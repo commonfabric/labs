@@ -1,5 +1,5 @@
 /**
- * The documentation corpus `query_docs` answers out of: how a Markdown file
+ * The documentation corpus `research` inspects: how a Markdown file
  * becomes addressable sections, which sections a question reaches, and the
  * endorsement that says a section is operator-provisioned reference material.
  */
@@ -20,7 +20,7 @@ import {
   resolveHarnessDocsCorpus,
 } from "../src/docs-corpus/corpus.ts";
 import {
-  selectSections,
+  rankSections,
   splitMarkdownSections,
 } from "../src/docs-corpus/sections.ts";
 
@@ -73,33 +73,27 @@ describe("docs-corpus", () => {
       expect(sections).toHaveLength(1);
       expect(sections[0].text).toContain("# not a heading");
     });
+
+    it("retains section text beyond 4,000 characters", () => {
+      const marker = "complete example after the former boundary";
+      const sections = splitMarkdownSections(
+        document,
+        `# Long contract\n\n${"prefix ".repeat(700)}${marker}\n`,
+      );
+
+      expect(sections[0].text.length).toBeGreaterThan(4_000);
+      expect(sections[0].text).toContain(marker);
+    });
   });
 
-  describe("selectSections()", () => {
-    const sections = splitMarkdownSections(
-      document,
-      "# Glazing\n\nDip the donut once.\n\n# Frying\n\nGlazing comes later.\n",
-    );
-
-    it("returns the heading match ahead of the body mention", () => {
-      const selected = selectSections(sections, "how do I do glazing?");
-
-      expect(selected.map((section) => section.heading)).toEqual([
-        "Glazing",
-        "Frying",
-      ]);
-    });
-
-    it("returns nothing for a question the corpus shares no term with", () => {
-      expect(selectSections(sections, "sourdough starter hydration")).toEqual(
-        [],
+  describe("rankSections()", () => {
+    it("returns nothing when the question contains only stop words", () => {
+      const sections = splitMarkdownSections(
+        document,
+        "# Guide\nUse the guide.",
       );
-    });
 
-    it("returns no more sections than the caller asked for", () => {
-      const selected = selectSections(sections, "glazing", { maxSections: 1 });
-
-      expect(selected).toHaveLength(1);
+      expect(rankSections(sections, "how should you use this")).toEqual([]);
     });
   });
 

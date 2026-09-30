@@ -11,6 +11,7 @@ import {
 } from "../src/cfc/canonical.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { inspectStoredConfLabel } from "../src/cfc/label-introspection.ts";
@@ -67,30 +68,27 @@ const seedLabeledDoc = async (
     ).getAsLink(),
   ).id!;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow(
-    { space, scope: "space", id: id as URI, path: [] },
-    {
-      value: { body: "payload" },
-      cfc: {
+  seedStoredEnvelope(seed, { space, scope: "space", id: id as URI, path: [] }, {
+    value: { body: "payload" },
+    cfc: {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
         version: 1,
-        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-        labelMap: {
-          version: 1,
-          entries: [{
-            path: ["body"],
-            label: {
-              confidentiality: ["secret", {
-                type: CFC_ATOM_TYPE.Caveat,
-                kind: "prompt-influence",
-                source: { space: "did:key:remote-a", id: "of:origin-a" },
-              }],
-            },
-            origin: "derived",
-          }],
-        },
+        entries: [{
+          path: ["body"],
+          label: {
+            confidentiality: ["secret", {
+              type: CFC_ATOM_TYPE.Caveat,
+              kind: "prompt-influence",
+              source: { space: "did:key:remote-a", id: "of:origin-a" },
+            }],
+          },
+          origin: "derived",
+        }],
       },
     },
-  );
+  });
   expect((await seed.commit()).ok).toBeDefined();
   return id;
 };

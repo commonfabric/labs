@@ -1,4 +1,6 @@
-import { Writable } from "commonfabric";
+/** Resolves note mentions to addresses rendered by the shared reference grammar. */
+
+import { type CellScope, renderCellReference, Writable } from "commonfabric";
 import { type MentionRefMap } from "./schemas.tsx";
 
 /** The shape `getAsNormalizedFullLink()` returns, as much of it as is used. */
@@ -6,39 +8,24 @@ interface NormalizedLink {
   id?: string;
   path?: readonly PropertyKey[];
   space?: string;
-  scope?: string;
+  scope?: CellScope;
 }
 
-/**
- * A resolved cell's address, in the form `cf-markdown` turns into a cell link.
- *
- * This mirrors `createLLMFriendlyLink` (`packages/runner/src/link-types.ts`),
- * which a pattern cannot import. Reproducing it rather than using the id alone
- * is what keeps a destination that is a nested cell, or one in another space,
- * addressable: an id on its own names the document root in the reader's own
- * space, which for those destinations is a different cell than the one meant.
- * Segments are escaped per RFC 6901, as `encodeJsonPointer` does.
- */
+/** Renders a resolved mention destination against the note's space. */
 export const linkAddress = (
   link: NormalizedLink,
   contextSpace: string | undefined,
 ): string | undefined => {
   if (!link.id) return undefined;
-
-  const id = link.scope && link.scope !== "space"
-    ? `${link.id}@${link.scope}`
-    : link.id;
-  const segments = contextSpace && link.space && link.space !== contextSpace
-    ? [`@${link.space}`, id, ...(link.path ?? [])]
-    : [id, ...(link.path ?? [])];
-
-  return `/${
-    segments
-      .map((segment) =>
-        String(segment).replace(/~/g, "~0").replace(/\//g, "~1")
-      )
-      .join("/")
-  }`;
+  return renderCellReference(
+    {
+      id: link.id,
+      space: link.space ?? contextSpace,
+      scope: link.scope,
+      path: (link.path ?? []).map(String),
+    },
+    contextSpace === undefined ? {} : { space: contextSpace, scope: "space" },
+  );
 };
 
 /**

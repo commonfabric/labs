@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -29,9 +30,9 @@ const signer = await Identity.fromPassphrase("piece named before start");
 const space = signer.did();
 
 // A host whose list maps each item onto a card carrying a handler. The
-// card's `{ "$stream": true }` marker is an internal cell of the card, which
-// a replica reading the card through the list does not receive: the card's
-// family belongs to whoever names it.
+// card's `bump` stream is an internal cell of the card, which a replica
+// reading the card through the list does not receive: the card's family
+// belongs to whoever names it.
 const CARD_SRC = [
   "import { pattern, computed, handler, type Stream, Writable } from 'commonfabric';",
   "const bump = handler<unknown, { count: Writable<number> }>((_, { count }) => {",
@@ -401,7 +402,7 @@ describe("piece-named-before-start", () => {
       const target = linkTargetId(candidate);
       if (target !== undefined) {
         targets.push(target);
-      } else if (candidate !== null && typeof candidate === "object") {
+      } else if (isObjectOrArray(candidate)) {
         for (const field of Object.values(candidate as object)) collect(field);
       }
     };

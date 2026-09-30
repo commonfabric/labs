@@ -40,6 +40,7 @@ import {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("cell-cache");
 
@@ -193,11 +194,52 @@ const validDelegatedModuleIdentities = (
 };
 
 /**
+ * The roots two module names sit under when they end the same way.
+ * `/api/patterns/system/x.tsx` and `/packages/patterns/system/x.tsx` share
+ * the tail `/patterns/system/x.tsx` under the roots `/api` and `/packages`;
+ * a name mounted at `/` has the empty root. Undefined when the two share no
+ * tail at all, which is a rename rather than the same tree under another
+ * root.
+ */
+const rootsOfSharedTail = (
+  previous: string,
+  next: string,
+): { previous: string; next: string } | undefined => {
+  const previousSegments = previous.split("/");
+  const nextSegments = next.split("/");
+  let shared = 0;
+  while (
+    shared < previousSegments.length && shared < nextSegments.length &&
+    previousSegments[previousSegments.length - 1 - shared] ===
+      nextSegments[nextSegments.length - 1 - shared]
+  ) {
+    shared++;
+  }
+  if (shared === 0) return undefined;
+  return {
+    previous: previousSegments.slice(0, previousSegments.length - shared)
+      .join("/"),
+    next: nextSegments.slice(0, nextSegments.length - shared).join("/"),
+  };
+};
+
+/**
  * Match a previous verified source closure to a newly emitted module set by
  * canonical full filename. Matching deliberately uses the whole normalized
  * path, never a basename: `../shared/writer.ts` has already resolved to the
  * stored module filename, while two different `writer.ts` files remain
- * distinct. Ambiguous duplicate canonical names are skipped fail-closed.
+ * distinct. Ambiguous matches are skipped fail-closed.
+ *
+ * `entries` names the two entry modules a source update moves a piece
+ * between, and the update itself is what says the one succeeds the other, so
+ * they match whatever they are called. When their names share a tail, the
+ * roots each sits under ({@link rootsOfSharedTail}) read as the same authored
+ * tree mounted at two places — a program the toolshed serves under
+ * `/api/patterns` and the same checkout supplied from a repository root as
+ * `/packages/patterns` — and every other module additionally matches the
+ * previous module named by its own name under the previous root. A module
+ * with candidates under both rules, or one that two successors claim, is
+ * ambiguous and matches nothing.
  *
  * Each successor inherits both its direct predecessor and that predecessor's
  * cumulative delegation list, preserving update chains across a cold reload.
@@ -207,6 +249,7 @@ export function deriveModuleDelegations<
 >(
   previous: ReadonlyMap<string, SourceDoc>,
   next: readonly Module[],
+  entries?: { previous: string; next: string },
 ): Map<string, ReadonlySet<string>> {
   const previousByName = new Map<
     string,
@@ -214,23 +257,78 @@ export function deriveModuleDelegations<
   >();
   for (const [identity, doc] of previous) {
     const name = canonicalModuleFilename(doc.filename);
-    const entries = previousByName.get(name) ?? [];
-    entries.push({ identity, doc });
-    previousByName.set(name, entries);
+    const entryList = previousByName.get(name) ?? [];
+    entryList.push({ identity, doc });
+    previousByName.set(name, entryList);
   }
 
-  const nextNameCounts = new Map<string, number>();
+  // The entry pair, once both sides are present: a closure missing either
+  // one has no pair to match, and matching falls back to names alone.
+  const previousEntryDoc = entries === undefined
+    ? undefined
+    : previous.get(entries.previous);
+  const nextEntry = entries === undefined
+    ? undefined
+    : next.find((module) => module.identity === entries.next);
+  const entryPair = entries !== undefined && previousEntryDoc !== undefined &&
+      nextEntry !== undefined
+    ? {
+      previous: { identity: entries.previous, doc: previousEntryDoc },
+      next: nextEntry,
+    }
+    : undefined;
+  const roots = entryPair === undefined ? undefined : rootsOfSharedTail(
+    canonicalModuleFilename(entryPair.previous.doc.filename),
+    canonicalModuleFilename(entryPair.next.filename),
+  );
+  const namesFor = (name: string): string[] => {
+    if (roots === undefined || roots.previous === roots.next) return [name];
+    if (!name.startsWith(`${roots.next}/`)) return [name];
+    return [name, `${roots.previous}${name.slice(roots.next.length)}`];
+  };
+
+  // The predecessor each successor names, before ambiguity is settled: a
+  // successor with more than one candidate is dropped here, and one whose
+  // candidate another successor also names is dropped below.
+  const claims = new Map<string, { identity: string; doc: SourceDoc }>();
   for (const module of next) {
-    const name = canonicalModuleFilename(module.filename);
-    nextNameCounts.set(name, (nextNameCounts.get(name) ?? 0) + 1);
+    if (
+      entryPair !== undefined && module.identity === entryPair.next.identity
+    ) {
+      claims.set(module.identity, entryPair.previous);
+      continue;
+    }
+    const candidates = new Map<string, { identity: string; doc: SourceDoc }>();
+    for (const name of namesFor(canonicalModuleFilename(module.filename))) {
+      for (const match of previousByName.get(name) ?? []) {
+        if (
+          entryPair !== undefined &&
+          match.identity === entryPair.previous.identity
+        ) {
+          continue;
+        }
+        candidates.set(match.identity, match);
+      }
+    }
+    if (candidates.size !== 1) continue;
+    claims.set(module.identity, [...candidates.values()][0]);
+  }
+  const claimants = new Map<string, number>();
+  for (const predecessor of claims.values()) {
+    claimants.set(
+      predecessor.identity,
+      (claimants.get(predecessor.identity) ?? 0) + 1,
+    );
   }
 
   const delegations = new Map<string, ReadonlySet<string>>();
   for (const module of next) {
-    const name = canonicalModuleFilename(module.filename);
-    const matches = previousByName.get(name);
-    if (matches?.length !== 1 || nextNameCounts.get(name) !== 1) continue;
-    const predecessor = matches[0];
+    const predecessor = claims.get(module.identity);
+    if (
+      predecessor === undefined || claimants.get(predecessor.identity) !== 1
+    ) {
+      continue;
+    }
     const inherited = validDelegatedModuleIdentities(
       module.identity,
       predecessor.identity === module.identity ? [] : [predecessor.identity],
@@ -909,14 +1007,14 @@ function withCompileCacheBuiltin<T>(
   action: () => T,
 ): T {
   const priorIdentity = tx.getCfcState().implementationIdentity;
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: "compile-cache",
   });
   try {
     return action();
   } finally {
-    tx.setCfcImplementationIdentity(priorIdentity);
+    setCfcImplementationIdentity(tx, priorIdentity);
   }
 }
 
@@ -962,10 +1060,12 @@ export function writeSourceDocs(
       recordUndeclarablePolicyStore(tx, baseCell);
       // Preserve product annotations on the entry doc only. Annotations are
       // only written there; reading every dependency doc here turns unrelated
-      // stale cache cells into writeback conflict preconditions.
-      const existing = baseCell.get();
+      // stale cache cells into writeback conflict preconditions. They carry
+      // over as stored: an annotation is typically a link to another document,
+      // and the raw write below has to keep it a link rather than a copy of
+      // what it reads through to.
       const existingAnnotations = identity === entryIdentity
-        ? existing?.annotations
+        ? baseCell.getRaw()?.annotations
         : undefined;
       const delegatedModuleIdentities = [
         ...(doc.delegatedModuleIdentities ?? []),
@@ -1424,8 +1524,8 @@ function cellCarriesIntegrity(
   path: readonly (string | number)[] = [],
 ): boolean {
   const link = cell.getAsNormalizedFullLink();
-  // An UnknownCfcMetadataVersionError propagates, deliberately: an
-  // uninterpretable envelope must not read as cacheable-unlabeled.
+  // A `StoredCfcMetadataError` propagates, deliberately: an envelope this
+  // build cannot produce labels from must not read as cacheable-unlabeled.
   const metadata = readStoredCfcMetadata(tx, {
     space: link.space,
     id: link.id,

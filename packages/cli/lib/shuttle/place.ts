@@ -4,17 +4,18 @@
  * travel as one pair and `cd` is the single door to either.
  *
  * Everything here is a value and a decision about a value — no connection, and
- * nothing read. The address grammar belongs to the fabric
- * (`normalizeLLMFriendlyRef` over the runner's `parseReferenceParts`) and this
- * module consumes it; what it adds is the navigation spellings that grammar
- * has no room for — `..`, `-`, `/`, `.` for the position, the `./` and
- * `.@` heads a relative reference takes a member or a qualifier on, and the
- * `%n` a listing's numbered row is named back by — the facet
- * names a rooted operand reserves for the walk from the root, the refusals a
- * place is subject to, the operand that reaches a child, which is those same
- * readings asked in the other direction, and the one reading that differs
- * between moving somewhere and reading it: a place cannot stand in an
- * arguments cell, and an operand may still name one.
+ * nothing read. The address grammar belongs to the fabric and this module
+ * consumes it: a rooted or complete reference is read by
+ * `normalizeLLMFriendlyRef` over the runner's `parseCellReference`, a relative
+ * one by `parseRelativeReference`, a piece segment by `parsePieceSegment`, and
+ * a piece position is written by `renderCellReference`. What this module adds
+ * is what that grammar has no room for, which is everything above a piece: the
+ * route a head's climbs walk back through, `-` and `/`, the `%n` a listing's
+ * numbered row is named back by, the facets a space root lists and a rooted
+ * operand reserves, the refusals a place is subject to, the operand that
+ * reaches a child, which is those same readings asked in the other direction,
+ * and the one reading that differs between moving somewhere and reading it: a
+ * place cannot stand in an arguments cell, and an operand may still name one.
  *
  * Where a value stops is the moves that reach a piece, and the spellings that
  * name something no value here holds. Whether the fabric holds a piece, and
@@ -26,14 +27,17 @@
  * carries.
  */
 
-import type { CellScope } from "@commonfabric/api";
+import type { CellScope, LinkScope, ReferenceMember } from "@commonfabric/api";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { glyphFor } from "../view/display.ts";
 import {
   CELL_SCOPE_VALUES,
   encodeJsonPointer,
   linkPathSegmentToCellPathSegment,
-  parseScopedIdSegment,
+  parsePieceSegment,
+  parseRelativeReference,
+  type RelativeReferenceParts,
+  renderCellReference,
 } from "@commonfabric/runner/shared";
 import { isSlugAddress } from "@commonfabric/runner/slugs";
 
@@ -59,7 +63,7 @@ export type PathSegment = string | number;
  *
  * The second half of that is a divergence from the canonical grammar and
  * `docs/plans/shuttle/grammar.md` says so. A rooted reference is the runner's
- * `parseReferenceParts` form rather than shuttle's, and `packages/cli` resolves
+ * `parseCellReference` form rather than shuttle's, and `packages/cli` resolves
  * its piece segment by slug, so shuttle reads `/slugs/x` and `/pieces/x`
  * differently from the way `cf` reads them — at these two values and no
  * others. Issue #6992 retires it by refusing them as slugs at `set-slug`.
@@ -128,11 +132,12 @@ export interface PiecePosition {
    * Path inside the piece's result; empty while standing at the piece.
    *
    * Every door into this module refuses a segment a rendering would not name
-   * back — an empty one, one ending in whitespace, one holding a line break —
-   * because writing a rendering and reading it back each lose characters that
-   * {@link unnameableSegment} describes. That is an invariant the doors
-   * establish rather than one this structural type enforces, so a position
-   * reached any other way is outside it.
+   * back, or would put on a terminal as an instruction — one holding a line
+   * break or another control character, and a number no digits name back —
+   * for the reasons {@link unnameableSegment} gives. An empty key and one
+   * ending in whitespace are keys like any other. That is an invariant the
+   * doors establish rather than one this structural type enforces, so a
+   * position reached any other way is outside it.
    */
   readonly path: readonly PathSegment[];
 }
@@ -179,11 +184,12 @@ export interface PiecePlace {
  * The levels walked through to reach a place, outermost first, each the
  * position one descent came from.
  *
- * `..` walks back out through it, which is what lets `cd slugs`, `cd board`,
- * `cd ..` return to `slugs/` while the piece itself stays one position however
- * it was reached. Three moves replace it wholesale rather than pushing: a
- * reference and a resolved target carry no route, and `-` restores the route
- * that came with the place it returns to.
+ * A relative head's climbs walk back out through it, one level per `..`,
+ * which is what lets `cd slugs`, `cd board`, `cd ..` return to `slugs/` while
+ * the piece itself stays one position however it was reached. Three moves
+ * replace it wholesale rather than pushing: a reference and a resolved target
+ * carry no route, and `-` restores the route that came with the place it
+ * returns to.
  */
 export type Trail = readonly Position[];
 
@@ -280,20 +286,34 @@ export interface SpaceNamedMove {
  * and handing this back to {@link CurrentPlace.reach} with the place the
  * listing was read at and the operand that row prints is what lands it.
  *
- * The handle is carried as it was written, `%` included, because what it names
- * is the handle table's to say and the reason it names nothing is the table's
- * to give. What follows the separator after it is an ordinary relative walk,
- * read from wherever the row turns out to stand.
+ * The handle is a head, read as the `.` head is: a member and a qualifier ride
+ * it, and what follows its separator is a literal path, so `%1/..` is the key
+ * `..` under the row and never a climb out of it. The member and the scope
+ * are read against the row's own position once the row is known.
  */
 export interface HandleMove {
   /** Names this arm of {@link Move}. */
   readonly kind: "handle";
 
-  /** The handle as the operand wrote it, `%` included. */
+  /**
+   * The handle as the operand wrote it, `%` included and the head's member and
+   * qualifiers left off, because what it names is the handle table's to say
+   * and the reason it names nothing is the table's to give.
+   */
   readonly handle: string;
 
-  /** The walk written after it, empty where the handle was the whole. */
-  readonly rest: string;
+  /** The member the head selects, where it selects one. */
+  readonly member?: ReferenceMember;
+
+  /** The scope the head moves to, absent where it names none or `@inherit`. */
+  readonly scope?: CellScope;
+
+  /**
+   * The literal keys written after the head, decoded. Empty where nothing
+   * follows the handle, and `[""]` where only its separator does, so `%1` and
+   * `%1/` are two moves.
+   */
+  readonly path: readonly string[];
 
   /**
    * The whole operand, as the person wrote it. A refusal about the walk after
@@ -341,15 +361,19 @@ export type Aimed = Exclude<Move, PendingMove>;
  */
 export interface Aim {
   /**
-   * True where the operand ended in `#argument`, which selects the piece's
-   * arguments cell — the same selection `--input` spells as a flag. The move
-   * beside it carries the operand with that suffix taken off, so the position
-   * is the same either way and this is the whole of what tells the two cells
-   * apart.
+   * True where the operand selected the `#argument` member, which is the
+   * piece's arguments cell — the same selection `--input` spells as a flag.
+   * The move beside it carries the path inside that cell, read from the cell's
+   * root, so this is the whole of what tells the two cells apart.
+   *
+   * It is false for a handle, whose selection is read against the row it
+   * names and so is known only once the row is: {@link CurrentPlace.resolveHandle}
+   * says which. A reference naming its space by name carries its selection
+   * already, and it is true here for one that selected the member.
    */
   readonly input: boolean;
 
-  /** Where the operand points, with any `#argument` suffix off it. */
+  /** Where the operand points. */
   readonly move: Aimed;
 }
 
@@ -444,18 +468,23 @@ export function placeAtSpaceRoot(space: MemorySpace): Place {
 
 /**
  * The operand `cd` takes from `place` to the child of its position called
- * `child`, and nothing where neither spelling it offers reaches that child.
+ * `child`, and nothing where no spelling it offers reaches that child.
  *
- * Two spellings are offered, the shorter first. The name on its own is what
- * `cd` takes wherever `cd` reads that name as data. Where one of the readings
- * above takes it instead, the reference the child renders as reaches it
- * anyway: a reference reads none of them, and it escapes the separator where a
- * relative operand cannot. An absent answer means neither of these reaches
- * the child, which is narrower than nothing reaching it: some multi-segment
- * operand can reach one that neither does, since a walk splits on the
- * separator and reads a head reading only on the whole operand. None is looked
- * for, and which would work is not a question this answers — what it returns
- * is a name for the child, and a route is not one.
+ * Inside a piece the child is a key, and the first spelling offered is the
+ * shared renderer's against the place as a context: the bare path where the
+ * reference grammar reads it as one, and the `.` head in front of a key the
+ * grammar would otherwise read as a head — `./..` for a key called `..`, and
+ * `./` for the empty key. Shuttle reads more of a bare operand than that
+ * grammar does, so where one of its own readings takes the renderer's form —
+ * `-` on its own, a `%n` head, a `#name` wish target — the same form with the
+ * `.` head in front is offered next, and reads none of them. Above a piece the
+ * child is a facet or a piece, and the two spellings are the name on its own
+ * and the complete reference a piece renders as.
+ *
+ * An absent answer means no candidate reaches the child. Inside a piece the
+ * reason is always the part itself, which no door admits — a key holding a
+ * line break or a control character — since the `.` head reads every other
+ * key literally.
  *
  * Each spelling is answered by making the move rather than by a second copy of
  * the readings, so what comes back is an operand `cd` took. The move is made
@@ -467,7 +496,7 @@ export function placeAtSpaceRoot(space: MemorySpace): Place {
  * One reading is asked rather than made, being one layer above a place: a
  * token opening with `-` reaches a verb as an option and never as an operand
  * (`readsAsOption`, `options.ts`), so a candidate the option grammar takes is
- * not offered and the reference is what names such a child.
+ * not offered and the next one is what names such a child.
  *
  * A move a read would confirm counts as reaching the child. What that read
  * decides is whether the fabric holds anything there, and a listing is asking
@@ -482,12 +511,37 @@ export function operandForChild(
   if (position === undefined) return undefined;
   const goal: Place = { ...place, position };
   const from: Standing = { place, trail: [] };
-  for (const candidate of [child, renderPosition(goal)]) {
+  for (const candidate of candidatesFor(place, goal, child)) {
     if (readsAsOption(candidate)) continue;
-    const reach = reached(movePlace(from, candidate, MOVING_VERB));
+    const reach = reached(movePlace(from, candidate, MOVING_VERB).step);
     if (reach !== undefined && samePlace(reach.place, goal)) return candidate;
   }
   return undefined;
+}
+
+/**
+ * Helper for {@link operandForChild}, which is the spellings tried for the
+ * child of `place` standing at `goal`, in the order they are offered.
+ */
+function candidatesFor(
+  place: Place,
+  goal: Place,
+  child: string,
+): readonly string[] {
+  const position = place.position;
+  if (position.kind !== "piece" || goal.position.kind !== "piece") {
+    return [child, renderPosition(goal)];
+  }
+  const rendered = renderCellReference(
+    cellOf({ ...goal, position: goal.position }),
+    {
+      space: position.space,
+      id: position.piece,
+      scope: place.scope,
+      path: position.path.map(String),
+    },
+  );
+  return [rendered, `${RELATIVE_HEAD}/${rendered}`];
 }
 
 /**
@@ -495,31 +549,25 @@ export function operandForChild(
  * what `pwd` prints whole, and what `where` prints under the connection's.
  *
  * A leading `/` is what makes a string a reference, so it marks the one
- * position that is a cell. A piece therefore renders as a fully qualified
- * reference — the rung that supplies every level, and so the one that denotes
- * the same cell read from anywhere — while a root and a
- * facet are containers and render without one, which is what keeps a
- * container's own rendering from resolving as a piece whose slug happens to
- * match. What holds of a rendering is one property and not a list: `cd` may
- * refuse it, but it never reads one as some other cell. A `#` reaches the
- * first half wherever it sits, the reference grammar reserving that character
- * for the `#argument` suffix. A piece or segment holding a newline would reach
- * the second half, by splitting the position line into a shorter reference,
- * which is why one is refused before it can reach a place rather than handled
- * here.
+ * position that is a cell. A piece therefore renders as a complete reference
+ * with its scope written — the form that supplies every level, and so the one
+ * that denotes the same cell read from anywhere — while a root and a facet are
+ * containers and render without one, which is what keeps a container's own
+ * rendering from resolving as a piece whose slug happens to match. What holds
+ * of a rendering is one property and not a list: `cd` may refuse it, but it
+ * never reads one as some other cell. A piece or segment holding a newline
+ * would break the second half, by splitting the position line into a shorter
+ * reference, which is why one is refused before it can reach a place rather
+ * than handled here.
  *
- * The scope is written on the piece even when it is the base, which is what
- * makes "read from anywhere" true rather than nearly so. Scope is part of a
- * cell's identity, and an omitted qualifier is filled from wherever the reader
+ * The scope is written even when it is the base, which is what makes "read
+ * from anywhere" true rather than nearly so. Scope is part of a cell's
+ * identity, and an omitted qualifier is filled from wherever the reader
  * stands, so a rendering without one denotes whatever cell the reader's own
  * scope selects. Writing it absolutely and reading it ambiently is the
  * asymmetry a shell has between what `pwd` prints and what a relative path
- * means. The reference serializer omits a base scope for the opposite
- * convention, that an omitted qualifier means the base, so this writes the
- * qualifier itself. The split that reads it back takes the last `@`, and this
- * writes one after the piece, so the qualifier it reads is always the one this
- * wrote — whatever the piece holds, and independently of any rule about
- * what a piece may hold.
+ * means. The shared renderer writes it for this reason when it is handed the
+ * empty context, which has no scope of its own to leave one to.
  */
 function placeEntries(place: Place): readonly RecordEntry[] {
   return [
@@ -585,7 +633,7 @@ export class CurrentPlace {
    */
   cd(operand: string): Move {
     return this.#commit(
-      movePlace(this.#here, operand, MOVING_VERB, this.#previous),
+      movePlace(this.#here, operand, MOVING_VERB, this.#previous).step,
     );
   }
 
@@ -595,10 +643,10 @@ export class CurrentPlace {
    *
    * It differs from {@link CurrentPlace.cd} in the two ways a read differs
    * from a move. Nothing moves, so shuttle stays where it stood whatever
-   * comes back. And a trailing `#argument` is read rather than refused: a
+   * comes back. And the `#argument` member is read rather than refused: a
    * place is result-rooted and cannot *stand* in an arguments cell, which is
-   * why `cd` turns the suffix down in every spelling it is written in, but
-   * reading one is a different act and the suffix is how an operand asks for
+   * why `cd` turns the member down in every spelling it is written in, but
+   * reading one is a different act and the member is how an operand asks for
    * it.
    *
    * Everything else is `cd`'s reading exactly, asked from where shuttle
@@ -613,16 +661,16 @@ export class CurrentPlace {
    * and there is nothing left for a check in front of it to add.
    */
   aim(operand: string, verb: string): Aim {
-    if (operand === ARGUMENT_SUFFIX) {
-      return { input: false, move: pointing(refuse(SUFFIX_NAMES_NO_TARGET)) };
+    if (operand === ARGUMENT_MEMBER) {
+      return { input: false, move: pointing(refuse(MEMBER_NAMES_NO_PIECE)) };
     }
-    const stripped = argumentSuffixOff(operand);
-    return {
-      input: stripped !== undefined,
-      move: pointing(
-        movePlace(this.#here, stripped ?? operand, verb, this.#previous),
-      ),
-    };
+    const { step, input } = movePlace(
+      this.#here,
+      operand,
+      verb,
+      this.#previous,
+    );
+    return { input, move: pointing(step) };
   }
 
   /**
@@ -670,26 +718,26 @@ export class CurrentPlace {
    * minted the handle was read at, `toward` the operand its row prints, and
    * `verb` the verb whose line the handle was written on.
    *
-   * The row's operand is walked from the listing's place, and the walk written
-   * after the handle from wherever that reached. Both are the walk a person
-   * could have typed: a handle is a way of not retyping a row's operand rather
-   * than a second way of reaching it, so a row naming a piece comes back
-   * pending here exactly as the typed operand does, and is confirmed by the
-   * same read.
+   * The row's operand is walked from the listing's place, and then the head's
+   * member and scope and the literal path after it from wherever that
+   * reached. The first is the walk a person could have typed: a handle is a
+   * way of not retyping a row's operand rather than a second way of reaching
+   * it, so a row naming a piece comes back pending here exactly as the typed
+   * operand does, and is confirmed by the same read.
    *
    * The walk starts with no trail, as one from a reference does. A handle
    * carries no route: it was minted from a row of a listing, and a listing is
-   * a view rather than a path shuttle took, so a `..` written after one backs
-   * out of the level the row stands in.
+   * a view rather than a path shuttle took.
    */
   reach(move: HandleMove, at: Place, toward: string, verb: string): Move {
-    return this.#commit(this.#reached(move, at, toward, verb));
+    return this.#commit(this.#reached(move, at, toward, verb).step);
   }
 
   /**
    * Like {@link CurrentPlace.reach}, except that it moves nothing: what comes
-   * back is where the handle and the walk after it point, and shuttle stays
-   * where it stood.
+   * back is where the handle and the path after it point, and which of the
+   * row's piece's two cells the head selects, and shuttle stays where it
+   * stood.
    *
    * Nothing comes back pending, for {@link CurrentPlace.aim}'s reason.
    */
@@ -698,8 +746,9 @@ export class CurrentPlace {
     at: Place,
     toward: string,
     verb: string,
-  ): Aimed {
-    return pointing(this.#reached(move, at, toward, verb));
+  ): Aim {
+    const { step, input } = this.#reached(move, at, toward, verb);
+    return { input, move: pointing(step) };
   }
 
   /**
@@ -745,8 +794,7 @@ export class CurrentPlace {
    * the scope sits last rather than where a reference carries it.
    */
   label(): string {
-    const place = this.#here.place;
-    return `${labelPosition(place.position)} ${renderScope(place.scope)}`;
+    return labelForPlace(this.#here.place);
   }
 
   /**
@@ -786,23 +834,40 @@ export class CurrentPlace {
    *
    * No previous place goes into the walk to the row, so a row whose operand is
    * `-` reaches nothing rather than reaching wherever shuttle last stood. It
-   * is not a row a listing mints — `operandForChild` offers the name and the
-   * reference, neither of which is that word — and refusing it here is what
-   * keeps that a property of this walk rather than of what a listing happens
-   * to offer.
+   * is not a row a listing mints — `operandForChild` never offers that word —
+   * and refusing it here is what keeps that a property of this walk rather
+   * than of what a listing happens to offer.
+   *
+   * The row counts as unread where its own walk came back pending, so what is
+   * written after the handle cannot land a piece row nothing has confirmed.
    */
   #reached(
     move: HandleMove,
     at: Place,
     toward: string,
     verb: string,
-  ): Step {
-    const step = movePlace({ place: at, trail: [] }, toward, verb);
-    const from = reached(step);
-    if (from === undefined) return step;
-    return move.rest === ""
-      ? step
-      : moveBySegments(from, move.rest, move.operand, verb);
+  ): Walked {
+    const row = movePlace({ place: at, trail: [] }, toward, verb);
+    const from = reached(row.step);
+    if (from === undefined) return row;
+    if (
+      move.member === undefined && move.scope === undefined &&
+      move.path.length === 0
+    ) {
+      return row;
+    }
+    return walkFrom(
+      from,
+      {
+        climbs: 0,
+        path: [...move.path],
+        member: move.member,
+        scope: move.scope,
+      },
+      move.operand,
+      verb,
+      row.step.kind === "pending",
+    );
   }
 
   /**
@@ -881,6 +946,32 @@ type Step =
   | Unlanded;
 
 /**
+ * A step, and whether the operand that made it selected the `#argument`
+ * member.
+ *
+ * The selection travels beside the step rather than inside the place, because
+ * a place holds none: a move that selected the member is refused before it
+ * becomes one, and only a read carries the selection on to where it is used.
+ */
+interface Walked {
+  /** What the operand did. */
+  readonly step: Step;
+
+  /** True where it selected the arguments cell; false for every refusal. */
+  readonly input: boolean;
+}
+
+/** Helper for the movers, which is `step` with `input` beside it. */
+function walked(step: Step, input = false): Walked {
+  return { step, input: step.kind === "refused" ? false : input };
+}
+
+/** Helper for the movers, which is a refusal carrying `reason`. */
+function refusing(reason: string): Walked {
+  return walked(refuse(reason));
+}
+
+/**
  * Where `operand` moves `from` to, `verb` naming the verb whose line it was
  * read from and `previous` being the standing `-` returns to.
  *
@@ -888,13 +979,13 @@ type Step =
  * every verb aims through this reading, so the refusal for one names the verb
  * whose line it is reading rather than a verb of its own.
  *
- * The operand is read in the order the spellings can be told apart: `-`, a
- * `.` and its `./` and `.@` heads, and `/` are shuttle's own, a rooted
- * string whose first segment names a facet is a walk from the space root, any
- * other string starting with `/` is a reference for the fabric's grammar to
- * parse, whichever rung of it, a leading
- * `#` is a wish target, and anything else is a relative walk from where
- * shuttle stands.
+ * The operand is read in the order the spellings can be told apart: `-` and
+ * `/` are shuttle's own whole operands, a rooted string whose first segment
+ * names a facet is a walk from the space root, any other string starting with
+ * `/` is a reference for the fabric's grammar to parse, whichever level of it,
+ * a leading `#` is a wish target, a leading `%` is a numbered handle, and
+ * anything else is a relative reference, read by the shared reader and walked
+ * from where shuttle stands.
  *
  * Each reading is matched against the operand as it was written, edges
  * included, so none of them reads a string that merely resembles the
@@ -909,34 +1000,17 @@ function movePlace(
   operand: string,
   verb: string,
   previous?: Standing,
-): Step {
+): Walked {
   const place = from.place;
   if (operand === "") {
-    return refuse(
+    return refusing(
       `\`${verb}\` was given an empty operand, which names no place.`,
     );
   }
   if (operand === "-") {
     return previous === undefined
-      ? refuse("There is no previous place to return to.")
-      : land(previous.place, previous.trail);
-  }
-  // `.` is the context's own cell, and the head a relative reference takes a
-  // member or a qualifier on. The head is read before the walk splits the
-  // operand, so it governs what follows it rather than standing as a segment:
-  // `./items@user` is the key `items@user` and never a walk through a key
-  // called `.`. What that costs is the bare spelling of such a key, the trade
-  // `..`, `-` and `/` already make here — `./.` and the reference a listing
-  // prints both reach it.
-  if (operand === RELATIVE_HEAD) return land(place, from.trail);
-  if (operand.startsWith(SCOPE_HEAD)) return moveScope(from, operand);
-  if (operand.startsWith(MEMBER_HEAD)) {
-    return moveBySegments(
-      from,
-      operand.slice(MEMBER_HEAD.length),
-      operand,
-      verb,
-    );
+      ? refusing("There is no previous place to return to.")
+      : walked(land(previous.place, previous.trail));
   }
 
   // A leading `/` roots a reference, and `/` alone roots one and names
@@ -949,54 +1023,98 @@ function movePlace(
     },
     trail: [],
   };
-  if (operand === "/") return land(root.place, root.trail);
+  if (operand === "/") return walked(land(root.place, root.trail));
 
   // Before the parse, because the parse would read the facet name as a piece
   // and the walk is what the segment means. A rooted operand and a walk from
-  // the root split on the same separator here, so `/slugs/board` is what `cd
+  // the root read the same literal keys here, so `/slugs/board` is what `cd
   // /` and `cd slugs/board` are together, down to the trail it leaves.
-  const walk = rootedFacetWalk(operand);
-  if (walk !== undefined) return moveBySegments(root, walk, operand, verb);
+  const keys = rootedFacetWalk(operand);
+  if (keys !== undefined) {
+    return walkFrom(root, { climbs: 0, path: keys }, operand, verb, false);
+  }
 
   const edged = rootedOnlyByTrim(operand);
-  if (edged !== undefined) return edged;
+  if (edged !== undefined) return walked(edged);
 
   let reference;
   try {
     reference = normalizeLLMFriendlyRef(operand, {
       space: place.position.space,
+      scope: place.scope,
     });
   } catch (error) {
-    return refuse(messageOf(error));
+    return refusing(messageOf(error));
   }
   if (reference !== undefined) {
     return moveByReference(place, reference, operand, verb);
   }
 
-  if (operand.startsWith("#")) return { kind: "wish", target: operand };
+  if (operand.startsWith("#")) {
+    return walked({ kind: "wish", target: operand });
+  }
   // At the head of a relative operand and nowhere else, as the other
   // spellings above are. A handle names a row of a listing, which is not a
   // level this module can walk to, so it comes back for the handle table the
   // way a wish target comes back for the connection. In any later segment `%`
   // is an ordinary character of a data key.
-  if (operand.startsWith(HANDLE_SIGIL)) {
-    const cut = operand.indexOf("/");
-    return {
-      kind: "handle",
-      handle: cut === -1 ? operand : operand.slice(0, cut),
-      rest: cut === -1 ? "" : operand.slice(cut + 1),
-      operand,
-    };
+  if (operand.startsWith(HANDLE_SIGIL)) return readHandle(operand);
+
+  let parts;
+  try {
+    parts = parseRelativeReference(operand);
+  } catch (error) {
+    return refusing(messageOf(error));
   }
-  return moveBySegments(from, operand, operand, verb);
+  return walkFrom(from, parts, operand, verb, false);
 }
 
 /**
- * Helper for {@link movePlace}, which is the walk a rooted operand stands for
- * where its first segment names a facet, and nothing where it names none.
+ * Helper for {@link movePlace}, which reads an operand opening with
+ * {@link HANDLE_SIGIL} as the head it is.
+ *
+ * The handle runs to the first `#`, `@` or separator, and what follows it is
+ * read as it would be after the `.` head — by the shared reader, with the
+ * handle standing in for `.` — so a member, a qualifier and a literal path
+ * mean after `%1` exactly what they mean after `.`, and a climb is never read
+ * there: `%1/..` is the key `..` under the row.
+ */
+function readHandle(operand: string): Walked {
+  const end = operand.search(/[#@/]/);
+  const handle = end === -1 ? operand : operand.slice(0, end);
+  let parts;
+  try {
+    parts = parseRelativeReference(
+      RELATIVE_HEAD + (end === -1 ? "" : operand.slice(end)),
+    );
+  } catch (error) {
+    return refusing(messageOf(error));
+  }
+  if (parts.pin !== undefined) return refusing(refusePin(operand));
+  const scope = placeScope(parts.scope);
+  return walked({
+    kind: "handle",
+    handle,
+    ...(parts.member === undefined ? {} : { member: parts.member }),
+    ...(scope === undefined ? {} : { scope }),
+    path: parts.path,
+    operand,
+  });
+}
+
+/**
+ * Helper for {@link movePlace}, which is the literal keys a rooted operand
+ * walks from the space root where its first segment names a facet, and
+ * nothing where it names none.
+ *
+ * A rooted operand has no head, so every segment after the leading `/` is read
+ * literally and decoded: the facet, then a piece segment, then data keys. So
+ * `/slugs/first/a/../b` is the piece `first` with the path `a`, `..`, `b`, the
+ * place `cd slugs/first/a/../b` reaches from the root, and a rooted operand
+ * never climbs.
  *
  * The rooted form only. A complete reference carries its own space and is the
- * canonical grammar's outright, so `/@did:key:…/slugs/board` still names a
+ * canonical grammar's outright, so `//did:key:…/slugs/board` still names a
  * piece slugged `slugs` — which is what leaves such a piece reachable by name
  * at all while one can exist, the rooted spelling being the walk
  * ({@link FACETS} carries what that costs and what retires it).
@@ -1006,10 +1124,13 @@ function movePlace(
  * {@link rootedOnlyByTrim} refuses that operand rather than letting it fall
  * to a reading of its own.
  */
-function rootedFacetWalk(operand: string): string | undefined {
+function rootedFacetWalk(operand: string): string[] | undefined {
   if (!operand.startsWith("/")) return undefined;
   const walk = operand.slice(1);
-  return isFacet(walk.split("/", 1)[0]) ? walk : undefined;
+  if (!isFacet(walk.split("/", 1)[0])) return undefined;
+  // The `.` head in front reads nothing of the walk's own but its keys: the
+  // first segment is a facet name, which no head reading could take.
+  return parseRelativeReference(`${RELATIVE_HEAD}/${walk}`).path;
 }
 
 /**
@@ -1049,171 +1170,186 @@ function rootedOnlyByTrim(operand: string): Step | undefined {
 }
 
 /**
- * Where a `.@scope` operand moves `from` to. `operand` is the whole of it, and
- * the scopes it may name are the canonical grammar's own, so no reference can
- * carry a scope this refuses. The position does not move, so the trail comes
- * through untouched.
+ * Helper for the movers, which is the scope a head or a piece segment moves a
+ * place to, and nothing where it leaves the place's own.
  *
- * The head is {@link SCOPE_HEAD}: `.` is the context's own cell and the
- * qualifier hangs off it, which is the relative spelling of a qualifier the
- * reference grammar gives
- * ([#6814](https://github.com/commontoolsinc/labs/issues/6814)). A qualifier
- * on a piece segment — `board@session` — is the same `@` on a different head,
- * and is read where that segment is.
- *
- * It comes back pending from a piece, like any other move onto one. A scope
- * selects which document a piece's id names, so the same id at `@space` and at
- * `@session` are two cells and a path found in one is not a path in the other:
- * the place a scope move reaches is one nothing has read. From a root or a
- * facet it lands, a container being a list of names rather than a cell for an
- * overlay to select within.
+ * `@inherit` is the context's scope, and the context a place reads an operand
+ * against is the place, so it moves nothing.
  */
-function moveScope(from: Standing, operand: string): Step {
-  const word = operand.slice(SCOPE_HEAD.length);
-  if (!CELL_SCOPE_VALUES.has(word)) {
-    return refuse(
-      `\`${operand}\` names no scope. The scopes are \`.@space\`, ` +
-        `\`.@user\`, and \`.@session\`.`,
-    );
-  }
-  const place = { ...from.place, scope: word as CellScope };
-  const position = place.position;
-  return position.kind === "piece"
-    ? pend({ ...place, position }, from.trail, operand)
-    : land(place, from.trail);
-}
-
-/**
- * Helper for the movers, which refuses `@word` riding a piece id for naming no
- * scope. The spellings it offers are the piece qualifier's, which is where
- * this fires:
- * `board@session` qualifies the piece, and {@link SCOPE_HEAD} is the head a
- * qualifier takes with no piece in front of it.
- */
-function refuseUnknownScope(word: string): Step {
-  return refuse(
-    `\`@${word}\` names no scope. The scopes are \`@space\`, \`@user\`, ` +
-      `and \`@session\`.`,
-  );
+function placeScope(scope: LinkScope | undefined): CellScope | undefined {
+  return scope === undefined || scope === "inherit" ? undefined : scope;
 }
 
 /**
  * Where a parsed reference moves `place` to.
  *
  * A rooted reference fixes the piece and the path and takes both its space
- * and its scope from the place; a `@did:key:…` prefix supplies the space, and
- * an `@scope` qualifier the scope. The parse refuses a
- * space whose DID differs from the place's, and hands one written as a name
- * back for a session to settle, since deriving a DID from a name needs one.
+ * and its scope from the place; a `//did:key:…/` prefix supplies the space, an
+ * `@scope` qualifier the scope, and an `#argument` member which of the piece's
+ * two cells the path is in. The place is the reader's context, so `@inherit`
+ * is the place's scope. A `@pin=` is refused, a place holding no pin. The
+ * parse refuses a space whose DID differs from the place's, and hands one
+ * written as a name back for a session to settle, since deriving a DID from a
+ * name needs one.
  */
 function moveByReference(
   place: Place,
   reference: NormalizedLLMFriendlyRef,
   operand: string,
   verb: string,
-): Step {
-  if (reference.input === true) return refuseArgumentSuffix(verb);
+): Walked {
+  if (reference.pin !== undefined) return refusing(refusePin(operand));
+  const input = reference.input === true;
+  if (input && verb === MOVING_VERB) return walked(refuseArgumentMember());
   const badPiece = unnameablePiece(reference.pieceId);
-  if (badPiece !== undefined) return refuseUnnameable(operand, badPiece);
+  if (badPiece !== undefined) {
+    return walked(refuseUnnameable(operand, badPiece));
+  }
   const badSegment = firstUnnameableSegment(reference.path);
   if (badSegment !== undefined) {
-    return refuseUnnameable(operand, badSegment);
+    return walked(refuseUnnameable(operand, badSegment));
   }
   const scope = reference.scope ?? place.scope;
   if (reference.embeddedSpace !== undefined) {
-    return {
+    return walked({
       kind: "space-by-name",
       name: reference.embeddedSpace,
       operand,
       piece: reference.pieceId,
       path: reference.path,
       scope,
-    };
+    }, input);
   }
-  return pend(
-    {
-      position: {
-        kind: "piece",
-        space: place.position.space,
-        piece: reference.pieceId,
-        path: reference.path,
+  return walked(
+    pend(
+      {
+        position: {
+          kind: "piece",
+          space: place.position.space,
+          piece: reference.pieceId,
+          path: reference.path,
+        },
+        scope,
       },
-      scope,
-    },
-    [],
-    operand,
+      [],
+      operand,
+    ),
+    input,
   );
 }
 
 /**
- * Where a relative operand moves `from` to, one segment at a time. Each
- * segment is read against the level the one before it landed on, so `..` and a
- * descent compose in one operand.
+ * Where a relative head and the literal path after it move `from` to, `parts`
+ * being what the shared reader read of the operand, or what a rooted walk and
+ * a handle stand in for it.
  *
- * `walk` is the segments to take and `operand` is what was written, which a
- * refusal quotes. The two are one string for a relative operand and differ for
- * a rooted one read as a walk from the root, the walk there being the operand
- * without the separator that rooted it.
+ * The head is applied first. Its climbs are taken one at a time through the
+ * trail, so a climb leaves a piece for the facet or the root it was reached
+ * through. Its member is the `#argument` member or the default: selecting the
+ * arguments cell reads the path from that cell's root rather than from where
+ * the head stood, so it has nothing for a climb to leave and a head that
+ * climbs and selects it is refused, and a move is refused it outright, a place
+ * being result-rooted. Its scope moves the place's, `@inherit` leaving it
+ * where it was, and a `@pin=` is refused, a place holding no pin.
  *
- * The walk's own edges are the outer edges of the first and last segments, it
- * reaching here as it was written: `cd " a"` reaches the key `" a"`, and
- * `cd "a "` is refused, a part ending in whitespace being refused wherever it
- * sits. Between those edges a segment is taken literally — the reference
- * grammar's `~1` escaping belongs to a reference, which a relative operand is
- * not, so `~1` here is two characters of a key and a key holding the separator
- * has no relative spelling at all.
+ * The path is then descended one decoded key at a time, each read against the
+ * level the one before it reached: at the root a key names a facet, in a facet
+ * a piece segment, and inside a piece a data key. Above a piece there are no
+ * keys, so a final empty key where the walk stands at the root or a facet is
+ * the separator that ended the operand and names nothing, while an empty key
+ * anywhere else above a piece is refused by the level it reaches.
  *
- * The walk is one move and comes back pending once, not per segment: a
- * descent inside the operand is a level nothing has read, so the whole walk
- * waits on the read the last of them needs. Sticky rather than last-step,
- * because a walk can climb back out of what it descended into and still end
- * somewhere unread — `a/b/..` ends at `a`, which nothing looked at.
+ * `operand` is what was written, which a refusal quotes.
  *
- * Two walks land all the same. One that climbed back out of the piece has no
- * piece left to ask about, and one that ends exactly where it started reaches
- * a place already stood at, settled when shuttle arrived there.
+ * The walk is one move and comes back pending once, not per key: a descent
+ * into or inside a piece is a level nothing has read, and so is a piece at a
+ * scope the head moved to, so the whole walk waits on the read the last of
+ * them needs. A walk that climbed out of a piece and descended nowhere has no
+ * piece left to ask about, and lands. `unread` says the walk starts at a level
+ * nothing has read, which a handle's row can be; otherwise a walk that ends
+ * exactly where it started reaches a place already stood at, settled when
+ * shuttle arrived there, and lands.
  */
-function moveBySegments(
+function walkFrom(
   from: Standing,
-  walk: string,
+  parts: RelativeReferenceParts,
   operand: string,
   verb: string,
-): Step {
-  const segments = walk.split("/");
-  if (segments[segments.length - 1] === "") segments.pop();
+  unread: boolean,
+): Walked {
+  if (parts.pin !== undefined) return refusing(refusePin(operand));
+  const selects = parts.member === "argument";
+  if (selects && parts.climbs > 0) {
+    return refusing(refuseClimbWithMember(operand));
+  }
 
   let moved = from;
-  let descended = false;
-  for (const segment of segments) {
-    // No fault check here: which rule a segment answers to depends on what it
-    // is about to become, and only `moveDown` knows that. A segment naming a
-    // piece is held to the piece rules and told the piece's reason, which is
-    // not the reason a data key gets.
-    const step = segment === ".."
-      ? moveUp(moved)
-      : moveDown(moved, segment, operand, verb);
-    const reach = reached(step);
-    if (reach === undefined) return step;
+  for (let climb = 0; climb < parts.climbs; climb++) moved = moveUp(moved);
+
+  if (selects) {
+    const position = moved.place.position;
+    if (position.kind !== "piece") {
+      return refusing(refuseMemberOfContainer(operand));
+    }
+    if (verb === MOVING_VERB) return walked(refuseArgumentMember());
+    moved = {
+      place: { ...moved.place, position: { ...position, path: [] } },
+      trail: moved.trail,
+    };
+  }
+
+  const scope = placeScope(parts.scope);
+  let descended = unread ||
+    (scope !== undefined && scope !== moved.place.scope);
+  if (scope !== undefined) {
+    moved = { place: { ...moved.place, scope }, trail: moved.trail };
+  }
+
+  let input = selects;
+  for (const [index, key] of parts.path.entries()) {
+    if (
+      key === "" && index === parts.path.length - 1 &&
+      moved.place.position.kind !== "piece"
+    ) {
+      break;
+    }
+    // No fault check here: which rule a key answers to depends on what it is
+    // about to become, and only `moveDown` knows that. A key naming a piece is
+    // held to the piece rules and told the piece's reason, which is not the
+    // reason a data key gets.
+    const next = moveDown(moved, key, operand, verb);
+    const reach = reached(next.step);
+    if (reach === undefined) return next;
     moved = reach;
-    descended ||= step.kind === "pending";
+    input ||= next.input;
+    descended ||= next.step.kind === "pending";
   }
   const position = moved.place.position;
-  return descended && position.kind === "piece" &&
-      !samePlace(moved.place, from.place)
-    ? pend({ ...moved.place, position }, moved.trail, operand)
-    : land(moved.place, moved.trail);
+  return walked(
+    descended && position.kind === "piece" &&
+      (unread || !samePlace(moved.place, from.place))
+      ? pend({ ...moved.place, position }, moved.trail, operand)
+      : land(moved.place, moved.trail),
+    input,
+  );
 }
 
 /**
- * Where `..` moves `from` to: back out through the trail where there is one,
- * and out of the level it stands in where the trail is empty, which is how a
- * position a reference named outright backs out.
+ * Where one climb moves `from` to: back out through the trail where there is
+ * one, and out of the level it stands in where the trail is empty, which is
+ * how a position a reference named outright backs out.
  */
-function moveUp(from: Standing): Step {
+function moveUp(from: Standing): Standing {
   const top = from.trail.at(-1);
   return top === undefined
-    ? land({ ...from.place, position: enclosing(from.place.position) }, [])
-    : land({ ...from.place, position: top }, from.trail.slice(0, -1));
+    ? {
+      place: { ...from.place, position: enclosing(from.place.position) },
+      trail: [],
+    }
+    : {
+      place: { ...from.place, position: top },
+      trail: from.trail.slice(0, -1),
+    };
 }
 
 /**
@@ -1228,9 +1364,9 @@ function enclosing(position: Position): Position {
 }
 
 /**
- * Where one relative segment moves `from` to: a facet at a space root, a piece
+ * Where one decoded key moves `from` to: a facet at a space root, a piece
  * inside a facet, and a data key or index inside a piece. A descent pushes the
- * level it left onto the trail, which is what `..` walks back out.
+ * level it left onto the trail, which is what a head's climbs walk back out.
  *
  * A facet is a closed set and lands; the other two reach the fabric and come
  * back pending, a piece having still to resolve and a key having still to be
@@ -1238,105 +1374,107 @@ function enclosing(position: Position): Position {
  */
 function moveDown(
   from: Standing,
-  segment: string,
+  key: string,
   operand: string,
   verb: string,
-): Step {
+): Walked {
   const place = from.place;
   const position = place.position;
   const trail = [...from.trail, position];
   switch (position.kind) {
     case "root":
-      return isFacet(segment)
-        ? land({
+      return isFacet(key)
+        ? walked(land({
           ...place,
-          position: { kind: "facet", space: position.space, facet: segment },
-        }, trail)
-        : refuse(
-          `A space root lists facets, and \`${segment}\` names none. The ` +
+          position: { kind: "facet", space: position.space, facet: key },
+        }, trail))
+        : refusing(
+          `A space root lists facets, and \`${key}\` names none. The ` +
             `facets are \`slugs/\` and \`pieces/\`.` +
             scopeMoveHint(operand),
         );
     case "facet":
-      return moveIntoPiece(place, position, segment, trail, operand, verb);
+      return moveIntoPiece(place, position, key, trail, operand, verb);
     case "piece": {
-      const fault = unnameableSegment(segment);
-      if (fault !== undefined) return refuseUnnameable(operand, fault);
-      return pend(
+      const fault = unnameableSegment(key);
+      if (fault !== undefined) return walked(refuseUnnameable(operand, fault));
+      return walked(pend(
         {
           ...place,
           position: {
             ...position,
-            path: [...position.path, linkPathSegmentToCellPathSegment(segment)],
+            path: [...position.path, linkPathSegmentToCellPathSegment(key)],
           },
         },
         trail,
         operand,
-      );
+      ));
     }
   }
 }
 
 /**
- * Where a segment naming a piece inside `facet` moves `place` to. The segment
- * is the one a scope qualifier may ride, since that is where the canonical
- * grammar carries it, and a qualifier here moves the scope half of the place.
+ * Where a key naming a piece inside `facet` moves `place` to.
  *
- * A `#` is refused rather than taken as part of the id, for one of two
- * reasons. `#argument` is refused for the reason it is refused on a
- * reference — a place is result-rooted — which holds however the suffix is
- * written, so both spellings give that one reason. Any other fragment is a
- * spelling nothing carries, `#` being reserved for `#argument` in the
- * reference form too, so the refusal says that rather than naming a form
- * which would refuse it again for a second reason.
+ * The key is a piece segment, so it is read by the shared reader's piece
+ * segment reading and not as data: an `#argument` member and qualifiers ride
+ * it as they ride the piece segment of a reference. The key arrives decoded,
+ * and is encoded again for that reading, which decodes the id itself — so an
+ * escape in the operand is read once.
+ *
+ * The member is the `#argument` member or the default, and selecting it is
+ * refused for a move for the reason a reference is refused one: a place is
+ * result-rooted, which holds however the member is written. A read carries
+ * the selection on. The scope moves the place's, `@inherit` leaving it where
+ * it was, and a `@pin=` is refused, a place holding no pin. Every other
+ * refusal is the reader's, relayed as it gave it.
  */
 function moveIntoPiece(
   place: Place,
   facet: FacetPosition,
-  segment: string,
+  key: string,
   trail: Trail,
   operand: string,
   verb: string,
-): Step {
-  const hash = segment.indexOf("#");
-  if (hash !== -1) {
-    const suffix = segment.slice(hash);
-    return suffix === "#argument" ? refuseArgumentSuffix(verb) : refuse(
-      `Unknown suffix "${suffix}". The one supported suffix is ` +
-        `"#argument", which selects the piece's arguments cell the way ` +
-        `"--input" does.`,
-    );
-  }
-  if (segment.startsWith("@")) {
-    return refuse(
-      `\`${segment}\` names no piece. A qualifier rides a piece id, and a ` +
+): Walked {
+  if (key.startsWith("@")) {
+    return refusing(
+      `\`${key}\` names no piece. A qualifier rides a piece id, and a ` +
         `facet holds pieces rather than keys.` + scopeMoveHint(operand),
     );
   }
-  let scoped;
-  try {
-    scoped = parseScopedIdSegment(segment);
-  } catch {
-    // The one throw left: the qualifier names no scope, `@` with no piece in
-    // front of it having been refused above.
-    return refuseUnknownScope(segment.slice(segment.lastIndexOf("@") + 1));
+  const empty = unnameablePiece(key);
+  if (key === "" && empty !== undefined) {
+    return walked(refuseUnnameable(operand, empty));
   }
-  const fault = unnameablePiece(scoped.id);
-  if (fault !== undefined) return refuseUnnameable(operand, fault);
-  const outside = outsideVocabulary(scoped.id);
-  if (outside !== undefined) return outside;
-  return pend(
-    {
-      position: {
-        kind: "piece",
-        space: facet.space,
-        piece: scoped.id,
-        path: [],
+  let segment;
+  try {
+    segment = parsePieceSegment(encodeJsonPointer([key]));
+  } catch (error) {
+    return refusing(messageOf(error));
+  }
+  if (segment.pin !== undefined) return refusing(refusePin(operand));
+  const fault = unnameablePiece(segment.id);
+  if (fault !== undefined) return walked(refuseUnnameable(operand, fault));
+  const outside = outsideVocabulary(segment.id);
+  if (outside !== undefined) return walked(outside);
+  const selects = segment.member === "argument";
+  if (selects && verb === MOVING_VERB) return walked(refuseArgumentMember());
+  return walked(
+    pend(
+      {
+        position: {
+          kind: "piece",
+          space: facet.space,
+          piece: segment.id,
+          path: [],
+        },
+        scope: placeScope(segment.scope) ?? place.scope,
       },
-      scope: scoped.scope ?? place.scope,
-    },
-    trail,
-    operand,
+      trail,
+      operand,
+    ),
+    selects,
   );
 }
 
@@ -1474,23 +1612,19 @@ function samePosition(one: Position, other: Position): boolean {
 }
 
 /**
- * The head of a relative reference: `.` is the context's own cell, and `.` at
- * the head is where the reference takes a member or a qualifier
- * ([#6814](https://github.com/commontoolsinc/labs/issues/6814)).
+ * The head of a relative reference that climbs nothing: the context's own
+ * cell, which the shared reader reads a member and a qualifier on.
  *
- * It is a head and not a whole operand, so `./items` reaches the member and
- * `./items@user` the key `items@user` — the `@` there sits on `items` rather
- * than on the head, and `@` is a qualifier only on the head. That is the whole
- * of what makes `@` one meaning: everywhere else it is an ordinary character,
- * so `cd @session` reaches a key called `@session`.
+ * This module writes it and never reads it — the reader does that — in two
+ * places: in front of a key a bare path would not reach, and in front of what
+ * follows a handle, which is read as what follows this head is.
+ *
+ * It is exported because a verb writes it too. `where scope <value>` sets the
+ * scope by moving the place the way `cd` moves it, which means composing the
+ * operand that carries a qualifier and no walk, and one spelling of the head
+ * is what keeps that operand the same operand a person types.
  */
-const RELATIVE_HEAD = ".";
-
-/** {@link RELATIVE_HEAD} with the member separator after it. */
-const MEMBER_HEAD = `${RELATIVE_HEAD}/`;
-
-/** {@link RELATIVE_HEAD} with a qualifier after it, which moves the scope. */
-const SCOPE_HEAD = `${RELATIVE_HEAD}@`;
+export const RELATIVE_HEAD = ".";
 
 /**
  * The character a numbered handle opens with, which a listing prints in front
@@ -1517,99 +1651,120 @@ export const HANDLE_SIGIL = "%";
  * operand that named no key *and* looks like an attempt at the scope.
  */
 export function scopeMoveHint(operand: string): string {
-  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1))
-    ? ` \`${SCOPE_HEAD}${operand.slice(1)}\` is what moves the scope.`
+  return isScopeWord(operand)
+    ? ` \`${RELATIVE_HEAD}${operand}\` is what moves the scope.`
     : "";
 }
 
 /**
- * The suffix an operand ends in to select a piece's arguments cell, which is
- * the selection `--input` spells as a flag.
+ * Whether `operand` is a scope word and nothing else: the sigil, and one of
+ * the scopes the runtime knows, with no path after it.
+ *
+ * It is the whole of what a setter for the scope may take. Composing an
+ * operand out of anything wider would hand the caller the navigation grammar
+ * under a name that says it sets one dimension — `where scope /pieces` would
+ * move the position — so the check is here beside the words rather than at
+ * each caller.
  */
-const ARGUMENT_SUFFIX = "#argument";
+export function isScopeWord(operand: string): boolean {
+  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1));
+}
+
+/** The scope words, in the spelling an operand and the record both write. */
+export const SCOPE_WORDS: readonly string[] = [...CELL_SCOPE_VALUES]
+  .map((scope) => `@${scope}`);
+
+/**
+ * The member an operand writes to select a piece's arguments cell, which is
+ * the selection `--input` spells as a flag.
+ *
+ * Exported because it is written as well as read: a verb that says where a
+ * write landed and a watch that names the cell it watches each spell the
+ * selection back, and one string is what keeps the spelling a person types
+ * and the spelling they are shown the same one.
+ */
+export const ARGUMENT_MEMBER = "#argument";
+
+/**
+ * The spellings a refusal about the member teaches, each one a read the
+ * grammar takes: the member on the `.` head, and on a piece segment.
+ */
+export const MEMBER_SPELLINGS = "`get .#argument/title` or " +
+  "`get /slugs/board#argument/title`";
 
 /**
  * The verb whose operand this module reads to stand somewhere rather than to
- * point at something, which is what tells {@link refuseArgumentSuffix} which
- * of its two sentences a line is owed: only a move can be wrong about what a
- * place may be.
+ * point at something, which is what decides that selecting the arguments cell
+ * is refused rather than carried: only a move can be wrong about what a place
+ * may be.
  */
 const MOVING_VERB = "cd";
 
 /**
- * The reason {@link ARGUMENT_SUFFIX} written with nothing in front of it is
- * refused. It selects a piece's arguments cell, so what it wants in front of
- * it is a target.
+ * The reason {@link ARGUMENT_MEMBER} written as a whole operand is refused.
+ * The member is read on a head or a piece segment, and on its own it has
+ * neither, so what it wants is the piece it selects the arguments cell of.
  */
-const SUFFIX_NAMES_NO_TARGET =
-  `\`${ARGUMENT_SUFFIX}\` selects a piece's arguments cell, so it follows ` +
-  `the target it selects, as in \`get topics${ARGUMENT_SUFFIX}\`.`;
+const MEMBER_NAMES_NO_PIECE = `\`${ARGUMENT_MEMBER}\` on its own names no ` +
+  `piece to select the arguments cell of. The member goes on a head or a ` +
+  `piece segment, as in ${MEMBER_SPELLINGS}.`;
 
 /**
- * Helper for {@link CurrentPlace.aim}, which is `operand` with a trailing
- * {@link ARGUMENT_SUFFIX} taken off, and nothing where it carries none.
+ * Helper for the movers, which refuses a move that selected the `#argument`
+ * member, in every spelling the member is written in.
  *
- * The rule is narrower than `splitArgumentSuffix`'s
- * (`packages/cli/lib/llm-friendly-ref.ts`), which additionally refuses every
- * other fragment. That is right where that one runs — at `cf`'s intake, and
- * inside the parse a rooted operand goes through here — and wrong for a
- * relative operand, where `#` is an ordinary character of a data key. So this
- * reads the one spelling it accepts and leaves every other `#` to whichever
- * door decides it: a reference refuses a fragment through that same function,
- * a walk inside a piece takes it as data, and a `#` at the head is a wish
- * target rather than a suffix on one.
- *
- * What it costs is one shape, and the reference door pays the same one: a data
- * key whose name ends in the suffix has no relative spelling, since this
- * reading takes the suffix off before the walk splits the operand.
- *
- * The suffix on its own never reaches here, {@link CurrentPlace.aim} having
- * answered it already, so what this returns for one is not a case: it names no
- * target, and the refusal it gets says that rather than pointing at the empty
- * operand taking the suffix off would leave.
+ * A place is result-rooted, and one rooted at the arguments cell would leave
+ * every later relative read ambiguous about which side of the piece it
+ * addressed (`docs/plans/shuttle/grammar.md`). That reason is about what a
+ * place may be, so it holds wherever the member sits in the operand, and a
+ * read, which stands nowhere, is not refused it.
  */
-function argumentSuffixOff(operand: string): string | undefined {
-  return operand.endsWith(ARGUMENT_SUFFIX)
-    ? operand.slice(0, -ARGUMENT_SUFFIX.length)
-    : undefined;
+function refuseArgumentMember(): Step {
+  return refuse(
+    "A place is result-rooted, so `cd` selects no `#argument` member. A " +
+      "place rooted at the arguments cell would leave every later relative " +
+      "read ambiguous about which side of the piece it addressed. Reach " +
+      `arguments per operand instead, as in ${MEMBER_SPELLINGS}.`,
+  );
 }
 
 /**
- * Helper for the movers, which refuses an operand carrying the `#argument`
- * suffix, `verb` naming the verb whose line it was read from.
+ * Helper for the movers, which is the reason a head that climbs and selects
+ * the `#argument` member in one is refused.
  *
- * Two sentences, because the two callers are wrong about different things and
- * one sentence for both would be false of one of them.
- *
- * A move is refused in every spelling the suffix is written in: a place is
- * result-rooted, and one rooted at the arguments cell would leave every later
- * relative read ambiguous about which side of the piece it addressed
- * (`docs/plans/shuttle/grammar.md`). That reason is about what a place may be,
- * so it holds wherever the suffix sits in the operand.
- *
- * A read never reaches here with the suffix at the end of its operand:
- * {@link CurrentPlace.aim} takes that one off and reads the arguments cell
- * with it, which is the spelling the same document names as the way to reach
- * arguments. So what reaches this from a read is a suffix with a walk written
- * after it, where what is wrong is the position of the suffix rather than
- * anything about a place — and a sentence about places would be telling a
- * `get` line that a spelling it has works only for `cd`.
+ * Selecting the member reads the path from the arguments cell's root, so the
+ * position the climbs would have left is not one the reading keeps, and the
+ * shared reader refuses the same head for the same reason.
  */
-function refuseArgumentSuffix(verb: string): Step {
-  return verb === MOVING_VERB
-    ? refuse(
-      "A place is result-rooted, so `cd` takes no `#argument` suffix. A " +
-        "place rooted at the arguments cell would leave every later " +
-        "relative read ambiguous about which side of the piece it " +
-        "addressed. Reach arguments per operand instead, as in " +
-        "`get topics/3#argument`.",
-    )
-    : refuse(
-      `\`${verb}\` takes \`${ARGUMENT_SUFFIX}\` at the end of an operand ` +
-        `and nowhere else: it selects a piece's arguments cell, and a path ` +
-        `inside that cell is written in front of it, as in ` +
-        `\`topics/3/title${ARGUMENT_SUFFIX}\`.`,
-    );
+function refuseClimbWithMember(operand: string): string {
+  return `\`${operand}\` climbs and selects the \`${ARGUMENT_MEMBER}\` ` +
+    `member in one head. The member reads the path from the arguments ` +
+    `cell's root, so there is no level for a climb to leave: ` +
+    `\`.${ARGUMENT_MEMBER}\` is the head that selects it.`;
+}
+
+/**
+ * Helper for the movers, which is the reason the `#argument` member is refused
+ * on a head standing at a space root or a facet, which hold no arguments cell.
+ */
+function refuseMemberOfContainer(operand: string): string {
+  return `\`${operand}\` selects the \`${ARGUMENT_MEMBER}\` member where ` +
+    `no piece stands: a space root and a facet are lists of what stands ` +
+    `inside them. Name the piece the member is on, as in ` +
+    `\`get /slugs/board#argument/title\`.`;
+}
+
+/**
+ * Helper for the movers, which is the reason an operand carrying a `@pin=`
+ * qualifier on a head or a piece segment is refused.
+ *
+ * A place holds no pin, and a read shuttle makes is of the piece as it runs,
+ * so a pin would be dropped without a word, which is what a refusal is for.
+ */
+function refusePin(operand: string): string {
+  return `\`${operand}\` carries a \`@pin=\` qualifier, and shuttle reads a ` +
+    `piece as it runs rather than at a pinned version. Write the operand ` +
+    `without the qualifier.`;
 }
 
 /**
@@ -1700,33 +1855,24 @@ const ACTED_ON = /\p{Cc}/u;
  * `segment` from naming that path back, and returns nothing when nothing
  * does.
  *
- * Characters go missing on the way out and on the way back. Reading a
- * rendering back is a parse of a reference, which trims the string it is
- * given and drops a trailing empty
- * segment. Writing the rendering separates its lines with a newline, so a
- * segment holding one splits the position line and leaves a shorter reference
- * naming another cell. Both are refused wherever a segment sits and not only
- * last, because `..` makes any segment the last one. Leading whitespace
- * survives both and is admitted: the parse trims the whole string, which no
- * leading character of a segment sits at the end of.
+ * Writing a rendering separates its lines with a newline, so a segment
+ * holding one splits the position line and leaves a shorter reference naming
+ * another cell. Reading one back loses nothing a key holds: the reference
+ * reader keeps an empty key and a key ending in whitespace, and a rendering
+ * escapes the separator and the escape, so every other key is admitted.
  *
- * A control character survives both losses and is refused all the same, for a
- * reason the round trip cannot see ({@link ACTS_ON_A_TERMINAL}): a rendering
- * is read on a terminal, where these are instructions rather than text. That
- * is what divides the refusals above from this one — those hold of a
- * rendering wherever it goes, since a reference that reads back as another
- * cell does that in a file as readily as on a screen, and this one is about
- * the screen. That the
- * reference reads back whole is what makes them dangerous rather than what
- * excuses them — the screen no longer shows the name, so what a person copies
- * off it is what the terminal did.
+ * A control character survives the round trip and is refused all the same,
+ * for a reason the round trip cannot see ({@link ACTS_ON_A_TERMINAL}): a
+ * rendering is read on a terminal, where these are instructions rather than
+ * text. That is what divides the line break's refusal from this one — that one
+ * holds of a rendering wherever it goes, since a reference that reads back as
+ * another cell does that in a file as readily as on a screen, and this one is
+ * about the screen. That the reference reads back whole is what makes them
+ * dangerous rather than what excuses them — the screen no longer shows the
+ * name, so what a person copies off it is what the terminal did.
  */
 function unnameableSegment(segment: PathSegment): Fault | undefined {
   if (typeof segment !== "number") {
-    if (segment === "") return { what: "an empty segment", so: NAMES_ANOTHER };
-    if (segment !== segment.trimEnd()) {
-      return { what: "a segment ending in whitespace", so: NAMES_ANOTHER };
-    }
     if (segment.includes("\n")) {
       return { what: "a segment holding a line break", so: NAMES_ANOTHER };
     }
@@ -1748,12 +1894,13 @@ function unnameableSegment(segment: PathSegment): Fault | undefined {
 }
 
 /**
- * The characters the reference grammar reads inside an id segment: the `@` a
- * scope suffix rides on (`parseScopedIdSegment`), and the `#` an argument
- * suffix does (`splitArgumentSuffix`). Neither vocabulary holds one — a slug
- * is lowercase letters, numbers and hyphens, and a handle is base64url — but
- * `isPieceHandle` is a length rule rather than an alphabet one, so a long
- * enough piece carries either past the vocabulary check.
+ * The characters the reference grammar reads inside a piece segment: the `@`
+ * a qualifier rides on and the `#` a member does (`parsePieceSegment`).
+ * Neither vocabulary holds one — a slug is lowercase letters, numbers and
+ * hyphens, and a handle is base64url — but `isPieceHandle` is a length rule
+ * rather than an alphabet one, so a long enough piece carries either past the
+ * vocabulary check at a door that reads no piece segment: a resolved target,
+ * a settled move, and a confirmed resolution.
  *
  * The separator and the escape are deliberately not here. A rendering escapes
  * both, `/` becoming `~1` and `~` becoming `~0`, so a piece holding one is
@@ -1766,13 +1913,10 @@ const READ_INSIDE_AN_ID = ["@", "#"];
  * Helper for the movers, which names what stops a piece from being one a place
  * may stand on, and returns nothing when nothing does.
  *
- * Of what a rendering loses, only the newline costs a piece its name. The scope suffix the rendering
- * always writes sits between the piece and the end of the string, so the trim
- * takes the suffix rather than the piece, and the split at the last `@` takes
- * the suffix's own — a piece with something in it comes back whole from both.
- * An empty one is the exception, and one fact generates it: its rendered id
- * segment is the suffix and nothing else, so the split finds no id in front of
- * it and the parse refuses the whole reference.
+ * Of what a rendering loses, only the newline costs a piece its name, by
+ * splitting the position line. An empty piece renders as a piece segment with
+ * no id in it, which the reader refuses whole rather than reading back as
+ * anything.
  *
  * The rules that are not the newline answer to {@link NO_SUCH_NAME} instead,
  * which is a weaker claim than the segment rules make and the honest one.
@@ -2001,35 +2145,81 @@ export function messageOf(thrown: unknown): string {
 }
 
 /**
- * The rooted reference naming the cell `place` stands on, which is what a `cf`
- * seam reading a `--cell` takes.
+ * The cell `place` names written short, which is the form the prompt carries
+ * for the place shuttle stands at and a watch carries for the cell it watches.
  *
- * It is the piece as the place holds it — a handle, or the operand's own
- * spelling where nothing resolved it — carrying the place's scope, and the
- * path after it with the separator escaped in every segment. That is
- * {@link renderPosition}'s rendering of a piece with the space left out, and
- * the space is left out because the seam is handed one already: shuttle
- * connects to one space and every config it builds names that space, so
- * writing it here would say a second time what the config says once.
+ * It is one rendering rather than two because it makes one promise: the piece
+ * is written by the name the space's index confirmed for it and by its handle
+ * otherwise, nothing is cut down to a prefix, and the scope is written out.
+ * A reader who has learned to read the prompt reads a watch's name with no
+ * second convention, and neither is an address — {@link referenceForPlace} is
+ * what a seam takes and `pwd` is what a person copies.
  *
- * A place is result-rooted, so nothing here writes the `#argument` suffix. An
- * operand that selects the arguments cell says so through the flag the seam
- * reads it on, which is where the selection is a parameter rather than part of
- * the address.
+ * `input` selects the piece's arguments cell, which is the one thing a place
+ * cannot carry: a place is result-rooted, so nothing here writes the member
+ * for a *place*. What this names is a cell, and a piece has two — so a caller
+ * naming the arguments one says which, and it is written where an operand
+ * selects it, on the piece segment ({@link ARGUMENT_MEMBER}): `board#argument/title`.
+ * Written after the path it would name the result key `title#argument`, which
+ * is a cell of its own. Without it two cells of one piece are one name, and a
+ * listing of them says the same thing twice.
  */
-export function referenceForPlace(place: PiecePlace): string {
-  return encodeJsonPointer([
-    "",
-    `${place.position.piece}@${place.scope}`,
-    ...place.position.path.map(String),
-  ]);
+export function labelForPlace(place: Place, input = false): string {
+  return `${labelPosition(place.position, input)} ${renderScope(place.scope)}`;
 }
 
 /**
- * Helper for {@link placeEntries}, which writes the position. A piece
- * carries the scope, since only a piece is a cell for a scope to select
- * within; a container renders its own name and leaves the scope to the line
- * below.
+ * The space-relative reference naming the cell `place` stands on, which is
+ * what a `cf` seam reading a `--cell` takes.
+ *
+ * It is the shared renderer's form against a context holding the space alone:
+ * the piece as the place holds it — a handle, or the operand's own spelling
+ * where nothing resolved it — carrying the place's scope, and the path after it
+ * as a pointer. The space is left out because the seam is handed one already:
+ * shuttle connects to one space and every config it builds names that space,
+ * so writing it here would say a second time what the config says once. The
+ * scope is written because that context has none to leave it to.
+ *
+ * A place is result-rooted, so a seam is handed no `#argument` member: an
+ * operand that selects the arguments cell says so through the flag the seam
+ * reads it on, which is where the selection is a parameter rather than part of
+ * the address. `input` writes the member on the piece segment for a caller
+ * that names a piece's arguments cell for itself rather than for a seam — a
+ * watch keying the cell it watches — where writing it after the path would
+ * name a result key instead.
+ */
+export function referenceForPlace(place: PiecePlace, input = false): string {
+  return renderCellReference(
+    { ...cellOf(place), ...(input ? { member: "argument" as const } : {}) },
+    { space: place.position.space },
+  );
+}
+
+/**
+ * Helper for the renderings, which is the cell `place` names, in the shape the
+ * shared renderer writes one from.
+ */
+function cellOf(place: PiecePlace): {
+  readonly space: MemorySpace;
+  readonly id: string;
+  readonly scope: CellScope;
+  readonly path: readonly PathSegment[];
+} {
+  return {
+    space: place.position.space,
+    id: place.position.piece,
+    scope: place.scope,
+    path: place.position.path,
+  };
+}
+
+/**
+ * Helper for {@link placeEntries}, which writes the position.
+ *
+ * A piece is a cell, so it renders through the shared renderer against the
+ * empty context, which writes the space and the scope. A container is not a
+ * cell and is no reference: it renders its own name after the space, with no
+ * leading `/`, and leaves the scope to the line below.
  */
 function renderPosition(place: Place): string {
   const position = place.position;
@@ -2040,12 +2230,7 @@ function renderPosition(place: Place): string {
     case "facet":
       return encodeJsonPointer([space, position.facet, ""]);
     case "piece":
-      return encodeJsonPointer([
-        "",
-        space,
-        `${position.piece}@${place.scope}`,
-        ...position.path.map(String),
-      ]);
+      return renderCellReference(cellOf({ ...place, position }));
   }
 }
 
@@ -2065,17 +2250,20 @@ function renderPosition(place: Place): string {
  * here, a short form being no reference for it to mark one in, so a container
  * takes it and reads as the walk down from the root that it is.
  */
-function labelPosition(position: Position): string {
+function labelPosition(position: Position, input = false): string {
   switch (position.kind) {
     case "root":
       return encodeJsonPointer(["", ""]);
     case "facet":
       return encodeJsonPointer(["", position.facet, ""]);
-    case "piece":
-      return encodeJsonPointer([
-        position.name ?? position.piece,
-        ...position.path.map(String),
-      ]);
+    case "piece": {
+      // The member rides the piece segment, where an operand selects it.
+      const piece = encodeJsonPointer([position.name ?? position.piece]) +
+        (input ? ARGUMENT_MEMBER : "");
+      return position.path.length === 0
+        ? piece
+        : `${piece}/${encodeJsonPointer(position.path.map(String))}`;
+    }
   }
 }
 

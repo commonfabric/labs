@@ -1,3 +1,4 @@
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
@@ -73,7 +74,7 @@ describe("CFC stream payload contracts", () => {
       expect((await setup.commit()).error).toBeUndefined();
 
       const forward = runtime.edit();
-      forward.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(forward, {
         kind: "builtin",
         builtinId: "stream-owner",
       });

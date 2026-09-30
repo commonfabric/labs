@@ -17,6 +17,11 @@
 // applier would get subtly wrong. `applyPatch` is offline-safe (pure value ops;
 // no live runtime/cell). See packages/memory/v2/patch.ts.
 
+import {
+  type FabricValue,
+  isFabricArray,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { applyPatchToDocument } from "@commonfabric/memory/v2/patch";
 import {
   decodeStoredDocumentPayload,
@@ -40,48 +45,66 @@ export interface ReconstructOptions extends EntityAddress {
   atSeq?: number;
 }
 
-export type EntityDocument =
-  & { value?: unknown; source?: unknown }
-  & Record<
-    string,
-    unknown
-  >;
+/**
+ * A stored document as the inspector reads one. It is memory's
+ * `EntityDocument` except for `source`, which memory declares as an
+ * `EntityRef`. A legacy result document holds a sigil link to its process cell
+ * there, and the inspector reads such documents, so `source` is any
+ * `FabricValue` here.
+ *
+ * The members are written out because `Omit<StoredDocument, "source">` does
+ * not keep them: on a type that has a string index signature, `Omit` drops
+ * every named key and leaves the index signature. `reconstructOutcome()`
+ * returns one of memory's documents as one of these, so a change to memory's
+ * type that stops it being assignable to this one stops this file compiling.
+ */
+export type EntityDocument = {
+  value?: FabricValue;
+  source?: FabricValue;
+  [key: string]: FabricValue;
+};
 
 export interface PathSelection {
   /** Whether every segment selected an own property. */
   found: boolean;
 
   /** The selected value. This can be `undefined` when `found` is true. */
-  value: unknown;
+  value: FabricValue;
 }
 
 /**
  * Navigates own properties using exact string segments and reports whether the
  * selected property exists. Array segments must be canonical array-index
- * property names.
+ * property names. The values with own properties to select are arrays, plain
+ * objects, and strings, whose own properties are `length` and one per
+ * character index. A `FabricSpecialObject` holds its contents privately, so no
+ * segment selects anything within one.
  */
 export function selectAtPath(
-  root: unknown,
+  root: FabricValue,
   path: string[],
 ): PathSelection {
-  let cur: unknown = root;
+  const notFound = { found: false, value: undefined };
+  let cur: FabricValue = root;
   for (const key of path) {
-    if (cur == null) return { found: false, value: undefined };
-    if (Array.isArray(cur)) {
-      if (!isArrayIndexPropertyName(key)) {
-        return { found: false, value: undefined };
-      }
+    if (isFabricArray(cur)) {
+      if (!isArrayIndexPropertyName(key)) return notFound;
       const index = Number(key);
-      if (!Object.hasOwn(cur, index)) {
-        return { found: false, value: undefined };
-      }
+      if (!Object.hasOwn(cur, index)) return notFound;
       cur = cur[index];
-    } else {
-      const boxed = Object(cur) as Record<string, unknown>;
-      if (!Object.hasOwn(boxed, key)) {
-        return { found: false, value: undefined };
+    } else if (isFabricPlainObject(cur)) {
+      if (!Object.hasOwn(cur, key)) return notFound;
+      cur = cur[key];
+    } else if (typeof cur === "string") {
+      if (key === "length") {
+        cur = cur.length;
+      } else if (isArrayIndexPropertyName(key) && Number(key) < cur.length) {
+        cur = cur[Number(key)];
+      } else {
+        return notFound;
       }
-      cur = boxed[key];
+    } else {
+      return notFound;
     }
   }
   return { found: true, value: cur };
@@ -91,7 +114,7 @@ export function selectAtPath(
  * Navigates own properties using exact string segments. Array segments must be
  * canonical array-index property names.
  */
-export function getAtPath(root: unknown, path: string[]): unknown {
+export function getAtPath(root: FabricValue, path: string[]): FabricValue {
   return selectAtPath(root, path).value;
 }
 
@@ -123,9 +146,10 @@ function storedPatchList(data: string | null): PatchOp[] {
 
 /** Does this DB carry a given table? (legacy/partial DBs lack branch/snapshot.) */
 function hasTable(space: SpaceDb, name: string): boolean {
-  return !!space.db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")
-    .get<{ 1: number }>(name);
+  return !!space.get<{ 1: number }>(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+    name,
+  );
 }
 
 /** One branch a read consults, and the seq its rows are visible up to. */
@@ -173,9 +197,9 @@ export function branchReadChain(
     seen.add(current);
     chain.push({ branch: current, atSeq: cut });
     if (!hasTable(space, "branch")) break;
-    const b = space.db
-      .prepare("SELECT parent_branch, fork_seq FROM branch WHERE name = ?")
-      .get<{ parent_branch: string | null; fork_seq: number | null }>(current);
+    const b = space.get<
+      { parent_branch: string | null; fork_seq: number | null }
+    >("SELECT parent_branch, fork_seq FROM branch WHERE name = ?", current);
     // The default branch is named "" (falsy) — test for null/undefined, not truthiness.
     if (!b || b.parent_branch === null || b.parent_branch === undefined) break;
     // Inherit at min(seq, fork_seq), with `?? 0` matching the engine's fallback
@@ -226,10 +250,8 @@ export function visibleRevisionRows(
   const conditions = ["branch = ?", "seq <= ?"];
   if (opts.scope !== undefined) conditions.push("scope_key = ?");
   if (opts.id !== undefined) conditions.push("id = ?");
-  const stmt = space.db.prepare(
-    `SELECT scope_key, id, count(*) revs FROM revision
-     WHERE ${conditions.join(" AND ")} GROUP BY scope_key, id`,
-  );
+  const sql = `SELECT scope_key, id, count(*) revs FROM revision
+     WHERE ${conditions.join(" AND ")} GROUP BY scope_key, id`;
   const rows: VisibleRevisionRow[] = [];
   const claimed = new Set<string>();
   for (const link of branchReadChain(space, opts.branch ?? "")) {
@@ -237,7 +259,8 @@ export function visibleRevisionRows(
     if (opts.scope !== undefined) params.push(opts.scope);
     if (opts.id !== undefined) params.push(opts.id);
     for (
-      const r of stmt.all<{ scope_key: string; id: string; revs: number }>(
+      const r of space.all<{ scope_key: string; id: string; revs: number }>(
+        sql,
         ...params,
       )
     ) {
@@ -329,13 +352,16 @@ function resolveBranchRow(
   id: string,
   atSeq: number,
 ): { row: RevRow; branch: string } | undefined {
-  const stmt = space.db.prepare(
-    `SELECT seq, op_index, op, data FROM revision
-     WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
-     ORDER BY seq DESC, op_index DESC LIMIT 1`,
-  );
   for (const link of branchReadChain(space, branch, atSeq)) {
-    const row = stmt.get<RevRow>(link.branch, id, scope, link.atSeq);
+    const row = space.get<RevRow>(
+      `SELECT seq, op_index, op, data FROM revision
+       WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
+       ORDER BY seq DESC, op_index DESC LIMIT 1`,
+      link.branch,
+      id,
+      scope,
+      link.atSeq,
+    );
     if (row) return { row, branch: link.branch };
   }
   return undefined;
@@ -359,14 +385,18 @@ function reconstructWithinBranch(
   rowSeq: number,
   rowOpIndex: number,
 ): StoredDocument {
-  const base = space.db
-    .prepare(
-      `SELECT seq, op_index, op, data FROM revision
-       WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
-         AND (seq < ? OR (seq = ? AND op_index <= ?))
-       ORDER BY seq DESC, op_index DESC LIMIT 1`,
-    )
-    .get<RevRow>(branch, id, scope, rowSeq, rowSeq, rowOpIndex);
+  const base = space.get<RevRow>(
+    `SELECT seq, op_index, op, data FROM revision
+     WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
+       AND (seq < ? OR (seq = ? AND op_index <= ?))
+     ORDER BY seq DESC, op_index DESC LIMIT 1`,
+    branch,
+    id,
+    scope,
+    rowSeq,
+    rowSeq,
+    rowOpIndex,
+  );
 
   let doc: StoredDocument = base && base.op === "set"
     ? storedDocument(base.data)
@@ -379,13 +409,15 @@ function reconstructWithinBranch(
   // behind a snapshot. The snapshot is keyed by seq only and represents the full
   // materialized document at that seq, so patches strictly AFTER its seq apply.
   if (hasTable(space, "snapshot")) {
-    const snap = space.db
-      .prepare(
-        `SELECT seq, value FROM snapshot
-         WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
-         ORDER BY seq DESC LIMIT 1`,
-      )
-      .get<{ seq: number; value: string }>(branch, id, scope, rowSeq);
+    const snap = space.get<{ seq: number; value: string }>(
+      `SELECT seq, value FROM snapshot
+       WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
+       ORDER BY seq DESC LIMIT 1`,
+      branch,
+      id,
+      scope,
+      rowSeq,
+    );
     if (snap && snap.seq >= baseSeq) {
       // A snapshot is a materialized document, held to the same root rule as
       // any other. Decoding it without that check lets a malformed one through
@@ -396,25 +428,22 @@ function reconstructWithinBranch(
     }
   }
 
-  const patches = space.db
-    .prepare(
-      `SELECT seq, op_index, op, data FROM revision
-       WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
-         AND (seq > ? OR (seq = ? AND op_index > ?))
-         AND (seq < ? OR (seq = ? AND op_index <= ?))
-       ORDER BY seq ASC, op_index ASC`,
-    )
-    .all<RevRow>(
-      branch,
-      id,
-      scope,
-      baseSeq,
-      baseSeq,
-      baseOpIndex,
-      rowSeq,
-      rowSeq,
-      rowOpIndex,
-    );
+  const patches = space.all<RevRow>(
+    `SELECT seq, op_index, op, data FROM revision
+     WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
+       AND (seq > ? OR (seq = ? AND op_index > ?))
+       AND (seq < ? OR (seq = ? AND op_index <= ?))
+     ORDER BY seq ASC, op_index ASC`,
+    branch,
+    id,
+    scope,
+    baseSeq,
+    baseSeq,
+    baseOpIndex,
+    rowSeq,
+    rowSeq,
+    rowOpIndex,
+  );
   for (const p of patches) {
     // `applyPatchToDocument`, not bare `applyPatch`: a root op can replace the
     // document with any value, and the engine rejects at the FIRST patch that
@@ -497,7 +526,7 @@ export function reconstructOutcome(
         row.seq,
         row.op_index,
       );
-    return { status: "present", document: document as EntityDocument };
+    return { status: "present", document };
   } catch (error) {
     return { status: "undecodable", error };
   }
@@ -524,7 +553,7 @@ export interface ValueAtResult {
   document?: EntityDocument;
 
   /** The value navigated to `path` within `document.value`. */
-  value?: unknown;
+  value?: FabricValue;
 }
 
 /** A reconstructed value result that distinguishes a missing selected path. */

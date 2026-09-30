@@ -11,14 +11,12 @@
  */
 
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime, UI } from "@commonfabric/runner";
 import type { Cell } from "@commonfabric/runner";
-import {
-  type CfcLabelView,
-  cfcLabelViewSymbol,
-} from "@commonfabric/runner/cfc";
+import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
@@ -97,25 +95,52 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
   const dummyCell = runtime.getCell(signer.did(), "dummy", undefined, dummyTx);
   const CellImplConstructor = dummyCell.constructor;
 
+  let mockCellId = 0;
+
   // Define MockCell extending CellImpl
   class MockCell extends (CellImplConstructor as any) {
     value: any;
     #subscribers = new Set<(value: any) => void>();
+    /** A mock's read consumes no labels, which a sink may ask to be told. */
+    static readonly consumed = {
+      confidentiality: [],
+      integrity: [],
+      modulePolicySpaces: new Map(),
+      sources: [],
+    };
 
-    constructor(value: any) {
+    constructor(value: any, labelView?: CfcLabelView) {
       // Pass dummy args to super to satisfy it
-      // CellImpl(runtime, tx, link, synced, causeContainer, kind)
-      super(runtime, undefined, undefined, false, undefined, "cell");
+      // CellImpl(runtime, tx, link, synced, causeContainer, kind, labelView)
+      super(
+        runtime,
+        undefined,
+        runtime.getCell(signer.did(), { mockCell: mockCellId++ })
+          .getAsNormalizedFullLink(),
+        false,
+        undefined,
+        "cell",
+        labelView,
+      );
       this.value = value;
     }
 
-    sink(callback: (value: any) => void) {
-      this.#subscribers.add(callback);
+    sink(
+      callback: (value: any, label?: undefined, consumed?: unknown) => void,
+      options?: { includeConsumedLabel?: boolean },
+    ) {
+      const deliver = (value: any) =>
+        callback(
+          value,
+          undefined,
+          options?.includeConsumedLabel ? MockCell.consumed : undefined,
+        );
+      this.#subscribers.add(deliver);
       // A real cell's `sink()` publishes the current value synchronously at
       // subscription, and the reconciler renders from that first delivery.
-      callback(this.value);
+      deliver(this.value);
       return () => {
-        this.#subscribers.delete(callback);
+        this.#subscribers.delete(deliver);
       };
     }
 
@@ -134,8 +159,21 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
      * Returns `undefined`: a mock carries no metadata, and the inherited read
      * throws on a link-less cell.
      */
-    getMetaRaw(): undefined {
+    getMetaRaw(_field?: string): unknown {
       return undefined;
+    }
+
+    getRawUntyped() {
+      return this.value;
+    }
+
+    /**
+     * Returns the inherited link. A step that needs another overrides it on
+     * the instance, which it can do because this class, and not the frozen
+     * cell prototype, defines it.
+     */
+    getAsNormalizedFullLink() {
+      return super.getAsNormalizedFullLink();
     }
 
     /**
@@ -146,6 +184,265 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       return this;
     }
   }
+
+  for (const teardown of ["unmount", "replace"] as const) {
+    for (const wholeProps of [false, true]) {
+      await t.step(
+        `cancels in-place ${
+          wholeProps ? "Cell props" : "Cell prop values"
+        } and children on ${teardown}`,
+        async () => {
+          const collector = createOpsCollector();
+          const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+          const suffix = `${teardown}-${wholeProps}`;
+          const title = runtime.getCell<string>(
+            signer.did(),
+            `title-${suffix}`,
+          );
+          const props = runtime.getCell<{ title: string }>(
+            signer.did(),
+            `props-${suffix}`,
+          );
+          const children = runtime.getCell<string[]>(
+            signer.did(),
+            `children-${suffix}`,
+          );
+          const write = async (value: string) => {
+            const tx = runtime.edit();
+            title.withTx(tx).set(value);
+            props.withTx(tx).set({ title: value });
+            children.withTx(tx).set([value]);
+            expect((await tx.commit()).error).toBeUndefined();
+            await runtime.idle();
+            await t.settle();
+          };
+          await write("initial");
+          const root = new MockCell({
+            type: "vnode",
+            name: "div",
+            props: { title: "static" },
+            children: ["static"],
+          });
+          const cancel = reconciler.mount(root as unknown as Cell<unknown>);
+          try {
+            await t.settle();
+            const element = collector.getOps().find((op) =>
+              op.op === "create-element" && op.tagName === "div"
+            );
+            if (!element || element.op !== "create-element") {
+              throw new Error("Expected initial `div`");
+            }
+            collector.clear();
+            root.set({
+              type: "vnode",
+              name: "div",
+              props: wholeProps ? props : { title },
+              children,
+            });
+            await runtime.idle();
+            await t.settle();
+            expect(collector.getOpsOfType("create-element")).toEqual([]);
+            const expectRendered = (value: string) => {
+              expect(collector.getOps()).toContainEqual({
+                op: "set-prop",
+                nodeId: element.nodeId,
+                key: "title",
+                value,
+              });
+              expect(
+                collector.getOps().some((op) =>
+                  "text" in op && op.text === value
+                ),
+              ).toBe(true);
+            };
+            expectRendered("initial");
+            collector.clear();
+            await write("updated");
+            expectRendered("updated");
+            if (teardown === "unmount") {
+              cancel();
+            } else {
+              root.set({
+                type: "vnode",
+                name: "section",
+                props: {},
+                children: [],
+              });
+            }
+            await t.settle();
+            collector.clear();
+            await write("ignored");
+            expect(collector.getOps()).toEqual([]);
+          } finally {
+            cancel();
+          }
+        },
+      );
+    }
+  }
+
+  await t.step(
+    "keeps a reused element's new reactive props and children read-only and cancels them when replaced",
+    async () => {
+      const collector = createOpsCollector();
+      const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+      const title = runtime.getCell<string>(signer.did(), "transition-title");
+      const children = runtime.getCell<string[]>(
+        signer.did(),
+        "transition-children",
+      );
+      const seed = runtime.edit();
+      title.withTx(seed).set("first title");
+      children.withTx(seed).set(["first child"]);
+      expect((await seed.commit()).error).toBeUndefined();
+      await runtime.idle();
+
+      const root = new MockCell({
+        type: "vnode",
+        name: "div",
+        props: { title: "static title" },
+        children: ["static child"],
+      });
+      const cancel = reconciler.mount(root as unknown as Cell<unknown>);
+      await t.settle();
+      const element = collector.getOpsOfType("create-element")[0];
+      expect(element?.op).toBe("create-element");
+      const elementId = "nodeId" in element ? element.nodeId : undefined;
+      const prepare = runtime.prepareTxForCommit;
+      const subscriptionModes: boolean[] = [];
+      runtime.prepareTxForCommit = (tx) => {
+        subscriptionModes.push(tx.isReadOnly?.() === true);
+        prepare.call(runtime, tx);
+      };
+      try {
+        collector.clear();
+        root.set({
+          type: "vnode",
+          name: "div",
+          props: { title },
+          children,
+        });
+        await runtime.idle();
+        await t.settle();
+        expect(collector.getOpsOfType("create-element")).toEqual([]);
+        expect(collector.getOpsOfType("set-prop")).toContainEqual({
+          op: "set-prop",
+          nodeId: elementId,
+          key: "title",
+          value: "first title",
+        });
+        expect(
+          collector.getOps().some((op) =>
+            "text" in op && op.text === "first child"
+          ),
+        ).toBe(true);
+        expect(subscriptionModes.length).toBeGreaterThanOrEqual(4);
+        expect(subscriptionModes.every(Boolean)).toBe(true);
+
+        collector.clear();
+        subscriptionModes.length = 0;
+        const update = runtime.edit();
+        title.withTx(update).set("second title");
+        children.withTx(update).set(["second child"]);
+        expect((await update.commit()).error).toBeUndefined();
+        await runtime.idle();
+        await t.settle();
+        expect(collector.getOpsOfType("set-prop")).toContainEqual({
+          op: "set-prop",
+          nodeId: elementId,
+          key: "title",
+          value: "second title",
+        });
+        expect(
+          collector.getOps().some((op) =>
+            "text" in op && op.text === "second child"
+          ),
+        ).toBe(true);
+        expect(subscriptionModes.length).toBeGreaterThanOrEqual(4);
+        expect(subscriptionModes.every(Boolean)).toBe(true);
+
+        root.set({
+          type: "vnode",
+          name: "div",
+          props: { title: "static again" },
+          children: ["static again"],
+        });
+        await t.settle();
+        collector.clear();
+        const afterReplacement = runtime.edit();
+        title.withTx(afterReplacement).set("ignored title");
+        children.withTx(afterReplacement).set(["ignored child"]);
+        expect((await afterReplacement.commit()).error).toBeUndefined();
+        await runtime.idle();
+        await t.settle();
+        expect(collector.getOps()).toEqual([]);
+      } finally {
+        cancel();
+        runtime.prepareTxForCommit = prepare;
+      }
+    },
+  );
+
+  await t.step(
+    "switches a reused element to a changing Cell-backed handler and cancels the removed prop",
+    async () => {
+      const collector = createOpsCollector();
+      const reconciler = new WorkerReconciler({ onOps: collector.onOps });
+      const seen: string[] = [];
+      const handler = new MockCell(() => seen.push("first"));
+      const root = new MockCell({
+        type: "vnode",
+        name: "button",
+        props: { onClick: () => seen.push("static") },
+        children: ["click"],
+      });
+      const cancel = reconciler.mount(root as unknown as Cell<unknown>);
+      try {
+        await t.settle();
+        collector.clear();
+        root.set({
+          type: "vnode",
+          name: "button",
+          props: { onClick: handler },
+          children: ["click"],
+        });
+        await t.settle();
+        expect(collector.getOpsOfType("create-element")).toEqual([]);
+        const first = collector.getOpsOfType("set-event");
+        expect(first).toHaveLength(1);
+        if (first[0].op !== "set-event") throw new Error("Expected set-event");
+        reconciler.dispatchEvent(first[0].handlerId, { type: "click" });
+        expect(seen).toEqual(["first"]);
+
+        collector.clear();
+        handler.set(() => seen.push("second"));
+        await t.settle();
+        expect(collector.getOpsOfType("remove-event")).toHaveLength(1);
+        const second = collector.getOpsOfType("set-event");
+        expect(second).toHaveLength(1);
+        if (second[0].op !== "set-event") throw new Error("Expected set-event");
+        reconciler.dispatchEvent(second[0].handlerId, { type: "click" });
+        expect(seen).toEqual(["first", "second"]);
+
+        collector.clear();
+        root.set({
+          type: "vnode",
+          name: "button",
+          props: {},
+          children: ["click"],
+        });
+        await t.settle();
+        expect(collector.getOpsOfType("remove-event")).toHaveLength(1);
+        collector.clear();
+        handler.set(() => seen.push("removed"));
+        await t.settle();
+        expect(collector.getOps()).toEqual([]);
+        expect(seen).toEqual(["first", "second"]);
+      } finally {
+        cancel();
+      }
+    },
+  );
 
   await t.step(
     "renders, updates, and cleans up Cells in a direct array root",
@@ -1945,30 +2242,25 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         path: [],
         scope: "space",
       });
-      const resolvedOutputCell = {
-        getAsNormalizedFullLink: () => ({
+      // The resolved output is a cell of its own, which carries the denied
+      // label while it is the denied output.
+      outputCell.resolveAsCell = () => {
+        const resolvedOutputCell = new MockCell(
+          undefined,
+          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
+        );
+        resolvedOutputCell.getAsNormalizedFullLink = () => ({
           id: resolvedOutputId,
           space: signer.did(),
           path: [],
           scope: "space",
-        }),
-        resolveAsCell() {
-          return this;
-        },
-        getMetaRaw: (field: string) =>
+        });
+        resolvedOutputCell.getMetaRaw = (field: string) =>
           field === "patternIdentity"
             ? { identity: "nested-pattern", symbol: "default" }
-            : undefined,
-        [cfcLabelViewSymbol]: () =>
-          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
-      } as unknown as Cell<unknown>;
-      outputCell.resolveAsCell = () => resolvedOutputCell;
-      // The mock has no stored target from which the metadata resolver can
-      // read. Carry the selected output's policy on its live reference.
-      Object.defineProperty(outputCell, cfcLabelViewSymbol, {
-        value: () =>
-          resolvedOutputId === deniedOutputId ? deniedLabelView : undefined,
-      });
+            : undefined;
+        return resolvedOutputCell;
+      };
 
       const rootCell = new MockCell(
         {

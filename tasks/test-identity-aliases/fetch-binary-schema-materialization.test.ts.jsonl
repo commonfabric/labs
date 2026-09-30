@@ -1,0 +1,1 @@
+{"date":"2026-09-12","from":{"k":"unit","s":"runner","n":"fetchBinary consumer materialization (CT-1836) > lifts reading a FabricBytes-bearing fetch result materialize and run"},"to":{"k":"unit","s":"runner","n":"fetchBinary consumer materialization > lifts reading a FabricBytes-bearing fetch result materialize and run"}}

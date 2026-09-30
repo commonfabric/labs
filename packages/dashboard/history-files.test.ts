@@ -39,12 +39,12 @@ Deno.test("dashboard cache files use fixed names in one configured directory", (
   );
   assertEquals(
     dashboardCacheFile(
-      "fabric-wall-github-members-commontoolsinc-history.json",
+      "fabric-wall-github-members-commonfabric-history.json",
       env,
     ),
     join(
       directory,
-      "fabric-wall-github-members-commontoolsinc-history.json",
+      "fabric-wall-github-members-commonfabric-history.json",
     ),
   );
 });

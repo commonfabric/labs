@@ -9,13 +9,16 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { getLogger } from "@commonfabric/utils/logger";
 import { Runtime } from "../src/runtime.ts";
 import { isSchemaMismatchError } from "../src/schema-view.ts";
 import { type JSONSchema } from "../src/builder/types.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toCell } from "../src/back-to-cell.ts";
+import { ensureSchemaDocument } from "../src/cfc/prepare.ts";
 
 const signer = await Identity.fromPassphrase("schema-view");
 const space = signer.did();
@@ -1071,6 +1074,335 @@ describe("schema-view", () => {
       });
     }
 
+    describe("under a schema that names no properties and refuses the rest", () => {
+      // `additionalProperties: false` with no `properties` beside it turns down
+      // every key the data carries. The narrowing reports each one as a bare
+      // `false`, the same return it gives for a shape it cannot read a child out
+      // of, so the view has to tell the two apart from the schema.
+
+      const closed = { type: "object", additionalProperties: false } as const;
+
+      it("leaves out every property, as an eager read does", async () => {
+        const read = await seeded(
+          "turned-down-names-none",
+          { id: "a", driver: "x" },
+          closed,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect(Object.keys(eager.get() as object)).toEqual([]);
+          const value = lazy.get() as Record<string, unknown>;
+          expect(Object.keys(value)).toEqual([]);
+          expect("driver" in value).toBe(false);
+          expect(value.driver).toBe(undefined);
+          expect(JSON.parse(JSON.stringify(value))).toEqual(
+            JSON.parse(JSON.stringify(eager.get())),
+          );
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      it("leaves out every property of an array element, as an eager read does", async () => {
+        const read = await seeded(
+          "turned-down-names-none-element",
+          { rows: [{ id: "a", driver: "x" }] },
+          {
+            type: "object",
+            properties: { rows: { type: "array", items: closed } },
+          } as const,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          const eagerRow = (eager.get() as { rows: object[] }).rows[0];
+          expect(Object.keys(eagerRow)).toEqual([]);
+          const row = (lazy.get() as { rows: Record<string, unknown>[] })
+            .rows[0];
+          expect(Object.keys(row)).toEqual([]);
+          expect("driver" in row).toBe(false);
+          expect(row.driver).toBe(undefined);
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      it("voids the object when the schema requires a property", async () => {
+        const read = await seeded(
+          "turned-down-names-none-required",
+          { id: "a", driver: "x" },
+          { ...closed, required: ["id"] } as const,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect(eager.get()).toBe(undefined);
+          expect(lazy.get()).toBe(undefined);
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      it("still reads a property that an `allOf` part names", async () => {
+        // An eager read merges the keywords beside an `allOf` into each part
+        // before it looks at a key, so a part can name what the schema itself
+        // does not, and the refusal does not reach that key.
+        const read = await seeded(
+          "turned-down-names-none-allof",
+          { id: "a", driver: "x" },
+          {
+            ...closed,
+            allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+          } as const,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect((eager.get() as { id: string }).id).toBe("a");
+          const value = lazy.get() as Record<string, unknown>;
+          expect("id" in value).toBe(true);
+          expect(value.id).toBe("a");
+          expect(Object.keys(value)).toEqual(["id"]);
+          expect("driver" in value).toBe(false);
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      describe("reached through", () => {
+        // The plain shape is one path; each of these reaches the same
+        // refusal by another — the union arm of the narrowing, a `$ref`, a
+        // `default` riding beside a value that is there, a child link — so a
+        // regression in one is not caught by pinning the others.
+
+        const rows: Array<[string, JSONSchema, string[]]> = [
+          ["a `type` list", { ...closed, type: ["object", "null"] }, []],
+          ["a schema with no `type`", { additionalProperties: false }, []],
+          [
+            "a `$ref`",
+            { $defs: { Closed: closed }, $ref: "#/$defs/Closed" },
+            [],
+          ],
+          ["a `default` beside it", { ...closed, default: { id: "d" } }, []],
+          [
+            "a named property",
+            { type: "object", properties: { row: closed } },
+            ["row"],
+          ],
+        ];
+
+        for (const [route, schema, path] of rows) {
+          it(`leaves out every property behind ${route}, as an eager read does`, async () => {
+            const value = path.length === 0
+              ? { id: "a", driver: "x" }
+              : { row: { id: "a", driver: "x" } };
+            const read = await seeded(
+              `turned-down-via-${route}`,
+              value,
+              schema,
+            );
+            const dig = (root: unknown): Record<string, unknown> =>
+              path.reduce(
+                (cursor, part) => (cursor as Record<string, unknown>)[part],
+                root,
+              ) as Record<string, unknown>;
+            const eager = read(false);
+            const lazy = read(true);
+            try {
+              expect(Object.keys(dig(eager.get()))).toEqual([]);
+              const row = dig(lazy.get());
+              expect(Object.keys(row)).toEqual([]);
+              expect("driver" in row).toBe(false);
+              expect(row.driver).toBe(undefined);
+            } finally {
+              await eager.tx.commit();
+              await lazy.tx.commit();
+            }
+          });
+        }
+      });
+
+      it("leaves the refused properties out of a default it takes for an absent value", async () => {
+        // Nothing is stored, so each read takes the schema's `default`. A
+        // default is built from the properties the schema names rather than
+        // read through a view, and this schema names none.
+        const schema = {
+          ...closed,
+          default: { id: "d", driver: "y" },
+        } as const;
+        const read = (lazy: boolean) => {
+          const tx = runtime.edit();
+          if (lazy) tx.markLazyMaterialize(true);
+          const cell = runtime.getCell(
+            space,
+            "turned-down-names-none-absent",
+            schema,
+            tx,
+          );
+          return { tx, get: () => cell.get() };
+        };
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect(Object.keys(eager.get() as object)).toEqual([]);
+          const value = lazy.get() as Record<string, unknown>;
+          expect(Object.keys(value)).toEqual([]);
+          expect("driver" in value).toBe(false);
+          expect(value.driver).toBe(undefined);
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      it("leaves out every property when the `allOf` beside it holds no parts", async () => {
+        // An eager read passes over an `allOf` with nothing in it, so no part
+        // is there to name a key and the refusal stands.
+        const read = await seeded(
+          "turned-down-names-none-empty-allof",
+          { id: "a", driver: "x" },
+          { ...closed, allOf: [] } as const,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect(Object.keys(eager.get() as object)).toEqual([]);
+          const value = lazy.get() as Record<string, unknown>;
+          expect(Object.keys(value)).toEqual([]);
+          expect("driver" in value).toBe(false);
+          expect(value.driver).toBe(undefined);
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+
+      it("hands over every property where the schema refuses none", async () => {
+        // Naming no properties turns nothing down; refusing the unnamed ones is
+        // what does.
+        const read = await seeded(
+          "names-none-refuses-none",
+          { id: "a", driver: "x" },
+          { type: "object" } as const,
+        );
+        const eager = read(false);
+        const lazy = read(true);
+        try {
+          expect(Object.keys(eager.get() as object)).toEqual(["id", "driver"]);
+          const value = lazy.get() as Record<string, unknown>;
+          expect(Object.keys(value)).toEqual(["id", "driver"]);
+          expect("driver" in value).toBe(true);
+          expect(value.driver).toBe("x");
+        } finally {
+          await eager.tx.commit();
+          await lazy.tx.commit();
+        }
+      });
+    });
+
+    describe("beside an `allOf`, under a schema that refuses what it does not name", () => {
+      // An eager read merges the keywords beside an `allOf` into each part
+      // before it looks at a key, and the part's own keywords win. So a part
+      // admits a key by naming it or by an `additionalProperties` that does not
+      // refuse it, and a key no part admits stays refused.
+
+      const named = {
+        type: "object",
+        properties: { id: { type: "string" } },
+      } as const;
+      const shapes: Array<[string, Record<string, unknown>, string[]]> = [
+        ["a part that names nothing", { allOf: [{ type: "object" }] }, []],
+        ["a part that is `true`", { allOf: [true] }, []],
+        [
+          "a part that refuses the rest itself",
+          { allOf: [{ type: "object", additionalProperties: false }] },
+          [],
+        ],
+        [
+          "a part whose `additionalProperties` is a schema",
+          {
+            allOf: [
+              { type: "object", additionalProperties: { type: "string" } },
+            ],
+          },
+          ["id", "driver"],
+        ],
+        [
+          "a part that declares one key `false` beside an `additionalProperties` that is a schema",
+          {
+            allOf: [
+              {
+                type: "object",
+                properties: { id: false },
+                additionalProperties: { type: "string" },
+              },
+            ],
+          },
+          ["driver"],
+        ],
+        [
+          "a part that is a `$ref` to a schema naming one key",
+          { $defs: { Named: named }, allOf: [{ $ref: "#/$defs/Named" }] },
+          ["id"],
+        ],
+        [
+          "a part naming one key through an `anyOf` of its own",
+          { allOf: [{ anyOf: [named] }] },
+          ["id"],
+        ],
+        [
+          "a part naming one key twelve `allOf`s down",
+          {
+            allOf: [
+              Array.from({ length: 12 }).reduce<unknown>(
+                (part) => ({ allOf: [part] }),
+                named,
+              ),
+            ],
+          },
+          ["id"],
+        ],
+        [
+          "a part naming one key beside `properties` naming another",
+          { properties: { q: { type: "number" } }, allOf: [named] },
+          ["id"],
+        ],
+      ];
+
+      for (const [shape, keywords, keys] of shapes) {
+        it(`reads the keys an eager read does for ${shape}`, async () => {
+          const read = await seeded(
+            `turned-down-allof-${shape}`,
+            { id: "a", driver: "x" },
+            {
+              type: "object",
+              additionalProperties: false,
+              ...keywords,
+            } as JSONSchema,
+          );
+          const eager = read(false);
+          const lazy = read(true);
+          try {
+            expect(Object.keys(eager.get() as object)).toEqual(keys);
+            const value = lazy.get() as Record<string, unknown>;
+            expect(Object.keys(value)).toEqual(keys);
+            expect("driver" in value).toBe(keys.includes("driver"));
+            expect(JSON.parse(JSON.stringify(value))).toEqual(
+              JSON.parse(JSON.stringify(eager.get())),
+            );
+          } finally {
+            await eager.tx.commit();
+            await lazy.tx.commit();
+          }
+        });
+      }
+    });
+
     it("voids the object when a required property is one it does not describe", async () => {
       // A schema that names its properties and says nothing about the rest
       // reaches the narrowing as a missing property rather than as `false`, and
@@ -1125,6 +1457,161 @@ describe("schema-view", () => {
         await eager.tx.commit();
         await lazy.tx.commit();
       }
+    });
+  });
+
+  describe("a key the data carries and the schema does not select", () => {
+    // Such a key reads as `undefined`, which is what a key that is not there
+    // reads as, so the view counts the read under a warning key of its own.
+    // The pattern test runner fails a test on any warning a run counts, unless
+    // the test allows console warnings. Each case compares the count either
+    // side of its reads, since the logger and its counts are shared by the
+    // whole process.
+
+    const ROW: JSONSchema = {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    };
+
+    const unselectedReads = (): number =>
+      getLogger("schema-view").countsByKey["unselected-key-read"]?.warn ?? 0;
+
+    /**
+     * Reads `value` under `schema`, runs `body` over what the read gives, and
+     * returns how many unselected-key reads the two counted together. The
+     * window opens before the read: an eager read does all its work inside
+     * `get()`, so a window opened after it would see none of that.
+     */
+    const countedDuring = async (
+      cause: string,
+      value: unknown,
+      schema: JSONSchema,
+      lazy: boolean,
+      body: (view: Record<string, unknown>) => void,
+    ): Promise<number> => {
+      const { tx, get } = (await seeded(cause, value, schema))(lazy);
+      try {
+        const before = unselectedReads();
+        const view = get() as Record<string, unknown>;
+        body(view);
+        return unselectedReads() - before;
+      } finally {
+        await tx.commit();
+      }
+    };
+
+    it("returns `undefined` for the key and counts the read", async () => {
+      const counted = await countedDuring(
+        "unselected-own",
+        { id: "a", driver: "x" },
+        ROW,
+        true,
+        (view) => expect(view.driver).toBeUndefined(),
+      );
+      expect(counted).toBe(1);
+    });
+
+    it("prints the key and the link it was read at once the logger is enabled", async () => {
+      const logger = getLogger("schema-view");
+      const printed: unknown[][] = [];
+      const warn = console.warn;
+      // With `LOG_TO_STDERR=1` the logger writes to stderr and never reaches
+      // `console.warn`, so the route is pinned for the length of the capture.
+      const stderrRoute = Deno.env.get("LOG_TO_STDERR");
+      Deno.env.set("LOG_TO_STDERR", "0");
+      logger.disabled = false;
+      console.warn = (...args: unknown[]) => {
+        printed.push(args);
+      };
+      try {
+        await countedDuring(
+          "unselected-printed",
+          { id: "a", driver: "x" },
+          ROW,
+          true,
+          (view) => expect(view.driver).toBeUndefined(),
+        );
+      } finally {
+        console.warn = warn;
+        logger.disabled = true;
+        if (stderrRoute === undefined) Deno.env.delete("LOG_TO_STDERR");
+        else Deno.env.set("LOG_TO_STDERR", stderrRoute);
+      }
+
+      const line = printed.find((args) => args.includes("unselected-key-read"));
+      const text = (line ?? []).join(" ");
+      const readAt = runtime.getCell(space, "unselected-printed")
+        .getAsNormalizedFullLink().id;
+      expect(text).toContain("`driver`");
+      expect(text).toContain(readAt);
+    });
+
+    it("counts nothing for a key the schema selects", async () => {
+      const counted = await countedDuring(
+        "unselected-selected",
+        { id: "a", driver: "x" },
+        ROW,
+        true,
+        (view) => expect(view.id).toBe("a"),
+      );
+      expect(counted).toBe(0);
+    });
+
+    it("counts nothing for a key the data does not carry", async () => {
+      const counted = await countedDuring(
+        "unselected-absent",
+        { id: "a" },
+        ROW,
+        true,
+        (view) => expect(view.driver).toBeUndefined(),
+      );
+      expect(counted).toBe(0);
+    });
+
+    it("counts nothing for a key the schema turns down", async () => {
+      const counted = await countedDuring(
+        "unselected-turned-down",
+        { id: "a", driver: "x", owner: "o" },
+        {
+          ...(ROW as object),
+          properties: { id: { type: "string" }, driver: false },
+          additionalProperties: false,
+        } as JSONSchema,
+        true,
+        (view) => {
+          // `driver` is declared `false`; `owner` is refused by a schema that
+          // refuses what it does not name.
+          expect(view.driver).toBeUndefined();
+          expect(view.owner).toBeUndefined();
+        },
+      );
+      expect(counted).toBe(0);
+    });
+
+    it("counts nothing for the keys JavaScript probes on any object", async () => {
+      const counted = await countedDuring(
+        "unselected-machinery",
+        { id: "a", then: "later", toJSON: "text" },
+        ROW,
+        true,
+        (view) => {
+          expect(view.then).toBeUndefined();
+          expect(view.toJSON).toBeUndefined();
+        },
+      );
+      expect(counted).toBe(0);
+    });
+
+    it("counts nothing on an eager read, which hands back a plain object", async () => {
+      const counted = await countedDuring(
+        "unselected-eager",
+        { id: "a", driver: "x" },
+        ROW,
+        false,
+        (value) => expect(value.driver).toBeUndefined(),
+      );
+      expect(counted).toBe(0);
     });
   });
 
@@ -1266,6 +1753,29 @@ describe("schema-view", () => {
       }
     });
 
+    it("matches nothing where the definition it names is `false`", async () => {
+      // The other boolean target. Reaching it through a local `$ref` is a
+      // resolution, and the `$defs` the ref resolves against merge into that
+      // target, so what comes back is the object form of `false` — a schema
+      // selecting nothing — and the read is nothing, as it is for the same
+      // `false` written as the whole schema (below).
+      const read = await seeded(
+        "rejecting-ref",
+        { a: 1 },
+        { $ref: "#/$defs/Nothing", $defs: { Nothing: false } } as const,
+      );
+
+      const eager = read(false);
+      const lazy = read(true);
+      try {
+        expect(eager.get()).toBeUndefined();
+        expect(lazy.get()).toBeUndefined();
+      } finally {
+        await eager.tx.commit();
+        await lazy.tx.commit();
+      }
+    });
+
     it("matches nothing where it is the whole schema", async () => {
       const read = await seeded(
         "unresolvable-root",
@@ -1284,6 +1794,66 @@ describe("schema-view", () => {
         await eager.tx.commit();
         await lazy.tx.commit();
       }
+    });
+  });
+
+  describe("a boolean as the whole schema", () => {
+    // `true` admits every value and `false` none, and the entry point keeps
+    // the two apart: `true` hands the read to the schema-less query-result
+    // proxy, and `false` reaches traversal, which matches nothing. Both hold
+    // whether the boolean is written in place or reached through a `cid:` ref,
+    // whose site carries nothing to merge into the target. A local
+    // `#/$defs/...` ref does carry its `$defs`, and that merge gives a `false`
+    // target back as an object — pinned above, under the `$ref` cases.
+
+    /** Read `{ a: 1 }` under `schema` in both modes. */
+    const readBoth = async (
+      cause: string,
+      schema: JSONSchema,
+      check: (value: unknown) => void,
+    ) => {
+      const read = await seeded(cause, { a: 1 }, schema);
+      const eager = read(false);
+      const lazy = read(true);
+      try {
+        check(eager.get());
+        check(lazy.get());
+      } finally {
+        await eager.tx.commit();
+        await lazy.tx.commit();
+      }
+    };
+    const untouched = (value: unknown) => {
+      const record = value as Record<string, unknown>;
+      expect(Object.keys(record)).toEqual(["a"]);
+      expect(record.a).toBe(1);
+    };
+    const nothing = (value: unknown) => {
+      expect(value).toBeUndefined();
+    };
+    /** Install a schema document holding `target` and return its ref. */
+    const installed = async (target: JSONSchema): Promise<JSONSchema> => {
+      const { taggedHashString } = internSchema(target, true);
+      const install = runtime.edit();
+      ensureSchemaDocument(install, space, taggedHashString, target);
+      await install.commit();
+      return { $ref: `cid:${taggedHashString}` } as JSONSchema;
+    };
+
+    it("hands back the value untouched where `true` is the whole schema", async () => {
+      await readBoth("true-root", true as JSONSchema, untouched);
+    });
+
+    it("reads nothing where `false` is the whole schema", async () => {
+      await readBoth("false-root", false as JSONSchema, nothing);
+    });
+
+    it("hands back the value untouched where a `cid:` ref names a `true` document", async () => {
+      await readBoth("cid-true-doc", await installed(true), untouched);
+    });
+
+    it("reads nothing where a `cid:` ref names a `false` document", async () => {
+      await readBoth("cid-false-doc", await installed(false), nothing);
     });
   });
 

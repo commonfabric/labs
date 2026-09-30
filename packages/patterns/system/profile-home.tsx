@@ -1,5 +1,6 @@
 import {
   Cell,
+  cellFromUrl,
   Cfc,
   computed,
   CurrentPrincipal,
@@ -136,6 +137,13 @@ export type ExternalIdentityAssertion = {
   verifiedAt: string;
 };
 
+/**
+ * A system integrity atom (`CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM`, spelled
+ * out because the schema lowering reads only a local literal): the runtime
+ * keeps it only on a write authored by a trusted builtin, so the writer of an
+ * assertion must attribute its transaction to one, and a profile cannot
+ * collect a self-asserted identity.
+ */
 export const LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY =
   "loom-verified-external-identity" as const;
 
@@ -145,6 +153,46 @@ export type VerifiedExternalIdentity = RequiresIntegrity<
 >;
 
 export type VerifiedExternalIdentityCell = Cell<VerifiedExternalIdentity>;
+
+/** What the profile knows of its share inbox piece: its name, at most. */
+export type ShareInboxPiece = {
+  [NAME]?: string;
+};
+
+/**
+ * Where things shared with this profile's owner are delivered: a link to the
+ * owner's share inbox piece — the piece whose `receive` stream other daemons
+ * call, in the dedicated inbox space the owner's daemon minted (loom
+ * `shares/inbox.py`; the design is loom's weaver-multiuser-sharing D8 and
+ * share-inbox proposal). The link names the piece and its space together;
+ * it carries no memory host because the inbox lives on the host the profile
+ * pointing at it lives on, so a reader uses the host it read the profile
+ * from. Public on purpose and no secret in it: the inbox space's ACL is the
+ * gate, the link only says where to knock. Stored as the `link@1` sigil,
+ * `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
+ * the same form the profile's pinned-piece elements take; `piece` is absent
+ * when the owner has no inbox.
+ *
+ * The link sits under a key rather than being the stored value itself
+ * because a write to a cell whose document root holds a link goes through
+ * the link into the piece it names, so a pointer stored bare could be set
+ * once and never re-pointed or cleared. Under a key, a new link re-binds the
+ * slot and an omitted key removes it.
+ */
+export type ProfileInbox = {
+  /** The owner's share inbox piece. */
+  piece?: Cell<ShareInboxPiece>;
+};
+
+export type SetProfileInboxEvent = {
+  /** The inbox piece to point at; absent clears the pointer. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // handler's event schema marks a reference position only where the wrapper
+  // is spelled in the event type, and through an alias the member compiles
+  // to the piece's value shape, so the handler is handed a value instead of
+  // the link it stores.
+  inbox?: Cell<ShareInboxPiece>;
+};
 
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
   VerifiedExternalIdentityCell[],
@@ -170,6 +218,12 @@ export type ProfileHomeOutput = {
   // (masked until now only because `addExternalLink` sorts earlier in the
   // required check).
   bio: Default<OwnerProtectedProfileWrite<string, typeof setBio>, "">;
+  // The owner's share inbox pointer. Owner-protected like bio; readable by
+  // anyone who can read the profile, which is what a sender needs. OPTIONAL
+  // rather than defaulted, unlike bio: a stored profile predating the field
+  // has no such property, and a profile with no inbox holds a pointer with
+  // no `piece`. A running profile always binds it.
+  inbox?: OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>;
   // Public web profiles the owner has chosen to associate with this profile.
   // The owner-protected list is distinct from `elements`, whose entries are
   // Common Fabric piece references.
@@ -202,6 +256,7 @@ export type ProfileHomeOutput = {
   setName: Stream<SetProfileNameEvent>;
   setAvatar: Stream<SetProfileAvatarEvent>;
   setBio: Stream<SetProfileBioEvent>;
+  setInbox: Stream<SetProfileInboxEvent>;
   addExternalLink: Stream<MutateExternalProfileLinksEvent>;
   removeExternalLink: Stream<MutateExternalProfileLinksEvent>;
   publishVerifiedIdentities: Stream<MutateVerifiedIdentitiesEvent>;
@@ -256,6 +311,7 @@ export type BackwardsCompatibleProfile = PartialBy<
   & Omit<ProfileHomeOutput, typeof UI>
   & { [UI]: unknown },
   | "setBio"
+  | "setInbox"
   | "addExternalLink"
   | "removeExternalLink"
   | "publishVerifiedIdentities"
@@ -271,6 +327,147 @@ const trimInitialName = (initialName?: string): string =>
  * and again at render time because a profile can contain older stored data. */
 const isSafeExternalProfileUrl = (url: string): boolean =>
   /^https?:\/\//i.test((url ?? "").trim());
+
+/** How the profile presents the assertion types it knows by name: the provider
+ * label it shows, and the public profile URL prefix for the types that have
+ * one. Every verified assertion is shown; a type absent here appears under its
+ * own name and without a link, so a provider Loom starts publishing needs no
+ * change here to reach the profile. */
+const KNOWN_IDENTITY_TYPES: Readonly<
+  Record<string, { provider: string; profileUrlPrefix?: string }>
+> = {
+  "github.login": {
+    provider: "GitHub",
+    profileUrlPrefix: "https://github.com/",
+  },
+  "github.node_id": { provider: "GitHub ID" },
+  email: { provider: "Email" },
+};
+
+export const identityProvider = (type: string): string =>
+  KNOWN_IDENTITY_TYPES[type]?.provider ?? type;
+
+/** How long after `verifiedAt` an assertion still counts as verified, the
+ * consumer freshness window of the shared profile space spec. */
+const VERIFIED_IDENTITY_FRESHNESS_MS = 48 * 60 * 60 * 1000;
+
+/** Whether an assertion verified at `verifiedAt` is inside the freshness
+ * window at `nowMs`. An unknown clock or an unreadable timestamp is not
+ * fresh, so the profile shows nothing it cannot date. */
+export const isFreshIdentity = (
+  verifiedAt: string | undefined,
+  nowMs: number | undefined,
+): boolean => {
+  if (typeof nowMs !== "number" || typeof verifiedAt !== "string") {
+    return false;
+  }
+  const verifiedMs = Date.parse(verifiedAt);
+  return Number.isFinite(verifiedMs) &&
+    nowMs - verifiedMs <= VERIFIED_IDENTITY_FRESHNESS_MS;
+};
+
+/** Whether the presentation shows an assertion: every type is shown, so what
+ * is left to hold is that it says something and is still fresh. */
+export const isShownIdentity = (
+  identity: Partial<ExternalIdentityAssertion> | undefined,
+  nowMs: number | undefined,
+): boolean =>
+  (identity?.type ?? "").length > 0 && (identity?.value ?? "").length > 0 &&
+  isFreshIdentity(identity?.verifiedAt, nowMs);
+
+/** The public page for an identity, or the empty string for a type with no
+ * such page — an email address among them, which the profile shows as text
+ * rather than turning a public profile into a one-click mail target. */
+export const identityProfileUrl = (type: string, value: string): string => {
+  const prefix = KNOWN_IDENTITY_TYPES[type]?.profileUrlPrefix;
+  return prefix === undefined ? "" : prefix + encodeURIComponent(value);
+};
+
+// One verified account in the profile presentation, or nothing for an
+// assertion outside the freshness window. The account name and the badge both
+// bind the stored assertion's own `value` field, so the badge reports the Loom
+// integrity label the runtime holds for the text shown beside it. The input
+// takes the plain assertion type. Requiring the integrity atom here would put
+// a write floor on the row's input that the `map` writing each list item into
+// it cannot meet; the badge reports the atom instead.
+export const VerifiedIdentityRow = pattern<
+  { assertion: ExternalIdentityAssertion; nowMs: number | undefined },
+  { [UI]: VNode; profileUrl: string; linked: boolean }
+>(
+  ({ assertion, nowMs }) => {
+    const displayed = computed(() => isShownIdentity(assertion, nowMs));
+    const provider = computed(() => identityProvider(assertion.type));
+    const profileUrl = computed(() =>
+      identityProfileUrl(assertion.type, assertion.value)
+    );
+    const linked = computed(() =>
+      identityProfileUrl(assertion.type, assertion.value).length > 0
+    );
+    return {
+      profileUrl,
+      linked,
+      [UI]: (
+        <cf-fragment>
+          {ifElse(
+            displayed,
+            <cf-hstack
+              gap="2"
+              align="center"
+              data-ui-region="profile-verified-identity"
+            >
+              <cf-text variant="caption" tone="muted">{provider} ·</cf-text>
+              {ifElse(
+                linked,
+                <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+                  {assertion.value}
+                </a>,
+                <cf-text variant="body">{assertion.value}</cf-text>,
+              )}
+              <cf-cfc-label
+                variant="badge"
+                atom={LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY}
+                $value={assertion.value}
+              />
+            </cf-hstack>,
+            null,
+          )}
+        </cf-fragment>
+      ),
+    };
+  },
+);
+
+// The verified accounts in the profile presentation: one row per shown
+// assertion, and nothing at all when none is shown, so an empty section adds
+// no gap to the presentation. The input takes plain assertion cells for the
+// same reason `VerifiedIdentityRow` takes a plain assertion.
+export const VerifiedIdentitiesSection = pattern<
+  {
+    identities: Cell<ExternalIdentityAssertion>[];
+    nowMs: number | undefined;
+  },
+  { [UI]: VNode; shown: boolean }
+>(({ identities, nowMs }) => {
+  const shown = computed(() =>
+    identities.some((identity) => isShownIdentity(identity.get(), nowMs))
+  );
+  return {
+    shown,
+    [UI]: (
+      <cf-fragment>
+        {ifElse(
+          shown,
+          <cf-vstack gap="1" data-ui-region="profile-verified-identities">
+            {identities.map((identity) => (
+              <VerifiedIdentityRow assertion={identity} nowMs={nowMs} />
+            ))}
+          </cf-vstack>,
+          null,
+        )}
+      </cf-fragment>
+    ),
+  };
+});
 
 const ProfileCatalogCard = pattern<{ title: string }, ProfileElementCell>(
   ({ title }) => ({
@@ -300,20 +497,21 @@ const UrlPatternReference = pattern<
   }),
 );
 
-// Build a link to an EXISTING deployed piece in (possibly) another space
-// (CT-1755). This is the canonical serialized cross-space link shape
-// (`createSigilLinkFromParsedLink`'s output): a `link@1` sigil carrying the
-// target piece id (URI form, `of:` prefix) and space DID. Stored as a
-// `ProfileElement.cell`, it resolves to the live piece and renders as a
-// followable `<cf-cell-link>` exactly like a `profiles[]` roster entry.
-const pieceReferenceLink = (space: string, pieceId: string): unknown => {
-  const id = pieceId.startsWith("of:") ? pieceId : `of:${pieceId}`;
-  return { "/": { "link@1": { id, space, path: [] } } };
+const PieceReference = pattern<{ url: string }>(
+  ({ url }) => {
+    const resolved = cellFromUrl({ url });
+    return resolved.cell;
+  },
+);
+
+// Element mutations compare references; renderers read the card content.
+type ProfileElementReference = Omit<ProfileElement, "cell"> & {
+  cell: Cell<unknown>;
 };
 
 const appendElement = (
   element: ProfileElement,
-  elements: Writable<ProfileElement[]>,
+  elements: Writable<ProfileElementReference[]>,
 ) => {
   const current = elements.get();
   if (current.some((existing) => equals(existing.cell, element.cell))) {
@@ -332,7 +530,7 @@ const appendElement = (
 const mutateElements = handler<
   MutateProfileElementsEvent,
   {
-    elements: Writable<ProfileElement[]>;
+    elements: Writable<ProfileElementReference[]>;
     // Instance intent. Each binding site declares what its events may do, so
     // a malformed/empty event can never cross purposes (an empty remove must
     // not add; an empty link form must not add a catalog card):
@@ -407,8 +605,16 @@ const mutateElements = handler<
       // Tag by the piece id so the same piece can't be pinned twice (dedup in
       // appendElement is by `cell`; a stable tag keeps the row label sane).
       const tag = rawId;
+      const id = rawId.startsWith("of:") ? rawId : `of:${rawId}`;
+      // Equality observes each held reference's selection labels.
+      const address = { "/": { "link@1": { id, space, path: [] } } };
+      if (
+        state.elements.get().some((existing) => existing.cell.equals(address))
+      ) {
+        return;
+      }
       appendElement({
-        cell: pieceReferenceLink(space, rawId),
+        cell: PieceReference({ url: `//${space}/${id}` }),
         source: "piece",
         title,
         tag,
@@ -507,6 +713,17 @@ const setBio = handler<
     state.draft?.set("");
   },
 );
+
+// The single authorized writer for the share inbox link. The link is stored
+// as sent, and an event without one clears the pointer (the owner retired
+// their inbox). No shape check here: the event's schema admits a cell link
+// and nothing else, and the runtime refuses an event that is not one.
+const setInbox = handler<
+  SetProfileInboxEvent,
+  { inbox: Writable<ProfileInbox> }
+>((event, state) => {
+  state.inbox.set(event.inbox === undefined ? {} : { piece: event.inbox });
+});
 
 // The single authorized writer for externally hosted profile links. Add and
 // remove streams are instances of this handler so the owner-protected list has
@@ -638,21 +855,28 @@ const applyInitialName = lift<
   { initialName?: string; name: Writable<string> },
   string
 >(({ initialName, name }) => {
-  return name.get() ?? trimInitialName(initialName);
+  return name.get() || trimInitialName(initialName);
 });
 
 export default pattern<ProfileHomeInput, ProfileHomeOutput>(
   ({ initialName, [SELF]: self }) => {
-    const initialProfileName = trimInitialName(initialName);
+    // A static initializer, so the cell keeps its identity across releases:
+    // a default derived from an input is materialized under an id that moves
+    // with the pattern, and a release would leave the saved name behind in
+    // the cell it no longer links. The display falls back to `initialName`
+    // (`applyInitialName`) until the person stores one through `setName`.
     const name = new Writable<
       OwnerProtectedProfileWrite<string, typeof setName>
-    >(initialProfileName).for("name");
+    >("").for("name");
     const avatar = new Writable<
       OwnerProtectedProfileWrite<string, typeof setAvatar>
     >("").for("avatar");
     const bio = new Writable<
       OwnerProtectedProfileWrite<string, typeof setBio>
     >("").for("bio");
+    const inbox = new Writable<
+      OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>
+    >({}).for("inbox");
     const externalLinks = new Writable<
       OwnerProtectedProfileWrite<
         ExternalProfileLink[],
@@ -719,6 +943,8 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     // bio block (CT-1648).
     const hasBio = computed(() => (bio.get() ?? "").trim().length > 0);
     const hasExternalLinks = computed(() => externalLinks.get().length > 0);
+    // Five-minute ticks are fine enough for a 48-hour freshness window.
+    const now = wish<number>({ query: "#now/300" });
     const parsedUserTags = computed(() =>
       userTagsText.get().split(",").map((tag) => tag.trim()).filter((tag) =>
         tag.length > 0
@@ -740,12 +966,14 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       name,
       avatar,
       bio,
+      inbox,
       externalLinks,
       verifiedIdentities,
       elements,
       setName: setName({ name }),
       setAvatar: setAvatar({ avatar }),
       setBio: setBio({ bio, draft: bioDraft }),
+      setInbox: setInbox({ inbox }),
       addExternalLink: mutateExternalProfileLinks({
         externalLinks,
         mode: "add",
@@ -856,6 +1084,11 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                   </cf-hstack>,
                   null,
                 )}
+
+                <VerifiedIdentitiesSection
+                  identities={verifiedIdentities}
+                  nowMs={now.result}
+                />
 
                 {
                   /* Pinned patterns render as tile variants (clickable,

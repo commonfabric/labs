@@ -2,78 +2,117 @@
  * Top-level `export`ed visitor functions.
  */
 
-import { type FabricValue } from "@/interface.ts";
+import type { FabricValuePlus } from "@/interface.ts";
 
-import {
-  type BaselineVisitResult,
-  type DomainFor,
-  type ValueVisitor,
-} from "./interface.ts";
+import type { ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
- * Performs a one-off visit of a value with a visitor, where the value is
- * assumed to be a valid `FabricValue` and where the full domain of the visit is
- * exactly `FabricValue`.
+ * Performs a one-off structural-map of a value, with the given visitor, with
+ * the structure it builds frozen: every container the map builds is frozen,
+ * and every `FabricInstance` it rebuilds is as its codec's `decode()` builds
+ * one when asked for a frozen value.
+ *
+ * What the map places into that structure without building it is left as it
+ * is, frozen or not. A visited value or subvalue which is itself frozen _and_
+ * which the operation left unchanged (that is, which mapped to itself) is
+ * included directly rather than as a copy, and so is a value a visitor supplies
+ * with a `mapTo`, which is the visitor's statement of what it wants in that
+ * position.
+ *
+ * See `visitValue()` in re `value` validation.
  */
-export function visitFabricValue<ResultType = FabricValue>(
-  value: FabricValue,
-  visitor: ValueVisitor<never, ResultType>,
-): BaselineVisitResult<ResultType> {
-  const inProgress = new VisitInProgress(visitor);
-  return inProgress.visitFabricValue(value);
+export function mapValue<PlusType, ResultType>(
+  value: NoInfer<FabricValuePlus<PlusType>>,
+  visitor: ValueVisitor<PlusType, ResultType>,
+): ResultType {
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "map",
+    freeze: true,
+  });
+  return inProgress.visit(value);
 }
 
 /**
- * Creates a visitor function bound to the given visitor. The result is a
- * single-argument `visit(value)` function.
+ * Performs a one-off structural-map of a value, with the given visitor, with
+ * the structure it builds left mutable: every container the map builds is
+ * mutable, and every `FabricInstance` it rebuilds is as its codec's `decode()`
+ * builds one when asked for a mutable value.
+ *
+ * The map copies every container it recurses into, even one it leaves
+ * unchanged (that is, which mapped to itself). A value a visitor supplies with
+ * a `mapTo` is included as given, frozen or not, being the visitor's statement
+ * of what it wants in that position.
+ *
+ * See `visitValue()` in re `value` validation.
  */
-export function makeVisitFabricValueFunction<ResultType = FabricValue>(
-  visitor: ValueVisitor<never, ResultType>,
-): (value: FabricValue) => BaselineVisitResult<ResultType> {
-  return (value: FabricValue) => visitFabricValue(value, visitor);
+export function mutableMapValue<PlusType, ResultType>(
+  value: NoInfer<FabricValuePlus<PlusType>>,
+  visitor: ValueVisitor<PlusType, ResultType>,
+): ResultType {
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "map",
+    freeze: false,
+  });
+  return inProgress.visit(value);
 }
 
 /**
- * Performs a one-off visit of a value with a visitor, using runtime type checks
- * to determine whether or not an encountered value is a `FabricValue`.
- *
- * Type checking can be performed either as a deep-validity check or a shallow
- * "shape of value" check:
- *
- * * The shallow check is a fast single-layer check based on
- *   `isValidFabricValueLayer()`, see which for details.
- *
- * * The deep check performs a full-depth validity check, based on
- *   `isValidFabricValue()`, anywhere an encountered value to be dispatched
- *   might turn out not to be a valid `FabricValue`, resulting in a guarantee
- *   that anything of type `FabricValue` passed to the visitor is in fact a
- *   valid `FabricValue`.
- *
- *   This can incur significant performance overhead. As a worst-case, it can
- *   result in O(N^2) checks on the number of values in the graph of the
- *   top-level value being visited. _If this turns out to be a problem in
- *   practice,_ this will become an active area of optimization.
+ * Creates a structural-map function which performs visits identically to
+ * `value => mapValue(value, visitor)`.
  */
-export function visitValue<DomainExtra, ResultType>(
-  value: NoInfer<DomainFor<DomainExtra>>,
-  visitor: ValueVisitor<DomainExtra, ResultType>,
-  deepTypeCheck: boolean = false,
-): BaselineVisitResult<ResultType> {
-  const inProgress = new VisitInProgress<DomainExtra, ResultType>(visitor);
-  return inProgress.visit(value, deepTypeCheck);
+export function makeMapValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => mapValue(value, visitor);
 }
 
 /**
- * Creates a visitor function bound to the given visitor. The result is a
- * single-argument `visit(value)` function.
- *
- * See `visitValue()` for details on the `deepTypeCheck` argument.
+ * Creates a structural-map function which performs visits identically to
+ * `value => mutableMapValue(value, visitor)`.
  */
-export function makeVisitValueFunction<DomainExtra, ResultType>(
-  visitor: ValueVisitor<DomainExtra, ResultType>,
-  deepTypeCheck: boolean = false,
-): (value: DomainFor<DomainExtra>) => BaselineVisitResult<ResultType> {
-  return (value: DomainFor<DomainExtra>) =>
-    visitValue(value, visitor, deepTypeCheck);
+export function makeMutableMapValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => mutableMapValue(value, visitor);
+}
+
+/**
+ * Creates a visitor function which performs visits identically to
+ * `value => visitValue(value, visitor)`.
+ */
+export function makeVisitValueFunction<PlusType, ResultType>(
+  visitor: ValueVisitor<PlusType, ResultType>,
+): (
+  value: FabricValuePlus<PlusType>,
+) => ResultType {
+  return (value: FabricValuePlus<PlusType>) => visitValue(value, visitor);
+}
+
+/**
+ * Performs a one-off visit of a value, with the given visitor.
+ *
+ * The engine does not validate `value`; it trusts the static type. Each value
+ * it encounters is dispatched by a shallow inspection of its shape: an array,
+ * a plain object, or a `FabricSpecialObject` is taken to be the fabric
+ * container or primitive its shape indicates, whatever it holds, and only a
+ * value whose shape is none of those is put to the visitor's `isPlusType()`.
+ * So a container which is not inert is walked as its shape says: an array
+ * carrying a named property `throw`s when its elements are iterated, and a
+ * plain object's entries are read the way `Object.entries()` reads them, which
+ * skips a symbol-keyed or non-enumerable property and runs an accessor. A
+ * caller which needs a value validated does that before visiting it.
+ */
+export function visitValue<PlusType, ResultType>(
+  value: NoInfer<FabricValuePlus<PlusType>>,
+  visitor: ValueVisitor<PlusType, ResultType>,
+): ResultType {
+  const inProgress = new VisitInProgress<PlusType, ResultType>(visitor, {
+    mode: "visit",
+  });
+  return inProgress.visit(value);
 }

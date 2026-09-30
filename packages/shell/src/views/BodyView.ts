@@ -12,6 +12,7 @@ import type { JSONSchema } from "@commonfabric/runner/shared";
 import { CellHandle, PieceHandle, VNode } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
 import { openPieceMenu } from "@commonfabric/ui";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 type SubPages = {
   sidebarUI?: VNode;
@@ -143,6 +144,16 @@ export class XBodyView extends BaseView {
   @property({ attribute: false })
   accessor activePattern: PieceHandle | undefined = undefined;
 
+  /** Pointer keys selecting a view inside the active result document. */
+  @property({ attribute: false })
+  accessor piecePath: string[] = [];
+
+  private get activeCell(): CellHandle | undefined {
+    let cell: CellHandle | undefined = this.activePattern?.cell();
+    for (const key of this.piecePath) cell = cell?.key(key as never);
+    return cell;
+  }
+
   @property()
   accessor showShellPieceListView = false;
 
@@ -159,20 +170,21 @@ export class XBodyView extends BaseView {
   accessor embedded = false;
 
   #subPages = new Task(this, {
-    task: async ([activePattern, embedded]) => {
+    task: async ([_activePattern, embedded, _path]) => {
       if (embedded) {
         return {
           sidebarUI: undefined,
         };
       }
       const sidebarUI = await getSidebarCell(
-        activePattern?.cell() as CellHandle<SubPages> | undefined,
+        this.activeCell as CellHandle<SubPages> | undefined,
       );
       return {
         sidebarUI,
       };
     },
-    args: () => [this.activePattern, this.embedded],
+    args:
+      () => [this.activePattern, this.embedded, JSON.stringify(this.piecePath)],
   });
 
   /**
@@ -225,7 +237,7 @@ export class XBodyView extends BaseView {
       : this.activePattern
       ? html`
         <cf-piece slot="main" .pieceId="${this.activePattern.id()}">
-          <cf-render .cell="${this.activePattern.cell()}"></cf-render>
+          <cf-render .cell="${this.activeCell}"></cf-render>
         </cf-piece>
       `
       : null;
@@ -274,7 +286,7 @@ function loadErrorMessage(error: unknown): string {
     if (error instanceof Error) {
       message = error.message;
     } else if (
-      typeof error === "object" && error !== null && "message" in error &&
+      isObjectOrArray(error) && "message" in error &&
       typeof error.message === "string"
     ) {
       message = error.message;

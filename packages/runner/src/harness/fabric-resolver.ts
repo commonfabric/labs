@@ -1,3 +1,4 @@
+import { isDID } from "@commonfabric/identity/did";
 import type { ProgramResolver, Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -19,7 +20,6 @@ import { compilerStack } from "./deferred-compiler-stack.ts";
 import type { FabricImportOptions, ResolvedFabricPin } from "./types.ts";
 
 const MAX_FABRIC_MOUNTS = 32;
-const DID_RE = /^did:[a-z0-9]+:.+$/;
 const logger = getLogger("fabric-resolver");
 
 export interface FabricResolutionContext extends FabricImportOptions {
@@ -221,7 +221,7 @@ export class FabricAwareResolver implements ProgramResolver {
 
   #sourceSpaceFor(refSpace: string | undefined): MemorySpace {
     if (refSpace === undefined) return this.#ctx.space;
-    if (DID_RE.test(refSpace)) return refSpace as MemorySpace;
+    if (isDID(refSpace)) return refSpace;
     throw new Error(
       "space names are currently unsupported; resolve the name to a DID first",
     );

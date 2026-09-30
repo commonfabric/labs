@@ -15,6 +15,7 @@ import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -136,7 +137,7 @@ const withRuntime = async (
 const seedSecret = async (runtime: Runtime, id: string): Promise<void> => {
   const seed = runtime.edit();
   const target = runtime.getCell(signer.did(), id, undefined, seed);
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: target.getAsNormalizedFullLink().id,
@@ -227,7 +228,7 @@ describe("cfc-denial-reporting", () => {
                 ? 42
                 : "private reference value";
               writeSeedEnvelopeDoc(seed, signer.did());
-              seed.writeOrThrow(source.getAsNormalizedFullLink(), {
+              seedStoredEnvelope(seed, source.getAsNormalizedFullLink(), {
                 value,
                 cfc: {
                   version: 2,

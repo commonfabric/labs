@@ -1,5 +1,5 @@
 /**
- * `Error` as a `FabricValue`, where most of the difficulty is that a native
+ * `Error` as a `FabricValue`, where most of the difficulty is that a JS
  * error carries two names and arbitrary extra properties.
  *
  * `type` and `name` are stored separately, and the encoding leans on their
@@ -22,22 +22,17 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricInstance, type FabricValue } from "@/interface.ts";
-import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import {
   deepFreeze,
+  FabricInstance,
+  type FabricValue,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
-} from "@/deep-freeze.ts";
+} from "@";
+import { CODEC, CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricError, FabricNativeWrapper } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
 import { dummyEnv, subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricError", () => {
@@ -158,7 +153,7 @@ describe("FabricError", () => {
         expect(se.message).toBe("changed");
         expect(se.stack).toBe("at nowhere");
         expect(se.cause).toEqual({ detail: 1 });
-        // The native projection reflects the mutated state (no stale cache).
+        // The JS projection reflects the mutated state (no stale cache).
         expect(se.toNativeValue(true).message).toBe("changed");
       });
 
@@ -189,6 +184,30 @@ describe("FabricError", () => {
 
     describe("`[CODEC]` `encode()` state", () => {
       const env = NULL_LIVE_ENVIRONMENT;
+
+      it("returns frozen state, for an instance that is not frozen", () => {
+        const se = FabricError.fromNativeError(new Error("hello"));
+
+        expect(Object.isFrozen(se)).toBe(false);
+        expect(Object.isFrozen(FabricError[CODEC].encode(se, env))).toBe(true);
+      });
+
+      it("returns state holding a `cause` as itself, unfrozen", () => {
+        const cause = { detail: "x" };
+        const se = new FabricError({
+          type: "Error",
+          message: "hello",
+          stack: undefined,
+          cause,
+        });
+        const state = FabricError[CODEC].encode(se, env) as Record<
+          string,
+          FabricValue
+        >;
+
+        expect(state.cause).toBe(cause);
+        expect(Object.isFrozen(cause)).toBe(false);
+      });
 
       it("returns `type`, `name=null` (common case), `message`, `stack`", () => {
         const se = FabricError.fromNativeError(new Error("hello"));
@@ -460,7 +479,7 @@ describe("FabricError", () => {
         expect(result).toBeInstanceOf(Error);
         expect(result.message).toBe("native");
         expect(Object.isFrozen(result)).toBe(true);
-        // The originating native Error is not stored / not mutated.
+        // The originating JS `Error` is not stored / not mutated.
         expect(Object.isFrozen(err)).toBe(false);
       });
 
@@ -730,6 +749,41 @@ describe("FabricError", () => {
             .toBe(true);
         });
 
+        it("returns `true` for a record with every checked field absent", () => {
+          expect(codec.canDecode({})).toBe(true);
+          expect(codec.canDecode({ cause: 42, code: 7 })).toBe(true);
+        });
+
+        it("returns `true` for a `null` `name`, which means same as `type`", () => {
+          expect(codec.canDecode({ type: "Error", name: null, message: "" }))
+            .toBe(true);
+        });
+
+        it("returns `true` for a `name` with no `type` (back-compat)", () => {
+          expect(codec.canDecode({ name: "TypeError", message: "old format" }))
+            .toBe(true);
+        });
+
+        it("returns `false` for a checked field that is not a string", () => {
+          // Each of these fields reaches a getter typed `string` unchecked by
+          // the constructor, so the predicate is the one place a mistyped one
+          // is refused.
+
+          for (const key of ["type", "name", "message", "stack"]) {
+            for (const value of [42, true, undefined, ["x"], { x: 1 }]) {
+              const state = { type: "Error", message: "boop", [key]: value };
+              expect(codec.canDecode(state as never)).toBe(false);
+            }
+          }
+        });
+
+        it("returns `false` for a `null` in a field other than `name`", () => {
+          for (const key of ["type", "message", "stack"]) {
+            const state = { type: "Error", message: "boop", [key]: null };
+            expect(codec.canDecode(state as never)).toBe(false);
+          }
+        });
+
         it("returns `false` for state that is not a plain object", () => {
           // Wire state is untrusted input. Without this check these decode
           // into a `FabricError` bearing a default type and an empty message,
@@ -909,10 +963,10 @@ describe("FabricError", () => {
         });
 
         it("round-trips an `Error` whose cause is itself a `FabricError`", () => {
-          // Simulates what `fabricFromNativeValue` produces: a FabricError
-          // wrapping an Error whose cause is itself a FabricError (not a raw
-          // Error). Encoding's recurse on `[CODEC]` `encode()` output must find
-          // a FabricValue, not a raw Error.
+          // Simulates what `fabricFromConvertibleJsValue` produces: a
+          // FabricError wrapping an Error whose cause is itself a FabricError
+          // (not a raw Error). Encoding's recurse on `[CODEC]` `encode()`
+          // output must find a FabricValue, not a raw Error.
 
           const innerSe = FabricError.fromNativeError(new Error("inner"));
           const outerErr = new Error("outer");

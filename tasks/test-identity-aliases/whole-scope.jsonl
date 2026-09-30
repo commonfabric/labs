@@ -1,0 +1,8 @@
+{"date": "2026-08-25", "from": {"k": "unit", "s": "connectors/agents"}, "to": {"k": "unit", "s": "connectors/agents/connector"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "agents-host"}, "to": {"k": "unit", "s": "connectors/agents/host"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "connectors/github"}, "to": {"k": "unit", "s": "connectors/github/connector"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "github-host"}, "to": {"k": "unit", "s": "connectors/github/host"}}
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "connectors/agents"}, "to": {"k": "typecheck", "s": "connectors/agents/connector"}}
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "agents-host"}, "to": {"k": "typecheck", "s": "connectors/agents/host"}}
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "connectors/github"}, "to": {"k": "typecheck", "s": "connectors/github/connector"}}
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "github-host"}, "to": {"k": "typecheck", "s": "connectors/github/host"}}

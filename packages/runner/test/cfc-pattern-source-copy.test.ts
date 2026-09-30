@@ -64,12 +64,13 @@ describe("cfc-pattern-source-copy", () => {
         tx,
         source.getAsNormalizedFullLink(),
       );
-      expect(metadata?.version).toBe(2);
+      expect(metadata?.version).toBe(3);
       expect(metadata!.labelMap.entries).toContainEqual(
         expect.objectContaining({
           path: ["code"],
           origin: "link",
           observes: "followRef",
+          referenceAcquisition: "complete",
           label: expect.objectContaining({
             integrity: [
               expect.objectContaining({ type: CFC_ATOM_TYPE.LinkReference }),
@@ -161,7 +162,7 @@ describe("cfc-pattern-source-copy", () => {
 
   it("refuses content and legacy labels that resemble reference identity evidence", () => {
     const marker: CfcMetadata = {
-      version: 2,
+      version: 3,
       schemaHash: "unused-by-metadata-classifier",
       labelMap: {
         version: 1,
@@ -169,13 +170,16 @@ describe("cfc-pattern-source-copy", () => {
           path: ["code"],
           origin: "link",
           observes: "followRef",
+          referenceAcquisition: "complete",
           label: { integrity: [{ type: CFC_ATOM_TYPE.LinkReference }] },
         }],
       },
     };
     expect(sourceCfcMetadataProhibitsCrossSpaceCopy(marker)).toBe(false);
-    expect(sourceCfcMetadataProhibitsCrossSpaceCopy({ ...marker, version: 1 }))
-      .toBe(true);
+    for (const version of [1, 2] as const) {
+      expect(sourceCfcMetadataProhibitsCrossSpaceCopy({ ...marker, version }))
+        .toBe(true);
+    }
     for (
       const changes of [
         { origin: "declared" as const },

@@ -11,7 +11,7 @@
  * reading and nothing about a resolution. What a resolution does to a place —
  * the handle it adopts, the name it leaves beside it, and the refusal a path
  * that is not there gets — is pinned where it happens, in `confirm()`'s block
- * in `shuttle-place.test.ts` and in `cd`'s in `shuttle-verbs.test.ts`.
+ * in `shuttle-place.test.ts` and in `cd`'s in `shuttle-verbs.serial.test.ts`.
  */
 
 import type { CurrentPlace, Move } from "../lib/shuttle/place.ts";

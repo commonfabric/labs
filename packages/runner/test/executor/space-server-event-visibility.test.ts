@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import {
+  type DeliveryDeferral,
   getServerExecutionConfig,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
   setServerExecutionConfig,
@@ -14,7 +15,10 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryServer from "@commonfabric/memory/v2/server";
 
-import { SpaceServer } from "../../src/executor/space-server.ts";
+import {
+  SpaceServer,
+  type SpaceServerPolicy,
+} from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -61,7 +65,7 @@ describe("SpaceServer", () => {
     }
   });
 
-  async function openFixture() {
+  async function openFixture(policy?: SpaceServerPolicy) {
     const engine = await server.engineForSpace(space);
     await settle(
       server.writeDocument(space, SERVER_EXECUTION_WATERMARK_DOC_ID, {
@@ -91,6 +95,7 @@ describe("SpaceServer", () => {
       ensureSpaceRoots: false,
       localSeqRef: { value: 0 },
       stats,
+      ...(policy === undefined ? {} : { policy }),
       decorateWaveCommitSink: (sink) => ({
         currentHeads: (space, docs) => sink.currentHeads(space, docs),
         concurrentWritePaths: (space, doc, seq) =>
@@ -186,6 +191,20 @@ describe("SpaceServer", () => {
           );
         }
         return admissions;
+      },
+      async admitOne(streamIndex: number, eventId: string) {
+        return await settle(server.commitDelegatedAppend({
+          targetSpace: space,
+          targetStream: sidecars[streamIndex],
+          targetStreamLink: streams[streamIndex],
+          eventId,
+          payload: {},
+          actingPrincipal: owner.did(),
+          actingSession: "session:visibility-actor",
+          capabilityRef: "cap:visibility",
+          sessionId: "session:visibility-delivery",
+          localSeq: ++localSeq,
+        }));
       },
       async drain() {
         for (const notice of notices) active.enqueueCommit(notice);
@@ -321,6 +340,82 @@ describe("SpaceServer", () => {
     });
   }
 
+  describe("the deferral backstop", () => {
+    // Both cases fail the same drain pass at the same point: the queue attempt
+    // for an admitted event throws, and the pass defers the entry rather than
+    // consequencing it. What differs between them is whether the serving
+    // tenure is still running when the deferral lands.
+
+    it("fires a re-drain after a queue-time failure", async () => {
+      const fixture = await openFixture();
+      await fixture.admit();
+      const scheduler = fixture.runtime.scheduler;
+      using queued = stub(scheduler, "queueEvent", (): never => {
+        throw new Error("injected queue failure");
+      });
+
+      await fixture.drain();
+      expect(queued.calls).toHaveLength(2);
+      expect(fixture.stats.events.deferredRescansArmed).toBe(1);
+      expect(fixture.stats.events.deferredRescansFired).toBe(0);
+
+      await clock.tick(250);
+      expect(fixture.stats.events.deferredRescansFired).toBe(1);
+      expect(queued.calls).toHaveLength(3);
+    });
+
+    it("arms nothing once the tenure has parked", async () => {
+      const fixture = await openFixture();
+      await fixture.admit();
+      const scheduler = fixture.runtime.scheduler;
+      using queued = stub(scheduler, "queueEvent", (): never => {
+        // A park clears the backstop timer and the renew interval up front,
+        // then awaits the seal chain and the runtime's disposal. The pass runs
+        // on through those awaits, so the deferral below lands on a tenure
+        // that has already released every timer it owns.
+        void fixture.serving.park("test-park-mid-drain");
+        throw new Error("injected queue failure");
+      });
+
+      // The tick comes before the assertions: a backstop armed here is one
+      // nothing clears, and leaving it pending for the next case to fire
+      // reports one failure as two.
+      await fixture.drain();
+      await clock.tick(250);
+      expect(fixture.serving.active).toBe(false);
+      expect(queued.calls).toHaveLength(1);
+      expect(fixture.stats.events.deferredRescansArmed).toBe(0);
+      expect(fixture.stats.events.deferredRescansFired).toBe(0);
+      expect(fixture.called).toEqual([]);
+    });
+
+    it("leaves the entries of a parked pass to the next activation", async () => {
+      const fixture = await openFixture();
+      await fixture.admit();
+      const scheduler = fixture.runtime.scheduler;
+      {
+        using _queued = stub(scheduler, "queueEvent", (): never => {
+          void fixture.serving.park("test-park-mid-drain");
+          throw new Error("injected queue failure");
+        });
+        await fixture.drain();
+      }
+      await settle(fixture.serving.park("test-park-await"));
+      // Past the backstop boundary with the space parked, so what the next
+      // tenure processes is what its own activation scan found.
+      await clock.tick(250);
+      expect(fixture.called).toEqual([]);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([false, false]);
+
+      const next = await openFixture();
+      await next.drain();
+      expect(next.called).toEqual(["A", "B"]);
+      expect(next.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, true]);
+    });
+  });
+
   it("processes a pending legacy entry after sequenced arrivals", async () => {
     const fixture = await openFixture();
     await fixture.admit();
@@ -447,61 +542,77 @@ describe("SpaceServer", () => {
     ]);
   });
 
-  for (const phase of ["sidecar sync", "publication", "response"] as const) {
+  for (
+    const phase of [
+      "sidecar sync",
+      "publication",
+      "response",
+      "stream document sync",
+    ] as const
+  ) {
     for (const outcome of ["success", "failure"] as const) {
       it(`leaves events pending when tenure ends during ${phase} ${outcome}`, async () => {
         const fixture = await openFixture();
         await fixture.admit();
-        const provider = fixture.runtime.storageManager.open(space);
-        const release = Promise.withResolvers<void>();
-        let entered = 0;
-        const hold = async () => {
-          entered++;
-          await release.promise;
+        const manager = fixture.runtime.storageManager;
+        const provider = manager.open(space);
+        let parked: Promise<void> | undefined;
+        // A park ends the tenure in its synchronous prefix and only then
+        // awaits its seal chain and the runtime's disposal, so the drain
+        // pass resumes from this wait inside that window: the tenure is
+        // over and the runtime is still alive. Ending the tenure once the
+        // pass has already resumed would leave nothing for the pass to
+        // notice.
+        const endTenure = () => {
+          parked = fixture.serving.park("visibility-test");
           if (outcome === "failure") {
             throw new Error(`injected ${phase} failure`);
           }
         };
-        const sync = provider.sync.bind(provider);
+        const syncCell = manager.syncCell.bind(manager);
         const flush = server.flushSessions.bind(server);
         const pull = provider.pullToServerHead!.bind(provider);
-        using _sync = stub(provider, "sync", async (uri, ...args) => {
-          const result = await sync(uri, ...args);
+        let sidecarSynced = false;
+        using _syncCell = stub(manager, "syncCell", async (cell, ...rest) => {
+          const result = await syncCell(cell, ...rest);
+          if (parked !== undefined) return result;
+          const { id } = cell.getAsNormalizedFullLink();
+          if (id === sidecars[0]) {
+            sidecarSynced = true;
+            if (phase === "sidecar sync") endTenure();
+          }
+          // The sidecar gate puts this at the drain's own load of the
+          // stream document, which the pass reaches per entry.
           if (
-            phase === "sidecar sync" && uri === sidecars[0] && entered === 0
+            phase === "stream document sync" && sidecarSynced &&
+            id === streams[0].id
           ) {
-            await hold();
+            endTenure();
           }
           return result;
         });
         using _flush = stub(server, "flushSessions", async (spaces) => {
           await flush(spaces);
           if (
-            phase === "publication" && spaces !== undefined && entered === 0
+            phase === "publication" && spaces !== undefined &&
+            parked === undefined
           ) {
-            await hold();
+            endTenure();
           }
         });
         using _pull = stub(provider, "pullToServerHead", async () => {
           await pull();
-          if (phase === "response" && entered === 0) await hold();
+          if (phase === "response" && parked === undefined) endTenure();
         });
-        try {
-          await fixture.drain();
-          expect(entered, `${phase} must start before teardown`).toBe(1);
-          const parked = fixture.serving.park("visibility-test");
-          await clock.settle();
-          release.resolve();
-          await settle(parked);
-          await clock.settle();
-          expect(fixture.called).toEqual([]);
-          expect(fixture.storedLog()).toEqual([]);
-          expect(readWatermarkSeq(fixture.engine)).toBe(1);
-          expect(fixture.entries().map((entry) => entry.consequenced === true))
-            .toEqual([false, false]);
-        } finally {
-          release.resolve();
-        }
+        await fixture.drain();
+        expect(parked, `${phase} must run before teardown`).toBeDefined();
+        await settle(parked!);
+        await clock.settle();
+        expect(fixture.called).toEqual([]);
+        expect(fixture.storedLog()).toEqual([]);
+        expect(readWatermarkSeq(fixture.engine)).toBe(1);
+        expect(fixture.entries().map((entry) => entry.consequenced === true))
+          .toEqual([false, false]);
       });
     }
   }
@@ -650,4 +761,119 @@ describe("SpaceServer", () => {
         .toEqual([true, true]);
     });
   }
+
+  describe("the delivery-failure wake", () => {
+    // Each case drains two events on one stream. The first is ordinary and
+    // reaches the scheduler; the second carries a durable checkpoint whose
+    // failed state holds no retry authority, which is what sends the pass to
+    // the wake instead of to a dispatch. What differs between them is which
+    // tenure is running when the pass reaches that second entry: the one that
+    // admitted it, one that has parked mid-pass, or the one after that.
+
+    const budgetMs = 4_000;
+
+    async function openDeferredFixture() {
+      const fixture = await openFixture({ deliveryFailureBudgetMs: budgetMs });
+      await fixture.admitOne(0, "delivery-runnable");
+      await fixture.admitOne(0, "delivery-failed");
+      const checkpoint: DeliveryDeferral = {
+        phase: "dispatch-load",
+        failureClass: "authorization",
+        firstFailureAt: Date.now(),
+        lastFailureAt: Date.now(),
+        accumulatedFailureMs: 0,
+        activeFailureStartedAt: Date.now(),
+        failureCount: 2,
+        state: "failed",
+      };
+      Engine.applyCommit(fixture.engine, {
+        space,
+        sessionId: "visibility-delivery-checkpoint",
+        principal: service.did(),
+        commitClass: "system",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: sidecars[0],
+            patches: [{
+              op: "add",
+              path: "/value/entries/1/deliveryDeferral",
+              value: checkpoint,
+            }],
+          }],
+        },
+      });
+      return fixture;
+    }
+
+    it("fires at the failed checkpoint's budget boundary", async () => {
+      const fixture = await openDeferredFixture();
+      await fixture.drain();
+      expect(fixture.called).toEqual(["A"]);
+      // One timer stands per entry: a pass that re-derives the checkpoint
+      // cancels the wake it replaces and arms another. So the armed count
+      // reads how many passes reached the entry, which is a number this case
+      // has no stake in; the fired count reads the timers.
+      expect(fixture.stats.events.deliveryFailureWakesArmed).toBeGreaterThan(0);
+      expect(fixture.stats.events.deliveryFailureWakesFired).toBe(0);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, false]);
+
+      await clock.tick(budgetMs);
+      expect(fixture.stats.events.deliveryFailureWakesFired).toBe(1);
+      // The scan the wake owes finds the budget spent and seals the terminal
+      // cover, which is what takes the entry off the park criterion.
+      expect(fixture.called).toEqual(["A"]);
+      expect(fixture.stats.events.needsAttention.total).toBe(1);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, true]);
+    });
+
+    it("arms nothing once the tenure has parked", async () => {
+      const fixture = await openDeferredFixture();
+      const scheduler = fixture.runtime.scheduler;
+      using queued = stub(scheduler, "queueEvent", () => {
+        // A park clears the wake timers and the renew interval up front, then
+        // awaits the seal chain and the runtime's disposal. The pass runs on
+        // through those awaits into the next entry, whose checkpoint reaches
+        // the arming site on a tenure that has released every timer it owns.
+        void fixture.serving.park("test-park-mid-drain");
+      });
+
+      // The tick carries the case past the budget boundary before the counters
+      // are read, so an absent fire is observed rather than still pending.
+      await fixture.drain();
+      await clock.tick(budgetMs);
+      expect(fixture.serving.active).toBe(false);
+      expect(queued.calls).toHaveLength(1);
+      expect(fixture.stats.events.deliveryFailureWakesArmed).toBe(0);
+      expect(fixture.stats.events.deliveryFailureWakesFired).toBe(0);
+      expect(fixture.called).toEqual([]);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([false, false]);
+    });
+
+    it("carries a replayed checkpoint's wake into the next tenure", async () => {
+      const first = await openDeferredFixture();
+      await settle(first.serving.park("test-park-before-drain"));
+
+      // §6 step 4 replays the durable checkpoint, and the entry's wake stands
+      // again with no input of any kind reaching the new tenure. What the
+      // count of armings would say here is how many passes re-derived the
+      // checkpoint, so the assertions read the one timer that stands.
+      const next = await openFixture({ deliveryFailureBudgetMs: budgetMs });
+      expect(next.called).toEqual(["A"]);
+      expect(next.stats.events.deliveryFailureWakesFired).toBe(0);
+      expect(next.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, false]);
+
+      await clock.tick(budgetMs);
+      expect(next.stats.events.deliveryFailureWakesFired).toBe(1);
+      expect(next.stats.events.needsAttention.total).toBe(1);
+      expect(next.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, true]);
+    });
+  });
 });

@@ -22,6 +22,7 @@ import {
   schemaAcceptsOpaqueCellValue,
 } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { pieceId } from "../piece-id.ts";
 import {
@@ -252,8 +253,7 @@ export async function surveyPieces(
   const validator = options.validator as unknown;
   if (
     validator !== undefined && typeof validator !== "boolean" &&
-    (typeof validator !== "object" || validator === null ||
-      Array.isArray(validator))
+    !isObjectNotArray(validator)
   ) {
     // The type admits only a schema, but the value usually arrives from a
     // caller-parsed file. `null` is not `undefined`, and shaping by it

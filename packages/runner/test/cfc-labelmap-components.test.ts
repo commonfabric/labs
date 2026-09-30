@@ -185,8 +185,8 @@ describe("CFC labelMap component origins", () => {
   });
 
   it("mints declared entries for tuple (prefixItems) slots at their index", async () => {
-    // CT-1895: walkIfcSchema never descended prefixItems, so an ifc on a
-    // tuple slot minted no labelMap entry — tuple data under-tainted.
+    // The IFC schema walk descends `prefixItems`, so an `ifc` on a tuple slot
+    // mints a labelMap entry and the tuple data carries its declared taint.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -241,10 +241,11 @@ describe("CFC labelMap component origins", () => {
   });
 
   it("a labeled items rest schema beside prefixItems keeps its wildcard entry", async () => {
-    // PR #4969 review: dropping the `*` entry for the mixed tuple-plus-rest
-    // shape silently dropped the tail elements' declared labels (fail-open).
-    // The `*` stays — it over-taints the slots with the rest labels, the
-    // fail-safe direction — and the slots still mint at their index.
+    // The `*` entry carries the tail elements' declared labels; a schema
+    // walk that dropped it for the mixed tuple-plus-rest shape would leave
+    // them unlabeled (fail-open). It over-taints the slots with the rest
+    // labels, the fail-safe direction, and the slots still mint at their
+    // index.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),

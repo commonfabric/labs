@@ -9,6 +9,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { StorageManager as CutoverStorageManager } from "../src/storage/cache.deno.ts";
 import type {
   IStorageProvider,
@@ -230,8 +231,8 @@ const notificationCarriesField = (
       return false;
     }
     const after = change.after as { value?: Record<string, unknown> } | null;
-    return after != null && typeof after === "object" &&
-      after.value != null && typeof after.value === "object" &&
+    return isObjectOrArray(after) &&
+      isObjectOrArray(after.value) &&
       after.value[key] === expected;
   });
 

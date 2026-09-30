@@ -68,7 +68,7 @@ describe("CFC browser helpers", () => {
     await browser.close();
   });
 
-  it("retains timeout outcomes without contacting the stalled worker", async () => {
+  it("reports the main-thread half when the worker never answers", async () => {
     await page.evaluate(() => {
       const row = {
         count: 1,
@@ -83,32 +83,48 @@ describe("CFC browser helpers", () => {
         getTimingStatsBreakdown: () => ({
           "runtime-client": {
             "ipc/runtime:idle": row,
-            "ipc-outcome/timeout/runtime:idle": row,
+            "ipc-outcome/cancelled/runtime:idle": row,
           },
         }),
         rt: {
-          getLoggerCounts: () => {
-            throw new Error("worker contacted");
-          },
+          // A worker that has stopped answering. Reading its statistics is
+          // a request like any other, so this promise is the shape a stalled
+          // worker presents: one that never settles.
+          getLoggerCounts: () => new Promise(() => {}),
+          getPendingRequests: () => [{ type: "runtime:idle", ageMs: 60_000 }],
           getRequestTimeline: () => [{
             type: "runtime:idle",
             sentAtMs: 0,
-            doneAtMs: 60_000,
-            error: true,
-            outcome: "timeout",
           }],
         },
       };
     });
     try {
-      const summary = await collectBrowserLoadSummary(page, "timed out");
-      expect(summary.workerStatus).toBe("skipped");
+      // A short budget, so the case pays milliseconds rather than the
+      // production default. The elapsed span is asserted against that budget
+      // below: the worker's answer never comes, so a collection that returned
+      // sooner would be one that abandoned the request without waiting, and
+      // the backstop would go unexercised while the status still read
+      // `unavailable`.
+      const budget = 250;
+      const startedAt = performance.now();
+      const summary = await collectBrowserLoadSummary(
+        page,
+        "worker not answering",
+        { workerBudgetMs: budget },
+      );
+      const elapsed = performance.now() - startedAt;
+
+      // The collection returns rather than waiting on the worker forever, and
+      // says the worker half is missing rather than reporting it as empty.
+      expect(summary.workerStatus).toBe("unavailable");
+      expect(elapsed).toBeGreaterThanOrEqual(budget);
       expect(summary.ipcFailures).toMatchObject([{
-        key: "ipc-outcome/timeout/runtime:idle",
+        key: "ipc-outcome/cancelled/runtime:idle",
         count: 1,
         total: 60_000,
       }]);
-      expect(summary.requestTimeline[0]).toMatchObject({ outcome: "timeout" });
+      expect(summary.pendingIpc).toMatchObject([{ type: "runtime:idle" }]);
       expect(summary.ipc).toHaveLength(1);
     } finally {
       await page.evaluate(() => {
@@ -2961,8 +2977,8 @@ describe("CFC browser helpers", () => {
       assertStringIncludes(error.message, "outside the page");
       // The size of the page, so a message that names some other 800 cannot
       // satisfy this.
-      assertStringIncludes(error.message, "width: 800");
-      assertStringIncludes(error.message, "height: 600");
+      assertStringIncludes(error.message, "width:800");
+      assertStringIncludes(error.message, "height:600");
 
       const clicks = await narrow.evaluate(() =>
         (globalThis as typeof globalThis & {

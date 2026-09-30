@@ -1,0 +1,1 @@
+{"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"coverage-report > collectReports() > returns no cache state where no lane opened the cache"},"to":{"k":"unit","s":"tasks","n":"coverage-report > collectReports() > returns the cache not cold where no lane opened it"}}

@@ -10,11 +10,8 @@ import { toOwnedUint8Array } from "@commonfabric/utils/buffers";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -25,12 +22,12 @@ import {
   REALM_CODEC,
   type TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import type { FabricValue } from "@/interface.ts";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
-} from "@/value-tags.ts";
+} from "./interface.ts";
 
 /**
  * The encoded state of a {@link FabricHash}: the algorithm tag, and the digest
@@ -98,6 +95,11 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
     return FABRIC_PRIMITIVE_VALUE_TAGS.FabricHash;
   }
 
+  /** @inheritDoc */
+  get schemaType(): "FabricHash" {
+    return "FabricHash";
+  }
+
   /** Defensive copy of the raw hash bytes. */
   get bytes(): Uint8Array {
     return new Uint8Array(this.#hash);
@@ -149,7 +151,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
   //
 
   static #jsonCodec = Object.freeze(
-    new (class HashCodec extends BaseNonterminalCodec<FabricHashState> {
+    new (class HashCodec extends BaseNonterminalCodec<never, FabricHashState> {
       /** Constructs an instance. */
       constructor() {
         super(CODEC_TYPE_TAGS.Hash, FabricHash);
@@ -157,7 +159,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
 
       /** @inheritDoc */
       encode(value: FabricHash, _env: LiveEnvironment): FabricHashState {
-        return { tag: value.tag, hash: value.hashString };
+        return Object.freeze({ tag: value.tag, hash: value.hashString });
       }
 
       /** @inheritDoc */
@@ -171,16 +173,18 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
         typeTag: string,
         state: FabricHashState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const { tag, hash } = state;
 
         try {
           return new FabricHash(fromBase64url(hash), tag, true);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Hash: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -203,7 +207,10 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * with this instance would leave a transferred value hollow.
        */
       encode(value: FabricHash, _env: LiveEnvironment): RealmCodecValue {
-        return { tag: value.tag, hash: value.#hash.buffer.slice(0) };
+        return Object.freeze({
+          tag: value.tag,
+          hash: value.#hash.buffer.slice(0),
+        });
       }
 
       /** @inheritDoc */

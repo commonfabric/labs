@@ -8,6 +8,7 @@ import type { URI } from "@commonfabric/memory/interface";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { Cell } from "../src/cell.ts";
@@ -55,7 +56,7 @@ const seedLabeledDoc = async (
     ).getAsLink(),
   ).id!;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id: id as URI, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id: id as URI, path: [] }, {
     value: { body: "payload" },
     cfc: {
       version: 1,
@@ -216,24 +217,26 @@ describe("inspectConfLabel builtin (inv-12 Stage 2)", () => {
           .getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, space);
-      seed.writeOrThrow(
-        { space, scope: "space", id: queryTypeId as URI, path: [] },
-        {
-          value: CFC_ATOM_TYPE.Caveat,
-          cfc: {
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: queryTypeId as URI,
+        path: [],
+      }, {
+        value: CFC_ATOM_TYPE.Caveat,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
             version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{
-                path: [],
-                label: { confidentiality: ["query-secret"] },
-                origin: "derived",
-              }],
-            },
+            entries: [{
+              path: [],
+              label: { confidentiality: ["query-secret"] },
+              origin: "derived",
+            }],
           },
         },
-      );
+      });
       expect((await seed.commit()).ok).toBeDefined();
 
       const source = runtime.getCell(space, "inspect-src-qi", undefined, tx);

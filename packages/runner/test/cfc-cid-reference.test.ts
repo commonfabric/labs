@@ -3,9 +3,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { Cell } from "../src/cell.ts";
+import { normalizeClause } from "../src/cfc/clause.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { CfcMetadata } from "../src/cfc/types.ts";
 import {
@@ -26,12 +28,15 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("cfc-cid-reference");
 const space = signer.did();
-const selection = "private-cid-selection";
+const selection = normalizeClause({
+  anyOf: ["private-cid-selection", cfcAtom.space(space)],
+});
 
 describe("cfc-cid-reference", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -82,10 +87,13 @@ describe("cfc-cid-reference", () => {
     const install = runtime.edit();
     const selected = runtime.getCell(space, "selected", undefined, install);
     writeSeedEnvelopeDoc(install, space);
-    install.writeOrThrow({ ...selected.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(install, {
+      ...selected.getAsNormalizedFullLink(),
+      path: [],
+    }, {
       value: target.getAsLink(),
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
@@ -93,6 +101,7 @@ describe("cfc-cid-reference", () => {
             path: [],
             origin: "link",
             observes: "followRef",
+            referenceAcquisition: "complete",
             label: { confidentiality: [selection] },
           }],
         },
@@ -111,7 +120,7 @@ describe("cfc-cid-reference", () => {
       referenceEntries(output).flatMap((entry) =>
         entry.label.confidentiality ?? []
       ),
-    ).toContain(selection);
+    ).toContainEqual(selection);
 
     const cold = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -123,7 +132,7 @@ describe("cfc-cid-reference", () => {
       const received = cold.getCell(space, "output", undefined, read);
       await received.sync();
       expect(received.get()).toBe("public module bytes");
-      expect(deriveFlowJoin(read).confidentiality).toContain(selection);
+      expect(deriveFlowJoin(read).confidentiality).toContainEqual(selection);
       read.abort();
     } finally {
       await cold.dispose({ closeStorage: false });

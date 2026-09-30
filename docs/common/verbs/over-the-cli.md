@@ -285,7 +285,7 @@ cf exec /tmp/cf/<space>/pieces/<piece>/result/addComment.handler \
 A tool prints its result on stdout as it always did, with the result cell's
 address on stderr. The line spells out the whole command that reads it back,
 and the address is one token that carries all three parts — space, id, and
-scope — as the `/@space/piece` reference a target position takes whole.
+scope — as the `//space/piece@scope` reference a target position takes whole.
 Naming the space inside the token is what makes the command portable: `cf exec`
 gets its space from the mount it ran through, while the suggested read falls
 back to whichever space the caller has configured, so an address that named
@@ -601,8 +601,9 @@ Run it against any host:
 API_URL=http://localhost:8000 packages/cli/integration/verbs-over-the-cli.sh
 ```
 
-CI runs it in the `piece-call` shard. It takes under half a minute and around
-two dozen `cf` invocations against a warm local toolshed.
+CI runs it as the `integration.sh verbs-walkthrough` unit of the `cli-core`
+suite. It takes under half a minute and around two dozen `cf` invocations
+against a warm local toolshed.
 
 Each step demonstrates one use case:
 
@@ -696,7 +697,8 @@ cf cell get --cell <board> notes \
 ```
 
 The address is one string in the fabric's reference syntax —
-`/[@space/]<piece>[@scope][/path]` — the same form the target positional reads,
+`//<space>/<piece>[#member][@qualifier…][/path]` or its
+space-relative form `/<piece>[#member][@qualifier…][/path]` — the same form the target positional reads,
 so an address a read hands you is passed onward as it stands. The space rides in front only
 when it differs from the space the command targeted, and the scope follows the
 id only when it is not the default. No schema is inlined: a stored link can

@@ -57,10 +57,10 @@
  * over one untimed burst, are written to stderr and so into the run's
  * `diagnostics.log`.
  *
- * With server execution disabled, the harness hosts its own storage server.
- * EXPERIMENTAL_SERVER_EXECUTION=true selects the serving toolshed at API_URL.
- * Both modes use ordinary worker clients without renderer mounts, so the
- * view-scoped web-client flag does not activate selective replication here.
+ * The harness hosts its own storage server, with a serving loop attached when
+ * server execution is enabled. Both modes use ordinary worker clients without
+ * renderer mounts, so the view-scoped web-client flag does not activate
+ * selective replication here.
  * The poll uses the `lunch-poll-keyed-votes` fixture's identity seam because
  * these clients do not render the `#profile` create surface.
  */

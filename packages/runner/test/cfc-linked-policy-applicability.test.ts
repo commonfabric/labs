@@ -1,3 +1,4 @@
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
@@ -63,7 +64,7 @@ describe("linked policy applicability", () => {
   for (const typed of [false, true]) {
     it(`checks only the matching stored branch through a ${typed ? "typed" : "schema-less"} receiver`, async () => {
       const seed = runtime.edit();
-      seed.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(seed, {
         kind: "builtin",
         builtinId: "trusted-sender",
       });
@@ -146,7 +147,7 @@ describe("linked policy applicability", () => {
         },
       } as const satisfies JSONSchema;
       const seed = runtime.edit();
-      seed.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(seed, {
         kind: "builtin",
         builtinId: "trusted-sender",
       });
@@ -168,7 +169,7 @@ describe("linked policy applicability", () => {
       expect((await create.commit()).error).toBeUndefined();
 
       const append = runtime.edit();
-      append.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(append, {
         kind: "builtin",
         builtinId: "trusted-importer",
       });
@@ -187,7 +188,7 @@ describe("linked policy applicability", () => {
       );
 
       const impostor = runtime.edit();
-      impostor.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(impostor, {
         kind: "builtin",
         builtinId: "trusted-importer",
       });

@@ -511,7 +511,7 @@ describe("piece-survey", () => {
           // The bare spelling reaches the same refusal: an entry is one
           // whole piece however the caller wrote it.
           [`of:fid1:${HANDLE}#argument`, "#argument suffix"],
-          [`of:fid1:${HANDLE}#result`, 'Unknown suffix "#result"'],
+          [`of:fid1:${HANDLE}#unknown`, "Unknown member"],
         ]
       ) {
         await expect(

@@ -2,6 +2,7 @@ import type { FabricValue } from "@commonfabric/api";
 import type { CfcModulePolicyRefAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { Immutable } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import type { Metadata } from "../storage/interface.ts";
@@ -95,9 +96,8 @@ export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
 /**
  * Marks a write-policy input as one the runtime itself recorded.
  *
- * `recordCfcWritePolicyInput` is on the public transaction interface, and
- * pattern-authored code runs in the runtime's own realm holding runtime cells,
- * so it reaches `cell.tx` and can record an input naming whatever it likes.
+ * `recordCfcWritePolicyInput` is on the public transaction interface, so any
+ * code holding a transaction can record an input naming whatever it likes.
  * An input a gate ACTS on — rather than one a gate measures — therefore has to
  * say who recorded it. This is the mark, and it works the way
  * `rawMetaWriteAuthorization` does: a symbol cannot be named by a module that
@@ -131,7 +131,7 @@ export const runtimeWritePolicyAuthorization: RuntimeWritePolicyAuthorization =
 
 /** Whether an authorization argument carries the runtime's mark. */
 export const runtimeWritePolicyAuthorized = (value: unknown): boolean =>
-  typeof value === "object" && value !== null &&
+  isObjectOrArray(value) &&
   (value as Partial<RuntimeWritePolicyAuthorization>)[
       RUNTIME_WRITE_POLICY_INPUT
     ] === true;
@@ -352,6 +352,14 @@ export type LabelEntryOrigin =
  * graph — and is re-exported above; label views carry the same axis, C4.)
  */
 export type LabelMapEntry = {
+  /**
+   * Runtime-attested accounting for this exact reference slot's acquisition.
+   * An unavailable acquisition carries the read-failed confidentiality atom.
+   * Valid only on version-3 link entries observing followRef. Absence keeps
+   * a carried legacy entry incomplete when another slot upgrades the envelope.
+   */
+  referenceAcquisition?: "complete";
+
   path: readonly string[];
   label: IFCLabel;
   origin?: LabelEntryOrigin;
@@ -366,19 +374,76 @@ export type LabelMapEntry = {
 };
 
 /**
+ * A stored envelope's `version`: the format gate every reader checks
+ * first. Version 1 holds every label inline; version 2 may hold a label as
+ * a reference to a content-addressed label document
+ * (`docs/specs/content-addressed-cfc-labels.md`). Version 3 additionally
+ * records acquisition-aware reference labels and accepts either label encoding.
+ * A value outside this
+ * union is an envelope the build cannot interpret, and every reader fails
+ * closed on it rather than treating the document as unlabeled.
+ */
+export type CfcMetadataVersion = 1 | 2 | 3;
+
+/** Whether this stored entry attests complete history for its reference slot. */
+export const isCompleteCfcReferenceEntry = (
+  version: CfcMetadataVersion,
+  entry: Pick<LabelMapEntry, "origin" | "observes" | "referenceAcquisition">,
+): boolean =>
+  version === 3 && entry.origin === "link" &&
+  entry.observes === "followRef" && entry.referenceAcquisition === "complete";
+
+/**
+ * A label held by reference in a version-2 or version-3 envelope: a single-member
+ * record naming the `cid:` label document whose value is the label. An
+ * inline label never carries `$ref`, so the key alone tells the two apart.
+ */
+export type CfcLabelReference = { readonly $ref: string };
+
+/**
+ * A `labelMap` entry as it is stored: {@link LabelMapEntry}, except that in
+ * a version-2 or version-3 envelope the label may be a {@link CfcLabelReference}.
+ */
+export type StoredLabelMapEntry = Omit<LabelMapEntry, "label"> & {
+  label: IFCLabel | CfcLabelReference;
+};
+
+/**
+ * A CFC envelope as it is stored at a document's reserved `cfc` member,
+ * discriminated by version: version 1 holds every label inline, and a
+ * reference in one is a spelling it does not define; version 2 may hold a
+ * label by reference. Version 3 adds complete reference acquisition records.
+ * Readers resolve every supported version to a {@link CfcMetadata} —
+ * every label inline — before any consumer walks it; the stored spelling
+ * is visible only to the persist path, which needs to know which version
+ * a document holds.
+ */
+export type StoredCfcMetadata =
+  | {
+    version: 1;
+    schemaHash: string;
+    labelMap: { version: 1; entries: Array<LabelMapEntry> };
+  }
+  | {
+    version: 2 | 3;
+    schemaHash: string;
+    labelMap: { version: 1; entries: Array<StoredLabelMapEntry> };
+  };
+
+/**
  * `schemaHash` names the envelope's ROOT schema document. The root may be
  * self-contained (the inline form) or reference further documents through
  * `$ref: cid:` members (the decomposed form) — one read policy covers
  * both: every external reference must resolve, verified against its own
  * address, and a member that cannot is an unreadable envelope (fail
  * closed). The storage commit boundary validates the whole closure at
- * write time, so a committed envelope's references are always backed. A
- * `version` outside this union is an envelope the build cannot
- * interpret, and every reader fails closed on it rather than treating
- * the document as unlabeled.
+ * write time, so a committed envelope's references are always backed.
+ * Label references resolve under the same policy, so a consumer holding a
+ * `CfcMetadata` holds every label inline; `version` records which stored
+ * spelling it was resolved from.
  */
 export type CfcMetadata = {
-  version: 1 | 2;
+  version: CfcMetadataVersion;
   schemaHash: string;
   labelMap: {
     version: 1;
@@ -389,7 +454,7 @@ export type CfcMetadata = {
 export type EntityDocumentWithCfc = {
   value?: unknown;
   source?: unknown;
-  cfc?: CfcMetadata;
+  cfc?: StoredCfcMetadata;
 };
 
 // CFC value types are deeply immutable by contract. The chokepoints
@@ -475,7 +540,19 @@ export type CfcLabelMetadataObservation = Immutable<{
 }>;
 
 export type ImplementationIdentity =
-  | { kind: "builtin"; builtinId: string }
+  | {
+    kind: "builtin";
+    builtinId: string;
+
+    /**
+     * The one instance a builtin that acts per instance acted for, as the
+     * custody seal acts for one custody instance. It rides into the
+     * `TransformedBy` the builtin's writes carry, so a witness over them names
+     * the instance, while a guard that names the builtin alone still matches
+     * by subset.
+     */
+    instance?: string;
+  }
   | {
     kind: "verified";
 
@@ -497,7 +574,17 @@ export type ImplementationIdentity =
 
 export type TrustSnapshot = {
   id: string;
+
+  /**
+   * The principal the transaction's trust is taken from. A host declares
+   * this one as a `DID` (`RuntimeClientOptions.trustSnapshot`). The serving
+   * loop reaches it through `Runtime.trustSnapshotForPrincipal` instead,
+   * carrying the acting user of a run: that is
+   * `ScopeKeyIdentity.principal`, which the memory plane holds as a string
+   * and spells as the empty string for a run with no actor.
+   */
   actingPrincipal?: string;
+
   revision?: string;
 };
 
@@ -516,6 +603,53 @@ export type ModuleDelegationSnapshotEntry = {
 // `deepFreeze()` covers the whole record); this just keeps the type
 // surface narrower.
 export type WritePolicyInput =
+  | {
+    /** Private runtime evidence; preparation must also prove unchanged protection. */
+    readonly kind: "preserved-output";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+  }
+  | {
+    /**
+     * The transaction is a release of a piece (setup, a pattern swap, a start
+     * repair): it names one of the piece's stores and the modules of the
+     * program it installs, whose writer stamps the release's schema can adopt
+     * over unstamped stored claims. Authority is the runtime's mark.
+     */
+    readonly kind: "release-program";
+    readonly target: CfcAddress;
+    readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A host's application of a schema to a document it does not write
+     * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
+     */
+    readonly kind: "policy-application";
+    readonly target: CfcAddress;
+  }
+  | {
+    /** An explicit host-authorized acceptance of existing unlabeled bytes. */
+    readonly kind: "owner-adoption";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly owner: string;
+  }
+  | {
+    /**
+     * Authority is carried by the runtime's private mark, never this record
+     * alone. A `"reference"` initialization stages a link to a cell that exists
+     * already and none of what the cell holds, so its `value` is that link.
+     * A `"replay"` record names an argument slot a runtime replaying a
+     * piece's setup carries over from the stored argument document, with
+     * the bytes it holds; it permits nothing but leaving those bytes as they
+     * are.
+     */
+    readonly kind: "initialization";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly mode: "seed" | "default" | "projection" | "reference" | "replay";
+  }
   | {
     readonly kind: "schema";
     readonly target: CfcAddress;
@@ -644,6 +778,61 @@ export type PreparedDigestInput = {
   // pre-Stage-2 digests are unchanged; canonicalized address-sorted.
   readonly labelMetadataObservations?: readonly CfcLabelMetadataObservation[];
   readonly referenceObservations?: readonly CfcReferenceObservation[];
+
+  /**
+   * Host-observed content admitted through opaque runtime receipts. Absent
+   * when empty so a transaction with no such observation keeps the established
+   * prepared-digest spelling.
+   */
+  readonly externalContentObservations?:
+    readonly CfcExternalContentObservation[];
+
+  /**
+   * Whole-value write destinations and the identity that recorded each
+   * (`CfcTxState.assertedValueRoots`). They decide where preparation stamps
+   * the writer's flow label, so a transaction whose roots change must not
+   * keep its digest. Absent when empty, so a transaction that recorded none
+   * keeps the established prepared-digest spelling.
+   */
+  readonly assertedValueRoots?: readonly CfcAssertedValueRoot[];
+
+  /**
+   * List-coordinator containers whose membership preparation re-stamps
+   * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
+   */
+  readonly structureContainers?: readonly CfcAddress[];
+};
+
+/**
+ * A destination the runtime wrote a whole value to (`CfcTxState.assertedValueRoots`),
+ * with the implementation identity that made the write. `reference` names
+ * the document root a pointer the runtime stored at this path refers to: the
+ * box the custody seal links a room to, or the entity document anchoring split
+ * an array element into.
+ */
+export type CfcAssertedValueRoot = {
+  readonly address: CfcAddress;
+  readonly identity: ImplementationIdentity | undefined;
+  readonly reference?: CfcAddress;
+};
+
+/**
+ * A content observation made outside durable Fabric storage and admitted by
+ * the runtime through a prepared, aborted write transaction. Both labels are
+ * canonical runtime products: `flow` carries the effective content label whose
+ * hereditary integrity the final flow fold meets, while `consumed` carries the
+ * egress guard pool.
+ */
+export type CfcExternalContentObservation = {
+  readonly source: CfcAddress;
+  readonly flow: IFCLabel;
+  readonly consumed: IFCLabel;
+  readonly labeledSpaces: readonly MemorySpace[];
+  readonly sources: readonly {
+    readonly atom: CfcConfClause;
+    readonly read: CfcAddress;
+    readonly labelPath: readonly string[];
+  }[];
 };
 
 /** A synchronous release refusal before the effect starts any work. */
@@ -742,6 +931,19 @@ export type CfcDecomposedEnvelopes = boolean;
 export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
 
 /**
+ * Whether labels above the inline limit are stored in content-addressed
+ * label documents (`docs/specs/content-addressed-cfc-labels.md`). The legacy
+ * profile writes version 2 when enabled; the precise reference profile uses
+ * version 3 with either inline or referenced labels. Reading resolves both
+ * representations. Every deployed reader must support its envelope version
+ * before a space stores that format.
+ */
+export type CfcContentAddressedLabels = boolean;
+
+export const DEFAULT_CFC_CONTENT_ADDRESSED_LABELS: CfcContentAddressedLabels =
+  false;
+
+/**
  * Exchange-rule policy evaluation dial (Epic B5, spec §4.4.5/§5.3),
  * orthogonal to the enforcement ladder: `off` = the gates decide on raw
  * labels exactly as before this dial existed; `observe` = evaluate every
@@ -822,6 +1024,7 @@ export type CfcTxState = {
   writeFloorMode: CfcWriteFloorMode;
   triggerReadGating: CfcTriggerReadGating;
   decomposedEnvelopes: CfcDecomposedEnvelopes;
+  contentAddressedLabels: CfcContentAddressedLabels;
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
@@ -842,6 +1045,23 @@ export type CfcTxState = {
   // fix, the dual of the input-read over-taint). map does NOT declare: it is
   // length-preserving with no membership secret, so its container stays clean.
   structureContainers: CfcAddress[];
+  // Destinations the runtime wrote a whole value to (`Cell.set`): the value
+  // there after the transaction is the one the writer supplied, however the
+  // diff split the write. Flow labels stamp such a destination as written,
+  // so what the writer asserted carries its `TransformedBy` even where the
+  // diff found a container already in place (`assertedValueRootPaths` in
+  // `prepare.ts`). Recorded only under the runtime's authorization, with the
+  // implementation identity that made the write, so a root stamps only for
+  // the identity the flow join names.
+  //
+  // A root recorded with a `reference` holds a pointer the runtime itself
+  // chose for the writer: the custody seal's link from a room to its box, or
+  // the reference anchoring stores at an array slot after splitting the plain
+  // object the writer put there into an entity document of its own
+  // (`anchorValueAsEntity` in `data-updating.ts`; both halves are recorded,
+  // the entity's root and the slot with the entity as its `reference`). That
+  // one pointer, at that one path, is part of the value the writer supplied.
+  assertedValueRoots: CfcAssertedValueRoot[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads
@@ -875,6 +1095,19 @@ export type CfcTxState = {
     identity?: ImplementationIdentity;
   };
   trustSnapshot?: TrustSnapshot;
+  // Whether a value the runtime initializes in this transaction — a
+  // constructed cell's seed, the reference exposing it, a new field's
+  // default, a pattern's setup projection — is attributed to the acting
+  // principal: true for the transaction of a handler run they invoked, for
+  // one that brings a piece into being outside any scheduled action on their
+  // behalf, and for a start or result pattern deferred from either; false
+  // otherwise. Preparation mints the integrity a schema adds about the
+  // current principal, and binds an owner, for an initialization only when
+  // this is true. Set only through the privileged
+  // `markCfcAttributedInitialization` (runtime authorization); once set it
+  // holds for the transaction, so a setup that must not be attributed runs
+  // in a transaction of its own.
+  attributedInitialization: boolean;
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.
@@ -925,6 +1158,10 @@ export type CfcTxState = {
   // public = nothing to derive, gate, or bind).
   labelMetadataObservations: CfcLabelMetadataObservation[];
   referenceObservations: CfcReferenceObservation[];
+  // Host-only observations admitted through an opaque runtime receipt. These
+  // are CONTENT inputs: they participate in flow derivation, read-side gates,
+  // egress, and the prepared digest exactly like durable content reads.
+  externalContentObservations: CfcExternalContentObservation[];
   // Structured descriptions of the refusals this transaction's gates
   // recorded (`cfc/refusal-detail.ts`): which boundary refused, which atoms
   // it refused, and which reads carried them. Recorded in every enforcement
@@ -934,3 +1171,13 @@ export type CfcTxState = {
   // not an input to it.
   refusalDetails: CfcRefusalDetail[];
 };
+
+/** Work counted during CFC preparation, without affecting its verdict. */
+export type CfcPreparationWork =
+  | "overlapWildcardQueries"
+  | "overlapConcreteQueries"
+  | "authoritativeCoverCalls"
+  | "stagedReferenceDerivations"
+  | "stagedReferenceCacheHits"
+  | "flowTemplateEntriesMinted"
+  | "flowTemplateContainers";

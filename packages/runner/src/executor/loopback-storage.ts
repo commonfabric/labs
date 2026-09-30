@@ -11,6 +11,7 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import {
   type Options,
   type SessionFactory,
@@ -23,8 +24,30 @@ class LoopbackSessionFactory implements SessionFactory {
 
   readonly #getServer: () => MemoryServer;
 
-  constructor(getServer: () => MemoryServer) {
+  readonly #onServerFrame?: (frame: string) => void;
+
+  constructor(
+    getServer: () => MemoryServer,
+    onServerFrame?: (frame: string) => void,
+  ) {
     this.#getServer = getServer;
+    this.#onServerFrame = onServerFrame;
+  }
+
+  /** The loopback transport, with each server frame reported AFTER the
+   * session has taken it. */
+  #transport(): MemoryClient.Transport {
+    const inner = MemoryClient.loopback(this.#getServer());
+    const report = this.#onServerFrame;
+    if (report === undefined) return inner;
+    return {
+      ...inner,
+      setReceiver: (next) =>
+        inner.setReceiver((payload) => {
+          next(payload);
+          report(payload);
+        }),
+    };
   }
 
   async create(
@@ -38,7 +61,7 @@ class LoopbackSessionFactory implements SessionFactory {
       );
     }
     const client = await MemoryClient.connect({
-      transport: MemoryClient.loopback(this.#getServer()),
+      transport: this.#transport(),
     });
     try {
       const session = await client.mount(
@@ -77,6 +100,11 @@ export class LoopbackStorageManager extends StorageManager {
   static connect(
     server: MemoryServer,
     options: Omit<Options, "memoryHost" | "spaceHostMap">,
+    /** DIAGNOSTIC (tests): each frame the server sends to this manager's
+     * sessions, reported once the session has taken it. A session's own
+     * termination arrives this way and nothing else reports it, so a test
+     * that has to act after one waits on this. */
+    onServerFrame?: (frame: string) => void,
   ): LoopbackStorageManager {
     return new LoopbackStorageManager(
       {
@@ -85,7 +113,7 @@ export class LoopbackStorageManager extends StorageManager {
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(() => server),
+      new LoopbackSessionFactory(() => server, onServerFrame),
     );
   }
 
@@ -96,7 +124,7 @@ export class LoopbackStorageManager extends StorageManager {
    * a registration that resets the provisional replica while every new
    * session still uses the co-hosted server.
    */
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed(): SpaceHostRegistration {
+    return { accepted: false, reason: "no-remote-resolution" };
   }
 }

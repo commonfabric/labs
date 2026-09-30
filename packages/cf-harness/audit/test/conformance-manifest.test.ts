@@ -163,7 +163,9 @@ describe("conformance manifest", () => {
 
   describe("against the fixture", () => {
     it("holds every covered obligation to a check that agrees with it", () => {
-      const reconciliation = reconcileConformanceManifest(FIXTURE_RESULTS);
+      const reconciliation = reconcileConformanceManifest(
+        auditRunFamily(family, RUN_CHECKS),
+      );
       expect(
         reconciliation.disagreements.map((one) => one.obligation.id),
       ).toEqual([]);

@@ -39,21 +39,9 @@ import type {
   MemorySpace,
 } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
-import { waitUntil } from "./support/wait-until.ts";
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 600_000 }),
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+import { awaitAdmitted, settleServing } from "./support/serving-waits.ts";
 
 const spaceSigner = await Identity.fromPassphrase("cooperative yield space");
 const space = spaceSigner.did() as MemorySpace;
@@ -118,7 +106,10 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     });
 
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 600_000 }),
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
   });
 
@@ -142,9 +133,11 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
 
   /** Activate the space through an authored client commit and wait for
    * the loop to sit idle in wait-for-input (its watermark covering the
-   * input). */
+   * input). Only an ACTIVE space runs the wave that advances W, so the
+   * settle barrier reports the activation as well as the cycle. */
   const activate = async (): Promise<Engine.Engine> => {
     openClient();
+    const engine = await server.engineForSpace(space);
     const input = clientRuntime.getCell<{ value: number }>(
       space,
       "yield-input",
@@ -153,16 +146,8 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     const tx = clientRuntime.edit();
     input.withTx(tx).set({ value: 1 });
     expect((await tx.commit()).error).toBeUndefined();
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space to activate",
-    );
-    const engine = await server.engineForSpace(space);
-    const authoredSeq = Engine.serverSeq(engine);
-    await waitUntil(
-      () => host!.spaceServer(space)!.watermark >= authoredSeq,
-      "the activation cycle to settle",
-    );
+    await settleServing(engine, clientRuntime, space);
+    expect(host!.spaceServer(space)?.active).toBe(true);
     return engine;
   };
 
@@ -215,12 +200,10 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
 
     const t0 = performance.now();
     const outIds = registerWalk();
-    await waitUntil(
-      () => Engine.serverSeq(engine) > seqBefore,
-      "the first wave commit of the walk",
-      15_000,
-      2,
-    );
+    // The wave commit reports itself to the server's admission hook the
+    // moment the engine applies it, so the elapsed time measured here is
+    // the commit's own latency with no poll interval quantizing it.
+    await awaitAdmitted(server, () => Engine.serverSeq(engine) > seqBefore);
     const firstCommitAfterMs = performance.now() - t0;
     // The whole walk is WALK_STEPS × STEP_MS = 1 200 ms of synchronous
     // runs; pre-fix the deadline could only fire after the last one. With
@@ -230,15 +213,14 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     expect(firstCommitAfterMs).toBeLessThan(WALK_STEPS * STEP_MS / 2);
     // The walk still completes in full: every step's write lands, and W
     // eventually covers everything (the last cycle settles un-exhausted).
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => storedOutCount(engine, outIds) === WALK_STEPS,
-      "every walk step's write to land",
-      20_000,
     );
-    await waitUntil(
-      () => host!.stats().wavesBudgetExhausted > before.wavesBudgetExhausted,
-      "an exhausted wave to be counted",
-    );
+    // The walk is twelve deadlines long, so waves were exhausted on the
+    // way to the writes above.
+    expect(host.stats().wavesBudgetExhausted)
+      .toBeGreaterThan(before.wavesBudgetExhausted);
     // The scheduler yielded (the mechanism, not just the effect).
     expect(servingRuntime!.scheduler.servingYield).toBeDefined();
     expect(servingRuntime!.scheduler.servingYield!.yieldCount)
@@ -271,10 +253,9 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     // The wave commits — under a lease that would have EXPIRED 900 ms in
     // without the mid-wave renew (the walk is 1 800 ms; the deadline 5 s,
     // so it is ONE wave).
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => storedOutCount(engine, outIds) === walkSteps,
-      "the walk's single wave to commit every step",
-      20_000,
     );
     expect(Engine.serverSeq(engine)).toBeGreaterThan(seqBefore);
     expect(host.stats().derivedCommits).toBeGreaterThan(derivedBefore);

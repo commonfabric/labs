@@ -711,23 +711,11 @@ describe("whole-object read over a session-scoped link", () => {
       } as const,
       tx,
     );
-    const midLink = capMid.getAsNormalizedFullLink();
     holder.setRaw({
       question: "capped question",
       count: 4,
-      // Hand-built sigil: the embedded schema's top-level `scope` is the
-      // follow cap (ContextualFlowControl.getSchemaScopeCap).
-      myDraft: {
-        "/": {
-          "link@1": {
-            id: midLink.id,
-            path: [],
-            space: midLink.space,
-            scope: "space",
-            schema: { type: "string", scope: "space" },
-          },
-        },
-      },
+      // The held reference carries the embedded schema's follow cap.
+      myDraft: capMid.asSchema({ type: "string", scope: "space" }),
     } as never);
     const result = await tx.commit();
     expect(result.error).toBeUndefined();

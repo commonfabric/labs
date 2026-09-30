@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -87,7 +88,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -217,6 +218,69 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     expect(tagsOf(join)).toEqual(["root-covering", "members-secret"]);
   });
 
+  it("consumes an enumerate entry on a read of its array or the array's length, and not on a read of one child", async () => {
+    // An enumerate entry labels a container's membership, order and count.
+    // Reading one addressed child observes that child, so it consumes the
+    // child's own entries and not the membership's.
+
+    const rt = makeRuntime();
+    const id = await seedDoc(rt, "occ-enumerate", { items: [{ n: 1 }] }, [
+      {
+        path: ["items"],
+        label: { confidentiality: [audience("members-secret")] },
+        origin: "declared",
+        observes: "enumerate",
+      },
+      // Another component than the membership's, so longest-prefix
+      // resolution within a component cannot mask it at the child.
+      {
+        path: ["items", "0"],
+        label: { confidentiality: [audience("element")] },
+        origin: "derived",
+      },
+    ]);
+
+    const container = await flowJoinOf(rt, "occ-enumerate-container", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items"]), { nonRecursive: true });
+    });
+    expect(tagsOf(container)).toContain("members-secret");
+
+    const length = await flowJoinOf(rt, "occ-enumerate-length", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items", "length"]));
+    });
+    expect(tagsOf(length)).toContain("members-secret");
+
+    const child = await flowJoinOf(rt, "occ-enumerate-child", (tx) => {
+      tx.readOrThrow(readAddress(id, ["items", "0"]));
+    });
+    expect(tagsOf(child)).toEqual(["element"]);
+  });
+
+  it("does not consume an enumerate entry on a read of an object's own length field", async () => {
+    // Only an array's native length observes its membership. An object's
+    // field named `length` is a child like any other.
+
+    const rt = makeRuntime();
+    const id = await seedDoc(rt, "occ-length-field", { box: { length: 3 } }, [
+      {
+        path: ["box"],
+        label: { confidentiality: [audience("members-secret")] },
+        origin: "declared",
+        observes: "enumerate",
+      },
+      {
+        path: ["box", "length"],
+        label: { confidentiality: [audience("field")] },
+        origin: "derived",
+      },
+    ]);
+
+    const join = await flowJoinOf(rt, "occ-length-field-out", (tx) => {
+      tx.readOrThrow(readAddress(id, ["box", "length"]));
+    });
+    expect(tagsOf(join)).toEqual(["field"]);
+  });
+
   it("standalone probes consume the link-origin pointer label (SC-8 widening, the new wider join)", async () => {
     // The SC-8 widening (NOT parity — C0 §6 scopes it out deliberately): a
     // standalone slot-pointer probe — a `linkResolutionProbe` read with no
@@ -273,6 +337,30 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
       });
     });
     expect(tagsOf(join)).toEqual(["pointer-label"]);
+  });
+
+  it("consumes nothing for a probe beneath a slot the transaction followed", async () => {
+    // The probes a dereference makes beneath the slot it follows walk the
+    // path that remains and find no reference: they observe nothing.
+
+    const rt = makeRuntime();
+    const id = await seedMixedDoc(rt, "occ-deref-beneath");
+    const join = await flowJoinOf(rt, "occ-deref-beneath-out", (tx) => {
+      tx.read(readAddress(id, ["slot", "field"]), {
+        meta: linkResolutionProbe,
+      });
+      tx.recordCfcDereferenceTrace({
+        source: { space, id, scope: "space", path: ["slot"] },
+        target: {
+          space,
+          id: "of:target-doc",
+          scope: "space",
+          path: [],
+        },
+        kind: "value",
+      });
+    });
+    expect(join).toBeUndefined();
   });
 
   it("consumes followRef entries during probes and subtree materialization", async () => {
@@ -391,7 +479,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     const seed = rt.edit();
     const cell0 = rt.getCell(space, "occ-carry-forward", undefined, seed);
     const id = cell0.getAsNormalizedFullLink().id;
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value: { slot: { "/": { "link@1": {} } }, other: 1 },
       cfc: {
         version: 1,

@@ -9,7 +9,9 @@ import {
 } from "@commonfabric/runner";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { addressKey } from "@commonfabric/runner/shared";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { stableFabricValue } from "./stable-fabric-value.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 export interface AgentFabricConnection {
   runtime: Runtime;
@@ -30,8 +32,7 @@ export function cellHasOwnerConfidentiality(
     cell.getAsNormalizedFullLink(),
   )?.labelMap.entries.some((entry) =>
     entry.label.confidentiality?.some((clause) =>
-      typeof clause === "object" && clause !== null &&
-      !Array.isArray(clause) && "type" in clause &&
+      isObjectNotArray(clause) && "type" in clause &&
       clause.type === ownerAtom.type && "subject" in clause &&
       clause.subject === ownerDid
     )
@@ -51,13 +52,12 @@ export function cellHasOwnerProtection(
   return metadata?.labelMap.entries.some((entry) =>
     entry.path.length === 0 &&
     entry.label.confidentiality?.some((clause) =>
-        typeof clause === "object" && clause !== null &&
-        !Array.isArray(clause) && "type" in clause &&
+        isObjectNotArray(clause) && "type" in clause &&
         clause.type === ownerAtom.type && "subject" in clause &&
         clause.subject === ownerDid
       ) === true &&
     entry.label.integrity?.some((atom) =>
-        typeof atom === "object" && atom !== null &&
+        isObjectOrArray(atom) &&
         "kind" in atom && atom.kind === "represents-principal" &&
         "subject" in atom && atom.subject === ownerDid
       ) === true
@@ -117,7 +117,7 @@ export interface StableCellGraphEntry {
 const HYDRATION_BATCH_SIZE = 50;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -183,7 +183,7 @@ export async function pushStableCellGraph(
   }
 
   const tx = connection.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });

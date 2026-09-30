@@ -75,7 +75,7 @@ describe("Reference detection core functionality", () => {
 
     // Check in array
     const arrayAliasIndex = testData.arrayWithAlias.findIndex(
-      (item) => typeof item === "object" && item !== null && "$alias" in item,
+      (item) => isObjectOrArray(item) && "$alias" in item,
     );
     assertEquals(arrayAliasIndex, 1, "Should detect alias in array");
   });

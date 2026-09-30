@@ -1,4 +1,5 @@
 import { encode } from "@commonfabric/utils/encoding";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 function stringify(value: unknown): string {
   switch (typeof value) {
@@ -69,7 +70,7 @@ export function safeStringify(obj: unknown, maxDepth = 8): string {
       return { $bigint: value.toString() };
     }
 
-    if (value !== null && typeof value === "object") {
+    if (isObjectOrArray(value)) {
       if (seen.has(value)) {
         return "<circular reference>";
       }

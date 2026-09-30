@@ -167,49 +167,47 @@ describe("connection", () => {
     }
   });
 
-  it("records a timed-out request exactly once even if its reply arrives late", async () => {
-    using time = new FakeTime();
-    const epoch = Date.now();
-    using _now = stub(performance, "now", () => Date.now() - epoch);
+  it("records an abandoned request exactly once even if its reply arrives late", async () => {
+    // Disposal ends the wait; the worker knows nothing of that and answers
+    // later. The late reply finds no pending entry, and must not record a
+    // second terminal wait for the same request.
     const transport = new FakeTransport([RequestType.Idle]);
     const connection = await initializedConnection(transport);
     const logger = getLogger("runtime-client");
     logger.resetTimeStats();
     const request = connection.request({ type: RequestType.Idle });
-    const rejection = expect(request).rejects.toThrow(
-      "RuntimeClient request timed out: runtime:idle",
-    );
-    await time.tickAsync(60_000);
+    const rejection = expect(request).rejects.toThrow();
+    await connection.dispose();
     await rejection;
 
     expect(connection.getPendingRequestDiagnostics()).toEqual([]);
-    expect(connection.getRequestTimelineDiagnostics().at(-1)).toMatchObject({
+    const idleEntry = () =>
+      connection.getRequestTimelineDiagnostics().find((entry) =>
+        entry.type === RequestType.Idle
+      );
+    expect(idleEntry()).toMatchObject({
       type: RequestType.Idle,
-      doneAtMs: 60_000,
       error: true,
-      outcome: "timeout",
+      outcome: "cancelled",
     });
     expect(logger.getTimeStats("ipc", RequestType.Idle)).toMatchObject({
       count: 1,
-      totalTime: 60_000,
     });
-    expect(logger.getTimeStats("ipc-outcome", "timeout", RequestType.Idle))
-      .toMatchObject({ count: 1, totalTime: 60_000 });
+    expect(logger.getTimeStats("ipc-outcome", "cancelled", RequestType.Idle))
+      .toMatchObject({ count: 1 });
+
     using _warning = stub(console, "warn");
     const sent = transport.sent.find((message) =>
       "msgId" in message && message.data.type === RequestType.Idle
     ) as IPCClientMessage;
     transport.emit("message", { msgId: sent.msgId });
     expect(logger.getTimeStats("ipc", RequestType.Idle)?.count).toBe(1);
-    expect(connection.getRequestTimelineDiagnostics().at(-1)).toMatchObject({
-      outcome: "timeout",
-      doneAtMs: 60_000,
-    });
-    await connection.dispose();
+    expect(idleEntry()).toMatchObject({ outcome: "cancelled" });
   });
 
-  it("keeps timeout statistics after the boot timeline fills", async () => {
-    using time = new FakeTime();
+  it("keeps outcome statistics after the boot timeline fills", async () => {
+    // The timeline is capped at the boot window, so a later request records no
+    // entry in it. The outcome statistics are uncapped and must still count it.
     const transport = new FakeTransport([RequestType.Idle]);
     const connection = await initializedConnection(transport);
     for (let index = 0; index < 100; index++) {
@@ -219,15 +217,14 @@ describe("connection", () => {
     const logger = getLogger("runtime-client");
     logger.resetTimeStats();
     const request = connection.request({ type: RequestType.Idle });
-    const rejection = expect(request).rejects.toThrow("request timed out");
-    await time.tickAsync(60_000);
+    const rejection = expect(request).rejects.toThrow();
+    await connection.dispose();
     await rejection;
     expect(connection.getRequestTimelineDiagnostics()).toEqual(timeline);
     expect(
-      logger.getTimeStats("ipc-outcome", "timeout", RequestType.Idle)?.count,
+      logger.getTimeStats("ipc-outcome", "cancelled", RequestType.Idle)?.count,
     )
       .toBe(1);
-    await connection.dispose();
   });
 
   it("records cancellation as a terminal outcome", async () => {
@@ -395,6 +392,9 @@ describe("connection", () => {
       // task queue (all microtasks, then one macrotask) runs every continuation a
       // completed dispose would take; the held Dispose reply never arrives, so a
       // correct dispose is still pending and the transport is untouched.
+      // `dispose()` has already aborted the lifetime by this point, and the
+      // Dispose request carries no abort listener, so what is observed here is
+      // a request only its reply can settle.
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(done).toBe(false);
       expect(transport.disposeCalls).toBe(0);
@@ -437,10 +437,10 @@ describe("connection", () => {
 
     it("leaves nothing pending when the send itself throws", async () => {
       // The throw reaches the caller, and the promise `request()` would have
-      // returned is never returned at all -- so the timeout and abort hook
-      // registered before the send must not be left holding it. Were they,
-      // disposal would reject a promise nobody holds, which is an unhandled
-      // rejection rather than a caught one.
+      // returned is never returned at all -- so the abort hook and pending
+      // entry registered before the send must not be left holding it. Were
+      // they, disposal would reject a promise nobody holds, which is an
+      // unhandled rejection rather than a caught one.
       const connection = new RuntimeConnection(
         new ThrowingTransport(RequestType.CellSet),
       );
@@ -521,22 +521,25 @@ describe("connection", () => {
       session.detach();
     });
 
-    it("cancels a mount whose response times out before forgetting its id", async () => {
-      using time = new FakeTime();
+    it("cancels a mount whose response fails before forgetting its id", async () => {
       const transport = new FakeTransport([RequestType.VDomMount]);
       const connection = await initializedConnection(transport);
       const session = connection.attachVDom(() => {});
       try {
         const mounting = session.mount(37, {
-          id: "of:mount-timeout",
+          id: "of:mount-failure",
           space: "did:key:test",
           scope: "space",
           path: [],
         });
-        const rejected = expect(mounting).rejects.toThrow(
-          "RuntimeClient request timed out: vdom:mount",
-        );
-        await time.tickAsync(60_000);
+        const rejected = expect(mounting).rejects.toThrow("mount refused");
+        const held = transport.sent.find((message) =>
+          "msgId" in message && message.data.type === RequestType.VDomMount
+        ) as IPCClientMessage;
+        transport.emit("message", {
+          msgId: held.msgId,
+          error: "mount refused",
+        });
         await rejected;
         const requests = transport.sent.filter(
           (message): message is IPCClientMessage => "msgId" in message,
@@ -766,6 +769,50 @@ describe("connection", () => {
       } finally {
         Reflect.set(performance, "now", realNow);
       }
+    });
+  });
+
+  describe("RuntimeConnection request lifetime", () => {
+    it("leaves a request the worker has not answered pending however long it waits", async () => {
+      // A request settles on its reply or on disposal, and on nothing else.
+      // The wait is what a `FakeTime` makes assertable: advancing an hour of
+      // fake time runs every timer a bound would have been armed on, so a
+      // request still pending afterwards is one no clock is going to reject.
+      // Real time does not move, so the case costs nothing to run.
+      //
+      // The connection is built before the clock is faked. Its loop-lag probe
+      // arms an interval through `unrefTimer`, which hands the id to
+      // `Deno.unrefTimer`, and a faked id names an unrelated real timer.
+      // Building first also keeps that interval off the fake clock, where an
+      // hour of ticks would run it thirty-six thousand times.
+      const transport = new FakeTransport([RequestType.Idle]);
+      const connection = await initializedConnection(transport);
+      using time = new FakeTime();
+
+      const inFlight = connection.request<RequestType.Idle>({
+        type: RequestType.Idle,
+      });
+      let outcome: "pending" | "settled" = "pending";
+      const settled = inFlight.then(
+        () => (outcome = "settled"),
+        (error) => {
+          outcome = "settled";
+          return error;
+        },
+      );
+
+      await time.tickAsync(60 * 60 * 1000);
+
+      expect(outcome).toBe("pending");
+      expect(connection.getPendingRequestDiagnostics()).toHaveLength(1);
+
+      // Disposal is what settles it, so the case leaves nothing unhandled.
+      const disposing = connection.dispose();
+      await time.tickAsync(0);
+      await disposing;
+      await settled;
+      expect(outcome).toBe("settled");
+      expect(connection.getPendingRequestDiagnostics()).toEqual([]);
     });
   });
 

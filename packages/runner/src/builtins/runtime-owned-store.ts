@@ -8,7 +8,7 @@
 // §4 states which stores qualify.
 
 import type { JSONSchema } from "../builder/types.ts";
-import type { Cell } from "../cell.ts";
+import { type Cell, cellRuntime } from "../cell.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   runtimeWritePolicyAuthorization,
@@ -121,7 +121,7 @@ export function enrollRuntimeOwnedStore(
   const ownerKey = runtimeOwnedStoreOwnerKey(
     storeLink,
     ownerLink,
-    owner.runtime.scopeKeyIdentity,
+    cellRuntime(owner).scopeKeyIdentity,
   );
   if (ownerKey === undefined) return;
   tx.enrollRuntimeOwnedStore(

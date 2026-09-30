@@ -15,6 +15,7 @@ import {
   isFabricSpecialObject,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   assertCloneDataUnlabeled,
   assertNoCloneFabricInstance,
@@ -142,7 +143,7 @@ export async function preloadCloneValue(
   assertCloneDataUnlabeled(cell);
   assertCloneDataUnlabeled(value);
   if (
-    value === null || typeof value !== "object" ||
+    !isObjectOrArray(value) ||
     isFabricSpecialObject(value) || seen.has(value)
   ) {
     return;

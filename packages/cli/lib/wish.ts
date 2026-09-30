@@ -8,6 +8,7 @@ import {
   type MemorySpace,
   type Runtime,
 } from "@commonfabric/runner";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type CellSelection,
   CellSelectionError,
@@ -166,10 +167,9 @@ export async function resolveWish(
     // gate, so a read after it can answer from a stale or empty result.
     await result.pull();
     await runtime.settled();
-    // Surface a permanent authorization denial on the wish's own space with
-    // the real error. Scoped to `space`: a denied cross-space profile load
-    // stays a silent absent read, which is the wish's expected "no profile
-    // yet" outcome.
+    // Surfaces a permanent authorization denial on the wish's own space,
+    // where even its error state may be unreadable. Cross-space profile load
+    // failures are reported by the wish's error state below.
     throwOnSpaceAuthorizationError(runtime.storageManager, space);
 
     const outCell = result.key("out");
@@ -181,7 +181,9 @@ export async function resolveWish(
     // only one of the two is an absent result: the matched one still has an
     // address, which is the whole of what a marked position asks for.
     const matched = resolved.getRaw() !== undefined;
-    const value: unknown = resolved.get();
+    const value: unknown = spec.schema === undefined
+      ? resolved.get()
+      : resolved.resolveAsCell().asSchema(spec.schema).get();
 
     return {
       // `?? null` covers the matched-but-unset target a caller selected
@@ -315,7 +317,7 @@ function projectNode(
   if (isCell(value) || isStream(value) || typeof value === "function") {
     return streamMarker(key);
   }
-  if (value === null || typeof value !== "object") return value;
+  if (!isObjectOrArray(value)) return value;
 
   // TODO(danfuzz): the `typeof` gate admits a `FabricSpecialObject`, so the
   // `Object.entries` rebuild below renders one — a `FabricBytes` in a

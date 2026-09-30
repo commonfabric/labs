@@ -26,6 +26,7 @@ import {
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   type CfcLabel,
@@ -63,7 +64,7 @@ import {
   isVNode,
   stringifyEntryValue,
 } from "./tree-builder.ts";
-import { FsTree, type TransplantChanges } from "./tree.ts";
+import { FsTree, recordEntryChange, type TransplantChanges } from "./tree.ts";
 
 /**
  * Expands a schema stored as a content-addressed reference into the schema it
@@ -76,7 +77,7 @@ import { FsTree, type TransplantChanges } from "./tree.ts";
 function expandSchemaReference(
   schema: JSONSchema | undefined,
 ): JSONSchema | undefined {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+  if (!isObjectNotArray(schema)) {
     return schema;
   }
   const ref = schema.$ref;
@@ -86,7 +87,7 @@ function expandSchemaReference(
   try {
     const recomposed = recomposeSchema(ref, lookupSchemaDocument);
     const { $ref: _expanded, ...siblings } = schema as Record<string, unknown>;
-    return typeof recomposed === "object" && recomposed !== null
+    return isObjectOrArray(recomposed)
       ? { ...recomposed, ...siblings } as JSONSchema
       : recomposed;
   } catch {
@@ -103,7 +104,7 @@ function getInputSchema(
   schema: JSONSchema | undefined,
 ): JSONSchema | undefined {
   schema = expandSchemaReference(schema);
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+  if (!isObjectNotArray(schema)) {
     return undefined;
   }
   const { asCell: _c, ...rest } = schema as Record<
@@ -130,12 +131,11 @@ function displayCallableInputType(
     return "void";
   }
 
-  const defs =
-    typeof schema === "object" && schema !== null && !Array.isArray(schema)
-      ? (schema as Record<string, unknown>).$defs as
-        | Record<string, JSONSchema>
-        | undefined
-      : undefined;
+  const defs = isObjectNotArray(schema)
+    ? (schema as Record<string, unknown>).$defs as
+      | Record<string, JSONSchema>
+      | undefined
+    : undefined;
   return schemaToTypeString(schema, { defs, maxDepth: 3 });
 }
 
@@ -1974,10 +1974,7 @@ export class CellBridge {
           "$FS",
           "frontmatter",
         ]);
-        if (
-          typeof current === "object" && current !== null &&
-          !Array.isArray(current)
-        ) {
+        if (isObjectNotArray(current)) {
           existingFrontmatter = current as Record<string, unknown>;
         }
       } catch {
@@ -2006,7 +2003,7 @@ export class CellBridge {
       } catch {
         return false;
       }
-      if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+      if (!isObjectNotArray(obj)) {
         return false;
       }
       // Plain-object shorthand stores keys directly under $FS instead of
@@ -2015,7 +2012,7 @@ export class CellBridge {
       let existingContent: Record<string, unknown> | null = null;
       try {
         const fsRaw = await writePath.piece.result.get(["$FS"]);
-        isPlainObjectShorthand = typeof fsRaw === "object" && fsRaw !== null &&
+        isPlainObjectShorthand = isObjectOrArray(fsRaw) &&
           !("type" in (fsRaw as Record<string, unknown>));
         const contentRaw = isPlainObjectShorthand
           ? fsRaw
@@ -2071,11 +2068,15 @@ export class CellBridge {
 
   /**
    * Helper for reconnection scheduling, which returns the delay before the next
-   * attempt: two seconds, doubling with each failure, capped at thirty.
+   * attempt: `#RECONNECT_BASE_DELAY_MS`, doubling with each failure, capped at
+   * `#RECONNECT_MAX_DELAY_MS`.
    */
   #reconnectDelayMs(): number {
-    // Exponential backoff: 2s, 4s, 8s, 16s, cap at 30s
-    return Math.min(2000 * Math.pow(2, this.#disconnectCount - 1), 30_000);
+    return Math.min(
+      CellBridge.#RECONNECT_BASE_DELAY_MS *
+        Math.pow(2, this.#disconnectCount - 1),
+      CellBridge.#RECONNECT_MAX_DELAY_MS,
+    );
   }
 
   /**
@@ -2353,9 +2354,7 @@ export class CellBridge {
    * string one, else the empty string.
    */
   #extractSummary(value: unknown): string {
-    if (
-      typeof value !== "object" || value === null || Array.isArray(value)
-    ) {
+    if (!isObjectNotArray(value)) {
       return "";
     }
     return typeof (value as Record<string, unknown>).summary === "string"
@@ -2922,7 +2921,7 @@ export class CellBridge {
     if (pendingIno === undefined) {
       if (oldIno !== undefined) {
         this.#tree.clear(oldIno);
-        this.#recordEntryChange(changes, parentIno, liveName);
+        recordEntryChange(changes, parentIno, liveName);
       }
       return;
     }
@@ -2930,14 +2929,17 @@ export class CellBridge {
     const oldNode = oldIno !== undefined
       ? this.#tree.getNode(oldIno)
       : undefined;
-    if (oldNode && pendingNode && oldNode.kind === pendingNode.kind) {
+    if (
+      oldIno !== undefined && oldNode && pendingNode &&
+      oldNode.kind === pendingNode.kind
+    ) {
       // Same path, same kind: the live inode survives, so its entry under the
       // parent is unchanged and is left cached.
       this.#mergeTransplantChanges(
         changes,
-        this.#tree.transplantSubtree(oldIno!, pendingIno),
+        this.#tree.transplantSubtree(oldIno, pendingIno),
       );
-      annotator?.annotateEntry(parentIno, liveName, oldIno!);
+      annotator?.annotateEntry(parentIno, liveName, oldIno);
     } else {
       if (oldIno !== undefined) {
         this.#tree.clear(oldIno);
@@ -2947,22 +2949,8 @@ export class CellBridge {
       if (movedIno !== undefined) {
         annotator?.annotateEntry(parentIno, liveName, movedIno);
       }
-      this.#recordEntryChange(changes, parentIno, liveName);
+      recordEntryChange(changes, parentIno, liveName);
     }
-  }
-
-  /** Records in `changes` that the entry `name` under `parentIno` changed. */
-  #recordEntryChange(
-    changes: TransplantChanges,
-    parentIno: bigint,
-    name: string,
-  ): void {
-    let names = changes.entryChanges.get(parentIno);
-    if (!names) {
-      names = new Set();
-      changes.entryChanges.set(parentIno, names);
-    }
-    names.add(name);
   }
 
   /** Merges the changes in `from` into `into`. */
@@ -2975,7 +2963,7 @@ export class CellBridge {
     }
     for (const [parentIno, names] of from.entryChanges) {
       for (const name of names) {
-        this.#recordEntryChange(into, parentIno, name);
+        recordEntryChange(into, parentIno, name);
       }
     }
   }
@@ -3124,11 +3112,11 @@ export class CellBridge {
           // the result directory and its .json sibling.
           if (existingIno !== undefined) {
             this.#tree.clear(existingIno);
-            this.#recordEntryChange(changes, pieceIno, propName);
+            recordEntryChange(changes, pieceIno, propName);
           }
           if (jsonIno !== undefined) {
             this.#tree.clear(jsonIno);
-            this.#recordEntryChange(changes, pieceIno, `${propName}.json`);
+            recordEntryChange(changes, pieceIno, `${propName}.json`);
           }
 
           // Build the projection under a staging container, then reconcile it
@@ -3159,7 +3147,7 @@ export class CellBridge {
           this.#fsProjectionEntries.set(pieceIno, newFsNames);
 
           this.#buildHandlersFile(pieceIno, callables, cfcAnnotator);
-          this.#recordEntryChange(changes, pieceIno, ".handlers");
+          recordEntryChange(changes, pieceIno, ".handlers");
 
           const state = this.#spaces.get(spaceName);
           if (state) {
@@ -3243,9 +3231,9 @@ export class CellBridge {
         }
         // First hydration: the prop directory and its `.json` sibling are new
         // to any cache, so their entries under the piece are invalidated.
-        this.#recordEntryChange(changes, pieceIno, propName);
+        recordEntryChange(changes, pieceIno, propName);
         if (this.#tree.lookup(pieceIno, `${propName}.json`) !== undefined) {
-          this.#recordEntryChange(changes, pieceIno, `${propName}.json`);
+          recordEntryChange(changes, pieceIno, `${propName}.json`);
         }
       }
       this.#markPiecePropHydrated(pieceIno, propName);
@@ -3253,11 +3241,11 @@ export class CellBridge {
       this.#markPiecePropCleared(pieceIno, propName);
       if (existingIno !== undefined) {
         this.#tree.clear(existingIno);
-        this.#recordEntryChange(changes, pieceIno, propName);
+        recordEntryChange(changes, pieceIno, propName);
       }
       if (jsonIno !== undefined) {
         this.#tree.clear(jsonIno);
-        this.#recordEntryChange(changes, pieceIno, `${propName}.json`);
+        recordEntryChange(changes, pieceIno, `${propName}.json`);
       }
       if (propName === "result") {
         this.#clearFsProjectionEntries(pieceIno, changes);
@@ -3267,7 +3255,7 @@ export class CellBridge {
       // `.handlers` is rebuilt on the piece directory, outside the prop
       // subtree the transplant reconciled, so its entry is invalidated here.
       this.#buildHandlersFile(pieceIno, callables, cfcAnnotator);
-      this.#recordEntryChange(changes, pieceIno, ".handlers");
+      recordEntryChange(changes, pieceIno, ".handlers");
     }
 
     this.#touchPieceDirIfEntriesChanged(pieceIno, pieceNamesBefore);
@@ -3679,7 +3667,7 @@ export class CellBridge {
         this.#syncPieceList(state, spaceName).catch((e) => {
           console.error(`[${spaceName}] Piece list sync error: ${e}`);
         });
-      }, 0);
+      }, CellBridge.#YIELD_DELAY_MS);
     });
     state.unsubscribes.push(piecesListCancel);
     state.pieceListSubscribed = true;
@@ -4450,9 +4438,7 @@ export class CellBridge {
 
     try {
       const parsed = JSON.parse(new TextDecoder().decode(metaNode.content));
-      if (
-        typeof parsed !== "object" || parsed === null || Array.isArray(parsed)
-      ) {
+      if (!isObjectNotArray(parsed)) {
         return;
       }
       this.#tree.updateFile(
@@ -4486,7 +4472,7 @@ export class CellBridge {
       if (ino !== undefined) {
         this.#tree.clear(ino);
         if (changes && name !== ".fs.pending") {
-          this.#recordEntryChange(changes, pieceIno, name);
+          recordEntryChange(changes, pieceIno, name);
         }
       }
     }
@@ -4496,7 +4482,7 @@ export class CellBridge {
       const ino = this.#tree.lookup(pieceIno, name);
       if (ino !== undefined) {
         this.#tree.clear(ino);
-        if (changes) this.#recordEntryChange(changes, pieceIno, name);
+        if (changes) recordEntryChange(changes, pieceIno, name);
       }
     }
   }
@@ -4555,10 +4541,7 @@ export class CellBridge {
     );
 
     this.#addVNodeJsonFiles(parentIno, treeValue, annotator);
-    if (
-      typeof treeValue === "object" && treeValue !== null &&
-      !Array.isArray(treeValue)
-    ) {
+    if (isObjectNotArray(treeValue)) {
       for (const [key, value] of Object.entries(treeValue)) {
         if (isVNode(value)) entries.add(`${encodeFuseComponent(key)}.json`);
       }
@@ -4594,12 +4577,15 @@ export class CellBridge {
         ? this.#tree.getNode(oldIno)
         : undefined;
       const stagedNode = this.#tree.getNode(stagedIno);
-      if (oldNode && stagedNode && oldNode.kind === stagedNode.kind) {
+      if (
+        oldIno !== undefined && oldNode && stagedNode &&
+        oldNode.kind === stagedNode.kind
+      ) {
         this.#mergeTransplantChanges(
           changes,
-          this.#tree.transplantSubtree(oldIno!, stagedIno),
+          this.#tree.transplantSubtree(oldIno, stagedIno),
         );
-        annotator?.annotateEntry(pieceIno, name, oldIno!);
+        annotator?.annotateEntry(pieceIno, name, oldIno);
       } else {
         if (oldIno !== undefined) {
           this.#tree.clear(oldIno);
@@ -4609,7 +4595,7 @@ export class CellBridge {
         if (movedIno !== undefined) {
           annotator?.annotateEntry(pieceIno, name, movedIno);
         }
-        this.#recordEntryChange(changes, pieceIno, name);
+        recordEntryChange(changes, pieceIno, name);
       }
     }
     for (const name of oldNames) {
@@ -4617,7 +4603,7 @@ export class CellBridge {
       const oldIno = this.#tree.lookup(pieceIno, name);
       if (oldIno !== undefined) {
         this.#tree.clear(oldIno);
-        this.#recordEntryChange(changes, pieceIno, name);
+        recordEntryChange(changes, pieceIno, name);
       }
     }
     this.#tree.clear(stageIno);
@@ -4647,8 +4633,7 @@ export class CellBridge {
     const schemaProperties = schema?.properties as
       | Record<string, unknown>
       | undefined;
-    const valueObject = typeof value === "object" && value !== null &&
-        !Array.isArray(value)
+    const valueObject = isObjectNotArray(value)
       ? value as Record<string, unknown>
       : null;
     const candidateKeys = new Set<string>([
@@ -4685,9 +4670,18 @@ export class CellBridge {
         resolvedCandidate = candidate;
       }
 
+      // The cell itself is the last thing asked, the way the CLI's detector
+      // asks it: a stream's document holds no value for either candidate to
+      // carry, and the link-derived cell answers from its stored links. It is
+      // asked only of a position that resolved to nothing or to a link, since
+      // a stream holds no value of its own and the question costs a read of
+      // the cell; a position holding a value is not one.
       const childSchema = expandSchemaReference(childCell.schema);
       let callableKind = classifyCallableEntry(candidate, childSchema) ??
-        classifyCallableEntry(resolvedCandidate, childSchema);
+        classifyCallableEntry(resolvedCandidate, childSchema) ??
+        (resolvedCandidate === undefined || isSigilLink(resolvedCandidate)
+          ? classifyCallableEntry(childCell, childSchema)
+          : null);
 
       if (!callableKind) {
         try {
@@ -4710,7 +4704,7 @@ export class CellBridge {
         schema: getInputSchema(childSchema),
       });
       callableKinds.set(key, callableKind);
-      if (typeof candidate === "object" && candidate !== null) {
+      if (isObjectOrArray(candidate)) {
         callableValues.add(candidate);
       }
     }
@@ -4718,7 +4712,7 @@ export class CellBridge {
     return {
       callables,
       skipEntry: (candidate: unknown) =>
-        (typeof candidate === "object" && candidate !== null &&
+        (isObjectOrArray(candidate) &&
           callableValues.has(candidate)) ||
         isVNode(candidate),
       classifyEntry: (key: string) => callableKinds.get(key) ?? null,
@@ -4759,10 +4753,9 @@ export class CellBridge {
       return value;
     }
 
-    const materialized: Record<string, unknown> =
-      typeof value === "object" && value !== null && !Array.isArray(value)
-        ? { ...(value as Record<string, unknown>) }
-        : {};
+    const materialized: Record<string, unknown> = isObjectNotArray(value)
+      ? { ...(value as Record<string, unknown>) }
+      : {};
     for (const key of Object.keys(properties)) {
       const childCell = rootCell.key(key).asSchemaFromLinks();
       let childValue: unknown;
@@ -4850,7 +4843,7 @@ export class CellBridge {
   ): void {
     const currentVNodeKeys = new Set<string>();
 
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    if (isObjectNotArray(value)) {
       for (
         const [key, val] of Object.entries(value as Record<string, unknown>)
       ) {
@@ -4975,7 +4968,7 @@ export class CellBridge {
     result: unknown,
   ): FsValue | null {
     if (
-      typeof result !== "object" || result === null ||
+      !isObjectOrArray(result) ||
       !("$FS" in (result as Record<string, unknown>))
     ) {
       return null;
@@ -4988,7 +4981,7 @@ export class CellBridge {
       // Plain-object shorthand: no `type` field, so the entire value is JSON
       // content.
       if (
-        typeof fsRaw === "object" && fsRaw !== null &&
+        isObjectOrArray(fsRaw) &&
         !("type" in (fsRaw as Record<string, unknown>))
       ) {
         return {
@@ -5096,7 +5089,7 @@ export class CellBridge {
                 `[${spaceName}] Error rebuilding ${pieceName}/${propName}: ${e}`,
               );
             });
-          }, 150);
+          }, CellBridge.#PROP_REBUILD_DEBOUNCE_MS);
         });
         cancels.push(() => {
           cancel();
@@ -5183,7 +5176,7 @@ export class CellBridge {
 
             // Read $NAME from the sink value directly — piece.name() may
             // return a stale cached value that hasn't updated yet.
-            const sinkName = typeof newValue === "object" && newValue !== null
+            const sinkName = isObjectOrArray(newValue)
               ? (newValue as Record<string, unknown>)["$NAME"]
               : undefined;
             const rawName = typeof sinkName === "string"
@@ -5307,7 +5300,7 @@ export class CellBridge {
               `[${spaceName}] Error renaming piece in FUSE tree: ${e}`,
             );
           }
-        }, 0);
+        }, CellBridge.#YIELD_DELAY_MS);
       });
       cancels.push(cancelRootSub);
     } catch (e) {
@@ -5341,10 +5334,7 @@ export class CellBridge {
       if (isHandlerCell(value)) return null;
 
       const rawLinkData: unknown = linkRefPayload(value);
-      if (
-        typeof rawLinkData !== "object" || rawLinkData === null ||
-        Array.isArray(rawLinkData)
-      ) {
+      if (!isObjectNotArray(rawLinkData)) {
         return null;
       }
       const linkData = rawLinkData as {
@@ -5599,4 +5589,29 @@ export class CellBridge {
    * mid-flight.
    */
   static readonly #MAX_HYDRATION_RETRIES = 3;
+
+  /**
+   * How long, in milliseconds, a piece's `input` or `result` cell must go
+   * without a further change before the prop is rebuilt. The reactive graph may
+   * report several intermediate values before it settles, and each one restarts
+   * the wait.
+   */
+  static readonly #PROP_REBUILD_DEBOUNCE_MS = 150;
+
+  /**
+   * Delay, in milliseconds, before the first reconnect attempt after a
+   * disconnect. Each failed attempt doubles the delay, up to
+   * `#RECONNECT_MAX_DELAY_MS`.
+   */
+  static readonly #RECONNECT_BASE_DELAY_MS = 2000;
+
+  /** Longest delay, in milliseconds, between two reconnect attempts. */
+  static readonly #RECONNECT_MAX_DELAY_MS = 30_000;
+
+  /**
+   * Delay, in milliseconds, of a timer set only to yield: its callback runs in
+   * a later macrotask, after the cell sink notification that set it has
+   * returned.
+   */
+  static readonly #YIELD_DELAY_MS = 0;
 }

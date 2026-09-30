@@ -166,8 +166,7 @@ Corollaries already ruled:
   scheduler-v2 durable IDs (#4288), which is also what makes handler
   processing idempotent across restarts: an event whose consequence commit
   landed is not re-run.
-- Toolshed routes its own pattern needs through the executor;
-  `background-piece-service` stays sunset (D12).
+- Toolshed routes its own pattern needs through the executor (D12).
 
 ## 3. Architecture
 
@@ -358,8 +357,10 @@ session-scoped client act. The wiring:
   same channel carries any future server-computed, client-enacted effect
   (focus, toast, download). One shape, audited once.
 - The client may enact optimistically from its speculative run
-  (navigate immediately) and reconcile if the authoritative intent
-  differs — navigation is reversible, so the egress rule permits it.
+  (navigate immediately), reconciling by nonce against the
+  authoritative intent — whichever of the two enacts first is the
+  journey's one navigation, and the other stands down. Navigation is
+  reversible, so the egress rule permits it.
 
 ### 3.8 Authority and budgets for server-run effects
 

@@ -45,10 +45,12 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  collectExternalSchemaRefHashes,
+} from "@commonfabric/data-model-schema/schema-refs";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { SessionFactory, SpaceReplica } from "../src/storage/v2.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
-import { collectExternalSchemaRefHashes } from "../src/schema-decompose.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -56,6 +58,13 @@ import type {
 import { ExecutorHost } from "../src/executor/host.ts";
 import { SpaceServer } from "../src/executor/space-server.ts";
 import { waveRunContextOf } from "../src/executor/wave.ts";
+import {
+  ArrivalLog,
+  awaitReplica,
+  settleServing,
+} from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import {
   emptyServingLoopStats,
   type ServingLoopStats,
@@ -73,7 +82,6 @@ import {
   resolveEntryIdentity,
 } from "../src/index.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space root ensure space");
 const space = spaceSigner.did() as MemorySpace;
@@ -106,7 +114,13 @@ function rootSource(marker: string): string {
  * schema leaves unmet.
  */
 class CidDroppingSessionFactory implements SessionFactory {
-  droppedCids = 0;
+  /** Each `cid:` upsert as the filter drops it. */
+  readonly cidDrops = new ArrivalLog<void>();
+
+  /** Each document let through whose link schemas reference a `cid:`
+   * schema document, reported once per document. */
+  readonly cidMentions = new ArrivalLog<string>();
+
   readonly cidMentioningIds = new Set<string>();
   readonly #getServer: () => MemoryV2Server.Server;
 
@@ -183,15 +197,19 @@ class CidDroppingSessionFactory implements SessionFactory {
   #filterSync(sync: SessionSync): SessionSync {
     const kept = sync.upserts.filter((upsert) => {
       if (upsert.id.startsWith("cid:")) {
-        this.droppedCids += 1;
+        this.cidDrops.record();
         return false;
       }
       if (upsert.doc !== undefined && upsert.doc !== null) {
         // The validator's own predicate: a `cid:` reference in a link-schema
         // position is an obligation; one in plain data is not.
         mapLinkSchemas(upsert.doc as FabricValue, (schema) => {
-          if (collectExternalSchemaRefHashes(schema as JSONSchema).size > 0) {
+          if (
+            collectExternalSchemaRefHashes(schema as JSONSchema).size > 0 &&
+            !this.cidMentioningIds.has(upsert.id)
+          ) {
             this.cidMentioningIds.add(upsert.id);
+            this.cidMentions.record(upsert.id);
           }
           return schema;
         });
@@ -206,6 +224,9 @@ class CidDroppingSessionFactory implements SessionFactory {
 
 describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
   let server: MemoryV2Server.Server;
+  /** Every space-root ensure attempt's outcome, in order — the edge the
+   * `stats.rootEnsure` counters can only be polled for. */
+  let ensures: ArrivalLog<string>;
   let engine: Engine.Engine;
   let files: Map<string, string>;
   let spaceServer: SpaceServer | undefined;
@@ -223,6 +244,35 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
    * tenure's waves as "commit replay mismatch" — observed live while
    * building the aged-reconcile pin). */
   let sinkLocalSeq: { value: number };
+
+  /** Commit an authored poke, hand it to `tenure`'s feed, and wait for
+   * the loop to cover it. A wave cycle runs the space-root ensure at its
+   * top, so W reaching the poke's own authored seq is ordered after an
+   * ensure attempt — which is what an "it stayed inert" assertion needs
+   * behind it. The feed is handed the commit directly because a bare
+   * SpaceServer has no host carrying admissions to it. */
+  const settleACycle = async (tenure: SpaceServer): Promise<void> => {
+    const poker = clientRuntime(readerSigner);
+    pokes += 1;
+    const poke = poker.getCell<{ n: number }>(space, `cycle-poke-${pokes}`);
+    await poke.sync();
+    const tx = poker.edit();
+    poke.withTx(tx).set({ n: pokes });
+    expect((await tx.commit()).error).toBeUndefined();
+    await poker.storageManager.synced();
+    tenure.enqueueCommit({
+      space,
+      seq: Engine.serverSeq(engine),
+      class: "authored",
+      sessionId: "test-cycle-poke",
+      writes: [{
+        id: poke.getAsNormalizedFullLink().id,
+        scopeKey: "space" as never,
+      }],
+    });
+    await settleServing(engine, poker, space);
+  };
+  let pokes = 0;
 
   const identityFor = (entry: string): Promise<string> =>
     resolveEntryIdentity(entry, (name) => {
@@ -266,6 +316,8 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       [APP_PATH, rootSource("app-v1")],
     ]);
     mintedTxs = [];
+    ensures = new ArrivalLog<string>();
+    pokes = 0;
     stats = emptyServingLoopStats();
     sinkLocalSeq = { value: 0 };
     hangPatternFetches = false;
@@ -357,6 +409,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
         };
       },
       localSeqRef: sinkLocalSeq,
+      onRootEnsure: ensures.record,
       stats,
       policy: {
         flushDeadlineMs: 2_000,
@@ -368,20 +421,19 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     return created;
   };
 
-  /** Resolve the space root through a client replica, poll-bounded:
-   * the wave batch lands link + docs together, but a reader's replica
-   * receives them on subscription frames, so the first resolve after
-   * the link's arrival can still miss the target's meta. */
-  const resolveRootEventually = async (reader: Runtime) => {
-    const deadline = Date.now() + 20_000;
-    while (true) {
-      const root = await resolveSpaceRootPattern(reader, space);
-      if (root !== undefined) return root;
-      if (Date.now() > deadline) {
-        throw new Error("timed out resolving the space root");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+  /** Resolve the space root through a client replica, sleeping on that
+   * replica's own arrivals. The ensure's batch lands the link and the
+   * root's docs together, but a reader receives them on subscription
+   * frames, so the resolve needs the frame carrying the target's meta as
+   * well as the one carrying the link — and the resolve is itself a read
+   * across the wire, which is why the predicate is the whole of it. */
+  const resolveRootAfterEnsure = async (reader: Runtime) => {
+    let root: Awaited<ReturnType<typeof resolveSpaceRootPattern>>;
+    await awaitReplica(reader.storageManager, async () => {
+      root = await resolveSpaceRootPattern(reader, space);
+      return root !== undefined;
+    });
+    return root!;
   };
 
   const ensureTxs = (): IExtendedStorageTransaction[] =>
@@ -394,14 +446,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const created = newSpaceServer();
     expect(await created.activate()).toBe(true);
 
-    // The ensure's writes ride the first wave; poll the DURABLE store
+    // The ensure's writes ride the first wave; read the DURABLE store
     // through an independent client replica.
     const reader = clientRuntime(readerSigner);
-    const probe = reader.getSpaceCell(space).key("defaultPattern");
-    await probe.sync();
-    await waitUntil(() => probe.get() !== undefined, "root linked");
-
-    const root = await resolveRootEventually(reader);
+    const root = await resolveRootAfterEnsure(reader);
     expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
     expect(getPatternIdentityRef(root)?.identity).toBe(
       await identityFor(HOME_PATH),
@@ -418,10 +466,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(await created.activate()).toBe(true);
 
     const reader = clientRuntime(readerSigner);
-    const probe = reader.getSpaceCell(space).key("defaultPattern");
-    await probe.sync();
-    await waitUntil(() => probe.get() !== undefined, "root linked");
-    const firstRoot = await resolveRootEventually(reader);
+    const firstRoot = await resolveRootAfterEnsure(reader);
     const bornIdentity = await identityFor(HOME_PATH);
     expect(getPatternIdentityRef(firstRoot)?.identity).toBe(bornIdentity);
 
@@ -440,16 +485,13 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
 
     const second = newSpaceServer();
     expect(await second.activate()).toBe(true);
-    await waitUntil(
-      () => stats.rootEnsure.runs === 2,
-      "second tenure's ensure",
-    );
+    await ensures.reached(2);
     // The second tenure RESOLVED: created stays 1, one root ever.
     expect(stats.rootEnsure.created).toBe(1);
     expect(stats.rootEnsure.failures).toBe(0);
 
     const probeReader = clientRuntime(readerSigner);
-    const current = await resolveRootEventually(probeReader);
+    const current = await resolveRootAfterEnsure(probeReader);
     expect(getEntityId(current)).toEqual(getEntityId(firstRoot));
     expect(getPatternIdentityRef(current)?.identity).toBe(bornIdentity);
     // Nothing the tenure did followed the root's origin, so its identity
@@ -502,8 +544,6 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       await readerManager.close();
     });
     const replica = readerManager.open(space).replica as SpaceReplica;
-    const droppedCids = () => dropping.droppedCids;
-    const cidMentioningIds = dropping.cidMentioningIds;
 
     // Subscribe FIRST (this starts the background consumer), activate
     // SECOND: everything the ensure materializes reaches this replica
@@ -525,33 +565,23 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     // deliveries — without both, this pin is vacuously green. Which
     // documents ride is the query walk's policy, not this pin's: it needs
     // one that mentions a cid, whichever that is.
-    await waitUntil(
-      () => cidMentioningIds.size > 0,
-      "a cid-mentioning document riding the plain subscription",
-    );
-    await waitUntil(
-      () => droppedCids() > 0,
-      "the simulated absorb defect dropping a cid delivery",
-    );
-    await waitUntil(
-      () => stats.rootEnsure.created === 1,
-      "the ensure's creation to complete beside the defective reader",
-    );
+    await dropping.cidMentions.reached(1);
+    await dropping.cidDrops.reached(1);
+    await ensures.matching((outcome) => outcome === "created");
 
     // THE PIN, half one — the consumer SURVIVED the violating push
     // frames (pre-containment: unhandled rejection in consumeUpdates,
     // nothing after this point runs) and a mention-carrying doc is
-    // QUARANTINED, not applied: fail-closed for the doc.
+    // QUARANTINED, not applied: fail-closed for the doc. The quarantine
+    // is the absence of a document the replica integrates, so the wait
+    // re-reads on the reader's own arrivals.
     let quarantinedId: string | undefined;
-    await waitUntil(
-      () => {
-        quarantinedId = [...cidMentioningIds].find((id) =>
-          replica.getDocument(id as URI) === undefined
-        );
-        return quarantinedId !== undefined;
-      },
-      "a cid-mentioning doc held in quarantine (not applied)",
-    );
+    await awaitReplica(readerManager, () => {
+      quarantinedId = [...dropping.cidMentioningIds].find((id) =>
+        replica.getDocument(id as URI) === undefined
+      );
+      return quarantinedId !== undefined;
+    });
 
     // Half two — the CONSUMER LOOP IS ALIVE, proven by delivery: a
     // writer pushes an update to the pre-synced liveness cell, and the
@@ -559,28 +589,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     // Pre-containment the violating push frame's throw ended the
     // consume loop (the unhandled rejection is retained by the test
     // harness, so death is otherwise silent here — the round-3
-    // review's R2), and this wait times out: the discriminator.
-    // A stall anywhere in the writer path must FAIL with its name, not
-    // hang the suite ahead of the named liveness wait below (Cubic P2 on
-    // this PR). These are event-completions, not polls — the deadline
-    // only converts a hang into a named failure, matching the suite's
-    // waitUntil discipline.
-    const named = async <T>(promise: Promise<T>, label: string): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          promise,
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`timed out waiting for ${label}`)),
-              20_000,
-            );
-          }),
-        ]);
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
+    // review's R2), and this wait never returns: the discriminator.
+    // Each step is netted, because a stalled watch path stalls the
+    // writer's own round trips too, and the live server keeps the
+    // process alive.
     {
       const writer = clientRuntime(spaceSigner);
       const writerLiveness = writer.getCell<{ n?: number }>(
@@ -588,19 +600,25 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
         "ow61-containment-liveness",
         undefined,
       );
-      await named(writerLiveness.sync(), "the writer's liveness-cell sync");
+      await withStuckNet(
+        writerLiveness.sync(),
+        "the writer's liveness-cell sync",
+      );
       const tx = writer.edit();
       writerLiveness.withTx(tx).set({ n: 2 });
-      expect((await named(tx.commit(), "the writer's liveness commit")).error)
-        .toBeUndefined();
-      await named(
+      expect(
+        (await withStuckNet(tx.commit(), "the writer's liveness commit")).error,
+      ).toBeUndefined();
+      await withStuckNet(
         writer.storageManager.synced(),
-        "the writer's post-commit sync barrier",
+        "the writer's flush after its liveness commit",
       );
     }
-    await waitUntil(
-      () => (liveness.get() as { n?: number } | undefined)?.n === 2,
-      "a post-quarantine push to be DELIVERED through the same consumer",
+    await waitForCellValue(
+      reader,
+      liveness,
+      (value: { n?: number } | undefined) => value?.n === 2,
+      { stuckLabel: "the reader's liveness cell to carry the writer's update" },
     );
 
     // And the request-shaped path still answers ok (pre-containment
@@ -640,14 +658,11 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(await created.activate()).toBe(true);
 
     const reader = clientRuntime(readerSigner);
-    const probe = reader.getSpaceCell(space).key("defaultPattern");
-    await probe.sync();
-    await waitUntil(() => probe.get() !== undefined, "root linked");
 
     // A non-self-owned space is NOT the owner's home: the system
     // default-app source, with the custom-URL fork's interim (system
     // default only) — never the home source.
-    const root = await resolveRootEventually(reader);
+    const root = await resolveRootAfterEnsure(reader);
     expect(getPatternSource(root)).toBe(DEFAULT_APP_PATTERN_SOURCE);
 
     const creations = ensureTxs();
@@ -671,10 +686,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     // never the service DID.
     const created = newSpaceServer();
     expect(await created.activate()).toBe(true);
-    await waitUntil(
-      () => stats.rootEnsure.skippedNoOwner === 1,
-      "fail-closed skip before the genesis",
-    );
+    await ensures.matching((outcome) => outcome === "skipped-no-owner");
     expect(stats.rootEnsure.runs).toBe(0);
 
     // The genesis lands (the client's bootstrap), and the host's feed
@@ -689,13 +701,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       writes: [{ id: `of:${space}`, scopeKey: "space" as never }],
     });
 
-    await waitUntil(
-      () => stats.rootEnsure.runs === 1,
-      "the re-armed ensure ran",
-    );
+    await ensures.matching((outcome) => outcome !== "skipped-no-owner");
     expect(stats.rootEnsure.created).toBe(1);
     const reader = clientRuntime(readerSigner);
-    const root = await resolveRootEventually(reader);
+    const root = await resolveRootAfterEnsure(reader);
     expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
   });
 
@@ -709,12 +718,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     let demandReads = 0;
     const facade = new Proxy(server, {
       get(target, property, receiver) {
-        if (property === "demandedInstancesForSpace") {
-          return (
-            ...args: Parameters<typeof server.demandedInstancesForSpace>
-          ) => {
+        if (property === "demandForSpace") {
+          return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
-            return target.demandedInstancesForSpace(...args);
+            return target.demandForSpace(...args);
           };
         }
         if (property === "idle") {
@@ -788,16 +795,13 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     // the lease: no failover, events queueing, no loop-failed park.
     // The deadline lands the wedge in the counted-failure arm and the
     // tenure proceeds serving. Watched RED before the deadline
-    // existed: the failure never counted and this pin timed out.
+    // existed: the failure never counted and this pin never returned.
     await seedAcl({ [space]: "OWNER" });
     hangPatternFetches = true;
     const created = newSpaceServer({ rootEnsureDeadlineMs: 300 });
     expect(await created.activate()).toBe(true);
 
-    await waitUntil(
-      () => stats.rootEnsure.failures === 1,
-      "the wedged ensure's deadline failure counted",
-    );
+    await ensures.matching((outcome) => outcome === "failed");
     expect(stats.rootEnsure.runs).toBe(0);
     expect(stats.rootEnsure.created).toBe(0);
     // The tenure is alive and serving — the wedge parked nothing.
@@ -861,12 +865,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await writer.storageManager.synced();
 
     const reader = clientRuntime(readerSigner);
-    const root = await resolveRootEventually(reader);
+    const root = await resolveRootAfterEnsure(reader);
     expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
-    await waitUntil(
-      () => host.stats().rootEnsure.created === 1,
-      "the host-driven ensure's creation counted",
-    );
+    // The root is at the store, so the ensure that put it there has run.
+    expect(host.stats().rootEnsure.created).toBe(1);
     expect(host.stats().rootEnsure.runs).toBeGreaterThanOrEqual(1);
     expect(host.stats().rootEnsure.failures).toBe(0);
   });
@@ -884,7 +886,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await seedAcl({ [space]: "OWNER" });
     const created = newSpaceServer(undefined, { ensureSpaceRoots: false });
     expect(await created.activate()).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleACycle(created);
 
     // The re-arm path cannot resurrect a disabled ensure either.
     created.enqueueCommit({
@@ -894,8 +896,9 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       sessionId: "test-acl-touch",
       writes: [{ id: `of:${space}`, scopeKey: "space" as never }],
     });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleACycle(created);
 
+    expect(ensures.entries).toEqual([]);
     expect(stats.rootEnsure).toEqual({
       runs: 0,
       created: 0,
@@ -913,10 +916,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const created = newSpaceServer();
     expect(await created.activate()).toBe(true);
 
-    await waitUntil(
-      () => stats.rootEnsure.skippedNoOwner === 1,
-      "fail-closed skip counted",
-    );
+    await ensures.matching((outcome) => outcome === "skipped-no-owner");
     expect(stats.rootEnsure.runs).toBe(0);
     expect(stats.rootEnsure.created).toBe(0);
     // The tenure keeps serving (the skip parks nothing).
@@ -926,7 +926,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     // fallback the fail-closed arm exists to prevent): semantic
     // absence through the same resolution the ensure itself uses.
     const reader = clientRuntime(readerSigner);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await settleACycle(created);
     expect(await resolveSpaceRootPattern(reader, space)).toBeUndefined();
     expect(ensureTxs().length).toBe(0);
   });

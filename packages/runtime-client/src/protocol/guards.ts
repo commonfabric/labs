@@ -7,7 +7,7 @@
  * Each doc below says where its particular guarantee stops.
  */
 
-import { isDID } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   AttachPortNotification,
@@ -17,6 +17,7 @@ import {
   ClientTransportNotificationType,
   ConsoleNotification,
   ErrorNotification,
+  EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
   IPCClientMessage,
@@ -29,7 +30,9 @@ import {
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
+  SpaceAccessLostNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -153,7 +156,10 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
-    isEventNeedsAttentionNotification(value);
+    isPresenceUpdateNotification(value) ||
+    isEventNeedsAttentionNotification(value) ||
+    isSpaceAccessLostNotification(value) ||
+    isEventIntentOutcomeNotification(value);
 }
 
 /**
@@ -167,6 +173,22 @@ export function isOperationUpdateNotification(
     value.type === NotificationType.OperationUpdate &&
     typeof value.subscriptionId === "string" &&
     isObjectNotArray(value.field);
+}
+
+/**
+ * Is `value` a {@link PresenceUpdateNotification}? The event is checked as
+ * an object carrying a `kind`; its record contents remain the consumer's
+ * concern.
+ */
+export function isPresenceUpdateNotification(
+  value: unknown,
+): value is PresenceUpdateNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.PresenceUpdate &&
+    typeof value.subscriptionId === "string" &&
+    isObjectNotArray(value.event) &&
+    (value.event.kind === "snapshot" || value.event.kind === "upsert" ||
+      value.event.kind === "remove" || value.event.kind === "failure");
 }
 
 /**
@@ -231,6 +253,24 @@ export function isErrorNotification(
     value.type === NotificationType.ErrorReport &&
     typeof value.message === "string"
   );
+}
+
+/** Recognizes a payload-free event admission refusal. */
+export function isEventIntentOutcomeNotification(
+  value: unknown,
+): value is EventIntentOutcomeNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.EventIntentOutcome && isDID(value.space) &&
+    typeof value.eventId === "string" && value.eventId.length > 0 &&
+    value.kind === "refused" && value.reason === "admission-refused";
+}
+
+/** Recognizes a space-scoped authoritative access-loss notification. */
+export function isSpaceAccessLostNotification(
+  value: unknown,
+): value is SpaceAccessLostNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceAccessLost && isDID(value.space);
 }
 
 /**
@@ -318,7 +358,9 @@ export function isWorkerReadyNotification(
 ): value is WorkerReadyNotification {
   return (
     isObjectNotArray(value) &&
-    value.type === TransportNotificationType.WorkerReady
+    value.type === TransportNotificationType.WorkerReady &&
+    (value.lifetimeLock === undefined ||
+      typeof value.lifetimeLock === "string")
   );
 }
 

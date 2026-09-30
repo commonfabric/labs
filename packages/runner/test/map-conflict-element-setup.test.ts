@@ -33,21 +33,11 @@ import {
   type SessionFactory,
   StorageManager as V2StorageManager,
 } from "../src/storage/v2.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("map-conflict-element-setup");
 const space = signer.did();
-
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
 
 /**
  * Holds server-push `session/effect` frames while closed, delivering every
@@ -57,6 +47,14 @@ const newSharedServer = () =>
 type FrameGate = {
   hold(): void;
   release(): void;
+
+  /**
+   * Resolves once a response carrying a `ConflictError` has passed through:
+   * the verdict, which the gate never holds. The catch-up its retry gate
+   * waits on rides the held frames, so the storage layer surfaces the
+   * rejection — the `revert` notification — only after a release.
+   */
+  conflictResponded: Promise<void>;
 };
 
 const gatedLoopback = (
@@ -64,12 +62,14 @@ const gatedLoopback = (
 ): { transport: MemoryV2Client.Transport; gate: FrameGate } => {
   let receiver: (payload: string) => void = () => {};
   let held: string[] | null = null;
+  const conflictResponded = Promise.withResolvers<void>();
   const connection = server.connect((message) => {
     const payload = encodeMemoryBoundary(message as unknown as FabricValue);
-    if (
-      held !== null &&
-      (message as { type?: string }).type === "session/effect"
-    ) {
+    const frame = message as { type?: string; error?: { name?: string } };
+    if (frame.type === "response" && frame.error?.name === "ConflictError") {
+      conflictResponded.resolve();
+    }
+    if (held !== null && frame.type === "session/effect") {
       held.push(payload);
       return;
     }
@@ -99,6 +99,7 @@ const gatedLoopback = (
         held = null;
         for (const payload of queued) receiver(payload);
       },
+      conflictResponded: conflictResponded.promise,
     },
   };
 };
@@ -163,11 +164,9 @@ describe("map element setup across a commit conflict", () => {
   let rtA: Runtime;
   let rtB: Runtime;
   let conflicts: Error[];
-  let firstConflict: PromiseWithResolvers<void>;
 
   beforeEach(() => {
     conflicts = [];
-    firstConflict = Promise.withResolvers<void>();
     server = newSharedServer();
     ({ manager: storageA } = SharedServerStorageManager.connectTo(server, {
       as: signer,
@@ -181,7 +180,6 @@ describe("map element setup across a commit conflict", () => {
           notification.reason.name === "ConflictError"
         ) {
           conflicts.push(notification.reason);
-          firstConflict.resolve();
         }
         return undefined;
       },
@@ -278,23 +276,22 @@ describe("map element setup across a commit conflict", () => {
       result.key("items").withTx(appendTx).set([1, 2]);
       rtB.prepareTxForCommit(appendTx);
       const appendCommit = appendTx.commit();
-      // The deferred waits here and below carry no bound, per the suite's
-      // ban on timeouts. The clock preload (test/clock-preload.ts) is the
-      // backstop: it freezes wall-clock timers armed from test files, and
-      // auto-advance drains the event loop when nothing can progress, so a
-      // wait whose resolver never fires fails the test promptly as a
-      // pending promise instead of holding the suite.
-      await firstConflict.promise;
-      expect(
-        conflicts.length,
-        "the reconcile's commit hit a real ConflictError",
-      ).toBeGreaterThanOrEqual(1);
+      // The verdict is what to wait for here: the rejection surfaces as a
+      // revert only once its retry gate has the catch-up, and that rides the
+      // held frames. The waits here and below carry no bound, per the
+      // suite's ban on timeouts; a resolver that never fires fails the test
+      // as a pending promise once the loop empties.
+      await factoryB.gate!.conflictResponded;
 
       // Deliver the held catch-up; the reconcile re-runs against the fresh
       // container and its rewrite lands both element links.
       factoryB.gate!.release();
       expect((await appendCommit).error).toBeUndefined();
       await twoSlots.promise;
+      expect(
+        conflicts.length,
+        "the reconcile's commit hit a real ConflictError",
+      ).toBeGreaterThanOrEqual(1);
       await rtB.scheduler.idleWithPendingCommits();
       await storageB.synced();
 

@@ -64,8 +64,13 @@ Instantiating a child pattern inside another piece creates its cells and
 metadata, but does not add the child to `pieceRegistry` automatically.
 
 A piece is identified by an entity id (a hash, e.g. `fid1:abc...`) and can carry
-a human **slug** for URLs. In the shell, `/{spaceName}/{pieceIdOrSlug}` shows
-a piece's UI.
+a human **slug** for URLs. In the current shell,
+`/{spaceName}/{pieceIdOrSlug}` shows a piece's UI.
+
+[Common Fabric URLs](../specs/fabric-urls.md) describes a possible future
+canonical browser form using an ASP host, a registered space name or space DID,
+and the piece DID. No deployment is planned; the current shell routes remain
+authoritative.
 
 The registry is the root of the supported piece listings. A child piece that is
 not registered must be published through a searchable collection or remain
@@ -173,16 +178,6 @@ Think about what this composition means: an LLM call whose *prompt is a
 reactive function of durable shared state*, whose result is durable shared
 state, inside a list comprehension, synced to every user of the space. That
 sentence is the product.
-
-## Background execution
-
-A piece can keep working with no browser open. A pattern that exposes a
-`bgUpdater` stream (or registers via the `cf-updater` component) gets picked
-up by the **background piece service**, which re-runs each registered piece
-on a fixed cadence (every 60 s by default), sending to that stream
-server-side — same graph, same cells, headless executor (details in
-Chapter 11). This is how "summarize my feed every morning" works without
-anyone keeping a tab open.
 
 ---
 

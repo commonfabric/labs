@@ -10,8 +10,17 @@ import {
   suiteById,
   topologyUnits,
 } from "./test-topology.ts";
+import {
+  parseSkipList,
+  SKIP_LIST_VARIABLE,
+} from "@commonfabric/test-support/records";
 import { CAPABILITIES } from "./ci-capabilities.ts";
+import { commandsWrittenIn } from "./check-test-shuffle.ts";
+import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
+import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
+import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
 import { serverExecutionCiLane } from "./server-execution-ci.ts";
+import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const suites = await loadTopology(root);
@@ -112,6 +121,129 @@ describe("the test topology", () => {
     }
   });
 
+  it("gives every unit a lane may subset a file the skip list keys on", async () => {
+    // A lane running part of a unit registers the rest as ignored. The
+    // registration preload looks each ignored name up under the
+    // repository-relative file that registered the test. A unit that is not
+    // such a file therefore cannot be handed a subset, and has to be listed in
+    // `whole`. An unlisted unit of that kind would get a skip list that matches
+    // nothing, and its lane would run every test while being charged for one.
+
+    const wrong: string[] = [];
+    for (const suite of suites) {
+      const whole = new Set(suite.whole);
+      for (const unit of suite.units) {
+        if (whole.has(unit)) continue;
+        if (!DENO_TEST_FILE.test(unit)) {
+          wrong.push(`${suite.id}: ${unit} is not a test file`);
+          continue;
+        }
+        const holds = await Deno.stat(path.join(root, unit))
+          .then((entry) => entry.isFile)
+          .catch(() => false);
+        if (!holds) wrong.push(`${suite.id}: ${unit} is not in the tree`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("names only its own units as the ones that run whole", () => {
+    const stray: string[] = [];
+    for (const suite of suites) {
+      const units = new Set(suite.units);
+      for (const unit of suite.whole) {
+        if (!units.has(unit)) stray.push(`${suite.id}: ${unit}`);
+      }
+    }
+    expect(stray).toEqual([]);
+  });
+
+  it("writes no skip list for a unit it declares whole", async () => {
+    // This is the reverse of the check above. A suite that lists a unit in
+    // `whole` and still writes a skip list for it has a runner that can take a
+    // subset. Listing such a unit in `whole` makes the packer place it whole
+    // for no reason.
+
+    const outputDir = await Deno.makeTempDir({ prefix: "topology-whole-" });
+    const spoolDir = `${outputDir}/spool`;
+    const written: string[] = [];
+    for (const suite of suites) {
+      if (suite.whole.length === 0) continue;
+      const requests = suite.whole.map((unit) => ({
+        unit,
+        skip: ["a name no unit holds"],
+      }));
+      for (
+        const invocation of await suite.command(requests, {
+          root,
+          outputDir,
+          spoolDir,
+        })
+      ) {
+        const named = invocation.env?.[SKIP_LIST_VARIABLE];
+        if (named === undefined) continue;
+        const list = parseSkipList(await Deno.readTextFile(named)) ?? {};
+        for (const unit of Object.keys(list)) {
+          written.push(`${suite.id}: ${unit}`);
+        }
+      }
+    }
+    await Deno.remove(outputDir, { recursive: true });
+    expect(written).toEqual([]);
+  });
+
+  it("runs the units it names into one process in one invocation of that name, and the rest in none", async () => {
+    // The packer charges a process's setup for each process a lane starts,
+    // reading which process a unit runs in from `processes`, and a lane
+    // measures that setup from the invocation carrying the process's name.
+    // A unit named into one process and run in another is charged for a
+    // process it does not start, and asking for the units of one process
+    // then starts two.
+
+    const outputDir = await Deno.makeTempDir({ prefix: "topology-process-" });
+    const context = { root, outputDir, spoolDir: `${outputDir}/spool` };
+    const wrong: string[] = [];
+    for (const suite of suites) {
+      const byProcess = new Map<string | undefined, string[]>();
+      for (const unit of suite.units) {
+        const process = suite.processes?.get(unit);
+        byProcess.set(process, [...byProcess.get(process) ?? [], unit]);
+      }
+      for (const [process, units] of byProcess) {
+        const invocations = await suite.command(
+          units.map((unit) => ({ unit, skip: [] })),
+          context,
+        );
+        const named = invocations.flatMap((invocation) =>
+          invocation.process === undefined ? [] : [invocation.process]
+        );
+        const expected = process === undefined ? [] : [process];
+        if (JSON.stringify(named) !== JSON.stringify(expected)) {
+          wrong.push(
+            `${suite.id}: the units of ${JSON.stringify(process)} run in ` +
+              JSON.stringify(named),
+          );
+        }
+      }
+    }
+    await Deno.remove(outputDir, { recursive: true });
+    expect(wrong).toEqual([]);
+  });
+
+  it("names a process for every unit of a suite or for none", () => {
+    // The packer charges a suite's process setup only to the units named
+    // into a process, so a unit left out of a suite that names others
+    // would be charged no setup at all.
+    const partial = suites.filter((suite) =>
+      suite.processes !== undefined && suite.processes.size > 0 &&
+      suite.units.some((unit) => !suite.processes!.has(unit))
+    ).map((suite) => suite.id);
+    expect(partial).toEqual([]);
+    expect(
+      suites.filter((suite) => (suite.processes?.size ?? 0) > 0).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("lets a default suite and a variant suite hold one source file", () => {
     const defaults = suites.find((suite) =>
       suite.id === "package-integration"
@@ -159,8 +291,17 @@ describe("the test topology", () => {
       { test: { k: "gate", s: "repo", n: "check-deno-pins" } },
       { test: { k: "gate", s: "repo", n: "check-test-aliases" } },
       { test: { k: "gate", s: "repo", n: "pattern-compat annotation.tsx" } },
-      { test: { k: "gate", s: "repo", n: "pattern-vintage a b c" } },
-      { test: { k: "typecheck", s: "repo", n: "cfcheck a.tsx" } },
+      // The vintage gate's wrapper record. Its per-fixture records are
+      // named after fixtures in the tree, which `test-topology/gates.test.ts`
+      // checks against the tree itself.
+      { test: { k: "gate", s: "repo", n: "pattern-vintage" } },
+      {
+        test: {
+          k: "typecheck",
+          s: "repo",
+          n: "cfcheck packages/patterns/annotation.tsx",
+        },
+      },
       { test: { k: "typecheck", s: "memory", n: "deno-check" } },
       {
         test: {
@@ -196,6 +337,61 @@ describe("the test topology", () => {
   });
 });
 
+describe("type checking in a test run", () => {
+  /** Whether a command starts `deno test`, itself or through the batcher. */
+  const startsDenoTest = (command: string) =>
+    /(^|\s)deno test(\s|$)/.test(command) ||
+    command.includes("run-test-batches.ts");
+
+  it("passes `--no-check` to every `deno test` a suite starts", async () => {
+    // The `typecheck` suite checks every file a test loads, so a test
+    // process checking its module graph again repeats that work in every
+    // process a lane starts.
+    const outputDir = await Deno.makeTempDir({ prefix: "topology-no-check-" });
+    const checking: string[] = [];
+    let started = 0;
+    for (const suite of suites) {
+      const requests = suite.units.map((unit) => ({ unit, skip: [] }));
+      for (
+        const invocation of await suite.command(requests, {
+          root,
+          outputDir,
+          spoolDir: "/spool",
+          baseRef: "origin/main",
+        })
+      ) {
+        if (invocation.command[1] !== "test") continue;
+        started++;
+        const flags = invocation.command.filter((word) =>
+          /^--(no-)?check(=|$)/.test(word)
+        );
+        if (flags.join(" ") !== "--no-check") {
+          checking.push(`${suite.id} in ${invocation.cwd}: ${flags}`);
+        }
+      }
+    }
+    await Deno.remove(outputDir, { recursive: true });
+    expect(checking).toEqual([]);
+    // Building no `deno test` at all would pass the check above.
+    expect(started).toBeGreaterThan(0);
+  });
+
+  it("passes `--no-check` to every `deno test` a manifest or script writes", async () => {
+    // Some tasks a lane runs as they stand, and every other one is how
+    // somebody runs the same tests by hand, so a task that checks is
+    // either a lane repeating the type check or a hand run unlike the
+    // lane's.
+    const written = (await commandsWrittenIn(root))
+      .filter(({ command }) => startsDenoTest(command));
+    expect(
+      written
+        .filter(({ command }) => !/(^|\s)--no-check(\s|$)/.test(command))
+        .map(({ where, command }) => `${where}: ${command}`),
+    ).toEqual([]);
+    expect(written.length).toBeGreaterThan(0);
+  });
+});
+
 describe("reading the topology as a whole", () => {
   it("finds a suite by the identifier its manifest entries carry", () => {
     expect(suiteById(suites, "workspace-unit")?.id).toBe("workspace-unit");
@@ -216,6 +412,37 @@ describe("reading the topology as a whole", () => {
       ["other", "c"],
     ]);
     expect(topologyUnits([])).toEqual([]);
+  });
+
+  it("names no suite the batch measurement suffix could swallow", () => {
+    // A lane's batch measurement is named for its suite and marked with
+    // `MEASURED_BATCH_SUFFIX` when coverage was on. A suite whose id
+    // ended with that suffix would have its unmeasured name read as the
+    // measured name of a shorter suite, so the two would be fitted as
+    // one. Reserving the suffix is cheaper than escaping every id.
+    for (const suite of suites) {
+      expect([suite.id, suite.id.endsWith(MEASURED_BATCH_SUFFIX)])
+        .toEqual([suite.id, false]);
+    }
+  });
+
+  it("gives every measured set a member with lines a report can name", async () => {
+    // The coverage gate fails a forced set whose reports name no line of
+    // its member, which is sound only where the member has a line a
+    // report could name. An empty report charges every such line, so a
+    // member it charges nothing has none.
+    const members = await readWorkspaceMembers(path.join(root, "deno.jsonc"));
+    for (const suite of suites) {
+      for (const set of suite.measured ?? []) {
+        const { uncoveredLines } = await collectMeasuredSetDebt({
+          rootDir: root,
+          lcov: "",
+          member: set.member,
+          members,
+        });
+        expect([set.member, uncoveredLines > 0]).toEqual([set.member, true]);
+      }
+    }
   });
 
   it("keys a set of records the way the store keys them", () => {

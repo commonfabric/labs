@@ -1,5 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join } from "@std/path";
+
+import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
 import {
   type ConsoleLaunchIo,
@@ -17,6 +20,7 @@ import {
   resolveConsoleLaunchPlan,
   WEAVER_PAIRING_PORT,
 } from "../../console/launch.ts";
+import type { ConsoleObservedLaunchHealth } from "../../console/health.ts";
 
 const PIECES_JSON = JSON.stringify({
   defaults: {
@@ -134,6 +138,89 @@ const fakeBinary = async (body: string): Promise<string> => {
 
 describe("launch", () => {
   describe("resolveConsoleLaunchPlan()", () => {
+    it("retains every grant and refusal with its deciding records and a distinct remedy", () => {
+      const pieces = JSON.parse(PIECES_JSON_WITH_CONNECTOR);
+      const original = pieces.pieces[0];
+      pieces.pieces.push({
+        ...original,
+        name: "duplicate",
+        sqlite_sources: [{
+          ...original.sqlite_sources[0],
+          connection_id: "gmail-other",
+        }],
+      }, {
+        name: "unlabeled",
+        sqlite_sources: [{ connection_id: "no-class", tables: {} }],
+      });
+      const handles = JSON.parse(HANDLES_JSON);
+      const invalidRef = "private-malformed-reference";
+      handles.handles.push(
+        {
+          connection_id: "gmail-other",
+          piece: "duplicate",
+          handle_ref: MAIL_REF,
+        },
+        { connection_id: "no-class", piece: "unlabeled", handle_ref: MAIL_REF },
+        { connection_id: "broken", piece: "broken", handle_ref: invalidRef },
+      );
+      const plan = resolveConsoleLaunchPlan({
+        ...WITH_CONNECTOR,
+        instance: {
+          ...WITH_CONNECTOR.instance!,
+          piecesJson: JSON.stringify(pieces),
+          handlesJson: JSON.stringify(handles),
+        },
+      }, OPTIONS);
+      expect(plan.health.resolved).toBe(plan.resolved);
+      expect(
+        plan.health.connectors.map(({ label, value, state }) => ({
+          label,
+          value,
+          state,
+        })),
+      ).toEqual([
+        {
+          label: "Connector Inventory",
+          value: "2 granted; 2 not granted",
+          state: "ok",
+        },
+        {
+          label: "gmail-work",
+          value: "granted: gmail-work (email)",
+          state: "ok",
+        },
+        {
+          label: "gmail-other",
+          value: "granted: gmail-other (email)",
+          state: "ok",
+        },
+        { label: "no-class", value: "not granted", state: "degraded" },
+        { label: "broken", value: "not granted", state: "unknown" },
+      ]);
+      expect(
+        plan.health.connectors.every((row) =>
+          row.detail?.includes(HANDLES_JSON_PATH) &&
+          row.detail?.includes(RECORDS.instance!.piecesJsonPath)
+        ),
+      ).toBe(true);
+      expect(plan.health.connectors[2]).toMatchObject({
+        source: "loom connector receipt + pieces.json (duplicate)",
+        state: "ok",
+        value: "granted: gmail-other (email)",
+      });
+      expect(plan.health.connectors[3]).toMatchObject({
+        reason: "its declared table contract carries no CFC class",
+        remedy:
+          "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+      });
+      expect(JSON.stringify(plan.health.connectors)).not.toContain(MAIL_REF);
+      expect(plan.health.connectors[4]).toMatchObject({
+        state: "unknown",
+        reason: "its `handle_ref` does not parse",
+      });
+      expect(JSON.stringify(plan.health.connectors)).not.toContain(invalidRef);
+    });
+
     it("returns the identity, space and toolshed the instance records", () => {
       const plan = resolveConsoleLaunchPlan(RECORDS, OPTIONS);
 
@@ -270,7 +357,7 @@ describe("launch", () => {
         "persist",
       );
       expect(plan.environment.CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE).toBe(
-        "enforce-explicit",
+        DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE,
       );
     });
 
@@ -433,6 +520,49 @@ describe("launch", () => {
       );
     });
 
+    it("does not run skill scripts unless a launch says so", () => {
+      const plan = resolveConsoleLaunchPlan(RECORDS, {});
+
+      expect(plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS).toBeUndefined();
+      expect(
+        consoleLaunchReport(plan).find((line) =>
+          line.includes("skill scripts")
+        ),
+      ).toContain("not run");
+    });
+
+    it("runs skill scripts when a launch names the switch", () => {
+      const plan = resolveConsoleLaunchPlan(RECORDS, {
+        allowSkillScripts: true,
+      });
+
+      expect(plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS).toBe("1");
+      const reported = consoleLaunchReport(plan).find((line) =>
+        line.includes("skill scripts")
+      );
+      expect(reported).toContain("run in the sandbox");
+      expect(reported).toContain("named on the command line");
+    });
+
+    it("runs skill scripts when the variable carries the switch", () => {
+      const plan = resolveConsoleLaunchPlan(RECORDS, {
+        inheritedAllowSkillScripts: true,
+      });
+
+      expect(plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS).toBe("1");
+      expect(
+        consoleLaunchReport(plan).find((line) =>
+          line.includes("skill scripts")
+        ),
+      ).toContain("inherited");
+    });
+
+    it("names the skill-script variable among the ones the launcher owns", () => {
+      expect(LAUNCHER_OWNED_VARIABLES).toContain(
+        "CF_HARNESS_ALLOW_SKILL_SCRIPTS",
+      );
+    });
+
     it("throws when an index is both named and waived", () => {
       expect(() =>
         resolveConsoleLaunchPlan(RECORDS, { ...OPTIONS, noPatternIndex: true })
@@ -502,7 +632,8 @@ describe("launch", () => {
 
       expect(JSON.parse(plan.environment.CF_HARNESS_CONNECTOR_GRANTS!))
         .toEqual([{
-          name: "email",
+          name: "gmail-work",
+          cfcClasses: ["email"],
           ref: MAIL_REF,
           source: {
             connection: "gmail-work",
@@ -513,7 +644,9 @@ describe("launch", () => {
 
     it("reports each grant against the two records that decided it", () => {
       const plan = resolveConsoleLaunchPlan(WITH_CONNECTOR, OPTIONS);
-      const grant = plan.resolved.find((entry) => entry.name === "grant email");
+      const grant = plan.resolved.find((entry) =>
+        entry.name === "grant gmail-work (email)"
+      );
 
       expect(grant?.value).toBe(MAIL_REF);
       expect(grant?.source).toContain(HANDLES_JSON_PATH);
@@ -758,6 +891,221 @@ describe("launch", () => {
       ).rejects.toThrow("daemon is not running");
     });
 
+    /** The selection Loom hands a console on the native runtime. */
+    const RUNSC_ENV = {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/store/images/kitchensink",
+      CF_HARNESS_RUNSC_BINARY: "/store/bin/runsc",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
+    };
+
+    it("reads no Docker runtime table for a console on the runsc runtime", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        RUNSC_ENV,
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ unreadable: "Docker is not running" });
+          },
+        }),
+      );
+
+      expect(reads).toBe(0);
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
+      );
+      expect(Object.keys(plan.environment)).not.toContain(
+        "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR",
+      );
+      const names = plan.resolved.map(({ name }) => name);
+      expect(names).not.toContain("cfc results");
+      expect(names).not.toContain("cfc contexts");
+      expect(plan.resolved).toEqual(expect.arrayContaining([
+        {
+          name: "sandbox",
+          value: "runsc",
+          source: "`CF_HARNESS_SANDBOX_RUNTIME`, inherited",
+        },
+        {
+          name: "runsc",
+          value: "/store/bin/runsc",
+          source: "`CF_HARNESS_RUNSC_BINARY`, inherited",
+        },
+        {
+          name: "rootfs",
+          value: "/store/images/kitchensink",
+          source: "`CF_HARNESS_SANDBOX_ROOTFS`, inherited",
+        },
+        {
+          name: "cfc policy",
+          value: "/store/policy.json",
+          source: "`CF_HARNESS_RUNSC_CFC_POLICY`, inherited",
+        },
+      ]));
+    });
+
+    it("prints the harness's own defaults for a runsc console that names no binary, rootfs or policy", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(
+          plan.resolved.filter(({ name }) =>
+            ["runsc", "rootfs", "cfc policy"].includes(name)
+          ),
+        ).toEqual([
+          {
+            name: "runsc",
+            value: "`runsc`, looked for on `PATH`",
+            source: "harness default",
+          },
+          {
+            name: "rootfs",
+            value: "(the driver's default)",
+            source: "harness default",
+          },
+          {
+            name: "cfc policy",
+            value: "(none: every turn is refused at `enforce-strict`)",
+            source: "harness default",
+          },
+        ]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("attributes a CFC policy found under `HOME` to the harness default, not to the environment", async () => {
+      const home = await Deno.makeTempDir({ prefix: "console-launch-home-" });
+      try {
+        const policy = `${home}/.local/share/runsc-cfc/cfc-policy.json`;
+        await Deno.mkdir(`${home}/.local/share/runsc-cfc`, {
+          recursive: true,
+        });
+        await Deno.writeTextFile(policy, "{}");
+
+        const { plan } = await prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "runsc", HOME: home },
+          io(),
+        );
+
+        expect(plan.resolved).toContainEqual({
+          name: "cfc policy",
+          value: policy,
+          source: "harness default",
+        });
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("reads the Docker runtime table for a console the environment puts on Docker", async () => {
+      let reads = 0;
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
+        io({
+          readDockerRuntimes: () => {
+            reads += 1;
+            return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+          },
+        }),
+      );
+
+      expect(reads).toBe(1);
+      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
+        "/store/runsc-cfc/sidecars/results",
+      );
+      expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
+    });
+
+    for (const flag of ["--cfc-result-dir", "--cfc-invocation-context-dir"]) {
+      it(`throws naming \`${flag}\`, a sidecar flag a console on the runsc runtime has no use for`, async () => {
+        await expect(
+          prepareConsoleLaunch(
+            [...NAMED_ARGS, flag, "/elsewhere/sidecar"],
+            RUNSC_ENV,
+            io(),
+          ),
+        ).rejects.toThrow(`\`${flag}\``);
+      });
+    }
+
+    for (
+      const [flag, variable] of [
+        ["--sandbox-runtime", "CF_HARNESS_SANDBOX_RUNTIME"],
+        ["--sandbox-rootfs", "CF_HARNESS_SANDBOX_ROOTFS"],
+        ["--sandbox-cfc-policy", "CF_HARNESS_RUNSC_CFC_POLICY"],
+      ] as const
+    ) {
+      it(`throws naming \`${variable}\` for the batch CLI's \`${flag}\`, in every spelling, before reading anything`, async () => {
+        for (
+          const spelling of [
+            [flag, "runsc"],
+            [`${flag}=runsc`],
+            [`${flag}=`],
+            [flag],
+            [flag, "runsc", flag, "docker"],
+          ]
+        ) {
+          let reads = 0;
+          await expect(
+            prepareConsoleLaunch(
+              [...NAMED_ARGS, ...spelling],
+              {},
+              io({
+                readDockerRuntimes: () => {
+                  reads += 1;
+                  return Promise.resolve({
+                    unreadable: "Docker is not running",
+                  });
+                },
+              }),
+            ),
+          ).rejects.toThrow(variable);
+          expect(reads).toBe(0);
+        }
+      });
+    }
+
+    it("resolves relative sandbox paths against the working directory it runs in", async () => {
+      const { plan } = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        {
+          CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+          CF_HARNESS_SANDBOX_ROOTFS: "images/kitchensink",
+          CF_HARNESS_RUNSC_CFC_POLICY: "policy/cfc.json",
+        },
+        io(),
+      );
+
+      expect(
+        plan.resolved.filter(({ name }) =>
+          ["rootfs", "cfc policy"].includes(name)
+        ).map(({ value }) => value),
+      ).toEqual([
+        join(Deno.cwd(), "images/kitchensink"),
+        join(Deno.cwd(), "policy/cfc.json"),
+      ]);
+    });
+
+    it("throws the shared derivation's refusal for a runtime it does not know", async () => {
+      await expect(
+        prepareConsoleLaunch(
+          NAMED_ARGS,
+          { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
+          io(),
+        ),
+      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
+    });
+
     it("ranks an instance's record above what the shell exported", async () => {
       // An exported variable is a fact about the shell; an instance that wrote
       // down its own store has said something more specific. Ranking them the
@@ -906,6 +1254,55 @@ describe("launch", () => {
       expect(plan.environment.CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE).toBe(
         "observe",
       );
+    });
+
+    it("reads the switch from the flag and from the variable", async () => {
+      const named = await prepareConsoleLaunch(
+        [...NAMED_ARGS, "--allow-skill-scripts"],
+        {},
+        io(),
+      );
+      expect(named.plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS).toBe("1");
+
+      const inherited = await prepareConsoleLaunch(
+        NAMED_ARGS,
+        { CF_HARNESS_ALLOW_SKILL_SCRIPTS: "1" },
+        io(),
+      );
+      expect(inherited.plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS).toBe(
+        "1",
+      );
+
+      const neither = await prepareConsoleLaunch(NAMED_ARGS, {}, io());
+      expect(neither.plan.environment.CF_HARNESS_ALLOW_SKILL_SCRIPTS)
+        .toBeUndefined();
+    });
+
+    it("refuses the skill-script switch passed through to the console", async () => {
+      // Every spelling that would enable it on the server: a boolean flag
+      // still parses `=true` and `=1`, so the bare token is not the whole of
+      // what has to be caught.
+      for (
+        const argument of [
+          "--allow-skill-scripts",
+          "--allow-skill-scripts=true",
+          "--allow-skill-scripts=1",
+        ]
+      ) {
+        await expect(
+          prepareConsoleLaunch([...NAMED_ARGS, "--", argument], {}, io()),
+        ).rejects.toThrow("cannot be passed through");
+      }
+    });
+
+    it("passes other console flags through unchanged", async () => {
+      const { consoleArgs } = await prepareConsoleLaunch(
+        [...NAMED_ARGS, "--", "--host-mount", "name=c"],
+        {},
+        io(),
+      );
+
+      expect(consoleArgs).toEqual(["--host-mount", "name=c"]);
     });
 
     it("leaves the registries out when both are waived", async () => {
@@ -1155,6 +1552,24 @@ describe("launch", () => {
           "/consoles/launched",
         );
         expect(Deno.env.get("MEMORY_DIR")).toBe("/checkout/cache/memory");
+      });
+    });
+
+    it("carries its observed decision report into serving", async () => {
+      await withEnvironmentRestored(async () => {
+        let observed: ConsoleObservedLaunchHealth | undefined;
+        await launchConsole(ARGS, {}, (_args, health) => {
+          observed = health;
+          return Promise.resolve();
+        }, io);
+        expect(observed?.resolved).toContainEqual({
+          name: "space",
+          value: "cf-harness-dev",
+          source: "named on the command line",
+        });
+        expect(Number.isFinite(Date.parse(observed?.checkedAt ?? ""))).toBe(
+          true,
+        );
       });
     });
 

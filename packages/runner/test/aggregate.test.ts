@@ -91,6 +91,68 @@ describe("aggregate", () => {
       cancel();
     }
   });
+  it("publishes nothing over a linked value that has not arrived", async () => {
+    // A leaf reads each element's value through its link. A document nothing
+    // has written yet reads as undefined, and the leaf then leaves the sum
+    // unpublished rather than counting the absence as a number; the value
+    // arriving re-runs the leaf. More than 32 entries also requires a parent
+    // combine node, which must wait for the incomplete child's state.
+    const aggregate = createNodeFactory({
+      type: "ref",
+      implementation: "aggregate",
+    });
+    const compiled = pattern<{ list: number[] }>(
+      ({ list }) => ({ value: aggregate({ list, operation: "sum" }) }),
+      {
+        type: "object",
+        properties: { list: { type: "array", items: { type: "number" } } },
+      },
+      { type: "object", properties: { value: { type: "number" } } },
+    );
+    const tx = runtime.edit();
+    const present = runtime.getCell<number>(
+      space,
+      "present value",
+      undefined,
+      tx,
+    );
+    present.set(5);
+    const absent = runtime.getCell<number>(
+      space,
+      "absent value",
+      undefined,
+      tx,
+    );
+    const list = runtime.getCell<number[]>(
+      space,
+      "list with an absent value",
+      undefined,
+      tx,
+    );
+    list.set([...Array.from({ length: 32 }, () => present), absent]);
+    const output = runtime.getCell<{ value: number }>(
+      space,
+      "output over an absent value",
+      compiled.resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, compiled, { list }, output);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    const cancel = result.sink(() => {});
+    try {
+      await runtime.idle();
+      expect(await result.key("value").pull()).toBeUndefined();
+      const arrive = runtime.edit();
+      absent.withTx(arrive).set(7);
+      await arrive.commit();
+      await runtime.idle();
+      expect(await result.key("value").pull()).toBe(167);
+    } finally {
+      cancel();
+    }
+  });
+
   it("compiles all named aggregates and updates predicate and score dependencies", async () => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",

@@ -41,6 +41,24 @@ describe("CFC observation helpers", () => {
     }
   });
 
+  it("preserves first structural spellings and distinct signed zeros with repeated references", () => {
+    const first = { kind: "source", fields: [1, 2] };
+    const equivalent = { fields: [1, 2], kind: "source" };
+    const actual = uniqueCfcAtoms([
+      first,
+      equivalent,
+      first,
+      -0,
+      0,
+      -0,
+      equivalent,
+    ]);
+    expect(actual).toHaveLength(3);
+    expect(actual[0]).toBe(first);
+    expect(Object.is(actual[1], -0)).toBe(true);
+    expect(Object.is(actual[2], 0)).toBe(true);
+  });
+
   it("checks whether observed confidentiality fits an observation ceiling", () => {
     const secret = { type: "secret" };
 

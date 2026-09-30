@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 
@@ -109,5 +110,50 @@ describe("ContextualFlowControl.lubSchema combinator descent", () => {
         },
       },
     })).toEqual(["a"]);
+  });
+
+  describe("with definitions that name one another", () => {
+    // Each definition carries an atom and names every other, so the walk
+    // reaches each one along every order of the others. Joining a schema
+    // afresh along each route resolves factorially often in the number of
+    // definitions; a resolution count past the bound below fails the case at
+    // once.
+
+    /** `count` definitions, each labeled with its index and naming the rest. */
+    const definitions = (count: number): JSONSchema => ({
+      $ref: "#/$defs/R0",
+      $defs: Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [`R${i}`, {
+          ifc: { confidentiality: [`r${i}`] },
+          anyOf: [
+            { type: "null" },
+            ...Array.from({ length: count }, (_, j) => j)
+              .filter((j) => j !== i)
+              .map((j) => ({ $ref: `#/$defs/R${j}`, asCell: ["cell"] })),
+          ],
+        }]),
+      ),
+    } as JSONSchema);
+
+    it("resolves each reference at most once", () => {
+      const count = 8;
+      const resolve = ContextualFlowControl.resolveSchemaRefsOrThrow;
+      let resolutions = 0;
+      using _counted = stub(
+        ContextualFlowControl,
+        "resolveSchemaRefsOrThrow",
+        (...args: Parameters<typeof resolve>) => {
+          if (++resolutions > 10_000) throw new Error("resolved without end");
+          return resolve.apply(ContextualFlowControl, args);
+        },
+      );
+
+      expect(atomsOf(definitions(count))).toHaveLength(count);
+      expect(resolutions).toBeLessThanOrEqual(count * (count - 1) + 1);
+    });
+
+    it("unions the confidentiality of every definition", () => {
+      expect(atomsOf(definitions(4))).toEqual(["r0", "r1", "r2", "r3"]);
+    });
   });
 });

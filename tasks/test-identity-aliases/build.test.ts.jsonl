@@ -1,0 +1,3 @@
+{"date": "2026-09-16", "from": {"k": "unit", "s": "tasks", "n": "build > provenance() > declines a fork run, whose records the fork authored"}, "to": {"k": "unit", "s": "tasks", "n": "build > provenance() > reads a fork run as a pull request"}}
+{"date": "2026-09-16", "from": {"k": "unit", "s": "tasks", "n": "build > readReport() > reads nothing from a fork run"}, "to": {"k": "unit", "s": "tasks", "n": "build > readReport() > reads a fork run's records"}}
+{"date": "2026-09-16", "from": {"k": "unit", "s": "tasks", "n": "build > readReport() > keeps no lane measurement from a group nothing may read"}, "to": {"k": "unit", "s": "tasks", "n": "build > readReport() > keeps a fork run's measurements of itself"}}

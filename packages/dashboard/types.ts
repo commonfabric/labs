@@ -3,14 +3,15 @@
  * statuses a tile may report, the render-ready view its `collect()` returns,
  * the shared context it is handed to gather that view, and the drill-down
  * routes it may claim. A file under tiles/ becomes a tile by exporting a
- * `Tile`.
+ * `Tile`. Its optional `collectActivity()` is refreshed independently:
+ * `true` shows workflow activity, `false` means idle, and `undefined` means
+ * activity is unavailable.
  */
 
 export type Status = "good" | "warn" | "bad" | "unknown";
 
 // A render-ready snapshot produced by a tile's collect().
 export interface TileView {
-  label: string; // header label (plain text; escaped by the renderer)
   status: Status; // good / warn / bad / unknown -> green / orange / red / gray
   value?: string; // big headline (TRUSTED html — escape in the tile if it holds data)
   valueLabel?: string; // plain-text headline shown when CSS truncates value
@@ -20,22 +21,36 @@ export interface TileView {
   alignChartBottom?: boolean; // keep the chart at the tile bottom when its grid row grows taller
   aside?: string; // trusted inline html minor header facet (e.g. an MTD or "running" badge)
   href?: string; // if set, the whole tile becomes a link (external opens a new tab)
-  hint?: string; // small drill affordance text, e.g. "commits ↗"
+  hint?: string; // drill arrow tooltip and accessible link description
 }
 
 export interface Route {
   path: string;
   handler(req: Request, url: URL): Response | Promise<Response>;
+  // The page is rendered again on every serving tick while a browser shows
+  // it, and sent to that browser when it changes (live-page.ts).
+  live?: boolean;
 }
 
-export function runSource(repo: string, workflow: string) {
-  return { repo, workflow } as const;
+// Which of a workflow's runs a source follows: those on the main branch, or
+// those started for pull requests.
+export type RunScope = "main" | "pull requests";
+
+export function runSource(repo: string, workflow: string, scope: RunScope) {
+  return { repo, workflow, scope } as const;
 }
 
 export type RunSource = ReturnType<typeof runSource>;
 
+export const runSourceKey = (source: RunSource): string =>
+  `${source.repo} ${source.workflow} ${source.scope}`;
+
 export interface Tile {
-  id: string; // unique, stable key for this tile's scheduling + latest-view state
+  // The tile's header on every view (plain text; escaped by the renderer). It
+  // is unique among registered tiles, and keys the tile's scheduling and
+  // latest-view state on the server and its markup in the browser.
+  label: string;
+
   intervalMs: number; // how often collect() runs, per source when runSources is set
   wide?: boolean; // render full-width below the grid, including before collection
   // Keep the last completed status and values while ignoring intermediate views.
@@ -43,6 +58,13 @@ export interface Tile {
   // GitHub workflow snapshots that drive this tile. The scheduler refreshes
   // each source independently and publishes its due dependent tiles together.
   runSources?: readonly RunSource[];
+  // The tile reports a problem with one of its sources itself, through
+  // ctx.runSourceProblem, and the scheduler leaves its view as it is rather
+  // than turning it gray.
+  reportsSourceProblems?: boolean;
+  // Optional workflow activity, refreshed independently on the tile's interval.
+  // true lights the running badge; false or undefined clears it.
+  collectActivity?(ctx: Ctx): Promise<boolean | undefined>;
   collect(ctx: Ctx, publish?: (view: TileView) => void): Promise<TileView>; // publish usable data before slower work completes
   routes?: Route[]; // optional drill-down routes this tile owns
 }
@@ -50,10 +72,18 @@ export interface Tile {
 // Shared, memoized data sources handed to every collect().
 export interface Ctx {
   runs(): Promise<Run[]>; // labs deno.yml runs on main (shared across CI tiles, memoized)
-  // main-branch runs for any repo + workflow, memoized per (repo, workflow) so
-  // several tiles reading the same repo share one fetch (loom's CI tiles, and the
-  // combined recent-runs stream).
-  runsFor(repo: string, workflow: string): Promise<Run[]>;
+  // The runs of any source, memoized per source so several tiles reading the
+  // same one share one fetch (loom's CI tiles, and the combined recent-runs
+  // stream).
+  runsFor(source: RunSource): Promise<Run[]>;
+  // For a tile collected from run-source snapshots: why the snapshot of that
+  // source is missing or out of date, or undefined when it is current.
+  runSourceProblem?(source: RunSource): string | undefined;
+  // For a tile collected from run-source snapshots: asks for the tile to be
+  // collected again from the snapshots it was last published from, for when
+  // data of its own has arrived since its last collection. Each ask brings
+  // one more collection, so a tile asks only when such data arrives.
+  collectAgain?(): void;
   env(key: string): string | undefined;
 }
 

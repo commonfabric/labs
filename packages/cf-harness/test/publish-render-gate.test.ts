@@ -475,7 +475,14 @@ describe("publish-render-gate", () => {
       expect(withheld).toContain("a pattern that reads the space it cannot");
     });
 
-    it("says of every verdict that the pattern is still recorded", () => {
+    it("reports every publication as queued and unconfirmed", () => {
+      for (const message of Object.values(PATTERN_PUBLICATION_MESSAGES)) {
+        expect(message).toMatch(/^queued for /);
+        expect(message).toContain("publication is not confirmed");
+      }
+    });
+
+    it("distinguishes requested search visibility from recording alone", () => {
       for (
         const reason of [
           "recorded-automatically",
@@ -486,12 +493,12 @@ describe("publish-render-gate", () => {
         ] as const
       ) {
         expect(PATTERN_PUBLICATION_MESSAGES[reason]).toContain(
-          "recorded in the pattern index but NOT offered to search",
+          "without requesting search discoverability",
         );
       }
       for (const reason of ["ui-rendered", "no-ui"] as const) {
         expect(PATTERN_PUBLICATION_MESSAGES[reason]).toContain(
-          "offered to search",
+          "with search discoverability requested",
         );
       }
     });

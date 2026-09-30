@@ -3,7 +3,7 @@
 _Epic D, stage D4, of
 [`docs/history/plans/cfc-future-work-implementation.md`](../history/plans/cfc-future-work-implementation.md).
 This doc is a **soundness review** of the plan's proposed prefix approximation,
-grounded in the CFC spec (`commontoolsinc/specs` `cfc/08-09-runtime-label-propagation.md`
+grounded in the CFC spec (`commonfabric/specs` `cfc/08-09-runtime-label-propagation.md`
 §8.9, §8.9.1, §8.9.2). It found a real unsoundness in the plan text and fixes the
 design before code lands. Written 2026-07-02 at owner request; amended
 2026-07-03 (overlap-keyed bound, read positions in the digest, §8.9.2
@@ -119,8 +119,9 @@ with decomposition:
   part of `P` from that read. Therefore a read after `w` **cannot** have fed
   `P`'s committed value.
 - `P`'s own value is a plain datum or a *reference*; if it is a link, the
-  reference was fixed at or before `w`, and the link target's label is tracked
-  separately by the link machinery (§8.11) — not by `P`'s prefix.
+  reference was fixed at or before `w`. Its acquisition confidentiality governs
+  the pointer; observing its target separately consumes that target's labels
+  ([reference semantics](cfc-references.md)).
 - Reads at index `< w` are exactly the observations that *could* have fed any
   of the overlapping writes contributing to `P`'s committed value, up to and
   including the finalizing one. Keeping all of them is conservative within the
@@ -272,7 +273,7 @@ Landed per §7 with two reconciliations, both recorded as
 
 ## Provenance
 
-Grounded in `commontoolsinc/specs` `cfc/08-09-runtime-label-propagation.md`
+Grounded in `commonfabric/specs` `cfc/08-09-runtime-label-propagation.md`
 §8.9.2 (*Propagation Algorithm* — the normative `computePcConfidentiality`
 definition and trigger-read joining), §8.9.1 (*Trusted Flow-Precision Claims*
 — *Decomposition before claims*, the `flow-taint-precision` normative

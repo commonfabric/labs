@@ -83,6 +83,19 @@ describe("fabric ref resolution", () => {
     );
   });
 
+  it("resolves a ref naming its space by DID", async () => {
+    const result = await resolveFabricRefToIdentity(
+      runtime,
+      space,
+      parse(`cf:/${space}/pattern:${ENTRY_A}`),
+    );
+
+    expect(result).toEqual({
+      entryIdentity: ENTRY_A,
+      chain: [`pattern:${ENTRY_A}`, `entryIdentity:${ENTRY_A}`],
+    });
+  });
+
   it("rejects space names", async () => {
     await expect(
       resolveFabricRefToIdentity(runtime, space, parse("cf:/kitchen/todo")),

@@ -68,9 +68,9 @@ describe("shell login tests", () => {
     // the key store opens and Navigation is installed, so a driver that
     // navigates or reloads and logs in straight away can arrive before the app
     // is published. The property installed below is that window with the timing
-    // taken out of it: the first read of `globalThis.app` answers `undefined`,
-    // and every read after it answers the root element. Logging in through that
-    // property means waiting for the boundary rather than reading through it.
+    // taken out of it: the first read of `globalThis.app` returns `undefined`,
+    // and announces publication in the next microtask. Every later read returns
+    // the root element.
 
     const identity = await Identity.generate({ implementation: "noble" });
     const page = shell.page();
@@ -88,6 +88,9 @@ describe("shell login tests", () => {
         get() {
           if (!unread) return published;
           unread = false;
+          queueMicrotask(() => {
+            globalThis.dispatchEvent(new Event("cf-shell-ready"));
+          });
           return undefined;
         },
         set(value: unknown) {

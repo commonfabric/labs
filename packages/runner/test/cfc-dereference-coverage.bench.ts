@@ -21,12 +21,10 @@
  * handful of reads is the shape that would not benefit. The `build` group keeps
  * that end of the trade visible.
  *
- * The wildcard groups are what the index declines. A `"*"` on either side turns
- * the walk into a search, so a wildcard query, or a set holding one wildcard
- * source, takes the scan. They are benched separately because either rule alone
- * routes to the scan, so one group carrying both would keep passing with one
- * rule removed — and re-admitting a wildcard QUERY to the walk is the 730x
- * case.
+ * The wildcard groups distinguish a query that scans every source from a
+ * source whose concrete prefix selects a candidate bucket. The query fallback
+ * bounds the cost of broad wildcard queries; the source group checks that a
+ * wildcard tail does not send unrelated concrete sources through the scan.
  *
  * The `benchmarks.yml` workflow runs this file on main and publishes the
  * results in its `bench-results` artifact, which the team ops dashboard charts
@@ -52,7 +50,7 @@ function sources(count: number): string[][] {
   return out;
 }
 
-/** The same set with a wildcard source, which the index declines outright. */
+/** The same set with a wildcard source under the common concrete prefix. */
 function wildcardSources(count: number): string[][] {
   const out = sources(count);
   out[out.length - 1] = ["value", "threads", "*", "msgs", "0"];
@@ -126,19 +124,11 @@ for (const count of [16, 64, 256]) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Wildcard queries
+// Wildcard queries and sources
 //
-// A `"*"` on either side turns the walk into a search, so the index declines
-// both. They need a group each, because either rule alone routes to the scan:
-// a group carrying both would keep passing if one rule were removed, and the
-// query rule is the one worth 730x.
-//
-//   `wildcard query` — concrete sources, so only `path.includes("*")` can
-//   route it. Re-admitting a wildcard query to the walk shows here as the
-//   index leaving the scan's line.
-//   `wildcard source` — concrete queries, so only `#wildcardSource` can.
-//
-// What both guard is that declining costs no more than never having indexed.
+// Separate groups keep the query scan and the source buckets measurable
+// independently. A query wildcard can match every child at its depth; a source
+// wildcard only contributes candidates under its own concrete prefix.
 // ────────────────────────────────────────────────────────────────────────
 
 const WILD_QUERIES = Array.from(

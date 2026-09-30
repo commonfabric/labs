@@ -142,7 +142,11 @@ export function mentionRefs(state: EditorState): MentionRefInfo[] {
   return state.field(mentionRefField).refs;
 }
 
-/** Announce the short name each mention's destination publishes. */
+/**
+ * Announce the short name each mention shows beside its label, by reference
+ * key: what the editor's mention universe calls the mention's destination. A
+ * key is absent where no row of the universe stands for its destination.
+ */
 export const setRefShortNames = StateEffect.define<
   Readonly<Record<string, string>>
 >();
@@ -150,11 +154,11 @@ export const setRefShortNames = StateEffect.define<
 const NO_SHORT_NAMES: Readonly<Record<string, string>> = {};
 
 /**
- * The short name each mention's destination publishes, by reference key.
+ * The short name each mention shows, by reference key.
  *
- * Held beside the parse rather than in it. A short name comes from the
- * destination cell and not from the document, so an edit neither produces one
- * nor invalidates one, and a name arriving late has to reach the pills of a
+ * Held beside the parse rather than in it. A short name comes from the mention
+ * universe and not from the document, so an edit neither produces one nor
+ * invalidates one, and a name arriving late has to reach the pills of a
  * document that has not changed since it loaded.
  */
 export const refShortNameField = StateField.define<
@@ -174,8 +178,8 @@ export const refShortNameField = StateField.define<
 
 /**
  * The short names in a state, for readers outside this module. Empty where
- * the field is not installed, which reads the same as a document no
- * destination has published a name for.
+ * the field is not installed, which reads the same as a document none of whose
+ * mentions has a name announced.
  */
 export function refShortNames(
   state: EditorState,
@@ -328,8 +332,8 @@ const HIDDEN = Decoration.replace({});
 
 /**
  * Helper for `mentionRefDecorations()`, which returns the pill a label wears,
- * carrying `shortName` for the stylesheet to render beside it where the
- * destination publishes one.
+ * carrying `shortName` for the stylesheet to render beside it where one was
+ * announced for the mention.
  *
  * A fresh decoration per call is what the redraw comparison expects: marks
  * compare by class and attributes rather than by identity, so two calls over

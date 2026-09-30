@@ -134,7 +134,7 @@ describe("cf wish read options", () => {
     // string carries all of that: the profile's space differs from the space
     // the wish read against, so it rides in front as `@did`.
     expect(result).toEqual({
-      $link: `/@${profileSpace}/${
+      $link: `//${profileSpace}/${
         runtime.getCell(profileSpace, "profile-default")
           .getAsNormalizedFullLink().id
       }`,
@@ -164,7 +164,7 @@ describe("cf wish read options", () => {
     // answers null here and loses an address that exists.
     // The path rides inside the one reference string, after the id.
     expect(result).toEqual({
-      $link: `/@${profileSpace}/${
+      $link: `//${profileSpace}/${
         runtime.getCell(profileSpace, "profile-default")
           .getAsNormalizedFullLink().id
       }/bio`,

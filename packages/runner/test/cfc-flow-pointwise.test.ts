@@ -5,6 +5,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -51,7 +52,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space,
       scope: "space",
       id,
@@ -635,6 +636,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's structure
       // entry in the document. `before`, `after` and `membershipEntries`
       // read that entry back.
@@ -735,6 +737,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's structure
       // entry in the document, and `sc` reads that entry back.
       cfcFlowLabels: "persist",
@@ -807,6 +810,7 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       // Persisting the derived join is what puts the container's membership
       // and existence entries in the document. The assertions below read
       // both back.

@@ -9,6 +9,8 @@ import {
   isLink,
   type MemorySpace,
   type NormalizedFullLink,
+  renderCellReference,
+  sendEvent,
 } from "@commonfabric/runner";
 import {
   cfcSchemaResolvedRoot,
@@ -203,11 +205,14 @@ export interface CallableExecutionDeps {
 
   /** @internal Seam for tests, mirroring `getCellValue`'s. */
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** @internal Seam for tests, which dispatch to a stand-in handler. */
+  sendEvent?: typeof sendEvent;
 }
 
 /** A backing-cell address published in an Invocation, written in the
- * fabric's canonical reference syntax — `/[@did/]<id>[@scope][/path]`
- * (`packages/cli/lib/llm-friendly-ref.ts`). One string carries the id, the
+ * fabric's canonical reference syntax, `//<space>/<id>[@scope][/path]`
+ * or `/<id>[@scope][/path]`. One string carries the id, the
  * space when it differs from the one the call targeted, the scope, and the
  * path inside the backing document, so the address a call hands back is
  * exactly what a later command takes in as `--cell`. */
@@ -297,14 +302,13 @@ export function addressArgument(ref: CallableResultRef): string {
 
 /**
  * `ref` written as the canonical fabric reference with its space embedded —
- * `/@<space>/<id>[@scope]` — the one token that names the cell from any
+ * `//<space>/<id>@scope` — the one token that names the cell from any
  * configuration. `--cell` takes it whole: the embedded space supplies the
  * target space when `--space` is absent, and is checked against it when both
- * are named. The id-and-scope segment is {@link addressArgument}'s, so the
- * two spellings of an address cannot drift apart.
+ * are named.
  */
 export function canonicalAddress(ref: CallableResultRef): string {
-  return encodeJsonPointer(["", `@${ref.space}`, addressArgument(ref)]);
+  return renderCellReference({ ...ref, path: [] });
 }
 
 export interface ExecutedCallable {
@@ -323,10 +327,11 @@ export interface ExecutedCallable {
 /** Read a tool callable's stored `pattern` slot as the pattern the runner
  * will run. Only the record shape is checked here; a record missing the
  * schemas reaches `runtime.run` the same way any malformed stored pattern
- * does. */
+ * does. The cast goes by way of `unknown` because a `Pattern` is not a record
+ * type, so a record says nothing about being one. */
 function asCallablePattern(value: unknown): Pattern | undefined {
   if (!isObjectNotArray(value)) return undefined;
-  return value as Pattern;
+  return value as unknown as Pattern;
 }
 
 function asExtraParams(value: unknown): Record<string, unknown> {
@@ -334,7 +339,7 @@ function asExtraParams(value: unknown): Record<string, unknown> {
 }
 
 export function runtimeErrorLog(runtime: unknown): CliRuntimeErrorRecord[] {
-  if (typeof runtime !== "object" || runtime === null) {
+  if (!isObjectOrArray(runtime)) {
     return [];
   }
   const log = (runtime as { [CF_RUNTIME_ERROR_LOG]?: unknown })[
@@ -345,7 +350,7 @@ export function runtimeErrorLog(runtime: unknown): CliRuntimeErrorRecord[] {
 
 function errorMessage(error: unknown): string {
   if (
-    typeof error === "object" && error !== null && "reason" in error &&
+    isObjectOrArray(error) && "reason" in error &&
     (error as { reason?: unknown }).reason != null
   ) {
     // A StorageTransactionAborted carries the abort's cause as `reason`, and
@@ -357,7 +362,7 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  if (typeof error === "object" && error !== null && "message" in error) {
+  if (isObjectOrArray(error) && "message" in error) {
     const message = (error as { message?: unknown }).message;
     if (typeof message === "string") {
       return message;
@@ -374,6 +379,13 @@ function errorMessage(error: unknown): string {
  * the flags parsed fine, the values they carry don't fit the verb.
  */
 export class VerbInputValidationError extends Error {
+  /**
+   * The canonical address of the piece the verb was resolved on, set when the
+   * target named a path and the piece was reached through the link stored
+   * there. A report that names a piece names this one.
+   */
+  linkedPiece?: string;
+
   constructor(readonly verb: string, readonly detail: string) {
     super(`Invalid input for "${verb}": ${detail}`);
     this.name = "VerbInputValidationError";
@@ -518,7 +530,7 @@ function firstUndeclaredEventField(
   position: string,
   atRoot: boolean,
 ): UndeclaredEventField | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   // A link is not an object whose fields can be judged. Its `/` key is the
   // envelope's own structure, not a name the caller chose, and the document it
   // points at is not read at dispatch — so there is nothing here to compare a
@@ -1285,7 +1297,7 @@ export function callableCommandSpec(
 
 /** Serialize a receipt/backing link into the canonical reference syntax.
  * `contextSpace` is the space the call targeted: an address in another space
- * carries its `@did` prefix, one in that space does not. */
+ * carries its `//<space>/` prefix; one in that space omits the space. */
 function toInvocationResultLink(
   link: NormalizedFullLink,
   contextSpace: MemorySpace,
@@ -1365,7 +1377,7 @@ export function collectInvocationResultLinks(
     // "/" when the result itself is live — but the walk never goes inside:
     // its properties are the runtime's, not the result's, and they refer
     // back to themselves.
-    if (typeof val !== "object" || val === null || isInstance(val)) return;
+    if (!isObjectOrArray(val) || isInstance(val)) return;
     const keys = Array.isArray(val)
       ? val.map((_, index) => String(index))
       : Object.keys(val);
@@ -1470,7 +1482,7 @@ export class CyclicResultError extends Error {
 function locateResultCycle(value: unknown): string | undefined {
   const ancestors = new Set<object>();
   const walk = (node: unknown, path: string[]): string | undefined => {
-    if (typeof node !== "object" || node === null) return undefined;
+    if (!isObjectOrArray(node)) return undefined;
     if (ancestors.has(node)) return encodeJsonPointer(["", ...path]);
     if (typeof (node as { toJSON?: unknown }).toJSON === "function") {
       return undefined;
@@ -1694,16 +1706,21 @@ export async function executeResolvedCallable(
             handled.resolve(committedTx);
           };
           try {
-            resolved.callableCell.send(dispatchInput, onCommit, {
-              ...(invocation === undefined ? {} : {
-                // The id and the session that chose it travel together:
-                // an id is the caller's own word, and only the pair
-                // decides which receipt this handling files under.
-                eventId: invocation.id,
-                session: invocation.session,
-              }),
-              onAppended,
-            });
+            (deps.sendEvent ?? sendEvent)(
+              resolved.callableCell,
+              dispatchInput,
+              onCommit,
+              {
+                ...(invocation === undefined ? {} : {
+                  // The id and the session that chose it travel together:
+                  // an id is the caller's own word, and only the pair
+                  // decides which receipt this handling files under.
+                  eventId: invocation.id,
+                  session: invocation.session,
+                }),
+                onAppended,
+              },
+            );
           } catch (error) {
             reject(error);
           }

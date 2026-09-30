@@ -12,6 +12,7 @@ import {
   main,
   measureArtifactRoot,
   type MeasurementTotals,
+  measureRun,
   measureTranscript,
   mergeTotals,
   renderReportLines,
@@ -25,6 +26,7 @@ import {
   totalsOf,
 } from "../scripts/measure-runs.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import { createToolOutputId } from "../src/contracts/tool-result.ts";
 
 const FIXTURE_ROOT = fromFileUrl(
   new URL("./support/measure-runs/runs", import.meta.url),
@@ -54,6 +56,417 @@ const familyNamed = (
 };
 
 describe("measure-runs", () => {
+  it("reports malformed saved source instead of measuring the transcript preview", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root/tool-outputs`, { recursive: true });
+      await Deno.writeTextFile(
+        `${root}/root/transcript.json`,
+        JSON.stringify([
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{
+              id: "compile",
+              type: "function",
+              function: {
+                name: "run_pattern",
+                arguments: JSON.stringify({ sourceText: "export default 1;" }),
+              },
+            }],
+          },
+          {
+            role: "tool",
+            toolName: "run_pattern",
+            toolCallId: "compile",
+            content: JSON.stringify({ outputId: "source-1", status: "ok" }),
+          },
+        ]),
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/unidentified-run-pattern-source.json`,
+        JSON.stringify({ sourceText: "export default 2;" }),
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/malformed-run-pattern-source.json`,
+        JSON.stringify({ outputId: "source-1", sourceText: 2 }),
+      );
+      const measured = await measureRun(root, "root", "parent");
+      expect(measured.runPatterns[0].target).toEqual({
+        kind: "unread",
+        reason: "the source artifact for source-1 is malformed",
+      });
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("reports unread research when the report belongs to another run or is a directory", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root`);
+      await Deno.writeTextFile(`${root}/root/transcript.json`, "[]");
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({ runId: "other", toolActivity: [] }),
+      );
+      const mismatched = await measureRun(root, "root", "parent");
+      expect(mismatched.research).toEqual({
+        kind: "unread",
+        reason:
+          "run-report.json has no matching run identity and activity list",
+      });
+      expect(renderRunLines(mismatched)).toContain(
+        "  [parent] research NOT READ (run-report.json has no matching run identity and activity list)",
+      );
+      await Deno.remove(`${root}/root/run-report.json`);
+      await Deno.mkdir(`${root}/root/run-report.json`);
+      const unread = await measureRun(root, "root", "parent");
+      expect(unread.research).toMatchObject({
+        kind: "unread",
+        reason: expect.stringContaining("directory"),
+      });
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("returns unread research for malformed activity rows", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root`);
+      await Deno.writeTextFile(`${root}/root/transcript.json`, "[]");
+      const measurements: RunMeasurement[] = [];
+      for (
+        const row of [
+          null,
+          {},
+          { toolId: "research", toolCallId: "research-call" },
+          {
+            toolId: "research",
+            toolCallId: "research-call",
+            startedAt: "2026-09-15T00:00:00.000Z",
+            endedAt: "2026-09-15T00:00:01.000Z",
+            resultRef: {
+              outputId: "research-output",
+              artifactPath: 1,
+            },
+          },
+        ]
+      ) {
+        await Deno.writeTextFile(
+          `${root}/root/run-report.json`,
+          JSON.stringify({ runId: "root", toolActivity: [row] }),
+        );
+        measurements.push(await measureRun(root, "root", "parent"));
+      }
+
+      expect(measurements.map((measurement) => measurement.research)).toEqual([
+        {
+          kind: "unread",
+          reason: "`run-report.json` has malformed `.toolActivity[0]`",
+        },
+        {
+          kind: "unread",
+          reason: "`run-report.json` has malformed `.toolActivity[0]`",
+        },
+        {
+          kind: "unread",
+          reason: "`run-report.json` has malformed `.toolActivity[0]`",
+        },
+        {
+          kind: "unread",
+          reason: "`run-report.json` has malformed `.toolActivity[0]`",
+        },
+      ]);
+      expect(measurements.map((measurement) => renderRunLines(measurement)))
+        .toEqual([
+          [
+            "  [parent] research NOT READ (`run-report.json` has malformed `.toolActivity[0]`)",
+          ],
+          [
+            "  [parent] research NOT READ (`run-report.json` has malformed `.toolActivity[0]`)",
+          ],
+          [
+            "  [parent] research NOT READ (`run-report.json` has malformed `.toolActivity[0]`)",
+          ],
+          [
+            "  [parent] research NOT READ (`run-report.json` has malformed `.toolActivity[0]`)",
+          ],
+        ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("distinguishes a missing activity list, unrelated activity, and a research call without a result reference", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root`);
+      await Deno.writeTextFile(`${root}/root/transcript.json`, "[]");
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({ runId: "root" }),
+      );
+      const missing = await measureRun(root, "root", "parent");
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({
+          runId: "root",
+          toolActivity: [{ toolId: "bash" }],
+        }),
+      );
+      const unrelated = await measureRun(root, "root", "parent");
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({
+          runId: "root",
+          toolActivity: [{
+            toolId: "research",
+            toolCallId: "research-call",
+            startedAt: "2026-09-15T00:00:00.000Z",
+            endedAt: "2026-09-15T00:00:01.000Z",
+          }],
+        }),
+      );
+      const withoutResult = await measureRun(root, "root", "parent");
+
+      expect(missing.research).toEqual({
+        kind: "unread",
+        reason: "`run-report.json` has no activity list",
+      });
+      expect(unrelated).not.toHaveProperty("research");
+      expect(withoutResult.research).toEqual({
+        kind: "read",
+        value: [{
+          outputId: "research-call",
+          origin: "model",
+          wallMs: 1_000,
+          work: {
+            kind: "unread",
+            reason: "research has no output artifact",
+          },
+        }],
+      });
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("preserves a research activity whose output artifact is missing", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root`);
+      await Deno.writeTextFile(`${root}/root/transcript.json`, "[]");
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({
+          runId: "root",
+          toolActivity: [{
+            toolId: "research",
+            toolCallId: "opening",
+            origin: "opening-research",
+            startedAt: "2026-09-15T00:00:00.000Z",
+            endedAt: "2026-09-15T00:00:01.000Z",
+            resultRef: {
+              outputId: "root:research:1",
+              artifactPath: "/original/tool-outputs/missing.json",
+            },
+          }],
+        }),
+      );
+      const measured = await measureRun(root, "root", "parent");
+      expect(measured.toolOutcomes.research).toEqual({ unread: 1 });
+      expect(measured.research).toEqual({
+        kind: "read",
+        value: [{
+          outputId: "root:research:1",
+          origin: "opening-research",
+          wallMs: 1000,
+          work: {
+            kind: "unread",
+            reason: expect.stringContaining("missing.json could not be read:"),
+          },
+        }],
+      });
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("throws when the source artifact directory is a file", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root`);
+      await Deno.writeTextFile(`${root}/root/transcript.json`, "[]");
+      await Deno.writeTextFile(`${root}/root/tool-outputs`, "not a directory");
+      await expect(measureRun(root, "root", "parent")).rejects.toThrow(
+        Deno.errors.NotADirectory,
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("reads saved composition drafts and counts host research once with its private work", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/root/tool-outputs`, { recursive: true });
+      const source =
+        'import P from "cf:pattern:part"; export default () => P({ items: [] });';
+      const transcript: HarnessTranscriptMessage[] = [
+        {
+          role: "user",
+          content: "Host opening research",
+          toolResultProvenance: {
+            type: "cf-harness.tool-result-provenance",
+            toolCallId: "opening",
+            toolId: "research",
+            outputId: createToolOutputId("root", "research", 1),
+          },
+        },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: "compile",
+            type: "function",
+            function: {
+              name: "run_pattern",
+              arguments: JSON.stringify({
+                sourceText:
+                  "[cf-harness: superseded run_pattern source collapsed for model context]",
+              }),
+            },
+          }],
+        },
+        {
+          role: "tool",
+          toolName: "run_pattern",
+          toolCallId: "compile",
+          content: JSON.stringify({
+            outputId: "root:run_pattern:2",
+            status: "ok",
+          }),
+        },
+      ];
+      await Deno.writeTextFile(
+        `${root}/root/transcript.json`,
+        JSON.stringify(transcript),
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/draft-run-pattern-source.json`,
+        JSON.stringify({
+          type: "cf-harness.run-pattern-source",
+          outputId: "root:run_pattern:2",
+          sourceText: source,
+        }),
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/research.json`,
+        JSON.stringify({
+          status: "ok",
+          outputId: "root:research:1",
+          researchRecord: {
+            researchRunId: "root:research:1",
+            budgets: { modelTurns: 5, toolCalls: 18, readChars: 30610 },
+            sourceReads: [{ sourceId: "one" }, { sourceId: "two" }],
+          },
+        }),
+      );
+      await Deno.writeTextFile(
+        `${root}/root/run-report.json`,
+        JSON.stringify({
+          runId: "root",
+          toolActivity: [{
+            toolId: "research",
+            toolCallId: "opening",
+            origin: "opening-research",
+            startedAt: "2026-09-14T21:07:17.372Z",
+            endedAt: "2026-09-14T21:08:21.161Z",
+            resultRef: {
+              outputId: "root:research:1",
+              artifactPath: "/original-location/tool-outputs/research.json",
+            },
+          }],
+        }),
+      );
+      const measured = await measureRun(root, "root", "parent");
+      expect(measured.runPatterns[0].target).toEqual({
+        kind: "read",
+        value: {
+          kind: "source",
+          sourceBytes: new TextEncoder().encode(source).length,
+          importedPatternIds: ["part"],
+          composition: "composition",
+        },
+      });
+      expect(measured.toolOutcomes.research).toEqual({ ok: 1 });
+      expect(measured.research).toEqual({
+        kind: "read",
+        value: [{
+          outputId: "root:research:1",
+          origin: "opening-research",
+          wallMs: 63789,
+          work: {
+            kind: "read",
+            value: {
+              modelTurns: 5,
+              toolCalls: 18,
+              readChars: 30610,
+              sourceReads: 2,
+            },
+          },
+        }],
+      });
+      expect(renderRunLines(measured).join("\n")).toContain(
+        "5 turns, 18 private calls, 2 reads, 30610 characters",
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/draft-run-pattern-source.json`,
+        "{",
+      );
+      await Deno.writeTextFile(
+        `${root}/root/tool-outputs/research.json`,
+        JSON.stringify({ outputId: "another-run", status: "ok" }),
+      );
+      const unread = await measureRun(root, "root", "parent");
+      expect(unread.runPatterns[0].target.kind).toBe("unread");
+      expect(unread.toolOutcomes.research).toEqual({ unread: 1 });
+      expect(
+        unread.research?.kind === "read" && unread.research.value[0].work.kind,
+      ).toBe("unread");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("does not count inherited research summaries as child work", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/child`);
+      await Deno.writeTextFile(
+        `${root}/child/transcript.json`,
+        JSON.stringify([{ role: "user", content: "Inherited kit" }]),
+      );
+      await Deno.writeTextFile(
+        `${root}/child/run-state.json`,
+        JSON.stringify({
+          researchRuns: [{ researchRunId: "parent:research:1" }],
+        }),
+      );
+      await Deno.writeTextFile(
+        `${root}/child/run-report.json`,
+        JSON.stringify({ runId: "child", toolActivity: [] }),
+      );
+      const measured = await measureRun(root, "child", "subagent");
+      expect(measured.research).toBeUndefined();
+      expect(measured.toolOutcomes).toEqual({});
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   describe("importedPatternIdsOf()", () => {
     it("returns each `cf:pattern:` specifier once, sorted", () => {
       expect(

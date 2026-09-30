@@ -26,6 +26,7 @@
 import type { SpaceDb } from "./db.ts";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { hashStringOf } from "@commonfabric/data-model";
+import { isDID } from "@commonfabric/identity/did";
 
 import { annotate, summarize } from "./decode.ts";
 import {
@@ -54,29 +55,56 @@ export interface Scope {
   revisions: number;
 }
 
-/** Parse a stored scope_key into its kind + principal/session. */
+/** One `:`-separated part of a scope key, percent-decoded when it can be. */
+function decodePart(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/**
+ * Parse a stored scope_key into its kind + principal/session.
+ *
+ * The engine writes each part percent-encoded (`resolveScopeKey`), which
+ * escapes the colons inside a DID and makes the split on `:` exact: a session
+ * key is the kind, the principal, and the session id, and nothing else.
+ *
+ * A key written without that encoding carries no mark of where its principal
+ * ends, and the two parts are read as `did:<method>:<id>` followed by the
+ * session id. That is the only boundary such a key can be read at, so a
+ * principal whose own identifier holds a colon cannot be recovered from one —
+ * which is what the encoding exists to prevent.
+ *
+ * Either way the principal has to come out a DID; anything else is `other`,
+ * and counted as no-user.
+ */
 export function parseScope(raw: string): Scope {
-  const decoded = decodeURIComponent(raw);
-  if (decoded === "space") {
+  if (raw === "space") {
     return { raw, kind: "space", entities: 0, revisions: 0 };
   }
-  // The platform `DID` type is `did:<method>:<id>` — not only `did:key:`. Match
-  // any method so a `did:web:` / `did:plc:` writer is still attributed to a
-  // principal (else it falls through to `other` and is miscounted as no-user).
-  let m = decoded.match(/^session:(did:[a-z0-9]+:[^:]+):(.+)$/);
-  if (m) {
-    return {
-      raw,
-      kind: "session",
-      principal: m[1],
-      sessionId: m[2],
-      entities: 0,
-      revisions: 0,
-    };
+  const [kind, ...rest] = raw.split(":");
+  if (kind === "session" && rest.length >= 2) {
+    const [principal, sessionId] = rest.length === 2
+      ? [decodePart(rest[0]), decodePart(rest[1])]
+      : [rest.slice(0, 3).join(":"), rest.slice(3).join(":")];
+    if (isDID(principal)) {
+      return {
+        raw,
+        kind: "session",
+        principal,
+        sessionId,
+        entities: 0,
+        revisions: 0,
+      };
+    }
   }
-  m = decoded.match(/^user:(did:[a-z0-9]+:[^:]+)$/);
-  if (m) {
-    return { raw, kind: "user", principal: m[1], entities: 0, revisions: 0 };
+  if (kind === "user" && rest.length >= 1) {
+    const principal = decodePart(rest.join(":"));
+    if (isDID(principal)) {
+      return { raw, kind: "user", principal, entities: 0, revisions: 0 };
+    }
   }
   return { raw, kind: "other", entities: 0, revisions: 0 };
 }
@@ -115,6 +143,31 @@ export function listScopes(
     total.revisions += row.revisions;
     totals.set(row.scope, total);
   }
+  return sortedScopes(totals);
+}
+
+/**
+ * The scopes {@link listScopes} would report, from rows a caller already
+ * grouped by scope — the shape `visibleEntityRowsByScope` returns. A caller
+ * that needs both the scopes and their rows takes them from one pass this way,
+ * rather than walking the branch's revisions a second time, and the two cannot
+ * disagree about which scopes exist.
+ */
+export function scopesOfRows(
+  rowsByScope: ReadonlyMap<string, readonly { readonly revisions: number }[]>,
+): Scope[] {
+  const totals = new Map<string, { entities: number; revisions: number }>();
+  for (const [scope, rows] of rowsByScope) {
+    let revisions = 0;
+    for (const row of rows) revisions += row.revisions;
+    totals.set(scope, { entities: rows.length, revisions });
+  }
+  return sortedScopes(totals);
+}
+
+function sortedScopes(
+  totals: ReadonlyMap<string, { entities: number; revisions: number }>,
+): Scope[] {
   return [...totals.entries()]
     .map(([scope, total]) => ({ ...parseScope(scope), ...total }))
     .sort((a, b) =>

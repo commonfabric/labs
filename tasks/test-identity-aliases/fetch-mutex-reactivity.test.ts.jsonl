@@ -1,0 +1,1 @@
+{"date":"2026-09-20","from":{"k":"unit","s":"runner","n":"fetch-json mutex mechanism: reactive fetch state > should include computed options on the first fetch (CT-1246)"},"to":{"k":"unit","s":"runner","n":"fetch-json mutex mechanism: reactive fetch state > includes computed options on the first fetch"}}

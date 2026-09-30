@@ -11,13 +11,15 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { TRUSTED_PATTERN_PROPERTIES } from "../contracts/trusted-pattern-schema.ts";
 import { schemaToTypeString } from "@commonfabric/runner";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import type { TrustedPatternRecord } from "../contracts/trusted-pattern.ts";
 import type {
   PatternIndexClient,
   PatternIndexPatternKind,
   PatternIndexQuality,
-  PatternIndexSignals,
 } from "../pattern-index/client.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -36,12 +38,7 @@ export const SEARCH_PATTERNS_MAX_RESULTS = 10;
  */
 export const SEARCH_PATTERNS_MAX_DETAILED_RESULTS = 5;
 
-export interface SearchPatternsToolResult {
-  patternId: string;
-  description: string;
-  hashtags: readonly string[];
-  signals?: PatternIndexSignals;
-
+export interface SearchPatternsToolResult extends TrustedPatternRecord {
   /** Whether its published argument schema classifies it as a part or app. */
   kind: PatternIndexPatternKind;
 
@@ -62,41 +59,9 @@ export interface SearchPatternsToolResult {
    * can be copied into pattern source as it stands.
    */
   importHint: string;
-
-  /** The pattern's argument shape, as a TypeScript type. */
-  argumentType?: string;
-
-  /** The pattern's result shape, as a TypeScript type. */
-  resultType?: string;
 }
 
-/**
- * What a run knows about a published pattern it may name by id. A
- * `search_patterns` hit is one of these, so every field a hit reports is
- * here; a pattern reference the task attached is another, resolved from the
- * index by id, and a by-id read answers no ranking evidence — no match
- * counts, and no tier — because that is what search computes over a query.
- * Whichever it came from, this is metadata and never source.
- */
-export interface TrustedPatternRecord {
-  patternId: string;
-  description: string;
-  hashtags: readonly string[];
-  signals?: PatternIndexSignals;
-  kind?: PatternIndexPatternKind;
-  quality?: PatternIndexQuality;
-  matchedTerms?: number;
-  queryTerms?: number;
-  importHint: string;
-  argumentType?: string;
-  resultType?: string;
-
-  /** The identity that published it, where the index reported it. */
-  ownerDid?: string;
-
-  /** When the index recorded it, where the index reported it. */
-  createdAt?: string;
-}
+export type { TrustedPatternRecord } from "../contracts/trusted-pattern.ts";
 
 export interface SearchPatternsToolSuccessOutput {
   outputId: string;
@@ -117,7 +82,7 @@ export type SearchPatternsToolOutput =
 const isSearchPatternsToolResult = (
   result: unknown,
 ): result is SearchPatternsToolResult => {
-  if (typeof result !== "object" || result === null || Array.isArray(result)) {
+  if (!isObjectNotArray(result)) {
     return false;
   }
   const record = result as Record<string, unknown>;
@@ -127,8 +92,7 @@ const isSearchPatternsToolResult = (
     Array.isArray(record.hashtags) &&
     record.hashtags.every((hashtag) => typeof hashtag === "string") &&
     (signals === undefined ||
-      (typeof signals === "object" && signals !== null &&
-        !Array.isArray(signals) && "uses" in signals &&
+      (isObjectNotArray(signals) && "uses" in signals &&
         typeof signals.uses === "number" && "score" in signals &&
         typeof signals.score === "number")) &&
     (record.kind === "part" || record.kind === "app") &&
@@ -148,7 +112,7 @@ const isSearchPatternsToolResult = (
 export const isSearchPatternsToolSuccessOutput = (
   output: unknown,
 ): output is SearchPatternsToolSuccessOutput => {
-  if (typeof output !== "object" || output === null || Array.isArray(output)) {
+  if (!isObjectNotArray(output)) {
     return false;
   }
   const record = output as Record<string, unknown>;
@@ -190,37 +154,7 @@ export const searchPatternsToolDescriptor: HarnessToolDescriptor = {
           type: "array",
           items: {
             type: "object",
-            properties: {
-              patternId: { type: "string" },
-              description: { type: "string" },
-              hashtags: { type: "array", items: { type: "string" } },
-              signals: {
-                type: "object",
-                properties: {
-                  uses: { type: "number" },
-                  score: { type: "number" },
-                },
-                required: ["uses", "score"],
-                additionalProperties: false,
-              },
-              kind: {
-                type: "string",
-                enum: ["part", "app"],
-                description:
-                  "Whether the published argument schema classifies the pattern as a reusable part or whole app.",
-              },
-              quality: {
-                type: "string",
-                enum: ["penalized", "unproven", "proven"],
-                description:
-                  "Evidence tier from recorded outcomes: penalized is net-negative, unproven has no recorded success, and proven has at least one recorded success or positive rating without a net-negative score.",
-              },
-              matchedTerms: { type: "number" },
-              queryTerms: { type: "number" },
-              importHint: { type: "string" },
-              argumentType: { type: "string" },
-              resultType: { type: "string" },
-            },
+            properties: TRUSTED_PATTERN_PROPERTIES,
             required: [
               "patternId",
               "description",
@@ -265,6 +199,12 @@ const errorMessage = (error: unknown): string =>
  * pattern declares none. A schema that cannot be rendered is reported as
  * absent: the search answers with what is known, and a shape it cannot write
  * down is not known.
+ *
+ * A definition the rendering refers to by name — the formatter names any
+ * definition too long to inline, `rows: LedgerTransaction[]` — is written out
+ * after it as `type Name = …`, and so is every definition those refer to, so
+ * the fields a composing author needs are in the type rather than behind a
+ * name nothing here defines.
  */
 export const patternIndexDeclaredType = (
   schema: JSONSchema | undefined,
@@ -273,11 +213,63 @@ export const patternIndexDeclaredType = (
     return undefined;
   }
   try {
-    return schemaToTypeString(schema);
+    const defs = declaredDefinitions(schema);
+    const rendered = [{ schema, text: schemaToTypeString(schema, { defs }) }];
+    const written = new Set<string>();
+    for (let index = 0; index < rendered.length; index++) {
+      const { schema: from, text } = rendered[index];
+      // Only a `$ref` the schema actually holds can name a definition, and
+      // only a name the text prints was left uninlined by the formatter.
+      for (const name of referencedDefinitions(from)) {
+        if (
+          written.has(name) || !Object.hasOwn(defs, name) ||
+          !namesType(text, name)
+        ) {
+          continue;
+        }
+        written.add(name);
+        rendered.push({
+          schema: defs[name],
+          text: `type ${name} = ${schemaToTypeString(defs[name], { defs })}`,
+        });
+      }
+    }
+    return rendered.map((entry) => entry.text).join("\n");
   } catch {
     return undefined;
   }
 };
+
+/** The `$defs` a schema declares, empty when it declares none. */
+const declaredDefinitions = (
+  schema: JSONSchema,
+): Record<string, JSONSchema> => {
+  const defs = typeof schema === "object" && schema !== null
+    ? (schema as { $defs?: unknown }).$defs
+    : undefined;
+  return typeof defs === "object" && defs !== null && !Array.isArray(defs)
+    ? defs as Record<string, JSONSchema>
+    : {};
+};
+
+/** The definition names `schema`'s own `$ref`s point at, its `$defs` aside. */
+const referencedDefinitions = (schema: JSONSchema): string[] => {
+  const { $defs: _defs, ...body } = typeof schema === "object" &&
+      schema !== null
+    ? schema as Record<string, unknown>
+    : {};
+  return [
+    ...JSON.stringify(body).matchAll(/"\$ref":"#\/\$defs\/([^"]+)"/g),
+  ].map((match) => match[1]);
+};
+
+/** Whether `rendered` uses `name` as a whole identifier. */
+const namesType = (rendered: string, name: string): boolean =>
+  new RegExp(
+    `(^|[^A-Za-z0-9_$])${
+      name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    }(?![A-Za-z0-9_$])`,
+  ).test(rendered);
 
 export const searchPatternsTool: HarnessToolDefinition<
   SearchPatternsToolInput,

@@ -23,6 +23,7 @@
  */
 
 import { dirname, join } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type CachedCiGanttJob,
   type CachedCiRunReference,
@@ -146,7 +147,7 @@ export class CiGanttDetailStore {
     } catch {
       return null;
     }
-    if (typeof parsed !== "object" || parsed === null) return null;
+    if (!isObjectOrArray(parsed)) return null;
     const value = parsed as Partial<StoredCiGanttDetail>;
     if (value.version !== DETAIL_VERSION || !Array.isArray(value.jobs)) {
       return null;

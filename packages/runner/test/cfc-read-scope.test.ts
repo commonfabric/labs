@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -62,7 +63,7 @@ const seedRecord = async (runtime: Runtime, name: string) => {
   );
   const sourceId = sourceCell.getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: sourceId,

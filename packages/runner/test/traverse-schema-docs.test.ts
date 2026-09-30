@@ -1,6 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import type {
   Entity,
@@ -21,7 +24,6 @@ import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import {
   type DecomposedSchema,
   decomposeSchema,
-  parseExternalSchemaRef,
 } from "../src/schema-decompose.ts";
 import {
   lookupSchemaDocument,

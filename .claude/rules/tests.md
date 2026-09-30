@@ -182,13 +182,14 @@ nothing about it.
 Each test execution produces a telemetry record named by what the runner
 reports — the describe chain, the `Deno.test` name, the pattern file path.
 Nothing to instrument when adding a test to an existing suite; the runners
-record on their own. Three consequences worth knowing while writing one:
+record on their own. Four consequences worth knowing while writing one:
 
 - The reported name is the test's identity across history. Prefer stable,
   content-derived wording over positional counters (`#${i}`) or
   interpolated identifiers, which mint a new identity every time they
   shift; renames split history unless bridged in
-  `tasks/test-identity-aliases.jsonl`.
+  `tasks/test-identity-aliases/`, in the file named after the test file;
+  `docs/development/test-records.md` states the naming rule.
 - The name has to be unique within its scope — the whole describe chain
   plus the `it()` description, or the bare `Deno.test` name, across every
   test file of the package. Two tests under one name are one identity, so
@@ -196,8 +197,17 @@ record on their own. Three consequences worth knowing while writing one:
   own. A loop that generates names is the case to check twice: a
   hand-written test beside it can land on one of them.
 - Every test must finish within sixty seconds in CI, not counting setup.
+- A lane runs a selected test on its own, with its file's other tests
+  registered as ignored. A test that passes only after a neighbor has
+  run fails there, and fails by waiting out the five-minute safety net
+  rather than by asserting. A test charged five minutes is charged more
+  than the bound a whole lane is packed to finish inside, so it then runs
+  nowhere. "Every
+  test has to pass on its own" in `docs/development/TESTING.md` covers
+  the rest, including how to run one test that way locally.
 
-A new test *surface* (a new CI job, script, or harness) does need wiring —
+A new test *surface* (a new script, harness, or kind of test) is a new suite in
+`tasks/test-topology/`, never a new CI job, and does need wiring —
 `docs/development/test-records.md` under "Covering a new test surface".
 
 Your own runs are recorded too, and are marked as an agent's: with
@@ -205,14 +215,9 @@ Your own runs are recorded too, and are marked as an agent's: with
 you are running under. Nothing to set, and nothing to work around —
 a run of yours is data about the tests, the same as anyone's.
 
-When running tests for a team member — someone with commit access —
-whose environment has no `CF_TEST_RECORDS_KEY_FILE`, it is worth
-mentioning once, not per run, that `deno task test-records-key setup`
-is the whole self-service path to a reporting key, so their
-local runs feed the shared flake and duration history. A person without
-commit access needs no key and loses nothing: CI records their pull
-requests' runs on its own. Recording is inert without a key; never treat
-a missing one as an error.
+AGENTS.md, under "Test-reporting key", says when to suggest setting up a
+reporting key. Recording is inert without a key; never treat a missing
+one as an error.
 
 ## Reaching into shadow DOM
 

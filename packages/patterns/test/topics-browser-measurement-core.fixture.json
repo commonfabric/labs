@@ -1,0 +1,35 @@
+{
+  "lifts": {
+    "crossrefTable": {
+      "module": "/topics/main.tsx",
+      "length": 2301,
+      "preview": "({ sources }) => {\n    const rows = [];\n    const list = Array.from(sources);\n    const mentions = mentionListsOf(list).map((refs) => refs === undefined ? undefined : Array.from(refs));\n    distinctBy",
+      "excerpt": "__cfHardenFn(distinctByIdentity);\nconst crossrefTable = (0, commonfabric_2.lift)(({ sources }) => {\n    const rows = [];\n    const list = Array.from(sources);\n    const mentions = mentionListsOf(list).map((refs) => refs === undefined ? undefined : Array.from(refs));\n    distinctByIdentity(list).forEach((topic) => {\n        const inbound = mentionedBy(topic, list, mentions);\n        rows.push(commonfabric_2.Writable.for(topic).asSchema({\n            type: \"object\",\n            properties: {\n                topic: {\n                    type: \"unknown\",\n                    description: \"The topic this row is about. `unknown` because it is written as a\\nreference and only ever compared \\u2014 `equals` takes the raw link. Anything\\nwider retrieves the piece instead of pointing at it: declared `object`,\\nthis field reads back as the whole expanded topic, `$UI` tree included.\"\n                },\n                mentionedBy: {\n                    type: \"array\",\n                    items: {\n                        type: \"unknown\"\n                    }\n                }\n            },\n            required: [\"topic\", \"mentionedBy\"],\n            description: \"One row of the board's mention pivot: a topic, and the topics that mention\\nit.\\n\\nONE ROW PER DISTINCT TOPIC. That is the contract, not a property of the\\nboard that happens to hold: the board's `crossrefTable` builds its rows from\\n`distinctByIdentity` over the board, which compares entries by `equals`, so a\\nboard listing one topic at two entries \\u2014 the same link twice, or a link and\\nan alias of it \\u2014 gets one row for that topic. Nothing downstream dedupes, and\\na reader finding its row by identity finds exactly one. Each of the topic's\\nentries still counts as a source in the rows of the topics it mentions, and\\nthe pivot's self-skip is asked of the topic rather than of its position so\\nthat a duplicate entry stays inert here too.\\n\\nBoth sides are declared `unknown`, which is the whole design rather than a\\nshortcut. A row holds cell REFERENCES \\u2014 `unknown` is the declaration that\\nlets a cell be written into one without a cast, and the one that stops any\\nreader of the table expanding a topic it did not ask for. Each consumer\\ndeclares what it wants to see through them.\"\n        }).set({\n            topic,\n            mentionedBy: inbound,\n        }));\n    });\n    return rows;\n}, {\n    type: \"object\",\n"
+    },
+    "backlinksOf": {
+      "module": "/topics/topic.tsx",
+      "length": 131,
+      "preview": "({ table, self }) => table\n    .filter((row) => (0, commonfabric_2.equals)(self, row.topic))\n    .flatMap((row) => row.mentionedBy)",
+      "excerpt": "});\nconst backlinksOf = (0, commonfabric_2.lift)(({ table, self }) => table\n    .filter((row) => (0, commonfabric_2.equals)(self, row.topic))\n    .flatMap((row) => row.mentionedBy), {\n    type: \"object\",\n"
+    },
+    "presentCommentCountOf": {
+      "module": "/topics/topic.tsx",
+      "length": 74,
+      "preview": "({ comments }) => comments.filter((c) => c.removedAt === undefined).length",
+      "excerpt": "});\nconst presentCommentCountOf = (0, commonfabric_2.lift)(({ comments }) => comments.filter((c) => c.removedAt === undefined).length, {\n    type: \"object\",\n"
+    },
+    "lastActivityOf": {
+      "module": "/topics/topic.tsx",
+      "length": 380,
+      "preview": "({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt }) => {\n    let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);\n    for (const c of comments) {\n        newest = Math.max(newe",
+      "excerpt": "});\nconst lastActivityOf = (0, commonfabric_2.lift)(({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt }) => {\n    let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);\n    for (const c of comments) {\n        newest = Math.max(newest, c.sentAt, c.editedAt ?? 0, c.removedAt ?? 0);\n    }\n    for (const l of links) {\n        newest = Math.max(newest, l.addedAt ?? 0, l.removedAt ?? 0);\n    }\n    return newest;\n}, {\n    type: \"object\",\n"
+    }
+  },
+  "cardsByActivityPreview": "({ rows }) => rows.toSorted((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))",
+  "instrumentedPreview": "({ sources }) => {\n    globalThis.__cfPatternCoverage?.hit(\"/topics/main.tsx\", 12);\n    const rows = [];\n    globalThis.__cfPatternCoverage?.hit(\"/topics/main.tsx\", 13);\n    const list = Array.from(so",
+  "identities": {
+    "/topics/main.tsx": "uYYHyR5Ut3UrZr2gMC1Srbeo75QhRylHfkJU2bIQdno",
+    "/topics/topic.tsx": "Y5FTfWbBeL2n-ZDnnu-EVeK6yMtrG4fsCe6aEtOsq7o"
+  },
+  "shiftedMainIdentity": "RmVcaVNYg6GcYLo9VpyDamKfNCll1gcrd91HtUrwL0Y"
+}

@@ -418,7 +418,8 @@ credential was retired" from "the server is down", and has to choose between
 dropping its buffer and retrying forever.
 
 `space` is pinned to `^did:key:z[1-9A-HJ-NP-Za-km-z]+$` in the create path. The
-existing `space.startsWith("did:")` check admits newlines and case variants,
+repository-wide `isDID` answers only whether a string is a DID, so it admits
+newlines and case variants after the prefix,
 and that same string feeds the hosted-space check, the ACL key, the `\n`-joined
 id derivation, and the on-disk `.sqlite` filename
 (`packages/memory/.../storage-path.ts:69`) — on a case-insensitive filesystem,

@@ -43,11 +43,12 @@ import type {
   MemorySpace,
 } from "../src/storage/interface.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { ArrivalLog } from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   isRetryableCommitRejection,
   isStaleReadConflict,
 } from "../src/storage/rejection.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 const spaceSigner = await Identity.fromPassphrase("ui-cell-write space");
 const space = spaceSigner.did() as MemorySpace;
@@ -87,15 +88,23 @@ const staleReadConflict = (release: Promise<void> = Promise.resolve()) => ({
  * staged ops, exactly like a refused export) and reports the injected
  * stale-read conflict instead of reaching storage. Later transactions
  * commit for real.
+ *
+ * Each interception is recorded on `rejections`, so a test that has to
+ * act between an attempt's rejection and its retry waits on the
+ * rejection itself rather than on a counter turning over.
  */
 const injectConflictOnNextCommits = (
   runtime: Runtime,
   count: number,
   makeRejection: () => ReturnType<typeof staleReadConflict>,
-): { intercepted: () => number; restore: () => void } => {
+): {
+  rejections: ArrivalLog<void>;
+  intercepted: () => number;
+  restore: () => void;
+} => {
   const realEdit = runtime.edit.bind(runtime);
+  const rejections = new ArrivalLog<void>();
   let remaining = count;
-  let intercepted = 0;
   const patched = (): IExtendedStorageTransaction => {
     const tx = realEdit();
     if (remaining > 0) {
@@ -105,9 +114,9 @@ const injectConflictOnNextCommits = (
       tx.commit = (options?: Parameters<typeof realCommit>[0]) => {
         if (used) return realCommit(options);
         used = true;
-        intercepted++;
         const rejection = makeRejection();
         tx.abort(rejection);
+        rejections.record();
         return Promise.resolve({ error: rejection as never });
       };
     }
@@ -116,7 +125,8 @@ const injectConflictOnNextCommits = (
   (runtime as unknown as { edit: () => IExtendedStorageTransaction }).edit =
     patched;
   return {
-    intercepted: () => intercepted,
+    rejections,
+    intercepted: () => rejections.entries.length,
     restore: () => {
       (runtime as unknown as { edit: () => IExtendedStorageTransaction })
         .edit = realEdit;
@@ -190,10 +200,10 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
       injection.restore();
     }
 
-    await waitUntil(
-      () => leaf.get() === "typed",
-      "the typed value to land despite the conflicted first attempt",
-    );
+    // The commit resolved, so the retry has landed; the local view
+    // catches up once the runtime is quiescent.
+    await runtime.idle();
+    expect(leaf.get()).toBe("typed");
 
     // Durable, not overlay: a fresh reader session sees it.
     const readerManager = EmulatedStorageManager.connectTo(server, {
@@ -210,9 +220,11 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
         schema,
       );
       await readerCell.sync();
-      await waitUntil(
-        () => readerCell.key("drafts").key("message").get() === "typed",
-        "the typed value to be durable for a fresh reader",
+      await waitForCellValue<string>(
+        readerRuntime,
+        readerCell.key("drafts").key("message"),
+        (message) => message === "typed",
+        { stuckLabel: "the reader to see the typed draft message" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -243,10 +255,7 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
         blind: true,
         supersedeKey: "ui-write-lww-lane",
       });
-      await waitUntil(
-        () => injection.intercepted() === 1,
-        "w1's first attempt to be rejected",
-      );
+      await injection.rejections.reached(1);
       // ...while w2 ("new") lands on the same lane.
       const w2Outcome = await runtime.commitUiCellWrite(leaf, "new", {
         blind: true,
@@ -267,12 +276,13 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
       injection.restore();
     }
 
-    await waitUntil(
-      () => leaf.get() === "new",
-      "the newest input to be the surviving value",
-    );
-    // And it stays "new": the released retry re-landed "new", not "old".
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Both writes have resolved, so nothing further is in flight; the
+    // released retry's own re-issue is behind `w1` above. Draining the
+    // runtime and flushing its manager is ordered after both, so the
+    // value read here is the surviving one — "new", not the retry's
+    // own "old".
+    await runtime.idle();
+    await runtime.storageManager.synced();
     expect(leaf.get()).toBe("new");
   });
 
@@ -305,9 +315,12 @@ describe("UI cell write conflict retry (the :133 stall's consumer seam)", () => 
       injection.restore();
     }
     expect(uiWriteLostCount()).toBeGreaterThan(lostBefore);
-    // The stale value never lands — not on the first attempt (rejected) and
-    // not through any retry.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The stale value never lands — not on the first attempt (rejected)
+    // and not through any retry. A retry would be work this runtime
+    // owns, so draining it and flushing its manager is ordered after
+    // one.
+    await runtime.idle();
+    await runtime.storageManager.synced();
     expect(leaf.get()).toBe("seed");
   });
 

@@ -46,6 +46,7 @@ describe("ExperimentalOptions", () => {
         storageManager: sm,
         experimental: {
           modernCellRep: false,
+          agentBuiltin: false,
           commitPreconditions: false,
           plainResultReceipts: false,
           computedCellIds: false,
@@ -55,6 +56,7 @@ describe("ExperimentalOptions", () => {
       });
       expect(runtime.experimental).toEqual({
         modernCellRep: false,
+        agentBuiltin: false,
         contentAddressedSchemas: true,
         commitPreconditions: false,
         plainResultReceipts: false,
@@ -78,6 +80,7 @@ describe("ExperimentalOptions", () => {
       });
       expect(runtime.experimental).toEqual({
         modernCellRep: true,
+        agentBuiltin: true,
         contentAddressedSchemas: true,
         commitPreconditions: true,
         plainResultReceipts: true,
@@ -99,6 +102,7 @@ describe("ExperimentalOptions", () => {
       });
       expect(runtime.experimental).toEqual({
         modernCellRep: false,
+        agentBuiltin: true,
         contentAddressedSchemas: true,
         commitPreconditions: true,
         plainResultReceipts: true,

@@ -10,11 +10,18 @@ describe("identitySeal", () => {
     expect(identitySeal(DID_A)).toEqual(identitySeal(DID_A));
   });
 
-  it("is stable across trivial formatting differences", () => {
-    // Leading/trailing whitespace and the `did:` prefix case must not change
-    // the aura (normalizeDid trims + canonicalizes the prefix only).
+  it("is stable across surrounding whitespace", () => {
     expect(identitySeal(`  ${DID_A}  `)).toEqual(identitySeal(DID_A));
-    expect(normalizeDid("  DID:key:abc ")).toBe("did:key:abc");
+    expect(normalizeDid("  did:key:abc ")).toBe("did:key:abc");
+  });
+
+  it("keeps a differently-cased prefix a different principal", () => {
+    // `DID:key:abc` is not a DID — the prefix is compared exactly — so it is
+    // some other string, and it must not fold onto the DID it resembles.
+    expect(normalizeDid("DID:key:abc")).toBe("DID:key:abc");
+    expect(identitySeal("DID:key:abc")).not.toEqual(
+      identitySeal("did:key:abc"),
+    );
   });
 
   it("distinguishes different identities by primary hue", () => {

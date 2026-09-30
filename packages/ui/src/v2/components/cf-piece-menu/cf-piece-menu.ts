@@ -3,7 +3,7 @@ import {
   subscribePieceBoundary,
 } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity";
+import { assertNotDID, isDID } from "@commonfabric/identity/did";
 import {
   appViewToUrlPath,
   navigate,
@@ -29,6 +29,7 @@ import type {
   SpaceAclCapability,
   SpaceAclView,
 } from "@commonfabric/runtime-client";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   css,
   html,
@@ -151,12 +152,6 @@ export function isStreamHandle(value: unknown): value is CellHandle {
   return isCellHandle(value) && schemaDeclaresStream(value.ref().schema);
 }
 
-/** The raw `{ $stream: true }` marker a schema-less read can surface. */
-function isRawStreamMarker(value: unknown): boolean {
-  return typeof value === "object" && value !== null &&
-    (value as { $stream?: unknown }).$stream === true;
-}
-
 /** Well-known view keys the Data panel omits: they hold VDOM, not data. */
 const VIEW_KEYS = new Set(["$UI", "$TILE_UI", "$CHIP_UI"]);
 
@@ -186,7 +181,7 @@ function toDisplay(
   depth: number,
   streamKeys?: ReadonlySet<string>,
 ): unknown {
-  if (isStreamHandle(value) || isRawStreamMarker(value)) return "[stream]";
+  if (isStreamHandle(value)) return "[stream]";
   if (isCellHandle(value)) {
     const ref = value.ref();
     return ref.path.length > 0
@@ -204,7 +199,7 @@ function toDisplay(
   // `toCompactDebugString()` instead of descended. The value arrives intact --
   // the connection carries it as a `codec-realm` encoding, class and all -- so
   // this walk is the only place it is lost.
-  if (typeof value === "object" && value !== null) {
+  if (isObjectOrArray(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
       if (depth === 0 && VIEW_KEYS.has(key)) continue;
@@ -1837,9 +1832,7 @@ export class CFPieceMenu extends BaseElement {
       argument: this.#argumentCell,
     };
     const scan = (value: unknown, source: "result" | "argument") => {
-      if (
-        typeof value !== "object" || value === null || Array.isArray(value)
-      ) return;
+      if (!isObjectNotArray(value)) return;
       const declared = this.#schemaProperties(parents[source]);
       for (const [name, item] of Object.entries(value)) {
         const declaredStream = schemaDeclaresStream(declared[name]);
@@ -1848,10 +1841,11 @@ export class CFPieceMenu extends BaseElement {
           if (!declaredStream && !isStreamHandle(item)) continue;
           handle = item;
         } else if (declaredStream && parents[source]) {
-          // The value did not arrive as a handle (e.g. a raw `{$stream:true}`
-          // marker from a schema-less read), but the parent schema declares
-          // the stream — address it through the parent, which is the trusted
-          // signal here; a bare marker alone is never dispatchable.
+          // The value did not arrive as a handle — a schema-less read leaves
+          // whatever the document holds, and a stream's holds nothing — but
+          // the parent schema declares the stream. Address it through the
+          // parent, which is the trusted signal here; nothing a value could
+          // hold is dispatchable on its own.
           handle = (parents[source]!.asSchema(
             {
               type: "object",
@@ -2055,6 +2049,9 @@ export class CFPieceMenu extends BaseElement {
   ): Promise<void> {
     const cell = this.cell;
     if (!cell || this.clonePending) return;
+    // The name is derived into a space key AND put in the URL as a name; a DID
+    // would mean two different spaces on those two routes.
+    assertNotDID(spaceName, "A space name");
     this.cloneMode = copyData ? "copy-data" : "fresh";
     this.clonePending = true;
     this.cloneError = undefined;

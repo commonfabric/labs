@@ -39,9 +39,9 @@ export async function openGithubFabricRuntime(options: {
   // winning per flag: the GitHub host is installed separately from the
   // toolshed it talks to (docs/development/EXPERIMENTAL_OPTIONS.md), so an
   // unset flag must adopt what the server runs rather than fall to this
-  // build's own default — the same resolution the agents host, the pieces
-  // controller, and cast-admin perform. Resolved before anything is
-  // allocated; this startup carries no cancellation signal to thread.
+  // build's own default — the same resolution the agents host and the pieces
+  // controller perform. Resolved before anything is allocated; this startup
+  // carries no cancellation signal to thread.
   const experimental = await experimentalOptionsForDeployedClient({
     apiUrl,
     env: (key) => Deno.env.get(key),

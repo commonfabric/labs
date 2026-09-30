@@ -3,18 +3,25 @@
  * encoded. The table follows private views; serialized views carry no authority.
  */
 
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 import type { ScopeCapAtDepth } from "../link-types.ts";
 import { narrowerScopeCap } from "../scope.ts";
 import { joinCfcObservedConfidentiality } from "./observation.ts";
-import type { CfcLabelView } from "./label-view-core.ts";
+import { meetInputWitnesses } from "./input-witness.ts";
+import {
+  type CfcLabelView,
+  cfcLabelViewOriginSpaces,
+  withCfcLabelViewOrigins,
+} from "./label-view-core.ts";
 import {
   cfcReferenceBinding,
   cfcReferenceBindingMatches,
   cfcReferenceConfidentialityForView,
   type CfcReferenceProvenance,
+  cfcReferenceSelectionWitnessesForView,
   withCfcReferenceConfidentiality,
 } from "./reference-provenance.ts";
 import type { CfcAddress } from "./types.ts";
@@ -23,6 +30,8 @@ import type { CfcAddress } from "./types.ts";
 export type CfcImmutableReference = {
   readonly source: CfcAddress;
   readonly reference: CfcReferenceProvenance;
+  /** Static runtime wiring replays its captured selection pointwise. */
+  readonly transport?: true;
 };
 
 type ReferenceTable = {
@@ -44,6 +53,7 @@ export function withImmutableReferenceTable(
   const result = withCfcReferenceConfidentiality(
     { version: 1, entries: [...(view?.entries ?? [])] },
     cfcReferenceConfidentialityForView(view),
+    cfcReferenceSelectionWitnessesForView(view),
   )!;
   const table = {
     identity: hashStringOf(entries),
@@ -53,7 +63,7 @@ export function withImmutableReferenceTable(
     ...(view === undefined ? [] : tables.get(view) ?? []),
     table,
   ]);
-  return result;
+  return withCfcLabelViewOrigins(result, cfcLabelViewOriginSpaces(view));
 }
 
 /** Preserves private tables through a label-view copy, merge, or projection. */
@@ -103,6 +113,8 @@ export function immutableReferenceSourceAcquisition(
   const acquisition: CfcReferenceProvenance = {
     binding: cfcReferenceBinding(source),
     confidentiality,
+    selectionWitnesses: cfcReferenceSelectionWitnessesForView(view),
+    originSpaces: cfcLabelViewOriginSpaces(view),
   };
   const matching = view === undefined ? undefined : tables.get(view)?.flatMap(
     (table) => table.entries,
@@ -111,6 +123,17 @@ export function immutableReferenceSourceAcquisition(
     acquisitions.set(acquisition, matching);
   }
   return acquisition;
+}
+
+/** Whether an acquisition replays only runtime-marked static binding slots. */
+export function immutableReferenceIsTransport(
+  acquisition: CfcReferenceProvenance | undefined,
+): boolean {
+  const entries = acquisition === undefined
+    ? undefined
+    : acquisitions.get(acquisition);
+  return entries !== undefined && entries.length > 0 &&
+    entries.every((entry) => entry.transport === true);
 }
 
 /** Validates the captured source slot and target against the decoded value. */
@@ -141,8 +164,22 @@ export function acquiredImmutableReference(
     depth,
     scope,
   }));
+  let witnesses: readonly CfcAtom[] | undefined;
+  for (const entry of entries) {
+    if (entry.reference.confidentiality.length === 0) continue;
+    const held = entry.reference.selectionWitnesses ?? [];
+    witnesses = witnesses === undefined
+      ? held
+      : meetInputWitnesses(witnesses, held);
+  }
   return {
     binding: cfcReferenceBinding(actual),
+    selectionWitnesses: witnesses ?? [],
+    originSpaces: [
+      ...new Set(
+        entries.flatMap((entry) => entry.reference.originSpaces ?? []),
+      ),
+    ],
     confidentiality: joinCfcObservedConfidentiality(
       entries.map((entry) => entry.reference.confidentiality),
     ),

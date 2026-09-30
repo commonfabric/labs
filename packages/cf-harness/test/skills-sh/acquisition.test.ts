@@ -16,6 +16,7 @@ import {
   SKILLS_SH_MAX_SKILL_BYTES,
   SkillsShAcquisitionClient,
   SkillsShAcquisitionError,
+  skillsShValueDigest,
 } from "../../src/skills-sh/acquisition.ts";
 import type { SkillsShPinnedAddress } from "../../src/skills-sh/pin.ts";
 import buildgreatTree from "./fixtures/buildgreatproducts-plaid-002ea.tree.json" with {
@@ -216,7 +217,9 @@ describe("skills.sh pinned acquisition", () => {
       "scripts/first.py",
       "scripts/second.sh",
     ]);
-    expect(acquired.scripts[0].text).toBe("# scripts/first.py\n");
+    expect(acquired.scripts[0].bytes).toEqual(
+      new TextEncoder().encode("# scripts/first.py\n"),
+    );
     // Every fetch names the one pinned commit, the instructions first.
     expect(urls).toEqual([
       BUILDGREAT_TREE_URL,
@@ -225,6 +228,48 @@ describe("skills.sh pinned acquisition", () => {
       `https://raw.githubusercontent.com/buildgreatproducts/plaid/${BUILDGREAT_SHA}/scripts/second.sh`,
     ]);
     expect(acquired.scripts[0].valueDigest).toMatch(/^sha256:/);
+  });
+
+  it("carries a script's bytes as served, byte-order mark included", async () => {
+    // Where the original defect lived, and the only layer that can catch its
+    // return: the digest is taken over the bytes GitHub served, so anything
+    // that decodes them and re-encodes carries a different file forward under
+    // a digest of the one it did not carry. A UTF-8 byte-order mark is what
+    // makes that visible — not a character, so a non-fatal decode drops it —
+    // and the write and the re-check downstream are both faithful to whatever
+    // arrives here.
+    const served = new Uint8Array([
+      0xEF,
+      0xBB,
+      0xBF,
+      ...new TextEncoder().encode("#!/usr/bin/env bash\necho budgets\n"),
+    ]);
+    const tree = {
+      sha: BUILDGREAT_SHA,
+      truncated: false,
+      tree: [
+        { path: "SKILL.md", mode: "100644", type: "blob" },
+        { path: "scripts", mode: "040000", type: "tree" },
+        { path: "scripts/report.sh", mode: "100755", type: "blob" },
+      ],
+    };
+    const fetch: HarnessFetch = (input) => {
+      const url = String(input);
+      if (url === BUILDGREAT_TREE_URL) {
+        return Promise.resolve(Response.json(tree));
+      }
+      if (url.endsWith("/scripts/report.sh")) {
+        return Promise.resolve(new Response(served));
+      }
+      return Promise.resolve(new Response("# SKILL.md\n"));
+    };
+
+    const acquired = await acquireSkillsShPinnedSkill(BUILDGREAT_PIN, {
+      fetch,
+    });
+
+    expect(acquired.scripts[0].bytes).toEqual(served);
+    expect(acquired.scripts[0].valueDigest).toBe(skillsShValueDigest(served));
   });
 
   it("refuses a script nested below the scripts directory", async () => {

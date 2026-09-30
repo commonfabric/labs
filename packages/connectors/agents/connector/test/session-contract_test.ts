@@ -3,6 +3,7 @@ import {
   normalizeSourceId,
   sessionChunkCause,
   sessionKey,
+  sessionManifestCause,
 } from "../src/session-contract.ts";
 
 Deno.test("sessionKey is stable and cannot collide across source boundaries", () => {
@@ -47,6 +48,35 @@ Deno.test("session chunk identity includes its content hash", () => {
     sourceId: "codex",
     nativeSessionId: "session",
     part: 0,
+    contentHash: "sha256:first",
+  });
+  assertNotEquals(first, second);
+});
+
+Deno.test("session manifest identity includes its manifest hash", () => {
+  const first = sessionManifestCause(
+    "did:key:space",
+    "did:key:owner",
+    "codex",
+    "session",
+    "codex-app-server",
+    "sha256:first",
+  );
+  const second = sessionManifestCause(
+    "did:key:space",
+    "did:key:owner",
+    "codex",
+    "session",
+    "codex-app-server",
+    "sha256:second",
+  );
+  assertEquals(first, {
+    spaceDid: "did:key:space",
+    ownerDid: "did:key:owner",
+    agentConnector: "session-version",
+    sourceId: "codex",
+    nativeSessionId: "session",
+    driver: "codex-app-server",
     contentHash: "sha256:first",
   });
   assertNotEquals(first, second);

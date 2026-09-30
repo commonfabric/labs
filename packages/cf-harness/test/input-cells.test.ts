@@ -23,6 +23,7 @@ import {
   inputCellsContextMessage,
   mintInputCellHandles,
   parseInputCellArgument,
+  parseNamedPieceAddress,
 } from "../src/input-cells.ts";
 
 const SPACE_DID =
@@ -93,6 +94,34 @@ describe("input-cells", () => {
   });
 
   describe("mintInputCellHandles()", () => {
+    it("mints a foreign reference only when its DID is admitted", async () => {
+      const spec = { name: "foreign", ref: FOREIGN_REF };
+      const admitted = await mintInputCellHandles(
+        undefined,
+        "admitted-foreign",
+        [spec],
+        SPACE_DID,
+        {
+          foreignSpaces: {
+            "did:key:z6MkforeignSpaceForInputCellTest":
+              "https://foreign.example/",
+          },
+        },
+      );
+      const entry = resolveHandleToken(
+        admitted.table,
+        admitted.inputCells[0].token,
+      );
+      expect(entry?.ref).toContain("did:key:z6MkforeignSpaceForInputCellTest");
+      await expect(mintInputCellHandles(
+        undefined,
+        "unadmitted-foreign",
+        [spec],
+        SPACE_DID,
+        { foreignSpaces: { "did:key:zOther": "https://foreign.example/" } },
+      )).rejects.toThrow("targets another space");
+    });
+
     it("mints a resolvable token into a fresh table when the run has none", async () => {
       const { table, inputCells } = await mintInputCellHandles(
         undefined,
@@ -203,9 +232,234 @@ describe("input-cells", () => {
     });
   });
 
+  describe("parseNamedPieceAddress()", () => {
+    it("reads a space-qualified piece address", () => {
+      expect(parseNamedPieceAddress("pattern:my-space/reading-list")).toEqual({
+        spaceName: "my-space",
+        slug: "reading-list",
+      });
+    });
+
+    it("reads a bare slug as an address naming no space", () => {
+      expect(parseNamedPieceAddress("reading-list")).toEqual({
+        slug: "reading-list",
+      });
+    });
+
+    it("answers undefined for an entity URI, which is the other grammar", () => {
+      expect(parseNamedPieceAddress(CELL_REF)).toBeUndefined();
+      expect(parseNamedPieceAddress(CELL_ID)).toBeUndefined();
+    });
+
+    it("throws for a pattern address with no slug after its space", () => {
+      expect(() => parseNamedPieceAddress("pattern:my-space/"))
+        .toThrow("pattern:<space>/<slug>");
+    });
+
+    it("throws for a pattern address with no space before its slug", () => {
+      expect(() => parseNamedPieceAddress("pattern:/reading-list"))
+        .toThrow("pattern:<space>/<slug>");
+    });
+
+    it("throws for a path under a piece, which names a cell and not a piece", () => {
+      expect(() => parseNamedPieceAddress("pattern:my-space/list/items"))
+        .toThrow("more than one path segment");
+    });
+
+    it("throws for a slug the runtime's own slug rule refuses", () => {
+      expect(() => parseNamedPieceAddress("Reading_List"))
+        .toThrow("Slug must use lowercase letters");
+    });
+
+    it("does not read the retired `piece:` spelling as an address", () => {
+      // It carries a colon, so it falls to the entity-URI grammar, which
+      // refuses it there. One name for one thing.
+      expect(parseNamedPieceAddress("piece:my-space/reading-list"))
+        .toBeUndefined();
+    });
+  });
+
+  describe("checkInputCellSpec() with a named piece address", () => {
+    it("accepts an address naming the session's own space", () => {
+      expect(() =>
+        checkInputCellSpec(
+          { name: "pattern_1", ref: "pattern:my-space/reading-list" },
+          undefined,
+          "my-space",
+        )
+      ).not.toThrow();
+    });
+
+    it("accepts a bare slug, which names no space to disagree about", () => {
+      expect(() =>
+        checkInputCellSpec(
+          { name: "pattern_1", ref: "reading-list" },
+          undefined,
+          "my-space",
+        )
+      ).not.toThrow();
+    });
+
+    it("throws for an address naming a space that is not the session's", () => {
+      expect(() =>
+        checkInputCellSpec(
+          { name: "pattern_1", ref: "pattern:other-space/reading-list" },
+          undefined,
+          "my-space",
+        )
+      ).toThrow("this session runs in `my-space`");
+    });
+
+    it("accepts an address naming another space when the session's is unknown", () => {
+      // The same shape the reference rule has: a check the text cannot
+      // decide waits for the side that can.
+      expect(() =>
+        checkInputCellSpec({
+          name: "pattern_1",
+          ref: "pattern:other-space/reading-list",
+        })
+      ).not.toThrow();
+    });
+
+    it("throws for a malformed slug, naming the input cell", () => {
+      expect(() =>
+        checkInputCellSpec(
+          { name: "pattern_1", ref: "pattern:my-space/Reading List" },
+          undefined,
+          "my-space",
+        )
+      ).toThrow("--input-cell `pattern_1` reference does not parse");
+    });
+  });
+
+  describe("mintInputCellHandles() with a named piece address", () => {
+    const PIECE_ID = `fid1:${"C".repeat(43)}`;
+
+    it("mints the address the session resolved the name to", async () => {
+      const resolved: string[] = [];
+      const { table, inputCells } = await mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "pattern:my-space/reading-list" }],
+        SPACE_DID,
+        {
+          spaceName: "my-space",
+          resolvePiece: (slug) => {
+            resolved.push(slug);
+            return Promise.resolve(PIECE_ID);
+          },
+        },
+      );
+      expect(resolved).toEqual(["reading-list"]);
+      expect(inputCells[0].name).toBe("pattern_1");
+      expect(inputCells[0].token).toMatch(HANDLE_TOKEN_PATTERN);
+      // What the table holds is the address, never the name: one kind of
+      // reference in the handle table however the caller spelled it.
+      expect(resolveHandleToken(table, inputCells[0].token)?.ref)
+        .toBe(`/of:${PIECE_ID}`);
+      expect(inputCells[0].ref).toContain(PIECE_ID);
+      expect(inputCells[0].ref).not.toContain("reading-list");
+    });
+
+    it("resolves a bare slug in the session's own space", async () => {
+      const { inputCells } = await mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "reading-list" }],
+        SPACE_DID,
+        {
+          spaceName: "my-space",
+          resolvePiece: () => Promise.resolve(PIECE_ID),
+        },
+      );
+      expect(inputCells[0].ref).toContain(PIECE_ID);
+    });
+
+    it("throws, naming the slug, for a piece the space does not hold", async () => {
+      await expect(mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "pattern:my-space/reading-list" }],
+        SPACE_DID,
+        {
+          spaceName: "my-space",
+          resolvePiece: () =>
+            Promise.reject(new Error(`No piece named "reading-list".`)),
+        },
+      )).rejects.toThrow(
+        "names the piece `reading-list`, which this space does not hold",
+      );
+    });
+
+    it("throws for a qualified address when the session's space has no name", async () => {
+      // The resolution knows one space. A name this side cannot check is a
+      // space it cannot honour — answering with this space's same-slug
+      // piece would hand back a cell nobody asked for.
+      let asked = false;
+      await expect(mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "pattern:some-space/reading-list" }],
+        SPACE_DID,
+        {
+          resolvePiece: () => {
+            asked = true;
+            return Promise.resolve(PIECE_ID);
+          },
+        },
+      )).rejects.toThrow("has no name to check that against");
+      expect(asked).toBe(false);
+    });
+
+    it("resolves a bare slug when the session's space has no name", async () => {
+      // A slug names no space to disagree about: it means this one.
+      const { inputCells } = await mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "reading-list" }],
+        SPACE_DID,
+        { resolvePiece: () => Promise.resolve(PIECE_ID) },
+      );
+      expect(inputCells[0].ref).toContain(PIECE_ID);
+    });
+
+    it("throws for a named address with no session to resolve it", async () => {
+      await expect(mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "pattern_1", ref: "reading-list" }],
+        SPACE_DID,
+      )).rejects.toThrow("needs a fabric session to resolve");
+    });
+
+    it("leaves a plain reference alone, asking the session nothing", async () => {
+      let asked = false;
+      const { inputCells } = await mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{ name: "travellerName", ref: CELL_REF }],
+        SPACE_DID,
+        {
+          spaceName: "my-space",
+          resolvePiece: () => {
+            asked = true;
+            return Promise.resolve(PIECE_ID);
+          },
+        },
+      );
+      expect(asked).toBe(false);
+      expect(inputCells[0].ref).toContain("A".repeat(43));
+    });
+  });
+
   describe("inputCellsContextMessage()", () => {
-    it("returns undefined for an empty input-cell list", () => {
-      expect(inputCellsContextMessage([])).toBeUndefined();
+    it("states that there are no attachments without discarding the conversation target", () => {
+      const message = inputCellsContextMessage([]);
+      expect(message).toContain("No input cells are attached for this run");
+      expect(message).toContain("conversation can still be the target");
+      expect(message).toContain(
+        "registry or connector references are not attachments",
+      );
     });
 
     it("pairs each token with the operator's name and never discloses the ref", () => {

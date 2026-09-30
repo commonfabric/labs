@@ -285,13 +285,8 @@ export class CFCheckbox extends BaseElement {
     ) {
       super.updated(changedProperties);
 
-      if (
-        changedProperties.has("checked") ||
-        changedProperties.has("indeterminate") ||
-        changedProperties.has("disabled")
-      ) {
-        this._updateAriaAttributes();
-      }
+      // Cell deliveries and form buffers can rerender without a property change.
+      this._updateAriaAttributes();
     }
 
     override render() {

@@ -49,6 +49,8 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import type {
   TestResult,
   TestRunnerOptions,
@@ -57,6 +59,7 @@ import type {
 import type {
   ParticipantInitResult,
   StepMeta,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
@@ -81,7 +84,7 @@ export function multiUserDescriptorMeta(
   defaultExport: unknown,
 ): MultiUserDescriptorMeta | undefined {
   if (
-    typeof defaultExport !== "object" || defaultExport === null ||
+    !isObjectOrArray(defaultExport) ||
     typeof (defaultExport as { participants?: unknown }).participants !==
       "object"
   ) {
@@ -94,7 +97,7 @@ export function multiUserDescriptorMeta(
     if (typeof entry === "function") {
       participants.push({ name, user: name });
     } else if (
-      typeof entry === "object" && entry !== null &&
+      isObjectOrArray(entry) &&
       typeof (entry as { pattern?: unknown }).pattern === "function"
     ) {
       const user = (entry as { user?: unknown }).user;
@@ -109,24 +112,30 @@ export function multiUserDescriptorMeta(
   return participants.length > 0 ? { participants } : undefined;
 }
 
-const RPC_TIMEOUT_MS = 120_000;
-
 class ParticipantWorker {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
+  #failure?: Error;
   #pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
 
-  constructor(name: string) {
+  constructor(name: string, onError: (error: Error) => void) {
     this.name = name;
     this.#worker = new Worker(
       new URL("./multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `cf-test:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -137,47 +146,39 @@ class ParticipantWorker {
       }
     };
     this.#worker.onerror = (event) => {
-      const error = new Error(`[${this.name}] worker error: ${event.message}`);
-      for (const pending of this.#pending.values()) pending.reject(error);
-      this.#pending.clear();
+      event.preventDefault();
+      onError(new Error(`[${this.name}] worker error: ${event.message}`));
     };
   }
 
   call(
     cmd: string,
     args: Record<string, unknown> = {},
-    timeoutMs = RPC_TIMEOUT_MS,
   ): Promise<unknown> {
+    if (this.#failure) return Promise.reject(this.#failure);
     const id = this.#nextId++;
     const request: WorkerRequest = { id, cmd, args };
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(
-          new Error(
-            `[${this.name}] ${cmd} timed out after ${timeoutMs}ms`,
-          ),
-        );
-      }, timeoutMs);
-      this.#pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
+      this.#pending.set(id, { resolve, reject });
       this.#worker.postMessage(request);
     });
   }
 
-  terminate(): void {
-    this.#worker.terminate();
-    for (const pending of this.#pending.values()) {
-      pending.reject(new Error(`[${this.name}] worker terminated`));
-    }
+  /**
+   * Rejects pending and future calls with `error`, and terminates the worker,
+   * settling once it has been torn down.
+   */
+  async terminate(
+    error = new Error(`[${this.name}] worker terminated`),
+  ): Promise<void> {
+    this.#fail(error);
+    await terminateWorker(this.#worker, this.#lifetimeLock);
+  }
+
+  /** Reject pending and future calls once the worker cannot answer them. */
+  #fail(error: Error): void {
+    this.#failure = error;
+    for (const pending of this.#pending.values()) pending.reject(error);
     this.#pending.clear();
   }
 }
@@ -236,14 +237,15 @@ export async function runMultiUserTestPattern(
     );
   }
   const startTime = performance.now();
-  const stepTimeout = options.timeout ?? 5000;
   const results: TestResult[] = [];
   const runtimeErrors: string[] = [];
   const nonIdempotent: string[] = [];
+  let runResult: TestRunResult | undefined;
 
   const server = StandaloneMemoryServer.start();
   const spaceName = crypto.randomUUID();
   const participants: ParticipantState[] = [];
+  const workers: ParticipantWorker[] = [];
 
   try {
     const identities = new Map<string, Identity>();
@@ -261,7 +263,14 @@ export async function runMultiUserTestPattern(
     // Sequential init: the first worker materializes the shared setup
     // instance (and the wish("#default") seed); the rest resume it.
     for (const [index, spec] of meta.participants.entries()) {
-      const worker = new ParticipantWorker(spec.name);
+      const worker = new ParticipantWorker(spec.name, (error) => {
+        // The failed worker may be idle while another participant is waiting.
+        // Reject every worker's requests so that failure reaches the active
+        // await, including during initialization, and cleanup can proceed.
+        // Every worker is terminated again, and waited for, on the way out.
+        for (const worker of workers) void worker.terminate(error);
+      });
+      workers.push(worker);
       try {
         const init = await worker.call("init", {
           identity: realmValueFromKeyPair(
@@ -284,11 +293,24 @@ export async function runMultiUserTestPattern(
           // A test that names a mode names it for every participant, the way
           // the single-user runner honors it.
           cfcEnforcementMode: options.cfcEnforcementMode,
+          cfcFlowLabels: options.cfcFlowLabels,
+          cfcDenials: options.cfcDenials,
         }) as ParticipantInitResult;
         assertParticipantRung(
           spec.name,
           options.cfcEnforcementMode,
           init.cfcEnforcementMode,
+        );
+        if (
+          options.cfcFlowLabels !== undefined &&
+          init.cfcFlowLabels !== options.cfcFlowLabels
+        ) {
+          throw new Error(
+            `Participant "${spec.name}" resolved flow labels to ${init.cfcFlowLabels}, expected ${options.cfcFlowLabels}`,
+          );
+        }
+        console.log(
+          `  [${spec.name}] CFC posture: enforcement=${init.cfcEnforcementMode} flowLabels=${init.cfcFlowLabels}`,
         );
         participants.push({
           spec,
@@ -310,7 +332,7 @@ export async function runMultiUserTestPattern(
         }
       } catch (error) {
         await worker.call("dispose").catch(() => {});
-        worker.terminate();
+        await worker.terminate();
         throw error;
       }
     }
@@ -369,10 +391,7 @@ export async function runMultiUserTestPattern(
             participant.actionCount++;
             participant.lastActionName = `action_${participant.actionCount}`;
             const stepStart = performance.now();
-            // Per-action deadline, matching the single-runtime runner's use
-            // of --timeout (an action is a local send + settle; a slow one is
-            // a bug, not propagation latency).
-            await participant.worker.call("action", { index }, stepTimeout);
+            await participant.worker.call("action", { index });
             if (options.verbose) {
               console.log(
                 `  [${participant.spec.name}] ${participant.lastActionName} (${
@@ -384,7 +403,7 @@ export async function runMultiUserTestPattern(
           }
           if (step.kind === "render") {
             const stepStart = performance.now();
-            await participant.worker.call("render", { index }, stepTimeout);
+            await participant.worker.call("render", { index });
             if (options.verbose) {
               console.log(
                 `  [${participant.spec.name}] ◇ render (${
@@ -396,7 +415,7 @@ export async function runMultiUserTestPattern(
           }
           if (step.kind === "settle") {
             const stepStart = performance.now();
-            await participant.worker.call("settleStep", {}, stepTimeout);
+            await participant.worker.call("settleStep");
             if (options.verbose) {
               console.log(
                 `  [${participant.spec.name}] ⋯ settle (${
@@ -510,7 +529,7 @@ export async function runMultiUserTestPattern(
       });
     }
 
-    return {
+    return runResult = {
       path: testPath,
       results,
       totalDurationMs: performance.now() - startTime,
@@ -521,7 +540,7 @@ export async function runMultiUserTestPattern(
       consoleWarnings,
     };
   } catch (error) {
-    return {
+    return runResult = {
       path: testPath,
       results,
       totalDurationMs: performance.now() - startTime,
@@ -535,6 +554,7 @@ export async function runMultiUserTestPattern(
         : String(error),
     };
   } finally {
+    let teardownError: Error | undefined;
     for (const participant of participants) {
       if (options.patternCoverageDir) {
         await participant.worker.call("writeCoverage").catch((error) => {
@@ -545,10 +565,30 @@ export async function runMultiUserTestPattern(
           );
         });
       }
-      await participant.worker.call("dispose").catch(() => {});
-      participant.worker.terminate();
+      await participant.worker.call("dispose").catch((error: Error) => {
+        console.error(
+          `[cf test] teardown failed for ${participant.spec.name}: ${
+            formatError(error)
+          }`,
+        );
+        teardownError ??= error;
+      });
+      await participant.worker.terminate();
     }
     await server.close().catch(() => {});
+    if (teardownError) {
+      // A throw from `finally` replaces the pending result. Keep that result
+      // visible, including step and runtime health failures, before raising.
+      if (runResult) {
+        console.error(
+          `[cf test] result before teardown failure for ${testPath}:\n${
+            JSON.stringify(runResult, null, 2)
+          }`,
+        );
+      }
+      // deno-lint-ignore no-unsafe-finally
+      throw teardownError;
+    }
   }
 }
 

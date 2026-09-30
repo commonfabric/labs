@@ -2,6 +2,9 @@
  * Maintains collection aggregates as a tree of ordinary reactive child runs.
  * Membership reconciliation reads identities; value changes recompute a leaf
  * and its ancestors. Child ownership and rollback use the list machinery.
+ * Every combine is associative and commutative, so the tree's order and
+ * grouping cannot change a result; `docs/features/collection-aggregates.md`
+ * explains why.
  */
 
 import { utf8Compare } from "@commonfabric/utils/utf8";
@@ -23,6 +26,10 @@ import {
   linkResolutionProbe,
   machineryRead,
 } from "../storage/reactivity-log.ts";
+import {
+  type AggregateCandidate,
+  chooseAggregateCandidate,
+} from "./aggregate-extremum.ts";
 import {
   type AggregateSum,
   aggregateSumLeaf,
@@ -59,18 +66,6 @@ export type AggregateOperation =
   | "minBy"
   | "maxBy";
 
-/** Value and stable identity of an extremum candidate. */
-interface Candidate {
-  /** Numeric comparison value, including NaN and infinities. */
-  score: number;
-
-  /** Source identity, including duplicate occurrence. */
-  key: string;
-
-  /** Live selected reference; numeric-only extrema do not acquire elements. */
-  element?: Cell<unknown>;
-}
-
 /** One subtree's partial result. */
 interface AggregateState {
   /** Number of included leaves for predicate count. */
@@ -80,7 +75,7 @@ interface AggregateState {
   sum?: AggregateSum;
 
   /** Selected element for an extremum; absent for an empty subtree. */
-  candidate?: Candidate;
+  candidate?: AggregateCandidate<Cell<unknown>>;
 }
 
 /** Shared immutable graph; constructed after runtime module initialization. */
@@ -98,29 +93,6 @@ function getNodePattern() {
     { type: "object", additionalProperties: true },
     true,
   );
-}
-
-/** Chooses an extremum, resolving equal scores by stable source identity. */
-function chooseCandidate(
-  left: Candidate | undefined,
-  right: Candidate | undefined,
-  minimum: boolean,
-  distinguishZero: boolean,
-): Candidate | undefined {
-  if (!left) return right;
-  if (!right) return left;
-  const a = left.score;
-  const b = right.score;
-  if (Number.isNaN(a) !== Number.isNaN(b)) {
-    return Number.isNaN(a) ? left : right;
-  }
-  if (!Number.isNaN(a)) {
-    if (a !== b) return (minimum ? a < b : a > b) ? left : right;
-    if (distinguishZero && a === 0 && Object.is(a, -0) !== Object.is(b, -0)) {
-      return Object.is(a, minimum ? -0 : 0) ? left : right;
-    }
-  }
-  return utf8Compare(left.key, right.key) <= 0 ? left : right;
 }
 
 /** Executes one leaf, binary combine, or final-value projection. */
@@ -168,7 +140,7 @@ export function aggregateNode(
         : operation === "countTruthy"
         ? { count: left.count! + right.count! }
         : {
-          candidate: chooseCandidate(
+          candidate: chooseAggregateCandidate(
             left.candidate,
             right.candidate,
             operation === "min" || operation === "minBy",

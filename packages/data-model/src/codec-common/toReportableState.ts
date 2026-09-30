@@ -1,6 +1,6 @@
 import type { FabricValue } from "@/interface.ts";
-import { isValidFabricValue } from "@/validity-check.ts";
-import { toCompactDebugString } from "@/value-debug.ts";
+import { isValidFabricValue } from "@/types";
+import { toCompactDebugString } from "@/value-debug";
 
 /** How much of a rendered state to keep. */
 const MAX_RENDERED_LENGTH = 200;
@@ -17,12 +17,12 @@ const MAX_RENDERED_LENGTH = 200;
  * throws outright on a typed array with elements.
  *
  * **A rendering is deliberately not a conversion**, though one is available.
- * `fabricFromNativeValue()` would turn a `Uint8Array` into a `FabricBytes` and
- * a `RegExp` into a `FabricRegExp`, and doing so would misreport the wire: a
- * reader would find a `FabricBytes` and conclude the payload carried one, when
- * it carried raw bytes the format does not accept. A string plainly reads as a
- * description of a value rather than the value, which is the honest answer
- * where fidelity is not on offer.
+ * `fabricFromConvertibleJsValue()` would turn a `Uint8Array` into a
+ * `FabricBytes` and a `RegExp` into a `FabricRegExp`, and doing so would
+ * misreport the wire: a reader would find a `FabricBytes` and conclude the
+ * payload carried one, when it carried raw bytes the format does not accept. A
+ * string plainly reads as a description of a value rather than the value, which
+ * is the honest answer where fidelity is not on offer.
  *
  * The membership check runs guarded, so that a defect in it cannot take this
  * function down with it. That is prophylaxis against an unanticipated bug in

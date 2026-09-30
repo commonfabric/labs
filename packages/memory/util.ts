@@ -1,9 +1,7 @@
 import { VerifierIdentity } from "@commonfabric/identity";
+import { DID_PREFIX, isDID, isDIDKey } from "@commonfabric/identity/did";
 
 import { AsyncResult, DID, DIDKey } from "./interface.ts";
-
-const DID_PREFIX = "did:";
-const DID_KEY_PREFIX = `did:key:`;
 
 /**
  * Parses a DID string into an Identity
@@ -11,11 +9,13 @@ const DID_KEY_PREFIX = `did:key:`;
 export const fromDID = async <ID extends DIDKey>(
   id: ID | DID | string,
 ): AsyncResult<VerifierIdentity<ID>, SyntaxError> => {
-  if (!id.startsWith(DID_PREFIX)) {
+  if (!isDID(id)) {
     return {
-      error: new SyntaxError(`Invalid DID "${id}", must start with "did:"`),
+      error: new SyntaxError(
+        `Invalid DID "${id}", must start with "${DID_PREFIX}"`,
+      ),
     };
-  } else if (!id.startsWith(DID_KEY_PREFIX)) {
+  } else if (!isDIDKey(id)) {
     return {
       error: new SyntaxError(
         `Invalid DID "${id}", only "did:key:" are supported right now`,

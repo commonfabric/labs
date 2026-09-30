@@ -1,0 +1,1053 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "NamesTableRow": {
+        "properties": {
+          "member": {
+            "description": "The member. `unknown` because it is written as a reference and only ever\ncompared; anything wider would read the member back whole.",
+            "type": "unknown"
+          },
+          "name": {
+            "description": "The member's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "member",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StoredTopicComment": {
+        "properties": {
+          "author": {
+            "$ref": "#/$defs/TopicAuthor",
+            "description": "Snapshot taken at write time (profile enrichment comes later; never gate\nauthorship on a profile wish — CT-1879). Comments carry no minted id:\narray elements have stable entity identity; future editing addresses\nelements by reference (`equals()`), not by a synthetic key.\n\nOptional because durable Topics may contain a comment without structured\nauthorship. Current `addComment` calls require `agentName` and always write\nthis snapshot."
+          },
+          "authorName": {
+            "description": "Unrestricted legacy storage; only nonblank strings supply a name.",
+            "type": "unknown"
+          },
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "editedAt": {
+            "description": "When the body was last revised, absent on a comment never edited. The\noriginal `sentAt` and `author` are left alone: an edit changes what was\nsaid, not who said it or when the thread reached this point.",
+            "type": "number"
+          },
+          "removedAt": {
+            "description": "Set when the comment was retracted, and the retraction is the whole of\nit — the record stays, carrying what it always said. A reader hides it;\n`commentCount` stops counting it; `lastActivityOf` keeps reading its\n`sentAt`, which is what stops a retraction moving a topic backwards in\nthe board's ordering.",
+            "type": "number"
+          },
+          "removedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "sentAt": {
+            "default": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "TopicAuthor": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Open for the same reason `TopicLinkKind` is: this is provided data, so a\nclosed set here could never gain `\"service\"` or whatever acts next.\nWell-known values are `\"person\"` and `\"agent\"`, the latter marking an\nagent acting with its human user's key. `\"legacy\"` records a display name\nwhose author kind is unknown.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "TopicCrossrefRow": {
+        "properties": {
+          "mentionedBy": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "description": "The topic this row is about. `unknown` because it is written as a\nreference and only ever compared — `equals` takes the raw link. Anything\nwider retrieves the piece instead of pointing at it: declared `object`,\nthis field reads back as the whole expanded topic, `$UI` tree included.",
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "topic",
+          "mentionedBy"
+        ],
+        "type": "object"
+      },
+      "TopicLink": {
+        "properties": {
+          "addedAt": {
+            "type": "number"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "kind": {
+            "default": "web",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "As on a comment, and with one consequence of its own: a retracted link\nstops resolving into `mentions`, so the reference it contributed goes\nwith it rather than outliving the link that made it.",
+            "type": "number"
+          },
+          "removedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "url": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url",
+          "label"
+        ],
+        "type": "object"
+      },
+      "TopicMentionRef": {
+        "properties": {
+          "destination": {
+            "type": "unknown"
+          },
+          "modifiedTitle": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "destination",
+          "modifiedTitle"
+        ],
+        "type": "object"
+      },
+      "TopicMentionRefMap": {
+        "additionalProperties": {
+          "$ref": "#/$defs/TopicMentionRef"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "TopicMentionable": {
+        "properties": {
+          "$NAME": {
+            "default": "",
+            "type": [
+              "string",
+              "undefined"
+            ]
+          },
+          "shortName": {
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "$NAME"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "authorFieldsMigratedV1": {
+        "asCell": [
+          "cell"
+        ],
+        "default": false,
+        "description": "Completion of the per-topic migration from display names to authors.",
+        "type": "boolean"
+      },
+      "boardCrossrefs": {
+        "asCell": [
+          "readonly"
+        ],
+        "default": [],
+        "description": "The board's mention pivot, one row per topic. A topic reads its own row\nout of it and nothing else; see `backlinksOf`. Absent, a topic simply shows\nno inbound references.\n\nReadable, not writable: the pivot is the board's derivation, and a topic\nhas no business writing into it. Declaring the narrower cell says so where\na reader can see it, rather than leaving it to convention.",
+        "items": {
+          "$ref": "#/$defs/TopicCrossrefRow"
+        },
+        "type": "array"
+      },
+      "boardNames": {
+        "asCell": [
+          "readonly"
+        ],
+        "default": [],
+        "description": "The board's names table, one row per named topic. The topic reads its own\nrow out of it and nothing else; absent, the topic shows no number.\n\nReadable, not writable, for the reason `boardCrossrefs` states: the table\nis the board's derivation, and a topic has no business writing into it.\nWired at creation by the board's create, and rewired onto a topic filed\nbefore the namespace as a one-time link-bind — the same operator step\n`mentionable` states for itself.",
+        "items": {
+          "$ref": "#/$defs/NamesTableRow"
+        },
+        "type": "array"
+      },
+      "body": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "description": "The topic's living document: durable conclusions get folded up into the\nbody; the comment thread below holds the deliberation.",
+        "type": "string"
+      },
+      "bodyUpdatedAt": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 0,
+        "type": "number"
+      },
+      "bodyUpdatedBy": {
+        "$ref": "#/$defs/TopicAuthor",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "kind": "person",
+          "name": ""
+        }
+      },
+      "comments": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StoredTopicComment"
+        },
+        "type": "array"
+      },
+      "createdAt": {
+        "default": 0,
+        "type": "number"
+      },
+      "createdBy": {
+        "$ref": "#/$defs/TopicAuthor"
+      },
+      "createdByName": {
+        "description": "Creator display name recorded without an author kind.",
+        "type": "unknown"
+      },
+      "links": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/TopicLink"
+        },
+        "type": "array"
+      },
+      "mentionable": {
+        "asCell": [
+          "readonly"
+        ],
+        "default": [],
+        "description": "The board's mention universe — what the body editor autocompletes\nover. Wired at creation to the board's mention index (one derived\ndocument of copies; `MentionableRow` in\n`../collection-naming/mentionable.ts`), and rewired onto a piece from\nbefore the index as a one-time link-bind. A plain list of the pieces\nthemselves also satisfies the demand — a board not yet rewired, or a\ncomposer without a board. Absent, the editor simply offers no\ncompletions.\n\nDeclared readable, which is what settles the retained link's proof. A\nwritable handle adds a write-back leg to that proof, asking this\nthree-field projection to accept every field the board's row publishes,\nand the row carries a required `piece` this projection deliberately omits\n— so a topic wired to a board is refused even the source it is running.\nThe declaration is not a runtime gate: a write through the handle is\nrefused by nothing, and where the universe is a plain list of pieces the\neditor's name write-back reaches a member's own title through it.",
+        "items": {
+          "$ref": "#/$defs/TopicMentionable"
+        },
+        "type": "array"
+      },
+      "mentioned": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Pieces this topic references outside its prose — what `mention` records.\n\nIts own list rather than an entry in `references`, because that map belongs\nto the body editor: the editor mints its keys, rewrites its labels, and\ncollects entries whose token has left the document. A verb writing there\nwould be writing into somebody else's bookkeeping. Here there is nothing to\nkey by, because there is nothing to point back at from the prose — a\nreference outside a sentence is just a link in a list.",
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "references": {
+        "$ref": "#/$defs/TopicMentionRefMap",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "Where this topic's `[Label][key]` mentions point, keyed by the token that\nappears in the body. The editor owns the contents; this pattern owns the\ncell, which is what makes a mention durable and — because each entry holds\nthe destination as a REFERENCE — what makes the reference graph a question\nabout cell identity rather than about text.\n\nThe default has to match the one `TopicOutput` publishes. A map published\nunder a different default than its input carries cannot be materialized."
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "titleUpdatedAt": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 0,
+        "type": "number"
+      },
+      "titleUpdatedBy": {
+        "$ref": "#/$defs/TopicAuthor",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "kind": "person",
+          "name": ""
+        },
+        "description": "Attribution of the last rename, stamped by `setTitle` — the same pair\nthe body keeps, because a title is the other editable scalar."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "topics/topic.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddCommentEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The comment text, appended verbatim after trimming. Must be non-empty:\nan empty body rejects rather than recording a blank thread entry.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "AddLinkEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the link points at — a rendering hint, not a behavior switch.\nOptional because the handler defaults it to `\"web\"`, and a caller should\nnot be made to supply a field the verb never needed.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Display label. Optional, and a blank one falls back to the URL.",
+            "type": "string"
+          },
+          "url": {
+            "description": "The link target. Must be http(s): anything else rejects, because a\nuser-supplied scheme on a shared surface is script execution in every\nviewer's session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "EditCommentEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The complete replacement text, trimmed. Must be non-empty: emptying a\ncomment is a retraction, and `removeComment` is what says so.",
+            "type": "string"
+          },
+          "comment": {
+            "description": "The comment to revise, named and checked as in `RemoveCommentEvent`,\nand additionally naming `body`, which this verb writes.",
+            "properties": {
+              "body": {
+                "default": "",
+                "type": "string"
+              },
+              "editedAt": {
+                "type": "number"
+              },
+              "removedAt": {
+                "type": "number"
+              },
+              "sentAt": {
+                "default": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "sentAt",
+              "body"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "comment",
+          "body",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "MentionEvent": {
+        "properties": {
+          "topic": {
+            "description": "The piece to reference — the piece itself, not an address. Identity here\nis the cell, so this is what a caller passes and what gets stored.\n\nDeclared through the one field every Topic has rather than `unknown`. The\ncell declaration marks this as a reference position, so the CLI resolves a\ncanonical `/of:...` value from an inline JSON event into the live piece\nlink. It also bounds the validation read: `topic.get()` is `undefined` for\na value that is not a reference and an object for any piece, and `mention`\nchecks it before storing anything.\n\n`title` is also the most this can safely name: this schema reaches every\ntopic in `mentionable`, so a property without a default would be demanded\nof topics written before it existed and refuse their update. `title`\ncarries one, and that default does double duty — it is also why the check\nadmits a piece that is not a topic at all, which reads back `{ title: \"\" }`\nrather than `undefined`. `deno task pattern-vintage` proves the update side\nby replaying a real board.\n\nNothing reads THROUGH it beyond that one field — the value is stored and\ncompared.",
+            "properties": {
+              "title": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "RemoveCommentEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "comment": {
+            "description": "The comment to retract — the stored element, not a copy of its fields.\nNames only what this verb reads and writes, for the reason\n`MentionEvent.topic` names only `title`: the declaration bounds the\nvalidation read, and a payload that is not a reference reads back\n`undefined` and is refused rather than silently matching nothing.\n`sentAt` carries a default, so it is what makes a real element read back\nas an object; the stamp fields are optional, which is what lets this\nschema reach comments written before they existed.",
+            "properties": {
+              "removedAt": {
+                "type": "number"
+              },
+              "removedBy": {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              "sentAt": {
+                "default": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "sentAt"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "comment",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "RemoveLinkEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "link": {
+            "description": "The stored link element. What a reader passes, from the row it renders.\nNamed as in `RemoveCommentEvent`, with `url` playing the defaulted-field\nrole `sentAt` plays there.",
+            "properties": {
+              "removedAt": {
+                "type": "number"
+              },
+              "removedBy": {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              "url": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "url": {
+            "description": "The link's URL, for a caller that cannot pass a reference. Retracts the\nmost recently added link still present with this URL, so retracting twice\nretracts two rather than re-stamping one.\n\nSequentially. Two concurrent retractions naming the same URL both resolve\nthe same newest-present element and merge into one stamped record, so\nthey retract one link between them rather than two. Naming the link by\nreference is what makes a caller's target unambiguous under concurrency;\nthis spelling trades that for being reachable at all.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "SetBodyEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Explicit content-level signature for an agent using its human user's\nidentity key. Fabric authenticates the write with that key; this says\nwhich agent acted under it.\n\nRequired so every authored-content call carries structured attribution.\nAuthenticated execution provenance can supersede the field by relaxing it\nto optional without breaking existing callers.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The complete replacement body, persisted verbatim — no trimming, so\nwhitespace-sensitive Markdown survives. An empty body is legal: clearing\na living document is an edit, not an error.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "SetTitleEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent making this mutation, stored as structured attribution beside\nthe write time. Required so every successful rename is attributed.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The new title, trimmed before it is stored. Must be non-empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "TopicAuthor": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Open for the same reason `TopicLinkKind` is: this is provided data, so a\nclosed set here could never gain `\"service\"` or whatever acts next.\nWell-known values are `\"person\"` and `\"agent\"`, the latter marking an\nagent acting with its human user's key. `\"legacy\"` records a display name\nwhose author kind is unknown.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "TopicComment": {
+        "properties": {
+          "author": {
+            "$ref": "#/$defs/TopicAuthor",
+            "description": "Snapshot taken at write time (profile enrichment comes later; never gate\nauthorship on a profile wish — CT-1879). Comments carry no minted id:\narray elements have stable entity identity; future editing addresses\nelements by reference (`equals()`), not by a synthetic key.\n\nOptional because durable Topics may contain a comment without structured\nauthorship. Current `addComment` calls require `agentName` and always write\nthis snapshot."
+          },
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "editedAt": {
+            "description": "When the body was last revised, absent on a comment never edited. The\noriginal `sentAt` and `author` are left alone: an edit changes what was\nsaid, not who said it or when the thread reached this point.",
+            "type": "number"
+          },
+          "removedAt": {
+            "description": "Set when the comment was retracted, and the retraction is the whole of\nit — the record stays, carrying what it always said. A reader hides it;\n`commentCount` stops counting it; `lastActivityOf` keeps reading its\n`sentAt`, which is what stops a retraction moving a topic backwards in\nthe board's ordering.",
+            "type": "number"
+          },
+          "removedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "sentAt": {
+            "default": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "TopicLink": {
+        "properties": {
+          "addedAt": {
+            "type": "number"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "kind": {
+            "default": "web",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "As on a comment, and with one consequence of its own: a retracted link\nstops resolving into `mentions`, so the reference it contributed goes\nwith it rather than outliving the link that made it.",
+            "type": "number"
+          },
+          "removedBy": {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          "url": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url",
+          "label"
+        ],
+        "type": "object"
+      },
+      "TopicMentionRef": {
+        "properties": {
+          "destination": {
+            "type": "unknown"
+          },
+          "modifiedTitle": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "destination",
+          "modifiedTitle"
+        ],
+        "type": "object"
+      },
+      "TopicMentionRefMap": {
+        "additionalProperties": {
+          "$ref": "#/$defs/TopicMentionRef"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "TopicSummary": {
+        "properties": {
+          "commentCount": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "createdAt": {
+            "description": "When the topic was filed (epoch milliseconds), stamped at create.",
+            "type": "number"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              {
+                "type": "undefined"
+              }
+            ],
+            "default": {
+              "kind": "person",
+              "name": ""
+            }
+          },
+          "lastActivityAt": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "title": {
+            "default": "",
+            "description": "The topic's title. Defaulted rather than required, like every other\nfield a board card renders: the card list is a mapped sub-pattern, so\nthis type reaches a piece holding topics written before the field\nexisted as the argument schema its update is checked against, and a\nrequired property those topics lack refuses that update outright.\n`deno task pattern-vintage` is what catches it, by replaying a real\ndeployed board.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "createdAt",
+          "commentCount",
+          "lastActivityAt"
+        ],
+        "type": "object"
+      },
+      "UnmentionEvent": {
+        "properties": {
+          "topic": {
+            "description": "Declared and checked exactly as `MentionEvent.topic` is, and for the same\nreason: a payload that is not a reference matches no stored entry, so\nwithout the check it would remove nothing and report success.",
+            "properties": {
+              "title": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A #topic — one durable unit of shared attention: a title, a living body\ndocument, a flat chronological comment thread, typed links out to other\ncore objects (PRs, agent sessions, web pages), and the references it makes\nto sibling pieces.\n\nDurable conclusions get folded up into the body — revise it whole with\n`setBody`; the thread holds the deliberation as point-in-time `addComment`\nrecords. The thread only ever grows: `removeComment` and `removeLink` stamp\na record as retracted and leave it where it is, and `editComment` revises a\nbody in place, so what a reader shows is the array filtered rather than the\narray itself. Sign every authored-content mutation with `agentName`:\nFabric records the human principal behind the key; the name says which\nagent acted under it. Reference-only `mention` and `unmention` calls carry\nno content signature. The session-draft cells and `submit*` streams below\nbelong to the rendered page, not the headless contract — they read state\nonly this session holds.",
+    "properties": {
+      "$NAME": {
+        "default": "",
+        "description": "The topic's display name. Like the other derived display fields, a cold\nretained topic may not have produced this path yet; its persisted title\nremains authoritative until it does.",
+        "type": [
+          "string",
+          "undefined"
+        ]
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addComment": {
+        "$ref": "#/$defs/AddCommentEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Append to the thread — a point-in-time record of progress or\ndeliberation; durable conclusions belong in the body. Returns the\ncomment as recorded, resolved author and `sentAt` included."
+      },
+      "addLink": {
+        "$ref": "#/$defs/AddLinkEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Attach a typed outbound link — a PR, an agent session, a web page.\nReturns the link as recorded, resolved `addedBy` and `addedAt`\nincluded. Appends merge and nothing dedupes: a repeated URL is two\nentries."
+      },
+      "body": {
+        "default": "",
+        "description": "The living document, verbatim Markdown. `setBody` replaces it whole.",
+        "type": "string"
+      },
+      "bodyDraft": {
+        "type": "string"
+      },
+      "bodyUpdatedAt": {
+        "type": [
+          "number",
+          "undefined"
+        ]
+      },
+      "bodyUpdatedBy": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/TopicAuthor"
+          }
+        ]
+      },
+      "cancelEditBody": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: close the body editor; the session drafts are the discard.",
+        "tier": "wrapper"
+      },
+      "cancelEditTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: close the rename editor; the session draft is the discard.",
+        "tier": "wrapper"
+      },
+      "commentCount": {
+        "default": 0,
+        "type": [
+          "number",
+          "undefined"
+        ]
+      },
+      "commentDraft": {
+        "description": "Session-local composer/edit state. These controls belong to a direct Topic\ninstance, not the shared TopicPiece projection used by the tracker's list.",
+        "type": "string"
+      },
+      "comments": {
+        "description": "The thread, in arrival order, each record carrying its author snapshot\nand `sentAt`.\n\nMEMBERSHIP is append-only; a record is not. Nothing is ever removed from\nthis array — `removeComment` stamps `removedAt` and leaves the record in\nplace, and `editComment` revises a body and stamps `editedAt` — so a\nreader that wants the live thread filters on `removedAt` rather than\ntaking the array as it stands. `commentCount` is that filtered count.",
+        "items": {
+          "$ref": "#/$defs/TopicComment"
+        },
+        "type": "array"
+      },
+      "createdAt": {
+        "description": "When the topic was filed (epoch milliseconds), stamped at create.",
+        "type": "number"
+      },
+      "createdBy": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TopicAuthor"
+          },
+          {
+            "type": "undefined"
+          }
+        ],
+        "default": {
+          "kind": "person",
+          "name": ""
+        }
+      },
+      "editComment": {
+        "$ref": "#/$defs/EditCommentEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Revise a comment's body in place, naming it by reference. Stamps\n`editedAt` and leaves `author` and `sentAt` as they were. Outside the\nprojection for the reason `removeComment` states."
+      },
+      "editingBody": {
+        "description": "Whether the body editor is open.\n\nA bare session-scoped value rather than a cell-wrapped one, and that\nspelling costs a capability worth knowing about before reaching for it: a\nverb cannot take a whole Topic as captured state while any required\nproperty is published this way. The piece does not materialize through the\nverb's state schema, so the argument arrives undefined and the runtime\ndeclines to run the verb at all — \"stream action argument is undefined\n(potential schema mismatch)\", logged rather than thrown, with the write\nsilently absent.\n\nNothing needs that today. A board names a member by writing the piece into\nits namespace, and every path that does so builds the piece inside the\nverb (`addTopic`, the browser composer) or resolves it out of the board's\nown list (`backfillNames`); none of them takes a Topic as an argument, so\nnone reads one through a state schema. Cell-wrapping these two would buy\nthe capability at the cost of a `scope changed` break on every deployed\nTopic, so it waits for a verb that needs it.",
+        "scope": "session",
+        "type": "boolean"
+      },
+      "editingTitle": {
+        "description": "Whether the rename editor is open. Bare for the reason `editingBody`\nstates, and the constraint is per property: cell-wrapping one and not the\nother buys nothing.",
+        "scope": "session",
+        "type": "boolean"
+      },
+      "lastActivityAt": {
+        "default": 0,
+        "type": [
+          "number",
+          "undefined"
+        ]
+      },
+      "linkKindDraft": {
+        "type": "string"
+      },
+      "linkLabelDraft": {
+        "type": "string"
+      },
+      "linkUrlDraft": {
+        "type": "string"
+      },
+      "links": {
+        "description": "Typed outbound links, in arrival order, each carrying its author snapshot\nand `addedAt`. Append-only in membership on the same terms as `comments`:\n`removeLink` stamps rather than removes, and a stamped link additionally\nstops resolving into `mentions`.",
+        "items": {
+          "$ref": "#/$defs/TopicLink"
+        },
+        "type": "array"
+      },
+      "mention": {
+        "$ref": "#/$defs/MentionEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Reference another piece from this topic — the payload is the piece\nitself, stored as a reference. Takes no `agentName` and returns no value;\nFabric retains the authenticated principal behind the edge."
+      },
+      "mentioned": {
+        "default": [],
+        "description": "Pieces referenced outside the prose, recorded by `mention`.",
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "mentions": {
+        "default": [],
+        "description": "Every piece this topic's prose and links point at, as references.\n\nThe board's pivot is declared over this and nothing else, so what one topic\ncosts a full-board scan is exactly this list of identities. Declared\n`unknown[]` because these are references, and comparing them never reads\nwhat is behind them.\n\nThe cell annotation that makes them comparable belongs to the READER, not\nhere: the pivot declares its own view of this list as\n`TopicMentionSource.mentions: ComparableCell<unknown>[]`, and that is what\nmakes its graph settle rather than depend on load order. A published\n`unknown[]` is what each reader annotates for itself.\n\nThe default stands alone: a declared default and `| undefined` collide,\nand the default is what a topic deployed before this path existed\nmaterializes against.",
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "referencedBy": {
+        "default": [],
+        "description": "The topics that mention this one, read out of the board's pivot.\n\nDeclared through `TopicSummary` rather than `TopicPiece`, and that is\nload-bearing rather than stingy: a topic whose backlinks were topics would\nbe a type that contains itself, and resolving one from a list would walk\nthe graph. The summary carries no reference of its own, so it terminates.\nA reader that wants more follows the link, which resolves whole.",
+        "items": {
+          "$ref": "#/$defs/TopicSummary"
+        },
+        "type": "array"
+      },
+      "references": {
+        "$ref": "#/$defs/TopicMentionRefMap",
+        "default": {},
+        "description": "Where this topic's `[Label][key]` mentions point. Durable content, like\n`links`. The body editor works on a session copy of this map, which a save\npublishes here whole, beside the prose whose tokens name its entries."
+      },
+      "referencesDraft": {
+        "$ref": "#/$defs/TopicMentionRefMap",
+        "description": "The body draft's mention map, staged so Cancel can discard it.\n\n`cf-code-editor` writes an entry the moment a mention is inserted and\ndrops one the moment its token leaves the document, neither of them\nwaiting for Save. Pointed at the durable map while `$value` holds a\nsession draft, those writes would outlive a discarded edit: a canceled\ninsertion would leave an edge no token names, and a canceled deletion\nwould strip the destination from a token the durable body still carries.\nThe editor's own ordering assumes its two bindings share a lifetime, so\nthis gives them one."
+      },
+      "removeComment": {
+        "$ref": "#/$defs/RemoveCommentEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Retract a comment, naming it by reference. The record is stamped rather\nthan deleted, so the thread keeps its evidence while a reader stops\nshowing it and `commentCount` stops counting it.\n\nHere rather than on `TopicPiece`, for the reason `setTitle` is: boards\nstore that projection, so it is a demand on every topic they already\nhold, and a required verb added to it would refuse every one deployed\nbefore the verb existed. A verb has no default to be rescued by, so there\nis no compatible way to demand a new one. Addressing the topic directly\nreaches all three of these."
+      },
+      "removeLink": {
+        "$ref": "#/$defs/RemoveLinkEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Retract a link, by reference or by `url`. Stamped like a comment, and a\nretracted link stops resolving into `mentions`. The url spelling exists\nbecause a link record carries no fid for a CLI caller to name. Outside\nthe projection for the reason `removeComment` states."
+      },
+      "saveBody": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: publish the session body and mention-map drafts whole,\nattributed to the viewer's Profile — the contract verb is `setBody`.",
+        "tier": "wrapper"
+      },
+      "saveTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: save the session title draft under the viewer's Profile —\nthe contract verb is `setTitle`, and both land through the same core, so\na browser rename stamps the same attribution and moves the same activity\nclock.",
+        "tier": "wrapper"
+      },
+      "setBody": {
+        "$ref": "#/$defs/SetBodyEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replace the living document whole — read it, revise it, write it back\ncomplete; the body is one value with whole-value conflict semantics.\nRequires `agentName` and returns the persisted body with its attribution."
+      },
+      "setTitle": {
+        "$ref": "#/$defs/SetTitleEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Rename the topic. Requires `agentName` and returns the persisted title\nwith its attribution. This direct-address verb stays outside the board's\nnarrow `TopicPiece` demand."
+      },
+      "shortName": {
+        "description": "The name the board calls this topic by, read out of the board's names\ntable by identity. The display name stays the title — this rides beside\nit, under the name a mention pill reads it by (`Mentionable.shortName` in\n`packages/ui/src/v2/core/mentionable.ts`), so a mention of this topic\nelsewhere gains the number as soon as the board names it.\n\nAbsent for a topic no board has named, or one wired to no board: the\nlookup produces nothing and the property is simply not there. Every\nconsumer treats that as no name — the badge renders nothing, a universe\nrow matches no `#42` query, and a mention pill shows no number\n(`_trackRefShortName` in\n`packages/ui/src/v2/components/cf-code-editor/cf-code-editor.ts` reads an\nabsent name exactly as it reads a blank one).\n\nOptional rather than defaulted, and the difference is the compatibility\nproof's: this is what a board's stored list is validated against, and a\ndefaulted property there moves the demand's defaults below an array\nconstraint the proof cannot show stable under default insertion. It is not\nwhat lets the projection apply over a board whose members predate the\nproperty, and nothing is; `TopicDemand.shortName` in `./main.tsx` states\nwhy.",
+        "tags": [
+          "42"
+        ],
+        "type": "string"
+      },
+      "startEditBody": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: open the body editor, seeding the session drafts from the\ndurable body and mention map.",
+        "tier": "wrapper"
+      },
+      "startEditTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: open the rename editor, seeding the session draft from the\ndurable title.",
+        "tier": "wrapper"
+      },
+      "submitComment": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: append the session comment draft under the viewer's\nProfile. Reads session-local state, so it is a silent no-op headless —\nthe contract verb is `addComment`.",
+        "tier": "wrapper"
+      },
+      "submitLink": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "UI wrapper: append the session link drafts under the viewer's Profile —\nthe contract verb is `addLink`.",
+        "tier": "wrapper"
+      },
+      "title": {
+        "default": "",
+        "description": "The topic's title. Defaulted rather than required, like every other\nfield a board card renders: the card list is a mapped sub-pattern, so\nthis type reaches a piece holding topics written before the field\nexisted as the argument schema its update is checked against, and a\nrequired property those topics lack refuses that update outright.\n`deno task pattern-vintage` is what catches it, by replaying a real\ndeployed board.",
+        "type": "string"
+      },
+      "titleDraft": {
+        "type": "string"
+      },
+      "titleUpdatedAt": {
+        "type": [
+          "number",
+          "undefined"
+        ]
+      },
+      "titleUpdatedBy": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/TopicAuthor"
+          }
+        ],
+        "description": "Attribution of the last rename; unset until the first `setTitle`.\nBeside `setTitle` rather than on the projection, for the same reason."
+      },
+      "unmention": {
+        "$ref": "#/$defs/UnmentionEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Stop referencing a piece: removes every `mention`-made entry naming it.\nReferences made in the prose are retracted by editing the prose, not by\nthis. Takes no `agentName` and returns no value."
+      }
+    },
+    "required": [
+      "commentDraft",
+      "bodyDraft",
+      "editingBody",
+      "titleDraft",
+      "editingTitle",
+      "linkUrlDraft",
+      "linkLabelDraft",
+      "linkKindDraft",
+      "referencesDraft",
+      "setTitle",
+      "removeComment",
+      "editComment",
+      "removeLink",
+      "startEditTitle",
+      "saveTitle",
+      "cancelEditTitle",
+      "submitComment",
+      "startEditBody",
+      "saveBody",
+      "cancelEditBody",
+      "submitLink",
+      "$UI",
+      "body",
+      "comments",
+      "links",
+      "mentions",
+      "references",
+      "mentioned",
+      "referencedBy",
+      "addComment",
+      "addLink",
+      "setBody",
+      "mention",
+      "unmention",
+      "$NAME",
+      "title",
+      "createdAt",
+      "commentCount",
+      "lastActivityAt"
+    ],
+    "tags": [
+      "topic"
+    ],
+    "type": "object"
+  }
+}

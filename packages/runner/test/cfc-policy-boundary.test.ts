@@ -18,6 +18,7 @@ import {
   ExtendedStorageTransaction,
   TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-policy-boundary");
 
@@ -99,7 +100,7 @@ const seedSpaceLabeledCell = async (
   const seed = runtime.edit();
   const target = runtime.getCell(signer.did(), id, undefined, seed);
   const targetId = target.getAsNormalizedFullLink().id;
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: targetId,

@@ -3,6 +3,10 @@ import {
   validateLoomAuthoringConfig,
 } from "./loom-authoring.ts";
 import {
+  type HarnessLoomRetrievalConfig,
+  validateLoomRetrievalConfig,
+} from "./loom-retrieval.ts";
+import {
   type CfcConfClause,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
@@ -13,7 +17,11 @@ import {
   meetCfcObservationCeilings,
   resolveCfcDials,
 } from "@commonfabric/runner/cfc";
-import { type CfcPosture, presetCfcOptions } from "@commonfabric/runner";
+import {
+  type CfcPosture,
+  MAX_ENFORCEMENT_CFC_OPTIONS,
+  presetCfcOptions,
+} from "@commonfabric/runner";
 import type { HarnessCfcEnforcementModeSource } from "./contracts/cfc-policy-snapshot.ts";
 import {
   type HarnessCredentialOwnerRef,
@@ -28,18 +36,20 @@ import type {
 import type { HarnessBrowserAccessLease } from "./contracts/browser-access.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import { resolveHarnessDocsCorpus } from "./docs-corpus/corpus.ts";
+import type { HarnessForeignSpaces } from "./foreign-spaces.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
 export const DEFAULT_GATEWAY_BASE_URL = "https://llm.stage.commontools.dev/";
 export const DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE =
-  "enforce-explicit" as const satisfies CfcEnforcementMode;
+  "enforce-strict" as const satisfies CfcEnforcementMode;
 export type HarnessGatewayAuthMode = "bearer" | "none";
 
 /**
- * The fabric session's enforcement dial admits raises only: the remoteClient
- * preset already pins `enforce-explicit`, so the sole configurable move is up
- * to `enforce-strict`. This is a different dial from the harness's own
+ * The fabric session's enforcement dial names an enforcing rung: the
+ * remoteClient preset already pins `enforce-strict`, so stating this dial
+ * either restates that rung or lowers the session to `enforce-explicit`.
+ * This is a different dial from the harness's own
  * `cfcEnforcementMode`, which governs tool policy and the sandbox — this one
  * governs the runtime the `run_pattern` tool deploys patterns into.
  */
@@ -62,7 +72,8 @@ export type HarnessFabricCfcFlowLabelsSource =
  * the run offers `run_pattern` in the parent tool surface; when absent, the
  * tool is unavailable. The optional CFC dials reach the session's Runtime;
  * unset means the remoteClient preset's first-party posture
- * (`enforce-explicit`, flow labels off). `cfcPosture` opts the runtime into
+ * (`enforce-strict`, flow labels persisted). `cfcPosture` opts the runtime
+ * into
  * a named bundle (`MAX_ENFORCEMENT_CFC_OPTIONS` in the runner's presets);
  * the two dials still apply over it.
  */
@@ -70,12 +81,17 @@ export interface HarnessFabricSessionConfig {
   apiUrl: string;
   identityKeyPath: string;
   space: string;
+
+  /** Operator-admitted foreign space DIDs and their HTTP(S) host routes. */
+  foreignSpaces?: HarnessForeignSpaces;
+
   cfcEnforcementMode?: HarnessFabricCfcEnforcementMode;
   cfcFlowLabels?: HarnessFabricCfcFlowLabelsMode;
   cfcPosture?: CfcPosture;
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by
    * (`RuntimeOptions.cfcReadMaxConfidentiality`). Absent is no ceiling.
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];
@@ -198,12 +214,26 @@ interface HarnessCommonConfig {
   skillsRootRecord?: HarnessSkillsRootRecord;
 
   /**
-   * Host directories of operator-provisioned reference material `query_docs`
+   * Host directories of operator-provisioned reference material `research`
    * answers out of, and where they came from. Read-only by use: the harness
    * reads them and never writes to them, and no other path admits a document
-   * into the corpus. A run naming none does not offer the tool.
+   * into the corpus. Research can consult a configured pattern index without
+   * a documentation corpus.
    */
   docsCorpus?: HarnessDocsCorpusRecord;
+
+  /**
+   * Whether a skill this run holds may have its scripts run in the sandbox.
+   *
+   * The operator's one decision about skill scripts, and it covers a registry
+   * skill and an acquired one alike: what a script is trusted with is the
+   * sandbox it runs in, which does not vary with where the skill came from.
+   * Off unless set, so a run that says nothing runs none.
+   *
+   * {@link allowedSkillScripts} names individual scripts and remains for a
+   * caller that wrote entries; a run with this set needs none.
+   */
+  allowSkillScripts?: boolean;
 
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
@@ -225,6 +255,9 @@ interface HarnessCommonConfig {
   fabricSession?: HarnessFabricSessionConfig;
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -280,6 +313,7 @@ export interface ResolveHarnessConfigOptions {
   skillsRoot?: string;
   skillsRootRecord?: HarnessSkillsRootRecord;
   docsCorpus?: HarnessDocsCorpusRecord;
+  allowSkillScripts?: boolean;
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
   skillScriptExecutionTarget?: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
@@ -300,6 +334,9 @@ export interface ResolveHarnessConfigOptions {
     | ResolvedHarnessFabricSessionConfig;
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -396,19 +433,25 @@ export const fabricSessionCfcFlowLabels = (
 
 /**
  * Where that rung came from: `configured` when the config states the dial,
- * `posture` when the named bundle the config selected moves the dial off what
- * the preset resolves without it, and `default` when nothing the config states
- * reaches this dial at all.
+ * `posture` when the named bundle the config selected carries the dial, and
+ * `default` when nothing the config states reaches this dial at all.
+ *
+ * The bundle is asked whether it carries the dial rather than whether it moved
+ * the resolved value. A bundle naming the rung the core pin already holds
+ * still supplied it, and an operator who selected that bundle is owed a record
+ * saying so; comparing values instead makes the answer flip whenever the pin
+ * and the bundle happen to agree, which is a fact about the pins rather than
+ * about what the operator asked for.
  */
 export const fabricSessionCfcFlowLabelsSource = (
   fabricSession: HarnessFabricSessionConfig,
 ): HarnessFabricCfcFlowLabelsSource =>
   fabricSession.cfcFlowLabels !== undefined
     ? "configured"
-    : presetCfcOptions(fabricSessionPresetCfcDials(fabricSession))
-        .cfcFlowLabels === presetCfcOptions({}).cfcFlowLabels
-    ? "default"
-    : "posture";
+    : fabricSession.cfcPosture !== undefined &&
+        "cfcFlowLabels" in MAX_ENFORCEMENT_CFC_OPTIONS
+    ? "posture"
+    : "default";
 
 /** What the operator stated the harness's own dial to be, if anything. */
 const statedCfcEnforcementMode = (
@@ -471,10 +514,12 @@ const fabricSessionRaisesCfcEnforcement = (
 
 /**
  * This run's harness enforcement dial. The harness loop and the session's
- * Runtime are two dial families over one run, and a run under a session raised
- * to `enforce-strict` follows it rather than the harness default: a loop
- * weaker than the session it writes through enforces less than the run claims,
- * and says nothing about it.
+ * Runtime are two dial families over one run, and a harness dial that would
+ * resolve below the `enforce-strict` its session enforces follows the session
+ * instead: a loop weaker than the session it writes through enforces less than
+ * the run claims, and says nothing about it. Both families default to
+ * `enforce-strict`, so the case arises where something weaker reaches the
+ * harness dial rather than on every run under a session.
  *
  * @throws Error when the operator stated a harness dial weaker than the
  * `enforce-strict` its session enforces.
@@ -658,6 +703,9 @@ export const resolveHarnessConfig = (
   if (options.loomAuthoring !== undefined) {
     validateLoomAuthoringConfig(options.loomAuthoring);
   }
+  if (options.loomRetrieval !== undefined) {
+    validateLoomRetrievalConfig(options.loomRetrieval);
+  }
   const modelProvider = options.modelProvider ?? "openai-compatible-gateway";
   if (
     options.credentialOwner !== undefined &&
@@ -730,6 +778,7 @@ export const resolveHarnessConfig = (
       ? { skillsRoot: skillsRootRecord.hostPath, skillsRootRecord }
       : {}),
     ...(docsCorpus !== undefined ? { docsCorpus } : {}),
+    ...(options.allowSkillScripts === true ? { allowSkillScripts: true } : {}),
     ...(options.allowedSkillScripts !== undefined
       ? { allowedSkillScripts: options.allowedSkillScripts }
       : {}),
@@ -755,6 +804,9 @@ export const resolveHarnessConfig = (
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(options.loomAuthoring !== undefined
       ? { loomAuthoring: structuredClone(options.loomAuthoring) }
+      : {}),
+    ...(options.loomRetrieval !== undefined
+      ? { loomRetrieval: structuredClone(options.loomRetrieval) }
       : {}),
     ...(options.patternIndex !== undefined
       ? { patternIndex: options.patternIndex }

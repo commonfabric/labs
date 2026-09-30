@@ -1,3 +1,4 @@
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type {
   AsCellEntry,
   CellKind,
@@ -44,9 +45,7 @@ export function isCellKind(value: unknown): value is CellKind {
 
 export function isAsCellEntry(value: unknown): value is AsCellEntry {
   if (isCellKind(value)) return true;
-  if (
-    value === null || typeof value !== "object" || Array.isArray(value)
-  ) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const entry = value as Record<string, unknown>;

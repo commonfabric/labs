@@ -43,6 +43,22 @@ export function sessionCause(
   };
 }
 
+export function sessionManifestCause(
+  spaceDid: string,
+  ownerDid: string,
+  sourceId: string,
+  nativeSessionId: string,
+  driver: string,
+  contentHash: string,
+): Record<string, string | number> {
+  return {
+    ...sessionCause(spaceDid, ownerDid, sourceId, nativeSessionId),
+    agentConnector: "session-version",
+    driver: requiredIdentityPart(driver, "driver"),
+    contentHash: requiredIdentityPart(contentHash, "contentHash"),
+  };
+}
+
 export function sessionChunkCause(
   spaceDid: string,
   ownerDid: string,
@@ -62,15 +78,19 @@ export function sessionChunkCause(
   };
 }
 
+/** The receipt cell for one command; a producer's command has its own,
+ * since its ID may repeat another queue's. */
 export function commandReceiptCause(
   spaceDid: string,
   ownerDid: string,
   commandId: string,
+  producer?: string,
 ): Record<string, string | number> {
   return {
     spaceDid,
     ownerDid: requiredIdentityPart(ownerDid, "ownerDid"),
     agentConnector: "command-receipt",
     commandId: normalizeCommandId(commandId),
+    ...(producer === undefined ? {} : { producer }),
   };
 }

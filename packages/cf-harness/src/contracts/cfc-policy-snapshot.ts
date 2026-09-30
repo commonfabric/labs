@@ -77,6 +77,7 @@ export interface HarnessCfcPolicySnapshot {
     allowedToolIds: readonly BuiltinToolId[];
   };
   skillScripts: {
+    allowSkillScripts: boolean;
     allowedScripts: readonly HarnessAllowedSkillScript[];
   };
   subagents: {
@@ -103,6 +104,7 @@ export interface CreateHarnessCfcPolicySnapshotOptions {
   promptSlotBindingSource: HarnessPromptSlotBindingSource;
   parentToolAllowance: HarnessParentToolAllowance;
   allowedToolIds: readonly BuiltinToolId[];
+  allowSkillScripts?: boolean;
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   subagentProfileConfigs: readonly HarnessSubagentProfileConfig[];
@@ -184,6 +186,10 @@ export const createHarnessCfcPolicySnapshot = (
     allowedToolIds: [...options.allowedToolIds],
   },
   skillScripts: {
+    // The operator's switch belongs here with the entries: with it on an empty
+    // entry list is what an authorized run looks like, so a snapshot carrying
+    // only the entries would show no authorization for every script that ran.
+    allowSkillScripts: options.allowSkillScripts === true,
     allowedScripts: (options.allowedSkillScripts ?? []).map((script) => ({
       ...script,
     })),

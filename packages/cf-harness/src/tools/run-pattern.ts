@@ -31,7 +31,7 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   HARNESS_POLICY_REFUSAL_SCHEMA,
   type HarnessPolicyRefusal,
@@ -44,7 +44,15 @@ import {
   comparableEntityHash,
   fabricRuntimeObservations,
 } from "../fabric-observations.ts";
+import { admitsFabricReference } from "../foreign-spaces.ts";
 import { defineOwnEntry } from "../handle-table.ts";
+import {
+  dedupedObservedOutputs,
+  type ObservedOutput,
+  observedOutputCause,
+  observedOutputsIn,
+  type RunPatternOutputConcern,
+} from "../run-pattern-output-concerns.ts";
 import {
   addressSealedPositions,
   isSealedOpaqueLinkObject,
@@ -74,30 +82,12 @@ import {
   runtimeProgramFromIndex,
 } from "../pattern-index/composition.ts";
 import type { HarnessToolDefinition } from "./types.ts";
+import {
+  RUN_PATTERN_INPUT_SCHEMA,
+  type RunPatternToolInput,
+} from "../contracts/run-pattern.ts";
 
-export interface RunPatternToolInput {
-  sourceText?: string;
-
-  /**
-   * What the pattern is for, in one line. Published with the pattern when the
-   * run contributes to the index; a run that gives none publishes nothing,
-   * since a pattern nobody can read the purpose of is a pattern nobody finds.
-   */
-  description?: string;
-
-  /** Tags the published pattern is found under. */
-  hashtags?: readonly string[];
-
-  /**
-   * A pattern published to the index, run in place of inline source. The
-   * program is fetched host-side and compiled down the same path; its source
-   * never reaches the model, on the success path or on any error path.
-   */
-  patternId?: string;
-
-  inputs?: Record<string, unknown>;
-  resultSchema?: JSONSchema;
-}
+export type { RunPatternToolInput } from "../contracts/run-pattern.ts";
 
 /** Upper bound on `sourceText`, enforced with a structured tool error. */
 export const RUN_PATTERN_MAX_SOURCE_TEXT_BYTES = 256 * 1024;
@@ -109,14 +99,19 @@ export interface RunPatternToolSuccessOutput {
   /** Canonical LLM-friendly link to the piece's result cell. */
   resultRef: string;
 
+  /** Declared pending read in the captured root; omitted if the fit refuses it. */
+  pending?: boolean;
+
+  /** Declared failure in the captured root; omitted if the fit refuses it. */
+  hasError?: boolean;
+
   /**
    * What the release boundary decided about this call's own result: released,
    * observed, or withheld, with the sink and ceiling it was fitted against
    * and what the fit refused. Artifact-only, like `releaseObservation`: the
    * prompt loop strips it from the model-facing rendering and appends it to
    * the run's policy trace, where a decision a label drove sits beside the
-   * decisions authority drove. Absent on a run that asked for no values,
-   * since nothing was measured.
+   * decisions authority drove. Every captured result is measured for status.
    */
   releaseDecision?: HarnessReleaseDecision;
 
@@ -125,8 +120,7 @@ export interface RunPatternToolSuccessOutput {
    * not reject it on. Artifact-only, like the other fields the prompt loop
    * strips: the values went out, so the model has nothing to act on, while an
    * operator staging the ladder has the population that raising it would
-   * start withholding. Absent, like `policyRefusal`, on a run that asked for
-   * no values, since nothing was measured.
+   * start withholding.
    */
   releaseObservation?: HarnessPolicyRefusal;
 
@@ -180,8 +174,8 @@ export interface RunPatternToolSuccessOutput {
   rawValue?: unknown;
 
   /**
-   * What became of this run's contribution to the pattern index, when the
-   * run had one to make. Absent when the run published nothing at all — it
+   * This run's queued contribution to the pattern index, when the run had one
+   * to make. Absent when the run staged nothing at all — it
    * named a `patternId`, it gave no description, or the run has no index.
    */
   patternPublication?: RunPatternPublicationReport;
@@ -193,8 +187,10 @@ export interface RunPatternToolSuccessOutput {
    * flow touched. And what the render gate's probe THREW, when one did —
    * never what it rendered — on the same terms as every other thrown message
    * this tool withholds: a computation over data the model cannot read can
-   * carry that data in what it throws. A run with both carries the reason
-   * first and the thrown text after a blank line.
+   * carry that data in what it throws. And the text of every output
+   * `outputConcerns` named, which a composed instance is the only holder of
+   * and which the model is told the position of rather than the words. A run
+   * with more than one carries them in that order, separated by a blank line.
    *
    * **The artifact root is not a confidentiality boundary.** `bash` does not
    * reserve it the way `read_file`, `write_file`, `edit_file` and
@@ -203,25 +199,38 @@ export interface RunPatternToolSuccessOutput {
    * reviewers walked that route independently and one reproduced it with a
    * planted marker; CT-2117 carries the structural fix. Thrown text is here
    * because it is the class this artifact already holds and cannot be
-   * recovered any other way. Rendered DOM is NOT, because it can: the
+   * recovered any other way, and a composed instance's output text is here
+   * for the same reason: that instance is not something the model can
+   * address, so an operator reading the run back has nothing else to debug
+   * from. Rendered DOM is NOT, because it can: the
    * synthetic instance is a deterministic function of the argument schema
    * and the index records the program, so the render is reproducible rather
    * than needing to be kept.
    */
   rawCauseMessage?: string;
+
+  /**
+   * Best-effort concerns from declared top-level outputs of readable retained
+   * instances. Policy refusals suppress pending concerns; absence is inconclusive.
+   */
+  outputConcerns?: readonly RunPatternOutputConcern[];
 }
 
 /**
- * What became of this run's contribution to the index after publication
- * policy and the render gate were applied.
+ * The contribution staged after publication policy and the render gate were
+ * applied. The tool returns before the session flush sends it to the index,
+ * so this report records intent at tool return, never an acknowledgment.
  *
- * Every field is pinned to a fixed set — the two unions and a boolean, with
- * `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and never composed. See
- * `pattern-index/publish-render-gate.ts` for why nothing derived from the
- * rendered DOM may join them.
+ * The identity comes from the compiled source. The verdict fields are pinned
+ * to fixed sets, with `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and
+ * never composed. See `pattern-index/publish-render-gate.ts` for why nothing
+ * derived from the rendered DOM may join them.
  */
 export interface RunPatternPublicationReport {
-  status: PatternPublicationStatus;
+  /** The exact entry identity staged by this attempt, retained after revision. */
+  patternId: string;
+
+  status: "queued";
   reason: PatternPublicationReason;
   message: string;
 
@@ -277,7 +286,7 @@ export type RunPatternToolOutput =
 export const isRunPatternToolSuccessOutput = (
   output: unknown,
 ): output is RunPatternToolSuccessOutput =>
-  typeof output === "object" && output !== null &&
+  isObjectOrArray(output) &&
   "status" in output && output.status === "ok" &&
   "resultRef" in output && typeof output.resultRef === "string" &&
   "resultRefSchema" in output;
@@ -341,52 +350,9 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Source you write imports the runtime from "${RUNTIME_MODULE_SPECIFIER}" and from no other module — every pattern opens with a line of the form ${RUNTIME_MODULE_IMPORT_LINE} — and no package named after the product resolves. When the run's session reads under a confidentiality ceiling, every db.query result must be declared per session (PerSession<> on the result type, or the query's { scope: "session" } option); a query left space-scoped is refused under a ceiling rather than read. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because an ordinary result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts. The host returns pending and hasError from the captured declared top-level outputs when the release fit admits them. Reread the held resultRef if it is pending; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
   effectClass: "side-effect",
-  inputSchema: {
-    type: "object",
-    properties: {
-      sourceText: {
-        type: "string",
-        description:
-          "Pattern source (TypeScript/TSX). At most 256 KiB. Return a durable result object directly. A whole-result derived wrapper is a known smell, but not a deterministic failure: after the run the harness checks the actual pattern pointer and refuses any piece materialized under a session-only identity.",
-      },
-      patternId: {
-        type: "string",
-        description:
-          "Id of a pattern published to the index, as search_patterns reports it. Exactly one of sourceText and patternId is given; the published program is fetched and compiled without passing through this conversation.",
-      },
-      description: {
-        type: "string",
-        description:
-          'One line saying what the pattern you are running does, e.g. "Totals an invoice\'s line items and applies a discount". Source you wrote is recorded in the pattern index when it runs, so fill this in for later evaluation and discovery. A run without one publishes nothing.',
-      },
-      hashtags: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          'Tags the recorded pattern will be found under if it earns discoverability, e.g. ["invoice", "arithmetic"]. Use the words someone searching for this capability would type.',
-      },
-      inputs: {
-        type: "object",
-        additionalProperties: true,
-        description:
-          'Input values for the pattern. A string value that is a whole-string LLM-friendly link (e.g. "/of:fid1:abc.../path") is passed as a live cell reference; everything else passes through as plain JSON.',
-      },
-      resultSchema: {
-        anyOf: [
-          { type: "boolean" },
-          { type: "object", additionalProperties: true },
-        ],
-        description:
-          'JSON Schema for the result value. Without it you get resultRef only and no value at all, so pass it whenever you need to read what the pattern computed. A value is returned only for the fields the schema models: an inert one (a number, a boolean, an enum or const string) comes back as itself; anything else is withheld as text and comes back as a reference token addressing that position, which describe_handle can inspect and a later run_pattern can wire by reference. Example: {"type":"object","properties":{"total":{"type":"number"}},"required":["total"]}. The framework\'s own result keys ($NAME, $UI and the other rendering variants) need not be declared. When the space\'s policy does not admit releasing the values to you, value is withheld, valueError says why and which input carried the refused label, and resultRef still names the result: pass it on by reference.',
-      },
-    },
-    // Exactly one of `sourceText` and `patternId` is required, which is a
-    // condition on the pair rather than on either alone; the tool states it
-    // in prose here and enforces it on invocation.
-    additionalProperties: false,
-  } satisfies JSONSchema,
+  inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
     oneOf: [{
       type: "object",
@@ -394,6 +360,8 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         outputId: { type: "string" },
         status: { type: "string", enum: ["ok"] },
         resultRef: { type: "string" },
+        pending: { type: "boolean" },
+        hasError: { type: "boolean" },
         resultRefSchema: {},
         pieceId: { type: "string" },
         value: {},
@@ -404,9 +372,10 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         patternPublication: {
           type: "object",
           properties: {
+            patternId: { type: "string" },
             status: {
               type: "string",
-              enum: ["discoverable", "recorded"],
+              enum: ["queued"],
             },
             reason: {
               type: "string",
@@ -424,6 +393,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
             syntheticInputsComplete: { type: "boolean" },
           },
           required: [
+            "patternId",
             "status",
             "reason",
             "message",
@@ -432,6 +402,23 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
           additionalProperties: false,
         },
         rawCauseMessage: { type: "string" },
+        outputConcerns: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              concern: {
+                type: "string",
+                enum: ["error-branch", "no-rows", "pending"],
+              },
+              key: { type: "string" },
+              patternId: { type: "string" },
+              message: { type: "string" },
+            },
+            required: ["concern", "key", "message"],
+            additionalProperties: false,
+          },
+        },
       },
       required: [
         "outputId",
@@ -465,10 +452,9 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
  * The `@link` object addressing one sealed position of a result: the result
  * cell's link extended by the sealed path. It rides as a whole object, which
  * the outbound swap mints from in one piece — the free-text scanner would
- * stop an address short at a property name's whitespace. A path the link
- * grammar cannot round-trip — an empty final segment parses back as its
- * parent — answers `undefined`, keeping the seal rather than becoming a
- * reference to the wrong cell.
+ * stop an address short at a property name's whitespace. Returns `undefined`
+ * if the rendered reference does not name an entity. The shared renderer
+ * preserves the sealed path's keys.
  */
 export const sealedPositionLink = (
   resultLink: NormalizedFullLink,
@@ -478,13 +464,7 @@ export const sealedPositionLink = (
   const segments = [...resultLink.path, ...path.map(String)];
   const ref = createLLMFriendlyLink({ ...resultLink, path: segments }, space);
   try {
-    const parsed = parseLLMFriendlyLink(ref, space);
-    if (
-      parsed.path.length !== segments.length ||
-      parsed.path.some((segment, i) => segment !== segments[i])
-    ) {
-      return undefined;
-    }
+    parseLLMFriendlyLink(ref, space);
   } catch {
     return undefined;
   }
@@ -524,10 +504,8 @@ const RUN_PATTERN_ANSWER_SINK = "run_pattern";
  *
  * What crosses the sink is a VALUE. The result reference the tool returns is
  * an opaque handle: it names the result without carrying it, and holding it
- * discloses nothing (AH-CFC-18), so the ceiling is consulted only for a call
- * that asks for values through `resultSchema`, and what a refusal withholds
- * is those values and never the reference. The model composes work out of
- * names it cannot read; that is what lets it route data it never sees.
+ * discloses nothing (AH-CFC-18). The ceiling gates the host's status booleans
+ * and the values a `resultSchema` asks for, never the reference.
  *
  * Empty rather than absent, and the difference is the point. A sink absent
  * from the inventory goes ungated because a deployment has not decided about
@@ -689,7 +667,7 @@ const refusalReadInputKeys = (
 const namableRefusalAtom = (rendered: string): boolean => {
   try {
     const parsed: unknown = JSON.parse(rendered);
-    return parsed === null || typeof parsed !== "object";
+    return !isObjectOrArray(parsed);
   } catch {
     return false;
   }
@@ -1053,11 +1031,11 @@ export const runPatternTool: HarnessToolDefinition<
     // Whole-string LLM-friendly links become live cell references; the
     // prompt loop has already resolved any handle tokens, so the strings
     // seen here carry canonical addresses. Non-link strings and non-strings
-    // pass through as plain JSON. A link that resolves outside the session's
-    // configured space is refused before anything is created: the session's
-    // authority ends at its own space. So is a value carrying a sealed
-    // opaque link anywhere within it, which is a redaction the model copied
-    // back out of an earlier result rather than a reference to anything.
+    // pass through as plain JSON. A link outside the local and
+    // operator-admitted spaces is refused before anything is created. So is a
+    // value carrying a sealed opaque link anywhere within it, which is a
+    // redaction the model copied back out of an earlier result rather than a
+    // reference to anything.
     let pieceInput: Record<string, unknown> | undefined;
     const liveCellInputs: Array<{ key: string; cell: Cell<unknown> }> = [];
     const plainInputs: Array<{ key: string; value: unknown }> = [];
@@ -1085,10 +1063,12 @@ export const runPatternTool: HarnessToolDefinition<
             // Not a parseable link after all — keep the plain string.
           }
           if (link !== undefined) {
-            if (link.space !== space) {
+            if (
+              !admitsFabricReference(link.space, space, session.foreignSpaces)
+            ) {
               return errorOutput(
                 "error",
-                `run_pattern input "${key}" reference targets another space; only references into the configured session space are allowed`,
+                `run_pattern input "${key}" reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
               );
             }
             const linkHash = comparableEntityHash(link.id);
@@ -1538,16 +1518,11 @@ export const runPatternTool: HarnessToolDefinition<
     // that read rather than a second one: a result the reactive graph
     // advances between two reads would otherwise let a later clean state
     // answer for an earlier labeled one. The read is host-side and discloses
-    // nothing by itself. What the answer discloses is the VALUES a
-    // `resultSchema` asks for, and those are an egress: they are read by a
-    // model, outside every space the fabric labels. A pattern's own egresses
-    // are sink requests the commit boundary gates, and this one records
-    // none, so it is measured here, and only when values were asked for —
-    // the transaction's consumed join, the result document and every
-    // computed cell the result links to, against the ceiling a model's
-    // context carries. The result reference goes out either way: it names
-    // the result without carrying it, and a name is not a release
-    // (AH-CFC-18). Nothing is committed.
+    // nothing by itself. Status booleans and any `resultSchema` values are
+    // model-facing, so the transaction's consumed join is fitted against
+    // the ceiling a model's context carries. The result reference goes out
+    // either way: it names the result without carrying it, and a name is not
+    // a release (AH-CFC-18). Nothing is committed.
     //
     // Each supplied input is read in its own transaction, used for both the
     // input-key map and refusal evidence. Every input reaches the pattern
@@ -1622,14 +1597,12 @@ export const runPatternTool: HarnessToolDefinition<
         attributionTraces = inputTransactions.flatMap((
           tx,
         ) => [...tx.getCfcState().dereferenceTraces]);
-        return parsedResultSchema === undefined
-          ? undefined
-          : describeSinkReleaseRefusal(
-            releaseTx,
-            inputTransactions,
-            RUN_PATTERN_ANSWER_SINK,
-            RUN_PATTERN_ANSWER_CEILING,
-          );
+        return describeSinkReleaseRefusal(
+          releaseTx,
+          inputTransactions,
+          RUN_PATTERN_ANSWER_SINK,
+          RUN_PATTERN_ANSWER_CEILING,
+        );
       } finally {
         releaseTx.abort("run_pattern release measurement");
         for (const tx of inputTransactions) {
@@ -1670,17 +1643,14 @@ export const runPatternTool: HarnessToolDefinition<
     const measured = withheld ?? releaseObservation;
     /**
      * The same measurement said as a decision, which is what reaches the
-     * run's policy trace. Present exactly where a measurement happened — a
-     * call that asked for no values measured nothing, and a decision about a
-     * boundary nothing crossed would be a record of an event that did not
-     * occur.
+     * run's policy trace, including a host-initiated status fit.
      *
      * The ceiling is stated whichever way the decision went. A released
      * answer and a withheld one differ in what the same ceiling admitted, and
      * an operator reading only the refusals would be reading the ladder's
      * effect without its terms.
      */
-    releaseDecision = parsedResultSchema === undefined ? undefined : {
+    releaseDecision = {
       reasonCode: withheld !== undefined
         ? "cfc_release_withheld"
         : releaseObservation !== undefined
@@ -1810,6 +1780,65 @@ export const runPatternTool: HarnessToolDefinition<
         };
       }
     }
+    // The run's exact captured result seeds the report alongside the
+    // materialized results retained in the instantiation window. A composed
+    // reader exposes its failure, pending state, and emptiness
+    // as outputs, and a pattern composing it need not pass them on — which is
+    // how a run answers `ok` over a result of zeros. The reads are
+    // host-side and nothing they find travels as text, so they are not part
+    // of the release measurement above and are taken on a transaction of
+    // their own, abandoned like every other measurement here. Read after the
+    // exits above rather than before them, so a run that reports a failure
+    // pays for none of it: what these answer is only ever carried by a
+    // success.
+    //
+    // Every instantiation in the window is read, the run's own root
+    // included, so a failure the caller's own query reported is disclosed on
+    // the same terms as a composed one. The recorder's buffer is what bounds
+    // the work: a pattern materialized once per row of a list reports the
+    // same output many times, and `dedupedObservedOutputs` states each once.
+    const ownCellHash = comparableEntityHash(piece.id);
+    const concernsTx = pieces.runtime.edit();
+    const capturedOutputs = observedOutputsIn(rawValue, pattern.resultSchema);
+    const found: ObservedOutput[] = [...capturedOutputs];
+    const scan = (async () => {
+      for (
+        const record of session.instantiations?.since(instantiationStart) ?? []
+      ) {
+        try {
+          const instance = pieces.runtime.getCellFromLink(record.link)
+            .withTx(concernsTx);
+          await instance.pull();
+          // The `required` relaxation is the one the result read above uses,
+          // so a scoped link this session cannot materialize degrades its
+          // member rather than voiding the whole read. It is applied AFTER
+          // the pull, because it decides what to relax by reading what the
+          // cell holds, and before the pull it holds nothing.
+          const materialized = cellWithScopedLinkRequiredsRelaxed(instance);
+          found.push(...observedOutputsIn(
+            asSerializableValue(materialized.get()),
+            record.link.schema,
+            record.cell === ownCellHash ? undefined : record.identity,
+          ));
+        } catch {
+          // One instance that will not read back says nothing about the
+          // others, and this report is a disclosure: what a failed read
+          // costs is the reason to look at that one instance, so it is
+          // dropped rather than taking the report down with it.
+        }
+      }
+    })();
+    // Raced with the signal like every other wait this tool performs: the
+    // scan resolves a graph, and a caller that gave up while it was in flight
+    // is told it was cancelled rather than handed an answer it stopped
+    // waiting for. The transaction is abandoned whichever way the race goes.
+    const scanned = await raceWithAbort(scan, signal);
+    concernsTx.abort("run_pattern output-concern read");
+    if (scanned === "aborted") {
+      stopPiece(piece.getCell());
+      return cancelledOutput();
+    }
+    const observedOutputs = dedupedObservedOutputs(found);
     // A result the caller's own `resultSchema` refused is reported as neither
     // outcome: the pattern ran and landed a result, and the schema it did not
     // match was written by whoever called the tool, so it is evidence about
@@ -1964,9 +1993,9 @@ export const runPatternTool: HarnessToolDefinition<
       }
       return signal?.aborted === true ? "cancelled" : outcome;
     };
-    // Source the model wrote and successfully ran is contributed back to the
-    // index. Recording and being offered to search are separate: the default
-    // records the run, while deliberate corpus seeding may request immediate
+    // Source the model wrote and successfully ran is queued for the index.
+    // Recording and being offered to search are separate: the default
+    // requests a record, while deliberate corpus seeding may request immediate
     // discoverability. A render-gate failure always withholds discovery with
     // its own reason. A run naming a `patternId` records nothing: it ran what
     // the index already holds.
@@ -2020,7 +2049,8 @@ export const runPatternTool: HarnessToolDefinition<
             reason: "recorded-automatically" as const,
           };
         publication = {
-          status: publicationVerdict.status,
+          patternId: entryIdentity,
+          status: "queued",
           reason: publicationVerdict.reason,
           message: PATTERN_PUBLICATION_MESSAGES[publicationVerdict.reason],
           syntheticInputsComplete: publicationVerdict.syntheticInputsComplete,
@@ -2051,9 +2081,8 @@ export const runPatternTool: HarnessToolDefinition<
             argumentSchema: pattern.argumentSchema,
             resultSchema: pattern.resultSchema,
             dependencies: patternIndexDependencies(program.files),
-            // Recording and surfacing are separate. Everything that ran is
-            // recorded; only an explicit seed configuration asks search to
-            // offer a passing render immediately.
+            // Recording and surfacing are separate. Only an explicit seed
+            // configuration asks search to offer a passing render immediately.
             ...(publicationVerdict.status === "recorded"
               ? {
                 nonDiscoverable: {
@@ -2067,7 +2096,16 @@ export const runPatternTool: HarnessToolDefinition<
         }
       }
     }
-    const retainedCauses = [withheldRefusal?.reason, probeThrown].filter(
+    const refusedValues = parsedResultSchema !== undefined &&
+      withheld !== undefined;
+    const outputConcerns = observedOutputs.flatMap(({ concern }) =>
+      refusedValues && concern.concern === "pending" ? [] : [concern]
+    );
+    const retainedCauses = [
+      withheldRefusal?.reason,
+      probeThrown,
+      observedOutputCause(observedOutputs),
+    ].filter(
       (text): text is string => text !== undefined,
     );
     return {
@@ -2076,7 +2114,17 @@ export const runPatternTool: HarnessToolDefinition<
       resultRef,
       resultRefSchema: pattern.resultSchema,
       pieceId: piece.id,
-      ...(withheld !== undefined
+      ...(withheld === undefined
+        ? {
+          pending: capturedOutputs.some(({ concern }) =>
+            concern.concern === "pending"
+          ),
+          hasError: capturedOutputs.some(({ concern }) =>
+            concern.concern === "error-branch"
+          ),
+        }
+        : {}),
+      ...(refusedValues
         ? {
           valueError: policyRefusalMessage(withheld, "release"),
           policyRefusal: withheld,
@@ -2090,6 +2138,7 @@ export const runPatternTool: HarnessToolDefinition<
       ...(releaseObservation !== undefined ? { releaseObservation } : {}),
       ...(releaseDecision !== undefined ? { releaseDecision } : {}),
       ...(publication !== undefined ? { patternPublication: publication } : {}),
+      ...(outputConcerns.length > 0 ? { outputConcerns } : {}),
       ...(retainedCauses.length > 0
         ? { rawCauseMessage: retainedCauses.join("\n\n") }
         : {}),

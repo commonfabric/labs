@@ -9,7 +9,7 @@ import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "./interface.ts";
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { ProblematicValue } from "@/codec-common";
 
 /**
  * Codec for `bigint`. Encodes to the `BigInt@1` tag with an unpadded base64
@@ -50,14 +50,16 @@ export class BigIntCodec extends BaseTerminalCodec<JsonCodecValue, string> {
     typeTag: string,
     state: string,
     _env: LiveEnvironment,
+    mutable = false,
   ): FabricValue {
     try {
       return bigintFromUnpaddedBase64url(state);
     } catch {
-      return new ProblematicValue(
+      return ProblematicValue.make(
         typeTag,
         state,
         `bigint: invalid base64: ${state}`,
+        mutable,
       );
     }
   }

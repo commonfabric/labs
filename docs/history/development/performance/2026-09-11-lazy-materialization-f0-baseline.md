@@ -8,7 +8,7 @@ reason: "F0 baseline of the lazy-materialization fast-follow: entry-point invent
 # Lazy materialization fast-follow: F0 baseline
 
 This is the F0 record for the [lazy materialization
-fast-follow](../../../plans/lazy-materialization-fast-follow.md). It pins the
+fast-follow](../../plans/lazy-materialization-fast-follow.md). It pins the
 runtime revision the later stages compare against, lists every place the
 `lazyMaterialization` flag and the transaction mark are consumed, names the
 reads on the handler path that stay eager, and measures what one dispatched

@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -767,9 +768,9 @@ serialTest(
       tx = runtime3.edit();
       personCell3.withTx(tx).setRawUntyped({
         name: "Alice",
-        address: addressLink,
+        address: runtime3.acquireExternalInput(space, addressLink),
       });
-      await tx.commit();
+      assertEquals((await tx.commit()).error, undefined);
       await runtime3.storageManager.synced();
 
       await gotAddress.promise;
@@ -823,7 +824,7 @@ serialTest(
         tx,
       );
       addressCell.set({ city: "New York" });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -837,9 +838,9 @@ serialTest(
       );
       personCell.setRawUntyped({
         name: "Bob",
-        address: addressLink,
+        address: runtime1.acquireExternalInput(space, addressLink),
       });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -872,7 +873,7 @@ serialTest(
       await addressCell3.sync();
       tx = runtime3.edit();
       addressCell3.withTx(tx).set({ city: "Los Angeles" });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await runtime3.storageManager.synced();
 
       await gotNewCity.promise;
@@ -936,7 +937,7 @@ serialTest(
         tx,
       );
       cityCell.set({ name: "Seattle", population: 750000 });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await cityCell.sync();
       await runtime1.storageManager.synced();
       const cityLink = structuredClone(cityCell.getAsLink());
@@ -950,9 +951,9 @@ serialTest(
       );
       addressCell.setRawUntyped({
         street: "123 Main St",
-        city: cityLink,
+        city: runtime1.acquireExternalInput(space, cityLink),
       });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await addressCell.sync();
       await runtime1.storageManager.synced();
       const addressLink = structuredClone(addressCell.getAsLink());
@@ -966,9 +967,9 @@ serialTest(
       );
       personCell.setRawUntyped({
         name: "Charlie",
-        address: addressLink,
+        address: runtime1.acquireExternalInput(space, addressLink),
       });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await runtime1.storageManager.synced();
       await runtime1.dispose();
 
@@ -1000,7 +1001,7 @@ serialTest(
       await cityCell3.sync();
       tx = runtime3.edit();
       cityCell3.withTx(tx).set({ name: "Seattle", population: 800000 });
-      await tx.commit();
+      expect((await tx.commit()).error).toBeUndefined();
       await runtime3.storageManager.synced();
 
       await gotPopulation.promise;

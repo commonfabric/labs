@@ -45,7 +45,8 @@ import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { awaitAdmitted } from "./support/serving-waits.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const spaceSigner = await Identity.fromPassphrase("trust attribution space");
 const space = spaceSigner.did() as MemorySpace;
@@ -307,26 +308,16 @@ describe("executor-trust-attribution", () => {
     result.key("bump").send({ kind: "warmup" });
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the warm-up append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0]?.consequenced === true;
-      },
-      "the warm-up event to consequence",
-    );
-    await waitUntil(
-      () =>
-        host!.spaceServer(space)?.active === true &&
-        servingRuntime !== undefined,
-      "the space to activate",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.[0]?.consequenced === true;
+    });
+    expect(host!.spaceServer(space)?.active).toBe(true);
+    expect(servingRuntime).toBeDefined();
     const entry = (Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue).entries![0];
     const streamLink = {
@@ -373,7 +364,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "flag5-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -390,11 +381,11 @@ describe("executor-trust-attribution", () => {
         );
         await clientRuntime!.idle();
         await clientRuntime!.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "authored")?.consequenced ===
               true,
-          "the authored event to consequence",
         );
         const entry = entryByKind(engine, sidecarId, "authored")!;
         expect(entry.error).toBeUndefined();
@@ -403,9 +394,9 @@ describe("executor-trust-attribution", () => {
         // The doc id is name-derived, so the client mints the same link.
         const docId = clientRuntime!.getCell(space, "flag5-doc", undefined)
           .getAsNormalizedFullLink().id;
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () => Engine.read(engine, { id: docId })?.value !== undefined,
-          "the authored doc to land durably",
         );
         const record = Engine.read(engine, { id: docId });
 
@@ -439,7 +430,7 @@ describe("executor-trust-attribution", () => {
       const serving = servingRuntime!;
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -458,11 +449,11 @@ describe("executor-trust-attribution", () => {
         await clientRuntime!.storageManager.synced();
         // OW54's surfacing: the CFC pre-storage refusal seals an ERROR
         // consequence; the entry advances carrying the refusal.
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "literal")?.consequenced ===
               true,
-          "the literal-claim event to consequence",
         );
         const entry = entryByKind(engine, sidecarId, "literal")!;
         expect(entry.error).toContain("CFC enforcement rejected commit");
@@ -495,7 +486,7 @@ describe("executor-trust-attribution", () => {
           if (kind === "s18-setup") {
             // A LEGIT mint first, so the doc holds a well-formed
             // envelope for the forgery to target.
-            tx.setCfcImplementationIdentity({
+            setCfcImplementationIdentity(tx, {
               kind: "builtin",
               builtinId: TRUSTED_WRITER,
             });
@@ -537,10 +528,10 @@ describe("executor-trust-attribution", () => {
         );
         await clientRuntime!.idle();
         await clientRuntime!.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "s18-setup")?.consequenced === true,
-          "the setup mint to consequence",
         );
         expect(
           principalSubjects(
@@ -552,14 +543,16 @@ describe("executor-trust-attribution", () => {
         result.key("bump").send(trustedPayload({ kind: "s18-forge" }));
         await clientRuntime!.idle();
         await clientRuntime!.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "s18-forge")?.consequenced === true,
-          "the forged-label event to consequence",
         );
         const entry = entryByKind(engine, sidecarId, "s18-forge")!;
         expect(entry.error).toContain("CFC enforcement rejected commit");
-        expect(entry.error).toContain("unprivileged write to protected cfc");
+        expect(entry.error).toContain(
+          "unprivileged write to protected runtime surface",
+        );
         // The stored envelope is untouched: the honest subjects survive.
         expect(
           principalSubjects(
@@ -585,7 +578,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, event) => {
           const docName = (event as { doc?: string })?.doc ?? "multi-doc";
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -624,12 +617,12 @@ describe("executor-trust-attribution", () => {
         await bob.runtime.idle();
         await clientRuntime!.storageManager.synced();
         await bob.runtime.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "alice-msg")?.consequenced ===
               true &&
             entryByKind(engine, sidecarId, "bob-msg")?.consequenced === true,
-          "both users' events to consequence",
         );
         const aliceEntry = entryByKind(engine, sidecarId, "alice-msg")!;
         const bobEntry = entryByKind(engine, sidecarId, "bob-msg")!;
@@ -650,11 +643,11 @@ describe("executor-trust-attribution", () => {
           "multi-bob-doc",
           undefined,
         ).getAsNormalizedFullLink().id;
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             Engine.read(engine, { id: aliceDocId })?.value !== undefined &&
             Engine.read(engine, { id: bobDocId })?.value !== undefined,
-          "both authored docs to land",
         );
         const aliceDoc = Engine.read(engine, { id: aliceDocId });
         const bobDoc = Engine.read(engine, { id: bobDocId });
@@ -690,7 +683,7 @@ describe("executor-trust-attribution", () => {
       const cancelProbe = serving.scheduler.addEventHandler(
         (tx, _event) => {
           dispatches += 1;
-          tx.setCfcImplementationIdentity({
+          setCfcImplementationIdentity(tx, {
             kind: "builtin",
             builtinId: TRUSTED_WRITER,
           });
@@ -725,17 +718,14 @@ describe("executor-trust-attribution", () => {
         result.key("bump").send(trustedPayload({ kind: "replayed" }));
         await clientRuntime!.idle();
         await clientRuntime!.storageManager.synced();
-        await waitUntil(
-          () =>
-            dispatches >= 2 &&
-            entryByKind(engine, sidecarId, "replayed")?.consequenced === true,
-          "the re-drained event to consequence",
-        );
+        await awaitAdmitted(server, () =>
+          dispatches >= 2 &&
+          entryByKind(engine, sidecarId, "replayed")?.consequenced === true);
         const docId = clientRuntime!.getCell(space, "replay-doc", undefined)
           .getAsNormalizedFullLink().id;
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () => Engine.read(engine, { id: docId })?.value !== undefined,
-          "the re-drained mint to land",
         );
         const minted = Engine.read(engine, { id: docId });
         expect(principalSubjects(minted, "authored-by")).toEqual([
@@ -770,10 +760,6 @@ describe("executor-trust-attribution", () => {
             .withTx(poke).set(1);
           expect((await poke.commit()).error).toBeUndefined();
         }
-        await waitUntil(
-          () => host!.spaceServer(space)?.active === true,
-          "the space to re-activate",
-        );
         // Ordered barrier for the negative: append a FRESH entry on the
         // same stream and wait for ITS consequence — the drain processes
         // entries in order, so a wrong re-run of the replayed entry
@@ -783,12 +769,13 @@ describe("executor-trust-attribution", () => {
         result.key("bump").send(trustedPayload({ kind: "replay-barrier" }));
         await clientRuntime!.idle();
         await clientRuntime!.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             entryByKind(engine, sidecarId, "replay-barrier")?.consequenced ===
               true,
-          "the barrier entry to consequence on the re-activated loop",
         );
+        expect(host!.spaceServer(space)?.active).toBe(true);
         expect(consequenceCommitsFor()).toBe(1);
         const labelsAfter = JSON.stringify(
           (Engine.read(engine, { id: docId }) as { cfc?: unknown })?.cfc,

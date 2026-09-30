@@ -8,6 +8,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   BRIDGE_PROTOCOL,
@@ -111,8 +112,7 @@ function namedMethodNames(
   if (!container) return [];
   if ("value" in container && container.value === undefined) return [];
   if (
-    !("value" in container) || container.value === null ||
-    typeof container.value !== "object" || Array.isArray(container.value)
+    !("value" in container) || !isObjectNotArray(container.value)
   ) {
     throw new TypeError(
       `Bridge resource \`${name}\` methods must be an object.`,
@@ -163,7 +163,7 @@ function resourceCell(name: string, resource: BridgeResource): BridgeCell {
 }
 
 function validateCell(name: string, value: unknown): BridgeCell {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     throw new TypeError(`Cell \`${name}\` must be an object.`);
   }
   const cell = value as BridgeCell;
@@ -211,8 +211,7 @@ function namedMethod(
   if (method === undefined || CORE_OPERATIONS.has(method)) return undefined;
   const container = Object.getOwnPropertyDescriptor(resource, "methods");
   if (
-    !container || !("value" in container) || container.value === null ||
-    typeof container.value !== "object" || Array.isArray(container.value)
+    !container || !("value" in container) || !isObjectNotArray(container.value)
   ) {
     return undefined;
   }
@@ -263,10 +262,7 @@ function discoverResource(
       `Bridge resource \`${name}\` must be an own data property.`,
     );
   }
-  if (
-    property.value === null || typeof property.value !== "object" ||
-    Array.isArray(property.value)
-  ) {
+  if (!isObjectNotArray(property.value)) {
     throw new TypeError(`Bridge resource \`${name}\` must be an object.`);
   }
   const resource = property.value as BridgeResource;

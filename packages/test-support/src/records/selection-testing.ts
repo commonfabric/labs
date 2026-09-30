@@ -33,7 +33,7 @@ export function sampleEntry(
 
 /** Calibration with everything free, so a case's own costs are the whole. */
 export function freeCalibration(): Calibration {
-  return { setupCost: {}, suites: {}, unitOverhead: {}, prologue: 0 };
+  return { setupCost: {}, suites: {}, prologue: 0 };
 }
 
 /** A small, valid manifest. */

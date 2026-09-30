@@ -125,7 +125,7 @@ describe("scheduler event drop predicate", () => {
         properties: { events: { type: "object" }, seen: { type: "number" } },
       },
       derivedInternalCells: [
-        { partialCause: "events", schema: { default: { $stream: true } } },
+        { partialCause: "events", schema: { asCell: ["stream"] } },
         { partialCause: "seen", schema: { default: 0 } },
         { partialCause: "child" },
       ],
@@ -196,7 +196,6 @@ describe("scheduler event drop predicate", () => {
     setResultCell(eventsCell, resultCell);
     setResultCell(seenCell, resultCell);
     argumentCell.set({ value: 1 });
-    eventsCell.setRaw({ $stream: true });
     await tx.commit();
 
     restoreTransact = rejectNextTransact(runtime, {

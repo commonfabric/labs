@@ -51,7 +51,7 @@ Every real-time-correlated signal a pattern can reach, and how it is closed.
 | 4 | `#now` cell-flip arrival/ordering | value coarsened + tick grid-aligned (≥1 s); deliberately left unshaped (low value; ≥1 s + grid-aligned + W1) | — |
 | 5 | Server-pushed cell changes (cross-tab/cross-machine), the `$value` write bypass, and own commit-completion latency | `$value` keystroke writes to a pattern reader are shaped through the cell-notification shaper (plan B, DONE); server pushes are NOT shaped — the adoption-era reason is deleted (server-execution v2 stage C; archived at [incremental observation adoption](../../history/specs/scheduler-v2/incremental-observation-adoption.md)), the shaping re-check is owed (runtime-mapping.md N10), and they are network-bounded (see below) | cell-notification shaper on the storage-notification hook |
 | 6 | Builtin progress cells — `fetchData` `pending`, large-language-model `partial` (~15 Hz) | LLM `partial` coarsened to ≤1 Hz always-on (DONE); `fetchData` `pending` left to W1 (terminal, not a cadence) | coarsen at source |
-| 7 | Raw `fetch()` exposed directly to patterns | CLOSED: gated fetch (handler-only, settlement snapped to an issue-relative 1 s grid boundary, fully buffered body) | createGatedFetch in `sandbox/compartment-globals.ts` (DONE) |
+| 7 | Raw `fetch()` exposed directly to patterns | CLOSED: a compartment endows no `fetch`, and the name is withheld from the authored surface, so calling one fails to compile | `SANDBOX_WITHHELD_GLOBALS` in `packages/utils/src/sandbox-contract.ts`, pinned by `runner/test/sandbox-global-contract.test.ts` (DONE) |
 | 8 | `Date.now()` / `Math.random()` re-enabled by a Secure ECMAScript config drift | neutered by an implicit default | W0 (pinned by test) |
 
 Randomness note: `Math.random()` is not itself a timing channel — random
@@ -71,7 +71,8 @@ sustained rate but leave ordinary interaction realtime — a short burst of
 deliberate clicks is not an oscillator, and holding it adds latency for no
 security gain (under W1 the sandbox cannot read the sub-second arrival phase a
 per-event delay would hide; a red-team confirmed this — the only reader was the
-raw `fetch()` clock, channel 7, now closed by the gated fetch). So two levers:
+raw `fetch()` clock, channel 7, now closed by withholding `fetch`). So two
+levers:
 
 - No clock field in events closes the timestamp-value channel.
 - A token-bucket rate cap floors the SUSTAINED sample rate. Each pattern has a
@@ -124,113 +125,41 @@ Landing order, smallest and safest first. Each is its own commit/PR.
   not exist in this Secure ECMAScript version; the test is the correct
   encoding.)
 
-- **W2 — Close the raw `fetch()` clock (channel 7). DONE (gated fetch).**
-  The pass-through shim and its `TODO(migrate-to-fetchData)` markers are gone.
-  Instead of migrating the ~27 imperative call sites (OAuth API clients doing
-  sequenced requests from handlers) to the reactive `fetchData` builtin — which
-  is a pattern-body node factory, not callable from a handler, and wrong for
-  mutations — the fetch injected into pattern compartments is now gated at the
-  boundary (`createGatedFetch` in `sandbox/compartment-globals.ts`):
-  - **Handler-only.** Starting a request outside a handler frame throws a
-    `TimeCapabilityError`, mirroring the W1 clock/entropy gate. Request
-    *initiation* instants therefore come only from handler runs, whose delivery
-    is already shaped (W3/plan B).
-  - **Superseded by the event-frozen handler clock (W1).** Since the handler
-    clock is now the triggering event's frozen instant rather than the live
-    clock, a handler reads the *same* value before issuing a fetch and in the
-    continuation after it settles — there is no advancing clock edge to correlate
-    a round trip against, so the correlation this grid settlement was built to
-    defeat no longer exists. The settlement arithmetic below is retained as
-    redundant defense-in-depth and is expected to be removed together with
-    imperative handler `fetch` (Outstanding work item 8); it is documented here
-    as-is until then.
-  - **Issue-relative grid settlement.** The whole response body is buffered,
-    then the promise settles (fulfills or rejects) at a wall-clock grid boundary
-    chosen from the request's *issue* instant, not its *arrival* instant:
-    `issueBoundary + grid·(1 + ceil(roundTrip / grid))`, where `issueBoundary`
-    is the issue time floored to the grid and `roundTrip` is the measured
-    arrival-minus-issue latency. The pattern receives a `Response` rebuilt from
-    the buffer, so every later read (`json()`, `text()`, `clone()`, the body
-    stream) completes in microtasks — no later settlement carries real time. The
-    settlement instant is a function only of the coarse issue second and the
-    round trip rounded up to the grid, and is independent of the sub-second issue
-    phase, so it exposes no capability beyond the coarse handler clock and the
-    coarse round-trip band. **This corrects an earlier design that snapped to the
-    next boundary after *arrival*: that leaked about one bit of sub-second issue
-    phase per fetch** (see the next bullet), because which boundary the arrival
-    lands on depends on whether `issuePhase + roundTrip` crossed a grid line — a
-    boundary the handler continuation can read off the coarse clock. The
-    issue-relative rule adds up to two grid steps of settlement latency in
-    exchange for closing that phase channel. Verified by
-    `runner/test/fetch-capability.test.ts` (phase-independence across a full
-    second of issue phases).
-  - **Why every fetch, not a burst (unlike the event shaper).** The event
-    shaper (W3) lets a short burst through at realtime and only floors the
-    *sustained* cadence, because the click threat is a sustained reference
-    oscillator and a bounded burst is not one — and because a single click
-    carries no sub-second phase a pattern can read (it does not control the
-    click's arrival and its handler has only the coarse clock). Fetch is the
-    opposite shape and must be coarsened on *every* call. The pattern controls
-    when it issues a fetch, and the completion resolves in a handler
-    continuation where the coarse clock is readable, so one realtime completion
-    is a fine wall-clock edge it can correlate against the clock grid to bisect
-    the current second: read the coarse clock (second S), issue a fetch of
-    known round-trip R, and on completion read the clock again — landing on S
-    versus S+1 reveals whether the phase was below or above 1000 − R
-    milliseconds, one bit of sub-second phase from one fetch. Varying R
-    binary-searches the phase to arbitrary precision, so a single realtime
-    fetch already leaks about a bit and a burst of ten would leak about ten
-    (roughly millisecond resolution) — a fine clock. "Repeated fetches only" is
-    therefore backwards: each fetch is another measurement, so more repetition
-    is more leak. Snapping the settlement to the grid removes the mid-second edge
-    the correlation needs — **but only if the boundary is chosen from the issue
-    instant, not the arrival instant.** Snapping to the next boundary after
-    arrival does *not* close the channel: the arrival is `issue + roundTrip`, so
-    which boundary it lands on still depends on the sub-second issue phase, and
-    the elapsed whole-seconds the continuation reads (`ceil((phase+roundTrip) /
-    grid)`) is exactly the leaked bit. Choosing the boundary from the coarse
-    issue second plus the grid-rounded round trip makes the settlement
-    phase-independent, which is what actually closes it. (This is also why the
-    reactive `fetchData` builtin is left uncoarsened — its completion drives a
-    cell flip observed in reactive/lift context, where W1 denies any clock, so
-    there is no handler-clock edge to correlate and nothing to snap; the
-    settlement cost falls only on imperative handler `fetch`, exactly the context
-    where the correlation exists.)
-  - **What it deliberately does not hide:** response *content* (a cooperating
-    server can echo its own fine timestamps — but those measure request
-    arrival at the server, which is a shaped handler-run instant plus network
-    noise, not a local fine clock) and settlement *order* of concurrent
-    requests (ordering, not time). Sandbox code still has no timers and no
-    other real-time async primitive.
-  - Tested in `runner/test/fetch-capability.test.ts` (gate contexts, grid
-    arithmetic, settle ordering, response fidelity, compartment injection).
-  - **Consequence — an API client cannot sleep in-sandbox.** The compartment
-    endows no `setTimeout` (part of the structural barrier above), and the name
-    is withheld from the authored surface, so a pattern that reaches for it
-    fails to compile rather than throwing once it runs. A retry or backoff
-    `sleep` therefore has nothing to wait on. The `airtable-client`,
-    `gmail-send-client`, and `google-docs-client` helpers do not attempt one: a
-    401 refreshes the token and retries, and a 429 or any other failure is
-    thrown to the caller for the reactive layer to re-drive. No spacing is lost
-    by this, because the gated fetch already settles every attempt on the
-    one-second grid. The one helper that still waits is
-    `calendar-write-client`, whose `waitIfTimersAreAvailable` reads `setTimeout`
-    off `globalThis` as a member access, which yields `undefined` in-sandbox
-    instead of raising a `ReferenceError`, and resolves immediately when it is
-    absent. That helper therefore waits for real in a host context and degrades
-    to an immediate retry inside a compartment. Pinned by
-    `runner/test/sandbox-timers.test.ts` (the compartment omits timers; a raw
-    `setTimeout` call throws in it; the guard resolves immediately).
-  - **Rejected alternative — a coarse sandbox `setTimeout`.** Endowing the
-    compartment with a grid-quantized `setTimeout` (delays rounded up to the
-    next one-second boundary, matching the gated-fetch settlement) would let
-    real backoff run in-sandbox. It is deliberately NOT done: it re-adds a timer
-    to the capability surface the structural barrier removes and that
-    `security-timing.test.ts` pins, so it needs an explicit security
-    sign-off, and its only benefit — honoring a long `Retry-After` — is marginal
-    once every fetch settles on the grid anyway. If a future need justifies it,
-    `calendar-write-client`'s guard already degrades cleanly and would
-    transparently begin honoring the endowed timer.
+- **W2 — Close the raw `fetch()` clock (channel 7). DONE (no ambient fetch).**
+  A compartment endows no `fetch`, and `fetch`, `Headers`, `Request`, and
+  `Response` are on `SANDBOX_WITHHELD_GLOBALS`, so the type libraries a pattern
+  compiles against do not declare them: authored code that reaches for one
+  fails to compile rather than throwing once it runs.
+  - **The channel it closes.** A pattern that can issue a request of its own
+    choosing and observe when the promise settles holds a fine wall-clock edge.
+    Reading the coarse clock, issuing a fetch of known round trip, and reading
+    the clock again in the continuation reveals whether the sub-second phase was
+    above or below a computed threshold; varying the round trip binary-searches
+    the phase to arbitrary precision. Each fetch is another measurement, so
+    repetition compounds the leak rather than diluting it. With no ambient
+    `fetch` there is no such promise to time.
+  - **Where network access lives instead.** The runtime's fetch builtins —
+    `fetchJson`, `fetchText`, `fetchBinary`, `fetchJsonUnchecked`,
+    `fetchProgram` — are reactive nodes the runtime issues on the pattern's
+    behalf. Their completion drives a cell flip observed in reactive/lift
+    context, where W1 denies any clock, so there is no handler-clock edge to
+    correlate and nothing to coarsen. They also carry what an ambient `fetch`
+    could not: the runtime records each request as a CFC sink request, holds it
+    as a CFC sink request, which a deployment's ceiling then gates
+    (`packages/runner/src/cfc/sink-inventory.ts`), and signs it when it targets
+    a first-party route.
+  - **Consequence — an imperative API client has no surface to run on.** A
+    handler cannot await a reactive node, so a request sequence is declared as a
+    chain of nodes whose inputs a handler writes rather than as awaited calls.
+    Handler-initiated reads and per-item fan-out fit that shape. Two things do
+    not: a non-idempotent mutation, because a node re-issues its request
+    whenever its inputs change and a token refresh changes them, so a send would
+    send twice; and a chain whose length is not known when the pattern body runs,
+    such as following a pagination cursor, because the body declares the nodes.
+  - Tested in `runner/test/sandbox-global-contract.test.ts` (every withheld
+    global is absent from a real compartment, and the type libraries declare
+    none of them) and `runner/test/security.test.ts` (module and callback
+    compartments both withhold it).
 
 - **W1 — Keystone: frame-gate the clock, entropy, and lift event-emit.**
   - **Clock/entropy gate: DONE (always-on, unconditional).** The gated ambient
@@ -287,15 +216,13 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       filled from `#now` once it resolves (a side-effecting computed); today-string
       values are `#now`-derived computeds, guarded for the load window. (This also
       fixed the prior `daily-journal` crash from seeding a Writable with a cell.)
-    - **Cross-file shared-helper clusters — DONE.** `bill-extractor`
-      `processBills` + `pge/bofa/chase-bill-tracker.tsx`; `google-auth`
-      `createPreviewUI` + `google-auth-personal/work.tsx`; `budget-tracker`
-      `getTodayDate` (`schemas.tsx`) + `expense-form.tsx` — each helper takes
+    - **Cross-file shared-helper clusters — DONE.** `budget-tracker`
+      `getTodayDate` (`schemas.tsx`) + `expense-form.tsx` — the helper takes
       `nowMs`; lift callers pass `#now`, handler callers pass `Date.now()`.
     - **Exempt (no migration needed).** `notes/schemas` `generateId` is dead (no
       caller). The other `generateId`
-      helpers (`imported-calendar`, `self-improving-classifier`, parking-coordinator
-      `genId`, weekly-calendar/`event.tsx`) are only called from handler/action
+      helpers (`self-improving-classifier`, parking-coordinator `genId`,
+      weekly-calendar/`event.tsx`) are only called from handler/action
       contexts.
     - **Bash sandbox id from entropy — DONE (option-3 landed upstream).**
       `suggestion.tsx` and `omnibox-fab.tsx` used to seed the `bash` tool's
@@ -311,9 +238,9 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       guards against (the server names sandboxes by this id at
       `/v1/sandboxes/${sandboxId}`) is closed by the content-addressed derivation.
     - **Loading-state polish — DONE.** A few migrated files passed `?? 0` to a
-      formatter, flashing a bogus value (e.g. airtable-auth "476000h", journal/
-      calendar relative labels) before `#now` resolved; each now returns a
-      neutral/loading value until `nowCell.result` is non-null.
+      formatter, flashing a bogus value (e.g. the journal and calendar relative
+      labels) before `#now` resolved; each now returns a neutral/loading value
+      until `nowCell.result` is non-null.
     - **Gate is unconditional — DONE.** The `enforceTimeCapability` flag and the
       per-runtime config lines that used to set it (`shell` `lib/env.ts`
       `EXPERIMENTAL`, `background-piece-service` `main.ts`, and `toolshed`
@@ -355,26 +282,22 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       streams (so handler-context reads run under real dispatch too), and asserts
       no `TimeCapabilityError` escapes. Only a `TimeCapabilityError` fails a
       pattern; a pattern that cannot instantiate offline for an unrelated reason is
-      reported as skipped, not a finding. The file is auto-discovered by the CI
-      shard selector (`tasks/select-pattern-integration-files.ts` reads the
-      `integration/` directory), so it runs in the normal pattern-integration CI.
-      Result of the run: **41 clean** (this now includes the games
-      battleship/card-piles/scrabble AND the Google/Gmail patterns, whose lifts
-      materialize offline without the network); **0 unexpected violations**; with
-      option-3 landed, the three former known-pending patterns (`suggestion`,
-      `omnibox-fab`, `daily-journal`) are now clean too; 4 skipped for non-gate
-      reasons (a `$checked` binding quirk
-      in airtable-auth, the multi-module `ModuleVerificationError` on
-      imported-calendar/weekly-calendar, and a sub-pattern helper). The
-      deliberately non-idempotent `test/non-idempotent/*` fixtures are excluded —
-      they read the clock/entropy in a lift on purpose and correctly throw. The
-      curated `time-capability.test.ts` also pins the three games as a fast check.
-      - **Narrow residual.** The 4 skipped patterns need a verified-module /
-        integration environment to instantiate fully, and the network patterns'
-        deeper handler paths are only exercised as far as the offline harness
-        reaches. Both are best closed by a CI run with the Google/Airtable/Gmail
-        integrations available. But the lift/pattern-body surface — the one the
-        gate throws on — is now behaviorally clean across the shipped set.
+      reported as skipped, not a finding. The file is auto-discovered by the
+      test topology (the `pattern-integration` suite reads the `integration/`
+      directory), so CI runs it in the `pattern-integration` suite. Result of
+      the run: **0 unexpected violations**, with the games
+      battleship/card-piles/scrabble among the clean set and `suggestion`,
+      `omnibox-fab` and `daily-journal` clean since option-3 landed. A pattern is
+      skipped when it needs a verified-module or integration environment to
+      instantiate, such as the multi-module `ModuleVerificationError` on
+      weekly-calendar or a sub-pattern helper. The deliberately non-idempotent
+      `test/non-idempotent/*` fixtures are excluded — they read the clock/entropy
+      in a lift on purpose and correctly throw. The curated
+      `time-capability.test.ts` also pins the three games as a fast check.
+      - **Narrow residual.** A skipped pattern needs a verified-module or
+        integration environment to instantiate fully, which a CI run with those
+        integrations available would close. The lift/pattern-body surface — the
+        one the gate throws on — is behaviorally clean across the shipped set.
 
 - **W3 — Delivery shaping for input events. DONE (always-on) for the
   input-cadence channel.** Renderer-originated (user-input) stream events are
@@ -496,21 +419,23 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     `security-timing.test.ts` unchanged, and the widened
     full-suite (raw `Date.now`/`Math.random`/`new Date()` now in scope) still
     green with zero new violations.
-  - **No escape to an ungated clock.** The gated `Date` has its own prototype
-    whose `constructor` is the gated `Date`, so the classic escape
-    `(new Date()).constructor.now()` routes back through the gate rather than
-    relying only on SES having tamed the shared `Date.prototype.constructor`; the
-    deeper `Date.prototype.constructor` still lands on the SES-tamed shared Date
-    (which throws), and `createGatedDate()` asserts lockdown has run before it
-    builds, so it fails loud rather than injecting a leaky clock if ever called
-    too early. `instanceof Date` and the real methods still work. Pinned by
+  - **No escape to an ungated clock.** The gated `Date` shares the intrinsic
+    `Date.prototype`, so an instance it makes is an ordinary `Date` to the host
+    and to the data model. The classic escapes
+    `(new Date()).constructor.now()` and `Date.prototype.constructor.now()` both
+    land on the SES-tamed shared Date, which throws, and `createGatedDate()`
+    asserts lockdown has run before it builds, so it fails loud rather than
+    injecting a leaky clock if ever called too early. `instanceof Date` and the
+    real methods still work. Pinned by
     `packages/runner/test/w6-intrinsic-escape.test.ts`, which drives every
     constructor/prototype escape and asserts none yields a number.
   - **Why it is better.** The native JS API becomes the safe API — authors write
     `new Date()` and get correct, safe behavior with no import and no lesson
     about `safeDateNow`. It kills the "raw `new Date()` throws under SES" bug
-    class (the calendar/Gmail stragglers start working, coarsened, instead of
-    throwing `Invalid time value`). Because the gate lives at the intrinsic it is
+    class (a handler formatting an ambient `new Date()` works, coarsened,
+    instead of throwing `Invalid time value`; a lift or pattern body still
+    throws, which is the gate doing its job). Because the gate lives at the
+    intrinsic it is
     unevadable (a transformer rewrite could be dodged with `const f = Date.now`),
     and because handlers already get a coarse clock it grants
     patterns no new capability — it is security-neutral, just a better delivery.
@@ -727,25 +652,24 @@ real users, has now landed. The items are ordered by what unblocks what.
    See the W1 "handler clock is the event's time, frozen" bullet for the
    mechanism and the tests.
 
-8. **Retire imperative handler `fetch()`.** With the handler clock frozen (item
-   7), the gated fetch's issue-relative grid settlement (channel 7 / W2) no
-   longer defends anything: a handler reads the same instant before issuing a
-   fetch and in the continuation after it settles, so there is no advancing clock
-   edge to correlate a round trip against, and the settlement arithmetic is
-   redundant. The intended end state is to remove imperative `fetch()` from the
-   handler surface entirely — it throws in a handler as it already does in a
-   lift/pattern-body — and route reactive data through the `fetchData` builtin,
-   which is observed in reactive context where no clock exists. The roughly two
-   dozen imperative call sites are the OAuth API clients (Google/Gmail/Airtable),
-   which do sequenced requests and mutations from handlers; retiring the surface
-   requires migrating or dropping those, so it is sequenced after this branch.
-   The gated-fetch settlement stays in place as redundant defense-in-depth until
-   then.
+8. **Retire imperative handler `fetch()`. DONE.** A compartment endows no
+   `fetch`, and the name is withheld from the authored surface, so the
+   imperative surface no longer exists in any context — handler, lift, or
+   pattern body alike. Reactive data goes through the fetch builtins, which are
+   observed in reactive context where no clock exists, and whose requests the
+   runtime records as CFC sink requests. The OAuth API clients that held the
+   roughly two dozen imperative call sites — Google, Gmail, Google Docs, and
+   Airtable — were removed along with the surface rather than rewritten. Their
+   reads and fan-out would rewrite as node chains; their mutations and their
+   cursor-following would not, for the reasons W2 gives, and rewriting several
+   thousand lines of client and the forty patterns above it is its own piece of
+   work. `docs/plans/handler-callable-egress.md` records the capability that
+   would carry them, and what a design for it owes.
 
 ## Relationship to the CFC specification
 
 Contextual Flow Control (CFC) is the information-flow-control model specified
-in the `cfc/` directory of the `commontoolsinc/specs` repository (checked out
+in the `cfc/` directory of the `commonfabric/specs` repository (checked out
 as a sibling of this repository, `specs/cfc`). Its threat model places this
 work outside CFC's own scope: `09-threat-model.md` §9.3.2 lists cache timing
 and other hardware/physical side channels as out of scope, and states that

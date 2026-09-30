@@ -1,10 +1,10 @@
 /**
- * The remedy channel a CFC refusal carries (CT-2077): not only WHAT the gate
- * refused, but WHICH of the transaction's reads carried the offending
- * confidentiality in. A refusal naming only its atoms leaves the refused party
- * with nothing to replan against; a refusal naming its inputs, and stating
- * whether those inputs account for every offending atom, is one an agent can
- * act on by dropping an argument and running again.
+ * The remedy channel a CFC refusal carries: not only WHAT the gate refused, but
+ * WHICH of the transaction's reads carried the offending confidentiality in. A
+ * refusal naming only its atoms leaves the refused party with nothing to replan
+ * against; a refusal naming its inputs, and stating whether those inputs
+ * account for every offending atom, is one an agent can act on by dropping an
+ * argument and running again.
  *
  * Three layers, because the channel breaks at any of them:
  *
@@ -35,10 +35,12 @@ import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import {
   type CfcAddress,
+  type CfcConfClause,
   type CfcRefusalDetail,
   type ConsumedAtomSource,
   describeRefusalInputs,
@@ -70,7 +72,7 @@ const addressOf = (id: string, path: readonly string[]): CfcAddress =>
   ({ space, id, scope: "space", path }) as CfcAddress;
 
 const sourceOf = (
-  atom: unknown,
+  atom: CfcConfClause,
   id: string,
   readPath: readonly string[],
   labelPath: readonly string[],
@@ -91,7 +93,7 @@ const seedSecret = async (
   const cell = runtime.getCell(space, name, undefined, seed);
   const id = cell.getAsNormalizedFullLink().id as URI;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
     value: { secret: "rosebud" },
     ...(confidentiality === undefined ? {} : {
       cfc: {
@@ -125,7 +127,7 @@ const seedRootLabeledDoc = async (
   const id = runtime.getCell(space, name, undefined, seed)
     .getAsNormalizedFullLink().id as URI;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
     value: { note: "labeled" },
     cfc: {
       version: 1,
@@ -216,6 +218,50 @@ describe("refusal-detail", () => {
       ]);
       expect(inputs).toEqual([]);
       expect(attribution).toBe("none");
+    });
+
+    it("retains clause-first source order across many distinct clauses", () => {
+      const sources = Array.from(
+        { length: 80 },
+        (_, index) =>
+          sourceOf(
+            { kind: "secret", number: index % 20 },
+            `of:read-${index}`,
+            [],
+            ["field"],
+          ),
+      );
+      const offending = [19, 0, 7, 100].map((number) => ({
+        number,
+        kind: "secret",
+      }));
+      const { inputs, attribution } = describeRefusalInputs(offending, sources);
+      expect(inputs.map((input) => input.read.id)).toEqual(
+        [19, 0, 7].flatMap((number) =>
+          [0, 20, 40, 60].map((offset) => `of:read-${number + offset}`)
+        ),
+      );
+      expect(inputs.map((input) => input.atoms)).toEqual(
+        offending.slice(0, 3).flatMap((atom) =>
+          Array.from({ length: 4 }, () => [renderCfcAtom(atom)])
+        ),
+      );
+      expect(attribution).toBe("partial");
+    });
+
+    it("retains the first rendered clause order for one read with repeated offenders", () => {
+      const clauses = Array.from(
+        { length: 40 },
+        (_, index) => `secret-${index}`,
+      );
+      const sources = clauses.map((atom) =>
+        sourceOf(atom, "of:one-read", [], ["field"])
+      );
+      const first = [...clauses].reverse();
+      const result = describeRefusalInputs([...first, ...clauses], sources);
+      expect(result.inputs).toHaveLength(1);
+      expect(result.inputs[0].atoms).toEqual(first.map(renderCfcAtom));
+      expect(result.attribution).toBe("complete");
     });
 
     it("returns `none` when no source claims any offending clause", () => {
@@ -413,6 +459,67 @@ describe("refusal-detail", () => {
   });
 
   describe("a refused writer-fit misfit", () => {
+    for (
+      const mode of [
+        "disabled",
+        "observe",
+        "enforce-explicit",
+        "enforce-strict",
+      ] as const
+    ) {
+      it(`builds attribution only for rejected writes in \`${mode}\``, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          cfcEnforcementMode: "disabled",
+          cfcFlowLabels: "persist",
+        });
+        try {
+          await seedSecret(runtime, "refusal-many-source", ["medical"]);
+          runtime.resetCfcStats();
+          const tx = runtime.edit();
+          tx.setCfcEnforcementMode(mode);
+          const secret = runtime.getCell(
+            space,
+            "refusal-many-source",
+            undefined,
+            tx,
+          ).key("secret").get();
+          for (let i = 0; i < 4; i++) {
+            runtime.getCell(space, `refusal-many-target-${i}`, undefined, tx)
+              .set({ copied: secret });
+          }
+          tx.prepareCfc();
+          const result = await tx.commit();
+          const stats = runtime.getCfcStats();
+          if (mode === "enforce-strict") {
+            expect(result.error?.name).toBe("CfcCommitRefusalError");
+            expect(refusalsOf(result.error)).toHaveLength(4);
+            for (const detail of refusalsOf(result.error)) {
+              expect(detail.gate).toBe("writer-fit");
+              expect(detail.attribution).toBe("complete");
+              expect(detail.inputs.length).toBeGreaterThan(0);
+            }
+            expect(stats.refusalDetailsRecorded).toBe(4);
+            expect(stats.consumedLabelWalks).toBe(1);
+          } else {
+            expect(result.error).toBeUndefined();
+            expect(tx.getCfcState().refusalDetails).toEqual([]);
+            const flags = tx.getCfcState().diagnostics.filter((diagnostic) =>
+              diagnostic.includes("writer-fit(persist-and-flag)")
+            );
+            expect(flags).toHaveLength(4);
+            expect(stats.refusalDetailsRecorded).toBe(0);
+            expect(stats.consumedLabelWalks).toBe(0);
+          }
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
     it("names the write target the derived label did not fit", async () => {
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
@@ -421,7 +528,12 @@ describe("refusal-detail", () => {
         cfcFlowLabels: "persist",
       });
       try {
-        await seedSecret(runtime, "refusal-writer-fit-source", ["medical"]);
+        const sourceId = await seedSecret(
+          runtime,
+          "refusal-writer-fit-source",
+          ["medical"],
+        );
+        runtime.resetCfcStats();
 
         const tx = runtime.edit();
         // Strict is where the misfit REJECTS rather than persists-and-flags,
@@ -433,8 +545,8 @@ describe("refusal-detail", () => {
           undefined,
           tx,
         );
-        const raw = source.getRaw() as { secret?: string };
-        expect(raw.secret).toBe("rosebud");
+        const secret = source.key("secret").get();
+        expect(secret).toBe("rosebud");
         // The target declares no store policy, so its ceiling is residency
         // alone: a `medical`-tainted derived value cannot fit.
         const derived = runtime.getCell(
@@ -443,7 +555,7 @@ describe("refusal-detail", () => {
           undefined,
           tx,
         );
-        derived.set({ copied: `${raw.secret}!` });
+        derived.set({ copied: `${secret}!` });
         const derivedId = derived.getAsNormalizedFullLink().id;
         tx.prepareCfc();
         const result = await tx.commit();
@@ -456,6 +568,22 @@ describe("refusal-detail", () => {
         expect(detail!.target?.id).toBe(derivedId);
         expect(detail!.offendingAtoms.length).toBeGreaterThan(0);
         expect(detail!.offendingAtoms).toContain(MEDICAL);
+        expect(detail!.reason).toBe(
+          `writer-fit confidentiality misfit for ${derivedId} at / ` +
+            `(canWrite, §8.12.4): ${MEDICAL}`,
+        );
+        expect(result.error?.message).toContain(detail!.reason);
+        expect(detail!.attribution).toBe("complete");
+        expect(detail!.inputs).toContainEqual({
+          read: { space, id: sourceId, scope: "space", path: ["secret"] },
+          labelPath: ["secret"],
+          atoms: [MEDICAL],
+        });
+        expect(runtime.getCfcStats().refusalDetailsRecorded).toBe(
+          tx.getCfcState().refusalDetails.length,
+        );
+        expect(runtime.getCfcStats().refusalDetailsRecorded).toBeGreaterThan(0);
+        expect(runtime.getCfcStats().consumedLabelWalks).toBe(1);
       } finally {
         await runtime.dispose();
         await storageManager.close();

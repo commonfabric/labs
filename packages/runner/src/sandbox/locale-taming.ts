@@ -35,6 +35,8 @@
  * remain host-local.
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
 const DEFAULT_LOCALE = "en-US";
 const DEFAULT_TIME_ZONE = "UTC";
 
@@ -89,7 +91,7 @@ const pinDateOptions = (
   options: Intl.DateTimeFormatOptions | undefined,
 ): unknown => {
   if (options === undefined) return { timeZone: DEFAULT_TIME_ZONE };
-  if (typeof options !== "object" || options === null) {
+  if (!isObjectOrArray(options)) {
     throw new TypeError(
       "sanitized Intl: Date options must be a plain object or undefined",
     );

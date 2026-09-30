@@ -54,7 +54,7 @@ describe("attestation claim(): Fabric-aware consistency check", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("reports StateInconsistency when the `FabricValue` actually changed (CT-1770)", () => {
+  it("reports StateInconsistency when the `FabricValue` actually changed", () => {
     // The attested value and the stored value are distinct `FabricBytes` that
     // differ only in their (private `#fields`) byte content: a genuine change,
     // which must surface as the `StorageTransactionInconsistent` error the

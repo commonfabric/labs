@@ -18,18 +18,19 @@ import {
   resolveCfcSchemaRefRoot,
 } from "./cfc/schema-refs.ts";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type { URI } from "./sigil-types.ts";
+import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
+import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
   collectExternalSchemaRefHashes,
   containsExternalSchemaRef,
-} from "./schema-decompose.ts";
+} from "@commonfabric/data-model-schema/schema-refs";
+import type { URI } from "./sigil-types.ts";
 import {
   externalResolutionMissCount,
   lookupSchemaDocument,
   onSchemaRegistryClear,
   registerSchemaDocument,
 } from "./schema-registry.ts";
-import { forEachSubschema } from "./schema-walk.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 
 const logger = getLogger("schema-ifc");
@@ -171,14 +172,13 @@ export function ensureExternalSchemaClosure(
   options?: { silentFailures?: boolean },
 ): boolean {
   if (schema === undefined || !containsExternalSchemaRef(schema)) return true;
-  let complete = true;
-  const pending = [...collectExternalSchemaRefHashes(schema)];
-  const seen = new Set<string>();
-  while (pending.length > 0) {
-    const hash = pending.pop()!;
-    if (seen.has(hash)) continue;
-    seen.add(hash);
-    if (lookupSchemaDocument(hash) === undefined) {
+  const { missing } = walkSchemaDocumentClosure({
+    roots: collectExternalSchemaRefHashes(schema),
+    load: (hash) => {
+      const registered = lookupSchemaDocument(hash);
+      if (registered !== undefined) {
+        return { kind: "verified", schema: registered };
+      }
       const address = {
         space,
         id: `cid:${hash}` as URI,
@@ -195,8 +195,7 @@ export function ensureExternalSchemaClosure(
             address.id,
           ]);
         }
-        complete = false;
-        continue;
+        return undefined;
       }
       // `value === undefined` included: the hasher assigns `undefined` a
       // hash, but the registry cannot represent a registered `undefined`
@@ -212,33 +211,27 @@ export function ensureExternalSchemaClosure(
             address.id,
           ]);
         }
-        complete = false;
-        continue;
+        return undefined;
       }
-      try {
-        registerSchemaDocument(
-          hash,
-          (doc as { value?: unknown }).value as JSONSchema,
-        );
-      } catch {
-        // A document whose content does not hash to its id is forged:
-        // neither registered nor recursed into.
-        if (!options?.silentFailures) {
-          logger.warn("schema-closure", () => [
-            "cid: document content does not hash to its id; ignoring it:",
-            address.id,
-          ]);
-        }
-        complete = false;
-        continue;
+      return { kind: "stored", value: (doc as { value?: unknown }).value };
+    },
+    onVerified: (hash, document) => {
+      registerSchemaDocument(hash, document);
+    },
+    onMissing: (hash, miss) => {
+      // An absent document was logged where its read found nothing. One
+      // whose content does not hash to its id is forged: neither
+      // registered nor recursed into.
+      if (miss !== "mismatch") return;
+      if (!options?.silentFailures) {
+        logger.warn("schema-closure", () => [
+          "cid: document content does not hash to its id; ignoring it:",
+          `cid:${hash}`,
+        ]);
       }
-    }
-    const document = lookupSchemaDocument(hash);
-    if (document !== undefined) {
-      pending.push(...collectExternalSchemaRefHashes(document));
-    }
-  }
-  return complete;
+    },
+  });
+  return missing.size === 0;
 }
 
 /**

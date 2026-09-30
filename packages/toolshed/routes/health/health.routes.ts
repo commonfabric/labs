@@ -43,6 +43,8 @@ export const stats = createRoute({
               hits: z.number().int().nonnegative(),
               misses: z.number().int().nonnegative(),
               evictions: z.number().int().nonnegative(),
+              patchReplays: z.number().int().nonnegative(),
+              resumes: z.number().int().nonnegative(),
               entries: z.number().int().nonnegative(),
               bytes: z.number().int().nonnegative(),
               budgetBytes: z.number().int().positive(),

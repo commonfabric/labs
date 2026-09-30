@@ -1,10 +1,11 @@
+import { isDID } from "@commonfabric/identity/did";
+
 import { validateSlug } from "../slugs.ts";
 import { ENTITY_URI_SCHEMES, type EntityUriScheme } from "../entity-kind.ts";
 
 export const HASH_RE = /^[A-Za-z0-9_-]{43}$/;
 
 const HOST_RE = /^[a-z0-9.-]+(:\d+)?$/i;
-const DID_RE = /^did:[a-z0-9]+:.+$/;
 
 export interface FabricRef {
   /** Toolshed host (authority); only present in the cf://host/... form. */
@@ -231,7 +232,7 @@ function validateSpace(
   space: string | undefined,
   specifier: string,
 ): void {
-  if (space === undefined || DID_RE.test(space)) return;
+  if (space === undefined || isDID(space)) return;
   try {
     validateSlug(space);
   } catch (cause) {

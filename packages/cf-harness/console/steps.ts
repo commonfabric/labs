@@ -10,7 +10,10 @@
  * in, which is the order that matters for reading a run back.
  */
 
+import type { CfcLabelViewEntry } from "@commonfabric/runner/cfc";
 import { matchLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { parseConsoleReference } from "./reference.ts";
 import {
   HANDLE_TOKEN_PATTERN,
   type HarnessHandleEntry,
@@ -146,6 +149,12 @@ export interface ConsoleArgumentRef {
   /** Confidentiality atoms the invocation context put on this argument. */
   confidentiality: readonly string[];
 
+  /**
+   * Integrity atoms the invocation context recorded on this argument — the
+   * prompt slot's influence on what the model wrote there.
+   */
+  integrity: readonly string[];
+
   /** The labels the space holds for the cell this argument names. */
   labels?: ConsoleCellLabels;
 
@@ -279,9 +288,8 @@ export interface ConsoleStep {
 
   /**
    * The CFC invocation context recorded for this call. Under a posture that
-   * propagates flow labels, its `cfcInputLabels` are the labels the runtime
-   * computed for each input position — which is where a confidentiality atom
-   * such as `PromptSlotInfluence` becomes visible.
+   * propagates flow labels, its `cfcInputLabels` are the confidentiality
+   * labels the runtime computed for each input position.
    */
   invocation?: HarnessCfcInvocationContext;
 }
@@ -311,9 +319,7 @@ export const handleTokensIn = (value: unknown): string[] =>
   );
 
 const asRecord = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  isObjectNotArray(value) ? value as Record<string, unknown> : {};
 
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value !== "" ? value : undefined;
@@ -359,7 +365,7 @@ const longestNumericRun = (value: unknown): number => {
     }
     return best;
   }
-  if (typeof value === "object" && value !== null) {
+  if (isObjectOrArray(value)) {
     let best = 0;
     for (const item of Object.values(value)) {
       best = Math.max(best, longestNumericRun(item));
@@ -380,7 +386,7 @@ const sealedPositions = (value: unknown): number => {
       0,
     );
   }
-  if (typeof value === "object" && value !== null) {
+  if (isObjectOrArray(value)) {
     const record = value as Record<string, unknown>;
     if (typeof record["@link"] === "string") {
       return String(record["@link"]).startsWith("opaque:") ? 1 : 0;
@@ -399,7 +405,7 @@ const sealedPositions = (value: unknown): number => {
  * something.
  */
 const disclosureOf = (output: unknown): ConsoleDisclosure | undefined => {
-  const record = typeof output === "object" && output !== null
+  const record = isObjectOrArray(output)
     ? output as Record<string, unknown>
     : undefined;
   if (record === undefined || !Object.hasOwn(record, "value")) {
@@ -503,7 +509,7 @@ const statusOf = (
   // answered with the reference to the result whose values the boundary held
   // back, so the step's outcome is the one its own answer states, below; the
   // boundary shows as the withheld marker beside the CFC line instead.
-  const record = typeof output === "object" && output !== null
+  const record = isObjectOrArray(output)
     ? output as Record<string, unknown>
     : undefined;
   const status = record?.status;
@@ -520,7 +526,7 @@ const statusOf = (
 
 /** The child run a `delegate_task` result names, when it names one. */
 const childRunIdOf = (output: unknown): string | undefined => {
-  const record = typeof output === "object" && output !== null
+  const record = isObjectOrArray(output)
     ? output as { subagent?: { childRunId?: unknown } }
     : undefined;
   const childRunId = record?.subagent?.childRunId;
@@ -551,7 +557,7 @@ const valueAtJsonPointer = (
       continue;
     }
     if (
-      typeof current !== "object" || current === null ||
+      !isObjectOrArray(current) ||
       !Object.hasOwn(current, segment)
     ) {
       return { available: false };
@@ -977,11 +983,9 @@ const handleProvenance = (
  * alone — a spelling this failed to recognise would read as a plain value and
  * lose the reference entirely.
  *
- * A handle's `ref` is the canonical spelling of what it names, so a link naming
- * a path inside a held cell starts with that cell's `ref`. The longest such
- * match wins, which is what keeps a path inside a document resolving to the
- * document rather than to a second cell. A link matching no handle is still a
- * reference — the run simply holds no handle for it.
+ * Addresses are compared after parsing, so aliases and explicit base scopes
+ * match the same held cell. The deepest matching path wins. A link matching no
+ * handle is still a reference — the run simply holds no handle for it.
  */
 const linkTarget = (
   value: unknown,
@@ -990,46 +994,31 @@ const linkTarget = (
   if (typeof value !== "string") {
     return undefined;
   }
-  const text = value.trim();
-  if (!matchLLMFriendlyLink.test(text) || !parsesAsLink(text)) {
+  const text = value.trimStart();
+  const address = parseConsoleReference(text);
+  if (!matchLLMFriendlyLink.test(text) || address === undefined) {
     return undefined;
   }
   let best: ConsoleHandle | undefined;
+  let bestDepth = -1;
   for (const handle of handles) {
+    const candidate = handle.ref === undefined
+      ? undefined
+      : parseConsoleReference(handle.ref);
     if (
-      handle.ref !== undefined && continuesAddress(text, handle.ref) &&
-      (best?.ref === undefined || handle.ref.length > best.ref.length)
+      candidate !== undefined && candidate.space === address.space &&
+      candidate.id === address.id && candidate.scope === address.scope &&
+      candidate.path.length > bestDepth &&
+      candidate.path.length <= address.path.length &&
+      candidate.path.every((key, index) => key === address.path[index])
     ) {
       best = handle;
+      bestDepth = candidate.path.length;
     }
   }
   return best?.ref === undefined
     ? { ref: text }
     : { ref: best.ref, handle: best };
-};
-
-/**
- * Whether a link continues a held cell's own address rather than merely
- * starting with its characters. `/of:fid1:abcdef` shares a prefix with
- * `/of:fid1:abc` and names a different entity, so a prefix test on its own
- * would attach one cell's handle to another cell's link.
- */
-const continuesAddress = (link: string, ref: string): boolean =>
-  link === ref || (link.startsWith(ref) && link[ref.length] === "/");
-
-/**
- * Whether a string is a whole LLM-friendly link rather than something merely
- * shaped like one. `run_pattern` passes a string it cannot parse through as
- * plain JSON, so reading one as a reference would draw a flow edge the run
- * never had.
- */
-const parsesAsLink = (text: string): boolean => {
-  const body = text.startsWith("/@")
-    ? text.slice(1).split("/").slice(1).join("/")
-    : text.slice(1);
-  const entity = body.split("/")[0] ?? "";
-  const separator = entity.indexOf(":");
-  return separator > 0 && entity.length > separator + 1;
 };
 
 /**
@@ -1069,6 +1058,7 @@ export const consoleStepArguments = (
         key,
         isReference: false,
         confidentiality: argumentAtomNames(step, key, argumentKeys),
+        integrity: argumentInfluenceNames(step, key, argumentKeys),
         value,
       };
     }
@@ -1088,6 +1078,7 @@ export const consoleStepArguments = (
         : {}),
       ...(handle?.schema !== undefined ? { schema: handle.schema } : {}),
       confidentiality: argumentAtomNames(step, key, argumentKeys),
+      integrity: argumentInfluenceNames(step, key, argumentKeys),
       ...(cellLabels !== undefined ? { labels: cellLabels } : {}),
     };
   });
@@ -1112,8 +1103,38 @@ const argumentAtomNames = (
   step: ConsoleStep,
   key: string,
   argumentKeys: readonly string[] = [],
+): string[] =>
+  atomNamesAtArgument(
+    step.invocation?.cfcInputLabels?.entries ?? [],
+    "confidentiality",
+    key,
+    argumentKeys,
+  );
+
+/**
+ * The integrity atoms the prompt slot's influence put on one argument, read
+ * from `promptSlotInfluenceLabels` by the same path rule as
+ * `argumentAtomNames()`.
+ */
+const argumentInfluenceNames = (
+  step: ConsoleStep,
+  key: string,
+  argumentKeys: readonly string[] = [],
+): string[] =>
+  atomNamesAtArgument(
+    step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
+    "integrity",
+    key,
+    argumentKeys,
+  );
+
+/** The names of the atoms on one axis of `entries` that govern `key`. */
+const atomNamesAtArgument = (
+  entries: readonly CfcLabelViewEntry[],
+  axis: "confidentiality" | "integrity",
+  key: string,
+  argumentKeys: readonly string[],
 ): string[] => {
-  const entries = step.invocation?.cfcInputLabels?.entries ?? [];
   // A label path is rooted at the operation's own argument, which is not
   // always what the model called it: a tool taking `path` and `content` may be
   // mediated as `args` and `stdin`. When no root names any argument of this
@@ -1131,8 +1152,8 @@ const argumentAtomNames = (
     if (!governs) {
       continue;
     }
-    for (const clause of entry.label?.confidentiality ?? []) {
-      const type = typeof clause === "object" && clause !== null
+    for (const clause of entry.label?.[axis] ?? []) {
+      const type = isObjectOrArray(clause)
         ? (clause as { type?: unknown }).type
         : undefined;
       if (typeof type === "string") {

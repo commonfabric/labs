@@ -1,3 +1,4 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
   CfcEnforcementMode,
@@ -17,7 +18,9 @@ import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.t
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type { HarnessWellKnownGrant } from "./contracts/well-known-grants.ts";
 import type { HarnessInputCell } from "./contracts/input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessPatternRef } from "./contracts/pattern-refs.ts";
+import type { HarnessResearchRunSummary } from "./contracts/research.ts";
 import type { HarnessPolicyEvent } from "./contracts/policy.ts";
 import type {
   HarnessPolicyDecisionRecord,
@@ -29,6 +32,7 @@ import type {
 } from "./contracts/run-manifest.ts";
 import type { PromptSlotBinding } from "./contracts/prompt-slot.ts";
 import type {
+  HarnessAcquiredSkills,
   HarnessSkillActivations,
   HarnessSkillRegistry,
   HarnessSkillResourceReads,
@@ -55,25 +59,42 @@ export type HarnessRunStatus =
   | "pending"
   | "running"
   | "completed"
+  | "canceled"
   | "failed";
 
+/** Durable driver checkpoint for research before a root task's first turn. */
+export interface HarnessOpeningResearch {
+  type: "cf-harness.opening-research";
+  version: 1;
+  status: "pending" | "completed" | "failed";
+  task: string;
+  toolCallId: string;
+  toolOutputIndex: number;
+  outputId?: string;
+  handoffMessage?: string;
+}
+
 /**
- * How a run ended. `assistant_completed` is the one success: the model
- * answered without calling a tool. `setup_error` is a run that died before
+ * How a run ended. `assistant_completed` means the model returned a final
+ * answer or an admitted task outcome. `budget_finalized` is a partial answer
+ * produced on the reserved final root turn. `setup_error` is a run that died before
  * its first model turn, while what it holds — skill registry, grants, input
  * cells — was being established; the others end the loop itself.
  */
 export type HarnessRunTerminalReason =
   | "assistant_completed"
+  | "budget_finalized"
   | "max_model_turns"
   | "prompt_loop_error"
   | "setup_error"
+  | "canceled"
   | "process_interrupted";
 
 /** Whether `status` is one a run leaves only by being resumed. */
 export const isTerminalHarnessRunStatus = (
   status: HarnessRunStatus,
-): boolean => status === "completed" || status === "failed";
+): boolean =>
+  status === "completed" || status === "failed" || status === "canceled";
 
 /**
  * The resolved CFC posture of the run's fabric session — the Runtime that
@@ -108,7 +129,8 @@ export interface HarnessFabricSessionCfcPosture {
   posture?: "max-enforcement";
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by:
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by:
    * the run manifest's, met with any the operator configured. Absent when
    * the session reads unbounded.
    */
@@ -154,6 +176,10 @@ export interface HarnessRunState {
   updatedAt: string;
   endedAt?: string;
   terminalReason?: HarnessRunTerminalReason;
+
+  /** Reason supplied by the run's controlling abort signal. */
+  cancelReason?: string;
+
   cfcEnforcementMode: CfcEnforcementMode;
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
@@ -165,6 +191,13 @@ export interface HarnessRunState {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+
+  /** Root-run structured-result configuration, retained across resume. */
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
+
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -175,6 +208,15 @@ export interface HarnessRunState {
   skillResourceReadsPath?: string;
   skillScriptExecutions?: HarnessSkillScriptExecutions;
   skillScriptExecutionsPath?: string;
+
+  /**
+   * The skills this run acquired scripts for, by pin, with where each script's
+   * bytes sit and the digest taken at acquisition. A run that acquired none
+   * has no record rather than an empty one.
+   */
+  acquiredSkills?: HarnessAcquiredSkills;
+
+  acquiredSkillsPath?: string;
   transcriptPath?: string;
   runReportPath?: string;
   capabilitySnapshot?: HarnessCapabilitySnapshot;
@@ -200,16 +242,33 @@ export interface HarnessRunState {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+
+  /** Pieces successfully named by this run, retained for session follow-ups. */
+  assignedPieces?: HarnessAssignedPiece[];
+
   patternRefs?: HarnessPatternRef[];
   policyEvents: HarnessPolicyEvent[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
 
+  /** Admitted research kits and host-confirmed records retained by this run. */
+  researchRuns?: HarnessResearchRunSummary[];
+
+  /** Current user goal carried into research and delegated work. */
+  researchGoal?: string;
+
+  /** Opening-research intent and recoverable model-context handoff. */
+  openingResearch?: HarnessOpeningResearch;
+
   /**
-   * How many `query_docs` calls in this run and its descendants ended with no
-   * answer — the model that answers them was unreachable, or what came back
-   * was not a reply the tool could read. A run whose documentation channel is
-   * down still answers every call, with an error the model reads and the
-   * operator never sees, so the count is kept where a summary can state it.
+   * How many `research` calls in this run and its descendants returned no kit.
+   * An incomplete kit is still a successful answer and does not increment it.
+   */
+  researchFailures?: number;
+
+  /**
+   * Legacy failed documentation-query count retained for resumed runs. New
+   * calls record {@link researchFailures}; this field remains readable so an
+   * older run's operator evidence is not rewritten or dropped.
    */
   docsQueryFailures?: number;
 
@@ -225,6 +284,10 @@ export interface CreateHarnessRunStateOptions {
   status?: HarnessRunStatus;
   endedAt?: string;
   terminalReason?: HarnessRunTerminalReason;
+
+  /** Reason supplied by the run's controlling abort signal. */
+  cancelReason?: string;
+
   cfcEnforcementMode: CfcEnforcementMode;
   fabricSessionCfc?: HarnessFabricSessionCfcPosture;
   promptSlotBinding?: PromptSlotBinding;
@@ -236,6 +299,10 @@ export interface CreateHarnessRunStateOptions {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -246,6 +313,15 @@ export interface CreateHarnessRunStateOptions {
   skillResourceReadsPath?: string;
   skillScriptExecutions?: HarnessSkillScriptExecutions;
   skillScriptExecutionsPath?: string;
+
+  /**
+   * The skills this run acquired scripts for, by pin, with where each script's
+   * bytes sit and the digest taken at acquisition. A run that acquired none
+   * has no record rather than an empty one.
+   */
+  acquiredSkills?: HarnessAcquiredSkills;
+
+  acquiredSkillsPath?: string;
   transcriptPath?: string;
   runReportPath?: string;
   capabilitySnapshot?: HarnessCapabilitySnapshot;
@@ -263,8 +339,13 @@ export interface CreateHarnessRunStateOptions {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+  assignedPieces?: HarnessAssignedPiece[];
   patternRefs?: HarnessPatternRef[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
+  researchRuns?: HarnessResearchRunSummary[];
+  researchGoal?: string;
+  openingResearch?: HarnessOpeningResearch;
+  researchFailures?: number;
   docsQueryFailures?: number;
   lineage?: HarnessSubagentLineage;
   subagentRuns?: HarnessSubagentRunRef[];
@@ -285,6 +366,9 @@ export const createHarnessRunState = (
     ...(options.endedAt !== undefined ? { endedAt: options.endedAt } : {}),
     ...(options.terminalReason !== undefined
       ? { terminalReason: options.terminalReason }
+      : {}),
+    ...(options.cancelReason !== undefined
+      ? { cancelReason: options.cancelReason }
       : {}),
     cfcEnforcementMode: options.cfcEnforcementMode,
     ...(options.fabricSessionCfc !== undefined
@@ -310,6 +394,9 @@ export const createHarnessRunState = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.structuredResult !== undefined
+      ? { structuredResult: structuredClone(options.structuredResult) }
       : {}),
     ...(options.runManifest !== undefined
       ? { runManifest: options.runManifest }
@@ -340,6 +427,12 @@ export const createHarnessRunState = (
       : {}),
     ...(options.skillScriptExecutionsPath !== undefined
       ? { skillScriptExecutionsPath: options.skillScriptExecutionsPath }
+      : {}),
+    ...(options.acquiredSkills !== undefined
+      ? { acquiredSkills: structuredClone(options.acquiredSkills) }
+      : {}),
+    ...(options.acquiredSkillsPath !== undefined
+      ? { acquiredSkillsPath: options.acquiredSkillsPath }
       : {}),
     ...(options.transcriptPath !== undefined
       ? { transcriptPath: options.transcriptPath }
@@ -392,6 +485,9 @@ export const createHarnessRunState = (
     ...(options.inputCells !== undefined
       ? { inputCells: structuredClone(options.inputCells) }
       : {}),
+    ...(options.assignedPieces !== undefined
+      ? { assignedPieces: structuredClone(options.assignedPieces) }
+      : {}),
     ...(options.patternRefs !== undefined
       ? { patternRefs: structuredClone(options.patternRefs) }
       : {}),
@@ -401,6 +497,18 @@ export const createHarnessRunState = (
     policyEvents: [],
     ...(options.policyDecisions !== undefined
       ? { policyDecisions: [...options.policyDecisions] }
+      : {}),
+    ...(options.researchGoal === undefined
+      ? {}
+      : { researchGoal: options.researchGoal }),
+    ...(options.researchRuns !== undefined
+      ? { researchRuns: structuredClone(options.researchRuns) }
+      : {}),
+    ...(options.openingResearch !== undefined
+      ? { openingResearch: structuredClone(options.openingResearch) }
+      : {}),
+    ...(options.researchFailures !== undefined
+      ? { researchFailures: options.researchFailures }
       : {}),
     ...(options.docsQueryFailures !== undefined
       ? { docsQueryFailures: options.docsQueryFailures }
@@ -481,8 +589,12 @@ export const setHarnessRunStatus = (
       now,
     );
   }
-  const { endedAt: _endedAt, terminalReason: _terminalReason, ...nonTerminal } =
-    state;
+  const {
+    endedAt: _endedAt,
+    terminalReason: _terminalReason,
+    cancelReason: _cancelReason,
+    ...nonTerminal
+  } = state;
   return patchHarnessRunState(nonTerminal, { status }, now);
 };
 
@@ -521,10 +633,9 @@ export const setHarnessSubagentRun = (
 };
 
 /**
- * The run with `count` more failed documentation queries against it. Called
- * once for each explore turn a provider refused, and once more with a child's
- * whole count when a delegation returns, so the number a summary reads covers
- * the family rather than one run of it.
+ * The run with `count` more legacy documentation-query failures against it.
+ * Kept for resumed state and child rollup; new research failures use
+ * {@link addHarnessResearchFailures}.
  */
 export const addHarnessDocsQueryFailures = (
   state: HarnessRunState,
@@ -533,6 +644,36 @@ export const addHarnessDocsQueryFailures = (
 ): HarnessRunState =>
   count <= 0 ? state : patchHarnessRunState(state, {
     docsQueryFailures: (state.docsQueryFailures ?? 0) + count,
+  }, now);
+
+/** Appends one host-admitted research kit and its confirmed records. */
+export const appendHarnessResearchRun = (
+  state: HarnessRunState,
+  run: HarnessResearchRunSummary,
+  now = new Date().toISOString(),
+): HarnessRunState =>
+  appendToHarnessRunState(state, "researchRuns", structuredClone(run), now);
+
+/** Replaces the durable opening-research driver checkpoint. */
+export const setHarnessOpeningResearch = (
+  state: HarnessRunState,
+  openingResearch: HarnessOpeningResearch,
+  now = new Date().toISOString(),
+): HarnessRunState =>
+  patchHarnessRunState(
+    state,
+    { openingResearch: structuredClone(openingResearch) },
+    now,
+  );
+
+/** Adds failed bounded research calls to the run-family summary. */
+export const addHarnessResearchFailures = (
+  state: HarnessRunState,
+  count: number,
+  now = new Date().toISOString(),
+): HarnessRunState =>
+  count <= 0 ? state : patchHarnessRunState(state, {
+    researchFailures: (state.researchFailures ?? 0) + count,
   }, now);
 
 export const appendHarnessFailureRecord = (

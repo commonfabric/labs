@@ -1,6 +1,7 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 
 import { type Cell } from "../cell.ts";
+import { ContextualFlowControl } from "../cfc.ts";
 import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
@@ -65,11 +66,13 @@ export function ifElse(
     const inputsWithLog = inputsCell.withTx(tx);
 
     const selected = inputsWithLog.key(condition ? "ifTrue" : "ifFalse");
-    const serializedRef = resolveCellReference(runtime, tx, selected).getAsLink(
-      {
-        base: result,
-      },
-    );
+    const resolved = resolveCellReference(runtime, tx, selected);
+    const serializedRef = resolved.getAsLink({
+      base: result,
+      includeSchema: ContextualFlowControl.declaresStream(
+        resolved.getAsNormalizedFullLink().schema,
+      ),
+    });
 
     // When writing links, we need to use setRawUntyped (link doesn't match T).
     // Pass `onlyIfDifferent` so re-running with the same selected branch (e.g.

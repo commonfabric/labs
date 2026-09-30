@@ -21,6 +21,7 @@ import type { PiecesController } from "@commonfabric/piece/ops";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { completeLine } from "../lib/shuttle/completion.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
 import { moved } from "./shuttle-place-helpers.ts";
@@ -68,6 +69,7 @@ function shuttleIn(): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({
       kind: "borrowed",
       pieces: {
@@ -118,7 +120,13 @@ function pieced(...ids: readonly string[]): VerbDeps {
     listing: {
       ...READS_NOTHING.listing,
       listPieces: () =>
-        Promise.resolve(ids.map((id) => ({ id, name: "Thermostat" }))),
+        Promise.resolve(
+          ids.map((id) => ({
+            id,
+            reference: `//${SPACE}/${id}`,
+            name: "Thermostat",
+          })),
+        ),
     },
   };
 }
@@ -197,9 +205,14 @@ describe("completion", () => {
         "more",
         "pwd",
         "set",
+        "unwatch",
         "verbs",
+        "watch",
+        "watches",
         "where",
         "wish",
+        "xcd",
+        "xpwd",
       ];
       expect([...VERB_WORDS]).toEqual(words);
       for (const word of words) {
@@ -318,26 +331,35 @@ describe("completion", () => {
 
     it("writes a key the name alone would not reach as the reference that does", async () => {
       // A key called `..` is a reading rather than a name, so the operand
-      // `operandForChild` offers is the reference — which is what the listing
-      // prints for the same row, and what `cd` takes back to it. What is typed
-      // is the opening of that reference, since a completion extends the token
-      // on the line rather than swapping it for another spelling.
+      // `operandForChild` offers is `./..` — which is what the listing prints
+      // for the same row, and what `cd` takes back to it. What is typed is the
+      // opening of that operand, since a completion extends the token on the
+      // line rather than swapping it for another spelling.
 
       const written = await completeLine(
         atPiece(),
-        "cd /",
+        "cd .",
         holding({ "..": 1 }),
       );
-      expect(written).toBe(`cd /@${SPACE}/${HANDLE}@space/..`);
+      expect(written).toBe("cd ./..");
+    });
+
+    it("writes a key opening with `#` behind the `.` head", async () => {
+      // Kills a completion that offers such a key bare, which `cd` reads as a
+      // wish target. The token is quoted, `#` being a character the printer
+      // quotes wherever it sits.
+
+      expect(await completeLine(atPiece(), "cd ./#", holding({ "#tag": 1 })))
+        .toBe("cd './#tag'");
     });
 
     it("offers no key that neither its name nor a reference reaches", async () => {
-      // A key opening with `#` has no operand at all — the reference grammar
-      // reserves the character — so there is nothing to write that would take
-      // the line to the row, and the row is left out rather than offered
-      // under a name that reaches nothing.
+      // A key holding a line break has no operand at all — no door admits it
+      // — so there is nothing to write that would take the line to the row,
+      // and the row is left out rather than offered under a name that
+      // reaches nothing.
 
-      expect(await completeLine(atPiece(), "cd #", holding({ "#tag": 1 })))
+      expect(await completeLine(atPiece(), "cd a", holding({ "a\nb": 1 })))
         .toBeUndefined();
     });
 
@@ -345,7 +367,7 @@ describe("completion", () => {
       // The bound the case above leaves: `..` is the row's name and not its
       // operand, so typing it is not typing the beginning of what `cd` takes.
 
-      expect(await completeLine(atPiece(), "cd .", holding({ "..": 1 })))
+      expect(await completeLine(atPiece(), "cd ..", holding({ "..": 1 })))
         .toBeUndefined();
     });
 
@@ -400,6 +422,31 @@ describe("completion", () => {
 
     it("writes nothing for `wish`, whose operand is a name the fabric holds", async () => {
       expect(await completeLine(shuttleIn(), "wish sl", READS_NOTHING))
+        .toBeUndefined();
+    });
+
+    it("writes the dimension `where` sets, which is a word this process holds", async () => {
+      // The third of the three surfaces, and it is one for the same reason
+      // the other two are: the words are a table this process already has,
+      // so answering costs no read.
+
+      expect(await completeLine(shuttleIn(), "where sc", READS_NOTHING))
+        .toBe("where scope");
+      expect(await completeLine(shuttleIn(), "where ex", READS_NOTHING))
+        .toBe("where external");
+    });
+
+    it("writes nothing for the value `where` sets a dimension to", async () => {
+      // What the slot takes depends on the dimension named before it — a
+      // scope word for one, a path outside the fabric for the other — and a
+      // slot declares what it offers for the position rather than for the
+      // line that reached it, so there is no answer right for both.
+
+      expect(await completeLine(shuttleIn(), "where scope @ses", READS_NOTHING))
+        .toBeUndefined();
+      expect(
+        await completeLine(shuttleIn(), "where external ../f", READS_NOTHING),
+      )
         .toBeUndefined();
     });
 
@@ -547,17 +594,12 @@ describe("completion", () => {
     it("completes a prefix that opens a child's own multi-segment operand", async () => {
       // Nothing gates a candidate on its shape, and this is the row that shows
       // why nothing may: `..` is a reading rather than a name, so the operand
-      // reaching it is the reference — which carries the separator. A rule
-      // turning down a prefix holding one would put this row out of reach.
+      // reaching it is `./..` — which carries the separator. A rule turning
+      // down a prefix holding one would put this row out of reach.
 
-      const reference = `/@${SPACE}/${HANDLE}@space/..`;
       expect(
-        await completeLine(
-          atPiece(),
-          `cd ${reference.slice(0, -1)}`,
-          holding({ "..": 1 }),
-        ),
-      ).toBe(`cd ${reference}`);
+        await completeLine(atPiece(), "cd ./.", holding({ "..": 1 })),
+      ).toBe("cd ./..");
     });
 
     it("writes nothing for a name that stands somewhere other than here", async () => {

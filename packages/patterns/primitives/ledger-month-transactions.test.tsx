@@ -43,6 +43,7 @@ const ledgerTable = () =>
     pending: "integer",
     category_primary: "text",
     iso_currency_code: "text",
+    status: "text",
     deleted: "integer",
     deleted_at: "text",
   });
@@ -50,8 +51,8 @@ const ledgerTable = () =>
 const insertSql = (): string =>
   "INSERT INTO rows_plaid_transaction (record_id, transaction_id, " +
   "account_id, date, amount, signed_amount, merchant_name, name, pending, " +
-  "category_primary, iso_currency_code, deleted, deleted_at) " +
-  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "category_primary, iso_currency_code, status, deleted, deleted_at) " +
+  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 /**
  * Seeds one live row, one tombstone and one row in the next month. The
@@ -72,6 +73,7 @@ const seedLedger = handler<void, { db: SqliteDb }>((_, { db }) => {
     0,
     "GENERAL_SERVICES",
     "USD",
+    "posted",
     0,
     "",
   ]);
@@ -87,6 +89,7 @@ const seedLedger = handler<void, { db: SqliteDb }>((_, { db }) => {
     0,
     "GENERAL_MERCHANDISE",
     "USD",
+    "posted",
     1,
     "2026-03-07T12:00:00Z",
   ]);
@@ -102,6 +105,7 @@ const seedLedger = handler<void, { db: SqliteDb }>((_, { db }) => {
     0,
     "GENERAL_SERVICES",
     "USD",
+    "posted",
     0,
     "",
   ]);
@@ -120,6 +124,75 @@ const seedNarrow = handler<void, { db: SqliteDb }>((_, { db }) => {
     "INSERT INTO rows_plaid_transaction (record_id, date) VALUES (?, ?)",
     ["narrow", "2026-03-04"],
   );
+});
+
+/**
+ * A caller that takes a month of its own and does not require it, and hands it
+ * to the atom — the shape the atom meets inside a larger pattern that has a
+ * month input to forward. An input nobody supplied reads `undefined`, and
+ * `undefined` is not a value a query can bind.
+ */
+interface ForwardedMonthInput {
+  bank: SqliteDb;
+  month?: string;
+}
+
+interface ForwardedMonthOutput {
+  month: string;
+  rowCount: number;
+  errorMessage: string;
+}
+
+const ForwardedMonthCaller = pattern<
+  ForwardedMonthInput,
+  ForwardedMonthOutput
+>(({ bank, month }) => {
+  const ledger = LedgerMonthTransactions({ bank, month });
+  return {
+    month: ledger.month,
+    rowCount: ledger.rowCount,
+    errorMessage: ledger.errorMessage,
+  };
+});
+
+/**
+ * One live row in the month the database's own clock is in, and one in the
+ * month after it, both dated in SQL because a handler is denied the clock
+ * inside the sandbox. It is what the atom answers a caller that named no
+ * month, so it sits in a database of its own where it cannot join the month
+ * the rows above are read from.
+ *
+ * TWO rows, because the seed reads the clock and the atom reads it again: a
+ * month boundary crossed between them resolves the read to the month after
+ * the one seeded. With a row in each, exactly one of them is inside whichever
+ * month the read resolves, so the count the assertions make is the same on
+ * both sides of the boundary rather than right for all but an instant.
+ */
+const seedCurrentMonth = handler<void, { db: SqliteDb }>((_, { db }) => {
+  const insert = (months: string): string =>
+    "INSERT INTO rows_plaid_transaction (record_id, transaction_id, " +
+    "account_id, date, amount, signed_amount, merchant_name, name, " +
+    "pending, category_primary, iso_currency_code, status, deleted, " +
+    "deleted_at) VALUES (?, ?, ?, " +
+    `date(strftime('%Y-%m', 'now', 'localtime') || '-15', '${months}'), ` +
+    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  const row = (id: string) => [
+    id,
+    `txn-${id}`,
+    "acct-1",
+    31.5,
+    -31.5,
+    "This Month Co",
+    "This Month Co charge",
+    0,
+    "GENERAL_SERVICES",
+    "USD",
+    "posted",
+    0,
+    "",
+  ];
+  db.exec(insert("+0 month"), row("current"));
+  db.exec(insert("+1 month"), row("next"));
 });
 
 export default pattern(() => {
@@ -149,6 +222,14 @@ export default pattern(() => {
   const brokenMonth = new Writable("1970-01");
   const broken = LedgerMonthTransactions({ bank: narrow, month: brokenMonth });
 
+  // A database of its own, so the row dated by the clock cannot land in the
+  // month the assertions above read.
+  const current = sqliteDatabase({
+    tables: { rows_plaid_transaction: ledgerTable() },
+  });
+  const seedCurrent = seedCurrentMonth({ db: current });
+  const forwarded = ForwardedMonthCaller({ bank: current });
+
   return {
     // The one warning this allows is normalizeAndDiff's "Storing a
     // session-scoped link in space-scoped data", raised when reading `[UI]`
@@ -163,6 +244,7 @@ export default pattern(() => {
 
       { action: action(() => seed.send()) },
       { action: action(() => seedNarrowRow.send()) },
+      { action: action(() => seedCurrent.send()) },
       { action: action(() => brokenMonth.set("2026-03")) },
 
       // A store of another shape reports why rather than an empty month, and
@@ -189,6 +271,9 @@ export default pattern(() => {
       { assertion: assert(() => ledger.rows[0].date === "2026-03-04") },
       { assertion: assert(() => ledger.rows[0].signed_amount === -84.2) },
       { assertion: assert(() => ledger.rows[0].pending === 0) },
+      // Projected because the connector store's row-label rule reads it: a
+      // query that drops it is refused there and reports an empty ledger.
+      { assertion: assert(() => ledger.rows[0].status === "posted") },
       { assertion: assert(() => ledger.month === "2026-03") },
       { assertion: assert(() => ledger.errorMessage === "") },
       { assertion: assert(() => ledger[NAME] === "Transactions 2026-03 (1)") },
@@ -249,6 +334,24 @@ export default pattern(() => {
       { assertion: assert(() => ledger.month.length === 7) },
       { assertion: assert(() => ledger.month.charAt(4) === "-") },
       { assertion: assert(() => ledger.errorMessage === "") },
+
+      // A caller forwarding a month input nobody supplied gets the same
+      // month from the clock, and the row the seed dated in it. Forwarding
+      // reads `undefined` rather than leaving the key out, so the input's own
+      // default is not what makes this hold.
+      //
+      // The seed writes a row in this month and one in the next, so the row
+      // the read finds is one whichever side of a month boundary the read's
+      // own clock lands on.
+      //
+      // Read for the first time HERE, after the seed, and that is what makes
+      // the row visible: the atom takes no `reactOn`, so a read that already
+      // settled over an empty table would not run again for a write. An
+      // assertion over `forwarded` placed before the seed would settle that
+      // read and take the row away from these.
+      { assertion: assert(() => forwarded.errorMessage === "") },
+      { assertion: assert(() => forwarded.month.length === 7) },
+      { assertion: assert(() => forwarded.rowCount === 1) },
     ],
   };
 });

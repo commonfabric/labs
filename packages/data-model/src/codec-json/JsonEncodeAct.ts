@@ -1,7 +1,8 @@
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseEncodeAct } from "@/codec-common/BaseEncodeAct.ts";
+import { BaseEncodeAct } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
 import { isEncodedInstance } from "./wire-text.ts";
@@ -87,7 +88,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * @inheritDoc
    *
    * Keys are visited in UTF-8 byte order, matching the canonical order
-   * `value-hash.ts` uses, so that this encoding is deterministic across
+   * `ValueHasher` uses, so that this encoding is deterministic across
    * implementations and across objects whose keys differ only in insertion
    * order. See `3-json-encoding.md` Section 10.
    *
@@ -151,7 +152,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * values (which `#unquote()` can collapse).
    */
   static #isQuoteSafe(v: JsonCodecValue): boolean {
-    if (v === null || typeof v !== "object") return true;
+    if (!isObjectOrArray(v)) return true;
     if (Array.isArray(v)) {
       return v.every((item) => JsonEncodeAct.#isQuoteSafe(item));
     }
@@ -169,7 +170,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * literal and must not be recursed into.
    */
   static #unquote(v: JsonCodecValue): JsonCodecValue {
-    if (v === null || typeof v !== "object") {
+    if (!isObjectOrArray(v)) {
       return v;
     } else if (Array.isArray(v)) {
       const result = v.map(JsonEncodeAct.#unquote) as JsonCodecValue;

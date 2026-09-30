@@ -1,0 +1,1 @@
+{"date":"2026-09-09","from":{"k":"unit","s":"runner","n":"CFC write-side requiredIntegrity floor (D3, §8.12.4.1) > a link with no derivable source label is skipped by the floor (reason recorded elsewhere)"},"to":{"k":"unit","s":"runner","n":"CFC write-side requiredIntegrity floor (D3, §8.12.4.1) > a link whose source is not CFC-relevant still fails the floor"}}

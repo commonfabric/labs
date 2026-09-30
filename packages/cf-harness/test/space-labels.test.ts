@@ -133,6 +133,29 @@ const SLOTTED = entity("slotted");
 /** A document linking at `via` to {@link LINKER}, whose own links go unread. */
 const VIA = entity("via");
 
+/**
+ * A version-2 envelope whose one entry holds its label by reference to
+ * {@link LABEL_DOCUMENT}, a content-addressed label document the store holds.
+ */
+const REFERENCED = entity("referenced");
+const LABEL_DOCUMENT = `cid:fid1:${"label".padEnd(43, "0")}`;
+
+/**
+ * A version-2 envelope referencing a label document the store holds nothing
+ * for, so the entry's label cannot be read.
+ */
+const REFERENCED_MISSING = entity("referenced-missing");
+const MISSING_LABEL_DOCUMENT = `cid:fid1:${"missing".padEnd(43, "0")}`;
+
+/**
+ * A version-2 envelope whose reference names an ordinary entity rather than
+ * a `cid:` document, which no label document can be read from.
+ */
+const REFERENCED_ENTITY = entity("referenced-entity");
+
+/** A document linking at `via` to {@link REFERENCED_MISSING}. */
+const VIA_MISSING = entity("via-missing");
+
 /** One stored link, in the at-rest sigil form the store holds. */
 const link = (id: string, space?: string, path: string[] = []) => ({
   "/": {
@@ -154,6 +177,51 @@ const stored = (
 });
 
 const documents: Record<string, unknown> = {
+  [LABEL_DOCUMENT]: {
+    value: { confidentiality: ["shared-secret"] },
+  },
+  [REFERENCED]: {
+    value: { secret: "held by reference" },
+    cfc: {
+      version: 2,
+      schemaHash: SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [
+          stored(["secret"], { $ref: LABEL_DOCUMENT }, "declared"),
+          // An entry that is not a record is skipped rather than read.
+          "bogus",
+        ],
+      },
+    },
+  },
+  [REFERENCED_MISSING]: {
+    value: { secret: "held by a reference nothing backs" },
+    cfc: {
+      version: 2,
+      schemaHash: SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [
+          stored(["secret"], { $ref: MISSING_LABEL_DOCUMENT }, "declared"),
+        ],
+      },
+    },
+  },
+  [VIA_MISSING]: {
+    value: { via: link(REFERENCED_MISSING) },
+  },
+  [REFERENCED_ENTITY]: {
+    value: { secret: "held by a reference to an entity" },
+    cfc: {
+      version: 2,
+      schemaHash: SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [stored(["secret"], { $ref: DECLARED }, "declared")],
+      },
+    },
+  },
   [DECLARED]: {
     value: { secret: "the combination is 1234" },
     cfc: {
@@ -393,6 +461,11 @@ const SPENT: LinkWalkBounds = { maxDepth: 64, maxNodes: 2 };
 
 /** The documents written as plain JSON rather than through the codec. */
 const PLAIN = new Set([
+  LABEL_DOCUMENT,
+  REFERENCED,
+  REFERENCED_MISSING,
+  REFERENCED_ENTITY,
+  VIA_MISSING,
   UNLABELLED,
   LINKER,
   NESTER,
@@ -592,6 +665,41 @@ describe("space-labels", () => {
           name: "cf-compiled-by:cf-compiler",
         },
         provenance,
+      ]);
+    });
+
+    it("reads a label held by reference out of its label document", () => {
+      const read = reader.read({ id: REFERENCED, scope: "space" });
+      expect(read.entries).toEqual([{
+        path: ["secret"],
+        confidentiality: [{ type: "shared-secret", name: "shared-secret" }],
+        integrity: [],
+        origin: "declared",
+      }]);
+      expect(read.unreadPaths).toBeUndefined();
+    });
+
+    it("records a label whose document the store lacks as an unread path", () => {
+      const read = reader.read({ id: REFERENCED_MISSING, scope: "space" });
+      expect(read.entries).toEqual([]);
+      expect(read.unreadPaths).toEqual([
+        { path: ["secret"], reason: "no-document" },
+      ]);
+    });
+
+    it("carries an unread label through the link that reaches it", () => {
+      const read = reader.read({ id: VIA_MISSING, scope: "space" });
+      expect(read.entries).toEqual([]);
+      expect(read.unreadPaths).toEqual([
+        { path: ["via", "secret"], reason: "no-document" },
+      ]);
+    });
+
+    it("does not follow a reference outside the cid: namespace", () => {
+      const read = reader.read({ id: REFERENCED_ENTITY, scope: "space" });
+      expect(read.entries).toEqual([]);
+      expect(read.unreadPaths).toEqual([
+        { path: ["secret"], reason: "no-document" },
       ]);
     });
 

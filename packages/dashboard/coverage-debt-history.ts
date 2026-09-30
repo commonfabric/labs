@@ -2,54 +2,67 @@
  * Collects what each day's `main` runs measured for the repository's whole
  * coverage debt, so a tile can chart the direction it has moved in.
  *
- * The number comes from the `perf-metrics` artifact the Coverage Check job
- * uploads. That artifact records every `coverage-debt: <group> uncovered lines`
- * metric the run measured, and the `workspace` one among them is the
+ * The number comes from the coverage measurements the full run on `main`
+ * writes into the test-run record store, whose `workspace` group is the
  * repository-wide total. `docs/development/COVERAGE.md` describes how the
- * groups are counted. Nothing else in the repository keeps that number over
- * time, so the history is assembled here a day at a time and kept on disk.
+ * groups are counted. The store keeps every run's measurements, and the
+ * collection keeps what it has read on disk, a day at a time.
  *
  * One sample a day is enough for a trend measured in weeks, and it bounds what
- * the collection costs: the runs are listed for one day at a time and only the
- * newest few of them are opened. Two things disqualify a run. A run whose
- * compile byte cache missed covers branches that only a cold compile reaches,
- * which lowers its debt by around a tenth of a percent — the same size as a
- * week's real movement, and the reason the coverage ratchet skips a cold run
- * too. And a run whose artifact will not parse measured nothing this can read.
+ * the collection costs: a day's coverage objects are found by one listing that
+ * the store filters by name, and they are opened newest first until one
+ * measured. Three things disqualify a run. A run whose compile byte cache
+ * missed covers branches that only a cold compile reaches, which lowers its
+ * debt by around a tenth of a percent — the same size as a week's real
+ * movement. A run that is not a push to `main` measured code `main` does not
+ * carry. And a run that recorded no repository-wide figure measured nothing
+ * this can use.
  *
  * A day that has been read keeps its answer, including the answer that it has
- * no usable run, because a day that is over gains no runs. A read that failed
- * establishes nothing and is left for the next collection.
+ * no usable run, once it is two days old. A run is filed under the day it
+ * started, and its measurements reach the store when the run has finished, so
+ * yesterday can still gain some; a day before that gains none. A read that
+ * failed establishes nothing and is left for the next collection.
  */
 
-import { REPO } from "./config.ts";
+import {
+  COVERAGE_OBJECT_GLOB,
+  coverageArtifactAttempt,
+  coverageFiguresOf,
+  datePartition,
+  isMainPush,
+  listObjects,
+  readObject,
+  RECORD_SCHEMA_VERSION,
+  type StoredReportGroup,
+} from "@commonfabric/test-support/records";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { dashboardCacheFile } from "./history-files.ts";
-import { type GitHubDownload, jsonFromZip } from "./lib.ts";
+import {
+  TEST_RECORDS_BUCKET,
+  TEST_RECORDS_CI_PREFIX,
+} from "./test-records-history.ts";
 
-/** The workflow whose `main` runs measure coverage. */
-export const COVERAGE_WORKFLOW = "deno.yml";
+/** The group holding the repository-wide uncovered-line count. */
+export const WORKSPACE_GROUP = "workspace";
 
-/** The artifact the Coverage Check job uploads its metrics in. */
-export const COVERAGE_ARTIFACT = "perf-metrics";
-
-/** The metric holding the repository-wide uncovered-line count. */
-export const WORKSPACE_METRIC = "coverage-debt: workspace uncovered lines";
-
-/** Runs of one day opened before the day is given up as unreadable. */
-export const RUNS_READ_PER_DAY = 3;
-
-/** Days read at once. */
+/** Days whose runs are opened at once. */
 const FETCH_CONCURRENCY = 8;
 
 const DAY_MS = 86_400_000;
 /**
- * The shape the history file is written in, bumped when that shape changes. A
- * file the running code cannot read as it was written is discarded whole
- * rather than day by day: a day it half understands reads as a day that
- * measured nothing, and a day that is over is never asked about again, so the
- * window would stay empty until it aged out.
+ * The shape the history file is written in, bumped when that shape changes, and
+ * when a change to the collection means a day the file records as measuring
+ * nothing may have measured after all. A file the running code cannot read as
+ * it was written is discarded whole rather than day by day: a day it half
+ * understands reads as a day that measured nothing, and a day that is over is
+ * never asked about again, so the window would stay empty until it aged out.
+ * The record store keeps every coverage measurement a run has written into it,
+ * so for the days it holds them for, discarding the file costs the collection
+ * it takes to fill the window again. A day the store holds none for is known
+ * only from this file.
  */
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 3;
 
 const COVERAGE_DEBT_FILE = () =>
   dashboardCacheFile("fabric-wall-coverage-debt.json");
@@ -66,10 +79,13 @@ export interface CoverageDebtSample {
   runId: number;
 }
 
-/** The GitHub calls the collection makes, so a test can supply its own. */
-export interface CoverageDebtGitHub {
-  json<T>(path: string, token: string): Promise<T>;
-  download(path: string, token: string): Promise<GitHubDownload>;
+/** Where the collection reads the store, so a test can supply its own. */
+export interface CoverageDebtSource {
+  /** The names of the coverage objects stored for one day, `YYYY-MM-DD`. */
+  list(day: string): Promise<string[]>;
+
+  /** The reports one object holds. */
+  read(objectName: string): Promise<StoredReportGroup[]>;
 }
 
 /** What a day's runs came to, when one of them measured. */
@@ -85,26 +101,17 @@ interface StoredDay {
   measured?: DayMeasurement;
 
   /**
-   * The newest run the day listed when it was last read. Today is read on
-   * every refresh, and this is what lets that cost one request when nothing
-   * has landed since: the number can only have moved if a run has.
+   * How many coverage objects the day listed when it was last read. The two
+   * newest days are read on every refresh, and this is what lets that cost a
+   * listing each when nothing has landed since: objects are only ever added,
+   * so the number can only have moved if the count has.
    */
-  newestRun?: number;
+  listed?: number;
 }
 
 interface StoredHistory {
   version: number;
   days: Record<string, StoredDay>;
-}
-
-interface WorkflowRun {
-  id: number;
-}
-
-interface RunArtifact {
-  id: number;
-  name: string;
-  expired: boolean;
 }
 
 const isRunId = (value: unknown): boolean =>
@@ -118,16 +125,16 @@ const isMeasurement = (value: unknown): value is DayMeasurement => {
 };
 
 const isStoredDay = (value: unknown): value is StoredDay => {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isObjectOrArray(value)) return false;
   const day = value as StoredDay;
-  if (day.newestRun !== undefined && !isRunId(day.newestRun)) return false;
+  if (
+    day.listed !== undefined &&
+    !(Number.isSafeInteger(day.listed) && day.listed >= 0)
+  ) {
+    return false;
+  }
   return day.measured === undefined || isMeasurement(day.measured);
 };
-
-const sameDay = (a: StoredDay | undefined, b: StoredDay): boolean =>
-  a !== undefined && a.newestRun === b.newestRun &&
-  a.measured?.uncoveredLines === b.measured?.uncoveredLines &&
-  a.measured?.runId === b.measured?.runId;
 
 /** The UTC day an instant falls in, as `YYYY-MM-DD`. */
 export function utcDay(at: number): string {
@@ -144,40 +151,39 @@ export function daysEndingAt(now: number, count: number): string[] {
 }
 
 /**
- * The repository-wide uncovered-line count a `perf-metrics` file records, or
- * `undefined` when it carries no such metric or was measured on a cold compile
- * cache. Anything the file does not hold in the shape the artifact writes reads
- * as no measurement rather than as a zero.
+ * The repository-wide uncovered-line count one stored report records, or
+ * `undefined` where it is not a push to `main`, carries no such figure, or was
+ * measured on a cold compile cache.
  */
-export function workspaceDebtOf(content: string): number | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
+export function workspaceDebtOf(report: StoredReportGroup): number | undefined {
+  if (report.context === undefined || !isMainPush(report.context)) {
     return undefined;
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const file = parsed as {
-    metrics?: unknown;
-    compileCacheStates?: Record<string, unknown>;
+  const figures = coverageFiguresOf(report.records);
+  return figures.cold ? undefined : figures.groups.get(WORKSPACE_GROUP);
+}
+
+/** The store as it really is. */
+export function liveCoverageDebtSource(
+  fetchImpl?: typeof fetch,
+): CoverageDebtSource {
+  const bucket = TEST_RECORDS_BUCKET;
+  return {
+    list: (day) =>
+      listObjects({
+        bucket,
+        prefix: `${TEST_RECORDS_CI_PREFIX}/v${RECORD_SCHEMA_VERSION}/` +
+          `${datePartition(`${day}T00:00:00Z`)}/`,
+        matchGlob: COVERAGE_OBJECT_GLOB,
+        ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+      }),
+    read: async (objectName) =>
+      (await readObject({
+        bucket,
+        objectName,
+        ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+      })).reports,
   };
-  const states = file.compileCacheStates;
-  if (typeof states === "object" && states !== null) {
-    if (Object.values(states).includes("cold")) return undefined;
-  }
-  if (!Array.isArray(file.metrics)) return undefined;
-  for (const metric of file.metrics) {
-    if (typeof metric !== "object" || metric === null) continue;
-    const record = metric as { name?: unknown; durationSeconds?: unknown };
-    if (record.name !== WORKSPACE_METRIC) continue;
-    const lines = record.durationSeconds;
-    // The artifact records the count under `durationSeconds`, which is the key
-    // the file has carried since it also held CI timings.
-    return typeof lines === "number" && Number.isFinite(lines) && lines >= 0
-      ? lines
-      : undefined;
-  }
-  return undefined;
 }
 
 /** Keeps each day's measurement across dashboard restarts. */
@@ -203,7 +209,7 @@ export class CoverageDebtStore {
       return;
     }
     if (stored?.version !== STORE_VERSION) return;
-    if (typeof stored.days !== "object" || stored.days === null) return;
+    if (!isObjectOrArray(stored.days)) return;
     for (const [day, value] of Object.entries(stored.days)) {
       if (isStoredDay(value)) this.#days.set(day, value);
     }
@@ -216,7 +222,6 @@ export class CoverageDebtStore {
 
   /** Records what a day's runs measured, or that none of them did. */
   set(day: string, value: StoredDay): void {
-    if (sameDay(this.#days.get(day), value)) return;
     this.#days.set(day, value);
     this.#dirty = true;
   }
@@ -263,61 +268,51 @@ type DayReading =
   | { outcome: "unchanged" }
   | { outcome: "failed"; error: unknown };
 
-async function readArtifact(
-  artifactId: number,
-  token: string,
-  github: CoverageDebtGitHub,
-): Promise<number | undefined> {
-  // GitHub answers with a redirect to a signed blob URL, which the download
-  // follows; the archive holds the one JSON file the job uploaded.
-  const zip = await github.download(
-    `repos/${REPO}/actions/artifacts/${artifactId}/zip`,
-    token,
-  );
-  if (!zip.ok) throw new Error(`artifact ${artifactId}: HTTP ${zip.status}`);
-  const json = await jsonFromZip(zip.body);
-  return json === null ? undefined : workspaceDebtOf(json);
+/**
+ * The run an object's name says it came from, and the attempt of that run
+ * that uploaded it, or nothing for a name `ciObjectName` would not give a
+ * coverage artifact.
+ */
+function uploadOf(
+  objectName: string,
+): { runId: number; attempt: number } | undefined {
+  const match = objectName.match(/\/run-(\d+)-([^/]*)\.ndjson$/);
+  if (match === null) return undefined;
+  const attempt = coverageArtifactAttempt(match[2]);
+  return attempt === undefined
+    ? undefined
+    : { runId: Number(match[1]), attempt };
 }
 
 async function readDay(
   day: string,
-  token: string,
-  github: CoverageDebtGitHub,
+  source: CoverageDebtSource,
   known: StoredDay | undefined,
 ): Promise<DayReading> {
   try {
-    const listed = await github.json<{ workflow_runs?: WorkflowRun[] }>(
-      `repos/${REPO}/actions/workflows/${COVERAGE_WORKFLOW}/runs` +
-        `?branch=main&event=push&status=success&created=${day}` +
-        `&per_page=${RUNS_READ_PER_DAY}`,
-      token,
-    );
-    const runs = listed.workflow_runs ?? [];
-    const newestRun = runs[0]?.id;
-    // Nothing has landed since the day was last read, so nothing can have
-    // measured a different number. This is the whole cost of a refresh that
-    // finds the tree where it left it.
-    if (newestRun !== undefined && newestRun === known?.newestRun) {
-      return { outcome: "unchanged" };
+    const names = await source.list(day);
+    // Objects are only ever added, so a day listing what it listed last
+    // time holds nothing the last reading did not see.
+    if (names.length === known?.listed) return { outcome: "unchanged" };
+    // Newest run first, and a run's newest attempt ahead of the one it
+    // measured again.
+    const objects = names
+      .flatMap((name) => {
+        const upload = uploadOf(name);
+        return upload === undefined ? [] : [{ name, ...upload }];
+      })
+      .sort((a, b) => b.runId - a.runId || b.attempt - a.attempt);
+    for (const { name, runId } of objects) {
+      for (const report of await source.read(name)) {
+        const uncoveredLines = workspaceDebtOf(report);
+        if (uncoveredLines === undefined) continue;
+        return {
+          outcome: "read",
+          day: { measured: { uncoveredLines, runId }, listed: names.length },
+        };
+      }
     }
-    for (const run of runs) {
-      const artifacts = await github.json<{ artifacts?: RunArtifact[] }>(
-        `repos/${REPO}/actions/runs/${run.id}/artifacts`,
-        token,
-      );
-      const artifact = (artifacts.artifacts ?? []).find((candidate) =>
-        candidate.name === COVERAGE_ARTIFACT && !candidate.expired
-      );
-      if (artifact === undefined) continue;
-      const uncoveredLines = await readArtifact(artifact.id, token, github);
-      if (uncoveredLines === undefined) continue;
-      return {
-        outcome: "read",
-        day: { measured: { uncoveredLines, runId: run.id }, newestRun },
-      };
-    }
-    const seen = newestRun === undefined ? {} : { newestRun };
-    return { outcome: "read", day: seen };
+    return { outcome: "read", day: { listed: names.length } };
   } catch (error) {
     return { outcome: "failed", error };
   }
@@ -334,28 +329,27 @@ export interface CoverageDebtHistory {
 
 /**
  * Fills in every day of the window the store has not read, then returns the
- * samples it holds. Today is read again on every refresh, because the day is
- * still gaining runs.
+ * samples it holds. Today and yesterday are read again on every refresh,
+ * because they can still gain runs.
  */
 export async function refreshCoverageDebt(options: {
-  token: string;
   days: number;
   now: number;
-  github: CoverageDebtGitHub;
+  source: CoverageDebtSource;
   store: CoverageDebtStore;
 }): Promise<CoverageDebtHistory> {
-  const { store, github, token } = options;
+  const { store, source } = options;
   await store.load();
   const window = daysEndingAt(options.now, options.days);
-  const today = window[window.length - 1];
+  const open = new Set(window.slice(-2));
   const wanted = window.filter((day) =>
-    day === today || store.get(day) === undefined
+    open.has(day) || store.get(day) === undefined
   );
   let error: unknown;
   for (let at = 0; at < wanted.length; at += FETCH_CONCURRENCY) {
     const batch = wanted.slice(at, at + FETCH_CONCURRENCY);
     const readings = await Promise.all(
-      batch.map((day) => readDay(day, token, github, store.get(day))),
+      batch.map((day) => readDay(day, source, store.get(day))),
     );
     readings.forEach((reading, index) => {
       if (reading.outcome === "read") store.set(batch[index], reading.day);

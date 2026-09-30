@@ -6,12 +6,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { Server } from "../v2/server.ts";
+import { parseClientMessage, Server } from "../v2/server.ts";
 import { connect, loopback } from "../v2/client.ts";
 import { cfLink, table } from "../v2/sqlite/schema.ts";
 import { all, match, principal } from "../v2/sqlite/row-label.ts";
-import type { SqliteDbRef } from "../v2.ts";
+import { encodeMemoryBoundary, type SqliteDbRef } from "../v2.ts";
 import {
+  TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
@@ -44,6 +45,7 @@ describe("sqlite protocol verbs (loopback)", () => {
     server = new Server({
       ...testSessionOpenServerOptions,
       store: new URL("memory://sqlite-protocol-test"),
+      acl: { mode: "off", delegatingDids: [TEST_SESSION_OPEN_PRINCIPAL] },
     });
     client = await connect({ transport: loopback(server) });
     session = await client.mount(SPACE, {}, testSessionOpenAuthFactory);
@@ -67,6 +69,79 @@ describe("sqlite protocol verbs (loopback)", () => {
       reads: { confirmed: [], pending: [] },
       operations: [{ op: "sqlite", db, sql, params }],
     });
+
+  it("refuses reader carriage when the connected server lacks the capability", async () => {
+    const flags = client.serverFlags!;
+    const advertised = flags.sqliteQueryReader;
+    delete flags.sqliteQueryReader;
+    try {
+      await expect(session.sqliteQuery(dbRef(), "SELECT 1", undefined, {
+        principal: SPACE,
+      })).rejects.toThrow(
+        "server does not support carried reader authorization",
+      );
+    } finally {
+      flags.sqliteQueryReader = advertised;
+    }
+  });
+
+  it("preserves the carried reader when selecting a scoped database over the wire", async () => {
+    const db = { ...dbRef(), scope: "user" as const };
+    await seedRows(db, "INSERT INTO messages (body) VALUES (?)", [
+      "reader's rows",
+    ]);
+    const own = await session.sqliteQuery(
+      db,
+      "SELECT body FROM messages",
+      undefined,
+      {
+        principal: TEST_SESSION_OPEN_PRINCIPAL,
+      },
+    );
+    expect(own.rows).toEqual([{ body: "reader's rows" }]);
+    const other = await session.sqliteQuery(
+      db,
+      "SELECT body FROM messages",
+      undefined,
+      {
+        principal: "did:key:another-reader",
+      },
+    );
+    expect(other.rows).toEqual([]);
+    await expect(
+      session.sqliteQuery(
+        { ...db, scope: "session" },
+        "SELECT body FROM messages",
+        undefined,
+        {
+          principal: TEST_SESSION_OPEN_PRINCIPAL,
+        },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("rejects malformed reader carriage at the protocol boundary", () => {
+    const base = {
+      type: "sqlite.query",
+      requestId: "reader-parse",
+      space: SPACE,
+      sessionId: "session",
+      db: dbRef(),
+      sql: "SELECT 1",
+    };
+    for (
+      const reader of [null, {}, { principal: "" }, { principal: 1 }, {
+        principal: SPACE,
+        sessionId: "",
+      }, { principal: SPACE, sessionId: 1 }]
+    ) {
+      expect(parseClientMessage(encodeMemoryBoundary({ ...base, reader })))
+        .toBeNull();
+    }
+    const reader = { principal: SPACE, sessionId: "reader-session" };
+    expect(parseClientMessage(encodeMemoryBoundary({ ...base, reader })))
+      .toMatchObject({ reader });
+  });
 
   it("writes (folded commit) then reads back over the protocol", async () => {
     const db = dbRef();

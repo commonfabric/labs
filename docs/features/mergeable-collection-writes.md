@@ -206,6 +206,22 @@ The same machinery carries three mergeable ops. `append` is described below;
   array-membership analog of the conflict-granularity fix for distinct-key
   writers to a container.
 
+  That invalidation is where a collection's contention goes once its writes
+  merge. A reader that recomputes and stores a value derived from the whole
+  list commits a compare-and-set over the list, so concurrent appends refuse
+  it. Measured on the `convergence-chat` fixtures, two sessions posting twenty
+  messages apiece cost nothing at all in the four variants with no derived
+  reader and thirty-four refused commits in the one that has them, every
+  refusal being the derivation's own. The cost falls on every session holding
+  the derivation, including one that never writes, and it tracks how many
+  sessions write at once rather than how many writes there are: the same forty
+  posts cost nothing from a single session. It is also erratic where the write
+  side is not — five identical runs of the deriving variant gave 7, 39, 2, 12
+  and 9 — so a test can usefully require which documents a refused commit
+  contended for, and cannot usefully bound a count of rolled-back writes.
+  `docs/history/features/derived-reader-contention-2026-09-04.md` records the
+  runs.
+
 ### The op family
 
 `add-unique`, `increment`, and `remove-by-value` reuse every part of the above —
@@ -219,7 +235,12 @@ switch cases — differing only in the op they emit and how it applies:
   possibly-incomplete view) and records the count it added; the server re-dedups
   against durable state. Suppression is identical to
   `append` (the added elements are at the tail). A `Cell` argument dedups by its
-  link rather than by value (see below), so re-adding the same entity is a no-op.
+  link rather than by value (see below), so re-adding the same entity writes
+  nothing. It still reads: the dedup resolves every element's link, and with
+  nothing left to add the call returns before recording its op, so neither that
+  read nor the array read is dropped from the commit's conflict set. See "What a
+  keyed operation reads besides the record it writes" in
+  `keyed-collection-writes.md`.
 
 - **`increment`** (`{ op: "increment"; path; by }`, `incrementAtPath`) — adds
   `by` (which may be negative) to the number at `path`. A missing value implies a

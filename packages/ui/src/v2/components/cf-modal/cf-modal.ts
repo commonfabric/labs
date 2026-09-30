@@ -63,6 +63,17 @@ import { modalStyles } from "./styles.ts";
 /** Z-index for an open modal: the `--cf-z-layer-overlay` token's value. */
 const MODAL_Z_INDEX = 1000;
 
+/** Finds the focused control through open renderer and component shadow roots. */
+function activeControl(): HTMLElement | SVGElement | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
+  return active instanceof HTMLElement || active instanceof SVGElement
+    ? active
+    : null;
+}
+
 export class CFModal extends BaseElement {
   static override styles = [BaseElement.baseStyles, modalStyles];
 
@@ -114,7 +125,7 @@ export class CFModal extends BaseElement {
   private _previousBodyOverflow = "";
 
   /** Previously focused element for restoration */
-  private _previousActiveElement: HTMLElement | null = null;
+  private _previousActiveElement: HTMLElement | SVGElement | null = null;
 
   /** Boolean cell controller for open state */
   private _openCellController = createBooleanCellController(this, {
@@ -209,7 +220,7 @@ export class CFModal extends BaseElement {
    */
   private _onOpen() {
     // Store currently focused element for restoration
-    this._previousActiveElement = document.activeElement as HTMLElement;
+    this._previousActiveElement = activeControl();
 
     this._applyZIndex(MODAL_Z_INDEX);
 
@@ -250,7 +261,9 @@ export class CFModal extends BaseElement {
     }
 
     // Restore focus to previously focused element
-    this._previousActiveElement?.focus();
+    if (this._previousActiveElement?.isConnected) {
+      this._previousActiveElement.focus();
+    }
 
     // Fire closed event after transition
     const dialog = this.shadowRoot?.querySelector(".dialog") as HTMLElement;
@@ -340,16 +353,22 @@ export class CFModal extends BaseElement {
 
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
+    // A single-control host can forward focus into a native shadow control
+    // with tabindex=-1. Its place in the tab order belongs to the host.
+    const active = e.composedPath().find((target) =>
+      (target instanceof HTMLElement || target instanceof SVGElement) &&
+      focusables.includes(target)
+    );
 
     if (e.shiftKey) {
       // Shift+Tab: wrap from first to last
-      if (document.activeElement === first) {
+      if (active === first) {
         e.preventDefault();
         last.focus();
       }
     } else {
       // Tab: wrap from last to first
-      if (document.activeElement === last) {
+      if (active === last) {
         e.preventDefault();
         first.focus();
       }
@@ -363,36 +382,42 @@ export class CFModal extends BaseElement {
   /**
    * Get all focusable elements within the dialog
    */
-  private _getFocusableElements(): HTMLElement[] {
+  private _getFocusableElements(): (HTMLElement | SVGElement)[] {
     const dialog = this.shadowRoot?.querySelector(".dialog");
     if (!dialog) return [];
 
     const selector =
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const shadowFocusables = Array.from(
-      dialog.querySelectorAll(selector),
-    ) as HTMLElement[];
-
-    // Also get focusables from slotted content
-    const slots = dialog.querySelectorAll("slot");
-    const slottedFocusables: HTMLElement[] = [];
-    slots.forEach((slot) => {
-      const assigned = (slot as HTMLSlotElement).assignedElements({
-        flatten: true,
-      });
-      assigned.forEach((el) => {
-        if ((el as HTMLElement).matches?.(selector)) {
-          slottedFocusables.push(el as HTMLElement);
-        }
-        slottedFocusables.push(
-          ...(Array.from(el.querySelectorAll(selector)) as HTMLElement[]),
-        );
-      });
-    });
-
-    return [...shadowFocusables, ...slottedFocusables].filter(
-      (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
-    );
+    const focusables: (HTMLElement | SVGElement)[] = [];
+    const visit = (element: Element): void => {
+      if (element instanceof HTMLElement || element instanceof SVGElement) {
+        const style = getComputedStyle(element);
+        if (
+          (element instanceof HTMLElement &&
+            (element.hidden || element.inert)) ||
+          // Fieldsets retain enabled legend controls and non-form tab stops.
+          (element.hasAttribute("disabled") &&
+            element.localName !== "fieldset") ||
+          style.display === "none"
+        ) return;
+        if (
+          element.matches(selector) && element.tabIndex >= 0 &&
+          !element.matches(":disabled") && style.visibility === "visible" &&
+          element.getClientRects().length > 0
+        ) focusables.push(element);
+      }
+      // Walk the flattened tree in rendered order, replacing slots with assigned
+      // content and hosts with their shadow children rather than counting both.
+      const assigned = element instanceof HTMLSlotElement
+        ? element.assignedElements({ flatten: true })
+        : [];
+      const children = assigned.length > 0
+        ? assigned
+        : (element.shadowRoot ?? element).children;
+      for (const child of children) visit(child);
+    };
+    visit(dialog);
+    return focusables;
   }
 
   /**

@@ -1,4 +1,5 @@
 import type {
+  BuiltInAgentParams,
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
 } from "@commonfabric/api";
@@ -6,6 +7,7 @@ import type {
 import type { Cell } from "../cell.ts";
 import { raw } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
+import { agent } from "./agent.ts";
 import { aggregate, aggregateNode } from "./aggregate.ts";
 import { cellFromUrl } from "./cell-from-url.ts";
 import { collectionIndex } from "./collection-index.ts";
@@ -46,8 +48,6 @@ const WISH_DEBOUNCE_MS = 50;
  * fail strict). When adding a builtin here, record it there: in
  * `REPLAYABLE_BUILTIN_REFS` if replaying the node deterministically
  * reproduces its writes, otherwise in the documented non-replayable list.
- * (Precedent for a name-keyed builtin set: `EAGER_RESULT_BUILTIN_REFS` in
- * runner.ts — scheduler-facing, deliberately kept separate.)
  */
 export function registerBuiltins(runtime: Runtime) {
   const moduleRegistry = runtime.moduleRegistry;
@@ -76,7 +76,7 @@ export function registerBuiltins(runtime: Runtime) {
   );
   moduleRegistry.addModuleByRef("fetchProgram", raw(fetchProgram));
   moduleRegistry.addModuleByRef("streamData", raw(streamData));
-  moduleRegistry.addModuleByRef("llm", raw(llm, { isEffect: true }));
+  moduleRegistry.addModuleByRef("llm", raw(llm));
   moduleRegistry.addModuleByRef("llmDialog", raw(llmDialog));
   moduleRegistry.addModuleByRef(
     "ifElse",
@@ -90,14 +90,10 @@ export function registerBuiltins(runtime: Runtime) {
   moduleRegistry.addModuleByRef("unless", raw(unless));
   moduleRegistry.addModuleByRef("compileAndRun", raw(compileAndRun));
   moduleRegistry.addModuleByRef("sqliteDatabase", raw(sqliteDatabase));
-  // sqliteQuery does a server round-trip and writes results back, so it is an
-  // effect (like generateText/llm), and re-runs when its `reactOn` input
-  // changes. (Writes are the imperative SqliteDb.exec, folded into the caller's
-  // commit — not a builtin node.)
-  moduleRegistry.addModuleByRef(
-    "sqliteQuery",
-    raw(sqliteQuery, { isEffect: true }),
-  );
+  // sqliteQuery re-runs when its `reactOn` input changes. (Writes are the
+  // imperative SqliteDb.exec, folded into the caller's commit — not a builtin
+  // node.)
+  moduleRegistry.addModuleByRef("sqliteQuery", raw(sqliteQuery));
   moduleRegistry.addModuleByRef(
     "generateObject",
     raw<BuiltInGenerateObjectParams, {
@@ -106,7 +102,7 @@ export function registerBuiltins(runtime: Runtime) {
       error: Cell<string | undefined>;
       partial: Cell<string | undefined>;
       requestHash: Cell<string | undefined>;
-    }>(generateObject, { isEffect: true }),
+    }>(generateObject),
   );
   moduleRegistry.addModuleByRef(
     "generateText",
@@ -116,7 +112,20 @@ export function registerBuiltins(runtime: Runtime) {
       error: Cell<string | undefined>;
       partial: Cell<string | undefined>;
       requestHash: Cell<string | undefined>;
-    }>(generateText, { isEffect: true }),
+    }>(generateText),
+  );
+  // `agent` stages a sink request and creates its run record after commit;
+  // the result cell derives from that record, so it is scheduled as a
+  // computation and effectful only through the outbox, like `generateObject`.
+  moduleRegistry.addModuleByRef(
+    "agent",
+    raw<BuiltInAgentParams, {
+      pending: Cell<boolean>;
+      result: Cell<unknown>;
+      error: Cell<string | undefined>;
+      requestHash: Cell<string | undefined>;
+      run: Cell<unknown>;
+    }>(agent),
   );
   moduleRegistry.addModuleByRef(
     "navigateTo",

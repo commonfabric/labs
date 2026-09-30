@@ -1,5 +1,6 @@
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Cell } from "../src/cell.ts";
 import { type JSONSchema, NAME } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -151,7 +152,7 @@ async function cleanup(env: BenchEnv): Promise<void> {
 }
 
 function consumeResult(result: unknown): void {
-  if (typeof result === "object" && result !== null && "result" in result) {
+  if (isObjectOrArray(result) && "result" in result) {
     resultSink += Object.keys(result).length;
   }
 }

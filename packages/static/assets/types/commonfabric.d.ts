@@ -45,8 +45,8 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  * Pattern-visible declarations for the fabric value type system, and for the
  * options of the debug renderers over it, in the form that `@commonfabric/api`
  * re-exports to patterns. Everything here is an interface, a type, or a
- * `declare const`, except for the three brand-key constants, so the module's
- * only runtime footprint is those constants.
+ * `declare`, except for the brand constants, so the module's only runtime
+ * footprint is those constants.
  *
  * The canonical implementations live in this module's siblings --
  * `interface.ts`, `fabric-primitives/FabricHash.ts`,
@@ -61,7 +61,9 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  *
  * Every concrete `FabricPrimitive` subclass needs an instanceof-capable
  * declaration here, that being an interface, a constructor interface, and a
- * `declare const` combining the two.
+ * `declare const` combining the two. The interface narrows `.schemaType` to
+ * the one name its class reports, and the interface is a member of
+ * `ConcreteFabricPrimitive`.
  *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
@@ -75,6 +77,32 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  * re-exports them to patterns. Every other module in this package takes them
  * from `interface.ts`.
  */
+
+//
+// Brand symbols
+//
+
+/**
+ * The nominal brand of `FabricInstancePlus`, and so of `FabricInstance`, whose
+ * type in a declaration is the `PlusType` the instance may hold: an interned
+ * symbol, so that every realm and every copy of this module agree on its
+ * value, and so that the member it keys can never be mistaken for data -- a
+ * symbol-keyed member has no place in a schema. A runtime instance never
+ * carries the key.
+ */
+export const FABRIC_INSTANCE_PLUS_BRAND = Symbol.for(
+  "@commonfabric/FabricInstancePlus",
+);
+
+/**
+ * The nominal brand of `FabricPrimitive`: an interned symbol, so that every
+ * realm and every copy of this module agree on its value, and so that the
+ * member it keys can never be mistaken for data -- a symbol-keyed member has
+ * no place in a schema. A runtime instance never carries the key.
+ */
+export const FABRIC_PRIMITIVE_BRAND = Symbol.for(
+  "@commonfabric/FabricPrimitive",
+);
 
 //
 // `FabricValue` and the types defined directly from it
@@ -152,16 +180,7 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  * deep-frozen proofs by root identity without re-validating; a value that
  * violates it can corrupt data-model invariants, as any broken contract can.
  */
-export type FabricValue =
-  | bigint
-  | boolean
-  | null
-  | number
-  | string
-  | symbol
-  | undefined
-  | FabricPrimitive
-  | FabricContainerValue;
+export type FabricValue = FabricValuePlus<never>;
 
 /**
  * The container types that are part of `FabricValue`. Note that
@@ -169,13 +188,10 @@ export type FabricValue =
  * (`FabricInstance`) and a non-container type (`FabricPrimitive`), and the
  * latter is _not_ part of this type.
  */
-export type FabricContainerValue =
-  | FabricArray
-  | FabricInstance
-  | FabricPlainObject;
+export type FabricContainerValue = FabricContainerValuePlus<never>;
 
 /** Read-only array of `FabricValue`s. */
-export interface FabricArray extends ReadonlyArray<FabricValue> {}
+export type FabricArray = FabricArrayPlus<never>;
 
 /**
  * Read-only object/record of `FabricValue`s.
@@ -185,83 +201,108 @@ export interface FabricArray extends ReadonlyArray<FabricValue> {}
  * contractually forbidden from defining one, even though there is no way to say
  * that requirement in TypeScript.
  */
-export interface FabricPlainObject
-  extends Readonly<Record<string, FabricValue>> {}
+export type FabricPlainObject = FabricPlainObjectPlus<never>;
+
+/**
+ * The two kinds of `FabricValue` beyond the JavaScript built-ins, as one type.
+ * The two differ along one axis: whether the data model treats an instance as
+ * a primitive. A `FabricPrimitive` is treated the way a built-in `string` or
+ * `number` is; a `FabricInstance` is treated the way an `object` is. What
+ * follows from that, and what a caller sees of it, is that a `FabricInstance`
+ * may hold and expose arbitrary outgoing `FabricValue` references, and a
+ * `FabricPrimitive` may not. `isFabricSpecialObject()` narrows to this type
+ * with one check.
+ *
+ * As part of the overall `FabricValue` contract, no instance of either class
+ * exposes any enumerable own property; all interaction with an instance is via
+ * its concrete class's instance members, and in particular an object-spread
+ * (`{ ...instance }`) on an instance always yields an empty object (`{}`).
+ */
+export type FabricSpecialObject = FabricSpecialObjectPlus<never>;
 
 /** A `FabricValue` other than `null` or `undefined`. */
 export type NonNullableFabricValue = NonNullable<FabricValue>;
 
 //
-// `FabricSpecialObject` and its two direct subclasses
+// `FabricValuePlus` type and most of its direct component types
+//
+// `FabricValue` is the baseline type used throughout the `data-model`, but in
+// terms of implementation, it is defined in terms of `FabricValuePlus` and not
+// the other way around. This section includes everything included in the type
+// except the two `FabricSpecialObject` classes.
 //
 
 /**
- * The nominal brand key declared on `FabricSpecialObject`. It exists only in
- * the type system — a runtime instance never carries the key; `instanceof
- * FabricSpecialObject` is its runtime form. Schema `required` presence
- * checks must therefore treat this key as satisfied by any
- * `FabricSpecialObject` rather than probing for it with `in`.
- */
-export const FABRIC_SPECIAL_OBJECT_BRAND = "@commonfabric/FabricSpecialObject";
-
-/**
- * Common base class for `FabricInstance` and `FabricPrimitive`, which are the
- * only two kinds of `FabricValue` beyond the JavaScript built-ins. The two
- * differ along one axis: whether the data model treats an instance as a
- * primitive. A `FabricPrimitive` is treated the way a built-in `string` or
- * `number` is; a `FabricInstance` is treated the way an `object` is. What
- * follows from that, and what a caller sees of it, is that a `FabricInstance`
- * may hold and expose arbitrary outgoing `FabricValue` references, and a
- * `FabricPrimitive` may not. Enables a single `instanceof` check for any
- * value known to be a `FabricValue`.
+ * Type which is equivalent to `FabricValue`, except that it is compatible with
+ * one additional type, the `PlusType`: This type is a union of `FabricValue`,
+ * `PlusType`, and the containers -- arrays, plain objects, and instances --
+ * whose contents may recursively include this type.
  *
- * As part of the overall `FabricValue` contract, no concrete instance of this
- * class exposes any enumerable own property; all interaction with an instance
- * is via its concrete class's instance members, and in particular an
- * object-spread (`{ ...instance }`) on an instance always yields an empty
- * object (`{}`).
- *
- * The `@commonfabric/FabricSpecialObject` member is a nominal brand with no
- * runtime existence — see the canonical declaration in
- * `data-model/src/interface.ts` for why it is a well-known string key and not
- * a `unique symbol`. The two declarations must agree exactly.
+ * **Note:** `FabricValuePlus<never>` is the same type as `FabricValue` itself.
  */
-export interface FabricSpecialObject {
-  readonly "@commonfabric/FabricSpecialObject": true;
-}
-
-export interface FabricSpecialObjectConstructor {
-  prototype: FabricSpecialObject;
-}
-
-export declare const FabricSpecialObject:
-  & FabricSpecialObjectConstructor
-  & (abstract new (...args: any) => FabricSpecialObject);
+export type FabricValuePlus<PlusType> =
+  | bigint
+  | boolean
+  | null
+  | number
+  | string
+  | symbol
+  | undefined
+  | FabricPrimitive
+  | FabricContainerValuePlus<PlusType>
+  | PlusType;
 
 /**
- * The nominal brand key declared on `FabricPrimitive`. As with
- * `FABRIC_SPECIAL_OBJECT_BRAND`, a runtime instance never carries the key, so
- * a schema derived from the type leaves it out.
+ * The container types that are part of `FabricValuePlus`.
  */
-export const FABRIC_PRIMITIVE_BRAND = "@commonfabric/FabricPrimitive";
+export type FabricContainerValuePlus<PlusType> =
+  | FabricArrayPlus<PlusType>
+  | FabricInstancePlus<PlusType>
+  | FabricPlainObjectPlus<PlusType>;
+
+/** Read-only array of `FabricValuePlus`es. */
+export type FabricArrayPlus<PlusType> = ReadonlyArray<
+  FabricValuePlus<PlusType>
+>;
+
+/** Read-only object/record of `FabricValuePlus`es. */
+export type FabricPlainObjectPlus<PlusType> = {
+  readonly [key: string]: FabricValuePlus<PlusType>;
+};
 
 /**
- * Abstract base class for the `FabricValue`s that participate in the fabric
- * protocol as primitives. An instance is always frozen, passes through the
- * native conversions unchanged, and holds no arbitrary outgoing `FabricValue`
- * reference. `FabricSpecialObject` says how this differs from
- * `FabricInstance`.
+ * A `FabricSpecialObject` whose instance variant includes a `PlusType`.
  */
-export interface FabricPrimitive extends FabricSpecialObject {
+export type FabricSpecialObjectPlus<PlusType> =
+  | FabricPrimitive
+  | FabricInstancePlus<PlusType>;
+
+//
+// `FabricSpecialObject`: the two special-object classes and their union
+//
+
+/**
+ * The `FabricValue`s that participate in the fabric protocol as primitives. An
+ * instance is always frozen, passes through the convertible-JS conversions
+ * unchanged, and holds no arbitrary outgoing `FabricValue` reference.
+ * `FabricSpecialObject` says how this differs from `FabricInstance`.
+ */
+export interface FabricPrimitive {
   /**
    * The nominal brand that tells a `FabricPrimitive` from a `FabricInstance`
-   * in the type system. The `FabricSpecialObject` brand alone leaves this
-   * type structurally empty, which would make every `FabricInstance` a
-   * `FabricPrimitive` as well; this member is what refuses that. It exists
-   * only in the type system, as that brand does. `FABRIC_PRIMITIVE_BRAND` is
-   * the key.
+   * and from every other object, in the type system. Without it this type is
+   * structurally empty, and every object would satisfy it, and through it
+   * `FabricValue`. It exists only in the type system: a runtime instance never
+   * carries the key.
    */
-  readonly "@commonfabric/FabricPrimitive": true;
+  readonly [FABRIC_PRIMITIVE_BRAND]: true;
+
+  /**
+   * Name of this instance's class in the schema `type` vocabulary: the `type`
+   * a schema names to admit this value by its class. Every instance of a class
+   * reports the same name, which need not be the name of the class.
+   */
+  readonly schemaType: FabricPrimitiveSchemaType;
 }
 
 export interface FabricPrimitiveConstructor {
@@ -273,21 +314,17 @@ export declare const FabricPrimitive:
   & (abstract new (...args: any) => FabricPrimitive);
 
 /**
- * Abstract base class for the `FabricValue`s that participate in the fabric
- * protocol as non-primitives. An instance may hold and expose arbitrary
- * outgoing `FabricValue` references, and is mutable until frozen.
- * `FabricSpecialObject` says how this differs from `FabricPrimitive`.
+ * Like `FabricInstance`, except that the instance's state may refer to
+ * `PlusType` values instead of _just_ `FabricValue`s.
  */
-export interface FabricInstance extends FabricSpecialObject {
+export interface FabricInstancePlus<PlusType> {
   /**
-   * The nominal brand that carries a `FabricInstancePlus`'s `PlusType`. It
-   * exists only in the type system, as the `FabricSpecialObject` brand does,
-   * and is `never` here: an instance of this type holds only `FabricValue`s,
-   * which is what makes it a `FabricInstancePlus<never>`, and what keeps a
-   * `FabricInstancePlus` of any other `PlusType` from being taken for one.
-   * `FABRIC_INSTANCE_PLUS_BRAND` is the key.
+   * The nominal brand that tells an instance from any other object with the
+   * two clone methods, in the type system, and whose type is the `PlusType`
+   * the instance may hold. It exists only in the type system: a runtime
+   * instance never carries the key.
    */
-  readonly "@commonfabric/FabricInstancePlus"?: never;
+  readonly [FABRIC_INSTANCE_PLUS_BRAND]: PlusType;
 
   /**
    * Returns a new deep clone of this instance with equivalent data but no
@@ -297,11 +334,19 @@ export interface FabricInstance extends FabricSpecialObject {
    * false`, produces a deeply-mutable instance with no visible shared
    * reference structure with the original.
    */
-  deepClone(frozen: boolean): FabricInstance;
+  deepClone(frozen: boolean): FabricInstancePlus<PlusType>;
 
   /** Returns a shallow clone of this instance with the requested frozenness. */
-  shallowClone(frozen: boolean): FabricInstance;
+  shallowClone(frozen: boolean): FabricInstancePlus<PlusType>;
 }
+
+/**
+ * The `FabricValue`s that participate in the fabric protocol as non-primitives.
+ * An instance may hold and expose arbitrary outgoing `FabricValue` references,
+ * and is mutable until frozen. `FabricSpecialObject` says how this differs
+ * from `FabricPrimitive`.
+ */
+export type FabricInstance = FabricInstancePlus<never>;
 
 export interface FabricInstanceConstructor {
   prototype: FabricInstance;
@@ -312,67 +357,6 @@ export declare const FabricInstance:
   & (abstract new (...args: any) => FabricInstance);
 
 //
-// `FabricValuePlus` and related types
-//
-
-/**
- * The nominal brand key declared on `FabricInstance` and `FabricInstancePlus`,
- * whose type in a declaration is the `PlusType` the instance may hold. As with
- * `FABRIC_SPECIAL_OBJECT_BRAND`, a runtime instance never carries the key, so
- * a schema derived from either type leaves it out.
- */
-export const FABRIC_INSTANCE_PLUS_BRAND = "@commonfabric/FabricInstancePlus";
-
-/**
- * Type which is equivalent to `FabricValue`, except that it is compatible with
- * one additional type, the `PlusType`: This type is a union of `FabricValue`,
- * `PlusType`, and the containers -- arrays, plain objects, and instances --
- * whose contents may recursively include this type.
- *
- * **Note:** `FabricValuePlus<never>` is the same type as `FabricValue` itself.
- */
-export type FabricValuePlus<PlusType> =
-  | FabricValue
-  | PlusType
-  | FabricContainerValuePlus<PlusType>;
-
-/**
- * The container types that are part of `FabricValuePlus`.
- */
-export type FabricContainerValuePlus<PlusType> =
-  | FabricArrayPlus<PlusType>
-  | FabricInstancePlus<PlusType>
-  | FabricPlainObjectPlus<PlusType>;
-
-/** Read-only array of `FabricValuePlus`es. */
-export interface FabricArrayPlus<PlusType>
-  extends ReadonlyArray<FabricValuePlus<PlusType>> {}
-
-/** Read-only object/record of `FabricValuePlus`es. */
-export interface FabricPlainObjectPlus<PlusType>
-  extends Readonly<Record<string, FabricValuePlus<PlusType>>> {}
-
-/**
- * Like `FabricInstance`, except that the instance may hold `PlusType` values
- * where a `FabricInstance` holds only `FabricValue`s. A `FabricInstance` is a
- * `FabricInstancePlus<never>`, and is assignable to this type at any
- * `PlusType`; the reverse holds only at `never`.
- */
-export interface FabricInstancePlus<PlusType> extends FabricSpecialObject {
-  /**
-   * The nominal brand that carries `PlusType`. It exists only in the type
-   * system; the same-named member of `FabricInstance` says how.
-   */
-  readonly "@commonfabric/FabricInstancePlus"?: PlusType;
-
-  /** Like `FabricInstance.deepClone()`, but returning this type. */
-  deepClone(frozen: boolean): FabricInstancePlus<PlusType>;
-
-  /** Like `FabricInstance.shallowClone()`, but returning this type. */
-  shallowClone(frozen: boolean): FabricInstancePlus<PlusType>;
-}
-
-//
 // Concrete `FabricPrimitive` classes
 //
 
@@ -381,6 +365,9 @@ export interface FabricInstancePlus<PlusType> extends FabricSpecialObject {
  * `sliceBuffer()`, or `copyInto()`.
  */
 export interface FabricBytes extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricBytes";
+
   readonly length: number;
   slice(start?: number, end?: number): Uint8Array<ArrayBuffer>;
   sliceBuffer(start?: number, end?: number): ArrayBuffer;
@@ -395,10 +382,49 @@ export interface FabricBytesConstructor {
 export declare const FabricBytes: FabricBytesConstructor;
 
 /**
+ * Temporal type representing a span of time, as a count of days. Wraps a
+ * `bigint` value.
+ */
+export interface FabricDurationDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationDay";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationDayConstructor {
+  new (value: bigint): FabricDurationDay;
+  prototype: FabricDurationDay;
+}
+
+export declare const FabricDurationDay: FabricDurationDayConstructor;
+
+/**
+ * Temporal type representing a span of time, as a count of nanoseconds. Wraps
+ * a `bigint` value.
+ */
+export interface FabricDurationNsec extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationNsec";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationNsecConstructor {
+  new (value: bigint): FabricDurationNsec;
+  prototype: FabricDurationNsec;
+}
+
+export declare const FabricDurationNsec: FabricDurationNsecConstructor;
+
+/**
  * Temporal type representing a particular day, as a count of days from the
  * POSIX Epoch. Wraps a `bigint` value.
  */
 export interface FabricEpochDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricEpochDay";
+
   readonly value: bigint;
 }
 
@@ -414,6 +440,9 @@ export declare const FabricEpochDay: FabricEpochDayConstructor;
  * Wraps a `bigint` value.
  */
 export interface FabricEpochNsec extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricEpochNsec";
+
   readonly value: bigint;
 }
 
@@ -428,6 +457,9 @@ export declare const FabricEpochNsec: FabricEpochNsecConstructor;
  * A content-addressed identifier: a hash digest paired with an algorithm tag.
  */
 export interface FabricHash extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricHash";
+
   readonly tag: string;
   readonly bytes: Uint8Array;
   readonly length: number;
@@ -455,6 +487,9 @@ export declare const FabricHash: FabricHashConstructor;
  * throws.
  */
 export interface FabricKeyPair extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricKeyPair";
+
   readonly algorithm: string;
   readonly hasMaterial: boolean;
 
@@ -495,18 +530,21 @@ export declare const FabricKeyPair: FabricKeyPairConstructor;
  * An immutable regular expression.
  *
  * The pattern is held as a flavor / source / flags triple rather than as a
- * native `RegExp`, so that flavors with no native representation can still be
- * carried. `value` reconstitutes a native `RegExp` where one exists.
+ * JS `RegExp`, so that flavors with no JS representation can still be
+ * carried. `value` reconstitutes a JS `RegExp` where one exists.
  */
 export interface FabricRegExp extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricRegExp";
+
   readonly source: string;
   readonly flags: string;
   readonly flavor: string;
 
   /**
-   * A fresh native `RegExp` equivalent to this value, returned anew on each
+   * A fresh JS `RegExp` equivalent to this value, returned anew on each
    * call so the internal instance is never aliased out. Throws for a flavor
-   * with no native `RegExp` representation.
+   * with no JS `RegExp` representation.
    */
   readonly value: RegExp;
 }
@@ -519,6 +557,131 @@ export interface FabricRegExpConstructor {
 
 export declare const FabricRegExp: FabricRegExpConstructor;
 
+/**
+ * Why a `FabricUnavailable` stands where data would otherwise be. The two
+ * transient reasons say the data is on its way; `error` says producing it
+ * failed, and is the one reason that carries a kind and a message.
+ */
+export type UnavailableReason = "pending" | "syncing" | "error";
+
+/**
+ * The kinds of failure a `FabricUnavailable` with reason `error` sorts into.
+ * `general` is the kind for a failure none of the others describes.
+ */
+export type UnavailableErrorKind =
+  | "general"
+  | "schemaMismatch"
+  | "invalidInput"
+  | "network"
+  | "decode"
+  | "compile"
+  | "provider"
+  | "sync";
+
+/**
+ * A marker standing in for data that is not available, saying why. It holds
+ * no data of its own: the reason, and for the `error` reason the kind of
+ * error and a message, are the whole of what it says. Only the `error` reason
+ * carries a kind, and it always does; only the `error` reason may carry a
+ * message, and `errorMessage` supplies one for its kind when none was given.
+ * For the other two reasons every error member is `null`.
+ */
+export interface FabricUnavailable extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricUnavailable";
+
+  /** Why the data is unavailable. */
+  readonly reason: UnavailableReason;
+
+  /** The kind of error, when the reason is `error`; `null` otherwise. */
+  readonly errorKind: UnavailableErrorKind | null;
+
+  /**
+   * The message, when the reason is `error`: the one given at construction,
+   * or the kind's default when none was. `null` for a transient reason.
+   */
+  readonly errorMessage: string | null;
+
+  /**
+   * The message as given at construction, with no default supplied: `null`
+   * for a transient reason, and for an `error` whose message is its kind's
+   * default or was never given.
+   */
+  readonly rawErrorMessage: string | null;
+
+  /** Whether the reason is `pending`. */
+  isPending(): boolean;
+
+  /** Whether the reason is `syncing`. */
+  isSyncing(): boolean;
+
+  /**
+   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
+   * to the non-`null` values the `error` reason always carries.
+   */
+  isError(): this is {
+    readonly errorKind: UnavailableErrorKind;
+    readonly errorMessage: string;
+  };
+
+  /**
+   * Whether the data is on its way rather than failed: `true` for the
+   * `pending` and `syncing` reasons, `false` for `error` whatever its kind.
+   */
+  isTransient(): boolean;
+}
+
+export interface FabricUnavailableConstructor {
+  new (
+    reason: UnavailableReason,
+    errorKind?: UnavailableErrorKind | null,
+    errorMessage?: string | null,
+  ): FabricUnavailable;
+  prototype: FabricUnavailable;
+}
+
+export declare const FabricUnavailable: FabricUnavailableConstructor;
+
+//
+// The `FabricPrimitive` schema `type` vocabulary
+//
+
+/**
+ * Union of the concrete `FabricPrimitive` classes this module declares. Every
+ * type that ranges over those classes is derived from this one.
+ */
+export type ConcreteFabricPrimitive =
+  | FabricBytes
+  | FabricDurationDay
+  | FabricDurationNsec
+  | FabricEpochDay
+  | FabricEpochNsec
+  | FabricHash
+  | FabricKeyPair
+  | FabricRegExp
+  | FabricUnavailable;
+
+/**
+ * One of the `FabricPrimitive` validation types -- a non-standard addition to
+ * the JSON Schema `type` vocabulary. Each name identifies a concrete
+ * `FabricPrimitive` class, being the name its instances report as
+ * `.schemaType`, and a value matches by prototype (`instanceof`), not by
+ * structure. `"object"` also accepts these values -- every `FabricPrimitive`
+ * is a subtype of `"object"` the way an `"integer"` value satisfies a
+ * `"number"` schema -- so schemas that do not use this vocabulary admit them
+ * all the same.
+ */
+export type FabricPrimitiveSchemaType = ConcreteFabricPrimitive["schemaType"];
+
+/** Every `FabricPrimitiveSchemaType`, one entry per concrete class. */
+export declare const FABRIC_PRIMITIVE_SCHEMA_TYPES:
+  readonly FabricPrimitiveSchemaType[];
+
+/** Whether the given schema type names a `FabricPrimitive` class. */
+export declare function isFabricPrimitiveSchemaType(
+  type: string,
+): type is FabricPrimitiveSchemaType;
+
 //
 // Concrete `FabricInstance` classes
 //
@@ -529,7 +692,7 @@ export declare const FabricRegExp: FabricRegExpConstructor;
  * whose keys must not collide with the slot names.
  */
 export type FabricErrorState = {
-  /** Constructor name of the originating native `Error` (e.g. `"TypeError"`). */
+  /** Constructor name of the originating JS `Error` (e.g. `"TypeError"`). */
   readonly type: string;
 
   /** The `.name` property. Omit to mean "same as `type`". */
@@ -579,8 +742,8 @@ export interface FromNativeErrorOptions {
   /**
    * Converter applied to the error's `cause` and to each of its custom
    * enumerable properties, whose result is what the instance holds. When
-   * absent, a value that is already a valid `FabricValue` is held as it
-   * stands, and anything else is converted the way `fabricFromNativeValue()`
+   * absent, a value that is already a valid `FabricValue` is held as it stands,
+   * and anything else is converted the way `fabricFromConvertibleJsValue()`
    * converts it, without freezing.
    */
   readonly convert?: (value: unknown) => FabricValue;
@@ -633,8 +796,10 @@ export interface DebugValueOptions {
    * Maximum depth of result nesting: a positive integer, or `Infinity` for as
    * deep as the conversion allows. An item which would require further
    * nesting is instead converted into a form suggestive of the elided
-   * information. When absent, the depth is ten levels. A large value is capped;
-   * there is no guarantee about the _actual_ possible maximum depth.
+   * information. The contents of a `FabricPrimitive` are nested to this depth
+   * in their own right, whatever the depth of the `FabricPrimitive` itself.
+   * When absent, the depth is ten levels. A large value is capped; there is no
+   * guarantee about the _actual_ possible maximum depth.
    */
   readonly maxDepth?: number;
 
@@ -643,10 +808,21 @@ export interface DebugValueOptions {
    * integer, or `Infinity` for as many as the conversion allows. An array
    * with more elements than this has only the elements at indices below the
    * limit converted, and in place of the rest a form suggestive of the
-   * elision, which includes the array's actual length. When absent, the limit
-   * is one hundred. A large value is capped.
+   * elision, which includes the array's actual length. This applies to an
+   * array within the contents of a `FabricPrimitive` too. When absent, the
+   * limit is one hundred. A large value is capped.
    */
   readonly maxArrayLength?: number;
+
+  /**
+   * Maximum number of bytes of a buffer which are rendered: a positive
+   * integer, or `Infinity` for as many as the rendering allows. A buffer is
+   * what holds the bytes of a `FabricPrimitive`, such as those of a
+   * `FabricBytes`. One with more bytes than this has only that many rendered,
+   * and after them a note of the elision, which includes the buffer's actual
+   * length. When absent, the limit is two hundred. A large value is capped.
+   */
+  readonly maxBufferLength?: number;
 
   /**
    * Maximum number of properties of an object which are represented: a
@@ -718,25 +894,37 @@ export interface CompactDebugStringOptions extends DebugValueOptions {
 /**
  * A value that can appear in an in-memory fabric execution graph.
  *
- * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions and
- * therefore is not necessarily durable or serializable: it is
- * `FabricValuePlus` at {@link FabricExecFunction}, so a function may sit at
- * the top or inside any container.
+ * Unlike a {@link FabricValue}, a `FabricExecValue` may contain builder
+ * artifacts, patterns, and modules, and therefore is not necessarily durable
+ * or serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so
+ * any of those may sit at the top or inside any container.
  */
-export type FabricExecValue = FabricValuePlus<FabricExecFunction>;
-
-/** A callable leaf in a {@link FabricExecValue} graph. */
-export type FabricExecFunction = (...args: any[]) => any;
-
-/** Read-only array of fabric execution values. */
-export type FabricExecArray = FabricArrayPlus<FabricExecFunction>;
+export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
 
 /**
- * Read-only plain object whose string-keyed values are execution values.
- * `Pattern` and `Module` extend it, and the schema generator recognizes that
- * base by this name.
+ * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
+ * callable builder artifact, a {@link Pattern}, or a {@link Module}.
+ *
+ * A pattern and a module are each an arm of their own. Each declares the
+ * members it has; neither is a record that any string key may be added to.
  */
-export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
+export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
+
+/**
+ * A callable leaf in a {@link FabricExecValue} graph: a builder artifact, which
+ * says what it is through {@link toEncodableForm}.
+ *
+ * No other function belongs in a graph. A module's implementation is a
+ * function, but it is a declared member of that {@link Module}, not a value in
+ * the graph.
+ */
+export type FabricExecFunction = ((...args: any[]) => any) & toEncodableForm;
+
+/** Read-only array of fabric execution values. */
+export type FabricExecArray = FabricArrayPlus<FabricExecPlusType>;
+
+/** Read-only plain object whose string-keyed values are execution values. */
+export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecPlusType>;
 
 //
 // Runtime Constants
@@ -755,6 +943,9 @@ export declare const TILE_UI: "$TILE_UI";
 export declare const CHIP_UI: "$CHIP_UI";
 export declare const FS: "$FS";
 export declare const TESTS: "$TESTS";
+// The single field under which a pattern offers named groups of facts and
+// streams a host may draw with its own toolkit. [UI] remains the floor.
+export declare const VIEWS: "$VIEWS";
 
 /**
  * The size/representation spectrum a piece can be rendered at (CT-1321):
@@ -836,6 +1027,50 @@ export type CellKind =
 export type CellScope = "space" | "user" | "session";
 export type SchemaScope = CellScope | "any";
 export type LinkScope = "inherit" | CellScope;
+
+/** A document selected on the piece segment. */
+export type ReferenceMember = "argument" | "result";
+
+/** A location prefix, with an independently known or unknown scope. */
+export type ReferenceContext =
+  & {
+    scope?: CellScope;
+  }
+  & (
+    | {
+      space?: undefined;
+      id?: undefined;
+      member?: undefined;
+      path?: undefined;
+    }
+    | { space: string; id?: undefined; member?: undefined; path?: undefined }
+    | {
+      space: string;
+      id: string;
+      member?: ReferenceMember;
+      path?: readonly string[];
+    }
+  );
+
+/** A cell address to render, with an optional space for unresolved references. */
+export interface RenderableCellReference {
+  id: string;
+  space?: string;
+  member?: ReferenceMember;
+  scope?: CellScope;
+  pin?: string;
+  path: readonly (string | number)[];
+}
+
+/**
+ * Renders a cell address relative to a location and scope context. Without a
+ * context, includes the known space and explicit scope. Empty and dot path
+ * keys retain their literal meaning.
+ */
+export declare function renderCellReference(
+  link: RenderableCellReference,
+  context?: ReferenceContext,
+): string;
 
 export type AsCellEntry =
   | CellKind
@@ -974,6 +1209,7 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    * Add one or more values to an array cell as a set: each value is appended
    * only if no existing element equals it. Mergeable — concurrent adds of
    * distinct elements merge and a repeated add is a no-op against durable state.
+   * A value read back through `get()` is refused; pass the element's cell.
    */
   addUnique(
     this: IsThisArray,
@@ -994,7 +1230,8 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Remove every element equal to `ref` by stored value (a cell matches by its
    * link). Mergeable — resolved against durable state, so concurrent removes of
-   * distinct entries merge instead of clobbering via a whole-array rewrite.
+   * distinct entries merge instead of clobbering via a whole-array rewrite. A
+   * value read back through `get()` is refused; pass the element's cell.
    */
   removeByValue(
     this: IsThisArray,
@@ -1541,12 +1778,20 @@ export type CollectionIndexKeyEntry<K extends CollectionIndexKey> = K extends
   : { kind: "value"; value: K };
 
 /** Stored descriptor whose buckets are addressed independently by keyed lookup. */
-export interface CollectionIndexData<K extends CollectionIndexKey, V> {
+export interface CollectionIndexData<
+  K extends CollectionIndexKey,
+  V,
+  M extends "group" | "key" = "group" | "key",
+> {
   /** Descriptor marker used to recognize an index receiver. */
   readonly kind: "collection-index";
 
-  /** Missing-key behavior: an empty group or an absent unique match. */
-  readonly mode: "group" | "key";
+  /**
+   * Missing-key behavior: an empty group or an absent unique match. The
+   * operator that built the index names one, so a lookup reads it from its
+   * receiver's schema when the descriptor has not been published yet.
+   */
+  readonly mode: M;
 
   /** Occupied keys in deterministic typed-key order. */
   readonly keys: K[];
@@ -1582,12 +1827,12 @@ export interface CollectionIndexHandle<
 
 /** Index whose missing-key lookup yields an empty group. */
 export type GroupIndex<K extends CollectionIndexKey, T> = CollectionIndexHandle<
-  CollectionIndexData<K, T[]>
+  CollectionIndexData<K, T[], "group">
 >;
 
 /** Index whose missing-key lookup yields undefined. */
 export type KeyIndex<K extends CollectionIndexKey, T> = CollectionIndexHandle<
-  CollectionIndexData<K, T | undefined>
+  CollectionIndexData<K, T | undefined, "key">
 >;
 
 /** @internal Preserves an index selector's key kind before result serialization. */
@@ -2223,12 +2468,12 @@ export type AnyCellWrapping<T> =
 // TODO(seefeld): Subset of internal type, just enough to make it
 // differentiated. But this isn't part of the public API, so we need to find a
 // different way to handle this.
-export interface Pattern extends FabricExecPlainObject {
+export interface Pattern {
   argumentSchema: JSONSchema;
   resultSchema: JSONSchema;
   defaultScope?: CellScope;
 }
-export interface Module extends FabricExecPlainObject {
+export interface Module {
   type: "ref" | "javascript" | "pattern" | "raw" | "isolated" | "passthrough";
   defaultScope?: CellScope;
 }
@@ -2351,40 +2596,6 @@ export interface JSONObject extends Readonly<Record<string, JSONValue>> {}
  * Deeply-mutable version of `JSONValue`.
  */
 export type MutableJSONValue = Mutable<JSONValue>;
-
-/**
- * `FabricPrimitive` validation types -- a non-standard addition to the JSON
- * Schema `type` vocabulary. Each name identifies a concrete `FabricPrimitive`
- * class from the data-model, and a value matches by prototype (`instanceof`),
- * not by structure. `"object"` also accepts these values -- every
- * `FabricPrimitive` is a subtype of `"object"` the way an `"integer"` value
- * satisfies a `"number"` schema -- so schemas that predate this vocabulary keep
- * working.
- */
-export const FABRIC_PRIMITIVE_SCHEMA_TYPES = Object.freeze(
-  [
-    "FabricBytes",
-    "FabricEpochDay",
-    "FabricEpochNsec",
-    "FabricHash",
-    "FabricKeyPair",
-    "FabricRegExp",
-  ] as const,
-);
-
-export type FabricPrimitiveSchemaType =
-  typeof FABRIC_PRIMITIVE_SCHEMA_TYPES[number];
-
-const FABRIC_PRIMITIVE_SCHEMA_TYPE_SET: ReadonlySet<string> = new Set(
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-);
-
-/** Whether the given schema type names a `FabricPrimitive` class. */
-export function isFabricPrimitiveSchemaType(
-  type: string,
-): type is FabricPrimitiveSchemaType {
-  return FABRIC_PRIMITIVE_SCHEMA_TYPE_SET.has(type);
-}
 
 // Valid values for the "type" property of a JSONSchema
 export type JSONSchemaTypes =
@@ -2521,6 +2732,15 @@ export type JSONSchemaObj = {
           readonly moduleIdentity?: string;
         };
       };
+    // The lowered form of `WritePolicyAnyOf`: alternative complete writer
+    // policies, any one of which admits a write whole. A position declaring
+    // it declares no `writeAuthorizedBy` or `uiContract` of its own.
+    readonly writePolicyAnyOf?: readonly {
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly exactCopyOf?: readonly string[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON
@@ -2943,6 +3163,59 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/**
+ * The request an `agent()` node submits: a task, the cells it may read, and
+ * the schema its answer takes. A runner the requester registered executes it
+ * as the requester; the builtin's cell follows the run's record.
+ */
+export interface BuiltInAgentParams {
+  /**
+   * What the run is for, as context rather than a command. Labeled data
+   * interpolated into this text becomes a value the request carries and the
+   * sink gate measures; pass the cell through `inputs` instead.
+   */
+  task: string;
+
+  /**
+   * The cells the run may read, by the names the model sees them under. Each
+   * reaches the request as a link, never as its value, so an entry has to be
+   * a cell.
+   */
+  inputs: Record<string, AnyCell<any> | AnyBrandedCell<any> | OpaqueCell<any>>;
+
+  /** The schema the run's structured result is validated against. */
+  resultSchema: JSONSchema;
+
+  /**
+   * Confidentiality clauses bounding what the run may observe. Absent, the
+   * run observes what the requester may see; declared, it can only tighten.
+   */
+  maxConfidentiality?: readonly JSONValue[];
+
+  /**
+   * Names of the tools the run may use, from the set the deployment
+   * publishes. A name the requester's registered runner does not offer fails
+   * the request before it is staged.
+   */
+  tools?: readonly string[];
+}
+
+/**
+ * What an `agent()` node holds. `result` is a link to the document the run's
+ * harness wrote; `run` is a link to the run's record, which a pattern reads
+ * for progress, outcome, and usage; `host` is the origin of the toolshed
+ * serving the record's space, carried beside `run` because a link resolves a
+ * space and not the host that serves it.
+ */
+export interface BuiltInAgentState<T> {
+  pending: boolean;
+  result?: T;
+  error?: string;
+  requestHash?: string;
+  run?: Record<string, any>;
+  host?: string;
+}
+
 export interface BuiltInCompileAndRunParams<T> {
   files: Array<{ name: string; contents: string }>;
   main: string;
@@ -2987,11 +3260,27 @@ export interface BuiltInCompileAndRunState<T> {
  * The reserved output fields the runtime reads off a pattern's result, each
  * typed so a value of the wrong shape under a reserved key is a compile error.
  * `[NAME]` and `[TYPE]` label the piece; `[UI]`, `[TILE_UI]` and `[CHIP_UI]`
- * are its renderings; `[FS]` is its filesystem projection. Those are each
+ * are its renderings; `[FS]` is its filesystem projection; `[VIEWS]` holds the
+ * named groups it offers a host to draw natively. Those are each
  * `FactoryInput`-wrapped, so a reactive value (a `computed()`, a cell) is
  * accepted alongside a plain one. `[TESTS]` is the exception: it holds a
  * `TestStep[]` written out at build time, not a reactive value, so it is not
  * wrapped.
+ *
+ * `[VIEWS]` is typed as an object and no further. What a group holds is the
+ * pattern's to declare and a consumer's to demand through a schema, so the
+ * framework types the field that carries them rather than their members — a
+ * value that is not a group map at all is the error worth catching here.
+ *
+ * `object` is the looser of two live choices, and what it buys is the
+ * `interface` idiom. It rejects a primitive and nothing else, so an array or a
+ * view node under this key compiles — pinned in `reserved-output-types.test.ts`
+ * so that narrowing the field later is a deliberate act rather than a silent
+ * one. `Record<string, unknown>` would reject both, and would also reject a
+ * group map declared as an `interface`, which has no implicit index signature.
+ * A `type` alias does satisfy it, so the stricter field is available for one
+ * keyword of author cost, at the price of a compile error on the declaration
+ * form a group is most naturally written in.
  */
 type ReservedOutput = {
   [NAME]?: FactoryInput<string>;
@@ -3001,6 +3290,7 @@ type ReservedOutput = {
   [CHIP_UI]?: FactoryInput<VNode> | JSXElement;
   [FS]?: FactoryInput<FsProjection>;
   [TESTS]?: TestStep[];
+  [VIEWS]?: FactoryInput<object>;
 };
 
 /**
@@ -3396,6 +3686,10 @@ export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
 
+export type AgentFunction = <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
+
 export type FetchOptions = {
   body?: JSONValue;
   headers?: Record<string, string>;
@@ -3490,23 +3784,37 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
-export type CellFromUrlFunction = (
-  params: FactoryInput<{
-    url: string;
-    hosts?: string[];
-  }>,
-) => Reactive<{
-  pending: boolean;
+export type CellFromUrlFunction = {
+  /** Resolves a writable handle; storage authorization still governs writes. */
+  <T = unknown>(
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+      writable: true;
+    }>,
+  ): Reactive<{ pending: boolean; cell?: Writable<T> }>;
 
-  /**
-   * The cell the URL named, once resolved, and absent when it named none. Its
-   * value is unconstrained: a URL addresses any cell, and resolution neither
-   * requires a piece nor supplies one's `[NAME]`.
-   */
-  cell?: ReadonlyCell<unknown>;
-}>;
+  (
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+    }>,
+  ): Reactive<{
+    pending: boolean;
+
+    /**
+     * The cell the URL named, once resolved, and absent when it named none. Its
+     * value is unconstrained: a URL addresses any cell, and resolution neither
+     * requires a piece nor supplies one's `[NAME]`.
+     */
+    cell?: ReadonlyCell<unknown>;
+  }>;
+};
 
 export type FetchProgramFunction = (
   params: FactoryInput<{ url: string }>,
@@ -3629,11 +3937,11 @@ export interface ISqliteQueryable {
       readClearance?: boolean;
 
       /** Scope of the result cell. A `session`-scoped result is one each
-       *  session reads alone, which a runtime-wide read ceiling
-       *  (`cfcReadMaxConfidentiality`) requires; absent, the result takes the
-       *  narrowest of the db's scope, the pattern's output scope, and — when
-       *  `readClearance` is set — `user`, since a cleared result is one
-       *  reader's view. */
+       *  session reads alone and filters under its runtime read ceiling. Shared
+       *  results retain their labels for cell-read enforcement. Absent, the
+       *  result takes the narrowest of the db's scope, the pattern's output
+       *  scope, and — when `readClearance` is set — `user`, since a cleared
+       *  result is one reader's view. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -3723,9 +4031,9 @@ export type SqliteQueryFunction = {
   >;
 
   /** Bind the query's result cell to a scope: a `session`-scoped result is
-   *  one each session reads alone, which a runtime-wide read ceiling
-   *  (`cfcReadMaxConfidentiality`) requires. The `scope` option of
-   *  `db.query` is the same binding. */
+   *  one each session reads alone and filters under its runtime read ceiling.
+   *  Shared results retain their labels for cell-read enforcement. The `scope`
+   *  option of `db.query` is the same binding. */
   asScope(scope: CellScope): SqliteQueryFunction;
 };
 
@@ -3822,7 +4130,14 @@ export type SqliteCfLinkFunction = <_T = unknown>() => SqliteColumnSchema;
 
 export type WishTag = `/${string}` | `#${string}`;
 
-export type DID = `did:${string}:${string}`;
+/**
+ * A decentralized identifier, most often a space DID.
+ *
+ * This package is the surface patterns compile against, so it carries no
+ * import of its own; the runtime-side twin of this type, and the predicate
+ * that decides whether a string is a DID, live in `@commonfabric/identity/did`.
+ */
+export type DID = `did:${string}`;
 
 export type WishParams = {
   query: WishTag | string;
@@ -4159,6 +4474,34 @@ export type ToIndentedDebugStringFunction = (
   value: unknown,
   options?: DebugValueOptions,
 ) => string;
+/**
+ * Composes a diagnostic message. A substitution is converted the way a
+ * template literal converts one, except that the conversion never throws, and
+ * except where a _directive_ comes right before it: a dollar sign and one or
+ * more comma-separated words, as in `$quote,long${value}`. The directive is
+ * removed from the text, and the value after it gets a debug rendering, cut to
+ * the size its size word names and quoted where it holds `quote`.
+ *
+ * - With no `indent`, the rendering is that of `toCompactDebugString()`, cut
+ *   to 50 characters, or with `long` to 500, or with `xlong` to 5000; `short`
+ *   names the default. With `quote` it is a Markdown code span.
+ * - With `indent`, the rendering is that of `toIndentedDebugString()`, cut to
+ *   5 lines, or with `long` to 50, or with `xlong` to 500. With `quote` it is
+ *   a Markdown fenced block on lines of its own.
+ *
+ * Either way the quoting survives a backtick in the value, which a
+ * hand-written pair of backticks does not. A backslash before the dollar sign,
+ * as in `\$quote${value}`, makes the text literal and the substitution an
+ * ordinary one. A directive holding any other word stays in the message as
+ * text, where the misspelling can be seen, and its value gets the default
+ * rendering.
+ *
+ * As with the renderers it calls, how a value renders is not a contract.
+ */
+export type DebugStrFunction = (
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+) => string;
 
 /**
  * Compare two cells or values for equality after resolving, i.e. after
@@ -4218,6 +4561,7 @@ export declare const llm: LLMFunction;
 export declare const llmDialog: LLMDialogFunction;
 export declare const generateObject: GenerateObjectFunction;
 export declare const generateText: GenerateTextFunction;
+export declare const agent: AgentFunction;
 export declare const cellFromUrl: CellFromUrlFunction;
 export declare const fetchBinary: FetchBinaryFunction;
 export declare const fetchText: FetchTextFunction;
@@ -4259,6 +4603,7 @@ export function getPatternEnvironment(): PatternEnvironment {
 }
 export declare const toCompactDebugString: ToCompactDebugStringFunction;
 export declare const toIndentedDebugString: ToIndentedDebugStringFunction;
+export declare const debugStr: DebugStrFunction;
 
 export interface UiActionProps {
   readonly as?: string;

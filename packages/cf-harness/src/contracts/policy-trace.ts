@@ -7,7 +7,10 @@ import type {
 import type { PromptSlotBinding } from "./prompt-slot.ts";
 import type { HarnessToolEffectClass } from "./tool-descriptor.ts";
 import type { HarnessToolInputSummary } from "./policy.ts";
-import type { HarnessToolPolicyDecision } from "./run-report.ts";
+import type {
+  HarnessToolInvocationOrigin,
+  HarnessToolPolicyDecision,
+} from "./run-report.ts";
 import type { ToolResultRef } from "./tool-result.ts";
 
 export type HarnessPolicyDecisionReasonCode =
@@ -28,6 +31,7 @@ export type HarnessPolicyDecisionReasonCode =
   | "write_file_enforce_explicit_requires_direct_command"
   | "write_file_enforce_strict_direct_command"
   | "write_file_enforce_strict_requires_direct_command"
+  | "structured_result_return"
   | "subagent_profile_allowed"
   | "subagent_profile_not_allowed"
   | "invalid_tool_call"
@@ -41,6 +45,7 @@ export interface HarnessPolicyDecisionRecord {
   toolActivitySequence: number;
   toolCallId: string;
   toolId: string;
+  origin?: HarnessToolInvocationOrigin;
   effectClass?: HarnessToolEffectClass;
   cfcEnforcementMode: CfcEnforcementMode;
   decision: HarnessToolPolicyDecision;
@@ -129,6 +134,7 @@ export const createHarnessPolicyDecisionRecord = (
   toolActivitySequence: options.toolActivitySequence,
   toolCallId: options.toolCallId,
   toolId: options.toolId,
+  ...(options.origin !== undefined ? { origin: options.origin } : {}),
   ...(options.effectClass !== undefined
     ? { effectClass: options.effectClass }
     : {}),

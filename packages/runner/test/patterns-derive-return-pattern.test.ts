@@ -51,7 +51,6 @@ describe("Pattern Runner - Derive returning pattern", () => {
 
   it("should handle derive returning a non-recursive pattern instantiation", async () => {
     // Baseline: derive returns a different pattern (not self-referential).
-    // email-pattern-launcher.tsx uses this mechanism successfully.
     const innerPattern = pattern<{ value: number }>(({ value }) => {
       const doubled = lift((x: number) => x * 2)(value);
       return { result: doubled };

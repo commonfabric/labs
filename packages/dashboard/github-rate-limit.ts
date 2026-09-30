@@ -5,6 +5,7 @@
  * spend is known before collection starts.
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const GITHUB_RATE_LIMIT_FRACTION = 0.8;
@@ -379,7 +380,7 @@ export class GitHubRateLimitBudget {
     }
     const ledger = parsed as StoredRateLimitLedger;
     if (
-      typeof parsed !== "object" || parsed === null ||
+      !isObjectOrArray(parsed) ||
       ledger.version !== LEDGER_VERSION ||
       !Array.isArray(ledger.tokens) ||
       !ledger.tokens.every(isStoredTokenBudget) ||

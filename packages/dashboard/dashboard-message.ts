@@ -1,10 +1,10 @@
 /**
- * Holds the one short message anyone at the wall can leave on it, and the
+ * Holds the one short message anyone at the dashboard can leave on it, and the
  * store that keeps that message across dashboard restarts. A message stays
  * fully visible for a while, then fades out linearly and expires, so a note
  * left about a broken build clears itself rather than growing stale on the
- * wall. Each save carries a revision, which is how a page that has been open
- * across someone else's edit tells its own text from theirs.
+ * dashboard. Each save carries a revision, which is how a page that has been
+ * open across someone else's edit tells its own text from theirs.
  */
 
 import { dashboardCacheFile } from "./history-files.ts";

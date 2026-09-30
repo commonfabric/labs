@@ -21,6 +21,7 @@ import {
   type InitializedRuntimeConnection,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** Default CellRef used when none is provided. */
 const DEFAULT_REF: CellRef = {
@@ -62,12 +63,12 @@ class MockCellNetwork {
     const root = this.#roots.get(this.#rootKey(ref));
     let value: unknown = root?.get();
     for (const seg of ref.path ?? []) {
-      if (value == null || typeof value !== "object") break;
+      if (!isObjectOrArray(value)) break;
       value = (value as Record<string, unknown>)[seg as string];
     }
-    const link = value != null && typeof value === "object" &&
+    const link = isObjectOrArray(value) &&
       (value as Record<string, unknown>)["$link"];
-    if (link != null && typeof link === "object") {
+    if (isObjectOrArray(link)) {
       return {
         scope: "space",
         path: [],
@@ -91,7 +92,7 @@ class MockCellNetwork {
 
     // Reconstruct the root's full value with the nested path updated
     const rootValue = root.get();
-    if (rootValue == null || typeof rootValue !== "object") return;
+    if (!isObjectOrArray(rootValue)) return;
 
     const updated = deepSet(
       rootValue as Record<string, unknown>,
@@ -112,7 +113,7 @@ function deepSet(
   const [head, ...rest] = path;
   const child = obj[head];
   const nested = rest.length === 0 ? value : deepSet(
-    (child != null && typeof child === "object" ? child : {}) as Record<
+    (isObjectOrArray(child) ? child : {}) as Record<
       string,
       unknown
     >,
@@ -162,7 +163,7 @@ function createMockConnection(
 }
 
 /**
- * Create a mock RuntimeClient that only provides `[$conn]()`.
+ * Create a mock RuntimeClient with a connection and a live lifetime signal.
  *
  * CellHandle's constructor only accesses `worker[$conn]()` — it doesn't call
  * any other RuntimeClient methods — so this minimal mock is sufficient.
@@ -170,7 +171,10 @@ function createMockConnection(
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
 ): RuntimeClient {
-  return { [$conn]: () => conn } as unknown as RuntimeClient;
+  return {
+    [$conn]: () => conn,
+    signal: new AbortController().signal,
+  } as unknown as RuntimeClient;
 }
 
 /**

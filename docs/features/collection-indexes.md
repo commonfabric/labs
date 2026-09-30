@@ -19,6 +19,24 @@ are empty arrays; missing unique entries are `undefined`. `keys()` separately
 observes occupied-key enumeration. Lookup does not read that enumeration or scan
 the source collection.
 
+The index's own scheduler action publishes the descriptor that `lookup(key)`,
+`keys()`, and `keyEntries()` read, and a consumer can run before that action
+commits. A receiver counts as an index when its stored descriptor says so or
+when its own schema does, which is what separates an index that has not
+published yet from ordinary data; a receiver that is neither is rejected. In
+that window `keys()` and `keyEntries()` return the empty enumeration an index
+with no occupants returns, and re-run once the descriptor arrives.
+
+`lookup(key)` needs the mode as well, since an empty group and an absent unique
+match differ. A published descriptor carries it. Before that, `lookup(key)`
+takes it from the handle's type: `groupBy` produces a `GroupIndex` and `keyBy` a
+`KeyIndex`, and each names its mode in the schema its handle carries, so a
+lookup on one returns that mode's empty answer and re-runs once the descriptor
+arrives. `CollectionIndexData` takes the mode as its third type argument and
+defaults to both, so a handle spelled through that interface directly names
+neither; `lookup(key)` on one fails saying so until its descriptor is
+published.
+
 ## Authored lookup and joins
 
 Build an index outside the callbacks that consume it. Use an explicit Cell or

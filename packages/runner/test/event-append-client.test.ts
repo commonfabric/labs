@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type {
   ClientCommit,
@@ -38,12 +39,17 @@ import {
   memoryEventAppendQueueStore,
   type QueuedEventAppend,
 } from "../src/storage/event-append-queue.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { ArrivalLog } from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+  testPrincipalSessionOpenAuthFactory,
+} from "./memory-v2-test-utils.ts";
 import {
   flushMicrotasks,
   scriptedIntentManager,
 } from "./speculation-intent-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 const spaceSigner = await Identity.fromPassphrase("event append space");
 const space = spaceSigner.did() as MemorySpace;
@@ -65,13 +71,83 @@ const appendOf = (
 });
 
 describe("event-append queue (events.md §5, LT9)", () => {
+  it("settles a READ principal's authoritative append refusal without retrying it", async () => {
+    const server = new MemoryV2Server.Server({
+      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
+      authorizeSessionOpen: (message) =>
+        (message.authorization as { principal: string }).principal,
+      acl: { mode: "enforce" },
+    });
+    const engine = await server.engineForSpace(space);
+    Engine.applyCommit(engine, {
+      sessionId: "read-append-genesis",
+      space,
+      principal: space,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [space]: "OWNER", [aliceSigner.did()]: "READ" } },
+        }],
+      },
+    });
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+    });
+    const session = await client.mount(
+      space,
+      {},
+      testPrincipalSessionOpenAuthFactory(aliceSigner),
+    );
+    const retried = Promise.withResolvers<"retried">();
+    let attempts = 0;
+    let refusal: unknown;
+    const queue = new EventAppendQueue({
+      space,
+      nextLocalSeq: () => ++attempts,
+      transact: async (commit) => {
+        if (attempts > 1) retried.resolve("retried");
+        try {
+          return await session.transact(commit);
+        } catch (error) {
+          refusal = error;
+          throw error;
+        }
+      },
+    });
+    try {
+      const result = await Promise.race([
+        queue.enqueue(appendOf("reader-denied")),
+        retried.promise,
+      ]);
+      expect(refusal).toMatchObject({
+        name: "AuthorizationError",
+        permanentEvidence: true,
+        aclRevision: 1,
+      });
+      expect(result).toEqual({
+        delivered: false,
+        refused: expect.stringContaining("lacks WRITE"),
+      });
+      expect(attempts).toBe(1);
+      expect(queue.pending).toHaveLength(0);
+      expect(Engine.serverSeq(engine)).toBe(1);
+    } finally {
+      queue.close();
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discharges in fired order, one in flight", async () => {
-    const sent: string[] = [];
+    const sent = new ArrivalLog<string>();
     let release: (() => void) | undefined;
     const queue = new EventAppendQueue({
       space,
       transact: (commit: ClientCommit) => {
-        sent.push((commit.eventAppends ?? [])[0]?.eventId ?? "?");
+        sent.record((commit.eventAppends ?? [])[0]?.eventId ?? "?");
         return new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -83,15 +159,16 @@ describe("event-append queue (events.md §5, LT9)", () => {
     });
     const first = queue.enqueue(appendOf("evt-1"));
     const second = queue.enqueue(appendOf("evt-2"));
-    await waitUntil(() => sent.length === 1, "the head to send");
-    // Strict serialization: evt-2 must NOT send while evt-1 is in
-    // flight (fired-order discharge, events.md §5).
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(sent).toEqual(["evt-1"]);
+    await sent.reached(1);
+    // Strict serialization: evt-2 must NOT send while evt-1 is in flight
+    // (fired-order discharge, events.md §5). A parallel discharge issues
+    // both sends in the same synchronous run, so it is already visible
+    // in the turn this arrival wakes.
+    expect(sent.entries).toEqual(["evt-1"]);
     release!();
     await first;
-    await waitUntil(() => sent.length === 2, "the second to send");
-    expect(sent).toEqual(["evt-1", "evt-2"]);
+    await sent.reached(2);
+    expect(sent.entries).toEqual(["evt-1", "evt-2"]);
     release!();
     expect(await second).toEqual({ delivered: true });
     queue.close();
@@ -158,6 +235,39 @@ describe("event-append queue (events.md §5, LT9)", () => {
     queue.close();
   });
 
+  it("retries authorization failures without a permanent current-ACL verdict", async () => {
+    for (
+      const details of [
+        {},
+        { permanentEvidence: true },
+        { permanentEvidence: true, aclRevision: 1, retriable: true },
+      ]
+    ) {
+      let attempts = 0;
+      const queue = new EventAppendQueue({
+        space,
+        nextLocalSeq: () => ++attempts,
+        transact: () =>
+          attempts === 1
+            ? Promise.reject(
+              Object.assign(
+                namedError("AuthorizationError", "session challenge"),
+                details,
+              ),
+            )
+            : Promise.resolve(),
+      });
+      try {
+        expect(await queue.enqueue(appendOf("auth-recovery"))).toEqual({
+          delivered: true,
+        });
+        expect(attempts).toBe(2);
+      } finally {
+        queue.close();
+      }
+    }
+  });
+
   it("duplicate-eventId fires each settle their own outcome (the per-entry keying — a per-id map would wedge the pending-commit barrier)", async () => {
     let calls = 0;
     const queue = new EventAppendQueue({
@@ -211,7 +321,13 @@ describe("event-append queue (events.md §5, LT9)", () => {
       nextLocalSeq: () => 1,
     });
     const pending = queue.enqueue(appendOf("evt-stuck"));
-    await waitUntil(() => queue.pending.length === 1, "the entry to queue");
+    // `enqueue` queues behind the backlog load and persists there, and
+    // same-source `.then` callbacks run in registration order, so a
+    // continuation registered on `loaded` here runs after the enqueue's
+    // and sees the save it issued.
+    await queue.loaded;
+    await queue.persisted;
+    expect(queue.pending.length).toBe(1);
     queue.close();
     const outcome = await pending;
     expect(outcome.delivered).toBe(false);
@@ -241,6 +357,54 @@ describe("event-append queue (events.md §5, LT9)", () => {
     ]);
   });
 
+  it("recovers a failed persistence save without dropping or reordering pending events", async () => {
+    const durable = memoryEventAppendQueueStore();
+    const delivery = Promise.withResolvers<void>();
+    const arrivals = new ArrivalLog<string>();
+    let saves = 0;
+    let localSeq = 0;
+    const queue = new EventAppendQueue({
+      space,
+      pacing: false,
+      nextLocalSeq: () => ++localSeq,
+      store: {
+        load: (space) => durable.load(space),
+        save: async (space, entries) => {
+          if (++saves === 1) throw new Error("persistence adapter unavailable");
+          await durable.save(space, entries);
+        },
+      },
+      transact: async (commit) => {
+        expect(commit.eventAppends).toHaveLength(1);
+        arrivals.record(commit.eventAppends![0].eventId);
+        await delivery.promise;
+      },
+    });
+    try {
+      const first = queue.enqueue(appendOf("save-retry-first"));
+      await arrivals.reached(1);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+      const second = queue.enqueue(appendOf("save-retry-second"));
+      await queue.loaded;
+      await queue.persisted;
+      expect((await durable.load(space)).map((entry) => entry.eventId))
+        .toEqual(["save-retry-first", "save-retry-second"]);
+      delivery.resolve();
+      expect(await first).toEqual({ delivered: true });
+      expect(await second).toEqual({ delivered: true });
+      expect(arrivals.entries).toEqual([
+        "save-retry-first",
+        "save-retry-second",
+      ]);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+    } finally {
+      delivery.resolve();
+      queue.close();
+    }
+  });
+
   it("saves serialize behind the PREVIOUS save (review 2026-08-11 m6/LT9): an async adapter can never complete snapshots out of order", async () => {
     // Pre-fix, #persist chained each save on the LOAD only: two rapid
     // enqueues issued two store.save calls back to back, and an
@@ -249,11 +413,11 @@ describe("event-append queue (events.md §5, LT9)", () => {
     // in flight.
     let manual = true;
     const parked: Array<{ snapshot: string[]; resolve: () => void }> = [];
-    let saveCalls = 0;
+    const saves = new ArrivalLog<void>();
     const store: EventAppendQueueStore = {
       load: () => Promise.resolve([]),
       save: (_space, entries) => {
-        saveCalls += 1;
+        saves.record();
         if (!manual) return Promise.resolve();
         return new Promise<void>((resolve) => {
           parked.push({
@@ -276,13 +440,15 @@ describe("event-append queue (events.md §5, LT9)", () => {
     void queue.enqueue(appendOf("evt-b"));
     // Two persists are owed. Only the FIRST save may start while it is
     // unresolved.
-    await waitUntil(() => saveCalls === 1, "the first save to start");
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(saveCalls).toBe(1);
+    await saves.reached(1);
+    // A second save issued while the first is unresolved would go out in
+    // the same synchronous run as the first, so it is already visible in
+    // the turn this arrival wakes.
+    expect(saves.entries.length).toBe(1);
     // Resolving the first releases the second — strictly after, with
     // the final queue state.
     parked[0].resolve();
-    await waitUntil(() => saveCalls === 2, "the second save to start");
+    await saves.reached(2);
     expect(parked[1].snapshot).toEqual(["evt-a", "evt-b"]);
     manual = false;
     parked[1].resolve();
@@ -302,21 +468,19 @@ describe("event-append queue (events.md §5, LT9)", () => {
     });
     void dead.enqueue(appendOf("evt-old-1"));
     void dead.enqueue(appendOf("evt-old-2"));
-    await waitUntil(
-      () => dead.pending.length === 2,
-      "the predecessor to queue its backlog",
-    );
+    await dead.loaded;
     await dead.persisted;
+    expect(dead.pending.length).toBe(2);
     dead.close();
 
     // Successor over the SAME store: the reloaded intents discharge
     // ahead of the fresh fire, in their fired order, and clientSeq
     // continues past the persisted ones (one session's append order).
-    const sent: string[] = [];
+    const sent = new ArrivalLog<string>();
     const revived = new EventAppendQueue({
       space,
       transact: (commit: ClientCommit) => {
-        sent.push((commit.eventAppends ?? [])[0]?.eventId ?? "?");
+        sent.record((commit.eventAppends ?? [])[0]?.eventId ?? "?");
         return Promise.resolve();
       },
       nextLocalSeq: (() => {
@@ -329,7 +493,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
     expect(await revived.enqueue(appendOf("evt-new"))).toEqual({
       delivered: true,
     });
-    expect(sent).toEqual(["evt-old-1", "evt-old-2", "evt-new"]);
+    expect(sent.entries).toEqual(["evt-old-1", "evt-old-2", "evt-new"]);
     // Everything delivered ⇒ the store drained (a queue that empties).
     // Durability is OBSERVED through `persisted` (its documented
     // purpose): the settle-side saves are chained, not synchronous.
@@ -357,7 +521,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
       },
       save: (saveSpace, entries) => store.save(saveSpace, entries),
     };
-    const sent: number[] = [];
+    const sent = new ArrivalLog<number>();
     const queue = new EventAppendQueue({
       space,
       transact: (commit: ClientCommit) => {
@@ -366,7 +530,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
             { values?: Array<{ firedAt?: { clientSeq?: number } }> }
           >;
         }).patches ?? [])[0]?.values?.[0];
-        sent.push(entry?.firedAt?.clientSeq ?? -1);
+        sent.record(entry?.firedAt?.clientSeq ?? -1);
         return Promise.resolve();
       },
       nextLocalSeq: (() => {
@@ -380,11 +544,11 @@ describe("event-append queue (events.md §5, LT9)", () => {
     const outcome = queue.enqueue(appendOf("evt-racing"));
     releaseLoad();
     expect(await outcome).toEqual({ delivered: true });
-    await waitUntil(() => sent.length === 3, "all three to discharge");
+    await sent.reached(3);
     // Persisted 0, 1 first (fired order), then the racer at an UNUSED
     // seq (2) — never a duplicate.
-    expect(sent).toEqual([0, 1, 2]);
-    expect(new Set(sent).size).toBe(3);
+    expect(sent.entries).toEqual([0, 1, 2]);
+    expect(new Set(sent.entries).size).toBe(3);
     queue.close();
   });
 });
@@ -475,6 +639,7 @@ describe("OW27 event-flood shaping — per-stream pacing, pace-never-drop (READM
 
   it("close() during a pacing hold settles the held outcomes (no dispose-time wedge) and keeps the intents queued for a successor", async () => {
     const store = memoryEventAppendQueueStore();
+    const pacedHolds = new ArrivalLog<void>();
     const queue = new EventAppendQueue({
       space,
       transact: () => Promise.resolve(),
@@ -482,6 +647,7 @@ describe("OW27 event-flood shaping — per-stream pacing, pace-never-drop (READM
       store,
       // One send per second, burst 1: the second send is HELD.
       pacing: { ratePerSecond: 1, burst: 1 },
+      onPacedHold: pacedHolds.record,
     });
     // Same STREAM (pacing is per stream — a second stream would get its
     // own fresh bucket).
@@ -489,10 +655,9 @@ describe("OW27 event-flood shaping — per-stream pacing, pace-never-drop (READM
     const first = queue.enqueue(holdOne);
     const second = queue.enqueue(holdTwo);
     expect(await first).toEqual({ delivered: true });
-    await waitUntil(
-      () => queue.pacedHoldCount >= 1,
-      "the second send to be held",
-    );
+    // Close INSIDE the hold: the queue reports the hold as it begins.
+    await pacedHolds.reached(1);
+    expect(queue.pacedHoldCount).toBeGreaterThanOrEqual(1);
     queue.close();
     expect(await second).toEqual({
       delivered: false,
@@ -504,6 +669,35 @@ describe("OW27 event-flood shaping — per-stream pacing, pace-never-drop (READM
     expect((await store.load(space)).map((e) => e.eventId)).toEqual([
       holdTwo.eventId,
     ]);
+  });
+
+  it("holds and then sends even when the paced-hold observer throws: the hold's own release still runs", async () => {
+    // The observer is a test diagnostic, reported from inside the hold's
+    // promise executor, so a throw that escaped would reject the drain
+    // and strand the held send.
+    const store = memoryEventAppendQueueStore();
+    const queue = new EventAppendQueue({
+      space,
+      transact: () => Promise.resolve(),
+      nextLocalSeq: (() => {
+        let seq = 1;
+        return () => seq++;
+      })(),
+      store,
+      // One send per second, burst 1: the second send is HELD.
+      pacing: { ratePerSecond: 1, burst: 1 },
+      onPacedHold: () => {
+        throw new Error("paced-hold observer failure (test-injected)");
+      },
+    });
+    const [holdOne, holdTwo] = floodOf(2, "throwing-hold");
+    const first = queue.enqueue(holdOne);
+    const second = queue.enqueue(holdTwo);
+    expect(await first).toEqual({ delivered: true });
+    expect(await second).toEqual({ delivered: true });
+    expect(queue.pacedHoldCount).toBeGreaterThanOrEqual(1);
+    queue.close();
+    await queue.persisted;
   });
 
   it("streams are INDEPENDENT: a paced head on stream A does not hold stream B (no cross-stream head-of-line hold), and each stream's own fired order stays exact", async () => {
@@ -775,9 +969,11 @@ describe("the fire fork (protocol.md §1's scheduler tell)", () => {
     await clientRuntime.storageManager.synced();
 
     // The echo ran the WHOLE cascade locally (1 + 10)...
-    await waitUntil(
-      () => (argument.key("value").get() as number | undefined) === 11,
-      "the cascade echo to render",
+    await waitForCellValue<number>(
+      clientRuntime,
+      argument.key("value"),
+      (value) => value === 11,
+      { stuckLabel: "the cascade to render 11" },
     );
     // ...but the store received exactly ONE authored commit — the ROOT
     // fire's append. The cascade send happened inside a

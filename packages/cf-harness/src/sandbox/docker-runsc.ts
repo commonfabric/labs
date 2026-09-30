@@ -10,10 +10,7 @@ import {
 
 import type {
   CfcEnforcementMode,
-  CfcSandboxJsonValue,
   CfcSandboxResult,
-  CfcStreamChannel,
-  IFCLabel,
 } from "@commonfabric/runner/cfc";
 import {
   CFC_ENFORCING_STRICTNESS,
@@ -22,12 +19,15 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { HarnessCfcInvocationContext } from "../contracts/cfc-invocation-context.ts";
-import { SandboxPathEscapeError } from "./errors.ts";
+import { readDockerRuntimes } from "./docker-runtimes.ts";
 import {
-  DenoProcessRunner,
-  type ProcessRunner,
-  type ProcessRunResult,
-} from "./process-runner.ts";
+  cfcResultFromRunscSidecar,
+  deniedCfcResult,
+  DOCKER_RUNSC_CFC_RESULT_READER,
+  type RunscCfcResultSidecar,
+} from "./runsc-cfc-result.ts";
+import { SandboxPathEscapeError } from "./errors.ts";
+import { DenoProcessRunner, type ProcessRunner } from "./process-runner.ts";
 import type {
   CfcSidecarTransportKind,
   CfcSidecarTransportReading,
@@ -57,21 +57,6 @@ export const DOCKER_NETWORK_MODE_ENV = "CF_HARNESS_DOCKER_NETWORK_MODE";
 export const CFC_RESULT_DIR_ENV = "CF_HARNESS_RUNSC_CFC_RESULT_DIR";
 export const CFC_INVOCATION_CONTEXT_DIR_ENV =
   "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR";
-
-interface RunscCfcLabelSidecar {
-  string?: unknown;
-  xattrJSON?: unknown;
-}
-
-interface RunscCfcResultSidecar {
-  version?: unknown;
-  containerId?: unknown;
-  sandboxId?: unknown;
-  waitStatus?: unknown;
-  cfcTaint?: unknown;
-}
-
-const textEncoder = new TextEncoder();
 
 const readEnvVar = (name: string): string | undefined => {
   try {
@@ -291,8 +276,8 @@ export const resolveDockerRunscSandboxConfig = (
  *
  *  - `cfcInvocationContextDir` — the harness writes the initial-taint
  *    invocation context the sandbox reads in. Without it the sandbox starts
- *    untainted, so input labels (prompt-slot influence, prior observed labels)
- *    are silently dropped.
+ *    untainted, so input labels (explicit trusted labels, prior observed
+ *    labels) are silently dropped.
  *  - `cfcResultDir` — runsc writes the final-taint result the harness reads
  *    back to mediate output. Without it every command's CFC result is absent
  *    and enforce-mode mediation fail-closes every observation.
@@ -577,8 +562,6 @@ export const registeredCfcSidecarHostDirs = (options: {
   };
 };
 
-const byteLength = (text: string): number => textEncoder.encode(text).length;
-
 const appendStderr = (stderr: string, message: string): string =>
   stderr.length > 0
     ? `${stderr}${stderr.endsWith("\n") ? "" : "\n"}${message}`
@@ -612,180 +595,6 @@ const parseDockerWaitExitCode = (stdout: string): number | undefined => {
   }
   const parsed = Number(firstLine);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
-};
-
-const observedStream = (
-  channel: CfcStreamChannel,
-  text: string,
-  label: IFCLabel,
-) => ({
-  channel,
-  policy: "observed" as const,
-  label,
-  segments: text.length === 0
-    ? []
-    : [{ text, label, offset: 0, byteLength: byteLength(text) }],
-});
-
-const opaqueStream = (
-  channel: CfcStreamChannel,
-  text: string,
-  label: IFCLabel,
-) => ({
-  channel,
-  policy: "opaque" as const,
-  label,
-  byteLength: byteLength(text),
-});
-
-const deniedCfcResult = (
-  code: string,
-  message: string,
-  details: Record<string, CfcSandboxJsonValue> = {},
-): CfcSandboxResult => ({
-  version: 1,
-  stdout: {
-    channel: "stdout",
-    policy: "denied",
-    label: {},
-    reason: message,
-  },
-  stderr: {
-    channel: "stderr",
-    policy: "denied",
-    label: {},
-    reason: message,
-  },
-  exitCode: {
-    policy: "denied",
-    label: {},
-    reason: message,
-  },
-  diagnostics: [{
-    level: "error",
-    code,
-    message,
-    details,
-  }],
-});
-
-const hasNonEmptyXattrValue = (value: unknown): boolean => {
-  if (Array.isArray(value)) {
-    return value.length > 0;
-  }
-  if (isObjectNotArray(value)) {
-    return Object.values(value).some(hasNonEmptyXattrValue);
-  }
-  return value !== undefined && value !== null;
-};
-
-const runscTaintLabel = (taint: RunscCfcLabelSidecar): IFCLabel => {
-  const xattr = isObjectNotArray(taint.xattrJSON) ? taint.xattrJSON : {};
-  return {
-    ...(Array.isArray(xattr.confidentiality)
-      ? { confidentiality: xattr.confidentiality }
-      : {}),
-    ...(Array.isArray(xattr.integrity) ? { integrity: xattr.integrity } : {}),
-  };
-};
-
-const isPublicRunscTaint = (taint: RunscCfcLabelSidecar): boolean => {
-  if (isObjectNotArray(taint.xattrJSON)) {
-    return !Object.values(taint.xattrJSON).some(hasNonEmptyXattrValue);
-  }
-  const stringValue = typeof taint.string === "string"
-    ? taint.string.trim()
-    : "";
-  return stringValue.length === 0 || stringValue === "{}";
-};
-
-const cfcResultFromRunscSidecar = (
-  parsed: RunscCfcResultSidecar,
-  expectedContainerID: string,
-  commandResult: SandboxCommandResult,
-): CfcSandboxResult => {
-  if (parsed.version !== 1) {
-    return deniedCfcResult(
-      "runsc_cfc_sidecar_version",
-      "runsc CFC result sidecar has an unsupported version",
-      { containerId: expectedContainerID },
-    );
-  }
-  if (parsed.containerId !== expectedContainerID) {
-    return deniedCfcResult(
-      "runsc_cfc_sidecar_container_mismatch",
-      "runsc CFC result sidecar did not match the Docker container ID",
-      {
-        expectedContainerId: expectedContainerID,
-        actualContainerId: typeof parsed.containerId === "string"
-          ? parsed.containerId
-          : "",
-      },
-    );
-  }
-  if (!isObjectNotArray(parsed.cfcTaint)) {
-    return deniedCfcResult(
-      "runsc_cfc_sidecar_missing_taint",
-      "runsc CFC result sidecar did not include final CFC taint",
-      { containerId: expectedContainerID },
-    );
-  }
-
-  const cfcTaint = parsed.cfcTaint;
-  const label = runscTaintLabel(cfcTaint);
-  const details: Record<string, CfcSandboxJsonValue> = {
-    containerId: expectedContainerID,
-  };
-  if (typeof parsed.sandboxId === "string") {
-    details.sandboxId = parsed.sandboxId;
-  }
-  if (typeof parsed.waitStatus === "number") {
-    details.waitStatus = parsed.waitStatus;
-  }
-  if (typeof cfcTaint.string === "string") {
-    details.runscTaint = cfcTaint.string;
-  }
-  if (cfcTaint.xattrJSON !== undefined) {
-    details.runscTaintXattrJSON = cfcTaint.xattrJSON as CfcSandboxJsonValue;
-  }
-
-  if (isPublicRunscTaint(cfcTaint)) {
-    return {
-      version: 1,
-      stdout: observedStream("stdout", commandResult.stdout, label),
-      stderr: observedStream("stderr", commandResult.stderr, label),
-      exitCode: {
-        policy: "observed",
-        label,
-        value: commandResult.exitCode,
-      },
-      diagnostics: [{
-        level: "info",
-        code: "runsc_cfc_result",
-        message: "runsc reported final CFC taint for sandbox output",
-        label,
-        details,
-      }],
-    };
-  }
-
-  return {
-    version: 1,
-    stdout: opaqueStream("stdout", commandResult.stdout, label),
-    stderr: opaqueStream("stderr", commandResult.stderr, label),
-    exitCode: {
-      policy: "opaque",
-      label,
-    },
-    diagnostics: [{
-      level: "info",
-      code: "runsc_cfc_result",
-      message:
-        "runsc reported tainted sandbox output; raw streams are withheld from model context",
-      label,
-      details,
-    }],
-  };
 };
 
 export class DockerRunscSandboxRuntime implements SandboxRuntime {
@@ -880,35 +689,11 @@ export class DockerRunscSandboxRuntime implements SandboxRuntime {
         ...this.#configuredTransportDirs(),
         reason,
       });
-    let result: ProcessRunResult;
-    try {
-      result = await this.#runner.run({
-        command: this.#dockerBinary,
-        args: ["info", "--format", "{{json .Runtimes}}"],
-      });
-    } catch (error) {
-      return unreadable(
-        `docker info could not be run: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (result.exitCode !== 0) {
-      return unreadable(`docker info exited ${result.exitCode}`);
-    }
-    let runtimes: unknown;
-    try {
-      runtimes = JSON.parse(result.stdout);
-    } catch (error) {
-      return unreadable(
-        `docker info runtime table could not be parsed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    const result = await readDockerRuntimes(this.#dockerBinary, this.#runner);
+    if (result.unreadable !== undefined) return unreadable(result.unreadable);
     return cfcTransportReadinessFromDockerRuntimes({
       runtimeName: this.#runtimeName,
-      runtimes,
+      runtimes: result.runtimes,
       ...this.#configuredTransportDirs(),
     });
   }
@@ -1170,7 +955,12 @@ export class DockerRunscSandboxRuntime implements SandboxRuntime {
     }
     try {
       const parsed = JSON.parse(text) as RunscCfcResultSidecar;
-      return cfcResultFromRunscSidecar(parsed, containerID, commandResult);
+      return cfcResultFromRunscSidecar(
+        parsed,
+        containerID,
+        commandResult,
+        DOCKER_RUNSC_CFC_RESULT_READER,
+      );
     } catch (error) {
       return deniedCfcResult(
         "runsc_cfc_sidecar_parse_error",

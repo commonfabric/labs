@@ -62,6 +62,38 @@ Deno.test("command ledgers preserve Fabric results across reopen", async () => {
   }
 });
 
+Deno.test("command ledgers key receipts by command identity", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    const ledger = await CommandLedger.open(path);
+    const owners = receipt("one");
+    const producers = receipt("one", {
+      producer: "workbench",
+      status: "failed",
+    });
+    await ledger.put(owners);
+    await ledger.put(producers);
+    assertEquals(ledger.pendingPublicationCount(), 2);
+    assertEquals(await ledger.recoverUnpublishedReceipts(), [
+      owners,
+      producers,
+    ]);
+    assertEquals(ledger.get("one"), owners);
+    assertEquals(ledger.get("one", "workbench"), producers);
+    assertEquals(ledger.get("one", "dashboard"), undefined);
+    await ledger.markPublished("one", "workbench");
+    assertEquals(ledger.pendingPublicationCount(), 1);
+
+    const reopened = await CommandLedger.open(path);
+    assertEquals(reopened.get("one"), owners);
+    assertEquals(reopened.get("one", "workbench"), producers);
+    assertEquals(reopened.pendingPublicationCount(), 1);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("command ledgers validate their complete persisted shape", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
@@ -97,6 +129,20 @@ Deno.test("command ledgers validate their complete persisted shape", async () =>
         receipts: { command: { ...receipt("command"), result: 1 } },
       }),
       "receipt result must use Fabric JSON: command",
+    ],
+    [
+      ledgerFile({
+        receipts: {
+          command: { ...receipt("command"), commandId: undefined },
+        },
+      }),
+      "receipt must name its commandId: command",
+    ],
+    [
+      ledgerFile({
+        receipts: { command: receipt("command", { producer: "workbench" }) },
+      }),
+      "receipt key does not match its identity: command",
     ],
   ];
 

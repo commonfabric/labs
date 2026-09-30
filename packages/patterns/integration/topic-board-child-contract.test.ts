@@ -1,22 +1,20 @@
 /**
- * What a caller can still observe about a topic it filed through the board,
- * once the board demands only the fields it renders.
+ * What a caller can observe about a topic it filed through the board, when the
+ * board demands only what its card, its index row, its activity sort, its
+ * crossref pivot, and its mention universe use, and names no verb.
  *
- * These three properties were pattern tests until the board's `topics` demand
- * narrowed. A pattern test can only reach a stored topic through the holder's
- * projection, and that projection no longer carries verbs, threads, or the
- * mention graph — so the properties stopped being observable there. They are
- * observable here, because this is the move the design says a caller makes:
- * survey the board, resolve the row to the topic's own address, and read or
- * call the topic itself, where its own schema governs.
+ * These cases make the move the design says a caller makes: survey the board,
+ * resolve the row to the topic's own address, and read or call the topic
+ * itself, where its own schema governs.
  *
- * Each `it()` therefore guards a property of `addTopic`'s children that nothing
- * else can: that the child is wired to the board's mention pivot, that a body
- * given at create is not recorded as a body update, and that the board's index
- * row tracks the child's thread after the fact.
+ * Each `it()` guards a property of `addTopic`'s children: that the child is
+ * wired to the board's mention pivot, that a body given at create is not
+ * recorded as a body update, and that the board's index row tracks the child's
+ * thread after the fact.
  */
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { debugStr } from "@commonfabric/data-model";
 import { env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Identity } from "@commonfabric/identity";
@@ -63,9 +61,9 @@ function onArmStepSkip(step: string): { ignore: boolean } {
   );
   if (entry === undefined) return { ignore: false };
   console.warn(
-    `[server-execution ON arm] patterns: SKIPPING STEP ${
-      JSON.stringify(step)
-    } (until ${entry.phase}) — ${entry.reason}`,
+    `[server-execution ON arm] patterns: ` +
+      debugStr`SKIPPING STEP $quote,long${step}` +
+      ` (until ${entry.phase}) — ${entry.reason}`,
   );
   return { ignore: true };
 }
@@ -140,7 +138,7 @@ describe("topic-board-child-contract", () => {
     await citing.result.set({ topic: cited.getCell() }, ["mention"]);
 
     // The edge exists only if `addTopic` handed this child the board's
-    // `crossrefs` pivot — which is the thing no pattern test can still see.
+    // `crossrefs` pivot.
     const inbound = await cited.result.get(["referencedBy"]) as {
       title: string;
     }[];
@@ -168,19 +166,15 @@ describe("topic-board-child-contract", () => {
 });
 
 /**
- * The board's mention pivot, exercised where it is still reachable.
+ * The board's mention pivot, exercised through a board and the topics it
+ * created.
  *
- * `crossrefTable` derives the whole reference graph once on the board, and each
- * topic reads its own row out of it. Testing that needs two things at the same
- * time: topics that are ON a board, so the pivot sees them, and `mention` /
- * `unmention` / `referencedBy` on those same topics. A pattern test can no
- * longer have both — the board's demand carries no verbs, and a topic
- * constructed in a pattern body cannot be placed on a board either (pushing one
- * in reports a schema mismatch and the action never runs; seeding the array at
- * construction fails because `Cell.of()` takes static data only).
- *
- * Here both hold, because a caller files through the board and then addresses
- * the created topic by its own fid.
+ * `crossrefTable()` derives the whole reference graph once on the board, and
+ * each topic reads its own row out of it. Testing that needs two things at the
+ * same time: topics that are ON a board, so the pivot sees them, and
+ * `mention` / `unmention` / `referencedBy` on those same topics. Here both
+ * hold, because a caller files through the board and then addresses the
+ * created topic by its own fid.
  */
 describe("topic-board-pivot-contract", () => {
   let cc: PiecesController;
@@ -229,9 +223,14 @@ describe("topic-board-pivot-contract", () => {
    *
    * Only ever awaited for a count the write is about to PRODUCE. An absence is
    * not a thing to wait for: "no edges yet" and "the edge has not arrived yet"
-   * are the same observation, so a wait for zero cannot fail — it can only
-   * hang, and `waitForCellValue` has no deadline of its own. Absences are read
-   * with {@link edgesNow} after a positive signal has settled. */
+   * are the same observation, so a wait for zero cannot fail — it returns at
+   * once having observed nothing. Absences are read with {@link edgesNow}
+   * after a positive signal has settled.
+   *
+   * The stuck-condition net is what turns a count that never arrives into a
+   * failure naming the count and the topic. This suite holds a connection to
+   * the server open for as long as it runs, so its process never goes quiet
+   * and Deno's runner never reports the pending promise. */
   const awaitEdges = async (
     t: PieceController,
     key: "referencedBy" | "mentions",
@@ -244,6 +243,10 @@ describe("topic-board-pivot-contract", () => {
       // A path that has produced nothing yet reads as undefined rather than as
       // an empty array, so the count has to treat the two alike.
       (v) => ((v ?? []) as unknown[]).length === length,
+      {
+        stuckLabel:
+          debugStr`${length} edges in $quote${key} on $quote,long${t.id}`,
+      },
     );
   };
 
@@ -254,26 +257,43 @@ describe("topic-board-pivot-contract", () => {
     key: "referencedBy" | "mentions",
   ): Promise<unknown[]> => ((await t.result.get([key])) ?? []) as unknown[];
 
-  /** Await the named topics APPEARING among `t`'s inbound edges, then hand
-   * back the rows so the caller can pin the exact set.
+  /** The titles of the topics that mention `t`, as they stand. Carries the
+   * reading rule {@link edgesNow} states, since it composes it. */
+  const inboundTitles = async (t: PieceController): Promise<string[]> =>
+    ((await edgesNow(t, "referencedBy")) as { title?: string }[])
+      .map((row) => row?.title ?? "").sort();
+
+  /** Await `t`'s inbound edges being exactly the topics named, in any order.
    *
-   * Waits on content rather than on a count, because `referencedBy` is served
+   * Names the whole set rather than a count, because `referencedBy` is served
    * from the board-wide pivot rather than written here: a count-wait cannot
-   * tell a number that has not arrived from one that never will, and
-   * `waitForCellValue` has no deadline, so a pivot serving the wrong number
-   * hangs it. A content-wait resolves the moment the edge lands, and the
-   * assertion after it still catches an extra row. */
+   * tell a number that has not arrived from one that never will, so a pivot
+   * serving the wrong number spends the stuck net's whole span before it says
+   * so. Naming the set covers an edge arriving, an edge going, and a row that
+   * should not be there, in one wait.
+   *
+   * Well-founded only where the set named differs from the set in place as
+   * the wait is installed, which is the caller's to establish. Naming no
+   * topics at all is therefore a wait for an edge to go, and belongs only
+   * where one is in place. */
   const awaitInbound = async (
     t: PieceController,
     ...titles: string[]
-  ): Promise<{ title: string }[]> => {
+  ): Promise<void> => {
     const cell = (await t.result.getCell()).key("referencedBy");
-    return await waitForCellValue<{ title: string }[]>(
+    const wanted = [...titles].sort();
+    await waitForCellValue<{ title?: string }[]>(
       cc.runtime,
       cell,
       (v) => {
-        const rows = (v ?? []) as { title?: string }[];
-        return titles.every((want) => rows.some((r) => r?.title === want));
+        const rows = ((v ?? []) as { title?: string }[])
+          .map((row) => row?.title ?? "").sort();
+        return rows.length === wanted.length &&
+          rows.every((title, index) => title === wanted[index]);
+      },
+      {
+        stuckLabel: debugStr`the inbound edges on $quote,long${t.id}` +
+          debugStr` settling to $quote,long${wanted}`,
       },
     );
   };
@@ -292,6 +312,38 @@ describe("topic-board-pivot-contract", () => {
     ));
   };
 
+  /** Ensure `source` mentions both `target` and `third`, and that the board's
+   * pivot serves an inbound edge for each.
+   *
+   * Reads the edges that are there and writes only what is missing, so the two
+   * mentions the case above makes are made once however this file is run. A
+   * case here may run with its siblings registered as ignored, and this is the
+   * state the retraction case below drops one edge from.
+   *
+   * Every wait here covers an edge this call has just written, so the state
+   * already in place cannot satisfy one. */
+  const ensureSourceMentionsBoth = async (): Promise<void> => {
+    const missing: PieceController[] = [];
+    for (const topic of [target, third]) {
+      if (!(await inboundTitles(topic)).includes("Graph source")) {
+        missing.push(topic);
+      }
+    }
+    if (missing.length > 0) {
+      for (const topic of missing) {
+        await source.result.set({ topic: topic.getCell() }, ["mention"]);
+      }
+      // The count has to settle at two before the retraction, which counts
+      // this same path down to one.
+      await awaitEdges(source, "mentions", 2);
+      for (const topic of missing) await awaitInbound(topic, "Graph source");
+    }
+    // An assertion rather than a wait: this is the count in place before the
+    // retraction changes it, and a wait for a count already held returns
+    // having observed nothing.
+    expect((await edgesNow(source, "mentions")).length).toBe(2);
+  };
+
   it({
     name:
       "builds one pivot row per topic, claiming no edges before any mention",
@@ -301,14 +353,15 @@ describe("topic-board-pivot-contract", () => {
     fn: async () => {
       // Waits on the three topics this suite filed, which `addTopic` produces
       // directly, rather than on the pivot's row count: the pivot is
-      // board-wide, and a count-wait on it would hang rather than fail if it
-      // ever served a different number. The table is then asserted rather
-      // than awaited, so an extra row still fails.
+      // board-wide, and a count-wait on it reports nothing better than its
+      // stuck net's span if it ever serves a different number. The table is
+      // then asserted rather than awaited, so an extra row still fails.
       const topics = (await board.result.getCell()).key("topics");
       await waitForCellValue<unknown[]>(
         cc.runtime,
         topics,
         (v) => ((v ?? []) as unknown[]).length === 3,
+        { stuckLabel: "three topics on the board" },
       );
       expect(await topicTitles()).toEqual([
         "Graph target",
@@ -320,9 +373,9 @@ describe("topic-board-pivot-contract", () => {
       // observable here, and the clean titles above are what pin a wrong
       // count to the row side: four rows over exactly these three titles is
       // a duplicated row. The titles cannot name a duplicated TOPIC — one
-      // present by the wait above leaves `topics` at four and hangs that
-      // wait (it has no deadline); only a duplicate landing after the wait
-      // matched would surface here as a doubled title.
+      // present by the wait above leaves `topics` at four, which that wait
+      // reports as a stuck condition; only a duplicate landing after the
+      // wait matched would surface here as a doubled title.
       expect(((await board.result.get(["crossrefs"])) as unknown[]).length)
         .toBe(3);
       // The pivot has served three rows, so the topics behind them have
@@ -334,16 +387,17 @@ describe("topic-board-pivot-contract", () => {
 
   // NOTE ON WHAT THIS CANNOT SEPARATE, because the distinction is easy to
   // assume from the wording: every topic here sits at exactly ONE index, so
-  // this case cannot tell the pivot's identity check from a position check —
-  // swap `!equals(other, topic)` for `from !== to` in `crossrefTable` and it
-  // still passes. Only a board listing one topic at two indices separates
-  // them, and that is `assert_twin_earns_no_edge` in
-  // `packages/patterns/topics/topics.test.tsx`, which stays where it is. It
-  // cannot move here: a duplicate cannot be written into a board's list from
-  // outside it, by `push`, by seeding the array, or through the controller's
-  // `input` — the last is refused by `assertSchemaSubset`. Retiring that test
-  // needs the pivot's join extracted into something a unit test can hand a
-  // duplicated list, not a rehousing.
+  // this case cannot tell the identity check `mentionedBy()` makes when it
+  // leaves a topic out of its own backlinks (`!equals(other, topic)` in
+  // `packages/patterns/topics/main.tsx`) from a check by array position: both
+  // pass it. Only a list naming one topic at two indices separates them, and
+  // the board's pivot hands `mentionedBy()` the list `distinctByIdentity()`
+  // returns, which names each topic once.
+  // `assert_self_mention_inert_through_a_twin` in
+  // `packages/patterns/topics/topics.test.tsx` hands `mentionedBy()` a
+  // duplicated list directly. No case here builds a board listing one topic
+  // twice; the "over a board listing one topic twice" group in
+  // `topics-headless-fixture.test.ts` runs the board's lifts over one.
   it("records a self-mention without earning the topic an inbound edge", async () => {
     // Referencing yourself is not being referenced from somewhere else.
     await target.result.set({ topic: target.getCell() }, ["mention"]);
@@ -356,19 +410,25 @@ describe("topic-board-pivot-contract", () => {
     await source.result.set({ topic: third.getCell() }, ["mention"]);
     await awaitEdges(source, "mentions", 2);
 
-    expect((await awaitInbound(target, "Graph source")).length).toBe(1);
-    expect((await awaitInbound(third, "Graph source")).length).toBe(1);
+    await awaitInbound(target, "Graph source");
+    await awaitInbound(third, "Graph source");
     // Mentioning is not mutual.
     expect((await edgesNow(source, "referencedBy")).length).toBe(0);
   });
 
   it("drops only the retracted edge on unmention, leaving the other standing", async () => {
+    await ensureSourceMentionsBoth();
+
     await source.result.set({ topic: target.getCell() }, ["unmention"]);
     await awaitEdges(source, "mentions", 1);
 
-    expect((await edgesNow(target, "referencedBy")).length).toBe(0);
-    // The edge that was not retracted survives as a reference, not a
+    // The setup above put an edge from `Graph source` on `target`, so the
+    // edge going is a change this wait observes rather than an absence.
+    await awaitInbound(target);
+
+    // The pivot has served the retraction, so `third`'s row is read as it
+    // stands. The edge that was not retracted survives as a reference, not a
     // flattened copy of the piece it names.
-    expect((await awaitInbound(third, "Graph source")).length).toBe(1);
+    expect(await inboundTitles(third)).toEqual(["Graph source"]);
   });
 });

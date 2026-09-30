@@ -13,7 +13,6 @@
 ./scripts/restart-local-dev.sh --force       # Force kill first
 ./scripts/restart-local-dev.sh --clear-cache # Clear disposable caches (preserves spaces)
 ./scripts/restart-local-dev.sh --dangerously-clear-all-spaces # Clear databases/spaces
-./scripts/restart-local-dev.sh --bg-updater  # Also start background-piece-service
 ./scripts/start-local-dev.sh --cf-harness    # ...and a cf-harness console
 ./scripts/check-local-dev.sh          # Health check both servers
 ./scripts/share-pattern-via-tailscale.sh packages/patterns/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
@@ -42,6 +41,12 @@ record outranks the environment**, so a shell that happens to export
 instance's store or sign with another key. The printout says which of the three
 decided each value.
 
+`--allow-skill-scripts` alongside `--cf-harness` lets that console run the
+scripts of the skills it holds, in its sandbox, registry and acquired alike; it
+is off unless named. `start-local-dev.sh` passes it to `console:launch`, which
+resolves it and prints it beside the record that decided it.
+`packages/cf-harness/console/README.md` has the rest.
+
 The console is a surface on the fabric rather than part of it. It needs Docker
 and a connected model provider, and when it cannot start — either of those
 missing, its port taken, a value underivable — it says so in the script's output
@@ -55,7 +60,7 @@ binaries do: `start-local-dev.sh` defaults `COMMIT_SHA` to the checkout's
 current HEAD, and an explicit value in the environment overrides that default:
 
 ```bash
-COMMIT_SHA="<some-other-sha>" ./scripts/start-local-dev.sh --bg-updater
+COMMIT_SHA="<some-other-sha>" ./scripts/start-local-dev.sh
 ```
 
 The script's children inherit the value: toolshed uses it as the source-run
@@ -167,8 +172,7 @@ export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 The local toolshed itself runs as the identity derived from the passphrase
 `"implicit trust"`. Derive that key only when the CLI must act as the server's
-operator/admin (`add-admin-piece`, the background piece service, deploying
-system home patterns):
+operator/admin (deploying system home patterns):
 ```bash
 deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
 export CF_IDENTITY="$PWD/claude.key"
@@ -340,72 +344,48 @@ bundles, which is quicker than a restart.
 
 ---
 
-## Background Piece Service (Optional)
+## Agent Runner (Optional)
 
-The background-piece-service polls registered pieces and triggers their `bgUpdater` handlers server-side. This is **optional** - only needed if you're testing background/scheduled piece execution (e.g., auto-refreshing Google OAuth tokens).
+`cf agent runner` runs the agent requests a pattern makes with `agent()`. The
+builtin is enabled by default through the `agentBuiltin` experimental flag;
+requests stay queued until a runner claims them
+([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md)).
 
-### Quick Setup (Recommended)
-
-Use the `--bg-updater` flag with the local dev scripts:
-
-```bash
-./scripts/start-local-dev.sh --bg-updater
-# or
-./scripts/restart-local-dev.sh --bg-updater
-```
-
-This waits for toolshed to be healthy, then starts the background service. The service log is at `packages/background-piece-service/local-dev-bg.log`. The stop script will also clean up the background service process. The system space cell is auto-created when a piece is first registered (e.g., during Google OAuth).
-
-### Manual Setup
-
-If you prefer manual control:
+The runner holds one user's identity, so it takes the identity whose requests
+it should run, and the toolshed serving that identity's home space. Against
+`dev-local` on a port offset of 100:
 
 ```bash
-# 1. Ensure toolshed is running (uses "implicit trust" identity in dev mode)
-./scripts/restart-local-dev.sh
+# Shown for illustration only.
+./scripts/start-local-dev.sh --port-offset=100
 
-# 2. Start the background service from source
-cd packages/background-piece-service
-OPERATOR_PASS="implicit trust" API_URL="http://localhost:8000" deno task start
+deno task cf agent runner \
+  --identity ./my.key \
+  --api-url http://localhost:8100
 ```
 
-> **Optional:** The `add-admin-piece` task deploys an admin dashboard piece
-> into the system space. It is **not** required for normal background-service
-> operation -- the system space cell is bootstrapped automatically by
-> `setBGPiece()` during the OAuth callback when a piece is first registered.
-> Run it only if you want the admin dashboard:
->
-> ```bash
-> cd packages/background-piece-service
-> OPERATOR_PASS="implicit trust" API_URL="http://localhost:8000" deno task add-admin-piece
-> ```
+On start the runner creates the identity's home pattern if the home space has
+none, writes its `agentRunner` entry into the home space's agent queue, and then
+follows the queue. It prints a line when it claims a run and when the run ends,
+and it runs until interrupted. The model provider is the one `cf-harness` is
+configured with under `CF_HARNESS_HOME`; `--model` names a model, and
+`--loom-retrieval-config` names the host-owned file backing the read-only Loom
+tools. A run's workspace and artifacts go under `--work-root`, which defaults to
+`$CF_HARNESS_HOME/agent-runs`.
 
-### Registering a Piece for Background Updates
+A run's sandbox is the harness's Docker `runsc-cfc` sandbox, so
+`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
+Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
+prompt-slot role `context`, and the run returns its structured result through
+the harness's `submit_result` tool, which the harness's default
+`enforce-strict` mode admits under that role. Under that mode and role every
+other tool is refused, reads included, so a run that should use its tools — a
+Loom search, `describe_handle` — needs the runner started with
+`CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit`, which admits read tools.
+That dial covers the harness's tool policy and sandbox; the fabric session's
+own enforcement is a separate setting and is unchanged by it.
 
-Pieces must be registered to receive background polling:
-
-```bash
-# Via curl
-curl -X POST http://localhost:8000/api/integrations/bg \
-  -H "Content-Type: application/json" \
-  -d '{"pieceId":"fid1:abc...","space":"did:key:z6Mk...","integration":"my-integration"}'
-```
-
-Or use the `<cf-updater>` component in your piece's UI.
-
-### Key Details
-
-- **Polling interval**: 60 seconds (default)
-- **Identity**: Must match toolshed's identity (in dev mode: `OPERATOR_PASS="implicit trust"`)
-- **bgUpdater triggers**: Service sends `{}` to the piece's `bgUpdater` Stream
-- **Logs**: Watch service output for `Successfully executed piece` messages
-
-### Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `CompilerError: no exported member 'pattern'` | Binary version mismatch | Run `deno task build-binaries` |
-| `AuthorizationError` on system space | System space not yet bootstrapped | Register a piece (e.g., via OAuth) to auto-create it, or run optional `add-admin-piece` |
-| Piece not polling | Not registered | Register via `/api/integrations/bg` |
-
-See `packages/background-piece-service/AGENTS.md` for more details.
+When the home space and the runner's own toolshed are different deployments,
+`--api-url` names the first and `--local-api-url` the second. The
+[CLI README](../../packages/cli/README.md#agent-runner) describes the command.

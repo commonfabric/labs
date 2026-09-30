@@ -54,7 +54,7 @@ describe("cfc constructor reference", () => {
           initialRuntime.getCell(
             signer.did(),
             "initial output",
-            undefined,
+            covering ? { ifc: { confidentiality: ["private"] } } : undefined,
             setup,
           )
             .set(target);
@@ -78,7 +78,7 @@ describe("cfc constructor reference", () => {
           const repeatedOutput = runtime.getCell(
             signer.did(),
             "repeated output",
-            undefined,
+            covering ? { ifc: { confidentiality: ["private"] } } : undefined,
             repeat,
           );
           repeatedOutput.set(repeatedTarget);
@@ -105,7 +105,7 @@ describe("cfc constructor reference", () => {
           runtime.getCell(
             signer.did(),
             "selected after read",
-            undefined,
+            { ifc: { confidentiality: ["private"] } },
             readContent,
           ).set(repeatedTarget.withTx(readContent));
           expect((await readContent.commit()).error).toBeUndefined();

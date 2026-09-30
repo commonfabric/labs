@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type HarnessModelProviderId,
   isHarnessModelProviderId,
@@ -34,7 +35,7 @@ const parseDocument = (text: string): HarnessProviderSettingsState => {
   } catch {
     return { state: "invalid", detail: "settings file is not valid JSON" };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isObjectNotArray(parsed)) {
     return { state: "invalid", detail: "settings file must contain an object" };
   }
   const input = parsed as Record<string, unknown>;

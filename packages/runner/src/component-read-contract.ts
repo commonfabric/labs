@@ -243,9 +243,9 @@ export const MentionableSchema = {
     // crosses the client boundary as an empty object — so a reader reaches
     // the piece by ADDRESS and never reads through it under this schema.
     piece: { type: "object", properties: {}, asCell: ["cell"] },
-    // One scalar serving both positions this schema is used at: a universe
-    // row's copy, and a destination piece's own. Neither read reaches past
-    // the string.
+    // A universe row's copy of what its collection calls the member, which
+    // the editor's `#42` query and a mention's pill both read. The read
+    // reaches no further than the string.
     shortName: { type: "string" },
   },
   required: [NAME],

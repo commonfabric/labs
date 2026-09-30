@@ -136,11 +136,13 @@ describe("list element issuance ownership", () => {
         rejection = res.error;
       });
       const originalCommit = reconcileTx.commit.bind(reconcileTx);
-      reconcileTx.commit =
-        (() =>
-          heldReconcile.promise.then(() =>
-            originalCommit()
-          )) as typeof reconcileTx.commit;
+      reconcileTx.commit = (() =>
+        heldReconcile.promise.then(() => {
+          // The held fixture reaches the native stale-snapshot verdict with
+          // its late reads included in CFC preparation.
+          reconcileTx.prepareCfc();
+          return originalCommit();
+        })) as typeof reconcileTx.commit;
       captured.resolve();
       return ran;
     }) as typeof runtime.runner.run;

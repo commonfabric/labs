@@ -102,7 +102,7 @@ result is a `FabricHash`: hash bytes plus an algorithm tag, stringified as
 (`packages/data-model/src/fabric-primitives/FabricHash.ts`). The hash is
 opaque: nothing about the preimage — including `type: "internal"` or the
 partial cause — is recoverable from the id. `hashOf` mints the `fid1` tag at
-a single chokepoint (`packages/data-model/src/value-hash.ts`). The URI layer
+a single chokepoint (`packages/data-model/src/value-hash/ValueHasher.ts`). The URI layer
 (`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 
@@ -319,14 +319,15 @@ invisible to the builder — so replayability is decided by name against
 non-replayable, including the documented set `fetchBinary`, `fetchText`,
 `fetchJson`, `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`,
 `llmDialog`, `compileAndRun`, `generateObject`, `generateText`,
-`navigateTo`, `wish`, and `sqliteQuery` (a server round-trip; an effect
-like `llm`, even though its name suggests a query). The registry is
-deliberately NOT derived from the scheduler's `isEffect` (incomplete on the
-fetch family, and it carries scheduler semantics — do not complete or
-repurpose it) and NOT merged with the scheduler-facing
-`EAGER_RESULT_BUILTIN_REFS` set — same shape, different concern. A
-reciprocal comment at `registerBuiltins` (`builtins/index.ts`) keeps the
-registry in sync when builtins are added.
+`navigateTo`, `wish`, and `sqliteQuery` (a server round-trip, even though
+its name suggests a query). The registry is deliberately NOT derived from
+the scheduler's `isEffect`, which carries scheduler semantics and says
+nothing about replay; do not repurpose it. `isEffect` is one of the ways a node
+becomes a standing demand root, and of these names only `navigateTo` carries
+it. A node reaches the same standing demand by other routes too: `llmDialog`
+holds it as a materializer, through the envelope it declares over the
+`messages` cell it writes. A reciprocal comment at `registerBuiltins`
+(`builtins/index.ts`) keeps the registry in sync when builtins are added.
 
 #### Accepted consequence: result-surface exposure
 

@@ -133,7 +133,7 @@ Deno.test("dau: DAU_EXCLUDE_DIDS takes service principals out of the count", asy
 
 Deno.test("dau: a service that exports nothing -> gray, not zero", async () => {
   // SigNoz answers a query that matched no spans with no aggregations at all. Reading
-  // that as a count would put a false green zero on the wall for a deployment whose
+  // that as a count would put a false green zero on the dashboard for a deployment whose
   // tracing is simply switched off.
   const { result: v } = await withFetch(
     ok(null),
@@ -188,7 +188,7 @@ Deno.test("dau: SigNoz unreachable -> gray carrying the reason, never a count", 
   assertEquals(refused.result.status, "unknown");
   assertEquals(refused.result.value, "—");
   assertEquals(refused.result.sub, "SigNoz unavailable");
-  // The drill link survives the failure, so the reason can be chased from the wall.
+  // The drill link survives the failure, so the reason can be chased from the dashboard.
   assertEquals(refused.result.href, "https://signoz.example/traces-explorer");
 
   const rejected = await withFetch(
@@ -248,7 +248,7 @@ Deno.test("dau: the drill link comes from SIGNOZ_UI_URL, and a non-https base ge
   assertEquals(named.result.href, "https://ui.signoz.example/traces-explorer");
   assertEquals(named.result.hint, "traces ↗");
 
-  // An internal http:// endpoint is not somewhere a browser on the wall can follow.
+  // An internal http:// endpoint is not somewhere a browser on the dashboard can follow.
   const internal = await withFetch(
     ok([{ series: [ser("did:key:alice", [[day(1), 5]])] }]),
     () => dau.collect(ctx({ SIGNOZ_URL: "http://signoz.internal:8080", SIGNOZ_API_KEY: "k" })),

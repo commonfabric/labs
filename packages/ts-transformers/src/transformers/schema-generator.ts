@@ -3,7 +3,9 @@ import {
   SchemaGenerator,
 } from "@commonfabric/schema-generator";
 import { numberFromExpression } from "@commonfabric/schema-generator/numeric-expression";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
+import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 
 import {
   getNodeText,
@@ -63,6 +65,7 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         const writeAuthorizedByIdentity = extractWriteAuthorizedByIdentity(
           typeArg,
           sourceFile.fileName,
+          checker,
           writerIdentityForSourceFile,
         );
         let schemaTypeArg: ts.TypeNode = typeArg;
@@ -126,12 +129,34 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
                 : schemaUse,
             });
           },
+          // The program's own word on default-library membership; the
+          // generator only holds a checker, which cannot reach the program.
+          isDefaultLibrarySourceFile: (file) =>
+            context.isSourceFileDefaultLibrary(file),
+          // A node the pipeline printed from a type is read as that type.
+          printedFrom: (typeNode) => context.state.printedFrom(typeNode),
           // The schema-generator owns the general/nested CFC alias path. Give
           // it the same spelling and stamp source used by the direct
           // WriteAuthorizedBy special case below, including for bindings
           // declared in imported authored modules.
           writerIdentityForSourceFile,
         };
+
+        // Schema generation reads a print by the type it was printed from,
+        // which says nothing of a piece taken out of it, so a node built from
+        // pieces would be read as a node.
+        const piece = context.state.printPieceIn(schemaTypeArg);
+        if (piece) {
+          const root = context.state.printedWithin(piece);
+          const printedType = root && context.state.printedFrom(root);
+          throw new Error(
+            `A piece of the type node printed from \`${
+              printedType ? checker.typeToString(printedType) : "?"
+            }\` reached schema generation outside that node. A printed ` +
+              `type node is read by its type, so no node may be built from ` +
+              `its parts.`,
+          );
+        }
 
         // If Type resolved to 'any' or the synthetic TypeNode intentionally
         // contains unknown, use the synthetic-node generator so the checker
@@ -247,7 +272,7 @@ function resolvePolicyOfMarkers(
       resolvePolicyOfMarkers(entry, context, diagnosticNode)
     );
   }
-  if (value === null || typeof value !== "object") return value;
+  if (!isObjectOrArray(value)) return value;
   const record = value as Record<string, unknown>;
   const marker = record.__ctPolicyIdentityOf;
   if (marker && typeof marker === "object" && !Array.isArray(marker)) {
@@ -437,7 +462,7 @@ function attachUiContractFromSchemaHints(
       ifc: { uiContract: hint },
     };
   }
-  if (typeof schema !== "object" || schema === null) {
+  if (!isObjectOrArray(schema)) {
     return schema;
   }
 
@@ -461,8 +486,7 @@ function getUiPropertySchema(
 ): Record<string, unknown> | boolean | undefined {
   if (
     !schema.properties ||
-    typeof schema.properties !== "object" ||
-    schema.properties === null
+    !isObjectOrArray(schema.properties)
   ) {
     return undefined;
   }
@@ -471,7 +495,7 @@ function getUiPropertySchema(
   if (typeof uiProperty === "boolean") {
     return uiProperty;
   }
-  return typeof uiProperty === "object" && uiProperty !== null
+  return isObjectOrArray(uiProperty)
     ? uiProperty as Record<string, unknown>
     : undefined;
 }
@@ -509,6 +533,7 @@ function attachUiContractToSchemaRecord(
 function extractWriteAuthorizedByIdentity(
   typeNode: ts.TypeNode,
   sourceFileName: string,
+  checker: ts.TypeChecker,
   writerIdentityForSourceFile: (fileName: string) => {
     file: string;
     moduleIdentity?: string;
@@ -524,9 +549,14 @@ function extractWriteAuthorizedByIdentity(
   if (!ts.isIdentifier(bindingNode.exprName)) {
     return undefined;
   }
+  // The same resolution the formatter applies to a nested claim: the writer
+  // is named where it is DECLARED, through import bindings and re-exports,
+  // by its declared name. A binding the checker cannot resolve falls back to
+  // this file and the spelling, as before.
+  const binding = resolveWriterBinding(bindingNode.exprName, checker);
   return {
-    ...writerIdentityForSourceFile(sourceFileName),
-    path: [bindingNode.exprName.text],
+    ...writerIdentityForSourceFile(binding?.fileName ?? sourceFileName),
+    path: [binding?.name ?? bindingNode.exprName.text],
   };
 }
 

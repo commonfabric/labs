@@ -12,13 +12,24 @@ export const AGENTS_HOST_CONFIG_SCHEMA = "commonfabric.agents-host.config";
 export const DEFAULT_COLLECTION_INTERVAL_MS = 15 * 60 * 1_000;
 export const MAX_COLLECTION_INTERVAL_MS = 2_147_483_647;
 
+/** A deployed piece the host accepts commands from through its own queue. */
+export interface CommandProducerConfig {
+  /** Stable, lowercase identity; it names the producer's queue. */
+  id: string;
+  /** The piece's ID in the destination space. */
+  piece: string;
+}
+
 export interface AgentsHostConfig {
   schema: typeof AGENTS_HOST_CONFIG_SCHEMA;
   ownerDid: string;
   collectionIntervalMs: number;
   checkoutRoots?: string[];
   sources: AgentSourceConfig[];
+  commandProducers?: CommandProducerConfig[];
 }
+
+const COMMAND_PRODUCER_FIELDS = new Set(["id", "piece"]);
 
 const SOURCE_FIELDS = new Set([
   "id",
@@ -176,13 +187,32 @@ function parseSource(value: unknown, index: number): AgentSourceConfig {
   };
 }
 
+function parseCommandProducer(
+  value: unknown,
+  index: number,
+): CommandProducerConfig {
+  const label = `commandProducers[${index}]`;
+  const producer = record(value, label);
+  for (const key of Object.keys(producer)) {
+    if (!COMMAND_PRODUCER_FIELDS.has(key)) {
+      throw new Error(`${label} has an unknown field: ${key}`);
+    }
+  }
+  const rawId = nonEmptyString(producer.id, `${label}.id`).trim();
+  const id = normalizeSourceId(rawId);
+  if (rawId !== id) {
+    throw new Error(`${label}.id must already be normalized as "${id}"`);
+  }
+  return { id, piece: nonEmptyString(producer.piece, `${label}.piece`).trim() };
+}
+
 export function parseAgentsHostConfig(value: unknown): AgentsHostConfig {
   const config = record(value, "configuration");
   for (const key of Object.keys(config)) {
     if (
       key !== "schema" && key !== "ownerDid" &&
       key !== "collectionIntervalMs" && key !== "sources" &&
-      key !== "checkoutRoots"
+      key !== "checkoutRoots" && key !== "commandProducers"
     ) {
       throw new Error(`configuration has an unknown field: ${key}`);
     }
@@ -246,12 +276,38 @@ export function parseAgentsHostConfig(value: unknown): AgentsHostConfig {
   if (!sources.some((source) => source.enabled)) {
     throw new Error("configuration must enable at least one source");
   }
+  let commandProducers: CommandProducerConfig[] = [];
+  if (config.commandProducers !== undefined) {
+    if (!Array.isArray(config.commandProducers)) {
+      throw new Error("configuration.commandProducers must be an array");
+    }
+    commandProducers = config.commandProducers.map(parseCommandProducer);
+    const producerIds = new Set<string>();
+    const producerPieces = new Set<string>();
+    for (const producer of commandProducers) {
+      if (producerIds.has(producer.id)) {
+        throw new Error(
+          `configuration has duplicate command producer id: ${producer.id}`,
+        );
+      }
+      producerIds.add(producer.id);
+      // Two producers naming one piece would each link a queue into the same
+      // `commands` input, and the later link would replace the earlier.
+      if (producerPieces.has(producer.piece)) {
+        throw new Error(
+          `configuration has duplicate command producer piece: ${producer.piece}`,
+        );
+      }
+      producerPieces.add(producer.piece);
+    }
+  }
   return {
     schema: AGENTS_HOST_CONFIG_SCHEMA,
     ownerDid,
     collectionIntervalMs,
     ...(checkoutRoots.length > 0 ? { checkoutRoots } : {}),
     sources,
+    ...(commandProducers.length > 0 ? { commandProducers } : {}),
   };
 }
 

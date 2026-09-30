@@ -81,6 +81,33 @@ Deno.test("scope awareness: enumerate, compose, diverge", async (t) => {
         assertEquals(s.sessionId, "sid123");
       });
 
+      await t.step(
+        "parseScope reads an unencoded key at its one boundary",
+        () => {
+          // Nothing in an unencoded key marks where its principal ends, so the
+          // principal is the three segments a `did:<method>:<id>` takes and the
+          // session id is the rest, colons and all.
+          const plain = parseScope("session:did:key:zAlice:11111111-2222");
+          assertEquals(plain.kind, "session");
+          assertEquals(plain.principal, "did:key:zAlice");
+          assertEquals(plain.sessionId, "11111111-2222");
+          const colonInSession = parseScope("session:did:key:zAlice:sid:2");
+          assertEquals(colonInSession.principal, "did:key:zAlice");
+          assertEquals(colonInSession.sessionId, "sid:2");
+          // The encoded form carries the boundary, so a colon inside either part
+          // survives it.
+          const encoded = parseScope("session:did%3Akey%3AzA%3Ab:sid%3A2");
+          assertEquals(encoded.principal, "did:key:zA:b");
+          assertEquals(encoded.sessionId, "sid:2");
+        },
+      );
+
+      await t.step("parseScope refuses a key whose principal is no DID", () => {
+        assertEquals(parseScope("session:alice:sid").kind, "other");
+        assertEquals(parseScope("user:alice").kind, "other");
+        assertEquals(parseScope("something-else").kind, "other");
+      });
+
       await t.step("listScopes enumerates with counts", () => {
         const scopes = listScopes(space);
         const byKind = Object.fromEntries(scopes.map((s) => [s.kind, s]));

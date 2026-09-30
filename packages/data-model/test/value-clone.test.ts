@@ -23,13 +23,19 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  cloneForMutation,
   CloneForMutationError,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
-} from "@/index.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
+  deepFreeze,
+  type FabricValue,
+  isDeepFrozen,
+  isFabricContainerValue,
+  missingContainerIsArray,
+  tracePath,
+} from "@";
+import { FabricError } from "@/fabric-instances";
+import { FabricHash } from "@/fabric-primitives";
 
 // deno-lint-ignore no-explicit-any
 const obj = (v: unknown) => v as any;
@@ -231,6 +237,153 @@ describe("value-clone", () => {
     it("removes the whole value for an `undefined` root or an empty path", () => {
       expect(cloneWithoutValueAtPath(undefined, ["a"])).toBeUndefined();
       expect(cloneWithoutValueAtPath(deepFreeze({ a: 1 }), [])).toBeUndefined();
+    });
+  });
+
+  describe("missingContainerIsArray()", () => {
+    it("returns `true` for `0`, `7`, `4294967294`, and `-`", () => {
+      expect(["0", "7", "4294967294", "-"].map(missingContainerIsArray))
+        .toEqual([true, true, true, true]);
+    });
+
+    it("returns `false` for `length`, `08`, `-1`, `4294967295`, the empty string, and `a`", () => {
+      expect(
+        ["length", "08", "-1", "4294967295", "", "a"].map(
+          missingContainerIsArray,
+        ),
+      ).toEqual([false, false, false, false, false, false]);
+    });
+  });
+
+  describe("tracePath()", () => {
+    it("returns `complete` with each container the path passes through and the value at its end", () => {
+      const inner = { b: [5] };
+      const root = { a: inner };
+
+      const trace = tracePath(root, ["a", "b", "0"]);
+
+      expect(trace.end).toBe("complete");
+      expect(trace.containers).toEqual([root, inner, [5]]);
+      expect(trace.containers[1]).toBe(inner);
+      expect(trace.end === "complete" && trace.value).toBe(5);
+    });
+
+    it("returns `missing` at the first key its container does not hold", () => {
+      const trace = tracePath({ a: { b: 1 } }, ["a", "x", "y"]);
+
+      expect(trace.end === "missing" && trace.at).toBe(1);
+      expect(trace.containers).toHaveLength(2);
+    });
+
+    it("returns `missing` at a key the record only inherits", () => {
+      const trace = tracePath({ a: {} }, ["a", "toString", "x"]);
+
+      expect(trace.end === "missing" && trace.at).toBe(1);
+    });
+
+    it("returns `complete` for an array's `length`, with the length as the value", () => {
+      const trace = tracePath({ a: [7, 8] }, ["a", "length"]);
+
+      expect(trace.end === "complete" && trace.value).toBe(2);
+    });
+
+    it("returns `blocked` at a null-prototype record", () => {
+      const record = Object.assign(Object.create(null), { b: 1 });
+
+      const trace = tracePath({ a: record } as FabricValue, ["a", "b"]);
+
+      expect(trace.end === "blocked" && trace.at).toBe(1);
+    });
+
+    it("returns `blocked` where the path goes on past a value no key addresses", () => {
+      const error = FabricError.fromNativeError(new Error("e"));
+
+      for (
+        const [root, path, at, value] of [
+          [{ a: 5 }, ["a", "b"], 1, 5],
+          [{ a: error }, ["a", "message"], 1, error],
+          [{ a: undefined }, ["a", "b"], 1, undefined],
+          [7, ["a"], 0, 7],
+        ] as [FabricValue, string[], number, FabricValue][]
+      ) {
+        const trace = tracePath(root, path);
+
+        expect(trace.end === "blocked" && trace.at).toBe(at);
+        expect(trace.end === "blocked" && trace.value).toBe(value);
+      }
+    });
+  });
+
+  describe("cloneForMutation() over a corpus of roots and paths", () => {
+    // Roots a caller owns, holding frozen containers the call would thaw into
+    // them, crossed with every path of one to three keys drawn from an index,
+    // a name, `-`, `length` and an inherited name, with and without
+    // `createMissing`. Exhaustive over that set and silent past it.
+
+    /** The containers reachable from `value`, in the order a walk visits them. */
+    const containersIn = (value: unknown, found: object[] = []): object[] => {
+      if (typeof value === "object" && value !== null) {
+        found.push(value);
+        for (const key of Object.keys(value)) {
+          containersIn((value as Record<string, unknown>)[key], found);
+        }
+      }
+      return found;
+    };
+
+    const roots: (() => FabricValue)[] = [
+      () => ({ a: deepFreeze({ b: 1, x: [1, 2] }), b: deepFreeze([{ a: 1 }]) }),
+      () => [deepFreeze({ a: { x: 1 } }), 5],
+      () => ({ a: FabricError.fromNativeError(new Error("e")), x: null }),
+      () => ({ a: undefined }),
+    ];
+    const keys = ["a", "b", "0", "-", "length", "toString"];
+    const paths: string[][] = [];
+    for (const first of keys) {
+      paths.push([first]);
+      for (const second of keys) {
+        paths.push([first, second]);
+        for (const third of ["a", "0"]) paths.push([first, second, third]);
+      }
+    }
+
+    it("throws exactly where its trace ends short, and then leaves the input as it was", () => {
+      let throws = 0;
+      for (const makeRoot of roots) {
+        for (const path of paths) {
+          for (const createMissing of [false, true]) {
+            const root = makeRoot();
+            const before = containersIn(root);
+            const trace = tracePath(root, path);
+            const shortEnd = trace.end === "blocked" ||
+              (trace.end === "missing" && !createMissing) ||
+              (trace.end === "complete" &&
+                !isFabricContainerValue(trace.value));
+
+            let threw = false;
+            try {
+              cloneForMutation(root, path, { createMissing, force: false });
+            } catch (e) {
+              expect(e).toBeInstanceOf(CloneForMutationError);
+              threw = true;
+            }
+
+            expect({ path, createMissing, threw }).toEqual({
+              path,
+              createMissing,
+              threw: shortEnd,
+            });
+            if (threw) {
+              throws++;
+              const after = containersIn(root);
+              expect(after.length).toBe(before.length);
+              expect(after.every((container, i) => container === before[i]))
+                .toBe(true);
+            }
+          }
+        }
+      }
+      expect(throws).toBeGreaterThan(50);
     });
   });
 });

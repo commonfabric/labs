@@ -35,3 +35,21 @@ refusal naming the `finance` atom, and any governed derived data it does persist
 carries that label plus a `TransformedBy` attribution.
 
 Driven by `scripts/hostile-skill-demo.sh`.
+
+## `acquirable-skills/`
+
+`acquirable-skills/cf-spend-digest/` is a skill this repository publishes for
+the CT-2091 demo to acquire by pin, rather than one an operator installs under
+`--skills-root`: the demo run names it `commonfabric/labs/cf-spend-digest`, and
+`acquire_skill` resolves that against this public repository's default branch
+and reads the pinned commit's bytes. It holds a `SKILL.md` and one script under
+`scripts/` and nothing else, which is the whole of what pinned acquisition
+admits — a reference, an asset, a package file or a nested directory anywhere
+under the skill root refuses the acquisition outright, so the tree is flat on
+purpose. `scripts/category-budgets.sh` prints the skill author's own
+per-category monthly budgets as one JSON object; it reads nothing, takes no
+arguments, and produces the same bytes in every space, which is the demo's
+blast-radius receipt written as code rather than claimed.
+
+The demo allowlists exactly one script of it, at the pin, and the child that
+receives its handle is the only run that mounts its bytes.

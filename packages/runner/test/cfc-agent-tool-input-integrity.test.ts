@@ -15,6 +15,7 @@ import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc agent tool-input integrity");
 const space = signer.did();
@@ -45,6 +46,9 @@ async function setupSendMail(
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcEnforcementMode,
+    // Disabled enforcement omits CFC persistence, so this legacy bypass
+    // profile also disables precise reference acquisition.
+    cfcFlowLabels: cfcEnforcementMode === "disabled" ? "off" : "persist",
   });
   const tx = runtime.edit();
   const { commonfabric } = createTrustedBuilder(runtime);
@@ -173,7 +177,7 @@ async function setupSendMail(
   // cfc-integrity-mint-gate.test.ts).
   const seedKernelRecipient = async (name: string, value: string) => {
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "agent-kernel-demo",
     });
@@ -220,7 +224,7 @@ async function setupSendMail(
       },
     } as const satisfies JSONSchema;
     const seedTx = runtime.edit();
-    seedTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seedTx, {
       kind: "builtin",
       builtinId: "llm-dialog",
     });
@@ -879,9 +883,9 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
   });
 
   it("descends into tuple (prefixItems) slot floors", async () => {
-    // CT-1895: the gate never descended prefixItems, so a floor declared on
-    // a tuple slot was never enforced — a model-supplied literal in that
-    // slot executed the tool.
+    // The gate descends `prefixItems`, so a floor declared on a tuple slot is
+    // enforced: a model-supplied literal in that slot does not execute the
+    // tool.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),

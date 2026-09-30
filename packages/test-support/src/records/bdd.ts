@@ -36,17 +36,13 @@ import {
   describe as realDescribe,
   it as realIt,
 } from "@std/testing/bdd/real";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   activeCapture,
   NAME_SEPARATOR,
-  registerFrameworkModule,
-  registeringFile,
   type RegistrationCapture,
+  runningFile,
 } from "./registration.ts";
-
-// A test registered through this module is the caller's, not this
-// module's, so the file attribution walks past these frames.
-registerFrameworkModule(import.meta.url);
 
 /**
  * The describe chain enclosing whatever is being registered right now.
@@ -86,7 +82,7 @@ const ROOT_SUITE_NAME = "global";
 export function nameOf(args: readonly unknown[]): string | undefined {
   for (const arg of args) {
     if (typeof arg === "string") return arg;
-    if (typeof arg === "object" && arg !== null) {
+    if (isObjectOrArray(arg)) {
       const named = (arg as { name?: unknown }).name;
       if (typeof named === "string") return named;
       const fn = (arg as { fn?: unknown }).fn;
@@ -109,7 +105,7 @@ export function bodyOf(
     if (typeof arg === "function") {
       return { index, body: arg as AnyFunction };
     }
-    if (typeof arg === "object" && arg !== null) {
+    if (isObjectOrArray(arg)) {
       const fn = (arg as { fn?: unknown }).fn;
       if (typeof fn === "function") {
         return { index: -1, body: fn as AnyFunction };
@@ -131,11 +127,11 @@ type Hook = <T>(fn: (this: T) => void | Promise<void>) => void;
  */
 function namedChain(args: readonly unknown[]): readonly string[] | undefined {
   for (const arg of args) {
-    if (typeof arg !== "object" || arg === null) continue;
+    if (!isObjectOrArray(arg)) continue;
     const own = chains.get(arg);
     if (own !== undefined) return own;
     const suite = (arg as { suite?: unknown }).suite;
-    if (typeof suite !== "object" || suite === null) continue;
+    if (!isObjectOrArray(suite)) continue;
     const named = chains.get(suite);
     if (named !== undefined) return named;
   }
@@ -181,7 +177,7 @@ function withBody(
     return next;
   }
   return args.map((arg) =>
-    typeof arg === "object" && arg !== null &&
+    isObjectOrArray(arg) &&
       typeof (arg as { fn?: unknown }).fn === "function"
       ? { ...arg, fn: body }
       : arg
@@ -210,7 +206,7 @@ export function wrapDescribe(through: AnyFunction): AnyFunction {
     const result = found === undefined
       ? through(...args)
       : through(...withBody(args, found.index, inChain(own, found.body)));
-    if (typeof result === "object" && result !== null) {
+    if (isObjectOrArray(result)) {
       chains.set(result, own);
     }
     return result;
@@ -221,9 +217,9 @@ export function wrapDescribe(through: AnyFunction): AnyFunction {
  * Wraps one `it` entry point so that a listed leaf is registered as
  * ignored, and so that the leaf's own file reaches the name map. The
  * leaf's identity is the chain enclosing it and its own name joined,
- * which is what the store speaks in, and the file is read from the
- * registration stack the same way the preload reads it — the two
- * together, because the same test name occurs in more than one file.
+ * which is what the store speaks in, and the file is the test file the
+ * process runs, as the preload takes it — the two together, because the
+ * same test name occurs in more than one file.
  *
  * The body reaches the real function unchanged, so the runner names the
  * leaf from the same function `nameOf` read it from.
@@ -246,7 +242,7 @@ export function wrapIt(
     const name = nameOf(args);
     if (name === undefined) return through(...args);
     const identity = [...enclosing(args), name].join(NAME_SEPARATOR);
-    const file = registeringFile(new Error().stack ?? "");
+    const file = runningFile();
     if (file !== undefined) capture.names.set(identity, file);
     return capture.skipped(file, identity) ? ignore(...args) : through(...args);
   };

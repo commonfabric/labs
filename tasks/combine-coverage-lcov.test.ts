@@ -24,8 +24,8 @@ Deno.test("normalizeSourcePath strips a GitHub-hosted workspace root", () => {
 Deno.test("normalizeSourcePath handles a dotted repository name", () => {
   assertEquals(
     normalizeSourcePath(
-      "/home/runner/work/commontoolsinc.labs/commontoolsinc.labs/tasks/x.ts",
-      "commontoolsinc.labs",
+      "/home/runner/work/commonfabric.labs/commonfabric.labs/tasks/x.ts",
+      "commonfabric.labs",
     ),
     "tasks/x.ts",
   );

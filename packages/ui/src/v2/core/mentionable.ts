@@ -23,11 +23,13 @@ export interface Mentionable {
    * The name the collection that owns this member calls it by — `42` for a
    * member of a board that numbers its members.
    *
-   * One property for one fact, read at both ends of a mention. On a universe
-   * row it is a COPY the collection publishes, so matching a `#42` query
-   * costs no read of the member behind it; on a destination piece it is what
-   * that piece publishes for itself, which is what lets a mention already in
-   * a document gain the name once its member is named.
+   * On a universe row it is a COPY the collection publishes, and the editor
+   * reads that copy at both ends of a mention: a `#42` query matches it, and
+   * a mention's pill shows it for the destination the row stands for, so
+   * neither costs a read of the member behind the row. A piece may publish
+   * one for itself as well. The editor does not read that one off a
+   * destination: it is the name the piece's creating collection gave it, and
+   * a pill shows only what the universe it completes mentions from calls it.
    *
    * Optional, and absent wherever no collection has named the member, which
    * is what keeps such an entry out of every short-name query rather than

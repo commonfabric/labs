@@ -1,6 +1,6 @@
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
-import { getCarriedCfcLabelView } from "../cfc/label-view-state.ts";
+import { getCarriedCfcLabelView } from "../cell.ts";
 import { carryCfcReferenceProvenance } from "../cfc/reference-provenance.ts";
 import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";

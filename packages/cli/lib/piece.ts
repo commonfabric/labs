@@ -12,14 +12,11 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import {
-  createSession,
-  type Identity,
-  isDID,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, type Identity, Session } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
@@ -36,15 +33,21 @@ import {
 } from "@commonfabric/piece";
 import {
   assertPieceInputPath,
+  completeServedRegistration,
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
   PieceController,
   PieceInputPathError,
   type PiecePatternRef,
   PiecesController,
+  type PieceSourceActionResult,
+  servedInstantiatePiece,
+  ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
 import {
   Cell,
+  cellRuntime,
+  cellTx,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -77,6 +80,7 @@ import {
 import {
   type CfcLabelView,
   cfcLabelViewForResolvedCellWithStatus,
+  cfcLabelViewForWriteTargetWithStatus,
   cfcLabelViewFromSchema,
   cfcSchemaResolvedRoot,
   cfcSchemaWithInheritedDefs,
@@ -123,6 +127,7 @@ import {
   executeResolvedCallable,
   type InvocationOutcome,
   runtimeErrorLog,
+  VerbInputValidationError,
 } from "./callable.ts";
 import {
   type CellSelection,
@@ -142,6 +147,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -193,6 +199,7 @@ export interface SpaceConfig {
 /** Metadata returned for a piece whose stored data matches a search query. */
 export interface PieceSearchResult {
   id: string;
+  reference: string;
   name?: string;
   patternRef?: PiecePatternRef;
 }
@@ -304,21 +311,15 @@ export function parseCellCfcLabelUpdate(
   } as CellCfcLabelUpdate;
 }
 
-/**
- * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
- *
- * Each command needs that doc for its own reason. An INSPECTION read must not
- * answer "none" for a value carrying a label behind a link the path crosses
- * part way through. A read that feeds a WRITE needs it because the write
- * resolves too: `applyCfcSchemaToExistingValue` follows the same links, so the
- * doc this view describes is the doc the update lands in.
- */
+/** Display labels, or the destination's own labels when validating an update. */
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  writeTarget = false,
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = writeTarget
+    ? cfcLabelViewForWriteTargetWithStatus(cell)
+    : cfcLabelViewForResolvedCellWithStatus(cell);
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -416,6 +417,14 @@ export interface ResolvedPieceCallable extends CallableResolution {
    * Only the help page pulls it. A dispatch needs nothing an author wrote.
    */
   declaredProse?: () => Promise<DeclaredVerbProse | undefined>;
+
+  /**
+   * The canonical address of the piece called, present when the target named
+   * a path and the piece was reached through the link stored there. The
+   * address the caller wrote names the holder of that link, so this is the
+   * one that names what ran.
+   */
+  linkedPiece?: string;
 }
 
 export interface PieceCallableDependencies extends CallableExecutionDeps {
@@ -495,7 +504,7 @@ function storageManagerCloseNow(
   storageManager: unknown,
 ): (() => Promise<unknown>) | undefined {
   if (
-    typeof storageManager === "object" && storageManager !== null &&
+    isObjectOrArray(storageManager) &&
     "closeNow" in storageManager
   ) {
     const closeNow = Reflect.get(storageManager, "closeNow");
@@ -783,26 +792,33 @@ export async function listPieces(
   config: SpaceConfig,
   deps: PieceOperationDependencies = {},
 ): Promise<
-  { id: string; name?: string; patternRef?: PiecePatternRef; error?: string }[]
+  (PieceSearchResult & { error?: string })[]
 > {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
   return Promise.all(
     registeredPieces.map(async (piece) => {
+      const reference = createLLMFriendlyLink(
+        piece.getCell().getAsNormalizedFullLink(),
+      );
       try {
-        const livePiece = await pieces.get(piece.id, true);
+        const owner = piece.pieces();
+        const cell = await owner.getPieceCell(piece.getCell(), true);
+        const livePiece = new PieceController(owner, cell);
         const name = (await (
           livePiece.getCell().key(NAME) as Cell<unknown>
         ).pull()) as string | undefined;
         const patternRef = await livePiece.getPatternRef();
         return {
           id: piece.id,
+          reference,
           name,
           patternRef,
         };
       } catch (err) {
         return {
           id: piece.id,
+          reference,
           error: err instanceof Error ? err.message : String(err),
         };
       }
@@ -926,10 +942,15 @@ function cellDocumentTraversalKey(cell: Cell<unknown>): string {
 
 function cellValueTraversalKey(cell: Cell<unknown>): string {
   const { space, id, scope, path } = cell.getAsNormalizedFullLink();
-  return hashStringOf({
-    link: { space, id, scope, path },
-    cfcLabelView: getCarriedCfcLabelView(cell),
-  });
+  // A read can accumulate reference labels without changing which cell it
+  // materialized. Preserve that read's schema, including opaque children.
+  return hashStringOf({ space, id, scope, path });
+}
+
+/** Identify a piece's document independently of its selected fields or view labels. */
+function pieceDocumentIdentity(cell: Cell<unknown>): string {
+  const { space, id, scope } = cell.getAsNormalizedFullLink();
+  return hashStringOf({ space, id, scope });
 }
 
 interface PieceOwnerCache {
@@ -939,7 +960,7 @@ interface PieceOwnerCache {
 
 async function resolveRegisteredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   let current = cell;
@@ -971,8 +992,9 @@ async function resolveRegisteredDocumentOwner(
     const currentId = pieceId(current);
     // Nested piece results can point to a parent result. Stop at the nearest
     // registered result before following its parent metadata.
-    if (currentId !== undefined && registeredPieceIds.has(currentId)) {
-      return finish(currentId);
+    const currentDocument = pieceDocumentIdentity(current);
+    if (registeredPieceDocuments.has(currentDocument)) {
+      return finish(currentDocument);
     }
 
     await current.sync();
@@ -982,15 +1004,15 @@ async function resolveRegisteredDocumentOwner(
       (getPatternIdentityRef(current) !== undefined ||
         argumentLink !== undefined)
     ) {
-      return finish(currentId);
+      return finish(currentDocument);
     }
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
 
-    current = current.runtime.getCellFromLink(
+    current = cellRuntime(current).getCellFromLink(
       { ...resultLink, path: [], schema: undefined },
       undefined,
-      current.tx,
+      cellTx(current),
       getCarriedCfcLabelView(current),
     );
   }
@@ -998,7 +1020,7 @@ async function resolveRegisteredDocumentOwner(
 
 function registeredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   const key = cellDocumentTraversalKey(cell);
@@ -1007,28 +1029,28 @@ function registeredDocumentOwner(
   }
   return resolveRegisteredDocumentOwner(
     cell,
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 async function resolveRegisteredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
   if (!cellIsMaterialized) await cell.sync();
   return registeredDocumentOwner(
     cell.resolveAsCell(),
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 function registeredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
@@ -1037,7 +1059,7 @@ function registeredPieceOwner(
   if (owner === undefined) {
     owner = resolveRegisteredPieceOwner(
       cell,
-      registeredPieceIds,
+      registeredPieceDocuments,
       ownerCache,
       cellIsMaterialized,
     );
@@ -1047,8 +1069,8 @@ function registeredPieceOwner(
 }
 
 interface SearchOwnership {
-  pieceId: string;
-  registeredPieceIds: ReadonlySet<string>;
+  pieceDocument: string;
+  registeredPieceDocuments: ReadonlySet<string>;
   ownerCache: PieceOwnerCache;
 }
 
@@ -1123,11 +1145,11 @@ async function searchTextMatches(
   if (isCell(rootCell)) {
     const owner = await registeredPieceOwner(
       rootCell,
-      ownership.registeredPieceIds,
+      ownership.registeredPieceDocuments,
       ownership.ownerCache,
       false,
     );
-    if (owner !== undefined && owner !== ownership.pieceId) return false;
+    if (owner !== undefined && owner !== ownership.pieceDocument) return false;
   }
 
   const value = await rootCell.pull();
@@ -1162,7 +1184,7 @@ async function searchTextMatches(
     }
     const current = next.value.value;
 
-    if (current !== null && typeof current === "object" && isCell(current)) {
+    if (isObjectOrArray(current) && isCell(current)) {
       if (!isReadableCell(current)) continue;
 
       try {
@@ -1173,11 +1195,13 @@ async function searchTextMatches(
         if (!next.value.ownershipEstablished) {
           const owner = await registeredPieceOwner(
             current,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             false,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
         }
 
         const nested = await current.pull();
@@ -1196,11 +1220,11 @@ async function searchTextMatches(
       try {
         const owner = await registeredPieceOwner(
           sourceCell,
-          ownership.registeredPieceIds,
+          ownership.registeredPieceDocuments,
           ownership.ownerCache,
           true,
         );
-        if (owner !== undefined && owner !== ownership.pieceId) continue;
+        if (owner !== undefined && owner !== ownership.pieceDocument) continue;
         ownershipEstablished = true;
       } catch (error) {
         reportReadError?.(error);
@@ -1208,7 +1232,7 @@ async function searchTextMatches(
       }
     }
 
-    if (current === null || typeof current !== "object") {
+    if (!isObjectOrArray(current)) {
       if (
         typeof current !== "function" &&
         foldedSearchTextContains(String(current), query)
@@ -1228,11 +1252,13 @@ async function searchTextMatches(
         if (!ownershipEstablished) {
           const owner = await registeredPieceOwner(
             sourceCell,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             true,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
           ownershipEstablished = true;
         }
 
@@ -1341,8 +1367,8 @@ export async function searchPieces(
   // against a server-hosted index.
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
-  const registeredPieceIds = new Set(
-    registeredPieces.map((piece) => piece.id),
+  const registeredPieceDocuments = new Set(
+    registeredPieces.map((piece) => pieceDocumentIdentity(piece.getCell())),
   );
   const ownerCache: PieceOwnerCache = {
     cells: new Map(),
@@ -1376,7 +1402,11 @@ export async function searchPieces(
         inputMatches = await searchTextMatches(
           inputCell,
           normalizedQuery,
-          { pieceId: piece.id, registeredPieceIds, ownerCache },
+          {
+            pieceDocument: pieceDocumentIdentity(piece.getCell()),
+            registeredPieceDocuments,
+            ownerCache,
+          },
           NO_IGNORED_ROOT_KEYS,
           (error) => reportSearchError(piece.id, "input data", error),
         );
@@ -1391,7 +1421,11 @@ export async function searchPieces(
           resultMatches = await searchTextMatches(
             resultCell,
             normalizedQuery,
-            { pieceId: piece.id, registeredPieceIds, ownerCache },
+            {
+              pieceDocument: pieceDocumentIdentity(piece.getCell()),
+              registeredPieceDocuments,
+              ownerCache,
+            },
             RESULT_IGNORED_ROOT_KEYS,
             (error) => reportSearchError(piece.id, "result data", error),
           );
@@ -1413,7 +1447,14 @@ export async function searchPieces(
         } catch (error) {
           reportSearchError(piece.id, "metadata", error);
         }
-        matches[index] = { id: piece.id, name, patternRef };
+        matches[index] = {
+          id: piece.id,
+          reference: createLLMFriendlyLink(
+            piece.getCell().getAsNormalizedFullLink(),
+          ),
+          name,
+          patternRef,
+        };
       }
     }
   };
@@ -1632,36 +1673,84 @@ async function lifecycleClient(
 }
 
 /**
- * The served half of `newPiece`: the serving runtime compiles the program
- * and materializes the piece — the creation act, with its registry entry
- * and its name in the same transaction — and this connection then starts
- * it the way it starts any piece it opens, running the graph as
- * speculation while the server derives on demand. The request is awaited
- * without a wall-clock bound: a creation the server is still committing
- * is not one to walk away from, since it lands whether or not this
- * process waits. `boundStart` is the bound the local start runs under.
+ * Creates or resumes a piece with an atomic creation receipt. A serving
+ * deployment executes the transaction remotely; an ordinary client executes
+ * the same operation locally. Registration retains its delivery identity, so
+ * an uncertain response can be retried without reinitializing the document.
+ * `boundStart` bounds only the local start, after creation and registration.
  */
-async function createOnServer(
+async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
   entry: EntryConfig,
-  options: { start?: boolean; slug?: string; force?: boolean } | undefined,
+  options: {
+    input?: object;
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
 ): Promise<{ id: string; getCell: () => Cell<unknown> }> {
-  const receipt = await (deps.instantiatePieceOnServer ??
-    instantiatePieceOnServer)(await lifecycleClient(config, deps), {
-      space: pieces.getSpace(),
-      program,
-      ...(entry.repository === undefined
-        ? {}
-        : { repository: entry.repository }),
-      ...(options?.slug === undefined ? {} : { slug: options.slug }),
-      ...(options?.force === undefined ? {} : { force: options.force }),
-      register: true,
-      ...(options?.start === false ? { start: false } : {}),
-    });
+  const requestKey = options?.requestKey ?? crypto.randomUUID();
+  const receipt = await (async () => {
+    try {
+      const client = await lifecycleClient(config, deps);
+      const request = {
+        requestKey,
+        ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(entry.repository === undefined
+          ? {}
+          : { repository: entry.repository }),
+        ...(options?.slug === undefined ? {} : { slug: options.slug }),
+        ...(options?.force === undefined ? {} : { force: options.force }),
+        register: true,
+      };
+      if (servesLifecycleVerbs(pieces)) {
+        return await (deps.instantiatePieceOnServer ??
+          instantiatePieceOnServer)(client, {
+            ...request,
+            space: pieces.getSpace(),
+            program,
+            ...(options?.start === false ? { start: false } : {}),
+          });
+      }
+      const created = await servedInstantiatePiece(pieces, {
+        ...request,
+        source: { program },
+        actingUser: client.identity.did(),
+      });
+      return await completeServedRegistration(
+        pieces,
+        created,
+        client.identity.did(),
+      );
+    } catch (error) {
+      if (
+        error instanceof ServedLifecycleRefusal ||
+        (error instanceof ServedLifecycleError && error.status >= 400 &&
+          error.status < 500 && error.status !== 408)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Piece creation outcome may be incomplete. Retry the same command ` +
+          `with --request-key ${requestKey}. ` +
+          (error instanceof Error ? error.message : String(error)),
+        { cause: error },
+      );
+    }
+  })();
+  if (receipt.registration?.status !== "handled") {
+    throw new Error(
+      `Piece ${receipt.pieceId} was created but registration is ` +
+        `${receipt.registration?.status ?? "unconfirmed"}. ` +
+        `Retry the same command with --request-key ${requestKey}. ` +
+        (receipt.registration?.error ?? ""),
+    );
+  }
   const cell = await pieces.getPieceCell(receipt.pieceId, false);
   if (options?.start !== false) await boundStart(pieces.startPiece(cell));
   return { id: receipt.pieceId, getCell: () => cell };
@@ -1671,16 +1760,24 @@ async function createOnServer(
  * Creates a new piece from source code and optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
- * refuses one, and `force` takes it. Against a serving deployment the name
- * rides the creation transaction, so the refusal leaves nothing behind.
- * Otherwise the refusal arrives after the piece exists, so it names the
- * piece as well as the flag: an operator who meant to repoint has an id to
- * name, and one who did not has a piece to find.
+ * refuses one, and `force` takes it. With a request key or a serving
+ * deployment, the name rides the creation transaction, so the refusal
+ * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
+ * so it names the piece as well as the flag: an operator who meant to repoint
+ * has an id to name, and one who did not has a piece to find.
  */
 export async function newPiece(
   config: SpaceConfig,
   entry: EntryConfig,
-  options?: { start?: boolean; slug?: string; force?: boolean },
+  options?: {
+    /** Initial argument committed during setup, before registration or start. */
+    input?: object;
+
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  },
   deps: PieceOperationDependencies = {},
 ): Promise<string> {
   const pieces = await timeCliPhase(
@@ -1690,7 +1787,8 @@ export async function newPiece(
 
   // Against a serving deployment the space root is the serving loop's to
   // ensure — it does so on activation, ahead of the verb this command sends
-  // — and a served creation that finds no root refuses with `no-space-root`.
+  // — and a served creation that finds no root retains its piece and reports
+  // failed registration, which the same request key can resume.
   // Otherwise registration through `pieces.add()` requires an existing
   // default pattern and fails before sending if none exists. Ensuring it
   // creates an absent root and reconciles and repairs an existing one; fail
@@ -1753,11 +1851,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
+  const receipted = served || options?.requestKey !== undefined;
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      served
-        ? createOnServer(
+      receipted
+        ? createWithReceipt(
           config,
           pieces,
           program,
@@ -1769,15 +1868,15 @@ export async function newPiece(
         : boundStart(pieces.create(program, {
           repository: entry.repository,
           start: options?.start,
+          ...(options?.input === undefined ? {} : { input: options.input }),
         })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // A served creation named and registered the piece in its own
-  // transaction; what follows is the client-side creation's second half.
-  if (served) return piece.id;
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {
@@ -1978,6 +2077,76 @@ async function updateOnServer(
     detachedOrigin: receipt.detachedOrigin,
     refresh,
   };
+}
+
+/** A follow receipt includes the incompatibility this invocation accepted. */
+export type FollowPieceSourceResult =
+  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | (Extract<PieceSourceActionResult, { status: "applied" }> & {
+    acceptedIncompatibility?: string;
+  });
+
+/**
+ * Points a piece at `origin` and adopts what that origin currently serves,
+ * in one source transition (`repoint`). From then on the piece follows the
+ * origin: opening it adopts each later release the origin ships.
+ *
+ * This is how a piece created detached — a profile made before the runtime
+ * claimed origins for children of system pieces, say — is put on the
+ * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
+ * is recorded with the revision. The transition carries the same writer
+ * delegation a `setsrc` does, since it is the owner's explicit act.
+ *
+ * @throws Error when the deployment serves piece lifecycle verbs (the served
+ * update takes no origin), when the piece cannot be resolved, or when the
+ * origin cannot be read or does not compile.
+ */
+export async function followPieceSource(
+  config: PieceConfig,
+  origin: string,
+  options: Pick<SetPiecePatternOptions, "dangerouslyAllowIncompatibleSchema"> =
+    {},
+  deps: PieceOperationDependencies = {},
+): Promise<FollowPieceSourceResult> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  // Against a serving deployment a source transition is the serving
+  // runtime's to commit, and the served update verb carries no origin yet;
+  // a client-side repoint there would commit outside the served lifecycle.
+  if (servesLifecycleVerbs(pieces)) {
+    throw new Error(
+      "This deployment serves piece lifecycle verbs, and `follow` is not " +
+        "served yet; the served update takes no origin.",
+    );
+  }
+  const resolvedConfig = await resolvePieceConfigWithPieces(
+    config,
+    pieces,
+    deps,
+  );
+  const piece = await pieces.get(
+    resolvedConfig.piece,
+    false,
+    undefined,
+    resolvedConfig.pieceScope,
+  );
+  const action = { kind: "repoint" as const, url: origin };
+  let result: FollowPieceSourceResult = await piece.changeSource(action);
+  if (
+    result.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const acceptedIncompatibility = result.message;
+    result = await piece.changeSource(action, {
+      confirmedChange: result.prepared,
+    });
+    if (result.status === "applied") {
+      result = { ...result, acceptedIncompatibility };
+    }
+  }
+  if (result.status === "applied") noteWroteTo(config.space);
+  return result;
 }
 
 /**
@@ -2195,7 +2364,7 @@ async function tryResolvePieceCallableAt(
  */
 function probeForcedStreamCell(cell: any, name: string): any | null {
   if (
-    typeof cell !== "object" || cell === null ||
+    !isObjectOrArray(cell) ||
     typeof cell.asSchema !== "function"
   ) {
     return null;
@@ -2324,15 +2493,61 @@ async function tryResolveLivePieceToolCallable(
 async function loadPieceForCallables(
   config: PieceConfig,
   deps: PieceCallableDependencies,
-  { prepareDispatch }: { prepareDispatch: boolean },
+  { prepareDispatch, followPathToPiece = false }: {
+    prepareDispatch: boolean;
+
+    /**
+     * Whether a path left after the piece is followed, through the link
+     * stored there, to the piece it names. Off, such a path is refused.
+     */
+    followPathToPiece?: boolean;
+  },
 ): Promise<{
   pieces: any;
   piece: any;
   space: MemorySpace;
-  resolvedConfig: Awaited<ReturnType<typeof resolvePieceConfigWithPieces>>;
+  resolvedConfig: PieceConfig;
+
+  /** Whether the piece was reached through a link stored at a path. */
+  followedLink: boolean;
 }> {
-  const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  const load = deps.loadPieces ?? loadPieces;
+  let pieces = await load(config);
+  let resolvedConfig: PieceConfig;
+  let followedLink = false;
+  if (followPathToPiece) {
+    const target = await resolvePieceTargetWithPieces(
+      config,
+      config.piecePath ?? [],
+      pieces,
+    );
+    if (target.path.length === 0) {
+      resolvedConfig = target.config;
+    } else {
+      const linked = await resolveLinkedPiece(pieces, target, deps);
+      followedLink = true;
+      // The embedded space named the space the position sits in, which the
+      // connection above already checked; the linked piece's space comes
+      // from the stored link, so nothing embedded is left to agree with.
+      const { embeddedSpaces: _checked, ...rest } = target.config;
+      resolvedConfig = {
+        ...rest,
+        space: linked.space,
+        piece: linked.piece,
+        pieceScope: linked.scope,
+      };
+      if (linked.space !== (pieces.getSpace?.() ?? config.space)) {
+        // A controller serves one space, so a piece in another one is
+        // reached over a connection of its own, opened as the same
+        // identity. Whether that identity may call the piece is the target
+        // space's ACL to decide, as for a call addressed there directly.
+        await pieces.dispose?.();
+        pieces = await load(resolvedConfig);
+      }
+    }
+  } else {
+    resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  }
 
   const piece = await (deps.loadPiece
     ? deps.loadPiece(
@@ -2356,8 +2571,161 @@ async function loadPieceForCallables(
         resolvedConfig.pieceScope,
       ),
     ));
-  const space = pieces.getSpace?.() ?? config.space;
-  return { pieces, piece, space, resolvedConfig };
+  const space = pieces.getSpace?.() ?? resolvedConfig.space;
+  return { pieces, piece, space, resolvedConfig, followedLink };
+}
+
+/**
+ * The phrase every refusal of {@link resolveLinkedPiece} carries when the
+ * addressed position holds no pointer to a piece. A caller tells "no pointer
+ * here" from every other failure by it.
+ */
+export const NAMES_NO_PIECE = "names no piece";
+
+/**
+ * A `cf piece call` target whose path does not lead to a piece: the position
+ * holds no link, or the link it holds names a cell inside a piece.
+ */
+export class LinkedPieceRefusal extends Error {}
+
+/** Helper for {@link resolveLinkedPiece}, which compares two cell addresses. */
+function sameCellAddress(a: NormalizedFullLink, b: NormalizedFullLink) {
+  return a.space === b.space && a.id === b.id &&
+    (a.scope ?? "space") === (b.scope ?? "space") &&
+    a.path.length === b.path.length &&
+    a.path.every((segment, index) => segment === b.path[index]);
+}
+
+/**
+ * Helper for {@link resolveLinkedPiece}, which follows every stored link at
+ * `cell` with the runtime's own link resolution. Resolution reads the local
+ * replica and stops at a document that has not arrived, so each round loads
+ * the document reached and resolves again, until a round moves nowhere.
+ */
+async function resolveThroughStoredLinks(
+  cell: Cell<unknown>,
+): Promise<Cell<unknown>> {
+  let current = cell;
+  // A round that moves ends on a document the rounds so far had not loaded,
+  // and a chain of stored links crosses finitely many; once all of a cycle's
+  // documents are local, the resolution itself throws on it.
+  while (true) {
+    await current.sync();
+    const next = current.resolveAsCell();
+    if (
+      sameCellAddress(
+        next.getAsNormalizedFullLink(),
+        current.getAsNormalizedFullLink(),
+      )
+    ) return next;
+    current = next;
+  }
+}
+
+/**
+ * Helper for {@link resolveLinkedPiece}, which says whether the document
+ * `cell` sits in is `result` or a document `result`'s piece owns. Setup writes
+ * a `result` back-link onto each document a piece owns, and that is what is
+ * read here.
+ */
+async function isDocumentOf(
+  cell: Cell<unknown>,
+  result: Cell<unknown>,
+): Promise<boolean> {
+  const owner = { ...result.resolveAsCell().getAsNormalizedFullLink() };
+  const sameDocument = (link: NormalizedFullLink) =>
+    sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
+  const link = cell.getAsNormalizedFullLink();
+  const document = cellRuntime(cell).getCellFromLink(
+    { ...link, path: [], schema: undefined },
+    undefined,
+    cellTx(cell),
+  );
+  await document.sync();
+  const backLink = getMetaLink(document, "result");
+  return sameDocument(link) ||
+    (backLink !== undefined && sameDocument(backLink));
+}
+
+/**
+ * Resolves the piece that the position `target.path` inside `target.config`'s
+ * piece links to, in whichever space the stored link names.
+ *
+ * @throws LinkedPieceRefusal when the position holds no link to another
+ * document or links to a document that is no piece, carrying
+ * {@link NAMES_NO_PIECE}, or when the link it holds names a cell inside a
+ * piece.
+ */
+async function resolveLinkedPiece(
+  pieces: PiecesController,
+  target: ResolvedPieceTarget,
+  deps: PieceCallableDependencies,
+): Promise<{ space: string; piece: string; scope?: CellScope }> {
+  const { config, path } = target;
+  const spelled = `"${path.join("/")}" on piece ${config.piece}`;
+  const holder = deps.loadPiece
+    ? await deps.loadPiece(pieces, config.piece, config.pieceScope)
+    : new PieceController(
+      pieces,
+      await pieces.getPieceCell(
+        config.piece,
+        false,
+        undefined,
+        config.pieceScope,
+      ),
+    );
+  const result: Cell<unknown> = await holder.result.getCell();
+  // The parent resolves first, so that what is compared below is the last
+  // segment alone: links on the way to the position are the holder's own
+  // plumbing, and only one AT the position is a pointer.
+  const parent = await resolveThroughStoredLinks(
+    path.length > 1 ? result.key(...path.slice(0, -1)) : result,
+  );
+  const position = parent.key(path[path.length - 1]);
+  const resolved = await resolveThroughStoredLinks(position);
+  const link = resolved.getAsNormalizedFullLink();
+  // A piece is the document its pattern identity is written on.
+  const piece = pieceId(resolved);
+  if (
+    link.path.length > 0 || piece === undefined ||
+    getPatternIdentityRef(resolved) === undefined
+  ) {
+    const ending = `\`cf piece call\` takes a piece, or a path that links ` +
+      `to one.`;
+    // A link that stays within the holder is its own plumbing — a result
+    // field reading an argument or an internal cell — and what sits at the
+    // end of it is the holder's value, so it points nowhere either.
+    if (
+      sameCellAddress(link, position.getAsNormalizedFullLink()) ||
+      await isDocumentOf(resolved, result)
+    ) {
+      throw new LinkedPieceRefusal(
+        `The path ${spelled} ${NAMES_NO_PIECE}: no link is stored there. ` +
+          ending,
+      );
+    }
+    // A document a piece owns, reached at its root, is one of that piece's
+    // cells as much as a path into its result is.
+    if (
+      link.path.length > 0 || getMetaLink(resolved, "result") !== undefined
+    ) {
+      throw new LinkedPieceRefusal(
+        `The path ${spelled} links to a cell inside a piece ` +
+          `(${[link.id, ...link.path].join("/")} in ${link.space}), not ` +
+          `to a piece. ${ending}`,
+      );
+    }
+    throw new LinkedPieceRefusal(
+      `The path ${spelled} ${NAMES_NO_PIECE}: the document it links to is ` +
+        `not a piece. ${ending}`,
+    );
+  }
+  const scope = link.scope;
+  return {
+    space: link.space,
+    piece,
+    ...(scope !== undefined && scope !== "space" && { scope }),
+  };
 }
 
 /**
@@ -2411,12 +2779,40 @@ async function resolvePieceCallable(
   callableName: string,
   deps: PieceCallableDependencies = {},
 ): Promise<ResolvedPieceCallable> {
-  const { pieces, piece, space, resolvedConfig } = await loadPieceForCallables(
-    config,
-    deps,
-    { prepareDispatch: true },
+  const { pieces, piece, space, resolvedConfig, followedLink } =
+    await loadPieceForCallables(
+      config,
+      deps,
+      { prepareDispatch: true, followPathToPiece: true },
+    );
+  const resolution = await resolveCallableOnPiece(
+    { pieces, piece, space, resolvedConfig },
+    callableName,
   );
+  if (!followedLink) return resolution;
+  return {
+    ...resolution,
+    linkedPiece: canonicalAddress({
+      id: resolvedConfig.piece,
+      space,
+      scope: resolvedConfig.pieceScope ?? "space",
+    }),
+  };
+}
 
+/**
+ * Helper for {@link resolvePieceCallable}, which resolves `callableName` on a
+ * piece already loaded for dispatch.
+ */
+async function resolveCallableOnPiece(
+  { pieces, piece, space, resolvedConfig }: {
+    pieces: any;
+    piece: any;
+    space: MemorySpace;
+    resolvedConfig: PieceConfig;
+  },
+  callableName: string,
+): Promise<ResolvedPieceCallable> {
   const onResultCell = await tryResolvePieceCallableAt(
     piece,
     pieces,
@@ -2455,7 +2851,7 @@ async function resolvePieceCallable(
     (await tryResolvePieceHandler(piece, pieces, space, callableName));
   if (!resolved) {
     throw new Error(
-      `Callable "${callableName}" not found on piece ${config.piece}`,
+      `Callable "${callableName}" not found on piece ${resolvedConfig.piece}`,
     );
   }
 
@@ -3926,6 +4322,33 @@ export async function executePieceCallable(
   // question.
   const commandPrefix = deps.helpCommandPrefix ??
     cliCommand(["piece", "call", "...", callableName]);
+  return await executeResolvedPieceCallable(
+    resolved,
+    rawArgs,
+    deps,
+    commandPrefix,
+  ).catch((error) => {
+    // The address the caller wrote names the holder of the link, so a
+    // refusal that sends them to the verb listing carries the piece whose
+    // verb it was.
+    if (
+      error instanceof VerbInputValidationError &&
+      resolved.linkedPiece !== undefined
+    ) error.linkedPiece = resolved.linkedPiece;
+    throw error;
+  });
+}
+
+/**
+ * Helper for {@link executePieceCallable}, which parses the verb's section
+ * and dispatches on the callable already resolved.
+ */
+async function executeResolvedPieceCallable(
+  resolved: ResolvedPieceCallable,
+  rawArgs: string[],
+  deps: PieceCallableDependencies,
+  commandPrefix: string,
+): Promise<ExecutedPieceCallable> {
   return await executeCallableCommand({
     resolved,
     execution: resolved,
@@ -4033,7 +4456,7 @@ export async function linkPieces(
       // Check source path resolves
       let current: any = sourceData;
       for (const segment of resolvedSourcePath) {
-        if (current == null || typeof current !== "object") {
+        if (!isObjectOrArray(current)) {
           errors.push(
             `Source path "${
               resolvedSourcePath.join("/")
@@ -4089,7 +4512,7 @@ export async function linkPieces(
       );
       let current: unknown = targetData;
       for (const segment of resolvedTargetPath) {
-        if (current == null || typeof current !== "object") {
+        if (!isObjectOrArray(current)) {
           current = undefined;
           break;
         }
@@ -4481,7 +4904,7 @@ export function cachedResultFields(
   result: Readonly<unknown>,
 ): CachedResultField[] {
   if (!isObjectNotArray(result)) return [];
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const tx = runtime.readTx();
   const cached: CachedResultField[] = [];
   for (const name of Object.keys(result)) {
@@ -4587,7 +5010,7 @@ export async function inspectPiece(
   }));
   const resultCell = await piece.result.getCell();
   const inputCell = await piece.input.getCell();
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const sourceLink = resolveLink(
     runtime,
     runtime.readTx(),
@@ -4689,19 +5112,23 @@ interface ReadPathVerb {
 
 /**
  * Classify a `cf cell get` path whose last segment CERTAINLY lands on a
- * verb. The guard refuses only on the two definite stored signals: the
- * link-derived schema answers as a stream (`isHandlerCell` on the
- * `asSchemaFromLinks` cell — that schema comes from stored links, never from
- * a caller-supplied cast), or the stored value reads as the
- * `{$stream: true}` sentinel. It NEVER refuses on the forced-stream probe:
- * the probe is deliberately permissive for the dispatcher and the listing —
- * over-inclusion there is an extra listing row or a call the caller asked
- * for — but the cast's stream schema survives link resolution for inline
- * values and schema-less links (`resolveLink` keeps the caller's schema and
- * `Cell.isStream`'s schema branch answers from it), so a read guard built on
- * it would refuse plain data outputs. Reads fail open: a classification
- * failure, an uncertain shape, or a tool binding (readable data, exactly as
- * the llm-dialog read tool treats it) all read normally.
+ * verb. The guard refuses on two definite stored signals, both read off the
+ * child by `detectCallableKind`: the link-derived schema declaring a stream
+ * (`isHandlerCell` on the `asSchemaFromLinks` cell — that schema comes from
+ * the stored links, never from a caller-supplied cast), and the stored value
+ * being the retired `{ $stream: true }` sentinel, which `detectCallableKind`
+ * reads through `getRaw()` until no stored document holds one. A stream's
+ * document written since holds no value, so for it the schema is the whole
+ * of what can say what it is. It
+ * NEVER refuses on the forced-stream probe: the probe is deliberately
+ * permissive for the dispatcher and the listing — over-inclusion there is an
+ * extra listing row or a call the caller asked for — but the cast's stream
+ * schema survives link resolution for inline values and schema-less links
+ * (`resolveLink` keeps the caller's schema and `Cell.isStream`'s schema
+ * branch answers from it), so a read guard built on it would refuse plain
+ * data outputs. Reads fail open: a classification failure, an uncertain
+ * shape, or a tool binding (readable data, exactly as the llm-dialog read
+ * tool treats it) all read normally.
  *
  * `callable` is true only for root-level names — the dispatcher's resolution
  * paths all start at a root — so the refusal message can redirect honestly.
@@ -4742,6 +5169,61 @@ async function classifyReadPathVerb(
 }
 
 /**
+ * Which of `keys`, directly under `addressedPath` on a piece's cell, stand at
+ * a verb's dispatch surface. Each is decided the way {@link classifyReadPathVerb}
+ * decides a read: from the child's link-derived schema, with nothing read at
+ * the position, since a stream's document holds no value to read.
+ *
+ * This fails open the way the guard does: a key the classification fails on,
+ * or a piece it cannot reach, yields no callables, and the listing shows each
+ * key by what it holds. It runs beside a value read of the same cell that
+ * has already succeeded, so what a failure here costs is an annotation and
+ * never the listing.
+ */
+export async function listCallableKeys(
+  config: PieceConfig,
+  addressedPath: (string | number)[],
+  keys: readonly string[],
+  options: { input?: boolean } = {},
+  deps: PieceOperationDependencies = {},
+): Promise<ReadonlySet<string>> {
+  const callables = new Set<string>();
+  if (keys.length === 0) return callables;
+  try {
+    const pieces = await (deps.loadPieces ?? loadPieces)(config);
+    const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
+      config,
+      addressedPath,
+      pieces,
+      deps,
+    );
+    const piece = await (deps.loadPieceForRead ?? loadPieceForRead)(
+      pieces,
+      resolvedConfig.piece,
+      false,
+      resolvedConfig.pieceScope,
+    );
+    const rootCell = await piece[options.input ? "input" : "result"]
+      .getCell();
+    const parentCell = path.length > 0 ? rootCell.key(...path) : rootCell;
+    for (const key of keys) {
+      try {
+        const child = parentCell.key(key);
+        const derived = child.asSchemaFromLinks?.() ?? child;
+        if (detectCallableKind(undefined, derived) === "handler") {
+          callables.add(key);
+        }
+      } catch {
+        // Not certainly a verb: the listing shows the key by what it holds.
+      }
+    }
+  } catch {
+    // The cell could not be reached for this read; see above.
+  }
+  return callables;
+}
+
+/**
  * The read-path guard's refusal, preferred over a result-projection failure.
  *
  * A verb is not a materializable result, so a read that lands on one fails the
@@ -4770,8 +5252,8 @@ async function verbReadRefusalOrNull(
  * includes stored declared, derived, and link-carried labels and uses the same
  * display redaction as the runtime-client boundary.
  *
- * The path is followed through the links it crosses, so the answer describes
- * the doc that holds the value rather than the doc the path started in.
+ * Following the path accumulates reference labels alongside the labels on
+ * the document that holds the value.
  */
 export async function getCellCfcLabel(
   config: PieceConfig,
@@ -4832,12 +5314,8 @@ export async function setCellCfcLabel(
     await (options.input ? piece.input.getCell() : piece.result.getCell());
   const targetCell = rootCell.key(...path);
   await targetCell.pull();
-  // The guard's "what classes already exist here" question is asked of the doc
-  // the write lands in. Asked of the unresolved doc it was asked about a doc
-  // the write never touches: the row doc's `observes` was invisible to it, so
-  // the update silently REPLACED a value-class entry with a class-less one,
-  // and the command returned null while having written a label.
-  const currentView = cfcLabelViewForCommand(targetCell, path);
+  // Only the destination's declared classes constrain this schema update.
+  const currentView = cfcLabelViewForCommand(targetCell, path, true);
   const value = targetCell.getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
@@ -4973,15 +5451,17 @@ export async function getCellValue(
         () => targetCell.pull(),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.beforeIdle",
+        "getCellValue.step.synced.beforeSettled",
         () => pieces.synced(),
       );
+      // Async query results and their reactive updates must arrive before
+      // the read; scheduler idle alone can leave their initial values visible.
       await timeCliPhase(
-        "getCellValue.step.runtime.idle",
-        () => pieces.runtime.idle(),
+        "getCellValue.step.runtime.settled",
+        () => pieces.runtime.settled(Infinity),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.afterIdle",
+        "getCellValue.step.synced.afterSettled",
         () => pieces.synced(),
       );
     }
@@ -5172,8 +5652,9 @@ export async function setCellValue(
 
 /**
  * What a {@link callPieceHandler} call supplies: the connection its
- * resolution runs over, and the three execution deps a handling can observe
- * through a call that returns nothing.
+ * resolution runs over, the three execution deps a handling can observe
+ * through a call that returns nothing, and the `sendEvent` a test stands in
+ * for the dispatch.
  *
  * Narrower than {@link PieceCallableDependencies} by the fields this path
  * cannot keep. The input readers and the help prefix have no bearing on it —
@@ -5186,7 +5667,10 @@ export async function setCellValue(
  * {@link executePieceCallable}, which returns one.
  */
 export type PieceHandlerCallDeps =
-  & Pick<CallableExecutionDeps, "invocation" | "onPhase" | "skipReadback">
+  & Pick<
+    CallableExecutionDeps,
+    "invocation" | "onPhase" | "skipReadback" | "sendEvent"
+  >
   & Pick<PieceCallableDependencies, "loadPieces" | "loadPiece">;
 
 /**
@@ -5304,6 +5788,155 @@ export interface WarmPieceDeps extends PieceResolutionDeps {
    * repeat rather than a fault.
    */
   readonly alreadyRunning?: (piece: string) => boolean;
+}
+
+/** What {@link sinkCellValue} reads at each settled change. */
+export interface CellSinkOptions {
+  /**
+   * Read the piece's arguments cell rather than its result, which is the
+   * selection `getCellValue` makes on the same pair.
+   */
+  readonly input?: boolean;
+}
+
+/**
+ * Subscribes to the cell `addressedPath` resolves to and calls `onSettled`
+ * with its value once per quiet runtime, returning the function that cancels
+ * the subscription.
+ *
+ * One logical change fires the underlying sink several times before the
+ * reactive graph quiets, so what a caller would see without this is a value
+ * part-way through a computation. The discipline is a reentrancy guard plus
+ * `runtime.idle()`, which is `renderVDomToHtml`'s
+ * (`lib/piece-render.ts`): a fire while a settle is outstanding is folded
+ * into that settle, and the value is read after the runtime is quiet rather
+ * than taken from the callback. Nothing here waits on a clock, so a runtime
+ * that is slow is a runtime that is still computing.
+ *
+ * The bound on "once per quiet runtime" is what the guard can promise: two
+ * changes that quiet separately are two calls, and two that arrive inside one
+ * settle are one — so a caller is told what the cell holds at each quiet
+ * point and not how many commits reached it. A settle that fails costs the
+ * one report it was folding rather than every report after it, the guard
+ * being cleared on that path too.
+ *
+ * The piece is not started. Starting it is the caller's decision and its own
+ * act ({@link warmPiece}), because a caller that watches several cells of one
+ * piece starts it once.
+ *
+ * @returns The cancel, which is idempotent and stops delivery at once: a
+ * settle already outstanding when it runs reports nothing.
+ *
+ * @throws Error if the piece cannot be resolved, or if the pattern behind it
+ * will not load in this space.
+ */
+export async function sinkCellValue(
+  config: PieceConfig,
+  addressedPath: (string | number)[],
+  onSettled: (value: unknown) => void,
+  options: CellSinkOptions = {},
+  deps: PieceResolutionDeps = {},
+): Promise<() => void> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
+    config,
+    addressedPath,
+    pieces,
+    deps,
+  );
+  const piece = await pieces.get(
+    resolvedConfig.piece,
+    false,
+    undefined,
+    resolvedConfig.pieceScope,
+  );
+  // The path goes to `getCell`, which is not the same cell as keying into the
+  // root. For a piece's arguments cell the path form asserts the path is
+  // admitted by the input projection, reads its schema selection, and resolves
+  // a conditional branch through the root (`PiecePropIo.getCell`,
+  // `packages/piece`); the root keyed into reaches none of that. So a watch
+  // and a read of one path would otherwise be about two different cells.
+  const io = options.input ? piece.input : piece.result;
+  const cell = await io.getCell(path) as Cell<unknown>;
+  // Before the subscription, so the baseline is the value a read of this path
+  // would serve. The first settle writes no line and is what every later
+  // change is measured against, and `runtime.idle()` says the runtime is quiet
+  // rather than that the document has arrived — so a baseline taken ahead of
+  // the pull would be measured against whatever had loaded by then, and the
+  // arrival would report as a change nobody made. `PiecePropIo.get` pulls the
+  // selected cell before its own read (`packages/piece`), which is what makes
+  // the two agree.
+  await cell.pull();
+  return settledSink(
+    await readThrough(cell),
+    () => pieces.runtime.idle(),
+    onSettled,
+  );
+}
+
+/**
+ * Helper for {@link sinkCellValue}, which is the cell a read of the same path
+ * reads its value through: the one behind an `asCell` handle where the slot
+ * holds one, and the slot's own cell everywhere else.
+ *
+ * A path crossing an `asCell` field selects a cell whose value *is* a handle,
+ * and what a read serves is what stands behind it (`PiecePropIo.get`,
+ * `packages/piece`). A subscription on the outer cell fires when the handle
+ * stored at the slot is replaced and at no other time, so a change to the
+ * value behind it would settle nothing the caller could see — the watch and
+ * the read would be about two different cells, which is the one thing they may
+ * not be.
+ *
+ * The stored slot decides rather than the projection, and in that order: an
+ * `asCell` projection materializes even an absent or explicitly undefined slot
+ * as a `Cell`, so asking the projection first would follow a handle standing
+ * for nothing. That is the order the read takes for the same reason.
+ */
+async function readThrough(cell: Cell<unknown>): Promise<Cell<unknown>> {
+  if (cell.getRaw() === undefined) return cell;
+  const held = cell.get();
+  if (!isCell(held)) return cell;
+  await held.pull();
+  return held as Cell<unknown>;
+}
+
+/**
+ * Helper for {@link sinkCellValue}, which is the settling half of it: the
+ * sink on `cell`, the guard that folds a fire arriving during a settle into
+ * that settle, and the read `idle` gates.
+ *
+ * It is separate from the resolution above it because the two are driven by
+ * different things — the resolution by a connection, this by the reactive
+ * graph — and only this one has an ordering worth exhibiting on its own.
+ *
+ * The guard is cleared in the same synchronous stretch as the read, so no
+ * fire lands unreported between the two.
+ */
+function settledSink(
+  cell: Cell<unknown>,
+  idle: () => Promise<void>,
+  onSettled: (value: unknown) => void,
+): () => void {
+  let settling = false;
+  let cancelled = false;
+  const cancelSink = cell.sink(() => {
+    if (settling || cancelled) return;
+    settling = true;
+    idle().then(() => {
+      settling = false;
+      // Read after the settle rather than taking the value the sink was
+      // handed: a cell passes through states that exist only until the
+      // scheduler drains, and the callback's value can be one of them.
+      if (!cancelled) onSettled(cell.get());
+    }, () => {
+      settling = false;
+    });
+  });
+  return () => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelSink();
+  };
 }
 
 export async function stepPiece(

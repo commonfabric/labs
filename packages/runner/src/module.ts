@@ -1,3 +1,4 @@
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { createNodeFactory } from "./builder/module.ts";
 import {
   type CellScope,
@@ -57,8 +58,7 @@ export function isRawBuiltinResult(
   result: RawBuiltinReturnType,
 ): result is RawBuiltinResult {
   return (
-    typeof result === "object" &&
-    result !== null &&
+    isObjectOrArray(result) &&
     "action" in result &&
     typeof result.action === "function"
   );

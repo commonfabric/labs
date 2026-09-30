@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import {
   createHarnessChatEventEnvelope,
@@ -31,28 +32,11 @@ import {
   faultingToolLoop,
   toolCall,
 } from "./support/chat-fault-fixture.ts";
-
-const nextIsoNow = () => {
-  let counter = 0;
-  return () => {
-    counter += 1;
-    return `2026-05-27T00:00:${String(counter).padStart(2, "0")}.000Z`;
-  };
-};
-
-const makeResult = (
-  options: RunHarnessTranscriptOptions,
-  finalAssistantText: string,
-): HarnessPromptLoopResult => ({
-  model: options.model ?? "gpt-test",
-  finalAssistantText,
-  transcript: [
-    ...options.transcript,
-    { role: "assistant", content: finalAssistantText },
-  ],
-  modelTurns: 1,
-  runState: {} as HarnessPromptLoopResult["runState"],
-});
+import {
+  makeResult,
+  nextIsoNow,
+  unattachedTurnContext,
+} from "./support/session-store-fixtures.ts";
 
 /** Asserts a synthesized result states an unknown outcome without `ok`. */
 const assertUnknownToolOutcome = (
@@ -838,10 +822,12 @@ Deno.test("sqlite session store restores and terminalizes active legacy transcri
       [[3, "tool_started"], [4, "turn_failed"]],
     );
     const recoveredTranscript = store.getSession("session-1")?.transcript ?? [];
-    assertEquals(recoveredTranscript.slice(0, 2), legacyTranscript);
-    assertEquals(recoveredTranscript.length, 3);
+    expect(recoveredTranscript.slice(0, legacyTranscript.length)).toEqual(
+      legacyTranscript,
+    );
+    expect(recoveredTranscript.length).toBe(legacyTranscript.length + 1);
     assertUnknownToolOutcome(
-      recoveredTranscript[2],
+      recoveredTranscript[legacyTranscript.length],
       "call-interrupted",
       "read_file",
     );
@@ -853,11 +839,11 @@ Deno.test("sqlite session store restores and terminalizes active legacy transcri
     });
     assertEquals(followUp.ok, true);
     await restored.waitForTurn("session-1", "turn-2");
-    assertEquals(restoredInputs[0].slice(0, 3), recoveredTranscript);
-    assertEquals(restoredInputs[0][3], {
-      role: "user",
-      content: "Continue",
-    });
+    expect(restoredInputs[0]).toEqual([
+      ...recoveredTranscript,
+      ...unattachedTurnContext(),
+      { role: "user", content: "Continue" },
+    ]);
     assertEquals(
       restored.listTurns({ sessionId: "session-1" }).turns.map((turn) => [
         turn.turn.turnId,
@@ -1119,11 +1105,11 @@ Deno.test("sqlite session restore heals terminal legacy transcripts idempotently
     });
     assertEquals(followUp.ok, true);
     await secondRestore.waitForTurn(session.sessionId, "turn-follow-up");
-    assertEquals(restoredInputs[0].slice(0, 3), once);
-    assertEquals(restoredInputs[0][3], {
-      role: "user",
-      content: "Continue carefully",
-    });
+    expect(restoredInputs[0]).toEqual([
+      ...once,
+      ...unattachedTurnContext(),
+      { role: "user", content: "Continue carefully" },
+    ]);
     assertEquals(
       secondRestore.listEvents({
         sessionId: session.sessionId,
@@ -1216,7 +1202,7 @@ Deno.test("sqlite chat resumes a canceled tool call from its checkpoint", async 
     });
     assertEquals(followUp.ok, true);
     await service.waitForTurn("session-canceled", "turn-follow-up");
-    assertEquals(followUpInputs[0], [{
+    expect(followUpInputs[0]).toEqual([...unattachedTurnContext(), {
       role: "user",
       content: "Continue",
     }]);
@@ -1808,8 +1794,10 @@ Deno.test("sqlite session restore keeps closed sessions closed while terminalizi
 });
 
 const RESUMED_AFTER_FIRST_TURN: readonly HarnessTranscriptMessage[] = [
+  ...unattachedTurnContext(),
   { role: "user", content: "Read the first file" },
   { role: "assistant", content: "Read the first." },
+  ...unattachedTurnContext(),
   { role: "user", content: "Try again" },
 ];
 
@@ -2124,8 +2112,9 @@ Deno.test("sqlite session restore normalizes a truncated transcript without dele
     });
     assertEquals(followUp.ok, true);
     await restored.waitForTurn("session-1", "turn-1");
-    assertEquals(next, [
+    expect(next).toEqual([
       ...normalized,
+      ...unattachedTurnContext(),
       { role: "user", content: "Try again" },
     ]);
   } finally {
@@ -2188,8 +2177,9 @@ Deno.test("a listener failure after normalization commit does not poison the ses
     });
     assertEquals(followUp.ok, true);
     await restored.waitForTurn("session-1", "turn-1");
-    assertEquals(next, [
+    expect(next).toEqual([
       ...normalized,
+      ...unattachedTurnContext(),
       { role: "user", content: "Continue" },
     ]);
   } finally {

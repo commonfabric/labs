@@ -263,10 +263,14 @@ A load report cannot be matched to a document: a guest can renavigate its own
 frame, and the inner frame's initial `about:blank` navigation can complete after
 a document was asked for, so reports do not stand one to one with the documents
 the host asks for. The host offers a fresh port per report and lets use decide
-which offer matters. A session's first request retires every session offered
-before it, and a guest already holding a port refuses the new offer rather than
-losing the session it has. Two offers are kept at most, which is what stops a
-guest renavigating its own frame from accumulating them.
+which offer matters. A guest need not have started listening by the time its
+document has loaded, so a guest that starts listening only after that asks for a
+port up the parent chain, and the host offers one on that request as it does on
+a report, unless it is still loading a document, whose report is still to come.
+A session's first request retires every session offered before it, and a guest
+already holding a port refuses the new offer rather than losing the session it
+has. Two offers are kept at most, which is what stops a guest renavigating its
+own frame from accumulating them.
 
 ## Security considerations
 
@@ -286,6 +290,20 @@ The double-frame construction exists because support for the iframe `csp`
 attribute is inconsistent. The outer `srcdoc` frame applies a Content Security
 Policy inherited by the inner guest document. See the [CSP processing model] and
 [browser support for the `csp` attribute].
+
+A `srcdoc` frame also inherits the policy of the page that embeds it, and both
+apply. A host page whose own policy refuses inline script therefore refuses the
+outer frame's script and every guest's. Such a host serves the outer frame from
+a URL instead, where it takes its policy from its own response, and sets
+`outerFrameUrl` on the element; `cf-iframe` takes it from the
+`iframeOuterFrameUrl` the host gave its `RuntimeClient`. The document served is
+`outer-frame-script.js` as its script, under the policy the guest is to inherit
+and a `sandbox` directive that withholds `allow-same-origin`. Framed by the
+element, the document is sandboxed by the element's `sandbox` attribute as the
+inlined one is. The directive is for the same URL opened on its own, in a tab or
+a window, where no element and so no attribute stands in front of it, and a
+document that runs a guest's inline script would otherwise run it as the host's
+origin.
 
 [CSP processing model]: https://www.w3.org/TR/CSP2/#processing-model-iframe-srcdoc
 [browser support for the `csp` attribute]: https://caniuse.com/mdn-html_elements_iframe_csp

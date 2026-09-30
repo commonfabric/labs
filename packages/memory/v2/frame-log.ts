@@ -1,4 +1,5 @@
 import { isDeno } from "@commonfabric/utils/env";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * A per-frame record of what the memory client exchanges with its server,
@@ -60,7 +61,7 @@ const docIdentity = (entry: Record<string, unknown>): string =>
 
 /** The top-level keys of a document's value, or its type when it has none. */
 const docKeys = (value: unknown): string[] | string =>
-  value !== null && typeof value === "object"
+  isObjectOrArray(value)
     ? Object.keys(value as object).slice(0, 12)
     : typeof value;
 

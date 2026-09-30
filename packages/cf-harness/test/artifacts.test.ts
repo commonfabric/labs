@@ -5,6 +5,7 @@ import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -142,8 +143,7 @@ const labelHasConfidentialityValue = (
   label: unknown,
   value: unknown,
 ): boolean =>
-  typeof label === "object" &&
-  label !== null &&
+  isObjectOrArray(label) &&
   "confidentiality" in label &&
   Array.isArray(label.confidentiality) &&
   label.confidentiality.some((entry) =>
@@ -156,22 +156,20 @@ const cfcInputLabelContains = (
   value: unknown,
 ): boolean => {
   if (
-    typeof labels !== "object" ||
-    labels === null ||
+    !isObjectOrArray(labels) ||
     !("entries" in labels) ||
     !Array.isArray(labels.entries)
   ) {
     return false;
   }
   const entry = labels.entries.find((entry) =>
-    typeof entry === "object" &&
-    entry !== null &&
+    isObjectOrArray(entry) &&
     "path" in entry &&
     Array.isArray(entry.path) &&
     entry.path.length === 1 &&
     entry.path[0] === pathRoot
   );
-  return typeof entry === "object" && entry !== null && "label" in entry &&
+  return isObjectOrArray(entry) && "label" in entry &&
     labelHasConfidentialityValue(entry.label, value);
 };
 
@@ -438,6 +436,10 @@ Deno.test({
           runId: "run-loop-persisted",
           model: "gpt-5.4",
           skillsRoot: fixture.skillsRoot,
+          // Read back off the persisted snapshot below: the operator's switch
+          // has to survive the whole `engine.config` to run-state path, not
+          // only the projection that builds the snapshot object.
+          allowSkillScripts: true,
           // The policy-snapshot comparison below reads this rung and its
           // source back, and the run reads a file, which a rung above this
           // one refuses without direct-command authorization.
@@ -555,6 +557,10 @@ Deno.test({
         absenceBehavior: "fail-closed-if-absent",
         substrateStatus: "not-attested",
       });
+      assertEquals(persistedPolicySnapshot.skillScripts, {
+        allowSkillScripts: true,
+        allowedScripts: [],
+      });
       assertEquals(persistedPolicySnapshot.runManifest, { present: false });
       assertEquals(persistedPolicySnapshot.promptSlot, {
         present: false,
@@ -571,7 +577,8 @@ Deno.test({
           "write_file",
           "delegate_task",
           "describe_handle",
-          "query_docs",
+          "finish_task",
+          "research",
         ],
       });
       assertEquals(persistedPolicySnapshot.subagents.allowedProfiles, [
@@ -721,7 +728,7 @@ Deno.test({
         {
           model: "gpt-5.4",
           messageCount: 1,
-          toolCount: 9,
+          toolCount: 10,
         },
       );
       assert(

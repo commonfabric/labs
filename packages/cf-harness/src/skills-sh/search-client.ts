@@ -18,6 +18,7 @@
  *   asked for came back.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -156,9 +157,7 @@ export const sanitizeRegistryString = (value: string): string => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 
 /**
  * One entry, or `undefined` when it is not a hit this client will report.

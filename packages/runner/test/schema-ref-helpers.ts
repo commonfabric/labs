@@ -11,13 +11,13 @@
 import type { JSONSchemaObj } from "@commonfabric/api";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  isExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import {
-  isExternalSchemaRef,
-  recomposeSchema,
-} from "../src/schema-decompose.ts";
+import { recomposeSchema } from "../src/schema-decompose.ts";
 import { lookupSchemaDocument } from "../src/schema-registry.ts";
 
 /** The recomposed closure behind a reference-form schema; others as-is. */

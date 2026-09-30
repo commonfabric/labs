@@ -8,9 +8,10 @@
  */
 
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** Canonical name of this repository in every record context. */
-export const REPO = "commontoolsinc/labs";
+export const REPO = "commonfabric/labs";
 
 /** GCP project holding the store and the per-person service accounts. */
 export const GCP_PROJECT = "commontools-core";
@@ -86,7 +87,7 @@ export function parsePersonalKeyFile(
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const key = value as Record<string, unknown>;
   if (
     typeof key.client_email !== "string" ||

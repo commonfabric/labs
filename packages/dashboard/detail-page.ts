@@ -1,6 +1,6 @@
 /**
- * Holds the chrome a page behind a tile starts from: the page frame, the
- * line of navigation back to the wall at the top of it, the heading above a
+ * Holds the chrome a page behind a tile starts from: the page frame, the line
+ * of navigation back to the dashboard at the top of it, the heading above a
  * section, and the footnote at the bottom. A drill-down adds what its own
  * subject needs on top of these, and may narrow one of them as the CI Gantt
  * page narrows the frame.

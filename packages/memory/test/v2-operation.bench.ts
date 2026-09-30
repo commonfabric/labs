@@ -1,4 +1,5 @@
 import type { FabricValue } from "@commonfabric/api";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { ChangeSet } from "@codemirror/state";
 import { toFileUrl } from "@std/path";
 
@@ -196,8 +197,7 @@ const structuredCodec: OperationCodec = {
     const document = materialized as StructuredDocument;
     const node = (submitted as { append?: FabricValue }).append;
     if (
-      !Array.isArray(document?.nodes) || node === null ||
-      typeof node !== "object" || Array.isArray(node) ||
+      !Array.isArray(document?.nodes) || !isObjectNotArray(node) ||
       typeof (node as { id?: unknown }).id !== "string" ||
       typeof (node as { text?: unknown }).text !== "string"
     ) {

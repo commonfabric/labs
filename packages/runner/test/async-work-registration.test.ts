@@ -115,6 +115,9 @@ describe("async builtin work registration", () => {
     readResult: () => unknown,
     expected: unknown,
   ) => {
+    // The built-in is a computation: a reader has to demand it before any
+    // request goes out, and the barriers are measured against that demand.
+    const cancelDemand = run.sink(() => {});
     let settledReturned = false;
     const settledPromise = runtime.settled().then(() => {
       settledReturned = true;
@@ -146,6 +149,7 @@ describe("async builtin work registration", () => {
     // above. Anything that has to be waited for here is work they failed to
     // cover.
     expect(readResult()).toEqual(expected);
+    cancelDemand();
   };
 
   it("registers the generateObject direct path against its run", async () => {

@@ -4,8 +4,11 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Task } from "@lit/task";
+import type { ReactiveController } from "lit";
 import { type DID, Identity } from "@commonfabric/identity";
 import { NotificationType } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** Install the browser globals Lit reads and return a restoration function. */
 function installBrowserGlobals(
@@ -94,7 +97,7 @@ function templateText(value: unknown): string {
  * an event handler is reached without a DOM to dispatch into.
  */
 function findBinding(value: unknown, marker: string): unknown {
-  if (value == null || typeof value !== "object") return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = findBinding(item, marker);
@@ -118,7 +121,7 @@ function findBinding(value: unknown, marker: string): unknown {
 
 /** Find the load-error value passed through a nested Lit template. */
 function findLoadError(value: unknown): unknown {
-  if (value == null || typeof value !== "object") return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   if (Array.isArray(value)) {
     for (const item of value) {
       const result = findLoadError(item);
@@ -219,6 +222,48 @@ describe("load-errors", () => {
 
   describe("XBodyView", () => {
     describe("instance members", () => {
+      it("keeps completed sidebar work when pointer keys are unchanged", async () => {
+        const restore = installBrowserGlobals();
+        try {
+          const { XBodyView } = await import("../src/views/BodyView.ts");
+          const controllers: ReactiveController[] = [];
+          class ObservedBodyView extends XBodyView {
+            override addController(controller: ReactiveController): void {
+              controllers.push(controller);
+              super.addController(controller);
+            }
+          }
+          const view = new ObservedBodyView();
+          const task = controllers.find((controller) =>
+            controller instanceof Task
+          );
+          if (!(task instanceof Task)) {
+            throw new Error("Sidebar task unavailable.");
+          }
+          task.hostUpdate();
+          await task.taskComplete;
+          const first = task.value;
+
+          view.piecePath = [];
+          task.hostUpdate();
+          await task.taskComplete;
+          expect(task.value).toBe(first);
+
+          view.piecePath = ["detail"];
+          task.hostUpdate();
+          await task.taskComplete;
+          const detail = task.value;
+          expect(detail).not.toBe(first);
+
+          view.piecePath = ["detail"];
+          task.hostUpdate();
+          await task.taskComplete;
+          expect(task.value).toBe(detail);
+        } finally {
+          restore();
+        }
+      });
+
       describe("render()", () => {
         it("opens the piece menu over the surface a piece failed to load into", async () => {
           const openings: unknown[] = [];
@@ -239,6 +284,9 @@ describe("load-errors", () => {
           >;
           document.createElement = () => panel;
           document.body = {
+            // CodeMirror reads `document.body.style` when its module loads,
+            // and this case can be the first in the process to load it.
+            style: {},
             appendChild(node: { isConnected: boolean }) {
               node.isConnected = true;
             },

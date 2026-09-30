@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run=git
 
 /**
  * The credential-free shipping step every CI test job ends with: gather the
@@ -30,6 +30,12 @@ import {
   serializeRecordLine,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import {
+  commitMoment,
+  parseSeed,
+  SHUFFLE_SEED_VARIABLE,
+} from "@commonfabric/test-support/shuffle";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** One JUnit ingestion request from the command line. */
 export interface JUnitSpec {
@@ -49,6 +55,9 @@ export interface JobFacts {
   os: string;
   arch: string;
   denoVersion: string;
+
+  /** The seed the job's test runners shuffled their order by. */
+  shuffleSeed: number;
 }
 
 /** Parses one `kind=...,scope=...[,prefix=...],glob=...` specification. */
@@ -73,11 +82,11 @@ export function parseJUnitSpec(text: string): JUnitSpec {
 
 /** The head commit of the pull request the event describes, when any. */
 export function headCommitOfEvent(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
+  if (!isObjectOrArray(payload)) return undefined;
   const pr = (payload as Record<string, unknown>).pull_request;
-  if (typeof pr !== "object" || pr === null) return undefined;
+  if (!isObjectOrArray(pr)) return undefined;
   const head = (pr as Record<string, unknown>).head;
-  if (typeof head !== "object" || head === null) return undefined;
+  if (!isObjectOrArray(head)) return undefined;
   const sha = (head as Record<string, unknown>).sha;
   return typeof sha === "string" && sha.length > 0 ? sha : undefined;
 }
@@ -140,9 +149,11 @@ export async function collectRecords(
     throw new Error("a declared variant must not be empty");
   }
   const records: TestRecord[] = [];
-  // The registration preload leaves a name-to-file map in the spool, and
-  // it is the only thing that can tell a bdd leaf's file: Deno names a
-  // case by its describe chain and puts that chain in the classname too.
+  // The registration preload leaves a name-to-file map in the spool.
+  // Where it installed, every class name names the wrapper it put in
+  // front of `Deno.test`, so the map is the only thing that can tell a
+  // bdd leaf its file; where it did not, the spool holds no map and
+  // ingestion reads the report's own class names.
   const fileByName = options.spoolDir === undefined
     ? new Map<string, string>()
     : await readNameMaps(options.spoolDir);
@@ -227,6 +238,12 @@ export async function gather(options: GatherOptions): Promise<void> {
     os: Deno.build.os,
     arch: Deno.build.arch,
     denoVersion: Deno.version.deno,
+    // The same answer the job's runners reached: its override where the
+    // job set one, and otherwise the day of the commit it checked out.
+    shuffleSeed: parseSeed(
+      readEnv(SHUFFLE_SEED_VARIABLE, env),
+      commitMoment() ?? new Date(),
+    ),
   };
   if (options.shard !== undefined) facts.shard = options.shard;
   const commit = readEnv("GITHUB_SHA", env);

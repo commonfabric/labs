@@ -2,6 +2,7 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { FabricClient, ResourceSnapshot } from "../src/guest.ts";
 import {
@@ -20,7 +21,7 @@ function containsValue(value: unknown, expected: unknown): boolean {
       containsValue(key, expected) || containsValue(item, expected)
     );
   }
-  return value !== null && typeof value === "object" &&
+  return isObjectOrArray(value) &&
     Object.values(value).some((item) => containsValue(item, expected));
 }
 

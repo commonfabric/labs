@@ -8,7 +8,7 @@ reason: "F3 of the lazy-materialization fast-follow: the default-on rollout evid
 # Lazy materialization: default-on rollout evidence
 
 This is the F3 record for the
-[lazy materialization fast-follow](../../../plans/lazy-materialization-fast-follow.md).
+[lazy materialization fast-follow](../../plans/lazy-materialization-fast-follow.md).
 It assembles what is known about `lazyMaterialization` running on by default,
 so that the flag's owner can decide whether the lift path's rollout switch is
 retired (F4). It records no decision itself, and it mutates no live data.

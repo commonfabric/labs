@@ -55,13 +55,17 @@ import {
   rectangularSelection,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { DID } from "@commonfabric/identity";
+import { type DID, isDID } from "@commonfabric/identity/did";
 import { parseFabricUrl } from "@commonfabric/runner/fabric-url";
 import { stringSchema } from "@commonfabric/runner/schemas";
 import {
   type CellHandle,
+  cellRefToIdentityKey,
   isCellHandle,
   NAME,
+  type PresenceEvent,
+  type PresenceRecord,
+  type PresenceRoomHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
@@ -86,11 +90,7 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "../../core/mentionable.ts";
-import {
-  presenceUrlContext,
-  runtimeContext,
-  spaceContext,
-} from "../../runtime-context.ts";
+import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import { type StoredFile, uploadFile } from "../../utils/file-cell-storage.ts";
 import { mentionIdFromCellId } from "../../utils/mention-id.ts";
 import {
@@ -132,11 +132,12 @@ import {
   presenceSelectionToJSON,
 } from "./codemirror-presence.ts";
 import {
-  copresenceRoomForField,
-  CopresenceSession,
+  CARET_FACET,
+  caretFacetOf,
+  participantFromRecord,
   type PresenceFailureCategory,
-  type PresenceServerMessage,
-} from "./copresence-client.ts";
+  presenceFailureCategory,
+} from "./presence-facets.ts";
 
 /** A unique noteId, so notes created from a mention do not collide. */
 function generateNoteId(): string {
@@ -187,10 +188,6 @@ function escapeMarkdownImageAltText(text: string): string {
     .replace(/\]/g, "\\]")
     .replace(/\r?\n/g, " ");
 }
-
-// A browser tab advertises one editor room at a time. Blur retains ownership;
-// focus in another instance transfers it.
-let activePresenceEditor: CFCodeEditor | undefined;
 
 /**
  * Supported MIME types for syntax highlighting
@@ -265,11 +262,14 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
  * @attr {string} presenceRoom - Optional opaque room override for ephemeral
- *   co-presence. The bound text Cell address supplies the default.
+ *   co-presence. Without one the runtime derives the room from the bound
+ *   text Cell's resolved field.
  * @attr {string} participantName - Plain-text display name which enables
- *   co-presence when this editor is focused.
- * @attr {string} presenceUrl - Optional WebSocket co-presence service
- *   override. Hosts can instead provide `presenceUrlContext`.
+ *   co-presence. The editor joins the room of the field it is bound to, where
+ *   everyone editing that field meets, one entry per browser tab, and
+ *   publishes its caret there with `focused` reporting whether it owns focus.
+ *   Presence travels over the runtime's memory connection; no endpoint is
+ *   configured.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -278,6 +278,8 @@ const getLangExtFromMimeType = (mime: MimeType) => {
  *   edits are pending. Detail preserves localValue, canonicalValue, and cursors.
  * @fires cf-presence-error - Fired when ephemeral presence fails independently
  *   of document collaboration. Detail contains a safe failure category.
+ * @fires cf-presence-join - Fired each time the editor joins its presence room,
+ *   including a rejoin after `cf-presence-error`. It carries no detail.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -328,7 +330,6 @@ export class CFCodeEditor extends BaseElement {
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
-    presenceUrl: { type: String },
   };
 
   declare value: CellHandle<string> | string;
@@ -372,11 +373,6 @@ export class CFCodeEditor extends BaseElement {
   declare collaborative: boolean;
   declare presenceRoom: string;
   declare participantName: string;
-  declare presenceUrl: string;
-
-  @consume({ context: presenceUrlContext, subscribe: true })
-  @property({ attribute: false })
-  accessor contextPresenceUrl: string | undefined = undefined;
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -403,11 +399,13 @@ export class CFCodeEditor extends BaseElement {
   private _presenceComp = new Compartment();
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
-  private _presence: CopresenceSession | undefined;
+  private _presence: PresenceRoomHandle | undefined;
+  private _presenceUnsubscribe: (() => void) | undefined;
+  private _presenceJoining = false;
+  private _presenceGeneration = 0;
   private _presenceParticipantId: string | undefined;
   private _presenceHasSelection = false;
   private _presenceEpoch: number | undefined;
-  private _presenceServiceUrl: string | undefined;
   private _presenceRoom: string | undefined;
   private _presenceFailure:
     | {
@@ -415,7 +413,6 @@ export class CFCodeEditor extends BaseElement {
       configurationKey: string;
     }
     | undefined;
-  private _presenceReconnectListenersInstalled = false;
   private _collaborationTransition: Promise<void> | undefined;
   private _collaborationGeneration = 0;
   private _collaborationFailed = false;
@@ -493,14 +490,7 @@ export class CFCodeEditor extends BaseElement {
    */
   private _refNames = new Map<string, string>();
 
-  /**
-   * Each referenced destination's own short name, from the same subscription. A
-   * key is absent while its destination publishes none, which is what a pill
-   * with no number beside its label means.
-   */
-  private _refShortNames = new Map<string, string>();
-
-  /** Whether a publication of those names is already waiting to run. */
+  /** Whether a publication of the mentions' short names is waiting to run. */
   private _refShortNamesPublishPending = false;
 
   /**
@@ -565,7 +555,6 @@ export class CFCodeEditor extends BaseElement {
     this.collaborative = false;
     this.presenceRoom = "";
     this.participantName = "";
-    this.presenceUrl = "";
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
@@ -1650,6 +1639,8 @@ export class CFCodeEditor extends BaseElement {
     ) {
       this._resolvedPieceIds = newResolved;
       this._resolvedPieceCells = newCells;
+      // The pills find their short names through these records.
+      this._publishRefShortNames();
       this._mentionResolutionPending = false;
       const deferredContent = this._deferredMentionedContent;
       this._deferredMentionedContent = null;
@@ -1662,6 +1653,20 @@ export class CFCodeEditor extends BaseElement {
     }
   }
 
+  /**
+   * Forgets every universe row's resolved piece, until a resolution pass
+   * records them again.
+   *
+   * The pills' short names are found through those records, so forgetting
+   * them is announced too: a name the editor can no longer find by identity is
+   * not one a pill keeps.
+   */
+  private _forgetResolvedPieces(): void {
+    this._resolvedPieceIds.clear();
+    this._resolvedPieceCells.clear();
+    this._publishRefShortNames();
+  }
+
   private getValue(): string {
     return this._cellController.getValue();
   }
@@ -1672,7 +1677,6 @@ export class CFCodeEditor extends BaseElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this._setupPresenceReconnectListeners();
     if (this.autofocus && this._editorView) {
       this._queueAutofocus();
     }
@@ -1680,8 +1684,7 @@ export class CFCodeEditor extends BaseElement {
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this._cleanupPresenceReconnectListeners();
-    this._releasePresenceOwnership();
+    this._cleanupPresence();
     this._cleanup();
   }
 
@@ -1974,7 +1977,12 @@ export class CFCodeEditor extends BaseElement {
       this._cleanupPresence();
     }
     this._setupPresence(snapshot);
-    if (!this._presence || !this._editorView) return;
+    // The extension is installed as soon as a join starts, so its cursor
+    // follows every advance from then on; a record that lands after the
+    // join is mapped against the document the extension already knows.
+    if ((!this._presence && !this._presenceJoining) || !this._editorView) {
+      return;
+    }
     this._editorView.dispatch({
       effects: codeMirrorPresenceCursorEffect.of({
         cursor: snapshot.confirmedCursor,
@@ -1984,25 +1992,21 @@ export class CFCodeEditor extends BaseElement {
     this._publishPresence();
   }
 
+  /**
+   * Joins the presence room of the collaborative field through the cell's
+   * runtime once collaboration is ready and a participant name is set. A
+   * join already made for the same epoch and room is kept and republished
+   * to; a failure is reported once per configuration, and a `configuration`
+   * failure is not retried until the room or name changes.
+   */
   private _setupPresence(
     synchronization = this._collaboration?.synchronizationSnapshot,
     retryFailedConnection = false,
   ): void {
-    if (activePresenceEditor !== this) {
-      this._cleanupPresence();
-      return;
-    }
     const view = this._editorView;
-    const serviceUrl = this.presenceUrl || this.contextPresenceUrl || "";
-    const room = this.presenceRoom ||
-      (synchronization === null || synchronization === undefined
-        ? ""
-        : copresenceRoomForField(synchronization.field));
-    const configurationKey = JSON.stringify([
-      serviceUrl,
-      room,
-      this.participantName,
-    ]);
+    const controller = this._collaboration;
+    const room = this.presenceRoom;
+    const configurationKey = JSON.stringify([room, this.participantName]);
     if (
       this._presenceFailure !== undefined &&
       this._presenceFailure.configurationKey !== configurationKey
@@ -2010,9 +2014,9 @@ export class CFCodeEditor extends BaseElement {
       this._presenceFailure = undefined;
     }
     if (
-      !view || !this.collaborative || !this._collaboration?.active ||
+      !view || !this.collaborative || !controller?.active ||
       synchronization === null || synchronization === undefined ||
-      !room || !this.participantName || !serviceUrl
+      !this.participantName
     ) {
       this._cleanupPresence();
       return;
@@ -2025,10 +2029,9 @@ export class CFCodeEditor extends BaseElement {
       return;
     }
     if (
-      this._presence !== undefined &&
+      (this._presence !== undefined || this._presenceJoining) &&
       this._presenceEpoch === synchronization.confirmedCursor.epoch &&
-      this._presenceRoom === room &&
-      this._presenceServiceUrl === serviceUrl
+      this._presenceRoom === room
     ) {
       this._publishPresence();
       return;
@@ -2043,49 +2046,54 @@ export class CFCodeEditor extends BaseElement {
     });
     this._presenceEpoch = synchronization.confirmedCursor.epoch;
     this._presenceRoom = room;
-    this._presenceServiceUrl = serviceUrl;
-    try {
-      this._presence = new CopresenceSession({
-        serviceUrl,
-        room,
-        onMessage: (message) => this._handlePresenceMessage(message),
-        onFailure: (category) => this._failPresence(category),
-      });
+    const generation = this._presenceGeneration;
+    const cell = controller.cell;
+    this._presenceJoining = true;
+    void cell.runtime().joinPresenceRoom(
+      cell,
+      room === "" ? {} : { room },
+    ).then((handle) => {
+      if (generation !== this._presenceGeneration) {
+        void handle.leave();
+        return;
+      }
+      this._presenceJoining = false;
+      this._presence = handle;
+      this._presenceParticipantId = handle.participantId;
+      this._presenceUnsubscribe = handle.subscribe((event) =>
+        this._handlePresenceEvent(event)
+      );
+      this._applyPresenceSnapshot(handle.participants);
       this._publishPresence();
-    } catch {
-      this._failPresence("configuration");
-    }
-  }
-
-  private _takePresenceOwnership(): void {
-    if (activePresenceEditor !== this) {
-      const previous = activePresenceEditor;
-      activePresenceEditor = this;
-      previous?._cleanupPresence();
-    }
-    this._setupPresence();
+      this.emit("cf-presence-join");
+    }, (error) => {
+      if (generation !== this._presenceGeneration) return;
+      this._presenceJoining = false;
+      this._failPresence(presenceFailureCategory(error));
+    });
   }
 
   private _handlePresenceFocus(): void {
-    this._takePresenceOwnership();
-    this._publishPresence();
-  }
-
-  private _releasePresenceOwnership(): void {
-    if (activePresenceEditor !== this) return;
-    activePresenceEditor = undefined;
-    this._cleanupPresence();
+    // A focus is a user's action, and the one signal on which a failed
+    // connection is tried again. A room already joined is republished to
+    // with the new focus state; one being joined publishes on arrival.
+    this._setupPresence(undefined, true);
   }
 
   private _cleanupPresence(): void {
+    // A join still in flight belongs to the generation it started under and
+    // leaves the room it lands in.
+    this._presenceGeneration++;
+    this._presenceJoining = false;
     const presence = this._presence;
     this._presence = undefined;
-    presence?.dispose();
+    this._presenceUnsubscribe?.();
+    this._presenceUnsubscribe = undefined;
+    void presence?.leave();
     this._presenceParticipantId = undefined;
     this._presenceHasSelection = false;
     this._presenceEpoch = undefined;
     this._presenceRoom = undefined;
-    this._presenceServiceUrl = undefined;
     this._editorView?.dispatch({
       effects: [
         codeMirrorPresenceClearEffect.of(null),
@@ -2095,14 +2103,8 @@ export class CFCodeEditor extends BaseElement {
   }
 
   private _failPresence(category: PresenceFailureCategory): void {
-    const synchronization = this._collaboration?.synchronizationSnapshot;
-    const room = this.presenceRoom ||
-      (synchronization === null || synchronization === undefined
-        ? ""
-        : copresenceRoomForField(synchronization.field));
     const configurationKey = JSON.stringify([
-      this.presenceUrl || this.contextPresenceUrl || "",
-      room,
+      this.presenceRoom,
       this.participantName,
     ]);
     if (
@@ -2116,86 +2118,62 @@ export class CFCodeEditor extends BaseElement {
     this.emit("cf-presence-error", { category });
   }
 
-  private _retryPresenceFromSignal(): void {
-    if (!this._presenceFailure) return;
-    this._setupPresence(undefined, true);
-  }
-
-  private readonly _handlePresenceOnline = (): void => {
-    this._retryPresenceFromSignal();
-  };
-
-  private readonly _handlePresenceVisibilityChange = (): void => {
-    if (
-      typeof document !== "undefined" && document.visibilityState === "visible"
-    ) {
-      this._retryPresenceFromSignal();
-    }
-  };
-
-  private _setupPresenceReconnectListeners(): void {
-    if (this._presenceReconnectListenersInstalled) return;
-    this._presenceReconnectListenersInstalled = true;
-    globalThis.addEventListener("online", this._handlePresenceOnline);
-    if (typeof document !== "undefined") {
-      document.addEventListener(
-        "visibilitychange",
-        this._handlePresenceVisibilityChange,
-      );
-    }
-  }
-
-  private _cleanupPresenceReconnectListeners(): void {
-    if (!this._presenceReconnectListenersInstalled) return;
-    this._presenceReconnectListenersInstalled = false;
-    globalThis.removeEventListener("online", this._handlePresenceOnline);
-    if (typeof document !== "undefined") {
-      document.removeEventListener(
-        "visibilitychange",
-        this._handlePresenceVisibilityChange,
-      );
-    }
-  }
-
-  private _handlePresenceMessage(message: PresenceServerMessage): void {
+  private _handlePresenceEvent(event: PresenceEvent): void {
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
+    if (event.kind === "failure") {
+      this._failPresence(presenceFailureCategory(event.error));
+      return;
+    }
     if (!view || !this._presence || !synchronization) return;
-    if (message.type === "room.snapshot") {
-      this._presenceParticipantId = message.snapshot.selfParticipantId;
+    if (event.kind === "snapshot") {
+      this._presenceParticipantId = event.participantId;
+      this._applyPresenceSnapshot(event.participants);
+      return;
+    }
+    if (event.kind === "upsert") {
+      if (event.participant.participantId === this._presenceParticipantId) {
+        return;
+      }
+      const participant = participantFromRecord(event.participant);
       view.dispatch({
-        effects: [
-          codeMirrorPresenceClearEffect.of(null),
-          ...message.snapshot.participants
-            .filter((participant) =>
-              participant.participantId !== this._presenceParticipantId
-            )
-            .map((participant) =>
-              codeMirrorPresenceUpsertEffect.of({
-                participant,
-                pendingChanges: synchronization.pendingChanges,
-              })
-            ),
-        ],
+        effects: participant === null
+          ? codeMirrorPresenceRemoveEffect.of(event.participant.participantId)
+          : codeMirrorPresenceUpsertEffect.of({
+            participant,
+            pendingChanges: synchronization.pendingChanges,
+          }),
       });
       return;
     }
-    if (message.type === "participant.upsert") {
-      if (message.participant.participantId === this._presenceParticipantId) {
-        return;
-      }
-      view.dispatch({
-        effects: codeMirrorPresenceUpsertEffect.of({
-          participant: message.participant,
-          pendingChanges: synchronization.pendingChanges,
-        }),
-      });
-    } else {
-      if (message.participantId === this._presenceParticipantId) return;
-      view.dispatch({
-        effects: codeMirrorPresenceRemoveEffect.of(message.participantId),
-      });
-    }
+    if (event.participantId === this._presenceParticipantId) return;
+    view.dispatch({
+      effects: codeMirrorPresenceRemoveEffect.of(event.participantId),
+    });
+  }
+
+  /** Replaces every remote caret with those the room's records carry. */
+  private _applyPresenceSnapshot(records: readonly PresenceRecord[]): void {
+    const view = this._editorView;
+    const synchronization = this._collaboration?.synchronizationSnapshot;
+    if (!view || !synchronization) return;
+    view.dispatch({
+      effects: [
+        codeMirrorPresenceClearEffect.of(null),
+        ...records
+          .filter((record) =>
+            record.participantId !== this._presenceParticipantId
+          )
+          .map(participantFromRecord)
+          .filter((participant) => participant !== null)
+          .map((participant) =>
+            codeMirrorPresenceUpsertEffect.of({
+              participant,
+              pendingChanges: synchronization.pendingChanges,
+            })
+          ),
+      ],
+    });
   }
 
   private _publishPresence(): void {
@@ -2208,9 +2186,11 @@ export class CFCodeEditor extends BaseElement {
     const focused = view.hasFocus;
     if (focused) this._presenceHasSelection = true;
     const provisional = synchronization.pendingChanges.length !== 0;
-    try {
-      presence.publish({
-        name: this.participantName,
+    presence.setName(this.participantName);
+    presence.setFocused(focused);
+    presence.setFacet(
+      CARET_FACET,
+      caretFacetOf({
         focused,
         cursor: synchronization.confirmedCursor,
         selection: this._presenceHasSelection
@@ -2220,10 +2200,8 @@ export class CFCodeEditor extends BaseElement {
           ))
           : null,
         basis: provisional ? "provisional" : "confirmed",
-      });
-    } catch {
-      this._failPresence("configuration");
-    }
+      }),
+    );
   }
 
   /**
@@ -2247,8 +2225,7 @@ export class CFCodeEditor extends BaseElement {
         // runs it on publish): against cleared maps an index-row backlink
         // has no id, and reconciling in that window would transiently drop
         // its edge only to re-add it moments later.
-        this._resolvedPieceIds.clear();
-        this._resolvedPieceCells.clear();
+        this._forgetResolvedPieces();
         this._resolvePieceIds();
       });
     this._mentionableUnsub = unsubscribe;
@@ -2326,11 +2303,10 @@ export class CFCodeEditor extends BaseElement {
     // user's own wording — the safe direction, since a rename arriving later
     // then leaves the person's text alone instead of overwriting it.
     this._refNames.clear();
-    // The short names DO have a second copy, in `refShortNameField`, so the
-    // cleared map is published rather than left for a later write to notice
-    // it — a write for a destination that publishes no name has nothing to
-    // carry, and the pill would keep the previous destination's number.
-    this._refShortNames.clear();
+    // The short names are read through the map, so they are published here
+    // rather than left for the next subscription pass: a map taken away opens
+    // no such pass, and a pill would keep the number its old destination was
+    // found under.
     this._publishRefShortNames();
   }
 
@@ -2344,8 +2320,7 @@ export class CFCodeEditor extends BaseElement {
     this._mentionResolutionPending = false;
     this._deferredMentionedContent = null;
     this._completionAwaitingResolution = false;
-    this._resolvedPieceIds.clear();
-    this._resolvedPieceCells.clear();
+    this._forgetResolvedPieces();
     if (this._mentionableUnsub) {
       this._mentionableUnsub();
       this._mentionableUnsub = null;
@@ -2371,8 +2346,7 @@ export class CFCodeEditor extends BaseElement {
       if (this.mentionable) {
         this.mentionable = this.mentionable.asSchema(MentionableArraySchema);
       }
-      this._resolvedPieceIds.clear();
-      this._resolvedPieceCells.clear();
+      this._forgetResolvedPieces();
       this._resolvePieceIds();
       this._setupMentionableSyncHandler();
       this._updateMentionedFromContent();
@@ -2428,8 +2402,6 @@ export class CFCodeEditor extends BaseElement {
 
     if (
       changedProperties.has("presenceRoom") ||
-      changedProperties.has("presenceUrl") ||
-      changedProperties.has("contextPresenceUrl") ||
       changedProperties.has("participantName")
     ) {
       this._setupPresence();
@@ -2783,8 +2755,9 @@ export class CFCodeEditor extends BaseElement {
       mentionRefField,
       atomicMentionRefRanges,
       mentionRefEditFilter,
-      // What each destination calls itself, which the pills render beside
-      // their labels. Empty until a destination publishes a short name.
+      // What the universe calls each mention's destination, which the pills
+      // render beside their labels. Holds no name for a mention whose
+      // destination no row of the universe stands for.
       refShortNameField,
       // Tab indentation keymap (toggleable)
       this._tabIndentComp.of(this.tabIndent ? keymap.of([indentWithTab]) : []),
@@ -3020,8 +2993,9 @@ export class CFCodeEditor extends BaseElement {
     // on this side, and a slug addresses a redirect document that would need a
     // read before it could name a piece.
     if (
-      !target || !target.id ||
-      (target.space && !target.space.startsWith("did:"))
+      !target || !target.id || target.member === "argument" ||
+      (target.scope !== undefined && target.scope !== "space") ||
+      (target.space && !isDID(target.space))
     ) {
       return false;
     }
@@ -3586,7 +3560,6 @@ export class CFCodeEditor extends BaseElement {
         existing.unsub();
         this._refDestinationSubscriptions.delete(ref.key);
         this._refNames.delete(ref.key);
-        this._refShortNames.delete(ref.key);
       }
 
       const destination = this._refDestination(ref.key);
@@ -3596,20 +3569,15 @@ export class CFCodeEditor extends BaseElement {
       this._refDestinationSubscriptions.set(key, {
         id,
         unsub: destination.subscribe((value) => {
-          const piece = value as Mentionable | undefined;
-          // Before the name check below, which returns on a destination that
-          // has not published one: a short name and a name arrive
-          // independently, and gating one on the other would keep a pill's
-          // number out of a document whose destination is still nameless.
-          this._trackRefShortName(key, piece?.shortName);
-          const name = piece?.[NAME];
+          const name = (value as Mentionable | undefined)?.[NAME];
           if (typeof name !== "string" || name.length === 0) return;
           this._refNames.set(key, name);
-          // Deferred for the reason the publication above is: this reaches a
-          // dispatch synchronously — an `async` body runs to its first
-          // `await`, and there is none before the rewrite when no
-          // collaboration is active — and this callback can be running
-          // inside an update.
+          // Deferred, because this reaches a dispatch synchronously — an
+          // `async` body runs to its first `await`, and there is none before
+          // the rewrite when no collaboration is active — and this callback
+          // can be running inside an update: a subscription delivers the
+          // moment it is opened, and this pass can run from the update
+          // listener.
           queueMicrotask(() =>
             void this._handleExternalRefTitleChange(key, name)
           );
@@ -3622,59 +3590,94 @@ export class CFCodeEditor extends BaseElement {
         subscription.unsub();
         this._refDestinationSubscriptions.delete(key);
         this._refNames.delete(key);
-        this._refShortNames.delete(key);
       }
     }
 
+    // The keys the document holds, and the destination each names, decide
+    // the short names as much as the universe does.
     this._publishRefShortNames();
   }
 
   /**
-   * Record the short name a destination published.
+   * Returns the short name each of the document's mentions shows, by reference
+   * key: the name carried by the universe row standing for the mention's
+   * destination.
    *
-   * A destination that publishes none loses whatever it had, so a pill drops
-   * the number when its member does rather than keeping a spelling nothing
-   * backs.
+   * The row is found by identity, comparing the cell the reference map names
+   * with the one the resolution pass recorded for each row through
+   * `cellRefToIdentityKey()`, whose doc comment carries what a cell's identity
+   * is and why it is not `CellHandle.equals()`. What matters to a pill is that
+   * a handle redelivered mid-settle names the same cell as the one it
+   * replaced, so a pill keeps its name across a redelivery rather than
+   * blinking out. The name is the row's, never one the destination
+   * publishes. A destination publishes the name its creating
+   * collection gave it, which means something only where that collection is
+   * read through (`docs/specs/collection-naming.md`, "The name a member
+   * publishes"). The row's is what this universe calls the member, and the
+   * one a `#` query here matches, so a name returned is one that query offers
+   * back for the same destination. A mention whose destination no resolved
+   * row stands for gets none, whatever its destination publishes. Where
+   * several rows stand for one destination, the first in the universe's order
+   * that carries a name is the one returned.
    */
-  private _trackRefShortName(key: string, shortName: unknown): void {
-    const published = typeof shortName === "string" && shortName.length > 0
-      ? shortName
-      : undefined;
-    if (published === undefined) this._refShortNames.delete(key);
-    else this._refShortNames.set(key, published);
-    this._publishRefShortNames();
+  private _universeShortNames(): Record<string, string> {
+    // Without a map no token in the document is a mention, so there is
+    // nothing to name.
+    if (!this.references) return {};
+
+    const rows = (this.mentionable?.get() ?? []) as MentionableArray;
+    const namesByPiece = new Map<string, string>();
+    for (let index = 0; index < rows.length; index++) {
+      const pieceCell = this._resolvedPieceCells.get(index);
+      const name = shortNameOf(rows[index]);
+      // A row the pass could not resolve to a cell stands for nothing, and
+      // its own sub-cell is not the member.
+      if (pieceCell === undefined || pieceCell.id() === "" || name === "") {
+        continue;
+      }
+      const identity = cellRefToIdentityKey(pieceCell.ref());
+      if (namesByPiece.has(identity)) continue;
+      namesByPiece.set(identity, name);
+    }
+
+    const names: Record<string, string> = {};
+    const refMap = this._refMap();
+    for (const ref of this._documentRefs()) {
+      const destination = refMap[ref.key]?.destination;
+      if (!isCellHandle(destination)) continue;
+      const name = namesByPiece.get(cellRefToIdentityKey(destination.ref()));
+      if (name !== undefined) names[ref.key] = name;
+    }
+    return names;
   }
 
   /**
-   * Bring the editor state into step with what each mention's destination
-   * calls itself.
+   * Brings the editor state into step with the short name each mention shows.
    *
-   * Every write to `_refShortNames` ends here, and what decides whether to
-   * dispatch is a comparison against the FIELD rather than against the map.
-   * A caller cannot see whether its own mutation changed anything the view has
-   * been told, so a caller that guessed would leave the two disagreeing — a
-   * key whose destination is replaced by one that publishes no name reaches
-   * `_trackRefShortName` with the map already cleared, and a guess of
-   * "unchanged" there is a pill still showing the previous destination's
-   * number. Judging from the field is what makes that unrepresentable.
+   * Nothing holds the names between publications. Each one reads them afresh
+   * through `_universeShortNames()`, and what decides whether to dispatch is a
+   * comparison against the FIELD. A caller therefore has nothing to keep in
+   * step by hand: whatever it changed — the document's mentions, the map, or
+   * the universe's resolved rows — a publication after it leaves the view
+   * showing what those say now, and a name nothing backs any more is dropped
+   * rather than kept.
    */
   private _publishRefShortNames(): void {
     if (this._refShortNamesPublishPending) return;
     this._refShortNamesPublishPending = true;
     // Off the current task, because a caller may be inside a CodeMirror
-    // update: a destination's subscription delivers synchronously the moment
-    // it is opened, and the pass that opens it runs from the update listener.
-    // A dispatch nested in an update can throw, taking the reference
-    // reconciliation around it with it. A microtask rather than a timer —
-    // the update is synchronous, so it has finished by the time this runs,
-    // and nothing here waits on the clock. Queueing one publication for many
-    // writes is the other half: a pass that changes ten keys dispatches once.
+    // update: the subscription pass runs from the update listener. A dispatch
+    // nested in an update can throw, taking the reference reconciliation
+    // around it with it. A microtask rather than a timer — the update is
+    // synchronous, so it has finished by the time this runs, and nothing here
+    // waits on the clock. Queueing one publication for many calls is the other
+    // half: a pass that changes ten keys dispatches once.
     queueMicrotask(() => {
       this._refShortNamesPublishPending = false;
       const view = this._editorView;
       if (!view) return;
 
-      const published = Object.fromEntries(this._refShortNames);
+      const published = this._universeShortNames();
       if (sameShortNames(refShortNames(view.state), published)) return;
       view.dispatch({ effects: setRefShortNames.of(published) });
     });

@@ -15,9 +15,9 @@
  * other half of why the rule above is absolute rather than stylistic.
  */
 
-import { isInstance } from "@commonfabric/utils/types";
+import { isInstance, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { FabricValue } from "./index.ts";
+import type { FabricValue } from "@/interface.ts";
 import type { LiveEnvironment } from "./codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "./codec-interface/NullLiveEnvironment.ts";
 import type { CodecRegistry } from "./codec-common/CodecRegistry.ts";
@@ -30,8 +30,8 @@ import type {
 } from "./codec-realm/interface.ts";
 import { RealmCodecEngine } from "./codec-realm/RealmCodecEngine.ts";
 import { createBaseRealmRegistry } from "./codec-realm/createBaseRealmRegistry.ts";
-import { codecClasses as primitiveClasses } from "./fabric-primitives/index.ts";
-import { codecClasses as instanceClasses } from "./fabric-instances/index.ts";
+import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
+import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
 
 /**
  * Creates a registry pairing the JSON format with the fabric classes this
@@ -60,14 +60,17 @@ export function createDefaultJsonRegistry(): CodecRegistry<JsonCodecValue> {
 /**
  * Constructs a `JsonCodecEngine` over {@link createDefaultJsonRegistry}, for a
  * caller that wants this package's classes rather than a set of its own.
- * `options.lenient` is passed through.
+ * `options.lenient` and `options.slotLimit` are passed through.
  */
 export function newDefaultJsonCodecEngine(
-  options?: { lenient?: boolean },
+  options?: { lenient?: boolean; slotLimit?: number },
 ): JsonCodecEngine {
   return new JsonCodecEngine({
     registry: createDefaultJsonRegistry(),
     lenient: options?.lenient ?? false,
+    ...(options?.slotLimit === undefined
+      ? {}
+      : { slotLimit: options.slotLimit }),
   });
 }
 
@@ -103,7 +106,7 @@ export function plainObjectFromJson<T extends object = object>(
 ): T {
   const result = fabricFromJsonValue(json, env);
 
-  if ((result === null) || (typeof result !== "object")) {
+  if (!isObjectOrArray(result)) {
     throw new Error(
       "`plainObjectFromJson()`: decoded to a primitive, not a plain object",
     );
@@ -180,10 +183,11 @@ const realmCodecEngine = newDefaultRealmCodecEngine();
  * avoid, and would charge it to correct input.
  *
  * Named for the `<target>From<Source>Value` family that
- * `fabricFromNativeValue()` and `nativeFromFabricValue()` establish. Both
- * sides being qualified is what keeps `realm` readable only as a modifier on
- * `value` -- a *realm value* is this transport form, as a *native value* is a
- * plain JavaScript one -- rather than as the boundary being crossed.
+ * `fabricFromConvertibleJsValue()` and `convertibleJsFromFabricValue()`
+ * establish. Both sides being qualified is what keeps `realm` readable only as
+ * a modifier on `value` -- a *realm value* is this transport form, as a *native
+ * value* is a plain JavaScript one -- rather than as the boundary being
+ * crossed.
  */
 export function realmFromFabricValue(
   value: FabricValue,

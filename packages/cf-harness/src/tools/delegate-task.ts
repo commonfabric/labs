@@ -37,7 +37,7 @@ export const delegateTaskTool: HarnessToolDefinition<
             ...HARNESS_SUBAGENT_PROFILES,
           ] satisfies HarnessSubagentProfile[],
           description:
-            'Named subagent profile to spawn. Defaults to the harness default profile. Authoring or running a Common Fabric pattern goes through "pattern-author": when the configured skill registry carries the pattern skills, this profile preloads them; the default profile does not. A "pattern-author" child runs what it wrote and answers with a reference to the result cell, never with source: you get something to assign_slug or wire into a run_pattern input, and you never compile anything yourself.',
+            "Named subagent profile to spawn. Defaults to the harness default profile. Authoring or running a Common Fabric pattern goes through \"pattern-author\": when the configured skill registry carries the pattern skills, this profile preloads them; the default profile does not. A \"pattern-author\" child runs what it wrote and answers with a reference to the result cell, never with source: you get something to assign_slug or wire into a run_pattern input, and you never compile anything yourself. It is also the only way to CHANGE a piece that already exists: hand it the piece's handle and say what should be different, and it reads that piece's current source and revises it in place, keeping the data. You cannot do that yourself — the tools that read and replace a piece's source are on that child's surface and on no parent's.",
         },
         context: {
           type: "string",
@@ -54,7 +54,7 @@ export const delegateTaskTool: HarnessToolDefinition<
                 type: "string",
                 minLength: 1,
                 description:
-                  "Pattern id exactly as this parent received it from search_patterns.",
+                  "Pattern id exactly as this parent received it from search_patterns or host-confirmed research.",
               },
               note: {
                 type: "string",
@@ -67,7 +67,7 @@ export const delegateTaskTool: HarnessToolDefinition<
             additionalProperties: false,
           },
           description:
-            "Optional published patterns selected from this parent's earlier search_patterns results. The harness attaches their trusted metadata to the child; supply ids and optional notes only.",
+            "Optional published patterns selected from this parent's earlier search_patterns results or host-confirmed research. The harness attaches their trusted metadata to the child; supply ids and optional notes only.",
         },
         maxModelTurns: {
           type: "integer",

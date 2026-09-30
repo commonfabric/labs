@@ -1,8 +1,10 @@
 import { encodeHex } from "@std/encoding/hex";
 
 import { sha256 } from "@commonfabric/content-hash";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import { OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL } from "../contracts/native-model-tool.ts";
+import type { HarnessModelToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type {
   HarnessAssistantTranscriptMessage,
   HarnessProviderContinuation,
@@ -10,6 +12,7 @@ import type {
   HarnessTranscriptMessage,
 } from "../contracts/transcript.ts";
 import { materializeImageAttachmentContentPart } from "../image-attachments.ts";
+import { codexSearchSources } from "./codex-search-evidence.ts";
 import {
   describeProviderError,
   providerErrorFromPayload,
@@ -81,7 +84,7 @@ export type ContinuationModelMismatch = "throw" | "drop";
 const REPLAYABLE_ITEM_TYPES = ["reasoning", "compaction"] as const;
 
 const isReplayableItem = (item: unknown): item is ResponsesInputItem => {
-  if (typeof item !== "object" || item === null) return false;
+  if (!isObjectOrArray(item)) return false;
   const record = item as Record<string, unknown>;
   return (REPLAYABLE_ITEM_TYPES as readonly string[]).includes(
     record.type as string,
@@ -104,11 +107,14 @@ export const continuationOutput = (
 ): ResponsesInputItem[] => {
   if (continuation?.providerId !== providerId) return [];
   const state = continuation.state;
-  if (typeof state !== "object" || state === null || Array.isArray(state)) {
+  if (!isObjectNotArray(state)) {
     return [];
   }
   const record = state as Record<string, unknown>;
-  if (record.version !== 1 || typeof record.sourceModel !== "string") return [];
+  if (
+    (record.version !== 1 && record.version !== 2) ||
+    typeof record.sourceModel !== "string"
+  ) return [];
   if (record.sourceModel !== model) {
     if (onModelMismatch === "throw") {
       throw new Error(
@@ -150,17 +156,80 @@ export const continuationFunctionCallItemId = (
 ): string | undefined => {
   if (
     continuation?.providerId !== providerId ||
-    typeof continuation.state !== "object" || continuation.state === null ||
-    Array.isArray(continuation.state)
+    !isObjectNotArray(continuation.state)
   ) return undefined;
   const record = continuation.state as Record<string, unknown>;
-  if (record.version !== 1 || record.sourceModel !== model) return undefined;
+  if (
+    (record.version !== 1 && record.version !== 2) ||
+    record.sourceModel !== model
+  ) return undefined;
   const ids = record.functionCallItemIds;
-  if (typeof ids !== "object" || ids === null || Array.isArray(ids)) {
+  if (!isObjectNotArray(ids)) {
     return undefined;
   }
   const itemId = (ids as Record<string, unknown>)[callId];
   return typeof itemId === "string" ? itemId : undefined;
+};
+
+/**
+ * Search-bearing output is replayed in its original order only while its
+ * assistant projection remains unchanged. Filters may rewrite text, calls, or
+ * native evidence; reconstruction must not resurrect the provider's old answer.
+ */
+const unchangedSearchOutput = (
+  message: HarnessAssistantTranscriptMessage,
+  model: string,
+  providerId: string,
+): ResponsesInputItem[] | undefined => {
+  const continuation = message.providerContinuation;
+  if (
+    providerId !== "openai-codex" || continuation?.providerId !== providerId
+  ) return undefined;
+  const state = continuation.state;
+  if (!isObjectNotArray(state)) {
+    return undefined;
+  }
+  const record = state as Record<string, unknown>;
+  if (
+    record.version !== 2 || record.sourceModel !== model ||
+    !Array.isArray(record.searchOutput)
+  ) return undefined;
+  if (
+    !record.searchOutput.every((item) => {
+      if (
+        typeof item !== "object" || item === null || Array.isArray(item)
+      ) return false;
+      return isReplayableItem(item) ||
+        (item.type === "message" && item.role === "assistant" &&
+          Array.isArray(item.content)) ||
+        (item.type === "web_search_call" && typeof item.id === "string" &&
+          typeof item.status === "string") ||
+        (item.type === "function_call" && typeof item.call_id === "string" &&
+          typeof item.name === "string" && typeof item.arguments === "string");
+    })
+  ) return undefined;
+  // Use the same projection as ingestion rather than trusting a second saved
+  // copy of the text, calls, or evidence. Invalid optional replay state falls
+  // back to the current transcript rather than replacing it with stale text.
+  let projection: HarnessAssistantTranscriptMessage;
+  try {
+    projection = normalizeTerminalResponse(
+      { status: "completed", output: record.searchOutput },
+      model,
+      providerId,
+      "stored search",
+    );
+  } catch {
+    return undefined;
+  }
+  if (
+    projection.content !== message.content ||
+    JSON.stringify(projection.toolCalls ?? []) !==
+      JSON.stringify(message.toolCalls ?? []) ||
+    JSON.stringify(projection.nativeModelToolResults ?? []) !==
+      JSON.stringify(message.nativeModelToolResults ?? [])
+  ) return undefined;
+  return structuredClone(record.searchOutput);
 };
 
 export const materializeUserContent = async (
@@ -173,10 +242,9 @@ export const materializeUserContent = async (
   for (const attachment of message.imageAttachments ?? []) {
     const part = await materializeImageAttachmentContentPart(attachment);
     const partRecord = part as Record<string, unknown>;
-    const imageUrl =
-      typeof partRecord.image_url === "object" && partRecord.image_url !== null
-        ? (partRecord.image_url as Record<string, unknown>).url
-        : undefined;
+    const imageUrl = isObjectOrArray(partRecord.image_url)
+      ? (partRecord.image_url as Record<string, unknown>).url
+      : undefined;
     if (typeof imageUrl !== "string") {
       throw new Error(
         `failed to materialize image attachment for ${label}`,
@@ -236,15 +304,27 @@ export const toResponsesInput = async (
         if (content.length > 0) input.push({ role: "user", content });
         break;
       }
-      case "assistant":
+      case "assistant": {
+        // Run the existing model/provider guard even when exact replay is possible.
+        const carriedOutput = continuationOutput(
+          message.providerContinuation,
+          model,
+          providerId,
+          onModelMismatch,
+          index === boundary && carried.length > 0 ? "reasoning-only" : "all",
+        );
+        const searchOutput = unchangedSearchOutput(message, model, providerId);
+        if (searchOutput !== undefined) {
+          input.push(
+            ...searchOutput.filter((item) =>
+              !(index === boundary && carried.length > 0 &&
+                isCompactionItem(item))
+            ),
+          );
+          break;
+        }
         input.push(
-          ...continuationOutput(
-            message.providerContinuation,
-            model,
-            providerId,
-            onModelMismatch,
-            index === boundary && carried.length > 0 ? "reasoning-only" : "all",
-          ),
+          ...carriedOutput,
         );
         if (message.content.length > 0) {
           input.push({
@@ -275,6 +355,7 @@ export const toResponsesInput = async (
           });
         }
         break;
+      }
       case "tool":
         input.push({
           type: "function_call_output",
@@ -288,7 +369,7 @@ export const toResponsesInput = async (
 };
 
 export const toResponsesTools = (
-  tools: readonly HarnessToolDescriptor[],
+  tools: readonly HarnessModelToolDescriptor[],
 ): ResponsesInputItem[] =>
   tools.map((tool) => ({
     type: "function",
@@ -318,7 +399,7 @@ export const addFirstUserPromptCacheBreakpoint = (
     const content = item.content;
     for (let index = content.length - 1; index >= 0; index -= 1) {
       const block = content[index];
-      if (typeof block !== "object" || block === null) continue;
+      if (!isObjectOrArray(block)) continue;
       if (
         !("type" in block) ||
         (block.type !== "input_text" && block.type !== "input_image" &&
@@ -382,14 +463,15 @@ export const normalizeTerminalResponse = (
   const toolCallById = new Map<string, HarnessToolCall>();
   const continuation: ResponsesInputItem[] = [];
   const functionCallItemIds: Record<string, string> = {};
+  const orderedOutput: ResponsesInputItem[] = [];
+  const searchCalls: ResponsesInputItem[] = [];
   for (const rawItem of output) {
-    if (
-      typeof rawItem !== "object" || rawItem === null || Array.isArray(rawItem)
-    ) continue;
+    if (!isObjectNotArray(rawItem)) continue;
     const item = rawItem as Record<string, unknown>;
     if (item.type === "message" && Array.isArray(item.content)) {
+      orderedOutput.push(structuredClone(item));
       for (const rawContent of item.content) {
-        if (typeof rawContent !== "object" || rawContent === null) continue;
+        if (!isObjectOrArray(rawContent)) continue;
         const content = rawContent as Record<string, unknown>;
         if (
           content.type === "output_text" && typeof content.text === "string"
@@ -427,25 +509,53 @@ export const normalizeTerminalResponse = (
       }
       toolCallById.set(call.id, call);
       toolCalls.push(call);
+      orderedOutput.push(structuredClone(item));
+    } else if (
+      providerId === "openai-codex" && item.type === "web_search_call" &&
+      typeof item.id === "string" && typeof item.status === "string"
+    ) {
+      searchCalls.push(structuredClone(item));
+      orderedOutput.push(structuredClone(item));
     } else if (isReplayableItem(item)) {
-      // Both reasoning and compaction items are retained: dropping a
-      // compaction item would mean paying to produce it and then discarding
-      // the only thing that lets the transcript ahead of it be pruned.
+      // Compaction carries the context before it; retain it for pruning too.
       continuation.push(structuredClone(item));
+      orderedOutput.push(structuredClone(item));
     }
   }
+  const content = text.join("");
+  const sources = providerId === "openai-codex"
+    ? codexSearchSources(orderedOutput)
+    : [];
+  const hasSearchEvidence = searchCalls.length > 0 || sources.length > 0;
   return {
     role: "assistant",
-    content: text.join(""),
+    content,
+    ...(hasSearchEvidence
+      ? {
+        nativeModelToolResults: [{
+          type: "cf-harness.native-model-tool-result" as const,
+          toolId: OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL,
+          provider: "openai-codex" as const,
+          providerMetadata: { searchCalls },
+          sources,
+        }],
+      }
+      : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
-    ...(continuation.length > 0 || Object.keys(functionCallItemIds).length > 0
+    ...(hasSearchEvidence || continuation.length > 0 ||
+        Object.keys(functionCallItemIds).length > 0
       ? {
         providerContinuation: {
           providerId,
           state: {
-            version: 1,
+            version: hasSearchEvidence ? 2 : 1,
             sourceModel,
             output: continuation,
+            ...(hasSearchEvidence
+              ? {
+                searchOutput: orderedOutput,
+              }
+              : {}),
             ...(Object.keys(functionCallItemIds).length > 0
               ? { functionCallItemIds }
               : {}),

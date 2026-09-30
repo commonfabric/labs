@@ -422,11 +422,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                     }
                 },
                 editingNoteIndex: {
-                    anyOf: [{
-                            type: "number"
-                        }, {
-                            type: "undefined"
-                        }],
+                    type: ["number", "undefined"],
                     asCell: ["readonly"]
                 },
                 editingNoteText: {
@@ -434,19 +430,11 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                     asCell: ["readonly"]
                 },
                 settingsModuleIndex: {
-                    anyOf: [{
-                            type: "number"
-                        }, {
-                            type: "undefined"
-                        }],
+                    type: ["number", "undefined"],
                     asCell: ["readonly"]
                 },
                 expandedIndex: {
-                    anyOf: [{
-                            type: "number"
-                        }, {
-                            type: "undefined"
-                        }],
+                    type: ["number", "undefined"],
                     asCell: ["readonly"]
                 },
                 trashedSubPieces: {

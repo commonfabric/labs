@@ -51,6 +51,10 @@ class CloneInstance extends FabricInstance {
 
 class ClonePrimitive extends FabricPrimitive {
   readonly nested = new CloneInstance();
+
+  get schemaType(): never {
+    throw new Error("Unimplemented.");
+  }
 }
 
 describe("clone data guards", () => {

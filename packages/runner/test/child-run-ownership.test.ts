@@ -432,7 +432,6 @@ describe("child run ownership", () => {
       trustExecutable(runtime, Piece),
       { value: 3 },
       true,
-      true,
     );
     expect(pending.keys()).toBe(1);
 

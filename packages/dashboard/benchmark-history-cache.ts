@@ -4,6 +4,7 @@
  * artifact.
  */
 
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const BENCHMARK_HISTORY_CACHE_DAYS = 60;
@@ -96,8 +97,7 @@ const isStoredRun = (value: unknown): value is StoredBenchmarkRun => {
     Number.isFinite(run.at) &&
     (run.cpu === undefined ||
       (typeof run.cpu === "string" && run.cpu.trim().length > 0)) &&
-    typeof run.metrics === "object" &&
-    run.metrics !== null && !Array.isArray(run.metrics) &&
+    isObjectNotArray(run.metrics) &&
     Object.values(run.metrics).every(isStats);
 };
 
@@ -157,7 +157,7 @@ export class BenchmarkHistoryStore {
       }
       throw error;
     }
-    if (typeof parsed !== "object" || parsed === null) {
+    if (!isObjectOrArray(parsed)) {
       if (strict) throw new Error("Invalid runtime benchmark history cache.");
       return {
         refresh: null,

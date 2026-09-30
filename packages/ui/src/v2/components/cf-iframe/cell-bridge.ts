@@ -16,6 +16,7 @@ import {
   isCellHandle,
 } from "@commonfabric/runtime-client";
 import type { JSONSchema } from "@commonfabric/runner/shared";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /** Capability kind assigned to a named context child. */
 export type CellContextResourceKind =
@@ -250,7 +251,7 @@ function localCell(
   const get = (): FabricValue | undefined => {
     let value: unknown = root;
     for (const key of path) {
-      if (value === null || typeof value !== "object") return undefined;
+      if (!isObjectOrArray(value)) return undefined;
       const property = Object.getOwnPropertyDescriptor(value, String(key));
       if (!property || !("value" in property)) return undefined;
       value = property.value;
@@ -267,7 +268,7 @@ function localCell(
         const child = property && "value" in property
           ? property.value
           : undefined;
-        if (child === null || typeof child !== "object") {
+        if (!isObjectOrArray(child)) {
           throw new TypeError("Cannot descend through a non-object value.");
         }
         parent = child as Record<string, unknown>;

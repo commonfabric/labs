@@ -20,8 +20,10 @@
 import { assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner";
 import {
+  type CommitRejection,
   MultiRuntimeHarness,
   type MultiRuntimeSession,
 } from "./multi-runtime-harness.ts";
@@ -42,8 +44,9 @@ const SERVER_EXECUTION_FROM_ENV = experimentalOptionsFromEnv(Deno.env.get)
  * a step listed there for this file is skipped ONLY when this process runs
  * the ON posture, loudly (the entry's reason is printed), and only while
  * the entry exists — the OFF arm and an unlisted step always run. Never a
- * silent filter: the CI step prints every entry, and the validator
- * requires this file to name each listed step and call this guard.
+ * silent filter: the test topology declares the entry's leaf unavailable,
+ * and the validator requires this file to name each listed step and call
+ * this guard.
  *
  * The registry is EMPTY, so this guard is inert everywhere today. Note the
  * key: it is the RAW env, while the on-skips module asks callers to resolve
@@ -61,9 +64,9 @@ function onArmStepSkip(step: string): { ignore: boolean } {
   );
   if (entry === undefined) return { ignore: false };
   console.warn(
-    `[server-execution ON arm] patterns: SKIPPING STEP ${
-      JSON.stringify(step)
-    } (until ${entry.phase}) — ${entry.reason}`,
+    `[server-execution ON arm] patterns: ` +
+      debugStr`SKIPPING STEP $quote,long${step}` +
+      ` (until ${entry.phase}) — ${entry.reason}`,
   );
   return { ignore: true };
 }
@@ -127,7 +130,7 @@ function minimalCase(
       assertEquals(
         bodies(observerView),
         observerBodies,
-        `observer sees ${JSON.stringify(observerView)}`,
+        debugStr`observer sees $quote,long${observerView}`,
       );
     });
   });
@@ -174,6 +177,8 @@ describe("convergence storm — observer converges with optional scoped links", 
       programPath: fixture("convergence-chat"),
       rootPath: ROOT_PATH,
       sessions: ["storm-alice", "storm-bob", "storm-observer"],
+      // Fills the per-commit rejection record the cost assertion below reads.
+      recordRejections: true,
     });
     [alice, bob, observer] = harness.sessions;
     await harness.settle();
@@ -221,8 +226,105 @@ describe("convergence storm — observer converges with optional scoped links", 
         [...sent].sort(),
         `observer missed messages: sent=${sent.length} ` +
           `landed=${observerView.length} ` +
-          `observer=${JSON.stringify(summarize(observerView))}`,
+          debugStr`observer=$quote,long${summarize(observerView)}`,
+      );
+
+      // What the storm cost, as opposed to whether it converged. This fixture
+      // derives a value from the whole message list, and that derivation's
+      // commit is a compare-and-set over the list, so it loses races and is
+      // refused; how often is a race and not worth asserting. What holds
+      // exactly is that the posts never pay for it. A post is
+      // `messages.push(...)`, which records a mergeable `append` and drops its
+      // own read of the array, so no commit that wrote the list is ever among
+      // the refused.
+      const messagesDoc = (await alice.link(["messages"])).id;
+      const refused = (await Promise.all(
+        harness.sessions.map((session) => session.rejections()),
+      )).flat();
+      assertEquals(
+        refused
+          .filter((rejection) => rejection.writes.includes(messagesDoc))
+          .map((rejection) => rejection.message),
+        [],
+        "a commit that wrote the message list was refused, so the appends " +
+          "are contending rather than merging",
       );
     },
   );
+});
+
+/**
+ * What a storm of concurrent appends costs, as opposed to whether it
+ * converges. The describes above assert that every message arrives; this one
+ * asserts what the sessions threw away getting them there.
+ *
+ * `MultiRuntimeSession.rejections()` carries one record per refused commit,
+ * naming what the commit wrote and what refused it, which is what lets this
+ * assert something exact rather than bound a count.
+ */
+describe("convergence storm — what the storm costs", () => {
+  const K = 10;
+
+  /**
+   * Two sessions post `K` messages apiece into `fixtureName`, pipelined, while
+   * a third only observes. Answers with every commit the three had refused
+   * while that ran.
+   */
+  async function stormRefusals(
+    fixtureName: string,
+  ): Promise<CommitRejection[]> {
+    const harness = await MultiRuntimeHarness.create({
+      programPath: fixture(fixtureName),
+      rootPath: ROOT_PATH,
+      sessions: ["cost-alice", "cost-bob", "cost-observer"],
+      // Fills the per-commit rejection record this assertion reads.
+      recordRejections: true,
+    });
+    try {
+      const [alice, bob] = harness.sessions;
+      await harness.settle();
+      await Promise.all(
+        harness.sessions.map((session) => session.clearRejections()),
+      );
+      const post = async (session: MultiRuntimeSession, author: string) => {
+        for (let n = 0; n < K; n++) {
+          // idle:false stacks the sends into a pipeline, as the storm above
+          // does: settling each one in turn hides the contention.
+          await session.send(
+            "post",
+            {
+              author,
+              body: `${author}-${n}`,
+              n,
+            },
+            undefined,
+            { idle: false },
+          );
+        }
+      };
+      await Promise.all([post(alice, "alice"), post(bob, "bob")]);
+      await harness.settle(20);
+      const refused = await Promise.all(
+        harness.sessions.map((session) => session.rejections()),
+      );
+      return refused.flat();
+    } finally {
+      await harness.dispose();
+    }
+  }
+
+  it("refuses no commit at all when nothing derives from the list", async () => {
+    // A post is `messages.push(...)`, which records a mergeable `append` and
+    // drops its own read of the array, so two sessions appending at once
+    // depend on nothing in common. This fixture carries no value derived from
+    // the whole list, which is the other thing that reads it, so the cost is
+    // none — not a small number, but zero across all three sessions.
+    const refused = await stormRefusals("convergence-chat-plain");
+    assertEquals(
+      refused.map((rejection) => rejection.message),
+      [],
+      "a storm of mergeable appends refused a commit, so an append has " +
+        "stopped merging or something now reads the list on the write path",
+    );
+  });
 });

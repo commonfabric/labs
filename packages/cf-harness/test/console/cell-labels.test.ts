@@ -156,9 +156,9 @@ const wildSnapshot = snapshot([
 const VALUED = entity("valued");
 
 /**
- * A document whose label path is written with the `value` segment an envelope
- * holds its content under. A reference reaches the same cell with the segment
- * or without it, so the two spellings are one path.
+ * A document labeled beneath a payload field named `value`. Label paths are
+ * relative to the payload, so `value` here is a field name like any other: a
+ * reference reaches the label through that field and not without it.
  */
 const valuedSnapshot = snapshot([
   record(VALUED, `/${VALUED}`, [{
@@ -579,6 +579,19 @@ describe("console/cell-labels", () => {
       );
     });
 
+    it("preserves the space of a complete reference with a short entity id", () => {
+      const labelled = record("of:short", "/of:short", [declared]);
+      const inSpace = consoleCellLabelIndex({
+        ...snapshot([labelled]),
+        space: { configured: "demo-space", did: OWN_DID },
+      });
+      expect(cellLabelsAt(inSpace, `//${OWN_DID}/of:short@space`)).toEqual(
+        consoleCellLabels(labelled),
+      );
+      expect(cellLabelsAt(inSpace, `//${FOREIGN_DID}/of:short@space`))
+        .toBeUndefined();
+    });
+
     it("leaves a cell the snapshot marked unread out of the index it answers from", () => {
       const unread = consoleCellLabelIndex(snapshot([
         record(LABELLED, `/${LABELLED}`, [declared]),
@@ -643,16 +656,18 @@ describe("console/cell-labels", () => {
         expect(labels?.transformedBy).toEqual(["llm"]);
       });
 
-      it("returns the atom at a path the reference reaches through a `value` segment", () => {
+      it("returns no atom at `value/secret` for a label on the top-level `secret`", () => {
         expect(cellLabelsAt(piece, `/${PIECE}/value/secret`)?.confidentiality)
-          .toEqual(["demo-secret"]);
+          .toEqual([]);
       });
 
-      it("returns the atom of an entry stored under `value` for a reference spelling no such segment", () => {
+      it("returns the atom of an entry under a payload field named `value` only through that field", () => {
         const valued = consoleCellLabelIndex(valuedSnapshot);
-        const labels = cellLabelsAt(valued, `/${VALUED}/secret`);
+        const labels = cellLabelsAt(valued, `/${VALUED}/value/secret`);
         expect(labels?.confidentiality).toEqual(["stored-under-value"]);
         expect(labels?.entries.map((entry) => entry.path)).toEqual([[]]);
+        expect(cellLabelsAt(valued, `/${VALUED}/secret`)?.confidentiality)
+          .toEqual([]);
       });
     });
 

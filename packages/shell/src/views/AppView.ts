@@ -1,11 +1,15 @@
 import { type DID, KeyStore } from "@commonfabric/identity";
 import {
+  isAppViewEqual,
   isEmbeddedView,
   isViewingDefaultPatternView,
   replaceNavigation,
+  spaceViewRef,
   updatePageTitle,
+  urlToAppView,
 } from "@commonfabric/navigation";
 import { type NameSchema, stringSchema } from "@commonfabric/runner/schemas";
+import { parseCellReference } from "@commonfabric/runner/shared";
 import { slugIdForSpace, validateSlug } from "@commonfabric/runner/slugs";
 import {
   type Cancel,
@@ -41,8 +45,8 @@ import type { LoadError } from "./BodyView.ts";
  *
  * - `pieceId` — which piece is rendered.
  * - `scope` — which document that piece is; one id in two scopes is two.
- * - `pathAfter` — whether the address keeps its member, and whether that
- *   member may be cited.
+ * - `pathAfter` — the segments the walk left unspent, which decide whether
+ *   the reference's member named anything.
  * - `refusal` — always absent on this arm, where it marks the landing rather
  *   than carrying anything. Including a constant would say nothing.
  */
@@ -135,6 +139,31 @@ function sameSlugReference(a: SlugReference, b: SlugReference): boolean {
 }
 
 /**
+ * What the view makes of where `reference` landed: the landing itself, or a
+ * refusal naming the member where the landing left that member unspent.
+ *
+ * A slug naming a piece at its root spends no member, and the resolution hands
+ * the member back. The member then names nothing in that piece, as a member a
+ * collection does not hold names nothing in the collection, so it is refused
+ * the same way. The selection and the watch both read a resolution through
+ * here, so the answer one records as shown is the answer the other compares.
+ */
+function answerFor(
+  reference: SlugReference,
+  landed: SlugReferenceTarget | SlugReferenceRefusal,
+): SlugReferenceTarget | SlugReferenceRefusal {
+  if (landed.refusal || landed.pathAfter.length === 0) return landed;
+  return {
+    refusal: {
+      code: "not-collection",
+      message:
+        `no member ${landed.pathAfter.join("/")} in ${reference.slug}, ` +
+        "which names a piece rather than a collection",
+    },
+  };
+}
+
+/**
  * One live watch on a slug reference: the reference, the runtime it is read
  * through, and everything whose lifetime is this watch's — the subscription
  * it opens, the poll it schedules, and the pair of flags that keep its
@@ -193,6 +222,50 @@ interface ShownResolution {
 
   /** What that run reached, or `undefined` where it reached nothing. */
   readonly answer: SlugReferenceTarget | SlugReferenceRefusal | undefined;
+}
+
+/**
+ * The origin a reference is opened under when it is read as a page. Only the
+ * path is read, so which origin this is decides nothing.
+ */
+const PAGE_ORIGIN = "http://page.invalid";
+
+/**
+ * Whether both readers of `reference` read it as member `member` of the
+ * collection `slug` in `space`: the cell reference grammar, which `cf` reads
+ * it through, and `urlToAppView`, which opens it as a page under this shell's
+ * origin.
+ *
+ * Each reader rewrites spellings the other keeps. The grammar refuses a space
+ * name holding a character it reserves. A page URL percent-encodes some
+ * characters and resolves dot segments, and the page reader takes an escaped
+ * `@` at the head of the space for the space's mark. A name rewritten on the
+ * way in comes back out naming another space.
+ */
+function readsBackAs(
+  reference: string,
+  space: string,
+  slug: string,
+  member: string,
+): boolean {
+  // Each reader is asked rather than restated, so neither has a copy of its
+  // rules here to fall out of step with.
+  try {
+    const cited = parseCellReference(reference);
+    const citesMember = cited.space === space && cited.id === slug &&
+      cited.member === undefined && cited.scope === undefined &&
+      cited.pin === undefined && cited.path.length === 1 &&
+      cited.path[0] === member;
+    if (!citesMember) return false;
+  } catch {
+    return false;
+  }
+  const named = spaceViewRef(space, undefined);
+  if (!named) return false;
+  return isAppViewEqual(
+    urlToAppView(new URL(`${PAGE_ORIGIN}${reference}`)),
+    { ...named, pieceSlug: slug, pieceMember: member },
+  );
 }
 
 export class XAppView extends BaseView {
@@ -399,6 +472,19 @@ export class XAppView extends BaseView {
           const member = "pieceMember" in app.view
             ? app.view.pieceMember
             : undefined;
+          // Segments past a member are refused from the address alone. Only
+          // the member is read out of an address, so what follows it names
+          // nothing whatever the slug turns out to name. No reference is
+          // watched for such an address, so there is no answer to record.
+          const extraPath = "pieceExtraPath" in app.view
+            ? app.view.pieceExtraPath
+            : undefined;
+          if (extraPath !== undefined) {
+            throw new Error(
+              `no piece at ${extraPath} after member ${member} in ` +
+                `${app.view.pieceSlug}, since nothing past a member resolves`,
+            );
+          }
           // This run's own address, held for as long as the run takes: what
           // it reports is what THIS reference reached, and the address may
           // have moved on by the time it reports.
@@ -409,7 +495,10 @@ export class XAppView extends BaseView {
           };
           let landed: SlugReferenceTarget | SlugReferenceRefusal;
           try {
-            landed = await rt.resolveSlug(space, app.view.pieceSlug, member);
+            landed = answerFor(
+              reference,
+              await rt.resolveSlug(space, app.view.pieceSlug, member),
+            );
           } catch (error) {
             // Around the resolution alone, for the reason the load below
             // carries its own wrapper: the outer catch also takes the
@@ -431,16 +520,11 @@ export class XAppView extends BaseView {
             this.#markShown(reference, landed, signal);
             throw new Error(landed.refusal.message);
           }
-          const { pieceId, scope, pathAfter } = landed;
-          this.#namedAMember = member !== undefined && pathAfter.length === 0;
+          const { pieceId, scope } = landed;
+          // `answerFor()` refuses a landing that leaves the member unspent, so
+          // a member carried this far named one.
+          this.#namedAMember = member !== undefined;
           this.#selectedPatternTargetId = pieceId;
-          // A slug naming a piece at its root spends no member, so the
-          // segment named nothing and the piece's address does not include
-          // it. Drop it, which is how an address the shell cannot honor
-          // normalizes — the same replacement a visited identity URL gets.
-          if (member !== undefined && pathAfter.length > 0) {
-            this.#replaceViewWithoutMember(app.view);
-          }
           let pattern: PieceHandle<NameSchema>;
           try {
             pattern = await rt.getPattern(space, pieceId, { scope });
@@ -460,13 +544,19 @@ export class XAppView extends BaseView {
           return pattern;
         }
         if ("pieceId" in app.view && app.view.pieceId) {
+          const scope = app.view.pieceScope ?? "space";
           const target = await rt.getPattern(space, app.view.pieceId, {
             start: false,
+            scope,
           });
           if (signal.aborted) return;
           this.#selectedPatternTargetId = target.id();
-          const pattern = await rt.getPattern(space, app.view.pieceId);
-          const slug = await rt.getSlug(space, app.view.pieceId);
+          const pattern = await rt.getPattern(space, app.view.pieceId, {
+            scope,
+          });
+          const slug = scope === "space" && !app.view.piecePath?.length
+            ? await rt.getSlug(space, app.view.pieceId)
+            : undefined;
           if (!signal.aborted && slug) {
             this.#replacePieceUrlWithSlug(app.view, slug);
           }
@@ -616,11 +706,16 @@ export class XAppView extends BaseView {
    * The address is the one source of a reference: a watch is built for what
    * it names, and a recorded answer is held against what it names. Both read
    * it through here, so the two cannot disagree about what the address says.
+   *
+   * An address carrying segments past its member names none. The selection
+   * refuses it from the address alone, so there is nothing to watch and no
+   * answer to hold against it.
    */
   get #addressedReference(): SlugReference | undefined {
     const space = this.space;
     const view = this.app.view;
     if (!space || !("pieceSlug" in view) || !view.pieceSlug) return undefined;
+    if ("pieceExtraPath" in view && view.pieceExtraPath) return undefined;
     return {
       space,
       slug: view.pieceSlug,
@@ -711,10 +806,13 @@ export class XAppView extends BaseView {
   async #resolveAgainst(watch: SlugWatch): Promise<void> {
     let landed: SlugReferenceTarget | SlugReferenceRefusal;
     try {
-      landed = await watch.rt.resolveSlug(
-        watch.reference.space,
-        watch.reference.slug,
-        watch.reference.member,
+      landed = answerFor(
+        watch.reference,
+        await watch.rt.resolveSlug(
+          watch.reference.space,
+          watch.reference.slug,
+          watch.reference.member,
+        ),
       );
     } catch (error) {
       if (watch.rt.signal.aborted) {
@@ -790,18 +888,6 @@ export class XAppView extends BaseView {
     const event = e as CellUpdateEvent<string | undefined>;
     this.pieceTitle = event.detail ?? "";
   };
-
-  /**
-   * Drop the member from the address, leaving the collection's name. A
-   * segment the walk did not spend named nothing, so the page it opened is
-   * the one the name alone addresses, and the URL says so.
-   */
-  #replaceViewWithoutMember(view: typeof this.app.view) {
-    if (!("pieceSlug" in view) || !view.pieceSlug) return;
-    this.preserveRuntimeErrorsForNextViewChange?.();
-    const { pieceMember: _dropped, ...rest } = view;
-    this.#replaceView(rest);
-  }
 
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
     try {
@@ -942,17 +1028,29 @@ export class XAppView extends BaseView {
 
   /**
    * How the piece this view addresses is cited from anywhere:
-   * `/@<space>/<collection>/<member>`, the spelling this shell's own URLs and
-   * `cf` both read and which depends on no binding of the reader's; a
-   * pattern's `cellFromUrl` does not read it. Only a
-   * member of a named collection has one — a piece
-   * reached by identity carries its own, a collection's name with no member
-   * after it names no piece at all, and a segment the walk did not spend
-   * named nothing to cite.
+   * `//<space>/<collection>/<member>`, the cell reference grammar's fully
+   * qualified form, which depends on no binding of the reader's. `cf` reads
+   * it, and so does this shell's `urlToAppView`, which opens it as the page
+   * `/<space>/<collection>/<member>`. A pattern's `cellFromUrl` does not: it
+   * wants an entity id where the collection's name sits. Only a member of a
+   * named collection has one — a piece reached by identity carries its own, a
+   * collection's name with no member after it names no piece at all, and a
+   * segment the walk did not spend named nothing to cite.
    *
-   * The space is taken from the view rather than from the resolved DID: a
-   * space name derives that DID for everyone, so a name travels as far as the
-   * DID does and reads better where it lands.
+   * The space is written as the view names it: a space name derives its DID
+   * for everyone, so a name travels as far as the DID does and reads better
+   * where it lands. Where either reader would take the reference for another
+   * address, as {@link readsBackAs} decides, the space is written as the DID
+   * the view's space resolved to instead.
+   *
+   * A member is written as the address the page was opened at carries it, and
+   * a member the two readers read differently is cited by nothing. The
+   * readers differ on a member name carrying a JSON Pointer escape — `a~1b`
+   * reaches the grammar as `a/b` — and on one a URL path rewrites, and
+   * neither escaping settles it: the token that reaches the grammar as `a~1b`
+   * reaches the page as `a~01b`. Such a name is outside the grammar a
+   * collection holds its members to, and the alternative for one is an
+   * address that names a different member of the same collection.
    */
   #getPieceReference(): string | undefined {
     if (!this.#namedAMember) return;
@@ -960,13 +1058,19 @@ export class XAppView extends BaseView {
     if (!("pieceSlug" in view) || !view.pieceSlug) return;
     const member = "pieceMember" in view ? view.pieceMember : undefined;
     if (!member) return;
-    const space = "spaceName" in view
+    const named = "spaceName" in view
       ? view.spaceName
       : "spaceDid" in view
       ? view.spaceDid
       : undefined;
-    if (!space) return;
-    return `/@${space}/${view.pieceSlug}/${member}`;
+    for (const space of [named, this.space]) {
+      if (!space) continue;
+      const reference = `//${space}/${view.pieceSlug}/${member}`;
+      if (readsBackAs(reference, space, view.pieceSlug, member)) {
+        return reference;
+      }
+    }
+    return undefined;
   }
 
   #getRuntimeLoadError(): LoadError | undefined {
@@ -1045,6 +1149,9 @@ export class XAppView extends BaseView {
         .rt="${this.rt}"
         .space="${this.space}"
         .activePattern="${activePattern}"
+        .piecePath="${"piecePath" in this.app.view
+          ? this.app.view.piecePath ?? []
+          : []}"
         .loadError="${loadError}"
         .runtimeError="${runtimeLoadError}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"

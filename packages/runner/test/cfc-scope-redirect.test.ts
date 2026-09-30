@@ -161,7 +161,9 @@ describe("CFC scope redirects", () => {
         "private target",
         roomSchema("user"),
       );
-      const output = runtime.getCell(space, "private output");
+      const output = runtime.getCell(space, "private output", {
+        ifc: { confidentiality: ["private-selection"] },
+      });
       await Promise.all([target.sync(), output.sync()]);
       const setup = runtime.edit();
       target.withTx(setup).set({ list: ["one"] });

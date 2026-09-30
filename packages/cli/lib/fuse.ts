@@ -8,6 +8,7 @@ import {
   resolve,
   SEPARATOR,
 } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { cliName } from "./cli-name.ts";
 import {
   type FuseMountFlags,
@@ -73,7 +74,7 @@ function normalizeMountStateEntry(entry: MountStateEntry): MountStateEntry {
 }
 
 function isMountStateEntry(value: unknown): value is MountStateEntry {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isObjectOrArray(value)) return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.pid === "number" &&
     typeof entry.mountpoint === "string" &&

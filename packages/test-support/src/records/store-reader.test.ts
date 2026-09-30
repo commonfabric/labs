@@ -21,7 +21,7 @@ function ciContext(reportId: string, fork: boolean): RunContext {
     schema: 1,
     line: "context",
     reportId,
-    repo: "commontoolsinc/labs",
+    repo: "commonfabric/labs",
     commit: "0123456789abcdef0123456789abcdef01234567",
     dirty: false,
     env: "ci",
@@ -75,6 +75,23 @@ describe("store-reader", () => {
           )) as typeof fetch,
       });
       expect(names).toEqual(["a", "b"]);
+    });
+
+    it("asks the store to filter by a glob only where given one", async () => {
+      const urls: URL[] = [];
+      const listing = ((input: URL | RequestInfo) => {
+        urls.push(new URL(String(input)));
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }) as typeof fetch;
+      await listObjects({
+        bucket: "b",
+        prefix: "p/",
+        matchGlob: "**/run-*.ndjson",
+        fetch: listing,
+      });
+      await listObjects({ bucket: "b", prefix: "p/", fetch: listing });
+      expect(urls[0]?.searchParams.get("matchGlob")).toBe("**/run-*.ndjson");
+      expect(urls[1]?.searchParams.has("matchGlob")).toBe(false);
     });
 
     it("throws for an error status", async () => {

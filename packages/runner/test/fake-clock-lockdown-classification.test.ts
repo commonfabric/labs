@@ -21,10 +21,8 @@ import { sleep } from "@commonfabric/utils/sleep";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 
 // One real macrotask turn. A zero-delay `setTimeout` fires on a real macrotask
-// through the harness's kick, and the auto-advance pump runs on a real macrotask
-// armed the moment a `src/` timer is scheduled — armed earlier, so it runs
-// first. After this yield a `src/` timer the pump owns has fired, while a frozen
-// `test/` timer has not.
+// through the harness's kick. After this yield a frozen `test/` timer has not
+// fired, and it never will on its own.
 const macrotaskTurn = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -59,14 +57,14 @@ describe("fake-clock caller classification survives SES lockdown", () => {
 
   it("a src/-scheduled positive-delay setTimeout still auto-advances after lockdown", async () => {
     ensureSESLockdown();
-    let fired = false;
     // `sleep` arms the timer from `packages/utils/src`, a `src/` frame, so the
     // harness auto-advances it — the runtime's own throttle and backoff timers
-    // are armed the same way and must keep elapsing on their own.
-    sleep(500).then(() => {
-      fired = true;
-    });
-    await macrotaskTurn();
-    expect(fired).toBe(true);
+    // are armed the same way and must keep elapsing on their own. The pump
+    // fires it once the loop is idle, so the wait is on the sleep itself:
+    // frozen, it would never return, and Deno would report the pending
+    // promise once the loop emptied.
+    const started = Date.now();
+    await sleep(500);
+    expect(Date.now() - started).toBe(500);
   });
 });

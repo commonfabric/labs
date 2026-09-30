@@ -1,19 +1,26 @@
 {
   "name": "@commonfabric/runner",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --preload runs test/clock-preload.ts before the test modules; it replaces
     // the clock so the runtime's own timers auto-advance and test sleeps freeze.
     // See that file and docs/development/waiting-in-tests.md. --no-check: the
     // global `clock` type lives in test/clock.d.ts, which `deno task check` sees
     // by type-checking the package directory as one program.
-    // --allow-run=git,deno: window-retention-release.test.ts re-invokes deno
-    // for a helper that needs --expose-gc and the real clock.
-    "test": "ENV=test deno test --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno test/**/*.test.ts test/**/*.test.tsx",
+    // --allow-run: commit-callback-release.test.ts and read-release.test.ts
+    // re-invoke `deno` by name for a helper that needs --expose-gc and the
+    // real clock, and silent-backstop-guard.test.ts spawns the Deno running
+    // the task (`Deno.execPath()`, which a bare `deno` entry does not permit —
+    // Deno resolves the allowlist through PATH) to run a fixture under this
+    // preload.
+    // --allow-net=127.0.0.1: serving-memory-server.test.ts listens on a
+    // localhost websocket and connects a client to it.
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
     },
-    "integration": "LOG_LEVEL=warn deno test -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --no-check -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
@@ -22,20 +29,28 @@
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
+    "@types/ws": "npm:@types/ws@^8.18.1",
     "ses": "npm:ses@^2.2.0",
-    "typescript": "npm:typescript@6.0.3"
+    "typescript": "npm:typescript@6.0.3",
+    "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./inbox": "./src/inbox.ts",
+    "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
     "./shared": "./src/shared.ts",
+    "./agent-run": "./src/agent-run.ts",
     "./entity-kind": "./src/entity-kind.ts",
+    "./fabric-special-object-brand": "./src/fabric-special-object-brand.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
+    "./space-host": "./src/space-host.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",
     "./slugs": "./src/slugs.ts",
     "./schemas": "./src/schemas.ts",
+    "./scope": "./src/scope.ts",
     "./component-read-contract": "./src/component-read-contract.ts",
     "./telemetry-otel-bridge": "./src/telemetry-otel-bridge.ts",
     "./storage/write-stack-trace": "./src/storage/write-stack-trace.ts",
@@ -48,15 +63,25 @@
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
+    "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
+    "./cfc/custody-seal": "./src/cfc/custody-seal.ts",
+    "./cfc/trust-authority": "./src/cfc/trust-authority.ts",
+    "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
+    "./cfc/policy-application": "./src/cfc/policy-application.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
+    "./cfc/trust": "./src/cfc/trust.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
+    "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./executor/host": "./src/executor/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",
+    "./executor/serving-memory-server.deno": "./src/executor/serving-memory-server.deno.ts",
+    "./executor/serving-runtime": "./src/executor/serving-runtime.ts",
     "./executor/stats": "./src/executor/stats.ts",
     "./executor/watermark": "./src/executor/watermark.ts",
     "./cfc/migration-reason": "./src/cfc/migration-reason.ts",
     "./cfc/schema-sanitization": "./src/cfc/schema-sanitization.ts",
     "./cfc/schema-refs": "./src/cfc/schema-refs.ts",
-    "./schema-walk": "./src/schema-walk.ts"
+    "./cfc/schema-primitives": "./src/cfc/schema-primitives.ts",
+    "./stream-declaration": "./src/stream-declaration.ts"
   }
 }

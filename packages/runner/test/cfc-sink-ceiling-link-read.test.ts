@@ -10,6 +10,7 @@ import { setPatternEnvironment } from "../src/env.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-sink-ceiling-link");
 const space = signer.did();
@@ -40,7 +41,7 @@ const seedConfidentialCell = async (
   const seed = runtime.edit();
   const target = runtime.getCell(space, id, undefined, seed);
   const targetId = target.getAsNormalizedFullLink().id;
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space,
     scope: "space",
     id: targetId,

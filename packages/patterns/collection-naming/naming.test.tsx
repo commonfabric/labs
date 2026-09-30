@@ -2,17 +2,21 @@
  * Pattern tests for the naming library's own rules, driven on plain cells
  * with no board: the sequence over the names in use, the allocator re-run
  * against a stale read — the shape a lost commit race leaves behind — the
- * reverse lookup, and the declaration.
+ * agreement between the name `createNamed()` hands `create` and the name it
+ * records the member under, the reverse lookup, and the declaration.
  */
 
 import { action, assert, equals, pattern, TESTS, Writable } from "commonfabric";
 import {
   assignName,
+  createNamed,
   nameOf,
   type NamesMap,
   namesTable,
   nextNameAmong,
   ownName,
+  recordNames,
+  type RecordNamesResult,
   SEQUENCE_NAMING,
 } from "./naming.ts";
 
@@ -88,6 +92,47 @@ export default pattern(() => {
     equals(names.get()["3"] as object, loser)
   );
 
+  // `createNamed()` builds the member with the name it records it under, and
+  // returns that same name. The middle step records a member under a name the
+  // allocator did not issue, so the allocation after it runs over a map that
+  // gained a key — the map a re-run reads once it has lost a commit race.
+  // Producing that re-run takes two transactions in flight at once, which no
+  // sequence of steps has: the runner settles each step before sending the
+  // next. `../integration/collection-naming-concurrency.test.ts` overlaps two
+  // creates and holds the re-run to this same agreement.
+  const builtNames = new Writable<NamesMap>({});
+  const builtFirst = new Writable({ title: "built first" });
+  const recordedByAnother = new Writable({ title: "recorded by another" });
+  const builtAfter = new Writable({ title: "built after" });
+  const built = new Writable<string[]>([]);
+  const returned = new Writable<string[]>([]);
+
+  const action_create_first = action(() => {
+    const { name } = createNamed(builtNames, (allocated) => {
+      built.push(allocated);
+      return builtFirst;
+    });
+    returned.push(name);
+  });
+  const action_another_name_lands = action(() => {
+    builtNames.key("2").set(recordedByAnother);
+  });
+  const action_create_after_it = action(() => {
+    const { name } = createNamed(builtNames, (allocated) => {
+      built.push(allocated);
+      return builtAfter;
+    });
+    returned.push(name);
+  });
+  const assert_create_builds_with_the_name_it_records = assert(() =>
+    built.get().join(",") === "1,3" &&
+    returned.get().join(",") === "1,3" &&
+    Object.keys(builtNames.get()).join(",") === "1,2,3" &&
+    equals(builtNames.get()["1"] as object, builtFirst) &&
+    equals(builtNames.get()["2"] as object, recordedByAnother) &&
+    equals(builtNames.get()["3"] as object, builtAfter)
+  );
+
   // Foreign keys on a real map, as a client over the memory protocol could
   // leave them: they neither block allocation nor count as the largest, so
   // the next name follows the sequence's own largest.
@@ -152,6 +197,40 @@ export default pattern(() => {
     SEQUENCE_NAMING.name === undefined
   );
 
+  // `recordNames` over members that publish the names the namespace holds for
+  // them, which is what a collection showing its member names hands it. The
+  // branch under test is the one that tells an already-recorded member from an
+  // unrecorded one: the first member reports `1` and is reported under `named`
+  // with nothing sent, the second reports nothing and is asked. Remove that
+  // branch and both come back under `pending`.
+  //
+  // Held over stand-in members rather than over a collection's own, so the
+  // branch is guarded where the library declares it rather than only where a
+  // collection happens to exercise it.
+  // Each member is its own cell: a member has to be an addressable document
+  // for the walk to resolve it and for a send to reach it, and an element of
+  // an inline array is neither.
+  const recordedOne = new Writable<{ shortName?: string }>({ shortName: "1" });
+  const recordedTwo = new Writable<{ shortName?: string }>({});
+  const recordedMembers = new Writable<{ shortName?: string }[]>([]);
+  const recordedNames = new Writable<NamesMap>({});
+  const recordedRuns = new Writable<RecordNamesResult[]>([]);
+  const action_seed_recorded_members = action(() => {
+    recordedMembers.push(recordedOne);
+    recordedMembers.push(recordedTwo);
+    recordedNames.key("1").set(recordedOne);
+    recordedNames.key("2").set(recordedTwo);
+  });
+  const action_record_over_published_names = action(() => {
+    recordedRuns.push(recordNames(recordedMembers, recordedNames));
+  });
+  const assert_published_names_are_reported_named = assert(() =>
+    recordedRuns.get().length === 1 &&
+    recordedRuns.get()[0]?.assigned?.length === 0 &&
+    recordedRuns.get()[0]?.named?.join(",") === "1" &&
+    recordedRuns.get()[0]?.pending?.join(",") === "2"
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_sequence_rule },
@@ -161,6 +240,10 @@ export default pattern(() => {
       { assertion: assert_stale_name_was_the_winners },
       { action: action_loser_reruns },
       { assertion: assert_rerun_takes_the_next_distinct_name },
+      { action: action_create_first },
+      { action: action_another_name_lands },
+      { action: action_create_after_it },
+      { assertion: assert_create_builds_with_the_name_it_records },
       { assertion: assert_names_stay_decimal_past_the_safe_integers },
       { assertion: assert_foreign_keys_are_not_names },
       { action: action_foreign_keys_land },
@@ -169,6 +252,9 @@ export default pattern(() => {
       { action: action_fill_the_table_map },
       { assertion: assert_table_publishes_only_names },
       { assertion: assert_reverse_lookup },
+      { action: action_seed_recorded_members },
+      { action: action_record_over_published_names },
+      { assertion: assert_published_names_are_reported_named },
       { assertion: assert_declaration },
     ],
   };

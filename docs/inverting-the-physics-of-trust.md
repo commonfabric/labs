@@ -71,9 +71,9 @@ close-ended, and a finite policy on a finite datum is exactly what a
 checker can prove. Putting policies on data allows open-ended
 possibilities without open-ended trust.
 
-Concretely: the fabric's Gmail importer is ordinary code a stranger
-could have written, and the OAuth token that can read all your mail is
-protected by a four-line policy attached to the token itself:
+Concretely: a mail importer is ordinary code a stranger could have
+written, and the OAuth token that can read all your mail is protected by
+a four-line policy attached to the token itself:
 
 - never logged
 - never transmitted outside the attested fabric, not even to your own

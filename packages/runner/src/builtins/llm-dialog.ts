@@ -19,6 +19,15 @@ import {
   toDeepFrozenSchema,
 } from "@commonfabric/data-model-schema";
 import {
+  ARRAY_SUBSCHEMA_KEYS,
+  mapSubschemas,
+  RECORD_SUBSCHEMA_KEYS,
+  SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
+import {
+  isExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
   DEFAULT_MODEL_NAME,
   LLMClient,
   LLMRequest,
@@ -47,10 +56,13 @@ import type { JSONSchemaObj } from "../builder/types.ts";
 import { type CellScope, NAME, type Pattern } from "../builder/types.ts";
 import type { Cell, MemorySpace, Stream } from "../cell.ts";
 import {
+  cellRuntime,
+  cellTx,
   isCell,
   isStream,
   markRuntimeInjectedEventKeys,
   recordRelevantSchemaWritePolicyInput,
+  sendEvent,
 } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import {
@@ -58,7 +70,6 @@ import {
   cfcSchemaToObject,
   resolveCfcSchemaRefs,
 } from "../cfc/schema-refs.ts";
-import { isExternalSchemaRef } from "../schema-decompose.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
@@ -94,25 +105,22 @@ import {
   getMetaLink,
   matchLLMFriendlyLink,
   type NormalizedFullLink,
+  ownerStreamSchema,
   parseLink,
   parseLLMFriendlyLink,
   sanitizeSchemaForLinks,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
 import { getResultCellWithSourceSchema } from "../piece-helpers.ts";
+import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
+  snapshotQueryResult,
 } from "../query-result-proxy.ts";
 import { Runtime, spaceCellSchema } from "../runtime.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
 import { schemaToTypeString } from "../schema-format.ts";
-import {
-  ARRAY_SUBSCHEMA_KEYS,
-  mapSubschemas,
-  RECORD_SUBSCHEMA_KEYS,
-  SINGLE_SUBSCHEMA_KEYS,
-} from "../schema-walk.ts";
 import { resolveLinkScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
@@ -125,6 +133,7 @@ import {
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
 import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -196,13 +205,10 @@ type SerializeForLLMObservationParams = {
 
 function normalizeInputSchema(schemaLike: unknown): JSONSchema {
   let inputSchema: any = schemaLike;
-  if (isBoolean(inputSchema)) {
-    inputSchema = {
-      type: "object",
-      properties: {},
-      additionalProperties: inputSchema,
-    };
-  }
+  // `false` is the argument schema of a pattern that takes no argument, which
+  // the runner runs with no input. Its object form accepts only `{}`, which is
+  // the one call such a tool takes.
+  if (isBoolean(inputSchema)) inputSchema = objectSchemaOfBoolean(inputSchema);
   if (!isObjectNotArray(inputSchema)) inputSchema = { type: "object" };
   const stripped = stripInjectedResult(inputSchema);
   return prepareSchemaForLLM(stripped);
@@ -305,7 +311,11 @@ function resolveRefsForLLM(
     const result: any = {};
     for (const [key, value] of Object.entries(nodeObj)) {
       if (key === "$defs") continue; // strip $defs from output
-      if (Array.isArray(value)) {
+      if (key === "additionalProperties" && value === false) {
+        // This keyword controls object openness; converting `false` to an
+        // object would permit the extra properties the schema forbids.
+        result[key] = value;
+      } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
           isWalkableObjectOrArray(item) || typeof item === "boolean"
             ? resolve(item, refDepth, activeRefs)
@@ -324,12 +334,26 @@ function resolveRefsForLLM(
 }
 
 /**
- * Prepare a schema for use in LLM tool definitions by:
- * 1. Stripping internal `asCell` markers and removing cycles
- * 2. Inlining all $ref references
+ * The object form of a boolean schema: an object that declares no properties
+ * and allows any others (`true`) or none (`false`). The LLM routes take a
+ * schema only as an object.
+ */
+function objectSchemaOfBoolean(schema: boolean): JSONSchema {
+  return { type: "object", properties: {}, additionalProperties: schema };
+}
+
+/**
+ * Prepare a schema for an LLM request, as a tool's input or as the shape of a
+ * generated object, by:
+ * 1. Writing a `true` schema in its object form (`objectSchemaOfBoolean`). A
+ *    `false` schema stays as written: its object form would accept `{}`, where
+ *    `false` accepts nothing, so the LLM routes refuse the request instead
+ * 2. Stripping internal `asCell` markers and removing cycles
+ * 3. Inlining all $ref references
  */
 function prepareSchemaForLLM(schema: JSONSchema): JSONSchema {
-  if (typeof schema !== "object" || schema === null) return schema;
+  if (schema === true) return objectSchemaOfBoolean(schema);
+  if (!isObjectOrArray(schema)) return schema;
   const sanitized = sanitizeSchemaForLinks(schema);
   return resolveRefsForLLM(sanitized);
 }
@@ -492,8 +516,7 @@ function simplifySchemaForContext(
     // Preserve semantic markers and other primitive values, but skip complex
     // objects not handled above
     if (
-      PRESERVE_KEYS.includes(key) || typeof value !== "object" ||
-      value === null
+      PRESERVE_KEYS.includes(key) || !isObjectOrArray(value)
     ) {
       simplified[key] = value;
     }
@@ -1010,11 +1033,9 @@ function resolveContextCellRef(cell: unknown): Cell<any> | undefined {
 function readCellValueForObservation(
   cell: Cell<unknown>,
 ): unknown {
-  const readTx = cell.runtime.readTx(
-    (cell as unknown as { tx?: IExtendedStorageTransaction }).tx,
-  );
+  const readTx = cellRuntime(cell).readTx(cellTx(cell));
   const link = resolveLink(
-    cell.runtime,
+    cellRuntime(cell),
     readTx,
     cell.getAsNormalizedFullLink(),
     "top",
@@ -1304,12 +1325,17 @@ function extractRunArguments(input: unknown): Record<string, any> {
 }
 
 /**
- * Flattens tools by extracting handlers from piece-based tools.
- * Converts { piece: ... } entries into individual handler entries.
+ * Builds the tool catalog a reader displays: an entry for each tool the
+ * pattern supplies other than a piece-backed one, and the built-in tools
+ * unless `includeBuiltinTools` is false.
+ *
+ * An entry holds the tool's description, its input schema, and its handler
+ * as a link. It holds nothing a turn needs to run the tool, which the turn
+ * reads from `tools` itself.
  *
  * @param toolsCell - Cell containing the tools
- * @param toolHandlers - Optional map to populate with handler references for invocation
- * @returns Flattened tools object with handler/pattern entries
+ * @param includeBuiltinTools - Whether the catalog lists the built-in tools
+ * @returns The catalog, keyed by tool name
  */
 function flattenTools(
   toolsCell: Cell<any>,
@@ -1332,13 +1358,38 @@ function flattenTools(
   const { legacy } = collectToolEntries(toolsCell, includeBuiltinTools);
 
   for (const entry of legacy) {
-    const passThrough: Record<string, unknown> = { ...entry.tool };
-    if (
-      passThrough.inputSchema && typeof passThrough.inputSchema === "object"
-    ) {
-      passThrough.inputSchema = stripInjectedResult(passThrough.inputSchema);
+    // The catalog carries what a reader displays and nothing else, which is
+    // what keeps this write the same over inputs that did not change. An
+    // array of objects is stored one document per element, and a copy of one
+    // mints those documents again, so a catalog holding a copy differs from
+    // the last one over tools that did not change. Two fields of a tool are
+    // full of such arrays — an author's `extraParams`, and a pattern tool's
+    // graph, down to the `anyOf` branches of its argument schema — and a turn
+    // reads both from `tools` itself, so neither is copied here. What is left
+    // is the tool's description, its input schema, and its handler, which is
+    // a stream and so a link to the one the tool already names rather than a
+    // copy of anything.
+    //
+    // An author's `inputSchema` holding an array of objects would land the
+    // same way. Nothing in the tree does today, and the fix if something does
+    // is to give a copied element a content-derived document rather than to
+    // narrow this further: the catalog is already down to what a reader
+    // reads.
+    const tool = entry.tool as Record<string, unknown> | undefined;
+    const flattenedEntry: Record<string, unknown> = {};
+    if (tool?.description !== undefined) {
+      flattenedEntry.description = tool.description;
     }
-    flattened[entry.name] = passThrough;
+    if (tool?.inputSchema !== undefined) {
+      flattenedEntry.inputSchema =
+        tool.inputSchema && typeof tool.inputSchema === "object"
+          ? stripInjectedResult(tool.inputSchema as JSONSchema)
+          : tool.inputSchema;
+    }
+    if (tool?.handler !== undefined) {
+      flattenedEntry.handler = entry.cell.key("handler");
+    }
+    flattened[entry.name] = flattenedEntry;
   }
 
   if (!includeBuiltinTools) {
@@ -2032,9 +2083,35 @@ function resolveToolCall(
       };
     }
 
+    // A path arrives as an address with no schema, and a stream holds nothing,
+    // so something stored has to say what the target is. Three things can. A
+    // path through a piece's result crosses a stored link that declares the
+    // stream. A path into a result document that keeps its result schema (a
+    // builtin's handlers are fields of its own result document) is typed from
+    // that schema. A path an observation handed out names a stream's own
+    // document, and its owner's manifest declares it.
+    //
+    // They are tried in that order because the handle chosen is also what the
+    // integrity gate reads its floors from (`integrityGateTarget`): a stored
+    // link and a manifest link carry the handler's event schema, floors
+    // included, where a result schema may say no more than "a stream". The
+    // handle returned carries that schema on its own link.
+    const streamHandle = (): Cell<unknown> | undefined => {
+      const resolved = cellRef.resolveAsCell();
+      if (isStream(resolved)) return resolved;
+      const typedRef = getResultCellWithSourceSchema(cellRef);
+      if (isStream(typedRef.resolveAsCell())) return typedRef;
+      const ownerSchema = ownerStreamSchema(resolved);
+      return ownerSchema === undefined
+        ? undefined
+        : cellRef.asSchema(ownerSchema);
+    };
+    const handler = streamHandle();
+    const targetsStream = handler !== undefined;
+
     if (name === READ_TOOL_NAME) {
       // Get cell reference from the link - works for any valid handle
-      if (isStream(cellRef.resolveAsCell())) {
+      if (targetsStream) {
         throw new Error(`Path resolves to a handler; use invoke() instead.`);
       }
 
@@ -2045,10 +2122,12 @@ function resolveToolCall(
       };
     }
 
-    if (isStream(cellRef.resolveAsCell())) {
+    if (targetsStream) {
       return {
         type: "invoke",
-        handler: cellRef as unknown as Stream<any>,
+        // A send decides stream or write off the handle, so the handle
+        // carries the declaration that was found for it.
+        handler: handler as unknown as Stream<any>,
         call: {
           id,
           name,
@@ -2166,6 +2245,11 @@ function effectiveObservationCeiling(
   sink: string,
   patternBound: readonly CfcConfClause[] | undefined,
 ): readonly CfcConfClause[] | undefined {
+  // The pattern's bound arrives as a view of the builtin's input. The bound
+  // this returns is carried into request snapshots and read by post-commit
+  // tool reads, after the transaction that read the input has finished, so it
+  // is detached here, once.
+  const ownBound = snapshotQueryResult(patternBound);
   const ceilings = runtime.cfcSinkMaxConfidentiality;
   // Object.hasOwn guard: the sink name is a runner-controlled literal today, but
   // a name colliding with an Object.prototype member must resolve to "no
@@ -2173,7 +2257,7 @@ function effectiveObservationCeiling(
   const deploymentCeiling = Object.hasOwn(ceilings, sink)
     ? ceilings[sink]
     : undefined;
-  return meetCfcObservationCeilings(patternBound, deploymentCeiling);
+  return meetCfcObservationCeilings(ownBound, deploymentCeiling);
 }
 
 function toolAllowsObservedConfidentiality(
@@ -2567,6 +2651,7 @@ export const llmDialogTestHelpers = {
   simplifySchemaForContext,
   prepareSchemaForLLM,
   resolveRefsForLLM,
+  resolveToolCall,
   toolAllowsObservedConfidentiality,
 };
 
@@ -2826,7 +2911,7 @@ async function handleRead(
     // If our cell is an intermediate with a parent result, follow that
     const parentLink = getMetaLink(cell, "result");
     if (parentLink !== undefined) {
-      const parentCell = cell.runtime.getCellFromLink(parentLink);
+      const parentCell = cellRuntime(cell).getCellFromLink(parentLink);
       await parentCell.pull();
       schema = parentCell.schema ?? getCellSchema(parentCell);
       cell = schema ? parentCell.asSchema(schema) : parentCell;
@@ -3081,7 +3166,12 @@ async function handleInvoke(
     );
 
     if (pattern) {
-      runtime.run(tx, pattern, invocationArgs, result);
+      // The model's tool call instantiates the pattern, in a continuation of
+      // the dialog's action: no principal's act attributes what its setup
+      // initializes.
+      runtime.run(tx, pattern, invocationArgs, result, {
+        attributeInitialization: false,
+      });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a
       // `result` of its own. Overwriting would silently DISCARD caller data
@@ -3094,7 +3184,8 @@ async function handleInvoke(
       // always gets the injected cell.
       const injectResult =
         !(isObjectOrArray(input) && Object.hasOwn(input, "result"));
-      handler.withTx(tx).send(
+      sendEvent(
+        handler.withTx(tx),
         injectResult
           ? {
             ...input,
@@ -3873,16 +3964,22 @@ export function llmDialog(
     }
     const { result, internal } = cells;
 
-    // Stream markers belong to every resolved instance; an initialized
-    // symbolic handle does not establish another actor's stored state.
+    // An empty `pinnedCells` belongs to every resolved instance; an
+    // initialized symbolic handle does not establish another actor's stored
+    // state. Stored pins are written back as stored: a pin a handler wrote may
+    // sit in a document of its own, and the raw write keeps the link to it.
+    const stored = result.withTx(tx).getRaw() as
+      | Record<string, FabricValue>
+      | undefined;
     result.withTx(tx).setRawUntyped({
-      ...result.withTx(tx).getRaw(),
-      addMessage: { $stream: true },
-      cancelGeneration: { $stream: true },
-      pinCell: { $stream: true },
-      unpinAllCells: { $stream: true },
-      pinnedCells: result.withTx(tx).key("pinnedCells").get() ?? [],
+      ...stored,
+      pinnedCells: stored?.pinnedCells ?? [],
     } as FabricValue);
+    // The dialog's handlers are fields of this document, and a stream holds
+    // nothing, so the document keeps its result schema the way a piece's
+    // result document does: an address into it that arrives with no schema,
+    // as a tool call's does, is typed from there.
+    writeResultSchemaMeta(result.withTx(tx), resultSchema);
 
     sendResult(tx, result);
     recordPublication(
@@ -3930,7 +4027,18 @@ export function llmDialog(
     }
   };
 
-  return { action, isEffect: true };
+  // The dialog writes its turns into the caller's `messages` cell, and a
+  // pattern may render that cell without ever reading the dialog's own
+  // result. Declaring the write makes this node a materializer: it holds
+  // standing demand and runs when its inputs change, whether or not anything
+  // reads what it returns.
+  Object.assign(action, {
+    materializerWriteEnvelopes: [
+      inputs.key("messages").resolveAsCell().getAsNormalizedFullLink(),
+    ],
+  });
+
+  return { action };
 }
 
 async function startRequest(
@@ -4019,7 +4127,7 @@ async function startRequest(
   ) => {
     const previousIdentity = tx.getCfcState().implementationIdentity;
     if (runtime.cfcEnforcementMode !== "disabled") {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "llmDialog",
       });
@@ -4091,7 +4199,7 @@ async function startRequest(
       }
     } finally {
       if (runtime.cfcEnforcementMode !== "disabled") {
-        tx.setCfcImplementationIdentity(previousIdentity);
+        setCfcImplementationIdentity(tx, previousIdentity);
       }
     }
   };

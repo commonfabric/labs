@@ -1,3 +1,4 @@
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 /** Runtime evidence belongs to concrete values and their captured authors. */
 
 import { expect } from "@std/expect";
@@ -13,6 +14,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -65,13 +67,23 @@ describe("CFC runtime stamp lifetime", () => {
     }
   };
 
+  const useFlowMode = async (flow: "off" | "persist") => {
+    if (runtime.cfcFlowLabels === flow) return;
+    await runtime.dispose({ closeStorage: false });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+      cfcFlowLabels: flow,
+    });
+  };
+
   for (const flow of ["off", "persist"] as const) {
     for (const builtinFirst of [true, false]) {
       it(`keeps mixed-author appends separate with flow ${flow} and builtin ${builtinFirst ? "first" : "last"}`, async () => {
+        await useFlowMode(flow);
         const tx = runtime.edit();
-        tx.setCfcFlowLabelsMode(flow);
         for (const trusted of [builtinFirst, !builtinFirst]) {
-          tx.setCfcImplementationIdentity(trusted ? builtin : undefined);
+          setCfcImplementationIdentity(tx, trusted ? builtin : undefined);
           runtime.getCell(
             space,
             "mixed",
@@ -116,11 +128,11 @@ describe("CFC runtime stamp lifetime", () => {
     }
 
     it(`invalidates a same-slot stamp after an unattributed rewrite with flow ${flow}`, async () => {
+      await useFlowMode(flow);
       const tx = runtime.edit();
-      tx.setCfcFlowLabelsMode(flow);
-      tx.setCfcImplementationIdentity(builtin);
+      setCfcImplementationIdentity(tx, builtin);
       runtime.getCell(space, "same-slot", stamped, tx).push({ text: "model" });
-      tx.setCfcImplementationIdentity(undefined);
+      setCfcImplementationIdentity(tx, undefined);
       runtime.getCell(space, "same-slot", plain, tx).key(0).set({
         text: "user",
       });
@@ -129,16 +141,16 @@ describe("CFC runtime stamp lifetime", () => {
     });
 
     it(`clears a stored parent stamp after a child overwrite or deletion with flow ${flow}`, async () => {
+      await useFlowMode(flow);
       const seed = runtime.edit();
-      seed.setCfcFlowLabelsMode(flow);
-      seed.setCfcImplementationIdentity(builtin);
+      setCfcImplementationIdentity(seed, builtin);
       runtime.getCell(space, "rewrite", stamped, seed).set([{ text: "first" }, {
         text: "second",
       }, { text: "untouched" }]);
       expect((await seed.commit()).error).toBeUndefined();
       expect(atoms("rewrite", ["0"])).toContainEqual(stamp);
+      await useFlowMode(flow);
       const tx = runtime.edit();
-      tx.setCfcFlowLabelsMode(flow);
       const cell = runtime.getCell(space, "rewrite", plain, tx);
       cell.key(0, "text").set("edited");
       tx.writeValueOrThrow(cell.key(1).getAsNormalizedFullLink(), undefined, {
@@ -158,15 +170,15 @@ describe("CFC runtime stamp lifetime", () => {
       properties: { a: { type: "string" }, b: { type: "string" } },
       ifc: { addIntegrity: [stamp] },
     } as const;
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     const cell = runtime.getCell(space, "subtree", schema, tx);
     cell.set({ a: "model-a", b: "model-b" });
-    tx.setCfcImplementationIdentity(undefined);
+    setCfcImplementationIdentity(tx, undefined);
     tx.writeValueOrThrow(
       { ...cell.getAsNormalizedFullLink(), path: ["a"] },
       "user-a",
     );
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     tx.writeValueOrThrow(
       { ...cell.getAsNormalizedFullLink(), path: ["b"] },
       "model-b2",
@@ -178,7 +190,7 @@ describe("CFC runtime stamp lifetime", () => {
   it("lets a complete builtin replacement shadow prior user edits and satisfy its evidence floor", async () => {
     const tx = runtime.edit();
     tx.setCfcWriteFloorMode("enforce");
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     const schema = {
       type: "object",
       properties: { text: { type: "string" } },
@@ -186,12 +198,12 @@ describe("CFC runtime stamp lifetime", () => {
     } as const;
     const cell = runtime.getCell(space, "replace-parent", schema, tx);
     cell.set({ text: "model" });
-    tx.setCfcImplementationIdentity(undefined);
+    setCfcImplementationIdentity(tx, undefined);
     tx.writeValueOrThrow(
       { ...cell.getAsNormalizedFullLink(), path: ["text"] },
       "user",
     );
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     tx.writeValueOrThrow(cell.getAsNormalizedFullLink(), {
       text: "checked replacement",
     });
@@ -202,14 +214,14 @@ describe("CFC runtime stamp lifetime", () => {
   it("refuses a runtime-evidence floor after a plain rewrite replaces the builtin value", async () => {
     const tx = runtime.edit();
     tx.setCfcWriteFloorMode("enforce");
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     const schema = {
       type: "string",
       ifc: { addIntegrity: [stamp], requiredIntegrity: [stamp] },
     } as const;
     const cell = runtime.getCell(space, "floor", schema, tx);
     cell.set("model");
-    tx.setCfcImplementationIdentity(undefined);
+    setCfcImplementationIdentity(tx, undefined);
     tx.writeValueOrThrow(cell.getAsNormalizedFullLink(), "user");
     expect((await tx.commit()).error?.message).toContain("write floor");
   });
@@ -225,7 +237,7 @@ describe("CFC runtime stamp lifetime", () => {
     for (const value of ["first", "second"]) {
       const tx = runtime.edit();
       tx.setCfcWriteFloorMode("enforce");
-      tx.setCfcImplementationIdentity(builtin);
+      setCfcImplementationIdentity(tx, builtin);
       runtime.getCell(space, "append-floor", schema, tx).push(value);
       expect((await tx.commit()).error).toBeUndefined();
     }
@@ -235,7 +247,7 @@ describe("CFC runtime stamp lifetime", () => {
 
   it("preserves untouched inline stamps across a later append and invalidates them on replacement", async () => {
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(seed, builtin);
     runtime.getCell(space, "inline", stringStamped, seed).set([
       "model-a",
       "model-b",
@@ -263,7 +275,7 @@ describe("CFC runtime stamp lifetime", () => {
       },
     } as const satisfies JSONSchema;
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(seed, builtin);
     runtime.getCell(space, "families", schema, seed).set("trusted");
     expect((await seed.commit()).error).toBeUndefined();
     expect(atoms("families")).toContainEqual(stamp);
@@ -290,21 +302,25 @@ describe("CFC runtime stamp lifetime", () => {
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, space);
       const cell = runtime.getCell(space, "legacy", undefined, seed);
-      seed.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
-        value: { text: "before" },
-        cfc: {
-          version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
+      seedStoredEnvelope(
+        seed,
+        { ...cell.getAsNormalizedFullLink(), path: [] },
+        {
+          value: { text: "before" },
+          cfc: {
             version: 1,
-            entries: [{
-              path,
-              origin: "declared",
-              label: { integrity: [stamp, "ordinary-policy"] },
-            }],
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path,
+                origin: "declared",
+                label: { integrity: [stamp, "ordinary-policy"] },
+              }],
+            },
           },
         },
-      });
+      );
       expect((await seed.commit()).error).toBeUndefined();
       expect(atoms("legacy")).toContainEqual(stamp);
       const tx = runtime.edit();
@@ -324,7 +340,7 @@ describe("CFC runtime stamp lifetime", () => {
     expect((await seed.commit()).error).toBeUndefined();
     const tx = runtime.edit();
     const address = cell.getAsNormalizedFullLink();
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     tx.writeValuesOrThrow!([
       {
         address: { ...address, path: ["missing"] },
@@ -350,7 +366,8 @@ describe("CFC runtime stamp lifetime", () => {
       cell.set({ first: "old", second: "old" });
       function* writes() {
         for (const [index, identity] of order.entries()) {
-          tx.setCfcImplementationIdentity(
+          setCfcImplementationIdentity(
+            tx,
             identity as ImplementationIdentity | undefined,
           );
           yield {
@@ -374,7 +391,7 @@ describe("CFC runtime stamp lifetime", () => {
 
   it("does not restore batch authority over a later reentrant write after a document run flushes", async () => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     const cell = runtime.getCell(space, "reentrant", {
       type: "string",
       ifc: { addIntegrity: [stamp] },
@@ -386,7 +403,7 @@ describe("CFC runtime stamp lifetime", () => {
     function* writes() {
       yield { address, value: "model" };
       yield { address: other, value: "flush first document" };
-      tx.setCfcImplementationIdentity(undefined);
+      setCfcImplementationIdentity(tx, undefined);
       tx.writeValueOrThrow(address, "user");
     }
     tx.writeValuesOrThrow!(writes());
@@ -397,14 +414,14 @@ describe("CFC runtime stamp lifetime", () => {
 
   it("withholds prior mint authority when a batch throws after a partial rewrite", () => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity(builtin);
+    setCfcImplementationIdentity(tx, builtin);
     const cell = runtime.getCell(space, "partial", undefined, tx);
     cell.set({ text: "model" });
     const address = cell.getAsNormalizedFullLink();
     const other = runtime.getCell(space, "partial-other", undefined, tx)
       .getAsNormalizedFullLink();
     function* writes() {
-      tx.setCfcImplementationIdentity(undefined);
+      setCfcImplementationIdentity(tx, undefined);
       yield { address: { ...address, path: ["text"] }, value: "user" };
       yield { address: other, value: "flush first document" };
       throw new Error("incomplete batch");
@@ -413,5 +430,34 @@ describe("CFC runtime stamp lifetime", () => {
     expect(tx.readValueOrThrow({ ...address, path: ["text"] })).toBe("user");
     expect(tx.getCfcValueWriteAuthor(address)?.identity).toBeUndefined();
     tx.abort();
+  });
+
+  it("keeps builtin evidence on a payload field named value", async () => {
+    const schema = {
+      type: "object",
+      properties: {
+        value: { type: "string", ifc: { addIntegrity: [stamp] } },
+        sibling: { type: "string" },
+      },
+    } as const;
+    const initialize = runtime.edit();
+    runtime.getCell(space, "payload-value", undefined, initialize).set({
+      value: "initial",
+      sibling: "ordinary",
+    });
+    expect((await initialize.commit()).error).toBeUndefined();
+    const write = runtime.edit();
+    setCfcImplementationIdentity(write, builtin);
+    runtime.getCell(space, "payload-value", schema, write).key("value").set(
+      "trusted",
+    );
+    expect((await write.commit()).error).toBeUndefined();
+    expect(atoms("payload-value", ["value"])).toContainEqual(stamp);
+    expect(atoms("payload-value", ["sibling"])).not.toContainEqual(stamp);
+    const overwrite = runtime.edit();
+    runtime.getCell(space, "payload-value", undefined, overwrite).key("value")
+      .set("edited");
+    expect((await overwrite.commit()).error).toBeUndefined();
+    expect(atoms("payload-value", ["value"])).not.toContainEqual(stamp);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Loading the documentation corpus `query_docs` answers out of.
+ * Loading the documentation corpus `research` searches and reads.
  *
  * The corpus is read on the host, from the roots the operator configured, and
  * never through the sandbox mount. That is what makes the endorsement below
@@ -234,7 +234,7 @@ export const checkoutDocsCorpusRoots = (): readonly string[] =>
 /**
  * The corpus dial a run resolves: what the operator configured, or the
  * checkout's own reference trees, or nothing at all — in which case the run
- * offers no `query_docs` and says so.
+ * offers no documentation source to `research` and says so.
  *
  * This is the one derivation of the dial, so a surface stating its tool policy
  * and the engine offering the tools reach the same answer.

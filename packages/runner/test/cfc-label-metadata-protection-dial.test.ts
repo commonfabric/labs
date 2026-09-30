@@ -12,7 +12,7 @@ const signer = await Identity.fromPassphrase(
 
 describe("CFC label-metadata protection dial (inv-12 Stage 1)", () => {
   // Inv-12 Stage 1 (SC-25): the `cfcLabelMetadataProtection` dial —
-  // `off | observe | enforce`, default `off` — following the established dial
+  // `off | observe | enforce`, default `enforce` — following the established
   // plumbing (cfcWriteFloor / cfcPolicyEvaluation): RuntimeOptions → per-tx
   // threading at edit() → CfcTxState, with the anti-downgrade pin (once
   // `enforce`, weakening throws) and prepared-state invalidation on a real
@@ -23,22 +23,23 @@ describe("CFC label-metadata protection dial (inv-12 Stage 1)", () => {
     return new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcEnforcementMode: "enforce-explicit",
       ...(mode !== undefined ? { cfcLabelMetadataProtection: mode } : {}),
     });
   };
 
-  it("defaults to off and threads the option onto each transaction", () => {
-    const offRuntime = makeRuntime();
+  it("defaults to enforce and threads the option onto each transaction", () => {
+    const defaultRuntime = makeRuntime();
+    const defaultTx = defaultRuntime.edit();
+    expect(defaultTx.getCfcState().labelMetadataProtectionMode).toBe(
+      "enforce",
+    );
+    defaultTx.abort();
+
+    const offRuntime = makeRuntime("off");
     const offTx = offRuntime.edit();
     expect(offTx.getCfcState().labelMetadataProtectionMode).toBe("off");
     offTx.abort();
-
-    const enforceRuntime = makeRuntime("enforce");
-    const enforceTx = enforceRuntime.edit();
-    expect(enforceTx.getCfcState().labelMetadataProtectionMode).toBe(
-      "enforce",
-    );
-    enforceTx.abort();
 
     const observeRuntime = makeRuntime("observe");
     const observeTx = observeRuntime.edit();

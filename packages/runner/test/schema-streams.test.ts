@@ -35,61 +35,14 @@ describe("Schema - Streams and Promises", () => {
   });
 
   describe("Stream Support", () => {
-    it("should create a stream for properties marked with asCell stream", () => {
-      const c = runtime.getCell<{
-        name: string;
-        events: { $stream: boolean };
-      }>(
-        space,
-        "should create a stream for properties marked with asStream 1",
-        undefined,
-        tx,
-      );
-      c.set({
-        name: "Test Doc",
-        events: { $stream: true },
-      });
-
-      const schema = {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          events: {
-            type: "object",
-            asCell: ["stream"],
-          },
-        },
-      } as const satisfies JSONSchema;
-
-      const cell = c.asSchema(schema);
-      const value = cell.get();
-
-      expect(value.name).toBe("Test Doc");
-      expect(isStream(value.events)).toBe(true);
-    });
-
     it("should handle nested streams in objects", () => {
-      const c = runtime.getCell<{
-        user: {
-          profile: {
-            name: string;
-            notifications: { $stream: boolean };
-          };
-        };
-      }>(
+      const c = runtime.getCell<{ user: { profile: { name: string } } }>(
         space,
         "should handle nested streams in objects 1",
         undefined,
         tx,
       );
-      c.set({
-        user: {
-          profile: {
-            name: "John",
-            notifications: { $stream: true },
-          },
-        },
-      });
+      c.set({ user: { profile: { name: "John" } } });
 
       const schema = {
         type: "object",
@@ -119,13 +72,13 @@ describe("Schema - Streams and Promises", () => {
       expect(isStream(value?.user?.profile?.notifications)).toBe(true);
     });
 
-    it("should not create a stream when property is missing", () => {
+    it("creates a stream for a declared stream property the value lacks", () => {
       const c = runtime.getCell<{
         name: string;
         // Missing events property
       }>(
         space,
-        "should not create a stream when property is missing 1",
+        "creates a stream for a declared stream property the value lacks 1",
         undefined,
         tx,
       );
@@ -149,23 +102,17 @@ describe("Schema - Streams and Promises", () => {
       const value = cell.get();
 
       expect(value.name).toBe("Test Doc");
-      expect(isStream(value.events)).toBe(false);
+      expect(isStream(value.events)).toBe(true);
     });
 
     it("should behave correctly when both asCell cell and asCell stream are in the schema", () => {
-      const c = runtime.getCell<{
-        cellData: { value: number };
-        streamData: { $stream: boolean };
-      }>(
+      const c = runtime.getCell<{ cellData: { value: number } }>(
         space,
         "should behave correctly when both asCell and asCell stream are in the schema 1",
         undefined,
         tx,
       );
-      c.set({
-        cellData: { value: 42 },
-        streamData: { $stream: true },
-      });
+      c.set({ cellData: { value: 42 } });
 
       const schema = {
         type: "object",

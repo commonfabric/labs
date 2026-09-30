@@ -39,6 +39,7 @@ import {
   getLogger,
   getLoggerCountsBreakdown,
 } from "@commonfabric/utils/logger";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
 import {
@@ -70,7 +71,6 @@ const signer = await Identity.fromPassphrase("memory-v2-stacked-commit");
 const space = signer.did();
 const DOCUMENT_MIME = "application/json" as const;
 const testLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell reconstruction in stacked commit transport",
 );
 const DOCS = {
@@ -838,7 +838,7 @@ const applyOperation = (
 };
 
 const isEntityDocumentValue = (value: unknown): value is { value: RootValue } =>
-  typeof value === "object" && value !== null && "value" in value;
+  isObjectOrArray(value) && "value" in value;
 
 const createLocalModel = (): Map<URI, LocalDocModel> =>
   new Map(
@@ -4044,7 +4044,10 @@ describe("memory-v2-stacked-commit", () => {
         // …and traced. A commit that never dialed a session still opens and
         // closes a push span, carrying the join keys every other push span
         // carries, so the suppressed population stays countable where the
-        // errored `memory.transact` spans were counted.
+        // errored `memory.transact` spans were counted. The error marker also
+        // says what was refused: the message names this a cascade behind the
+        // loser rather than a conflict of its own, and the reads and writes are
+        // the follower's.
         const followerOpId = `push:${space}:${follower.localSeq}`;
         expect(
           harness.telemetryMarkers.filter((marker) =>
@@ -4062,6 +4065,9 @@ describe("memory-v2-stacked-commit", () => {
             type: "storage.push.error",
             id: followerOpId,
             error: "ConflictError",
+            message: `pending dependency rejected: localSeq=${loser.localSeq}`,
+            reads: [`${DOCS.A}/value`],
+            writes: [DOCS.D],
           },
         ]);
       } finally {

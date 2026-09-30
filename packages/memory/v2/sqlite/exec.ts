@@ -4,7 +4,7 @@
 // the client (runner) before/after these calls.
 
 import { type BindValue, Database } from "@db/sqlite";
-import { fabricFromNativeValue } from "@commonfabric/data-model";
+import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { isPlainObject } from "@commonfabric/utils/types";
 import type { SqliteNativeRow } from "../../v2.ts";
@@ -113,7 +113,7 @@ function rowFromNative<Row extends SqliteNativeRow>(
   return Object.fromEntries(
     names.map((key, index) => [
       key,
-      fabricFromNativeValue(values[index]),
+      fabricFromConvertibleJsValue(values[index]),
     ]),
   ) as Row;
 }

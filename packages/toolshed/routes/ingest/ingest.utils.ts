@@ -2,6 +2,7 @@ import { sha256 } from "@commonfabric/content-hash";
 import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
 import { isLink } from "@commonfabric/runner";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   custodyIngest,
@@ -87,7 +88,7 @@ export const containsLink = (value: unknown): boolean => {
     if (isLink(current)) return true;
     if (Array.isArray(current)) {
       for (const item of current) stack.push(item);
-    } else if (current !== null && typeof current === "object") {
+    } else if (isObjectOrArray(current)) {
       for (const item of Object.values(current)) stack.push(item);
     }
   }
@@ -1168,7 +1169,7 @@ export async function processIngest(
     !Array.isArray(records) ||
     records.length === 0 ||
     !records.every(
-      (r) => r !== null && typeof r === "object" && !Array.isArray(r),
+      (r) => isObjectNotArray(r),
     )
   ) {
     return {

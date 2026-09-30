@@ -49,6 +49,23 @@ function makeChange(
 }
 
 describe("invalid cause dedup keys", () => {
+  it("retains empty paths and embedded delimiters in encounter order", () => {
+    const nodes = new NodeRegistry();
+    const record = nodes.register(() => {}, "effect");
+    const addresses: IMemorySpaceAddress[] = [
+      { space, id: "of:cell", path: [] },
+      { space, id: "of:cell", path: [""] },
+      { space, id: "of:cell", path: ["a\0b", "c"] },
+      { space, id: "of:cell", path: ["a", "b\0c"] },
+      { space, id: "of:cell\0a", path: ["b"] },
+      { space, id: "of:cell", path: ["a\0b"] },
+    ];
+    for (const address of [...addresses, ...addresses]) {
+      addInvalidCause(record, address);
+    }
+    expect([...record.invalidCauses.values()]).toEqual(addresses);
+  });
+
   it("keeps addresses distinct across scope and ambiguous path joins", () => {
     const action: Action = () => {};
     const nodes = new NodeRegistry();
@@ -231,13 +248,20 @@ describe("trigger reads survive failed runs", () => {
     onQueueExecution?: () => void;
   }): Promise<void> {
     const action: Action = () => {};
-    const tx = { tx: {} } as IExtendedStorageTransaction;
+    const tx = {
+      tx: {},
+      abandonStagedWork: () => {},
+    } as unknown as IExtendedStorageTransaction;
     const commitPromise = Promise.resolve(
       { error: args.error } as Awaited<
         ReturnType<IExtendedStorageTransaction["commit"]>
       >,
     );
     return watchReactiveActionCommit({
+      canRetry: () => true,
+      awaitRetryReadiness: (error) =>
+        (error as { readyToRetry?: () => Promise<void> }).readyToRetry?.() ??
+          Promise.resolve(),
       action,
       tx,
       log: { reads: [], shallowReads: [], writes: [] },
@@ -276,11 +300,14 @@ describe("trigger reads survive failed runs", () => {
     // dirty does not re-trigger every conflict (a conflict whose triggering
     // write has already been delivered leaves no future dirty), so relying on it
     // alone would strand the action with its stale committed value.
+    const calls: string[] = [];
     const error = Object.assign(new Error("conflict"), {
       name: "ConflictError",
-      readyToRetry: () => Promise.resolve(),
+      readyToRetry: () => {
+        calls.push("ready");
+        return Promise.resolve();
+      },
     });
-    const calls: string[] = [];
     await watchWith({
       error,
       onRestore: () => calls.push("restore"),
@@ -288,7 +315,13 @@ describe("trigger reads survive failed runs", () => {
       onMarkInvalid: () => calls.push("dirty"),
       onQueueExecution: () => calls.push("queue"),
     });
-    expect(calls).toEqual(["restore", "resubscribe", "dirty", "queue"]);
+    expect(calls).toEqual([
+      "restore",
+      "resubscribe",
+      "ready",
+      "dirty",
+      "queue",
+    ]);
   });
 
   it("a commit conflict bypasses the retry budget (re-queues even when exhausted)", async () => {
@@ -319,11 +352,14 @@ describe("trigger reads survive failed runs", () => {
     // revoked, or replaced mid-wait. That abort must not strand the action: it is
     // swallowed and the action is re-queued anyway (restore + resubscribe + dirty
     // + queue) so it re-runs on the next input change or pull.
+    const calls: string[] = [];
     const error = Object.assign(new Error("conflict"), {
       name: "ConflictError",
-      readyToRetry: () => Promise.reject(new Error("session replaced")),
+      readyToRetry: () => {
+        calls.push("ready");
+        return Promise.reject(new Error("session replaced"));
+      },
     });
-    const calls: string[] = [];
     await watchWith({
       error,
       onRestore: () => calls.push("restore"),
@@ -331,19 +367,26 @@ describe("trigger reads survive failed runs", () => {
       onMarkInvalid: () => calls.push("dirty"),
       onQueueExecution: () => calls.push("queue"),
     });
-    expect(calls).toEqual(["restore", "resubscribe", "dirty", "queue"]);
+    expect(calls).toEqual([
+      "restore",
+      "resubscribe",
+      "ready",
+      "dirty",
+      "queue",
+    ]);
   });
 
   it("re-queues a conflict when readyToRetry throws synchronously", async () => {
     // A readyToRetry that throws synchronously is handled the same as a rejected
     // one — swallowed, and the action re-queued.
+    const calls: string[] = [];
     const error = Object.assign(new Error("conflict"), {
       name: "ConflictError",
       readyToRetry: () => {
+        calls.push("ready");
         throw new Error("gate threw");
       },
     });
-    const calls: string[] = [];
     await watchWith({
       error,
       onRestore: () => calls.push("restore"),
@@ -351,7 +394,13 @@ describe("trigger reads survive failed runs", () => {
       onMarkInvalid: () => calls.push("dirty"),
       onQueueExecution: () => calls.push("queue"),
     });
-    expect(calls).toEqual(["restore", "resubscribe", "dirty", "queue"]);
+    expect(calls).toEqual([
+      "restore",
+      "resubscribe",
+      "ready",
+      "dirty",
+      "queue",
+    ]);
   });
 
   it("requeues primitive retryable errors without retry readiness", async () => {

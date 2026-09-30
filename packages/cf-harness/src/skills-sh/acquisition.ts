@@ -12,6 +12,7 @@
 
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   defaultHarnessFetch,
@@ -106,11 +107,16 @@ export class SkillsShAcquisitionError extends Error {
  * `path` is relative to the skill root, so it is what the skill's own prose
  * names and what an allowlist entry matches; the digest is over the exact
  * bytes fetched, as `SKILL.md`'s is.
+ *
+ * The payload is those bytes rather than a decoded string. Decoding is lossy
+ * at exactly the point the digest is checked: a UTF-8 byte-order mark is not
+ * a character, so a decode drops it and every later byte count and digest
+ * would describe a file the pinned commit never served.
  */
 export interface SkillsShAcquiredScript {
   readonly path: string;
   readonly sourceUrl: string;
-  readonly text: string;
+  readonly bytes: Uint8Array;
   readonly valueDigest: string;
 }
 
@@ -144,9 +150,7 @@ interface GithubTreeEntry {
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 
 const safeHostileText = (value: unknown): string =>
   sanitizeRegistryString(
@@ -292,7 +296,15 @@ const displayPath = (path: string): string =>
 const encodedTreePath = (path: string): string =>
   path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 
-const valueDigestOf = (bytes: Uint8Array): string =>
+/**
+ * The digest an acquisition records over the bytes a pinned commit served.
+ *
+ * Exported because `run_skill_script` re-checks an acquired script's file
+ * against this digest before executing it, and a comparison of two digests is
+ * only a comparison when one function produced both — the encoding is part of
+ * the value, not a presentation of it.
+ */
+export const skillsShValueDigest = (bytes: Uint8Array): string =>
   `sha256:${toUnpaddedBase64url(sha256(bytes))}`;
 
 const readCappedBytes = async (
@@ -506,11 +518,10 @@ export const acquireSkillsShPinnedSkill = async (
       scriptResponse,
       displayPath(relativePath),
     );
-    let scriptText: string;
+    // Decoded only to refuse what is not UTF-8. The bytes are what travels on,
+    // so the decoded string is deliberately discarded.
     try {
-      scriptText = new TextDecoder("utf-8", { fatal: true }).decode(
-        scriptBytes,
-      );
+      new TextDecoder("utf-8", { fatal: true }).decode(scriptBytes);
     } catch {
       throw acquisitionError(
         "invalid_skill_text",
@@ -520,8 +531,8 @@ export const acquireSkillsShPinnedSkill = async (
     scripts.push({
       path: relativePath,
       sourceUrl: scriptUrl,
-      text: scriptText,
-      valueDigest: valueDigestOf(scriptBytes),
+      bytes: scriptBytes,
+      valueDigest: skillsShValueDigest(scriptBytes),
     });
   }
 
@@ -530,7 +541,7 @@ export const acquireSkillsShPinnedSkill = async (
     skillRoot: root === "" ? "." : displayPath(root),
     sourceUrl,
     text,
-    valueDigest: valueDigestOf(bytes),
+    valueDigest: skillsShValueDigest(bytes),
     scripts,
     loadedPaths: ["SKILL.md", ...scripts.map((script) => script.path)],
   };

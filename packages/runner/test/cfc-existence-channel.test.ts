@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -79,7 +80,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -689,7 +690,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     );
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(outId), path: ["value", "secret"] },
+      { space, scope: "space", id: uri(outId), path: ["secret"] },
       "fresh",
     );
     clean.recordCfcWritePolicyInput({
@@ -698,7 +699,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,
@@ -760,7 +761,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
     });
     const clean = rt.edit();
     clean.writeValueOrThrow(
-      { space, scope: "space", id: uri(elsewhereId), path: ["value"] },
+      { space, scope: "space", id: uri(elsewhereId), path: [] },
       { unrelated: 2 },
     );
     clean.recordCfcWritePolicyInput({
@@ -769,7 +770,7 @@ describe("CFC existence channel (SC-4, freeze-at-creation)", () => {
         space,
         scope: "space",
         id: uri(outId),
-        path: ["value", "secret"],
+        path: ["secret"],
       },
       schemaHash: declared.taggedHashString,
       schema: declared.schema,
@@ -1102,21 +1103,27 @@ describe("CFC slot-pointer channel (C3, SC-8 end-to-end)", () => {
     const holder = runtime.getCell(space, "sp-holder", undefined, seed);
     const holderId = holder.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id: holderId, path: [] }, {
-      value: { slot: { "/": { "link@1": { id: "of:sp-target", path: [] } } } },
-      cfc: {
-        version: 1,
-        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-        labelMap: {
+    seedStoredEnvelope(
+      seed,
+      { space, scope: "space", id: holderId, path: [] },
+      {
+        value: {
+          slot: { "/": { "link@1": { id: "of:sp-target", path: [] } } },
+        },
+        cfc: {
           version: 1,
-          entries: [{
-            path: ["slot"],
-            label: { confidentiality: ["pointer-label"] },
-            origin: "link",
-          }],
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["slot"],
+              label: { confidentiality: ["pointer-label"] },
+              origin: "link",
+            }],
+          },
         },
       },
-    });
+    );
     expect((await seed.commit()).ok).toBeDefined();
 
     // Observe WHICH link sits at the slot without following it: lastNode

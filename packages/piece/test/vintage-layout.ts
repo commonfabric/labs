@@ -6,14 +6,16 @@
  * SECOND file, and a fixture that copied only the first would record roots
  * whose state it does not hold. The companion directory sits beside the primary
  * file, holds one raw `.sqlite` per other space, and travels with it in git —
- * raw, so delta compression still works (see `tasks/pattern-vintage-lib.ts`).
+ * raw, so delta compression still works (see
+ * `tasks/pattern-vintage-layout.ts`).
  *
  * Its own module, and a deliberately empty one: `state-continuity-harness.ts`
- * needs this rule to write and restore a fixture, and `pattern-vintage-lib.ts`
- * needs it to tell a companion from a fixture — and that second module is pure
- * path parsing whose unit test should not have to load the runner, the memory
- * server and the identity stack to check a string. Importing the harness for a
- * constant took its dependency graph from 11 modules to 765.
+ * needs this rule to write and restore a fixture, and
+ * `tasks/pattern-vintage-layout.ts` needs it to tell a companion from a
+ * fixture — and that second module is pure path parsing whose unit test should
+ * not have to load the runner, the memory server and the identity stack to
+ * check a string. Importing the harness for a constant took its dependency
+ * graph from 11 modules to 765.
  */
 
 /** Suffix of the directory carrying a fixture's NON-primary space stores. */

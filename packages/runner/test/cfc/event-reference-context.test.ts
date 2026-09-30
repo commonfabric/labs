@@ -2,7 +2,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import {
   cloneIfNecessary,
   type FabricValue,
@@ -26,10 +26,13 @@ import {
   serializeRuntimeEvent,
 } from "../../src/cfc/event-reference-context.ts";
 import { normalizeClause } from "../../src/cfc/clause.ts";
+import { cfcLabelViewOriginSpaces } from "../../src/cfc/label-view-core.ts";
 import { deriveFlowJoin } from "../../src/cfc/prepare.ts";
 import {
   carryCfcReferenceProvenance,
+  cfcReferenceSelectionWitnessesForView,
   getCfcReferenceProvenance,
+  getCfcReferenceView,
 } from "../../src/cfc/reference-provenance.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import {
@@ -40,6 +43,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
@@ -51,6 +55,10 @@ const secret = normalizeClause({
 const otherSecret = normalizeClause({
   anyOf: ["send-selection", cfcAtom.space(space)],
 });
+const selectionWitness = {
+  type: CFC_ATOM_TYPE.TransformedBy,
+  identity: { kind: "builtin", builtinId: "event-selector" },
+} as const;
 const roundtrip = (value: FabricValue) =>
   fabricFromJsonValue(jsonFromFabricValue(value));
 
@@ -75,16 +83,16 @@ describe("event-reference-context", () => {
     resetContentAddressedSchemasConfig();
   });
 
-  async function selectedReference() {
+  async function selectedReference(witnesses: readonly CfcAtom[] = []) {
     const tx = runtime.edit();
     const target = runtime.getCell(space, "target", undefined, tx);
     target.set("public value");
     const source = runtime.getCell(space, "selected", undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...source.getAsNormalizedFullLink(), path: [] }, {
       value: target.getAsLink(),
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
@@ -92,7 +100,8 @@ describe("event-reference-context", () => {
             path: [],
             origin: "link",
             observes: "followRef",
-            label: { confidentiality: [secret] },
+            referenceAcquisition: "complete",
+            label: { confidentiality: [secret], integrity: witnesses },
           }],
         },
       },
@@ -103,6 +112,69 @@ describe("event-reference-context", () => {
     acquire.abort();
     return held.withTx(undefined);
   }
+
+  it("restores verified selection witnesses on payload and dispatch references", async () => {
+    const held = await selectedReference([selectionWitness]);
+    expect(getCfcReferenceProvenance(held)?.selectionWitnesses)
+      .toEqual([selectionWitness]);
+    const send = runtime.edit();
+    const event = serializeRuntimeEvent(
+      { item: held },
+      send,
+      space,
+      held.getAsNormalizedFullLink(),
+    );
+    send.abort();
+    const restored = restoreRuntimeEventDispatch(
+      roundtrip(event.payload),
+      event.runtimeReferenceContext,
+      { ...held.getAsNormalizedFullLink() },
+    );
+    for (
+      const reference of [
+        (restored.payload as { item: unknown }).item,
+        restored.target,
+      ]
+    ) {
+      expect(getCfcReferenceProvenance(reference)?.selectionWitnesses)
+        .toEqual([selectionWitness]);
+      expect(
+        cfcReferenceSelectionWitnessesForView(getCfcReferenceView(reference)),
+      )
+        .toEqual([selectionWitness]);
+    }
+  });
+
+  it("drops historical selection witnesses when the sender adds confidential influence", async () => {
+    const held = await selectedReference([selectionWitness]);
+    const send = runtime.edit();
+    held.withTx(send).get();
+    const event = serializeRuntimeEvent(
+      { item: held },
+      send,
+      space,
+      held.getAsNormalizedFullLink(),
+    );
+    send.abort();
+    const restored = restoreRuntimeEventDispatch(
+      roundtrip(event.payload),
+      event.runtimeReferenceContext,
+      { ...held.getAsNormalizedFullLink() },
+    );
+    for (
+      const reference of [
+        (restored.payload as { item: unknown }).item,
+        restored.target,
+      ]
+    ) {
+      expect(getCfcReferenceProvenance(reference)?.selectionWitnesses)
+        .toEqual([]);
+      expect(
+        cfcReferenceSelectionWitnessesForView(getCfcReferenceView(reference)),
+      )
+        .toEqual([]);
+    }
+  });
 
   for (const modern of [false, true]) {
     it(`retains send confidentiality on a cycle without other references (modern=${modern})`, async () => {
@@ -129,6 +201,11 @@ describe("event-reference-context", () => {
         );
         expect(inputs.key("self").key("value").get()).toBe("event value");
         expect(deriveFlowJoin(read).confidentiality).toContainEqual(secret);
+        expect(
+          getCfcReferenceProvenance(
+            (payload as { self: unknown }).self,
+          )?.originSpaces,
+        ).toContain(space);
       } finally {
         read.abort();
       }
@@ -190,6 +267,73 @@ describe("event-reference-context", () => {
     expect(inputs.key("item").get()).toBe("public value");
     expect(deriveFlowJoin(read).confidentiality).toContainEqual(secret);
     read.abort();
+  });
+
+  it("retains holder policy origins through nested immutable event references", async () => {
+    const held = await selectedReference();
+    const send = runtime.edit();
+    const box = runtime.getImmutableCell(
+      space,
+      { item: held },
+      undefined,
+      send,
+    );
+    const event = serializeRuntimeEvent({ box }, send, space);
+    send.abort();
+    const restored = restoreRuntimeEventReferences(
+      roundtrip(event.payload),
+      event.runtimeReferenceContext,
+    );
+    const read = runtime.edit();
+    try {
+      const acquired = runtime.getImmutableCell(
+        space,
+        restored,
+        undefined,
+        read,
+      )
+        .key("box", "item").resolveAsCell();
+      expect(getCfcReferenceProvenance(acquired)?.originSpaces).toContain(
+        space,
+      );
+      expect(cfcLabelViewOriginSpaces(getCfcReferenceView(acquired)))
+        .toContain(space);
+    } finally {
+      read.abort();
+    }
+  });
+
+  it("retains sender policy origins on payload and dispatch references in another space", async () => {
+    const held = await selectedReference();
+    const destination =
+      (await Identity.fromPassphrase("event-origin-destination")).did();
+    const send = runtime.edit();
+    held.withTx(send).get();
+    const target = runtime.getCell(destination, "event-origin-target");
+    const event = serializeRuntimeEvent(
+      { item: target },
+      send,
+      destination,
+      target.getAsNormalizedFullLink(),
+    );
+    send.abort();
+    const restored = restoreRuntimeEventDispatch(
+      roundtrip(event.payload),
+      event.runtimeReferenceContext,
+      { ...target.getAsNormalizedFullLink() },
+    );
+    for (
+      const reference of [
+        (restored.payload as { item: unknown }).item,
+        restored.target,
+      ]
+    ) {
+      expect(getCfcReferenceProvenance(reference)?.originSpaces).toContain(
+        space,
+      );
+      expect(cfcLabelViewOriginSpaces(getCfcReferenceView(reference)))
+        .toContain(space);
+    }
   });
 
   it("joins the sending attempt into local and durable reference history", async () => {
@@ -556,6 +700,14 @@ describe("event-reference-context", () => {
       { ...record, reference: null },
       { ...record, reference: { ...reference, binding: null } },
       { ...record, reference: { ...reference, confidentiality: null } },
+      { ...record, reference: { ...reference, originSpaces: null } },
+      { ...record, reference: { ...reference, originSpaces: [1] } },
+      { ...record, reference: { ...reference, selectionWitnesses: null } },
+      { ...record, reference: { ...reference, selectionWitnesses: [1] } },
+      {
+        ...record,
+        reference: { ...reference, selectionWitnesses: ["display-only"] },
+      },
       {
         ...record,
         reference: { ...reference, binding: { ...binding, scope: "inherit" } },
@@ -640,6 +792,9 @@ describe("event-reference-context", () => {
     for (
       const invalid of [
         { ...entry, reference: null },
+        { ...entry, transport: true },
+        { ...entry, reference: { ...reference, selectionWitnesses: [false] } },
+        { ...entry, reference: { ...reference, originSpaces: [false] } },
         { ...entry, source: null },
         { ...entry, source: { ...source, id: binding.id } },
         { ...entry, source: { ...source, path: [1] } },
@@ -748,6 +903,20 @@ describe("event-reference-context", () => {
         {
           ...context,
           dispatchReference: { binding: null, confidentiality: [] },
+        },
+        {
+          ...context,
+          dispatchReference: {
+            ...context.dispatchReference as Record<string, unknown>,
+            originSpaces: [null],
+          },
+        },
+        {
+          ...context,
+          dispatchReference: {
+            ...context.dispatchReference as Record<string, unknown>,
+            selectionWitnesses: ["display-only"],
+          },
         },
       ]
     ) {

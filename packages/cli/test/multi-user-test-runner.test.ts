@@ -27,12 +27,16 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import { assertParticipantRung } from "../lib/multi-user-test-runner.ts";
 import type {
   ParticipantInitResult,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "../lib/multi-user-test-worker.ts";
@@ -57,6 +61,7 @@ function fixture(name: string): string {
 class ParticipantWorkerClient {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -69,7 +74,13 @@ class ParticipantWorkerClient {
       new URL("../lib/multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `marker-wait:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -99,7 +110,7 @@ class ParticipantWorkerClient {
 
   async close(): Promise<void> {
     await this.call("dispose").catch(() => {});
-    this.#worker.terminate();
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 }
 
@@ -258,7 +269,11 @@ describe(
 
       const { failed, results } = await runTests(
         fixture("marker-barrier.test.tsx"),
-        { root: FIXTURES, cfcEnforcementMode: "observe" },
+        {
+          root: FIXTURES,
+          cfcEnforcementMode: "observe",
+          cfcFlowLabels: "persist",
+        },
       );
       expect(results[0].error).toBeUndefined();
       expect(failed).toBe(0);
@@ -291,6 +306,8 @@ describe(
         for (const rung of CFC_ENFORCEMENT_MODES) {
           const init = await initParticipant(server, {
             cfcEnforcementMode: rung,
+            // Disabled preparation emits no reference acquisition records.
+            cfcFlowLabels: rung === "disabled" ? "off" : "persist",
           });
           expect(init.cfcEnforcementMode).toBe(rung);
         }
@@ -299,9 +316,35 @@ describe(
         // `runtimePresets.patternTest`'s pin, so a move there lands as a
         // failure in this test rather than as a quietly different harness.
         expect((await initParticipant(server, {})).cfcEnforcementMode)
-          .toBe("enforce-explicit");
+          .toBe("enforce-strict");
       } finally {
         await server.close().catch(() => {});
+      }
+    });
+
+    it("builds every requested flow-label mode into the participant runtime", async () => {
+      const server = StandaloneMemoryServer.start();
+      // Disposal retains both errors if the assertion and shutdown fail.
+      await using cleanup = new AsyncDisposableStack();
+      cleanup.defer(() => server.close());
+      for (const mode of ["off", "observe", "persist"] as const) {
+        expect(
+          (await initParticipant(server, { cfcFlowLabels: mode }))
+            .cfcFlowLabels,
+        ).toBe(mode);
+      }
+      expect((await initParticipant(server, {})).cfcFlowLabels).toBe(
+        "persist",
+      );
+    });
+
+    it("rejects an invalid flow-label mode before initializing a participant", async () => {
+      const client = new ParticipantWorkerClient("alice");
+      try {
+        await expect(client.call("init", { cfcFlowLabels: "typo" }))
+          .rejects.toThrow("cfcFlowLabels is typo");
+      } finally {
+        await client.close();
       }
     });
 
@@ -337,6 +380,48 @@ describe(
         expect(result.error).toContain("is a multi-user test");
         expect(result.error).toContain("`storageHost`");
         expect(result.results).toEqual([]);
+      } finally {
+        await storageManager.close();
+      }
+    });
+
+    it("writes nothing into a caller-supplied store it refuses", async () => {
+      // The single-user runner writes a test's compiled closure into its
+      // space, which is the caller's store when one is supplied. A multi-user
+      // test is only recognized once compiled, and refuses that store, so the
+      // write has to wait until the test is known not to be one.
+
+      const identity = await Identity.fromPassphrase("multi-user untouched");
+      const storageManager = StorageManager.emulate({ as: identity });
+      const path = fixture("marker-barrier.test.tsx");
+      try {
+        const result = await runTestPattern(path, {
+          root: FIXTURES,
+          storageHost: { identity, storageManager },
+        });
+        expect(result.error).toContain("is a multi-user test");
+
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        try {
+          const program = await resolveLocalProgram(
+            (r) => runtime.harness.resolve(r),
+            { main: path, root: FIXTURES },
+          );
+          const evaluated = await runtime.patternManager
+            .compileAndRegisterModules(program);
+          const entry = [...evaluated.exportsByIdentity!].find((
+            [, exports],
+          ) => exports === evaluated.main)!;
+          const stored = await runtime.patternManager
+            .getPatternSourceProgramByIdentity(entry[0], identity.did());
+          expect(stored).toBeUndefined();
+          await storageManager.synced();
+        } finally {
+          await runtime.dispose({ closeStorage: false });
+        }
       } finally {
         await storageManager.close();
       }

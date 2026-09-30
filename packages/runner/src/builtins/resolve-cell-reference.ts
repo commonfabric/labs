@@ -1,9 +1,8 @@
 /** Shared live-reference resolution for conditional and list builtins. */
 
-import type { Cell } from "../cell.ts";
+import { type Cell, getCarriedCfcLabelView } from "../cell.ts";
 import {
   cfcLabelViewForDereferenceTraces,
-  getCarriedCfcLabelView,
   mergeCfcLabelViews,
 } from "../cfc/label-view-state.ts";
 import { resolveLinkTracingDereferences } from "../link-resolution.ts";

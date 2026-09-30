@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
-import { isStream, type JSONSchema, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  isCell,
+  isStream,
+  type JSONSchema,
+  Runtime,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   projectWishValue,
@@ -189,6 +195,29 @@ describe("cf wish headless read (resolveWish)", () => {
     expect((result as { name?: string })?.name).toBe("Ada Lovelace");
   });
 
+  it("preserves an `asCell` reference whose target is absent on this toolshed", async () => {
+    const home = userIdentity.did();
+    const remoteSpace =
+      (await Identity.fromPassphrase("cf-wish-test-remote-run-space")).did();
+    const target = runtime.getCell(remoteSpace, "run-on-another-toolshed");
+    await runtime.editWithRetry((tx) => {
+      const homePattern = runtime.getCell(home, "queue-home", undefined, tx);
+      homePattern.set({ agentQueue: { run: target } });
+      runtime.getHomeSpaceCell(tx).key("defaultPattern").set(homePattern);
+    });
+
+    const { result } = await resolveWish(runtime, home, {
+      query: "#agent_queue",
+      schema: { type: "object", properties: { run: { asCell: ["cell"] } } },
+    });
+
+    expect(isCell((result as { run: unknown }).run)).toBe(true);
+    const link = (result as { run: Cell<unknown> }).run
+      .getAsNormalizedFullLink();
+    expect(link.id).toBe(target.getAsNormalizedFullLink().id);
+    expect(link.space).toBe(remoteSpace);
+  });
+
   it("projectWishValue strips stream handles but keeps profile data (CT-1844)", () => {
     // Build a profile-shaped result carrying a REAL stream handle alongside its
     // data fields, exactly as a materialized #profile object does.
@@ -200,8 +229,8 @@ describe("cf wish headless read (resolveWish)", () => {
       isEditing: boolean;
       elements: { title: string }[];
       $UI: { type: string; name: string };
-      setName: { $stream: boolean };
     }>(userIdentity.did(), "ct1844-projection-fixture", undefined, tx);
+    // Nothing is stored where `setName` stands; the schema declares it.
     cell.set({
       name: "Ada Lovelace",
       avatar: "ada.png",
@@ -209,7 +238,6 @@ describe("cf wish headless read (resolveWish)", () => {
       isEditing: false,
       elements: [{ title: "Note" }],
       $UI: { type: "vnode", name: "cf-screen" },
-      setName: { $stream: true },
     });
     const schema = {
       type: "object",
@@ -254,12 +282,13 @@ describe("cf wish headless read (resolveWish)", () => {
     // would project the shared subtree on the first path but return it RAW on
     // the second — leaking the handle. The memo must project it on both.
     const tx = runtime.edit();
-    const cell = runtime.getCell<
-      { shared: { label: string; setName: { $stream: boolean } } }
-    >(userIdentity.did(), "ct1844-diamond-fixture", undefined, tx);
-    cell.set({
-      shared: { label: "shared", setName: { $stream: true } },
-    });
+    const cell = runtime.getCell<{ shared: { label: string } }>(
+      userIdentity.did(),
+      "ct1844-diamond-fixture",
+      undefined,
+      tx,
+    );
+    cell.set({ shared: { label: "shared" } });
     const schema = {
       type: "object",
       properties: {

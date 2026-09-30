@@ -155,7 +155,7 @@ to react to existing state before any user has explicitly engaged with them.
 A **Space** is a logical database/namespace whose state, policies, and
 permissions evolve over time:
 
-- Identified by a space DID (often `did:key` in practice) (`MemorySpace` type: `did:${string}:${string}`)
+- Identified by a space DID (often `did:key` in practice) (`MemorySpace` type: `did:${string}`)
 - Owns its ACL and delegation state
 - The server maintains the append-only log but does NOT determine authorization
 

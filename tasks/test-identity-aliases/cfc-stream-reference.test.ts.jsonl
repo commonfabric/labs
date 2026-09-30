@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"CFC stream references > consumes the stream marker's confidentiality on an independently acquired target"},"to":{"k":"unit","s":"runner","n":"CFC stream references > carries stream content confidentiality only when the sender reads it (read=true)"}}

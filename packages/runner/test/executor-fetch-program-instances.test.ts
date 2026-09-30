@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { ProgramResult } from "../src/builtins/fetch-program.ts";
 import type { Cell } from "../src/cell.ts";
@@ -267,12 +268,12 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
         );
         return [...addresses.values()].flatMap((address) => {
           const value = Engine.read(engine, address)?.value;
-          if (typeof value !== "object" || value === null) return [];
+          if (!isObjectOrArray(value)) return [];
           return Object.values(value).flatMap((entry) => {
             if (
-              typeof entry !== "object" || entry === null ||
+              !isObjectOrArray(entry) ||
               !("inputHash" in entry) || !("state" in entry) ||
-              typeof entry.state !== "object" || entry.state === null ||
+              !isObjectOrArray(entry.state) ||
               !("type" in entry.state)
             ) return [];
             return [{ scopeKey: address.scopeKey, state: entry.state.type }];

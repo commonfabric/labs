@@ -25,7 +25,11 @@
  * (env reads, per-connection counter, message parsing) live in the route.
  */
 
-import { hashStringOf, toCompactDebugString } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashStringOf,
+  toCompactDebugString,
+} from "@commonfabric/data-model";
 
 /** A single operation from a parsed memory commit. */
 export interface MemWriteOp {
@@ -34,10 +38,10 @@ export interface MemWriteOp {
   scope?: unknown;
 
   /** Present for `set`/`delete`; absent for `patch` (value lives in `patches`). */
-  value?: unknown;
+  value?: FabricValue;
 
   /** JSON-patch entries for `patch` ops, each `{ path, value, ... }`. */
-  patches?: unknown;
+  patches?: FabricValue;
 }
 
 /** Sentinel `vhash` for an operation that carries no value (e.g. `delete`). */
@@ -64,7 +68,7 @@ const VALUE_DISPLAY_LEN = 600;
  * Canonical `FabricValue` hash, truncated for display. Returns a sentinel
  * rather than throwing so a single odd op can never abort the trace.
  */
-function displayVhash(value: unknown): string {
+function displayVhash(value: FabricValue): string {
   try {
     return hashStringOf(value).slice(0, VHASH_DISPLAY_LEN);
   } catch {

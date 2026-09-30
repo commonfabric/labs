@@ -23,7 +23,7 @@ decision is the contended case: everyone votes at once, on the same list.
 | `addOption` | insert an option if its id is new | set the option entity by id, `addUnique` it |
 | `setOptionImage` | edit one field of the option with a given id | edit the field on the option entity addressed by `id` |
 | `removeOption` | remove an option, then its votes | `removeByValue` the option by id; cascade `removeByValue` each vote by its key |
-| `castVote` | upsert by `(voter, option)`, with toggle-off | read/edit the vote entity by key; `addUnique` / `removeByValue` |
+| `castVote` | upsert by `(voter, option)`, with toggle-off | read/edit the vote entity by key; `addUnique` on the cast that first stores a vote, `removeByValue` on the toggle-off |
 | `clearMyVote` | remove by `(voter, option)` | `removeByValue` the vote by key, then clear its entity |
 | `resetVotes` | clear every vote (host only) | clear each vote entity, then `set([])` — an intentional overwrite |
 | `logVisit` | append a visit, then cap the log | one read-modify-write `set` — the cap is derived from the list |
@@ -132,6 +132,90 @@ Like the whole-value ops, a keyed op drops only the reads its own write issues
 do not false-conflict. The op's touched path for *other* readers stays the array
 path, so a reader of the whole list is still invalidated.
 
+### What a keyed operation reads besides the record it writes
+
+A keyed edit that changes no membership writes fields inside the record's own
+document, and two such edits to different records never interact. It is not
+free of the collection, though: three reads ride along, and each is a way for a
+keyed operation to be refused.
+
+**The collection's own link, under every keyed access.** `elementById` derives
+its address by resolving the collection's link, and the sigil probe that
+resolution makes — `resolveLinkTracingDereferences` in
+`packages/runner/src/link-resolution.ts`, tagged `linkResolutionProbe` — is
+recorded as a read at the collection's path plus the probe's sub-path. So even
+a bare `elementById(key).set(...)` — no `addUnique`, no scan, nothing that
+touches membership — commits against the collection. Its conflict set is three
+addresses, one of them `<collection>/value/<member>///link@1`.
+
+The probe is a shape observation of link topology, and both of its other
+consumers treat it as one: flow-label derivation classifies it as a `followRef`
+that consumes the pointer's own label and never the target's content label, and
+reactivity deliberately keeps it a content read so a link appearing later
+re-resolves. The commit's conflict set is the third consumer and reads it
+strongly, which nothing chose.
+
+Nothing chose it is not nothing depends on it, and the difference is a path.
+Whether the collection's own slot holds a link does not depend on how many
+members the collection has, so a probe there survives any membership change
+intact — that is the case `elementById` makes and the one worth narrowing. A
+probe at an indexed slot beneath it is a different matter: `removeByValue`
+writes the filtered array, so every element after the removed one shifts down
+and the link at a given index is not the link that was there. A resolution
+that followed such a slot has an address that really did depend on the
+collection's content, and the strong read is what would catch a concurrent
+change to it. Narrowing every probe by its observation class alone would take
+that away with it.
+
+Any write that changes the collection's membership refuses that commit, in
+either direction and mergeable or not: an `addUnique` that adds, a
+`removeByValue` that removes, a whole-list `set`. A write that only replaces
+one member's value does not. So keyed addressing narrows what a write depends
+on, and it does not take the collection out of the picture: two people writing
+different records still contend whenever a third adds or removes one.
+
+**Every element's link.** `addUnique` and `removeByValue` match candidates with
+`areLinksSame`, resolving each element's link, and resolving one reads that
+element's document at its link path. Those reads are on the element documents
+rather than on the array, so the array-read exclusion above does not cover
+them. A write inside an element document sits below the link path and does not
+disturb them; replacing an element document's whole value — `set(undefined)`
+when clearing a removed record, per the section on that below — sits at it and
+refuses every commit holding one. So two removals in flight at once collide on
+the records they both scanned, and the record being cleared need not be one
+either of them was removing.
+
+**The array, when `addUnique` has nothing to add.** `addUnique` reads the array
+first, finds its candidate already present, and returns before
+`recordMergeableOp`. The exclusion above drops a read only for an entity
+carrying a recorded op, so that read stays. An upsert of a record already in
+the collection therefore commits against the whole collection, and any write of
+the collection document — a `removeByValue`, an `addUnique` that does add, a
+whole-list `set` — refuses it, while the commit that made the membership
+change is not refused on this account, its own array read having been dropped.
+
+`packages/patterns/integration/lunch-poll-keyed-votes.test.ts` pins the free
+case and the boundary either mechanism crosses. Its burst recasts only, holds
+the collection's membership still through every round, and requires that no
+commit refused while it ran wrote the collection — the question a count of
+rolled-back writes cannot answer, since that count is every write a session
+threw away, whatever refused it.
+`docs/history/features/keyed-collection-contention-2026-09-01.md` records what
+bursts that do change membership cost, which mechanism each one exercised, and
+what none of them measured.
+
+A reader of the collection is not part of this, and is measured separately in
+`mergeable-collection-writes.md`, where it turns out to be the whole cost of a
+collection whose writes already merge. Deriving a value from the whole
+collection does put the collection in a conflict set. The conflict set it lands
+in belongs to the commit that writes the derived result, not to the commits
+that write the collection it derives from. The runner opens one transaction per
+event dispatch and another per reactive run, which is the reason, though it
+has not been established directly that a keyed write and a derivation never
+share a commit. What has been measured is that no refused commit in those runs
+wrote a derived document. The derived commit is a compare-and-set over the whole collection and
+contends with every element write, a cost belonging to the reader.
+
 ## Clear-and-reseed commits as a plain overwrite
 
 Replacing a list's whole membership in one handler — `list.set([])`, then
@@ -159,6 +243,9 @@ content. The lunch poll pairs every vote removal — toggle-off, clearMyVote, th
 removeOption cascade, and resetVotes — with a `set(undefined)` of the entity. The
 alternative, deciding membership by reading the array, would reintroduce the
 whole-list read this design exists to avoid.
+
+The clear is what a concurrent keyed operation is most likely to be refused
+over; the section on concurrency costs above says why.
 
 ## Back-compatibility: addressing scheme changes
 

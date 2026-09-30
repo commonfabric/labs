@@ -40,13 +40,10 @@ The same rule reaches further than the word "index". A task must not name a
 published pattern, describe one closely enough to be quoting it, or use the word
 "reuse". Ask for the thing a person would ask for.
 
-The rule is not only a methodological preference. It is also what makes a batch
-identifiable afterwards. Seven console runs sit in one artifact root within a
-ten-minute window; six of them are a discovery batch and the seventh is an
-instructed-composition run, and the only thing that separates them is that the
-seventh's text says "search the pattern index". No timestamp, session attribute,
-or artifact field distinguishes them. So a task that mentions the index does not
-merely weaken the finding — it makes the batch unrecoverable as a batch.
+Keep task text verbatim in the batch record so instructed composition remains
+distinguishable from ordinary discovery. Identify each run by the console's
+returned session and turn ids; the console uses its turn id as the root run id.
+Repeated task text and host context messages do not change that identity.
 
 There is a second kind of run that is worth doing and must never be filed
 alongside the first: telling a session explicitly to import a named pattern.
@@ -122,11 +119,13 @@ deno task measure-batch scripts/pattern-index-suite.json \
 defaults to `CF_HARNESS_FABRIC_API_URL`, then to `http://localhost:8000`. Point
 it at the same server the console was started against, or the report describes a
 machine the runs never touched. Add `--expect-git-sha=<sha>` to refuse the batch
-unless that server reports the commit you meant to measure, and `--base` to ask
-ancestry against a branch other than `main`. A commit known to be off that base
-also refuses by default. `--allow-diverged` is the explicit opt-out for a batch
-that intentionally measures such a server; a commit that cannot be checked
-remains a non-fatal `unchecked` reading.
+unless that server reports the commit you meant to measure. `--base` defaults to
+`origin/main`, the remote-tracking ref in the local clone. Run
+`git fetch origin` to refresh it before a measurement, or pass `--base=<ref>` to
+select another base. A commit known to be off that base also refuses by default.
+`--allow-diverged` is the explicit opt-out for a batch that intentionally
+measures such a server; a commit that cannot be checked remains a non-fatal
+`unchecked` reading.
 
 `--cell-spec=<file>` states what this experiment requires of the console, and
 refuses the whole batch before the first task when the console is something
@@ -144,13 +143,12 @@ operator can see and release with a `POST /api/cancel`, rather than a bound that
 turns a slow run into a failed one.
 
 After a turn settles, the runner locates its root run under the session's
-`artifactRoot`, falling back to the console-wide root. A candidate must have
-been created after the batch began and its transcript's first user message must
-exactly equal the suite task. No match is recorded as not measured. More than
-one match is an ambiguity, also recorded as not measured with every candidate
-run identifier; directory order never chooses a run silently. The runner writes
-`report.md` and `report.json` under `--out`, and exits non-zero if any task
-ended other than completed.
+`artifactRoot`, falling back to the console-wide root. The root directory and
+stored run id must equal the returned turn id, the run must have been created
+after the batch began, and it must not have child lineage. A missing or invalid
+identity is recorded as not measured. Unreadable artifacts belonging to other
+turns do not affect this join. The runner writes `report.md` and `report.json`
+under `--out`, and exits non-zero if any task ended other than completed.
 
 Measuring runs that are already on disk needs no console:
 
@@ -164,6 +162,14 @@ A run family is a parent run and the `delegate_task` children the harness named
 `<run-id>.subagent.<n>`. Both commands report the family, never the parent
 alone: a parent commonly delegates the authoring and then names the child's work
 as its own.
+
+Source measurements read saved `run-pattern-source` artifacts by output id. A
+collapsed transcript marker without its artifact is unread source, never a
+program with zero imports. Research activity is read from each run's own report
+and raw research artifacts, including host opening calls, private model turns,
+tool calls, exact reads, and elapsed time. An inherited kit contributes no new
+research work to a child's measurement. Browser behavior and token accounting
+remain separate readings.
 
 ## The suite file
 

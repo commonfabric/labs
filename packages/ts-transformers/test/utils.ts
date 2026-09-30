@@ -30,6 +30,9 @@ export interface TransformOptions {
   state?: CrossStageState;
   assertDiagnostics?: boolean;
   canonicalWriterIdentityFile?: (fileName: string) => string;
+
+  /** Compiles as a reload of durable stored source (`storedSource`). */
+  storedSource?: boolean;
 }
 
 export interface BatchTypeCheckResult {
@@ -575,6 +578,7 @@ export async function transformFiles(
     state: options.state,
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
+    storedSource: options.storedSource,
   });
 
   const out: Record<string, string> = {};
@@ -830,6 +834,7 @@ export async function validateFiles(
     state: options.state,
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
+    storedSource: options.storedSource,
   });
 
   const outputs: Record<string, string> = {};

@@ -32,6 +32,7 @@ export interface PerformanceViewState {
   days: number;
   sort: string;
   stat: string;
+  keyOnly?: boolean;
 }
 
 export const PERFORMANCE_CHECK_MS = 60_000;
@@ -99,6 +100,7 @@ export function performanceViewHref(
     view === "runtime" ? runtimeSort(state.sort) : ciSort(state.sort),
   );
   params.set("stat", state.stat);
+  if (view === "runtime" && state.keyOnly) params.set("key", "1");
   return `/bench?${escapeHtml(params.toString())}`;
 }
 

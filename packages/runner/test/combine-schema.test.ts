@@ -6,6 +6,7 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "../src/reader-schema-precedence-config.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { externalizeSchema } from "../src/link-utils.ts";
 
 describe("combineSchema type handling", () => {
   const disjointCases: readonly {
@@ -767,5 +768,53 @@ describe("combineSchemaForLink reader precedence", () => {
     } finally {
       resetReaderSchemaPrecedenceConfig();
     }
+  });
+});
+
+describe("combineSchemaForLink over a link that declares a stream", () => {
+  // A stream target holds no value, so its declaration crosses reader
+  // precedence. Each reader is judged in its structural form, so the inline
+  // spelling and the content-addressed reference a stored schema rides as get
+  // the same verdict.
+  const streamLink = {
+    asCell: ["stream"],
+    type: "number",
+  } as JSONSchema & object;
+  const spellings = (schema: JSONSchema & object) =>
+    [
+      ["inline", schema],
+      ["as a content-addressed reference", externalizeSchema(schema)],
+    ] as const;
+
+  for (const [spelling, link] of spellings(streamLink)) {
+    it(`hands a shaped reader the declaration, spelled ${spelling}`, () => {
+      expect(combineSchemaForLink({ type: "object" }, link)).toEqual(
+        streamLink,
+      );
+      expect(combineSchemaForLink({ type: "unknown" }, link)).toEqual(
+        streamLink,
+      );
+    });
+  }
+
+  for (const [spelling, reader] of spellings({ asCell: ["cell"] })) {
+    it(`refuses a reader asking for a plain cell, spelled ${spelling}`, () => {
+      expect(combineSchemaForLink(reader, streamLink)).toBe(false);
+    });
+  }
+
+  for (
+    const [spelling, reader] of spellings({
+      asCell: ["stream"],
+      type: "integer",
+    })
+  ) {
+    it(`leaves a reader that declares the stream as it stands, spelled ${spelling}`, () => {
+      expect(combineSchemaForLink(reader, streamLink)).toEqual(reader);
+    });
+  }
+
+  it("keeps a false reader false", () => {
+    expect(combineSchemaForLink(false, streamLink)).toBe(false);
   });
 });

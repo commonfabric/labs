@@ -1,4 +1,5 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
 import type {
   ChangeGroup,
@@ -250,15 +251,19 @@ export interface MarkInvalidOptions {
 
   /** The invalidation is a RETRY the scheduler owes after a WAIT: a run
    * whose commit was refused for a stale basis, re-queued once the
-   * conflict's catch-up gate resolved. Not an input change — the trailing
+   * conflict's catch-up gate resolved, or a builtin whose output waited for
+   * document confirmation. Not an input change — the trailing
    * debounce coalesces input churn and a throttle spaces runs that produced
    * output, while a refused run left nothing durable and its wait was its
    * delay — so the retry is queued past both: the debounce is not re-armed,
    * and an armed debounce or throttle readiness is released (the
-   * convergence backoff stays). Held behind its debounce, a retry would run
+   * convergence backoff stays). Further invalidations preserve the release
+   * until the owed run starts. Held behind its debounce, a retry would run
    * only when a live demander armed the expiry wake, and a one-shot `pull()`
-   * has none once it resolves. A re-queue that waited on nothing — a local
-   * inconsistency, a transport error — keeps its gates: there the debounce
+   * has none once it resolves. An empty reactive rejection also bypasses
+   * gates when the node or instance has no accepted result yet, or has no
+   * live demander to wake it. Live nodes with accepted results, other local
+   * inconsistencies, and transport errors keep their gates: there the debounce
    * is the spacing between the re-run and the local writer it raced.
    *
    * Consumed by the scheduler facade's invalid-setter (`#markActionInvalid`),
@@ -305,15 +310,15 @@ export function markInvalid(
 
 /**
  * The key a pending invalid cause is recorded under. Scope participates (an
- * omitted scope normalizes to `space`, matching storage), and JSON keeps
- * path segments unambiguous: ["a","b"] never collides with ["a/b"].
+ * omitted scope normalizes to `space`, matching storage). The three address
+ * fields precede the path segments, keeping empty and split paths distinct.
  */
 function invalidCauseKey(address: IMemorySpaceAddress): string {
-  return JSON.stringify([
+  return stringTupleKey([
     address.space,
     address.scope ?? "space",
     address.id,
-    address.path,
+    ...address.path,
   ]);
 }
 

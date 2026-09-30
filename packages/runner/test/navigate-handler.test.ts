@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -499,3 +499,60 @@ Deno.test("navigateTo contains a rejected async callback", async () => {
     await storageManager.close();
   }
 });
+
+Deno.test(
+  "navigateTo's legacy arm refuses to run without a navigateCallback",
+  async () => {
+    // The OFF arm checks for the callback before it resolves the target or
+    // records an attempt, so a runtime built without one gets the refusal
+    // on the first run, from the guard itself, and not a navigation that
+    // has nowhere to go.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+    try {
+      const resultCell = runtime.getCell(
+        space,
+        "navigateTo without a callback result cell",
+        undefined,
+        tx,
+      );
+      const target = runtime.getCell(
+        space,
+        "navigateTo without a callback target",
+        undefined,
+        tx,
+      );
+      target.set({ title: "unreachable" });
+      const inputs = runtime.getImmutableCell(
+        space,
+        target.getAsLink(),
+        undefined,
+        tx,
+      );
+      const builtin = rawNavigateTo(
+        inputs,
+        (resultTx, result) => {
+          resultCell.withTx(resultTx).key("result").set(result);
+        },
+        () => {},
+        [],
+        resultCell,
+        runtime,
+      );
+
+      assertThrows(
+        () => builtin.action(tx),
+        Error,
+        "navigateCallback is not set",
+      );
+    } finally {
+      await tx.commit();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  },
+);

@@ -22,6 +22,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import {
@@ -154,7 +155,7 @@ async function seedLabelledSecret(
     seed,
   );
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space,
     scope: "space",
     id: sourceCell.getAsNormalizedFullLink().id,

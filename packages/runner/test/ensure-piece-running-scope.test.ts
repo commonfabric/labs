@@ -86,10 +86,12 @@ describe("ensurePieceRunningVerdict()", () => {
           path: [],
         }, { propagateErrors: true }));
 
+        // The chain crossed into the space instance, and the terminus is
+        // named there rather than in the scope the traversal started in.
         expect(verdict).toEqual({
           started: false,
           reason: "no-pattern-meta",
-          rootId: id,
+          root: { space, id, scope: "space" },
           observedDocIds: [id],
         });
         expect(server.demandSetSizesForSpace(space).perSession)

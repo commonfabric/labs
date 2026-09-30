@@ -684,11 +684,6 @@ interface Headers {
     forEach(callbackfn: (value: string, key: string, parent: Headers) => void, thisArg?: any): void;
 }
 
-declare var Headers: {
-    prototype: Headers;
-    new(init?: HeadersInit): Headers;
-};
-
 /**
  * The **`MessageChannel`** interface of the Channel Messaging API allows us to create a new message channel and send data through it via its two MessagePort properties.
  *
@@ -1004,11 +999,6 @@ interface Request extends Body {
     clone(): Request;
 }
 
-declare var Request: {
-    prototype: Request;
-    new(input: RequestInfo | URL, init?: RequestInit): Request;
-};
-
 /**
  * The **`Response`** interface of the Fetch API represents the response to a request.
  *
@@ -1032,17 +1022,6 @@ interface Response extends Body {
     /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Response/clone) */
     clone(): Response;
 }
-
-declare var Response: {
-    prototype: Response;
-    new(body?: BodyInit | null, init?: ResponseInit): Response;
-    /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Response/error_static) */
-    error(): Response;
-    /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Response/json_static) */
-    json(data: any, init?: ResponseInit): Response;
-    /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Response/redirect_static) */
-    redirect(url: string | URL, status?: number): Response;
-};
 
 /**
  * The **`TextDecoder`** interface represents a decoder for a specific text encoding, such as `UTF-8`, `ISO-8859-2`, `KOI8-R`, `GBK`, etc.
@@ -1466,7 +1445,6 @@ declare function btoa(data: string): string;
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/clearInterval) */
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/clearTimeout) */
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/fetch) */
-declare function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/queueMicrotask) */
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/setInterval) */
 /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/Window/setTimeout) */

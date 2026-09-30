@@ -1,7 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { PropertyValues } from "lit";
 
-import type { CellHandle } from "@commonfabric/runtime-client";
+import { $conn, type CellHandle } from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/utils/defer";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
@@ -95,6 +96,23 @@ describe("CFRender variant handling", () => {
 });
 
 describe("CFRender render concurrency", () => {
+  it("does not resolve a cell after its runtime is disposed", async () => {
+    const element = new CFRender();
+    const cell = createMockCellHandle<unknown>({});
+    Object.assign(cell.runtime(), { signal: AbortSignal.abort() });
+    let resolutions = 0;
+    cell.resolveAsCell = () => {
+      resolutions++;
+      return Promise.resolve(cell);
+    };
+    element.cell = cell;
+    element.accessForTestingOnly.containerRef = {
+      value: {} as HTMLDivElement,
+    };
+    await element.accessForTestingOnly.renderCell();
+    expect(resolutions).toBe(0);
+  });
+
   it("cleans up the mounted render when its cell is cleared", async () => {
     const element = new CFRender();
     let cleanups = 0;
@@ -177,6 +195,71 @@ describe("CFRender render concurrency", () => {
         'Error rendering content: <img src="x" onerror="alert(1)">',
       );
     } finally {
+      mockDocument.restore();
+    }
+  });
+
+  it("shows an unavailable state when a linked target cannot be read", async () => {
+    const element = new CFRender();
+    element.cell = createMockCellHandle({}) as CellHandle;
+    const container = { textContent: "" };
+    const internals = element as unknown as {
+      _containerRef: { value: HTMLDivElement };
+      _watchLinkTarget(): Promise<undefined>;
+      _renderCell(): Promise<void>;
+      _hasRendered: boolean;
+    };
+    internals._containerRef = { value: container as HTMLDivElement };
+    internals._watchLinkTarget = () => Promise.resolve(undefined);
+    await internals._renderCell();
+    expect(container.textContent).toBe(
+      "This piece is unavailable or you do not have access.",
+    );
+    expect(internals._hasRendered).toBe(true);
+  });
+
+  it("shows asynchronous mount refusals inside the panel", async () => {
+    const mockDocument = installMockDocument();
+    const element = new CFRender();
+    const cell = createMockCellHandle({});
+    const refusal = new Error("AuthorizationError: lacks READ");
+    Object.assign(cell.runtime(), { signal: new AbortController().signal });
+    Object.assign(cell.runtime()[$conn](), {
+      onDispose: () => () => {},
+      signal: new AbortController().signal,
+      attachVDom: () => ({
+        onBatch() {},
+        offBatch() {},
+        detach() {},
+        mount: () => Promise.reject(refusal),
+        dispose: () => Promise.resolve(),
+        unmount: () => Promise.resolve(),
+      }),
+    });
+    const container = createMockElement("div");
+    const internals = element as unknown as {
+      _containerRef: { value: HTMLDivElement };
+      _renderCell(): Promise<void>;
+      _handleRenderError(error: unknown): void;
+    };
+    internals._containerRef = {
+      value: container as unknown as HTMLDivElement,
+    };
+    const rendered = defer<void>();
+    const handleError = internals._handleRenderError.bind(element);
+    internals._handleRenderError = (error) => {
+      captureConsoleError(() => handleError(error));
+      rendered.resolve();
+    };
+    element.cell = cell;
+    try {
+      await internals._renderCell();
+      await rendered.promise;
+      expect(container.children.map((child) => child.textContent)).toEqual([
+        "Error rendering content: AuthorizationError: lacks READ",
+      ]);
+    } finally {
+      element.disconnectedCallback();
       mockDocument.restore();
     }
   });
@@ -981,6 +1064,44 @@ describe("CFRender tile navigation", () => {
     return element;
   }
 
+  it("keeps the linked piece scope in tile navigation", () => {
+    const element = navigatingElement();
+    element.cell = createMockCellHandle({}, {
+      id: "of:fid1:same" as never,
+      space: "did:key:foreign" as never,
+      scope: "session",
+    }) as CellHandle;
+    const seen = captureNavigation("cf-navigate", () => {
+      (element as unknown as { _navigateToPiece(e: MouseEvent): void })
+        ._navigateToPiece(tileClick());
+    });
+    expect(seen).toEqual([{
+      spaceDid: "did:key:foreign",
+      pieceId: "of:fid1:same",
+      pieceScope: "session",
+    }]);
+  });
+
+  it("keeps the linked cell path in tile navigation", () => {
+    const element = navigatingElement();
+    element.cell = createMockCellHandle({}, {
+      id: "of:fid1:same" as never,
+      space: "did:key:foreign" as never,
+      scope: "session",
+      path: ["view", "a/b"],
+    }) as CellHandle;
+    const seen = captureNavigation("cf-navigate", () => {
+      (element as unknown as { _navigateToPiece(e: MouseEvent): void })
+        ._navigateToPiece(tileClick());
+    });
+    expect(seen).toEqual([{
+      spaceDid: "did:key:foreign",
+      pieceId: "of:fid1:same",
+      pieceScope: "session",
+      piecePath: ["view", "a/b"],
+    }]);
+  });
+
   it("navigates to the piece a clicked tile renders", () => {
     const element = navigatingElement();
     const seen = captureNavigation("cf-navigate", () => {
@@ -1032,6 +1153,43 @@ describe("CFRender tile navigation", () => {
 });
 
 describe("CFRender disconnectedCallback", () => {
+  it("rerenders once after reconnecting with an equal queued cell update", async () => {
+    class LifecycleRender extends CFRender {
+      /** Runs the update hook without requiring Lit's DOM pipeline. */
+      flushUpdated(changes: PropertyValues): void {
+        super.updated(changes);
+      }
+
+      protected override createRenderRoot(): HTMLElement | DocumentFragment {
+        return { adoptedStyleSheets: [] } as unknown as DocumentFragment;
+      }
+
+      protected override performUpdate(): void {}
+    }
+    const element = new LifecycleRender();
+    const cell = createMockCellHandle<unknown>({ name: "stable" });
+    let connected = true;
+    Object.defineProperty(element, "isConnected", { get: () => connected });
+    element.hasUpdated = true;
+    element.cell = cell;
+    element.flushUpdated(new Map([["cell", undefined]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(1);
+
+    connected = false;
+    element.disconnectedCallback();
+    const equal = await cell.resolveAsCell();
+    element.cell = equal;
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(2);
+    connected = true;
+    element.connectedCallback();
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
+    element.flushUpdated(new Map());
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
+    element.disconnectedCallback();
+  });
+
   it("listens for right-clicks while connected, and stops when disconnected", () => {
     const element = new CFRender();
     const listened: string[] = [];
@@ -1187,7 +1345,9 @@ describe("CFRender piece context menu", () => {
 
   it("opens the built-in menu when no host takes the click", () => {
     // The menu mounts on document.body, outside the piece — see cf-piece-menu.
+
     const mounted: unknown[] = [];
+    const closedFor: Element[] = [];
     const original = Object.getOwnPropertyDescriptor(globalThis, "document");
     Object.defineProperty(globalThis, "document", {
       configurable: true,
@@ -1196,6 +1356,7 @@ describe("CFRender piece context menu", () => {
         createElement: () => ({
           open: () => {},
           close: () => {},
+          closeFor: (piece: Element) => closedFor.push(piece),
           style: { setProperty: () => {}, removeProperty: () => {} },
         }),
         body: {
@@ -1232,6 +1393,10 @@ describe("CFRender piece context menu", () => {
 
       expect(mounted.length).toBe(1);
       expect(event.defaultPrevented).toBe(true);
+
+      element.disconnectedCallback();
+      expect(closedFor).toHaveLength(1);
+      expect(closedFor[0]).toBe(element);
     } finally {
       if (original) Object.defineProperty(globalThis, "document", original);
       else Reflect.deleteProperty(globalThis, "document");

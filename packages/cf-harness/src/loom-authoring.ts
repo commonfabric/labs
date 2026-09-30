@@ -4,6 +4,7 @@
  */
 
 import { sha256 } from "@commonfabric/content-hash";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { isAbsolute } from "@std/path";
 
 import type { ProcessRunner } from "./sandbox/process-runner.ts";
@@ -50,7 +51,7 @@ const LOOM_ID = /^loom-[a-f0-9]{16}$/;
 
 /** Whether a decoded JSON value is an object with named properties. */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /** Whether an identity contains an ASCII control character. */
 const hasControlCharacter = (value: string): boolean =>

@@ -14,6 +14,7 @@ import {
   type LLMRequest,
 } from "@commonfabric/llm/types";
 import { type BuiltInLLMMessage } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   LLMRequestError,
   LLMUpstreamError,
@@ -196,7 +197,7 @@ function truncateDescription(text: string): string {
  * wrapped; raw response bodies stay in the cause that reaches the log.
  */
 function describeStreamError(error: unknown): string {
-  if (typeof error !== "object" || error === null) {
+  if (!isObjectOrArray(error)) {
     return truncateDescription(String(error));
   }
   if (!(error instanceof Error)) {

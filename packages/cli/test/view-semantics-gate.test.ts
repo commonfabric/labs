@@ -20,6 +20,7 @@ import {
   createSemantics,
 } from "../lib/view/languages/typescript/semantics.ts";
 import type { DiffMaps } from "../lib/view/diffdoc.ts";
+import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import type { Document } from "../lib/view/model.ts";
 
 const CWD = Deno.cwd();
@@ -159,7 +160,7 @@ export const answer = double(21);
 
 function diffMapsFor(file: string): DiffMaps {
   return {
-    rootFiles: [file],
+    rootFiles: new Map([[file, typeScriptLanguage]]),
     toFile: () => null,
     fromFile: () => null,
   };
@@ -220,7 +221,7 @@ Deno.test("diff semantics: no in-workspace root file means no service (not a fai
 
   const sem = createDiffSemantics(
     "difftext",
-    { rootFiles: [], toFile: () => null, fromFile: () => null },
+    { rootFiles: new Map(), toFile: () => null, fromFile: () => null },
     { cwd: CWD },
   );
   assertEquals(sem, undefined);

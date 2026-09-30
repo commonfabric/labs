@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toStructuredDebugValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -49,7 +50,7 @@ function debugFormContains(value: unknown, text: string): boolean {
   const walk = (node: unknown): boolean => {
     if (typeof node === "string") {
       return node.includes(text);
-    } else if ((typeof node === "object") && (node !== null)) {
+    } else if (isObjectOrArray(node)) {
       return Object.values(node).some(walk);
     }
     return false;

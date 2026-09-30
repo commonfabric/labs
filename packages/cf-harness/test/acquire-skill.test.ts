@@ -23,6 +23,7 @@ import {
 } from "../src/skills-sh/acquisition.ts";
 import { SkillsShPinResolutionError } from "../src/skills-sh/pin.ts";
 import { SkillsShSearchClient } from "../src/skills-sh/search-client.ts";
+import { AcquiredSkillDirectoryReadableError } from "../src/skills/acquired-skill-mount.ts";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,
@@ -407,6 +408,135 @@ describe("acquire-skill", () => {
     expect(output).toMatchObject({
       status: "error",
       message: "acquire_skill could not write the skill handle: write failed",
+    });
+  });
+
+  //
+  // An acquired skill's scripts, held behind the mount check
+  //
+  // The scripts are written before the handle is minted, so a refusal here
+  // leaves no handle to a skill whose scripts the acquiring run could read.
+  //
+
+  const acquiredWithScript = {
+    ...unitAcquired,
+    loadedPaths: ["SKILL.md", "scripts/report.sh"] as const,
+    scripts: [{
+      path: "scripts/report.sh",
+      bytes: new TextEncoder().encode("#!/usr/bin/env bash\necho acquired\n"),
+      valueDigest: "sha256:script",
+    }],
+  };
+
+  const writingRuntime = () => {
+    const cell = {
+      getAsNormalizedFullLink: () => ({
+        id: "of:unit-cell",
+        space: "did:key:unit",
+        scope: "space",
+        path: [],
+      }),
+      withTx: () => ({ set: () => undefined }),
+    };
+    return {
+      getCell: () => cell,
+      editWithRetry: (write: (tx: object) => void) => {
+        write({ markCfcRelevant: () => undefined });
+        return Promise.resolve({});
+      },
+      idle: () => Promise.resolve(),
+    };
+  };
+
+  const invokeAcquiringScripts = (
+    materializeAcquiredSkill: HarnessToolContext["materializeAcquiredSkill"],
+  ) =>
+    invokeWith({
+      getSkillsShAcquisitionClient: () =>
+        Promise.resolve({
+          resolvePin: () => Promise.resolve(unitPin),
+          acquirePin: () => Promise.resolve(acquiredWithScript),
+        } as unknown as SkillsShAcquisitionClient),
+      getFabricSession: () =>
+        Promise.resolve({
+          pieces: {
+            runtime: writingRuntime(),
+            getSpace: () => "did:key:unit",
+          },
+        } as never),
+      mintSkillContextHandle: () => Promise.resolve("cfh:a:unit1"),
+      ...(materializeAcquiredSkill !== undefined
+        ? { materializeAcquiredSkill }
+        : {}),
+    });
+
+  it("holds the scripts under the pin before minting the handle", async () => {
+    const held: unknown[] = [];
+    const output = await invokeAcquiringScripts((options) => {
+      held.push(options);
+      return Promise.resolve({
+        registryId: options.registryId,
+        commitSha: options.commitSha,
+        pin: `${options.registryId}@${options.commitSha}`,
+        hostRoot: "/artifacts/.acquired-skills/run/sha/plaid",
+        sandboxRoot: "/acquired-skill",
+        scripts: [],
+      });
+    });
+
+    expect(output.status).toBe("loaded");
+    expect(held).toEqual([{
+      registryId: MEMBRANE_ID,
+      commitSha: MEMBRANE_SHA,
+      scripts: [{
+        path: "scripts/report.sh",
+        bytes: new TextEncoder().encode("#!/usr/bin/env bash\necho acquired\n"),
+        valueDigest: "sha256:script",
+      }],
+    }]);
+  });
+
+  it("refuses, naming the mount, when the acquiring run could read the scripts", async () => {
+    // A policy answer about who could read the bytes, not a failure to write
+    // them, so it is a refusal rather than an error — and there is no handle.
+    const output = await invokeAcquiringScripts(() =>
+      Promise.reject(
+        new AcquiredSkillDirectoryReadableError(
+          "the acquired-skills directory is inside this run's workspace mount (/host at /workspace)",
+        ),
+      )
+    );
+
+    expect(output).toMatchObject({
+      status: "refused",
+      reason: { code: "acquired_scripts_readable_by_acquiring_run" },
+      pin: unitPin,
+    });
+    expect(JSON.stringify(output)).toContain("workspace mount");
+    expect(JSON.stringify(output)).not.toContain("skillHandle");
+  });
+
+  it("reports a failure to write the scripts as an error, not a refusal", async () => {
+    const output = await invokeAcquiringScripts(() =>
+      Promise.reject(new Error("no space left on device"))
+    );
+
+    expect(output).toMatchObject({
+      status: "error",
+      message:
+        "acquire_skill could not hold this skill's scripts: no space left on device",
+    });
+  });
+
+  it("refuses a skill with scripts on a run that writes no artifacts", async () => {
+    // Instructions without their scripts would be a different skill, so the
+    // acquisition does not silently drop them.
+    const output = await invokeAcquiringScripts(undefined);
+
+    expect(output).toMatchObject({
+      status: "error",
+      message:
+        "acquire_skill cannot hold this skill's scripts: the run writes no artifacts",
     });
   });
 

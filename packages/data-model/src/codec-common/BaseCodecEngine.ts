@@ -37,8 +37,9 @@ import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts"
  * * A tag comes from `tagForValue()` rather than from the value.
  * * An unrecognized tag becomes an `UnknownValue`, and one that is not a tag at
  *   all an error, per Section 9 of the formal spec.
- * * A codec's `decode()` result is deep-frozen, and a throw from one is
- *   re-raised or wrapped according to `lenient`.
+ * * A codec's `decode()` result is deep-frozen, or built mutable, according to
+ *   `mutable`, and a throw from one is re-raised or wrapped according to
+ *   `lenient`.
  *
  * None of those is a property of a wire format, and every one of them is a
  * decision a walker could quietly get wrong: a state expanded when it should
@@ -67,6 +68,8 @@ export abstract class BaseCodecEngine<
 > implements CodecEngineConfig<Encoded> {
   readonly #lenient: boolean;
 
+  readonly #mutable: boolean;
+
   readonly #registry: CodecRegistry<Encoded>;
 
   /**
@@ -75,11 +78,17 @@ export abstract class BaseCodecEngine<
    * carry; there is no default, because which classes participate is a
    * question this class has no standing to answer. `options.lenient` makes a
    * failed `decode()` produce a `ProblematicValue` instead of throwing.
+   * `options.mutable` makes `decode()` leave what it builds mutable.
    */
   constructor(
-    options: { registry: CodecRegistry<Encoded>; lenient?: boolean },
+    options: {
+      registry: CodecRegistry<Encoded>;
+      lenient?: boolean;
+      mutable?: boolean;
+    },
   ) {
     this.#lenient = options.lenient ?? false;
+    this.#mutable = options.mutable ?? false;
     this.#registry = options.registry;
   }
 
@@ -119,6 +128,11 @@ export abstract class BaseCodecEngine<
    */
   get lenient(): boolean {
     return this.#lenient;
+  }
+
+  /** Whether `decode()` leaves what it builds mutable. */
+  get mutable(): boolean {
+    return this.#mutable;
   }
 
   /** Registry consulted for per-type encoding and decoding. */
@@ -201,6 +215,11 @@ export abstract class BaseCodecEngine<
    * an `UnknownValue` under both settings. That is not a rejection: it is how
    * a value survives a round trip through a reader that does not know the
    * type.
+   *
+   * The result is deep-frozen unless {@link #mutable}. A mutable decode
+   * leaves mutable every container it builds and every value a codec builds
+   * for it, a lenient `ProblematicValue` included; a value frozen by nature,
+   * such as a `FabricPrimitive`, is frozen either way.
    *
    * @throws If `data` is not this format's serialized form -- which a format
    *   carrying a marker can tell from the marker alone, and one without can

@@ -90,7 +90,7 @@ Representative places that mint one:
 
 - `Runtime.getImmutableCell()` in `packages/runner/src/runtime.ts` boxes a
   caller-supplied value into a cell. It calls `dataUriFromValue` directly on
-  the result of `fabricFromNativeValue(data)`, deliberately skipping the
+  the result of `fabricFromConvertibleJsValue(data)`, deliberately skipping the
   link-rewriting walk, because the data is immutable as given.
 - `undefinedDataLink()` in `packages/runner/src/link-resolution.ts` produces
   the link that a blocked or dead-ended link chain resolves to: an identifier

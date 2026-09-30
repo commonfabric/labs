@@ -1,5 +1,6 @@
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import {
@@ -68,8 +69,7 @@ export const readFileToolDescriptor: HarnessToolDescriptor = {
 export const isReadFileToolSuccessOutput = (
   output: unknown,
 ): output is ReadFileToolSuccessOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "outputId" in output &&
   typeof output.outputId === "string" &&
   "path" in output &&

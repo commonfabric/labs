@@ -1,0 +1,1 @@
+{"date": "2026-09-22", "from": {"k": "unit", "s": "dashboard", "n": "renderTile: a server-supplied id becomes the stable update key"}, "to": {"k": "unit", "s": "dashboard", "n": "renderTile: the label becomes the key an update matches the tile by"}}

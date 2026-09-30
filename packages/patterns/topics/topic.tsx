@@ -6,6 +6,7 @@ import {
   Default,
   equals,
   handler,
+  type JSONSchema,
   lift,
   NAME,
   pattern,
@@ -13,13 +14,15 @@ import {
   type ReadonlyCell,
   SELF,
   Stream,
+  toSchema,
   UI,
   type VNode,
   wish,
   Writable,
 } from "commonfabric";
+import type {} from "commonfabric/schema";
 
-import { type NamesTableRow, ownName } from "../collection-naming/naming.ts";
+import { isMemberName } from "../collection-naming/allocator.ts";
 
 // ===== Shared types =====
 
@@ -45,7 +48,8 @@ export interface TopicAuthor {
   /** Open for the same reason `TopicLinkKind` is: this is provided data, so a
    * closed set here could never gain `"service"` or whatever acts next.
    * Well-known values are `"person"` and `"agent"`, the latter marking an
-   * agent acting with its human user's key. */
+   * agent acting with its human user's key. `"legacy"` records a display name
+   * whose author kind is unknown. */
   kind: string;
   name: string;
   avatar?: string;
@@ -299,6 +303,12 @@ export interface TopicComment {
   removedBy?: TopicAuthor;
 }
 
+/** Stored comment fields available to the author migration. */
+interface StoredTopicComment extends TopicComment {
+  /** Unrestricted legacy storage; only nonblank strings supply a name. */
+  authorName?: unknown;
+}
+
 export interface TopicLink {
   kind: TopicLinkKind | Default<"web">;
   url: string | Default<"">;
@@ -363,10 +373,17 @@ export interface TopicInput {
   /** The topic's living document: durable conclusions get folded up into the
    * body; the comment thread below holds the deliberation. */
   body?: Writable<string | Default<"">>;
-  comments?: Writable<TopicComment[] | Default<[]>>;
+  comments?: Writable<StoredTopicComment[] | Default<[]>>;
   links?: Writable<TopicLink[] | Default<[]>>;
   createdAt?: number | Default<0>;
   createdBy?: TopicAuthor;
+
+  /** Creator display name recorded without an author kind. */
+  createdByName?: unknown;
+
+  /** Number of ordered state upgrades completed by this topic. */
+  topicStateVersion?: Writable<number | Default<0>>;
+
   bodyUpdatedBy?: Writable<
     TopicAuthor | Default<{ kind: "person"; name: "" }>
   >;
@@ -428,15 +445,50 @@ export interface TopicInput {
    * a reader can see it, rather than leaving it to convention. */
   boardCrossrefs?: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
-  /** The board's names table, one row per named topic. The topic reads its own
-   * row out of it and nothing else; absent, the topic shows no number.
+  /**
+   * The number the board calls this topic by, stored here and published as
+   * the topic's `shortName`. The board's create allocates it over the board's
+   * namespace and passes it in, in the transaction that creates the topic;
+   * `recordName` writes it onto a topic filed before the board numbered
+   * anything. A number is permanent and never reused, so this copy stays the
+   * number the board's namespace holds for the topic.
    *
-   * Readable, not writable, for the reason `boardCrossrefs` states: the table
-   * is the board's derivation, and a topic has no business writing into it.
-   * Wired at creation by the board's create, and rewired onto a topic filed
-   * before the namespace as a one-time link-bind — the same operator step
-   * `mentionable` states for itself. */
-  boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>;
+   * Absent on a topic nobody has numbered: one filed before the namespace
+   * existed and not yet recorded, and one composed with no board at all. Such
+   * a topic publishes no number and renders without failing.
+   *
+   * Plain rather than `Writable`, because every reader of it wants the string
+   * — the topic's own report of its number, a board's row demand, a mention
+   * universe row. The one writer is `recordName`, which takes the writable
+   * handle in its own state schema, beside the write that needs it.
+   */
+  shortName?: string;
+}
+
+/** What `recordName` takes: the number the board allocated for this topic. */
+export interface RecordNameEvent {
+  /**
+   * The number to store, as the board's namespace holds it. Required, and
+   * checked against the name grammar rather than stored as given: a topic has
+   * no way to derive its own number, so a caller that could omit this would be
+   * asking the topic to invent one.
+   *
+   * No `agentName` accompanies it, unlike every authored-content verb here,
+   * and the absence is the honest one for the reason `MentionEvent` gives
+   * about itself: the number is the board's allocation, so a content-level
+   * signature would be accepted and then dropped. Fabric still records the
+   * principal that made the write.
+   */
+  name: string;
+}
+
+/** What `recordName` returns. */
+export interface RecordNameResult {
+  /** The number the topic stores once the call returns. */
+  name: string;
+
+  /** Whether this call wrote it; `false` when the topic already stored it. */
+  wrote: boolean;
 }
 
 /**
@@ -486,12 +538,13 @@ export interface TopicMentionSource {
  * it.
  *
  * ONE ROW PER DISTINCT TOPIC. That is the contract, not a property of the
- * board that happens to hold: a row is addressed by `Writable.for(topic)`, so
- * a board listing the same topic twice addresses ONE row from both entries and
- * the second write lands on the first. Set semantics by construction — nothing
- * downstream dedupes, and a reader finding its row by identity finds exactly
- * one. The pivot's self-skip is asked of the topic rather than of its position
- * so that a duplicate entry stays inert here too.
+ * board that happens to hold: the board's `crossrefTable` builds its rows from
+ * `distinctByIdentity` over the board, which compares entries by `equals`, so a
+ * board listing one topic at two entries — the same link twice, or a link and
+ * an alias of it — gets one row for that topic. Nothing downstream dedupes, and
+ * a reader finding its row by identity finds exactly one. The pivot's sources
+ * come from the same distinct list, so that topic appears once, at its first
+ * entry, in the `mentionedBy` of each topic it mentions, and never in its own.
  *
  * Both sides are declared `unknown`, which is the whole design rather than a
  * shortcut. A row holds cell REFERENCES — `unknown` is the declaration that
@@ -593,19 +646,16 @@ export interface TopicPiece extends TopicSummary {
    * remains authoritative until it does. */
   [NAME]: string | Default<""> | undefined;
 
-  /** The name the board calls this topic by, read out of the board's names
-   * table by identity. The display name stays the title — this rides beside
-   * it, under the name a mention pill reads it by (`Mentionable.shortName` in
-   * `packages/ui/src/v2/core/mentionable.ts`), so a mention of this topic
-   * elsewhere gains the number as soon as the board names it.
+  /** The number the board calls this topic by, out of the `shortName` INPUT
+   * the topic stores. The display name stays the title, and this rides beside
+   * it: where a topic publishes one, its header and the board's card render it
+   * as a badge, and a mention universe carries it, which is what a mention
+   * pill and a `#42` query read.
    *
-   * Absent for a topic no board has named, or one wired to no board: the
-   * lookup produces nothing and the property is simply not there. Every
-   * consumer treats that as no name — the badge renders nothing, a universe
-   * row matches no `#42` query, and a mention pill shows no number
-   * (`_trackRefShortName` in
-   * `packages/ui/src/v2/components/cf-code-editor/cf-code-editor.ts` reads an
-   * absent name exactly as it reads a blank one).
+   * Absent for a topic whose input holds no number: the property is simply
+   * not there. Every consumer treats that as no name — the badge renders
+   * nothing, and the topic's universe row carries the empty name, which
+   * matches no `#42` query and gives a mention pill no number.
    *
    * Optional rather than defaulted, and the difference is the compatibility
    * proof's: this is what a board's stored list is validated against, and a
@@ -713,10 +763,11 @@ export interface TopicPiece extends TopicSummary {
  * body in place, so what a reader shows is the array filtered rather than the
  * array itself. Sign every authored-content mutation with `agentName`:
  * Fabric records the human principal behind the key; the name says which
- * agent acted under it. Reference-only `mention` and `unmention` calls carry
- * no content signature. The session-draft cells and `submit*` streams below
- * belong to the rendered page, not the headless contract — they read state
- * only this session holds.
+ * agent acted under it. `mention`, `unmention` and `recordName` carry no
+ * content signature: the first two record where a reference points, and the
+ * third records a number the board allocated. The session-draft cells and
+ * `submit*` streams below belong to the rendered page, not the headless
+ * contract — they read state only this session holds.
  */
 export interface TopicOutput extends TopicPiece {
   [UI]: VNode;
@@ -803,6 +854,34 @@ export interface TopicOutput extends TopicPiece {
    * the projection for the reason `removeComment` states. */
   removeLink: Stream<RemoveLinkEvent, RemoveLinkResult>;
 
+  /**
+   * Store the number the board calls this topic by, which is the only way a
+   * number reaches a topic the board did not pass one to at create: a board
+   * writes a member's result and never a member's argument, so the topic has
+   * to make the write itself.
+   *
+   * Idempotent, and permanent: a call naming the stored number writes nothing
+   * and reports `wrote: false`, and a call naming a different one is refused.
+   * The board's `backfillNames` sends this verb one event per topic it holds
+   * that reports no number, and an operator can send it directly.
+   *
+   * THE NUMBER MUST BE THE ONE THE BOARD'S NAMESPACE HOLDS FOR THIS TOPIC, and
+   * the verb cannot check that: a topic holds no namespace to look itself up
+   * in, and giving it one is the board-derived table this design exists to
+   * remove — `shortName` above says why. So the check is the caller's, and
+   * `cf cell get --cell <board> names` is where the answer is. A number the
+   * board did not allocate is stored as readily as one it did, and a number is
+   * permanent: the step then allocates a different one, writes it into the
+   * namespace, and is refused here for as long as the disagreement stands, so
+   * `top/<n>` and the topic's own badge name different numbers and nothing in
+   * the board reconciles them. The repair is by hand.
+   *
+   * Outside the projection for the reason `removeComment` states: a board
+   * stores `TopicPiece`, so a required verb added there would refuse every
+   * topic deployed before the verb existed.
+   */
+  recordName: Stream<RecordNameEvent, RecordNameResult>;
+
   /** Attribution of the last rename; unset until the first `setTitle`.
    * Beside `setTitle` rather than on the projection, for the same reason. */
   titleUpdatedBy?: TopicAuthor | undefined;
@@ -842,8 +921,9 @@ export interface TopicOutput extends TopicPiece {
   submitLink: Stream<void>;
 }
 
-// ===== Shared theme (calm editorial light) =====
+// ===== Shared presentation =====
 
+/** The Topics theme: calm editorial light. */
 export const TOPICS_THEME = {
   fontFamily: "'Iowan Old Style', 'Palatino', 'Georgia', serif",
   borderRadius: "0.5rem",
@@ -992,21 +1072,338 @@ export const appendLink = (
   return link;
 };
 
+/** Author fields that may be only partially populated in stored comments. */
+interface TopicUpgradeComment {
+  /** Structured destination whose existing properties are preserved. */
+  author?: Partial<TopicAuthor>;
+
+  /** Legacy storage key retained for version-zero inputs. */
+  authorName?: unknown;
+}
+
+/** Handles shared by ordered Topic upgrades and every durable mutation. */
+interface TopicUpgradeState {
+  /** Number of steps already committed for this topic. */
+  topicStateVersion: Writable<number>;
+
+  /** Legacy storage key; its spelling remains fixed for version-zero inputs. */
+  createdByName: ReadonlyCell<unknown>;
+
+  /** Structured creator destination, including partially populated stored data. */
+  createdBy: Writable<Partial<TopicAuthor> | undefined>;
+
+  /** Original comment identities, including the fixed legacy `authorName` key. */
+  comments: Writable<TopicUpgradeComment[]>;
+}
+
+/** Object schemas whose properties extend generated mutation contracts. */
+type TopicObjectSchema = Exclude<JSONSchema, boolean>;
+
+/** Generated reader contract for partially populated structured creators. */
+const TOPIC_CREATOR_SCHEMA = toSchema<
+  Writable<Partial<TopicAuthor> | undefined>
+>();
+
+/** Generated reader contract for partially populated comment authors. */
+const TOPIC_COMMENT_AUTHOR_SCHEMA = toSchema<
+  Partial<TopicAuthor>
+>();
+
+/**
+ * Reader contract that materializes strings while retaining opaque legacy data.
+ * Both structured-author projections must stay inline: this contract is also
+ * embedded inside handler schemas, whose roots resolve local references.
+ */
+const TOPIC_UPGRADE_SCHEMA = {
+  type: "object",
+  properties: {
+    topicStateVersion: toSchema<Writable<number>>(),
+    createdBy: TOPIC_CREATOR_SCHEMA,
+    // Concrete strings are read; every other legacy value stays opaque.
+    // A TypeScript `string | unknown` collapses to opaque-only `unknown`.
+    createdByName: {
+      type: ["string", "unknown"],
+      asCell: ["readonly"],
+    },
+    comments: {
+      type: "array",
+      asCell: ["cell"],
+      items: {
+        type: "object",
+        properties: {
+          author: TOPIC_COMMENT_AUTHOR_SCHEMA,
+          authorName: { type: ["string", "unknown"] },
+        },
+      },
+    },
+  },
+  required: [
+    "topicStateVersion",
+    "createdByName",
+    "createdBy",
+    "comments",
+  ],
+} as const;
+
+/** Durable fields and upgrade handles bound to a Topic mutation. */
+type TopicWriteState<K extends keyof TopicInput = never> =
+  & Required<Pick<TopicInput, K>>
+  & {
+    /** Shared state checked before the mutation's first durable write. */
+    upgrade: Writable<TopicUpgradeState>;
+  };
+
+/**
+ * Upgrades version zero to one by filling missing structured author names.
+ * Legacy key spellings in this step are storage identifiers and remain fixed.
+ * Returns true after completing all writes, or false when reads are incomplete.
+ * Handlers defer ambiguous absent values to the lift, whose reads suspend on
+ * unresolved links. Existing structured names, kinds, and avatars take priority.
+ */
+const upgradeLegacyAuthors = (
+  input: TopicUpgradeState,
+  fromHandler: boolean,
+): boolean => {
+  const { createdByName, createdBy, comments } = input;
+
+  const legacyCreatorName = createdByName.get();
+  const creator = createdBy.get();
+  const storedCreatorName = createdBy.key("name").get();
+  const creatorKind = createdBy.key("kind").get();
+  const creatorName = !storedCreatorName?.trim() &&
+      typeof legacyCreatorName === "string" && legacyCreatorName.trim() &&
+      legacyCreatorName.trim() !== "someone"
+    ? legacyCreatorName
+    : undefined;
+  // Handles keep unresolved reads pending in the lift. Eager handler reads
+  // can return undefined for both absent fields and unresolved links.
+  const storedComments = comments.get();
+  if (storedComments === undefined) return false;
+  const commentAuthors = storedComments.map((_, index) => {
+    const comment = comments.key(index);
+    const author = comment.key("author").get();
+    const storedName = comment.key("author").key("name").get();
+    const kind = comment.key("author").key("kind").get();
+    const legacyName = comment.key("authorName").get();
+    return {
+      index,
+      ready: Boolean(storedName?.trim()) ||
+        (author !== undefined && storedName !== undefined &&
+          kind !== undefined && legacyName !== undefined),
+      absent: author === undefined,
+      name: !storedName?.trim() &&
+          typeof legacyName === "string" && legacyName.trim() &&
+          legacyName.trim() !== "someone"
+        ? legacyName
+        : undefined,
+      kind,
+    };
+  });
+
+  if (
+    fromHandler && ((!storedCreatorName?.trim() &&
+      (creator === undefined || storedCreatorName === undefined ||
+        creatorKind === undefined || legacyCreatorName === undefined)) ||
+      commentAuthors.some(({ ready }) => !ready))
+  ) return false;
+
+  if (creatorName !== undefined) {
+    if (creator === undefined) {
+      createdBy.set({ name: creatorName, kind: "legacy" });
+    } else {
+      createdBy.key("name").set(creatorName);
+      if (!creatorKind) createdBy.key("kind").set("legacy");
+    }
+  }
+  commentAuthors.forEach(({ index, name, kind, absent }) => {
+    if (name === undefined) return;
+    const author = comments.key(index).key("author");
+    if (absent) {
+      author.set({ name, kind: "legacy" });
+    } else {
+      author.key("name").set(name);
+      if (!kind) author.key("kind").set("legacy");
+    }
+  });
+  return true;
+};
+
+/** Ordered, append-only steps; entry zero upgrades state version zero to one. */
+const TOPIC_STATE_UPGRADES = ["legacy-authors"] as const;
+
+/** State version stamped by every current Topics board creation path. */
+export const TOPIC_STATE_VERSION = TOPIC_STATE_UPGRADES.length;
+
+/** Dispatches each known step; the return type requires exhaustive handling. */
+const runTopicUpgrade = (
+  step: (typeof TOPIC_STATE_UPGRADES)[number],
+  state: TopicUpgradeState,
+  fromHandler: boolean,
+): boolean => {
+  switch (step) {
+    case "legacy-authors":
+      return upgradeLegacyAuthors(state, fromHandler);
+  }
+};
+
+/**
+ * Runs pending upgrades in order, recording each version after its step's writes.
+ * With a verb, refuses unsupported versions before a durable mutation; without
+ * one, leaves such state untouched so the running Topic can still render it.
+ */
+const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
+  const fromHandler = verb !== undefined;
+  const version = state.topicStateVersion.get();
+  if (
+    !Number.isSafeInteger(version) || version < 0 ||
+    version > TOPIC_STATE_VERSION
+  ) {
+    if (fromHandler) {
+      rejectMutation(verb, `unsupported topic state version ${version}`);
+    }
+    return;
+  }
+  for (let index = version; index < TOPIC_STATE_VERSION; index++) {
+    const step = TOPIC_STATE_UPGRADES[index];
+    // Author fields are additive: content handlers can still edit version
+    // zero while its migration waits for complete reads.
+    if (!runTopicUpgrade(step, state, fromHandler)) return;
+    state.topicStateVersion.set(index + 1);
+  }
+};
+
+/** Runs pending state upgrades whenever the Topic runs, without a result read. */
+const migrateTopicState = lift(
+  (state: TopicUpgradeState): void => upgradeTopicState(state),
+  TOPIC_UPGRADE_SCHEMA,
+  toSchema<void>(),
+);
+
+/** Generated object contract extended with the concrete legacy reader. */
+const SUBMIT_PROFILE_COMMENT_STATE_SCHEMA = toSchema<
+  SubmitProfileCommentState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const RETRACT_PROFILE_COMMENT_STATE_SCHEMA = toSchema<
+  RetractProfileCommentState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const SAVE_PROFILE_TITLE_STATE_SCHEMA = toSchema<
+  SaveProfileTitleState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const SAVE_PROFILE_BODY_STATE_SCHEMA = toSchema<
+  SaveProfileBodyState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const DROP_MENTION_STATE_SCHEMA = toSchema<
+  DropMentionState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const RETRACT_PROFILE_LINK_STATE_SCHEMA = toSchema<
+  RetractProfileLinkState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const SUBMIT_PROFILE_LINK_STATE_SCHEMA = toSchema<
+  SubmitProfileLinkState
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const COMMENTS_WRITE_SCHEMA = toSchema<
+  TopicWriteState<"comments">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const LINKS_WRITE_SCHEMA = toSchema<
+  TopicWriteState<"links">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const BODY_WRITE_SCHEMA = toSchema<
+  TopicWriteState<"body" | "bodyUpdatedBy" | "bodyUpdatedAt">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const TITLE_WRITE_SCHEMA = toSchema<
+  TopicWriteState<"title" | "titleUpdatedBy" | "titleUpdatedAt">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const MENTIONED_WRITE_SCHEMA = toSchema<
+  TopicWriteState<"mentioned">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const RECORD_NAME_STATE_SCHEMA = toSchema<
+  RecordNameState
+>() as TopicObjectSchema;
+
+/** Bound state for `submitProfileComment`. */
+type SubmitProfileCommentState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Stored thread containing the mutation target. */
+  comments: Writable<TopicComment[] | Default<[]>>;
+
+  /** Session draft cleared after a successful comment submit. */
+  commentDraft: Writable<string>;
+
+  /** Resolved canonical Profile name for attribution. */
+  profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
+  profileAvatar: string;
+};
+
 /** Browser comment submit with Profile fields already resolved by the pattern.
  * Keeping the mutation in a module-scope handler lets tests bind deterministic
  * Profile snapshots while production still sources them only from wishes. */
-export const submitProfileComment = handler<void, {
+export const submitProfileComment = handler<void, SubmitProfileCommentState>(
+  toSchema<void>(),
+  {
+    ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA,
+    properties: {
+      ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (_, { upgrade, comments, commentDraft, profileName, profileAvatar }) => {
+    const text = commentDraft.get();
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!text.trim() || !author) return;
+    upgradeTopicState(upgrade.get(), "submitProfileComment");
+    appendComment(comments, text, author);
+    commentDraft.set("");
+  },
+);
+
+/** Bound state for `retractProfileComment`. */
+type RetractProfileCommentState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Stored thread containing the mutation target. */
   comments: Writable<TopicComment[] | Default<[]>>;
-  commentDraft: Writable<string>;
+
+  // A CELL, for the reason `dropMention` gives about `topic`: bound as a plain
+  // value it arrives resolved, matches no stored position, and removes
+  // nothing.
+  /** Original comment cell selected for retraction. */
+  comment: Writable<TopicComment>;
+
+  /** Resolved canonical Profile name for attribution. */
   profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
   profileAvatar: string;
-}>((_, { comments, commentDraft, profileName, profileAvatar }) => {
-  const text = commentDraft.get();
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!text.trim() || !author) return;
-  appendComment(comments, text, author);
-  commentDraft.set("");
-});
+};
 
 /** Browser comment retraction under the current Profile snapshot.
  *
@@ -1022,23 +1419,26 @@ export const submitProfileComment = handler<void, {
  * regression in that property presents: refused here, a control bound to a
  * copy does nothing, where without it the copy would be stamped and the
  * reader would be shown a thread the topic does not hold. */
-export const retractProfileComment = handler<void, {
-  comments: Writable<TopicComment[] | Default<[]>>;
-  // A CELL, for the reason `dropMention` gives about `topic`: bound as a plain
-  // value it arrives resolved, matches no stored position, and removes
-  // nothing.
-  comment: Writable<TopicComment>;
-  profileName: string;
-  profileAvatar: string;
-}>((_, { comments, comment, profileName, profileAvatar }) => {
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!author) return;
-  if (!comment || comment.get() === undefined) return;
-  if (!isElementOf(comments, comment)) return;
-  if (comment.get()?.removedAt !== undefined) return;
-  comment.key("removedAt").set(Date.now());
-  comment.key("removedBy").set(author);
-});
+export const retractProfileComment = handler<void, RetractProfileCommentState>(
+  toSchema<void>(),
+  {
+    ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA,
+    properties: {
+      ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (_, { upgrade, comments, comment, profileName, profileAvatar }) => {
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!author) return;
+    if (!comment || comment.get() === undefined) return;
+    if (!isElementOf(comments, comment)) return;
+    if (comment.get()?.removedAt !== undefined) return;
+    upgradeTopicState(upgrade.get(), "retractProfileComment");
+    comment.key("removedAt").set(Date.now());
+    comment.key("removedBy").set(author);
+  },
+);
 
 /** The one place a rename lands. The contract verb and the browser save both
  * ride it, so the trim rule, the attribution stamp, and the activity clock
@@ -1063,85 +1463,167 @@ export const persistTitle = (
   return { title: trimmed, titleUpdatedBy: author, titleUpdatedAt: at };
 };
 
+/** Bound state for `saveProfileTitle`. */
+type SaveProfileTitleState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Durable title saved with its attribution stamps. */
+  title: Writable<string | Default<"">>;
+
+  /** Session title draft awaiting an explicit save. */
+  titleDraft: Writable<string>;
+
+  /** Session editor visibility after a successful save. */
+  editingTitle: Writable<boolean>;
+
+  /** Author snapshot of the latest title save. */
+  titleUpdatedBy: Writable<
+    TopicAuthor | Default<{ kind: "person"; name: "" }>
+  >;
+
+  /** Timestamp of the latest title save. */
+  titleUpdatedAt: Writable<number | Default<0>>;
+
+  /** Resolved canonical Profile name for attribution. */
+  profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
+  profileAvatar: string;
+};
+
 /** Browser title save under the current Profile snapshot. The header binds a
  * session draft, never the durable title: a live-bound shared string would
  * conflict per keystroke, and a title write outside `persistTitle` would
  * leave `titleUpdatedBy` and the activity clock describing an earlier
  * rename. */
-export const saveProfileTitle = handler<void, {
-  title: Writable<string | Default<"">>;
-  titleDraft: Writable<string>;
-  editingTitle: Writable<boolean>;
-  titleUpdatedBy: Writable<
-    TopicAuthor | Default<{ kind: "person"; name: "" }>
-  >;
-  titleUpdatedAt: Writable<number | Default<0>>;
-  profileName: string;
-  profileAvatar: string;
-}>((
-  _,
+export const saveProfileTitle = handler<void, SaveProfileTitleState>(
+  toSchema<void>(),
   {
-    title,
-    titleDraft,
-    editingTitle,
-    titleUpdatedBy,
-    titleUpdatedAt,
-    profileName,
-    profileAvatar,
+    ...SAVE_PROFILE_TITLE_STATE_SCHEMA,
+    properties: {
+      ...SAVE_PROFILE_TITLE_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
   },
-) => {
-  const text = titleDraft.get();
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!text.trim() || !author) return;
-  persistTitle(title, titleUpdatedBy, titleUpdatedAt, text, author);
-  editingTitle.set(false);
-});
+  (
+    _,
+    {
+      upgrade,
+      title,
+      titleDraft,
+      editingTitle,
+      titleUpdatedBy,
+      titleUpdatedAt,
+      profileName,
+      profileAvatar,
+    },
+  ) => {
+    const text = titleDraft.get();
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!text.trim() || !author) return;
+    upgradeTopicState(upgrade.get(), "saveProfileTitle");
+    persistTitle(title, titleUpdatedBy, titleUpdatedAt, text, author);
+    editingTitle.set(false);
+  },
+);
 
-/** Browser body save under the current Profile snapshot. */
-export const saveProfileBody = handler<void, {
+/** Bound state for `saveProfileBody`. */
+type SaveProfileBodyState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Durable prose saved with its references and attribution. */
   body: Writable<string | Default<"">>;
+
+  /** Session prose draft awaiting an explicit save. */
   bodyDraft: Writable<string>;
-  // deno-lint-ignore ban-types
-  references: Writable<TopicMentionRefMap | Default<{}>>;
+
+  /** Durable mention map published with the body. */
+  references: Writable<
+    // deno-lint-ignore ban-types
+    TopicMentionRefMap | Default<{}>
+  >;
+
+  /** Session mention map accompanying the body draft. */
   referencesDraft: Writable<TopicMentionRefMap>;
+
+  /** Session editor visibility after a successful save. */
   editingBody: Writable<boolean>;
+
+  /** Author snapshot of the latest body save. */
   bodyUpdatedBy: Writable<
     TopicAuthor | Default<{ kind: "person"; name: "" }>
   >;
+
+  /** Timestamp of the latest body save. */
   bodyUpdatedAt: Writable<number | Default<0>>;
+
+  /** Resolved canonical Profile name for attribution. */
   profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
   profileAvatar: string;
-}>((
-  _,
+};
+
+/** Browser body save under the current Profile snapshot. */
+export const saveProfileBody = handler<void, SaveProfileBodyState>(
+  toSchema<void>(),
   {
-    body,
-    bodyDraft,
-    references,
-    referencesDraft,
-    editingBody,
-    bodyUpdatedBy,
-    bodyUpdatedAt,
-    profileName,
-    profileAvatar,
+    ...SAVE_PROFILE_BODY_STATE_SCHEMA,
+    properties: {
+      ...SAVE_PROFILE_BODY_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
   },
-) => {
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!author) return;
-  // One whole-value set per explicit save keeps the conflict window small; a
-  // live-bound textarea on a shared string would conflict per keystroke.
-  body.set(bodyDraft.get());
-  // The map publishes with the prose it describes, in this one transaction:
-  // the tokens and the destinations they name are one document, and a save
-  // that landed only half of it would leave a dead link either way. Whole-map,
-  // for the same reason the body above is whole-value — an entry belongs to
-  // the draft that minted it, and the two conflict as one document or not at
-  // all. `destination` is `unknown`, which is what carries each one across as
-  // a link rather than expanding the piece behind it.
-  references.set(referencesDraft.get());
-  bodyUpdatedBy.set(author);
-  bodyUpdatedAt.set(Date.now());
-  editingBody.set(false);
-});
+  (
+    _,
+    {
+      upgrade,
+      body,
+      bodyDraft,
+      references,
+      referencesDraft,
+      editingBody,
+      bodyUpdatedBy,
+      bodyUpdatedAt,
+      profileName,
+      profileAvatar,
+    },
+  ) => {
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!author) return;
+    upgradeTopicState(upgrade.get(), "saveProfileBody");
+    // One whole-value set per explicit save keeps the conflict window small; a
+    // live-bound textarea on a shared string would conflict per keystroke.
+    body.set(bodyDraft.get());
+    // The map publishes with the prose it describes, in this one transaction:
+    // the tokens and the destinations they name are one document, and a save
+    // that landed only half of it would leave a dead link either way. Whole-map,
+    // for the same reason the body above is whole-value — an entry belongs to
+    // the draft that minted it, and the two conflict as one document or not at
+    // all. `destination` is `unknown`, which is what carries each one across as
+    // a link rather than expanding the piece behind it.
+    references.set(referencesDraft.get());
+    bodyUpdatedBy.set(author);
+    bodyUpdatedAt.set(Date.now());
+    editingBody.set(false);
+  },
+);
+
+/** Bound state for `dropMention`. */
+type DropMentionState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Durable set of verb-made piece references. */
+  mentioned: Writable<unknown[] | Default<[]>>;
+
+  // A CELL, because `removeByValue` matches a cell by its link. Bound as a
+  // plain value it would arrive resolved, match nothing, and remove nothing.
+  /** Original piece cell selected for reference removal. */
+  topic: Writable<unknown>;
+};
 
 /**
  * Drop one verb-made reference from the browser.
@@ -1151,15 +1633,39 @@ export const saveProfileBody = handler<void, {
  * `removeByValue` here for the same reason it is in `unmention`: it resolves
  * against durable state instead of rewriting the list.
  */
-export const dropMention = handler<void, {
-  mentioned: Writable<unknown[] | Default<[]>>;
-  // A CELL, because `removeByValue` matches a cell by its link. Bound as a
-  // plain value it would arrive resolved, match nothing, and remove nothing.
-  topic: Writable<unknown>;
-}>((_, { mentioned, topic }) => {
-  if (!topic) return;
-  mentioned.removeByValue(topic);
-});
+export const dropMention = handler<void, DropMentionState>(
+  toSchema<void>(),
+  {
+    ...DROP_MENTION_STATE_SCHEMA,
+    properties: {
+      ...DROP_MENTION_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (_, { upgrade, mentioned, topic }) => {
+    if (!topic) return;
+    upgradeTopicState(upgrade.get(), "dropMention");
+    mentioned.removeByValue(topic);
+  },
+);
+
+/** Bound state for `retractProfileLink`. */
+type RetractProfileLinkState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Stored links containing the mutation target. */
+  links: Writable<TopicLink[] | Default<[]>>;
+
+  /** Original link cell selected for retraction. */
+  link: Writable<TopicLink>;
+
+  /** Resolved canonical Profile name for attribution. */
+  profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
+  profileAvatar: string;
+};
 
 /** Browser link retraction under the current Profile snapshot.
  *
@@ -1167,48 +1673,83 @@ export const dropMention = handler<void, {
  * {@link retractProfileComment} is bound and for the same reasons. A stamped
  * link additionally stops resolving into `mentions`, so this control retracts
  * a reference as well as a row. */
-export const retractProfileLink = handler<void, {
+export const retractProfileLink = handler<void, RetractProfileLinkState>(
+  toSchema<void>(),
+  {
+    ...RETRACT_PROFILE_LINK_STATE_SCHEMA,
+    properties: {
+      ...RETRACT_PROFILE_LINK_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (_, { upgrade, links, link, profileName, profileAvatar }) => {
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!author) return;
+    if (!link || link.get() === undefined) return;
+    if (!isElementOf(links, link)) return;
+    if (link.get()?.removedAt !== undefined) return;
+    upgradeTopicState(upgrade.get(), "retractProfileLink");
+    link.key("removedAt").set(Date.now());
+    link.key("removedBy").set(author);
+  },
+);
+
+/** Bound state for `submitProfileLink`. */
+type SubmitProfileLinkState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** Stored links containing the mutation target. */
   links: Writable<TopicLink[] | Default<[]>>;
-  link: Writable<TopicLink>;
+
+  /** Session URL draft validated before link creation. */
+  linkUrlDraft: Writable<string>;
+
+  /** Session label draft accompanying the URL. */
+  linkLabelDraft: Writable<string>;
+
+  /** Session link category draft. */
+  linkKindDraft: Writable<TopicLinkKind>;
+
+  /** Resolved canonical Profile name for attribution. */
   profileName: string;
+
+  /** Resolved canonical Profile avatar for attribution. */
   profileAvatar: string;
-}>((_, { links, link, profileName, profileAvatar }) => {
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!author) return;
-  if (!link || link.get() === undefined) return;
-  if (!isElementOf(links, link)) return;
-  if (link.get()?.removedAt !== undefined) return;
-  link.key("removedAt").set(Date.now());
-  link.key("removedBy").set(author);
-});
+};
 
 /** Browser link submit under the current Profile snapshot. */
-export const submitProfileLink = handler<void, {
-  links: Writable<TopicLink[] | Default<[]>>;
-  linkUrlDraft: Writable<string>;
-  linkLabelDraft: Writable<string>;
-  linkKindDraft: Writable<TopicLinkKind>;
-  profileName: string;
-  profileAvatar: string;
-}>((
-  _,
+export const submitProfileLink = handler<void, SubmitProfileLinkState>(
+  toSchema<void>(),
   {
-    links,
-    linkUrlDraft,
-    linkLabelDraft,
-    linkKindDraft,
-    profileName,
-    profileAvatar,
+    ...SUBMIT_PROFILE_LINK_STATE_SCHEMA,
+    properties: {
+      ...SUBMIT_PROFILE_LINK_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
   },
-) => {
-  const url = linkUrlDraft.get();
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
-  if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
-  appendLink(links, url, linkKindDraft.get(), linkLabelDraft.get(), author);
-  linkUrlDraft.set("");
-  linkLabelDraft.set("");
-  linkKindDraft.set("web");
-});
+  (
+    _,
+    {
+      upgrade,
+      links,
+      linkUrlDraft,
+      linkLabelDraft,
+      linkKindDraft,
+      profileName,
+      profileAvatar,
+    },
+  ) => {
+    const url = linkUrlDraft.get();
+    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
+    upgradeTopicState(upgrade.get(), "submitProfileLink");
+    appendLink(links, url, linkKindDraft.get(), linkLabelDraft.get(), author);
+    linkUrlDraft.set("");
+    linkLabelDraft.set("");
+    linkKindDraft.set("web");
+  },
+);
 
 // ===== Derivations =====
 //
@@ -1248,7 +1789,8 @@ const backlinksOf = lift((
   // `filter` + `flatMap` rather than `find`, so a topic with no row on the
   // table — no board wired in — yields an empty array from the shape of the
   // expression instead of from a `?? []` bolted onto a miss. At most one row
-  // matches: rows are keyed by the topic they describe.
+  // matches: the board's pivot builds one row per distinct topic, compared by
+  // `equals` as this lookup compares.
   table
     .filter((row) => equals(self, row.topic))
     .flatMap((row) => row.mentionedBy) as TopicSummary[]
@@ -1336,6 +1878,368 @@ const createdByOf = lift((
   createdBy && createdBy.name.trim() ? createdBy : { kind: "person", name: "" }
 );
 
+/** Handles `addComment` after bringing durable Topic state up to date. */
+const addCommentHandler = handler<
+  AddCommentEvent,
+  TopicWriteState<"comments">,
+  AddCommentResult
+>(
+  toSchema<AddCommentEvent>(),
+  {
+    ...COMMENTS_WRITE_SCHEMA,
+    properties: {
+      ...COMMENTS_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ body: text, agentName }, { upgrade, comments }) => {
+    const trimmed = (text ?? "").trim();
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("addComment", "agentName must be non-blank");
+    if (!trimmed) rejectMutation("addComment", "body must be non-empty");
+    upgradeTopicState(upgrade.get(), "addComment");
+    return { comment: appendComment(comments, trimmed, author) };
+  },
+);
+
+/** Handles `addLink` after bringing durable Topic state up to date. */
+const addLinkHandler = handler<
+  AddLinkEvent,
+  TopicWriteState<"links">,
+  AddLinkResult
+>(
+  toSchema<AddLinkEvent>(),
+  {
+    ...LINKS_WRITE_SCHEMA,
+    properties: {
+      ...LINKS_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ kind, url, label, agentName }, { upgrade, links }) => {
+    const trimmedUrl = (url ?? "").trim();
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("addLink", "agentName must be non-blank");
+    if (!trimmedUrl) rejectMutation("addLink", "url must be non-empty");
+    if (!isSafeLinkUrl(trimmedUrl)) {
+      rejectMutation("addLink", "url must be http(s)");
+    }
+    upgradeTopicState(upgrade.get(), "addLink");
+    return { link: appendLink(links, trimmedUrl, kind, label, author) };
+  },
+);
+
+/** Handles `removeComment` after bringing durable Topic state up to date. */
+const removeCommentHandler = handler<
+  RemoveCommentEvent,
+  TopicWriteState<"comments">,
+  RemoveCommentResult
+>(
+  toSchema<RemoveCommentEvent>(),
+  {
+    ...COMMENTS_WRITE_SCHEMA,
+    properties: {
+      ...COMMENTS_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ comment, agentName }, { upgrade, comments }) => {
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("removeComment", "agentName must be non-blank");
+    // The same reference check `mention` makes, and it earns its place for
+    // the same reason: a payload that is not a reference has no stored
+    // element behind it, so the writes below would land on nothing and
+    // report success.
+    if (!comment || comment.get() === undefined) {
+      rejectMutation("removeComment", "comment must be a reference");
+    }
+    if (!isElementOf(comments, comment)) {
+      rejectMutation("removeComment", "comment is not on this topic");
+    }
+    if (comment.get()?.removedAt !== undefined) {
+      rejectMutation("removeComment", "comment is already retracted");
+    }
+    upgradeTopicState(upgrade.get(), "removeComment");
+    const removedAt = Date.now();
+    // Two field writes into the element the caller named, not a rewrite of
+    // the array. Concurrent retractions of distinct comments merge, and
+    // every surviving reference stays a reference.
+    comment.key("removedAt").set(removedAt);
+    comment.key("removedBy").set(author);
+    return { removedAt, removedBy: author };
+  },
+);
+
+/** Handles `editComment` after bringing durable Topic state up to date. */
+const editCommentHandler = handler<
+  EditCommentEvent,
+  TopicWriteState<"comments">,
+  EditCommentResult
+>(
+  toSchema<EditCommentEvent>(),
+  {
+    ...COMMENTS_WRITE_SCHEMA,
+    properties: {
+      ...COMMENTS_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ comment, body: text, agentName }, { upgrade, comments }) => {
+    // Checked, not bound: `editComment` requires a signature like every
+    // other mutation here, and then stores nothing from it. `author` and
+    // `sentAt` stay as the comment was written — an edit changes what was
+    // said, not who said it. Fabric still records the principal behind
+    // the write.
+    if (!topicAuthorFromAgent(agentName)) {
+      rejectMutation("editComment", "agentName must be non-blank");
+    }
+    if (!comment || comment.get() === undefined) {
+      rejectMutation("editComment", "comment must be a reference");
+    }
+    if (!isElementOf(comments, comment)) {
+      rejectMutation("editComment", "comment is not on this topic");
+    }
+    if (comment.get()?.removedAt !== undefined) {
+      rejectMutation("editComment", "comment is retracted");
+    }
+    const trimmed = (text ?? "").trim();
+    if (!trimmed) rejectMutation("editComment", "body must be non-empty");
+    upgradeTopicState(upgrade.get(), "editComment");
+    const editedAt = Date.now();
+    comment.key("body").set(trimmed);
+    comment.key("editedAt").set(editedAt);
+    return { body: trimmed, editedAt };
+  },
+);
+
+/** Handles `removeLink` after bringing durable Topic state up to date. */
+const removeLinkHandler = handler<
+  RemoveLinkEvent,
+  TopicWriteState<"links">,
+  RemoveLinkResult
+>(
+  toSchema<RemoveLinkEvent>(),
+  {
+    ...LINKS_WRITE_SCHEMA,
+    properties: {
+      ...LINKS_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ link, url, agentName }, { upgrade, links }) => {
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("removeLink", "agentName must be non-blank");
+    const named = (url ?? "").trim();
+    if (link && named) {
+      rejectMutation("removeLink", "pass link or url, not both");
+    }
+    let target = link;
+    if (!target) {
+      if (!named) {
+        rejectMutation("removeLink", "pass link or url");
+      }
+      // The url spelling resolves to an element the same way the reference
+      // spelling arrives as one, so both paths stamp a stored record.
+      // Newest first, so retracting twice retracts two rather than
+      // re-stamping the one already gone.
+      const stored = links.get();
+      for (let i = stored.length - 1; i >= 0; i--) {
+        const candidate = stored[i];
+        if (candidate?.url === named && isPresent(candidate)) {
+          target = links.key(i) as typeof link;
+          break;
+        }
+      }
+      if (!target) {
+        rejectMutation("removeLink", `no link present with url ${named}`);
+      }
+    } else if (target.get() === undefined) {
+      rejectMutation("removeLink", "link must be a reference");
+    } else if (!isElementOf(links, target)) {
+      rejectMutation("removeLink", "link is not on this topic");
+    } else if (target.get()?.removedAt !== undefined) {
+      rejectMutation("removeLink", "link is already retracted");
+    }
+    upgradeTopicState(upgrade.get(), "removeLink");
+    const removedAt = Date.now();
+    target!.key("removedAt").set(removedAt);
+    target!.key("removedBy").set(author);
+    return {
+      url: target!.get()?.url ?? named,
+      removedAt,
+      removedBy: author,
+    };
+  },
+);
+
+/** Handles `setBody` after bringing durable Topic state up to date. */
+const setBodyHandler = handler<
+  SetBodyEvent,
+  TopicWriteState<"body" | "bodyUpdatedBy" | "bodyUpdatedAt">,
+  SetBodyResult
+>(
+  toSchema<SetBodyEvent>(),
+  {
+    ...BODY_WRITE_SCHEMA,
+    properties: {
+      ...BODY_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (
+    { body: text, agentName },
+    { upgrade, body, bodyUpdatedBy, bodyUpdatedAt },
+  ) => {
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("setBody", "agentName must be non-blank");
+    const persisted = text ?? "";
+    upgradeTopicState(upgrade.get(), "setBody");
+    body.set(persisted);
+    const bodyUpdatedAtValue = Date.now();
+    bodyUpdatedBy.set(author);
+    bodyUpdatedAt.set(bodyUpdatedAtValue);
+    return {
+      body: persisted,
+      bodyUpdatedBy: author,
+      bodyUpdatedAt: bodyUpdatedAtValue,
+    };
+  },
+);
+
+/** Handles `setTitle` after bringing durable Topic state up to date. */
+const setTitleHandler = handler<
+  SetTitleEvent,
+  TopicWriteState<"title" | "titleUpdatedBy" | "titleUpdatedAt">,
+  SetTitleResult
+>(
+  toSchema<SetTitleEvent>(),
+  {
+    ...TITLE_WRITE_SCHEMA,
+    properties: {
+      ...TITLE_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  (
+    { title: text, agentName },
+    { upgrade, title, titleUpdatedBy, titleUpdatedAt },
+  ) => {
+    const trimmed = (text ?? "").trim();
+    const author = topicAuthorFromAgent(agentName ?? "") ??
+      rejectMutation("setTitle", "agentName must be non-blank");
+    if (!trimmed) rejectMutation("setTitle", "title must be non-empty");
+    upgradeTopicState(upgrade.get(), "setTitle");
+    return persistTitle(
+      title,
+      titleUpdatedBy,
+      titleUpdatedAt,
+      trimmed,
+      author,
+    );
+  },
+);
+
+/** Handles `mention` after bringing durable Topic state up to date. */
+const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
+  toSchema<MentionEvent>(),
+  {
+    ...MENTIONED_WRITE_SCHEMA,
+    properties: {
+      ...MENTIONED_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ topic }, { upgrade, mentioned }) => {
+    // A reference, or a rejection. The schema wraps whatever it is handed as
+    // a cell without looking behind it, so this is the boundary — and the
+    // narrowed payload is what makes it one read of one field: `undefined`
+    // is a value with no document behind it, and any real piece answers with
+    // an object because `title` carries a default.
+    if (!topic || topic.get() === undefined) {
+      rejectMutation("mention", "topic must be a reference");
+    }
+    // A set-add, not an append: referencing the same piece twice is one
+    // reference. Mergeable, so concurrent mentions of distinct pieces all
+    // land and a repeated one is a no-op against durable state.
+    upgradeTopicState(upgrade.get(), "mention");
+    mentioned.addUnique(topic);
+  },
+);
+
+/** Handles `unmention` after bringing durable Topic state up to date. */
+const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
+  toSchema<UnmentionEvent>(),
+  {
+    ...MENTIONED_WRITE_SCHEMA,
+    properties: {
+      ...MENTIONED_WRITE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ topic }, { upgrade, mentioned }) => {
+    // Same check as `mention`, and it earns its place here too: a payload
+    // that is not a reference matches no stored entry, so the removal below
+    // would quietly do nothing and report success.
+    if (!topic || topic.get() === undefined) {
+      rejectMutation("unmention", "topic must be a reference");
+    }
+    // `removeByValue`, not `remove` or `removeAll`: those two rebuild the
+    // array and set it back, which is both a clobbering write and the shape
+    // that flattens surviving references. This one resolves against durable
+    // state, so concurrent removals of distinct entries merge.
+    upgradeTopicState(upgrade.get(), "unmention");
+    mentioned.removeByValue(topic);
+  },
+);
+
+/** Bound state for `recordName`. */
+type RecordNameState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** The topic's own stored number, absent until a call records one. The
+   * writable handle the write needs, over an input every other reader takes
+   * as the plain string it holds. */
+  shortName: Writable<string | undefined>;
+};
+
+/** Handles `recordName` after bringing durable Topic state up to date. */
+const recordNameHandler = handler<
+  RecordNameEvent,
+  RecordNameState,
+  RecordNameResult
+>(
+  toSchema<RecordNameEvent>(),
+  {
+    ...RECORD_NAME_STATE_SCHEMA,
+    properties: {
+      ...RECORD_NAME_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ name }, { upgrade, shortName }) => {
+    const given = (name ?? "").trim();
+    // The grammar is the whole of what a topic can check: it holds no
+    // namespace to look the number up in, which is what keeps this verb from
+    // reading its board — or, through a board table, every sibling topic.
+    if (!isMemberName(given)) {
+      rejectMutation("recordName", `name must be a member name: \`${given}\``);
+    }
+    const stored = shortName.get();
+    // A number is permanent and never reused, so a topic holding one holds
+    // it. Naming that same number is a caller's repeat — the board's step
+    // re-sends whatever it cannot see stored yet — and naming a different one
+    // is a mistake worth refusing rather than a correction to apply.
+    if (stored === given) return { name: given, wrote: false };
+    if (stored !== undefined && stored !== "") {
+      rejectMutation("recordName", `topic already stores \`${stored}\``);
+    }
+    upgradeTopicState(upgrade.get(), "recordName");
+    shortName.set(given);
+    return { name: given, wrote: true };
+  },
+);
+
 // ===== The pattern =====
 
 export default pattern<TopicInput, TopicOutput>(
@@ -1347,6 +2251,8 @@ export default pattern<TopicInput, TopicOutput>(
       links,
       createdAt,
       createdBy,
+      createdByName,
+      topicStateVersion,
       bodyUpdatedBy,
       bodyUpdatedAt,
       titleUpdatedBy,
@@ -1355,10 +2261,13 @@ export default pattern<TopicInput, TopicOutput>(
       references,
       mentioned,
       boardCrossrefs,
-      boardNames,
+      shortName,
       [SELF]: self,
     },
   ) => {
+    const upgrade = { topicStateVersion, createdByName, createdBy, comments };
+    migrateTopicState(upgrade);
+
     // Session-local UI state (new-tab test: none of this should carry over).
     const commentDraft = new Writable.perSession("");
     const editingBody = new Writable.perSession(false);
@@ -1386,168 +2295,32 @@ export default pattern<TopicInput, TopicOutput>(
     const profileAvatar = profileWish.result?.avatar ?? "";
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
-    // The board has already derived the table; this is a lookup by identity,
-    // and it is written as one.
-    const shortName = ownName({ table: boardNames, self });
 
     // --- Streams (external API; also usable headlessly via CLI) ---
 
-    const addComment = action<AddCommentEvent, AddCommentResult>(
-      ({ body: text, agentName }) => {
-        const trimmed = (text ?? "").trim();
-        const author = topicAuthorFromAgent(agentName) ??
-          rejectMutation("addComment", "agentName must be non-blank");
-        if (!trimmed) rejectMutation("addComment", "body must be non-empty");
-        return { comment: appendComment(comments, trimmed, author) };
-      },
-    );
+    const addComment = addCommentHandler({ upgrade, comments });
 
-    const addLink = action<AddLinkEvent, AddLinkResult>(
-      ({ kind, url, label, agentName }) => {
-        const trimmedUrl = (url ?? "").trim();
-        const author = topicAuthorFromAgent(agentName) ??
-          rejectMutation("addLink", "agentName must be non-blank");
-        if (!trimmedUrl) rejectMutation("addLink", "url must be non-empty");
-        if (!isSafeLinkUrl(trimmedUrl)) {
-          rejectMutation("addLink", "url must be http(s)");
-        }
-        return { link: appendLink(links, trimmedUrl, kind, label, author) };
-      },
-    );
+    const addLink = addLinkHandler({ upgrade, links });
 
-    const removeComment = action<RemoveCommentEvent, RemoveCommentResult>(
-      ({ comment, agentName }) => {
-        const author = topicAuthorFromAgent(agentName) ??
-          rejectMutation("removeComment", "agentName must be non-blank");
-        // The same reference check `mention` makes, and it earns its place for
-        // the same reason: a payload that is not a reference has no stored
-        // element behind it, so the writes below would land on nothing and
-        // report success.
-        if (!comment || comment.get() === undefined) {
-          rejectMutation("removeComment", "comment must be a reference");
-        }
-        if (!isElementOf(comments, comment)) {
-          rejectMutation("removeComment", "comment is not on this topic");
-        }
-        if (comment.get()?.removedAt !== undefined) {
-          rejectMutation("removeComment", "comment is already retracted");
-        }
-        const removedAt = Date.now();
-        // Two field writes into the element the caller named, not a rewrite of
-        // the array. Concurrent retractions of distinct comments merge, and
-        // every surviving reference stays a reference.
-        comment.key("removedAt").set(removedAt);
-        comment.key("removedBy").set(author);
-        return { removedAt, removedBy: author };
-      },
-    );
+    const removeComment = removeCommentHandler({ upgrade, comments });
 
-    const editComment = action<EditCommentEvent, EditCommentResult>(
-      ({ comment, body: text, agentName }) => {
-        // Checked, not bound: `editComment` requires a signature like every
-        // other mutation here, and then stores nothing from it. `author` and
-        // `sentAt` stay as the comment was written — an edit changes what was
-        // said, not who said it. Fabric still records the principal behind
-        // the write.
-        if (!topicAuthorFromAgent(agentName)) {
-          rejectMutation("editComment", "agentName must be non-blank");
-        }
-        if (!comment || comment.get() === undefined) {
-          rejectMutation("editComment", "comment must be a reference");
-        }
-        if (!isElementOf(comments, comment)) {
-          rejectMutation("editComment", "comment is not on this topic");
-        }
-        if (comment.get()?.removedAt !== undefined) {
-          rejectMutation("editComment", "comment is retracted");
-        }
-        const trimmed = (text ?? "").trim();
-        if (!trimmed) rejectMutation("editComment", "body must be non-empty");
-        const editedAt = Date.now();
-        comment.key("body").set(trimmed);
-        comment.key("editedAt").set(editedAt);
-        return { body: trimmed, editedAt };
-      },
-    );
+    const editComment = editCommentHandler({ upgrade, comments });
 
-    const removeLink = action<RemoveLinkEvent, RemoveLinkResult>(
-      ({ link, url, agentName }) => {
-        const author = topicAuthorFromAgent(agentName) ??
-          rejectMutation("removeLink", "agentName must be non-blank");
-        const named = (url ?? "").trim();
-        if (link && named) {
-          rejectMutation("removeLink", "pass link or url, not both");
-        }
-        let target = link;
-        if (!target) {
-          if (!named) {
-            rejectMutation("removeLink", "pass link or url");
-          }
-          // The url spelling resolves to an element the same way the reference
-          // spelling arrives as one, so both paths stamp a stored record.
-          // Newest first, so retracting twice retracts two rather than
-          // re-stamping the one already gone.
-          const stored = links.get();
-          for (let i = stored.length - 1; i >= 0; i--) {
-            const candidate = stored[i];
-            if (candidate?.url === named && isPresent(candidate)) {
-              target = links.key(i) as typeof link;
-              break;
-            }
-          }
-          if (!target) {
-            rejectMutation("removeLink", `no link present with url ${named}`);
-          }
-        } else if (target.get() === undefined) {
-          rejectMutation("removeLink", "link must be a reference");
-        } else if (!isElementOf(links, target)) {
-          rejectMutation("removeLink", "link is not on this topic");
-        } else if (target.get()?.removedAt !== undefined) {
-          rejectMutation("removeLink", "link is already retracted");
-        }
-        const removedAt = Date.now();
-        target!.key("removedAt").set(removedAt);
-        target!.key("removedBy").set(author);
-        return {
-          url: target!.get()?.url ?? named,
-          removedAt,
-          removedBy: author,
-        };
-      },
-    );
+    const removeLink = removeLinkHandler({ upgrade, links });
 
-    const setBody = action<SetBodyEvent, SetBodyResult>(
-      ({ body: text, agentName }) => {
-        const author = topicAuthorFromAgent(agentName) ??
-          rejectMutation("setBody", "agentName must be non-blank");
-        const persisted = text ?? "";
-        body.set(persisted);
-        const bodyUpdatedAtValue = Date.now();
-        bodyUpdatedBy.set(author);
-        bodyUpdatedAt.set(bodyUpdatedAtValue);
-        return {
-          body: persisted,
-          bodyUpdatedBy: author,
-          bodyUpdatedAt: bodyUpdatedAtValue,
-        };
-      },
-    );
+    const setBody = setBodyHandler({
+      upgrade,
+      body,
+      bodyUpdatedBy,
+      bodyUpdatedAt,
+    });
 
-    const setTitle = action<SetTitleEvent, SetTitleResult>(
-      ({ title: text, agentName }) => {
-        const trimmed = (text ?? "").trim();
-        const author = topicAuthorFromAgent(agentName ?? "") ??
-          rejectMutation("setTitle", "agentName must be non-blank");
-        if (!trimmed) rejectMutation("setTitle", "title must be non-empty");
-        return persistTitle(
-          title,
-          titleUpdatedBy,
-          titleUpdatedAt,
-          trimmed,
-          author,
-        );
-      },
-    );
+    const setTitle = setTitleHandler({
+      upgrade,
+      title,
+      titleUpdatedBy,
+      titleUpdatedAt,
+    });
 
     /**
      * Record a reference to another piece.
@@ -1562,39 +2335,18 @@ export default pattern<TopicInput, TopicOutput>(
      * only collects keys it saw when the document loaded or minted itself, so a
      * key that arrived from elsewhere is kept.
      */
-    const mention = action<MentionEvent>(({ topic }) => {
-      // A reference, or a rejection. The schema wraps whatever it is handed as
-      // a cell without looking behind it, so this is the boundary — and the
-      // narrowed payload is what makes it one read of one field: `undefined`
-      // is a value with no document behind it, and any real piece answers with
-      // an object because `title` carries a default.
-      if (!topic || topic.get() === undefined) {
-        rejectMutation("mention", "topic must be a reference");
-      }
-      // A set-add, not an append: referencing the same piece twice is one
-      // reference. Mergeable, so concurrent mentions of distinct pieces all
-      // land and a repeated one is a no-op against durable state.
-      mentioned.addUnique(topic);
-    });
+    const mention = mentionHandler({ upgrade, mentioned });
 
     /** Stop referencing a piece — every entry naming it. */
-    const unmention = action<UnmentionEvent>(({ topic }) => {
-      // Same check as `mention`, and it earns its place here too: a payload
-      // that is not a reference matches no stored entry, so the removal below
-      // would quietly do nothing and report success.
-      if (!topic || topic.get() === undefined) {
-        rejectMutation("unmention", "topic must be a reference");
-      }
-      // `removeByValue`, not `remove` or `removeAll`: those two rebuild the
-      // array and set it back, which is both a clobbering write and the shape
-      // that flattens surviving references. This one resolves against durable
-      // state, so concurrent removals of distinct entries merge.
-      mentioned.removeByValue(topic);
-    });
+    const unmention = unmentionHandler({ upgrade, mentioned });
+
+    /** Store the number the board calls this topic by. */
+    const recordName = recordNameHandler({ upgrade, shortName });
 
     // --- UI-side actions (close over session drafts) ---
 
     const submitComment = submitProfileComment({
+      upgrade,
       comments,
       commentDraft,
       profileName,
@@ -1607,6 +2359,7 @@ export default pattern<TopicInput, TopicOutput>(
     });
 
     const saveTitle = saveProfileTitle({
+      upgrade,
       title,
       titleDraft,
       editingTitle,
@@ -1632,6 +2385,7 @@ export default pattern<TopicInput, TopicOutput>(
     });
 
     const saveBody = saveProfileBody({
+      upgrade,
       body,
       bodyDraft,
       references,
@@ -1650,6 +2404,7 @@ export default pattern<TopicInput, TopicOutput>(
     });
 
     const submitLink = submitProfileLink({
+      upgrade,
       links,
       linkUrlDraft,
       linkLabelDraft,
@@ -1905,6 +2660,7 @@ export default pattern<TopicInput, TopicOutput>(
                             disabled={!hasProfile}
                             data-retract="link"
                             onClick={retractProfileLink({
+                              upgrade,
                               links,
                               link,
                               profileName,
@@ -2003,6 +2759,7 @@ export default pattern<TopicInput, TopicOutput>(
                               disabled={!hasProfile}
                               data-retract="comment"
                               onClick={retractProfileComment({
+                                upgrade,
                                 comments,
                                 comment,
                                 profileName,
@@ -2076,7 +2833,7 @@ export default pattern<TopicInput, TopicOutput>(
                           <cf-cell-link $cell={topic} />
                           <cf-button
                             variant="ghost"
-                            onClick={dropMention({ mentioned, topic })}
+                            onClick={dropMention({ upgrade, mentioned, topic })}
                           >
                             Remove
                           </cf-button>
@@ -2140,6 +2897,7 @@ export default pattern<TopicInput, TopicOutput>(
       setTitle,
       mention,
       unmention,
+      recordName,
       commentDraft,
       bodyDraft,
       editingBody,

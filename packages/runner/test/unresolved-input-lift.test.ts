@@ -36,7 +36,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 const spaceSigner = await Identity.fromPassphrase("unresolved input space");
 const space = spaceSigner.did() as MemorySpace;
@@ -192,12 +192,13 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
       await writer.storageManager.synced();
     }
 
-    await waitUntil(
-      () => {
-        const out = result.key("out").get() as string[] | undefined;
-        return Array.isArray(out) && out.length === 2;
-      },
-      "the disposed run to re-trigger on the doc's arrival",
+    // The re-trigger's output arrives on the result cell's own sink, and
+    // is read once the reader's scheduler is quiescent.
+    await waitForCellValue<string[]>(
+      readerRuntime,
+      result.key("out"),
+      (out) => Array.isArray(out) && out.length === 2,
+      { stuckLabel: "the lift's output to hold both entries" },
     );
     expect(result.key("out").get()).toEqual(["hello", "world"]);
     expect(actionFailures).toEqual([]);
@@ -232,9 +233,11 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
     const cancel = result.sink(() => {});
     await readerRuntime.idle();
 
-    await waitUntil(
-      () => result.key("out").get() === null,
-      "the body to run with the stated null",
+    await waitForCellValue<string[] | null>(
+      readerRuntime,
+      result.key("out"),
+      (out) => out === null,
+      { stuckLabel: "the lift's output to fall back to null" },
     );
     expect(actionFailures).toEqual([]);
     cancel();

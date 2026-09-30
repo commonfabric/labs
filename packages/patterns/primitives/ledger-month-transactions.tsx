@@ -8,6 +8,13 @@
  * ledger over a full table. `month` picks the window as `YYYY-MM`, and
  * defaults to the calendar month the database's own clock is in.
  *
+ * The projection carries `status` because the connector store's row-label rule
+ * reads it, and a query that does not project every column its table's rule
+ * reads is refused rather than returned unlabeled — the refusal names the
+ * missing column in `error`, unlike the wrong tombstone filter, which reports
+ * an empty ledger and no reason at all. `describe_handle` names the columns a
+ * handle's rules read.
+ *
  * @hashtags plaid, bank, transactions, ledger, finance, month, connector
  * @keywords bank transactions, plaid ledger, this month's transactions,
  * bill payments, spending, deleted flag, tombstone, connector store,
@@ -36,6 +43,12 @@ export interface LedgerTransaction {
   pending: number;
   category_primary: string;
   iso_currency_code: string;
+
+  /**
+   * What the connector says became of the transaction. Projected because the
+   * table's row-label rule reads it, not because the view shows it.
+   */
+  status: string;
 }
 
 export interface LedgerMonthTransactionsInput {
@@ -83,7 +96,7 @@ const rowsSql = (): string =>
     `WITH bounds AS (SELECT ${resolvedMonthSql()} || '-01' AS start)`,
     "SELECT t.transaction_id, t.date, t.amount, t.signed_amount,",
     "  t.merchant_name, t.name, t.account_id, t.pending,",
-    "  t.category_primary, t.iso_currency_code",
+    "  t.category_primary, t.iso_currency_code, t.status",
     "FROM bounds, rows_plaid_transaction t",
     "WHERE t.deleted = 0",
     "  AND t.date >= bounds.start",
@@ -113,12 +126,19 @@ export const LedgerMonthTransactions = pattern<
   LedgerMonthTransactionsInput,
   LedgerMonthTransactionsOutput
 >(({ bank, month }) => {
+  // The param is a value READ out of `month`, not `month` itself. A query
+  // binds the reference it is handed and resolves it without the declared
+  // default, so a month a caller forwarded and nobody supplied reaches the
+  // query as `undefined`, and an undefined param fails the whole read rather
+  // than resolving to the month the SQL above answers an empty string with.
+  const monthParam = computed(() => month);
+
   const monthRead = bank.query<{ month: string }>(monthSql(), {
-    params: [month],
+    params: [monthParam],
     scope: "session",
   });
   const rowsRead = bank.query<LedgerTransaction>(rowsSql(), {
-    params: [month],
+    params: [monthParam],
     scope: "session",
   });
 

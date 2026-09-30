@@ -239,7 +239,8 @@ export default pattern((__cf_pattern_input) => {
                     "enum": ["collection-index"]
                 },
                 mode: {
-                    "enum": ["group", "key"]
+                    type: "string",
+                    "enum": ["group"]
                 },
                 keys: {
                     type: "array",
@@ -305,7 +306,8 @@ export default pattern((__cf_pattern_input) => {
                     "enum": ["collection-index"]
                 },
                 mode: {
-                    "enum": ["group", "key"]
+                    type: "string",
+                    "enum": ["key"]
                 },
                 keys: {
                     type: "array",

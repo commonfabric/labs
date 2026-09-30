@@ -18,10 +18,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   preloadCloneValue,
   snapshotCloneValue,
 } from "../src/ops/clone-data-snapshot.ts";
+import { PieceController } from "../src/ops/piece-controller.ts";
 import {
   classifyOrigin,
   PieceOriginError,
@@ -1183,7 +1185,7 @@ describe("reading a piece's source state", () => {
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     });
     const destination = await cloneDestination("source-clone-no-uri");
-    const cell = source.getCell();
+    const cell = patchableCell(source.getCell());
     const originalLink = cell.getAsNormalizedFullLink.bind(cell);
 
     try {
@@ -1191,9 +1193,10 @@ describe("reading a piece's source state", () => {
         ...originalLink(),
         id: "not-a-fabric-uri",
       })) as unknown as typeof cell.getAsNormalizedFullLink;
-      await expect(source.cloneTo(destination)).rejects.toThrow(
-        "piece has no fabric URI",
-      );
+      await expect(new PieceController(controller, cell).cloneTo(destination))
+        .rejects.toThrow(
+          "piece has no fabric URI",
+        );
     } finally {
       cell.getAsNormalizedFullLink = originalLink;
     }
@@ -1251,10 +1254,10 @@ describe("reading a piece's source state", () => {
   });
 
   it("rejects cells that appeared after clone data was preloaded", () => {
-    const cell = runtime.getImmutableCell(
+    const cell = patchableCell(runtime.getImmutableCell(
       controller.getSpace(),
       { value: 1 },
-    );
+    ));
 
     const get = cell.get.bind(cell);
     let read = false;
@@ -1297,7 +1300,9 @@ describe("reading a piece's source state", () => {
       "piece data containing unsupported object values cannot be copied",
     );
 
-    const cell = runtime.getImmutableCell(controller.getSpace(), "safe");
+    const cell = patchableCell(
+      runtime.getImmutableCell(controller.getSpace(), "safe"),
+    );
     const getRawUntyped = cell.getRawUntyped.bind(cell);
     try {
       cell.getRawUntyped = (() =>
@@ -1315,8 +1320,8 @@ describe("reading a piece's source state", () => {
       controller.getSpace(),
       { first: 1, second: 2 },
     );
-    const first = cell.key("first");
-    const second = cell.key("second");
+    const first = patchableCell(cell.key("first"));
+    const second = patchableCell(cell.key("second"));
     const cells = new Map<string, Cell<unknown>>();
     const firstPull = first.pull.bind(first);
     const secondPull = second.pull.bind(second);
@@ -1342,16 +1347,12 @@ describe("reading a piece's source state", () => {
     expect(pulls).toBe(1);
     expect(cells.size).toBe(2);
 
-    const stream = runtime.getImmutableCell(controller.getSpace(), "event");
-    const streamShape = stream as unknown as { isStream(): boolean };
-    const isStream = streamShape.isStream.bind(streamShape);
-    try {
-      streamShape.isStream = () => true;
-      await expect(preloadCloneValue(stream, undefined, new Map())).rejects
-        .toThrow("piece input containing streams cannot be copied");
-    } finally {
-      streamShape.isStream = isStream;
-    }
+    const stream = runtime.getImmutableCell(
+      controller.getSpace(),
+      { $stream: true },
+    );
+    await expect(preloadCloneValue(stream, undefined, new Map())).rejects
+      .toThrow("piece input containing streams cannot be copied");
   });
 
   it("recreates computed values and streams instead of copying them", async () => {
@@ -1436,12 +1437,12 @@ describe("reading a piece's source state", () => {
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
     const destination = await cloneDestination("source-clone-tx-source-change");
-    const cell = source.getCell();
+    const cell = patchableCell(source.getCell());
     const withTx = cell.withTx.bind(cell);
 
     try {
       cell.withTx = ((tx) => {
-        const txCell = withTx(tx);
+        const txCell = patchableCell(withTx(tx));
         const getMetaRaw = txCell.getMetaRaw.bind(txCell);
         txCell.getMetaRaw = ((key) =>
           key === "patternIdentity"
@@ -1449,8 +1450,11 @@ describe("reading a piece's source state", () => {
             : getMetaRaw(key)) as typeof txCell.getMetaRaw;
         return txCell;
       }) as typeof cell.withTx;
-      await expect(source.cloneTo(destination, { copyData: true })).rejects
-        .toThrow("piece source changed while it was being cloned");
+      await expect(
+        new PieceController(controller, cell).cloneTo(destination, {
+          copyData: true,
+        }),
+      ).rejects.toThrow("piece source changed while it was being cloned");
     } finally {
       cell.withTx = withTx;
     }
@@ -1462,12 +1466,12 @@ describe("reading a piece's source state", () => {
       files: [{ name: "/main.tsx", contents: COUNTER_SOURCE }],
     }, { input: { label: "before" } });
     const destination = await cloneDestination("source-clone-manifest-change");
-    const cell = source.getCell();
+    const cell = patchableCell(source.getCell());
     const withTx = cell.withTx.bind(cell);
 
     try {
       cell.withTx = ((tx) => {
-        const txCell = withTx(tx);
+        const txCell = patchableCell(withTx(tx));
         const getMetaRaw = txCell.getMetaRaw.bind(txCell);
         txCell.getMetaRaw = ((key) =>
           key === "internal"
@@ -1475,8 +1479,11 @@ describe("reading a piece's source state", () => {
             : getMetaRaw(key)) as typeof txCell.getMetaRaw;
         return txCell;
       }) as typeof cell.withTx;
-      await expect(source.cloneTo(destination, { copyData: true })).rejects
-        .toThrow("piece data changed while it was being cloned");
+      await expect(
+        new PieceController(controller, cell).cloneTo(destination, {
+          copyData: true,
+        }),
+      ).rejects.toThrow("piece data changed while it was being cloned");
     } finally {
       cell.withTx = withTx;
     }
@@ -1939,7 +1946,7 @@ describe("reading a piece's source state", () => {
     );
     await destination.synced();
 
-    const sourceCell = source.getCell();
+    const sourceCell = patchableCell(source.getCell());
     const sourceLink = sourceCell.getAsNormalizedFullLink();
     const runtimeWithMutableLookup = runtime as Runtime & {
       getCellFromEntityId: Runtime["getCellFromEntityId"];

@@ -1,5 +1,5 @@
-import type { LLMNativeModelToolId } from "@commonfabric/llm/types";
-import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import type { HarnessNativeModelToolId } from "../contracts/native-model-tool.ts";
+import type { HarnessModelToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type {
   HarnessAssistantTranscriptMessage,
   HarnessTranscriptMessage,
@@ -12,7 +12,7 @@ export interface HarnessModelRequestSummary {
   model: string;
   messageCount: number;
   toolCount: number;
-  nativeModelToolIds?: readonly LLMNativeModelToolId[];
+  nativeModelToolIds?: readonly HarnessNativeModelToolId[];
   nativeModelToolCount: number;
   serializedBytes: number;
 }
@@ -72,8 +72,8 @@ export interface HarnessModelAttemptDiagnostic {
 export interface HarnessModelTurnRequest {
   model: string;
   transcript: readonly HarnessTranscriptMessage[];
-  tools: readonly HarnessToolDescriptor[];
-  nativeModelToolIds: readonly LLMNativeModelToolId[];
+  tools: readonly HarnessModelToolDescriptor[];
+  nativeModelToolIds: readonly HarnessNativeModelToolId[];
   runId: string;
   cacheAffinityKey?: string;
   promptCacheMode?: "implicit" | "explicit";
@@ -126,14 +126,19 @@ export interface HarnessModelUsage {
   estimateWithheldReason?: HarnessCostEstimateWithheldReason;
 }
 
+/** Reasons a usage record cannot carry a complete cost estimate. */
+export const HARNESS_COST_ESTIMATE_WITHHELD_REASONS = [
+  "unknown-model",
+  "missing-token-counts",
+  "missing-cache-detail",
+  "invalid-token-counts",
+  "inconsistent-token-counts",
+  "provider-pricing-unavailable",
+  "incomplete-estimates",
+] as const;
+
 export type HarnessCostEstimateWithheldReason =
-  | "unknown-model"
-  | "missing-token-counts"
-  | "missing-cache-detail"
-  | "invalid-token-counts"
-  | "inconsistent-token-counts"
-  | "provider-pricing-unavailable"
-  | "incomplete-estimates";
+  typeof HARNESS_COST_ESTIMATE_WITHHELD_REASONS[number];
 
 export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
   "inputTokens",

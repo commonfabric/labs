@@ -1,13 +1,14 @@
 # Lazy, schema-observing cell materialization
 
 Status: built end to end and on by default behind `lazyMaterialization`. What
-remains is removing the flag and the eager path for lift arguments, and landing
-the synchronous refusal arm of Stage 5; handler materialization is settled
-there.
+remains is removing the flag and the eager path for lift arguments; handler
+materialization is settled under Stage 5.
 
-The remaining execution sequence and acceptance gates are owned by the separate
-[lazy materialization fast-follow](lazy-materialization-fast-follow.md). This
-document retains the view and snapshot design and its implementation record.
+Switch retirement is optional work for the flag owner. The separate
+[lazy materialization fast-follow record](../history/plans/lazy-materialization-fast-follow.md)
+contains the dated investigation and measurement evidence. Current read semantics
+are described in the [feature contract](../features/lazy-cell-materialization.md).
+This document retains the view and snapshot design and its implementation record.
 
 `Cell.get()` materializes everything its schema selects, in one pass, before the
 reader touches any of it. A lift declaring a list of a thousand entries gets a
@@ -20,7 +21,7 @@ each path when it is touched, narrowing the schema as it descends and refusing
 the read when the data no longer matches. A transaction can be flipped into a
 mode where every cell read hands back such a proxy; the runner flips it for the
 transaction that runs a lift, and treats a schema refusal as it treats an
-argument that did not resolve, with the exception the status line names.
+argument that did not resolve.
 
 ## Status convention
 
@@ -61,10 +62,13 @@ the data has stopped matching.
 
 **Schema narrowing already exists.** `ContextualFlowControl.schemaAtPath`
 ([`cfc.ts`](../../packages/runner/src/cfc.ts)) narrows a schema by a path,
-resolves `$ref`, unions `anyOf` / `oneOf` branches, and caches per interned
-schema. `canBranchMatch`, in `traverse.ts`, is a shallow branch prefilter — type
-check plus required-key presence, no descent. Together these are the narrowing
-primitive a lazy proxy needs.
+resolves `$ref`, and caches per interned schema. That is the narrowing a view
+applies to an ordinary container child. It does not decide a combinator: the
+view defers `anyOf`, `oneOf` and `allOf` to the eager traverser at the position
+where they are accessed, because whether a branch matches is a question about
+the whole branch. `canBranchMatch`, in `traverse.ts`, stays a shallow prefilter
+on the eager path — type check plus required-key presence, no descent — and
+nothing in the view is decided by it.
 
 **The "argument did not resolve" path.** `readJavaScriptArgument`
 ([`runner.ts`](../../packages/runner/src/runner.ts)) computes `isValidArgument`
@@ -150,21 +154,24 @@ a computed that has not produced yet is the ordinary case rather than a fault.
 The read that failed is registered either way, so the reader comes back when the
 data arrives.
 
-State the delta plainly, because it is the one behavior change a pattern author
-can observe: **a mismatch in a subtree the reader never touches no longer stops
-the reader.** Today a broken field five levels down collapses the whole argument
-and the lift does not run. Under this contract the lift runs, because nothing
-ever asked. This is the deliberate cost of not materializing what nobody wants.
-It is bounded in the direction that matters — a reader that touches broken data
-still refuses — and it removes a class of whole-argument collapses caused by
-data the reader had no interest in.
+For ordinary containers, a mismatch in an untouched child does not stop the
+reader. Validation follows demand, with whole-subtree decisions made at the
+boundaries below. A reader that touches broken data still refuses unless the
+schema permits an omitted property or a fallback.
 
-**`anyOf` resolves at the point of access.** When the narrowed schema at a path
-is a union, the view reads the value at that path non-recursively and filters
-branches with `canBranchMatch`. One surviving branch narrows to it; several
-merge their property schemas the way `mergeAnyOfBranchSchemas` already does;
-none is a refusal. The prefilter is shallow by construction, so this stays a
-container-shaped read, not a descent.
+**Combinators resolve at the point of access.** `anyOf`, `oneOf`, and `allOf`
+use eager traversal for the selected subtree, preserving whole-branch validation
+and merging only successful results. One case stays lazy: a union the value's
+type alone settles — one branch accepting the value's type and every other
+refusing it — is built as a view over that branch, since nothing below the
+value can change which branch applies. Shallow candidate matching decides
+nothing else. Nothing else is evaluated whole: a property default and a
+nullable array-item substitute answer for what the view rejects at the
+container, and what fails deeper refuses where it is touched. The feature
+contract lists those as
+[deliberate divergences](../features/lazy-cell-materialization.md#where-a-view-deliberately-diverges),
+and `packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
+cost they avoid.
 
 ### Snapshot semantics
 
@@ -369,8 +376,10 @@ the materialization differs.
       `Array.prototype` methods over element views built on demand. The
       reshaping methods refuse — a view is a read.
 - [x] `toCell` on every view.
-- [x] `anyOf` / `oneOf` narrowed at the point of access via `canBranchMatch`,
-      merged by `mergeAnyOfBranchSchemas` when several branches survive.
+- [x] `anyOf`, `oneOf`, and `allOf` evaluated through eager traversal at the
+      point of access, preserving whole-branch validation and result merging;
+      a union the value's type settles narrows to its one branch and stays
+      lazy.
 - [x] `SchemaMismatchError`, carrying link and reason.
 - [x] Root guard: type, `required` presence. A mismatch at the root is
       `undefined`, matching an eager read; below it, a refusal.
@@ -432,27 +441,24 @@ chain so a wrapper and the transaction it wraps answer alike.
 
 ### Stage 5 — Runner integration
 
-**Done, except a refusal a synchronous body throws.** The runner marks the
-action's transaction around argument materialization and the body, and unmarks
-it before the result is written, so diffing and the scheduler's own reads keep
-eager semantics.
+**Done.** The runner marks the action's transaction around argument
+materialization and the body, and unmarks it before the result is written, so
+diffing and the scheduler's own reads keep eager semantics.
 
 - [x] A refusal caught inside the body and found on the transaction afterwards,
       or rejected out of an asynchronous body, writes an undefined result
       through the ordinary path. Logged at info level as a non-run, not reported
       as an action error. Verified by reading the path; no test in the tree
       asserts the result for these two arms.
-- [ ] Not landed: a refusal a synchronous body throws writes the same undefined
-      result. Today it reaches the catch before `postRun` is assigned, so the
-      previous result stands;
-      `packages/runner/test/unresolved-input-lift.test.ts` pins this arm and
-      passes only because its case has no previous result to stand. The fix is
-      on the branch `codex/lift-refusal-disposition`, held for a ruling from the
-      Pattern Update State and Baseline Integrity gate's owner.
+- [x] A refusal a synchronous body throws writes the same undefined result:
+      `postRun` is assigned before the body is invoked, and
+      `packages/runner/test/lift-refusal-disposition.test.ts` pins it in both
+      postures. A refusal raised during the argument read still precedes the
+      assignment and keeps the earlier disposition.
 - [x] The reads taken up to the refusal stay registered, including the one that
       failed, so the node runs again when its inputs change.
 - [x] Handlers materialize eagerly, by decision rather than by omission. The
-      [fast-follow](lazy-materialization-fast-follow.md) built and measured a
+      [fast-follow](../history/plans/lazy-materialization-fast-follow.md) built and measured a
       lazy bound-context prototype and deferred it: a view narrows the read
       log a handler's commit is checked against, and its measured win is
       confined to a shape the collection guidance already steers away from.
@@ -473,7 +479,7 @@ eager semantics.
       read drops it, and three reads that were answered without being
       registered. None of them was the "argument refused for a missing field"
       story the earlier note here guessed at; that disposition was not among
-      them, though it carries the synchronous-throw gap Stage 5 names.
+      them.
 - [x] Read `.length` off a string. `.length` on a string output lowers to a link
       ending in that segment, and a string's `length` is not a stored path, so
       the store cannot serve the address the link resolves to. Eager traversal
@@ -481,9 +487,9 @@ eager semantics.
       link resolution now applies the same rule, which is also where an eager
       read of such a link used to answer `undefined`.
       `gideon-tests/proxy-length-repro` pins it.
-- [ ] Soak on default-on before removing the flag. F3/F4 in the
-      [fast-follow plan](lazy-materialization-fast-follow.md) own the evidence,
-      retirement decision and implementation sequence.
+- [ ] Owner-led: decide whether and when to remove the default-on flag. The
+      [fast-follow plan](../history/plans/lazy-materialization-fast-follow.md) supplies evidence;
+      its completion does not depend on this optional retirement.
 
 ## Testing
 

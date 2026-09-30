@@ -1,0 +1,1 @@
+{"date":"2026-09-11","from":{"k":"unit","s":"runner","n":"Cell with Optional Link > ensureLink() error handling > should throw error when accessing cell without frame context"},"to":{"k":"unit","s":"runner","n":"Cell with Optional Link > ensureLink() error handling > throws naming the missing space for a cell whose link and frame both lack one"}}

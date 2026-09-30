@@ -1038,7 +1038,7 @@ describe("Cell Static Methods", () => {
       });
     });
 
-    // A native `Date` written via `set()` is normalized to a `FabricEpochNsec`
+    // A JS `Date` written via `set()` is normalized to a `FabricEpochNsec`
     // (top-level and nested alike). These use a self-contained runtime that
     // drains the storage sync before dispose: the shared `afterEach` disposes
     // without awaiting the sync a commit triggers, which races for writes that
@@ -1081,7 +1081,7 @@ describe("Cell Static Methods", () => {
     //
     // Date normalization on `set()`
     //
-    // A native `Date` written through `set()` normalizes to a
+    // A JS `Date` written through `set()` normalizes to a
     // `FabricEpochNsec`, at the top level and nested inside an array.
     //
 

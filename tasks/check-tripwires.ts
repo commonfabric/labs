@@ -52,6 +52,9 @@ export const TRIPWIRES: Tripwire[] = [
     // Named-space keys derive from `Identity.fromPassphrase("common user")`,
     // ignoring the calling user entirely (packages/identity/src/session.ts).
     // So anyone who knows a space NAME can reconstruct its private key.
+    // That derivation supports the legacy space names used during development
+    // and nothing else, and is removed once those development-only spaces have
+    // been migrated (docs/plans/random-space-identities.md).
     stillWeak: async () => {
       const name = "check-tripwires-probe-space";
       const alice = await createSession({

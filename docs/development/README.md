@@ -16,7 +16,8 @@ mapped in [`../README.md`](../README.md).
 - [`code-comment-style.md`](code-comment-style.md) — how a comment is written:
   what earns one, the rule that a comment describes the system as it stands and
   the shapes that break it, the Markdown markup comments and error messages
-  share, and what a doc comment carries
+  share, the `debugStr` template tag for putting a value into a message, and
+  what a doc comment carries
 - [`imports.md`](imports.md) — why a file's dependencies belong in its import
   list, the two lint rules that keep them there, and what earns a deferred
   `import()` the ignore directive that keeps it
@@ -74,9 +75,8 @@ mapped in [`../README.md`](../README.md).
   installing it commits you to, and the questions a local clone answers more
   cheaply
 - [`CI_PERFORMANCE.md`](CI_PERFORMANCE.md) — how continuous-integration wall
-  time is tracked, and when to start or stop work on splitting and
-  rebalancing jobs
-- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which job
+  time is tracked, the dials that govern the lanes, and when to move them
+- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which suite
   collects which, and how to read the resulting numbers
 - [`test-records.md`](test-records.md) — the record of every test execution:
   what gets recorded, the environment surface, opting a workstation in with

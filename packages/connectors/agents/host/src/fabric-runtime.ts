@@ -1,4 +1,5 @@
-import { createSession, Identity, isDID } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   experimentalOptionsForDeployedClient,
@@ -13,6 +14,7 @@ import { parseAgentFabricApiUrl } from "./target-state.ts";
 
 export interface AgentFabricRuntime {
   runtime: Runtime;
+  graphRuntime: Runtime;
   manager: PiecesController;
   spaceDid: MemorySpace;
   target: AgentFabricTarget;
@@ -62,22 +64,42 @@ export async function openAgentFabricRuntime(options: {
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
   options.signal?.throwIfAborted();
-  const storageManager = StorageManager.open({
-    as: session.as,
-    memoryHost: apiUrl,
-    spaceIdentity: session.spaceIdentity,
-  });
-  const runtime = new Runtime(runtimePresets.remoteClient({
-    apiUrl,
-    storageManager,
-    experimental,
-    trustSnapshotProvider: () => ({
-      id: `principal:${session.as.did()}`,
-      actingPrincipal: session.as.did(),
-    }),
-  }));
+  const allocatedResources: Array<() => Promise<void>> = [];
+  const createRuntime = () => {
+    const storageManager = StorageManager.open({
+      as: session.as,
+      memoryHost: apiUrl,
+      spaceIdentity: session.spaceIdentity,
+    });
+    const resourceIndex = allocatedResources.push(
+      () => storageManager.close(),
+    ) - 1;
+    const runtime = new Runtime(runtimePresets.remoteClient({
+      apiUrl,
+      storageManager,
+      experimental,
+      trustSnapshotProvider: () => ({
+        id: `principal:${session.as.did()}`,
+        actingPrincipal: session.as.did(),
+      }),
+    }));
+    allocatedResources[resourceIndex] = () => runtime.dispose();
+    return runtime;
+  };
   let disposeTask: Promise<void> | undefined;
-  const dispose = () => disposeTask ??= runtime.dispose();
+  const dispose = () =>
+    disposeTask ??= Promise.allSettled(
+      allocatedResources.toReversed().map((disposeResource) =>
+        disposeResource()
+      ),
+    ).then((outcomes) => {
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : []
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Fabric runtime cleanup failed");
+      }
+    });
 
   const stage = async <T>(operation: Promise<T>): Promise<T> => {
     try {
@@ -97,6 +119,8 @@ export async function openAgentFabricRuntime(options: {
   };
 
   try {
+    const runtime = createRuntime();
+    const graphRuntime = createRuntime();
     if (!(await stage(runtime.healthCheck(options.signal)))) {
       throw new Error(`could not connect to ${apiUrl.origin}`);
     }
@@ -109,14 +133,33 @@ export async function openAgentFabricRuntime(options: {
       spaceDid: session.space,
       ownerDid: options.ownerDid,
     };
+    const graphConnection = {
+      runtime: graphRuntime,
+      spaceDid: session.space,
+      ownerDid: options.ownerDid,
+    };
+    const graphSessionFactory = () =>
+      Promise.resolve({
+        connection: graphConnection,
+        release: () => graphRuntime.storageManager.close(),
+      });
     const target = await stage(
       options.deferStorageClaim
-        ? AgentFabricTarget.connect(connection)
-        : AgentFabricTarget.open(connection),
+        ? AgentFabricTarget.connect(
+          connection,
+          undefined,
+          graphSessionFactory,
+        )
+        : AgentFabricTarget.open(
+          connection,
+          undefined,
+          graphSessionFactory,
+        ),
     );
     options.signal?.throwIfAborted();
     return {
       runtime,
+      graphRuntime,
       manager,
       spaceDid: session.space,
       target,

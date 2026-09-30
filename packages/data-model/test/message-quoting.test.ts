@@ -14,11 +14,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { backtickQuote } from "@commonfabric/utils/markdown";
 
-import { NullLiveEnvironment } from "@/codec-common/index.ts";
+import { cloneIfNecessary, hashOf } from "@";
+import { NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import { newDefaultJsonCodecEngine } from "@/codecs.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { cloneIfNecessary } from "@/value-clone.ts";
-import { hashOf } from "@/value-hash.ts";
+import { FabricHash } from "@/fabric-primitives";
 
 /**
  * Builds a class instance whose `constructor.name` holds the given text.
@@ -62,9 +61,8 @@ describe("message-quoting", () => {
         } catch (e) {
           message = (e as Error).message;
         }
-        expect(message).toContain(
-          `unsupported object type ${backtickQuote(name)}`,
-        );
+        expect(message).toContain("Cannot hash value");
+        expect(message).toContain(JSON.stringify(name));
       }
     });
   });
@@ -85,11 +83,10 @@ describe("message-quoting", () => {
 
   describe("JsonCodecEngine.decode()", () => {
     it("hands back the excerpt it refused", () => {
-      const env = new NullLiveEnvironment(false);
       for (const data of HOSTILE) {
         let message = "";
         try {
-          newDefaultJsonCodecEngine().decode(data, env);
+          newDefaultJsonCodecEngine().decode(data, NULL_LIVE_ENVIRONMENT);
         } catch (e) {
           message = (e as Error).message;
         }

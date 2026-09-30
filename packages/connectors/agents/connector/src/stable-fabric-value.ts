@@ -1,11 +1,11 @@
 import {
   deepFreeze,
-  fabricFromNativeValue,
+  fabricFromConvertibleJsValue,
   FabricInstance,
   type FabricPlainObject,
   type FabricValue,
   JS_TYPE_VALUE_TAGS,
-  tagFromNativeValueElseNull,
+  tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@commonfabric/data-model";
 import {
@@ -22,9 +22,10 @@ import {
   isCellResultForDereferencing,
 } from "@commonfabric/runner";
 import { isArrayWithOnlyIndexProperties } from "@commonfabric/utils/arrays";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -35,7 +36,7 @@ function hasToJson(
   value: unknown,
 ): value is { toJSON: () => unknown } {
   return (
-    (typeof value === "object" && value !== null) ||
+    isObjectOrArray(value) ||
     typeof value === "function"
   ) &&
     "toJSON" in value &&
@@ -78,8 +79,8 @@ function replaceCellsWithLinks(
     }
     return converted;
   }
-  const nativeTag = tagFromNativeValueElseNull(value);
-  if (nativeTag === VALUE_TAGS.JsError) {
+  const tag = tagOfConvertibleJsValueElseNull(value);
+  if (tag === VALUE_TAGS.JsError) {
     const error = value as Error;
     const existing = seen.get(error);
     if (existing) return existing;
@@ -102,9 +103,9 @@ function replaceCellsWithLinks(
     }
   }
   if (
-    nativeTag !== null &&
-    nativeTag !== VALUE_TAGS.Object &&
-    !Object.hasOwn(JS_TYPE_VALUE_TAGS, nativeTag)
+    tag !== null &&
+    tag !== VALUE_TAGS.Object &&
+    !Object.hasOwn(JS_TYPE_VALUE_TAGS, tag)
   ) {
     return value;
   }
@@ -151,7 +152,7 @@ function captureFabricValue(
   seen: WeakMap<object, FabricValue>,
   active: WeakSet<object>,
 ): FabricValue {
-  if (value === null || typeof value !== "object") return value;
+  if (!isObjectOrArray(value)) return value;
   const existing = seen.get(value);
   if (existing !== undefined) return existing;
   if (active.has(value)) {
@@ -243,12 +244,12 @@ function captureFabricValue(
 
 /**
  * Capture a graph value as an immutable `FabricValue`. Stable child cells
- * become links, while native values and shared references retain their
+ * become links, while JS values and shared references retain their
  * `FabricValue` semantics.
  */
 export function stableFabricValue(value: unknown): FabricValue {
   return captureFabricValue(
-    fabricFromNativeValue(
+    fabricFromConvertibleJsValue(
       replaceCellsWithLinks(value, new WeakMap()),
     ),
     new WeakMap(),

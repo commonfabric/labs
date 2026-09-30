@@ -22,8 +22,6 @@ import {
   fromBase64url,
   toUnpaddedBase64url,
 } from "@commonfabric/utils/base64url";
-import { JsonCodecEngine } from "@/codec-json/index.ts";
-import { jsonFromFabricValue } from "@/codecs.ts";
 import {
   DATA_URI_MEDIA_TYPE,
   dataUriFromValue,
@@ -33,6 +31,8 @@ import {
   valueFromDataUri,
   valueFromDataUriPayloadText,
 } from "@/codec-data-uri.ts";
+import { JsonCodecEngine } from "@/codec-json";
+import { jsonFromFabricValue } from "@/codecs.ts";
 
 describe("codec-data-uri", () => {
   describe("media-type predicates", () => {

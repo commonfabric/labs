@@ -37,19 +37,16 @@ export default pattern<Input, Input>(({ items }) => {
 });
 ```
 
-## Async Operations Block UI
+## A Handler Cannot Fetch
 
-Using `await` in handlers blocks the entire UI:
+A handler has no `fetch` to call: a compartment endows none, and the name is
+withheld from the type libraries, so reaching for one is a compile error rather
+than a runtime failure. A request is a reactive node the pattern body declares,
+and a handler starts one by writing the cell that node reads. Awaiting inside a
+handler blocks the whole UI besides, so the two rules point the same way.
 
 ```typescript
 // Shown for illustration only.
-// Blocks UI - async handlers block the entire UI
-const handleFetch = handler(async (_, { url, result }) => {
-  const response = await fetch(url.get());  // BLOCKS!
-  const data = await response.json();
-  result.set(data);
-});
-
 // Use fetchJson - reactive, non-blocking
 // Handler at module scope - just updates the query
 const handleSearch = handler<{ detail: { message: string } }, { searchQuery: Writable<string> }>(

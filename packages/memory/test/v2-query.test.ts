@@ -8,6 +8,7 @@ import {
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import type { JSONSchema } from "@commonfabric/api";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { encodeMemoryBoundary } from "../v2.ts";
 import {
@@ -1399,8 +1400,9 @@ Deno.test("memory v2 schema-closure assembly fails loudly on a corrupted depende
       `UPDATE head SET seq = seq + 1 WHERE id = :id`,
     ).run({ id: `cid:${leafHash}` });
 
-    // An established watch's refresh revalidates the whole delivered state
-    // and fails loudly even though the referrer did not change.
+    // A refresh delivering the leaf at its new version walks the hash its
+    // earlier version verified as, and fails loudly even though no
+    // referrer changed.
     assertThrows(
       () =>
         refreshTrackedGraph(
@@ -1917,6 +1919,151 @@ Deno.test("memory v2 delivers a label schema document that arrives after the doc
     assertEquals(tracked.state.entities.get(targetKey)?.document, {
       value: labelSchema,
     });
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 delivers the label documents a version-2 CFC envelope references", async () => {
+  const { engine, path } = await createEngine();
+  const space = "did:key:z6Mk-memory-v2-label-document-delivery";
+  const referrer = "of:label-document-referrer";
+  const labelSchema = {
+    type: "object",
+    properties: { n: { type: "number" } },
+  } as const;
+  const labelSchemaId = `cid:${internSchemaAsTaggedHashString(labelSchema)}`;
+  // Two entries share one label document, so the delivery is one document
+  // per distinct reference rather than one per entry.
+  const label = { confidentiality: ["secret", "vaulted"] };
+  const labelId = `cid:${taggedHashStringOf(label)}`;
+  try {
+    applyCommit(engine, {
+      sessionId: "session:label-document-writer",
+      invocation: invocationFor(1),
+      authorization,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: labelSchemaId,
+          value: { value: labelSchema },
+        }, {
+          op: "set",
+          id: labelId,
+          value: { value: label },
+        }, {
+          op: "set",
+          id: referrer,
+          value: {
+            value: { n: 1 },
+            cfc: {
+              version: 2,
+              schemaHash: labelSchemaId.slice("cid:".length),
+              labelMap: {
+                version: 1,
+                entries: [
+                  { path: ["n"], label: { $ref: labelId } },
+                  { path: [], origin: "derived", label: { $ref: labelId } },
+                ],
+              },
+            },
+          },
+        }],
+      },
+    });
+
+    // A reader of the referrer resolves its labels from the label document
+    // synchronously, so the document travels with the referrer: tracked
+    // beside the schema document, and delivered in the same result.
+    const tracked = trackGraph(space, engine, {
+      roots: [{
+        id: referrer,
+        selector: { path: [], schema: false },
+      }],
+    });
+    const schemaKey = `${space}/space/${labelSchemaId}` as const;
+    const labelKey = `${space}/space/${labelId}` as const;
+    assert(tracked.state.tracker.has(schemaKey));
+    assert(tracked.state.tracker.has(labelKey));
+    assertEquals(tracked.state.entities.get(labelKey)?.document, {
+      value: label,
+    });
+
+    // Only version 2 defines the reference: a version-1 envelope whose
+    // entry happens to hold one names no label document, so the walk
+    // tracks none for it.
+    const legacy = "of:label-document-legacy-referrer";
+    applyCommit(engine, {
+      sessionId: "session:label-document-writer",
+      invocation: invocationFor(2),
+      authorization,
+      commit: {
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: legacy,
+          value: {
+            value: { n: 2 },
+            cfc: {
+              version: 1,
+              schemaHash: labelSchemaId.slice("cid:".length),
+              labelMap: {
+                version: 1,
+                entries: [{ path: ["n"], label: { $ref: labelId } }],
+              },
+            },
+          },
+        }],
+      },
+    });
+    const legacyTracked = trackGraph(space, engine, {
+      roots: [{
+        id: legacy,
+        selector: { path: [], schema: false },
+      }],
+    });
+    assert(legacyTracked.state.tracker.has(schemaKey));
+    assert(!legacyTracked.state.tracker.has(labelKey));
+
+    // A metadata link is a same-space link: an envelope written as a sigil
+    // link into another space names nothing the per-space engine could
+    // read, so nothing is tracked for it.
+    const foreign = "of:label-document-foreign-referrer";
+    applyCommit(engine, {
+      sessionId: "session:label-document-writer",
+      invocation: invocationFor(3),
+      authorization,
+      commit: {
+        localSeq: 3,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: foreign,
+          value: {
+            value: { n: 3 },
+            cfc: {
+              "/": {
+                "link@1": {
+                  id: labelSchemaId,
+                  space: "did:key:z6Mk-memory-v2-some-other-space",
+                },
+              },
+            },
+          },
+        }],
+      },
+    });
+    const foreignTracked = trackGraph(space, engine, {
+      roots: [{
+        id: foreign,
+        selector: { path: [], schema: false },
+      }],
+    });
+    assert(!foreignTracked.state.tracker.has(schemaKey));
   } finally {
     close(engine);
     await Deno.remove(path);

@@ -24,7 +24,7 @@ type ProxyFetchInit = RequestInit & { client?: Deno.HttpClient };
 type DnsReply = readonly string[] | Error;
 
 const DEFAULT_HOSTS = [
-  "common.tools",
+  "commonfabric.com",
   "estuary.saga-castor.ts.net",
   "rapids.saga-castor.ts.net",
   "bastion.saga-castor.ts.net",
@@ -197,14 +197,14 @@ Deno.test("prod uptime: waits for public connectivity before checking hosts", as
   const restore = stub(
     (url) => {
       fetches++;
-      if (url === "https://common.tools/" && commonToolsReachable) {
+      if (url === "https://commonfabric.com/" && commonToolsReachable) {
         return new Response(null, { status: 200 });
       }
       throw new TypeError("unreachable");
     },
     (hostname) => {
       resolutions++;
-      return hostname === "common.tools" || dnsReachable
+      return hostname === "commonfabric.com" || dnsReachable
         ? ["100.64.0.1"]
         : new Deno.errors.NotFound("no record");
     },
@@ -235,7 +235,7 @@ Deno.test("prod uptime: waits for public connectivity before checking hosts", as
   }
 });
 
-Deno.test("prod uptime: common.tools uses public-site response semantics", async () => {
+Deno.test("prod uptime: commonfabric.com uses public-site response semantics", async () => {
   for (
     const [responseStatus, expectedStatus, expectedValue] of [
       [301, "good", "8/8 hosts up"],
@@ -245,11 +245,11 @@ Deno.test("prod uptime: common.tools uses public-site response semantics", async
   ) {
     const restoreConnectivity = setProdUptimeConnectivityForTest(false);
     const restore = stub((url, init) => {
-      if (url === "https://common.tools/") {
+      if (url === "https://commonfabric.com/") {
         assertEquals(init?.redirect, "manual");
       }
       return new Response(null, {
-        status: url === "https://common.tools/" ? responseStatus : 200,
+        status: url === "https://commonfabric.com/" ? responseStatus : 200,
       });
     });
     try {
@@ -257,7 +257,7 @@ Deno.test("prod uptime: common.tools uses public-site response semantics", async
       assertEquals(view.status, expectedStatus);
       assertEquals(view.value, expectedValue);
       assertEquals(
-        (view.extra ?? "").includes("common.tools"),
+        (view.extra ?? "").includes("commonfabric.com"),
         expectedStatus !== "good",
       );
       assertEquals(
@@ -271,7 +271,7 @@ Deno.test("prod uptime: common.tools uses public-site response semantics", async
   }
 });
 
-Deno.test("prod uptime: common.tools warns only above 2500 ms", async () => {
+Deno.test("prod uptime: commonfabric.com warns only above 2500 ms", async () => {
   for (
     const [latency, status, value] of [
       [2500, "good", "8/8 hosts up"],
@@ -279,7 +279,7 @@ Deno.test("prod uptime: common.tools warns only above 2500 ms", async () => {
     ] as const
   ) {
     const restoreElapsedMs = setProdUptimeElapsedMsForTest((name) =>
-      name === "common.tools" ? latency : 0
+      name === "commonfabric.com" ? latency : 0
     );
     const restoreConnectivity = setProdUptimeConnectivityForTest(false);
     const restore = stub();
@@ -288,7 +288,7 @@ Deno.test("prod uptime: common.tools warns only above 2500 ms", async () => {
       assertEquals(view.status, status);
       assertEquals(view.value, value);
       assertEquals(
-        (view.extra ?? "").includes("common.tools"),
+        (view.extra ?? "").includes("commonfabric.com"),
         status !== "good",
       );
       assertEquals(
@@ -298,7 +298,7 @@ Deno.test("prod uptime: common.tools warns only above 2500 ms", async () => {
       if (status !== "good") {
         assertTargetDetail(
           view,
-          "common.tools",
+          "commonfabric.com",
           `HTTP 200 · ${latency} ms`,
         );
       }
@@ -310,11 +310,11 @@ Deno.test("prod uptime: common.tools warns only above 2500 ms", async () => {
   }
 });
 
-Deno.test("prod uptime: common.tools needs three missed responses to count as down", async () => {
+Deno.test("prod uptime: commonfabric.com needs three missed responses to count as down", async () => {
   let siteUp = false;
   const restoreConnectivity = setProdUptimeConnectivityForTest(true);
   const restore = stub((url) => {
-    if (url === "https://common.tools/" && !siteUp) {
+    if (url === "https://commonfabric.com/" && !siteUp) {
       throw new TypeError("unreachable");
     }
     return new Response(null, { status: 200 });
@@ -324,13 +324,13 @@ Deno.test("prod uptime: common.tools needs three missed responses to count as do
       const view = await prodUptime.collect(ctx());
       assertEquals(view.status, "unknown");
       assertEquals(view.value, "7/8 hosts up");
-      assertStringIncludes(view.extra ?? "", "common.tools");
+      assertStringIncludes(view.extra ?? "", "commonfabric.com");
       assertStringIncludes(view.extra ?? "", "unreachable");
     }
 
     const down = await prodUptime.collect(ctx());
     assertEquals(down.status, "bad");
-    assertEquals(down.value, "common.tools down");
+    assertEquals(down.value, "commonfabric.com down");
 
     siteUp = true;
     const recovered = await prodUptime.collect(ctx());
@@ -347,7 +347,7 @@ Deno.test("prod uptime: common.tools needs three missed responses to count as do
   }
 });
 
-Deno.test("prod uptime: COMMON_TOOLS_URL replaces the public-site target", async () => {
+Deno.test("prod uptime: COMMON_FABRIC_URL replaces the public-site target", async () => {
   const fetched: string[] = [];
   const restore = stub((url) => {
     fetched.push(url);
@@ -355,16 +355,16 @@ Deno.test("prod uptime: COMMON_TOOLS_URL replaces the public-site target", async
   });
   try {
     const view = await prodUptime.collect(ctx({
-      COMMON_TOOLS_URL: "https://www.common.tools/health",
+      COMMON_FABRIC_URL: "https://www.commonfabric.com/health",
     }));
     assertEquals(
-      fetched.includes("https://www.common.tools/health"),
+      fetched.includes("https://www.commonfabric.com/health"),
       true,
     );
-    assertEquals(fetched.includes("https://common.tools/"), false);
-    assertEquals((view.extra ?? "").includes("common.tools"), false);
+    assertEquals(fetched.includes("https://commonfabric.com/"), false);
+    assertEquals((view.extra ?? "").includes("commonfabric.com"), false);
     assertEquals(
-      (view.extra ?? "").includes("www.common.tools/health"),
+      (view.extra ?? "").includes("www.commonfabric.com/health"),
       false,
     );
   } finally {
@@ -388,7 +388,7 @@ Deno.test("prod uptime: healthy server checks keep pings while other hosts disap
   try {
     const view = await prodUptime.collect(ctx());
     assertEquals(fetched.sort(), [
-      "https://common.tools/",
+      "https://commonfabric.com/",
       "https://estuary.saga-castor.ts.net/_health",
       "https://rapids.saga-castor.ts.net/_health",
     ]);
@@ -399,14 +399,17 @@ Deno.test("prod uptime: healthy server checks keep pings while other hosts disap
         `${hostname} AAAA`,
       ]).sort(),
     );
-    assertEquals(view.label, "production");
     assertEquals(view.status, "good");
     assertEquals(view.value, "8/8 hosts up");
     assertEquals(view.sub, undefined);
     assertStringIncludes(view.extra ?? "", "estuary");
     assertStringIncludes(view.extra ?? "", "rapids");
-    assertEquals((view.extra ?? "").includes("common.tools"), false);
-    assertEquals((view.extra ?? "").match(/\d+ ms/g)?.length, 2);
+    assertEquals((view.extra ?? "").includes("commonfabric.com"), false);
+    // The detail cells themselves, not the tooltips repeating them.
+    assertEquals(
+      [...(view.extra ?? "").matchAll(/tabular-nums[^>]*>(\d+ ms)</g)].length,
+      2,
+    );
     assert(!(view.extra ?? "").includes("bastion"));
     assert(!(view.extra ?? "").includes("prod shell"));
     assert(!(view.extra ?? "").includes("DNS yes"));
@@ -455,6 +458,8 @@ Deno.test("prod uptime: several hosts with nothing behind them are counted", asy
     assertStringIncludes(view.extra ?? "", 'class="tile-detail-list"');
     assertStringIncludes(view.extra ?? "", 'role="region"');
     assertStringIncludes(view.extra ?? "", 'tabindex="0"');
+    // Its keyboard focus and scroll position carry over live updates.
+    assertStringIncludes(view.extra ?? "", 'data-focus-key="targets"');
     assertStringIncludes(view.extra ?? "", "scroll for more");
     assertStringIncludes(view.extra ?? "", "rapids");
     assertStringIncludes(view.extra ?? "", "bastion");
@@ -635,7 +640,7 @@ Deno.test("prod uptime: explicit server URLs and bastion host replace their defa
       BASTION_HOST: "ssh://jump.example.test:22",
     }));
     assertEquals(fetched.sort(), [
-      "https://common.tools/",
+      "https://commonfabric.com/",
       "https://prod.example.test/_health",
       "https://stage.example.test/_health",
     ]);
@@ -684,7 +689,7 @@ Deno.test("prod uptime: one proxy client serves both health checks and closes af
       fetched++;
       assertEquals(
         init?.client,
-        url === "https://common.tools/" ? undefined : client,
+        url === "https://commonfabric.com/" ? undefined : client,
       );
       return new Response(
         new ReadableStream<Uint8Array>({
@@ -998,7 +1003,7 @@ Deno.test("prod uptime: a health URL carrying a port keeps it", async () => {
     }));
     assertEquals(fetched.sort(), [
       "http://stage.example.test/_health",
-      "https://common.tools/",
+      "https://commonfabric.com/",
       "https://prod.example.test:8443/_health",
     ]);
     assertEquals(view.status, "good");
@@ -1079,7 +1084,7 @@ Deno.test("prod uptime: accepted proxy schemes configure one shared client", asy
     const restore = stub((url, init) => {
       assertEquals(
         init?.client,
-        url === "https://common.tools/" ? undefined : client,
+        url === "https://commonfabric.com/" ? undefined : client,
       );
       return new Response(null, { status: 200 });
     });
@@ -1176,6 +1181,6 @@ Deno.test("prod uptime: an unparseable configured URL rejects the collection", a
 });
 
 Deno.test("prod uptime: identity and cadence", () => {
-  assertEquals(prodUptime.id, "prod-uptime");
+  assertEquals(prodUptime.label, "production");
   assertEquals(prodUptime.intervalMs, 30_000);
 });

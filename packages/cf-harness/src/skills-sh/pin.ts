@@ -6,6 +6,7 @@
  * points without exposing the GitHub request or response.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -73,6 +74,31 @@ export const parseSkillsShSkillId = (id: string): SkillsShAddressSegments => {
   return { owner, repo, slug };
 };
 
+/**
+ * Splits a pin into the skill it names and the commit it pins, or `undefined`
+ * where the string carries no commit.
+ *
+ * The one place the pin spelling is decided, so that a caller recognizing a
+ * pin and a caller parsing one cannot come to different answers about the same
+ * string.
+ *
+ * The head is not validated here: a caller that needs a skill address says so
+ * by running it through {@link parseSkillsShSkillId}, and a caller that only
+ * has to recognize the shape does not pay for that.
+ */
+export const splitSkillsShPin = (
+  pin: string,
+): { readonly id: string; readonly commitSha: string } | undefined => {
+  const at = pin.lastIndexOf("@");
+  if (at <= 0) {
+    return undefined;
+  }
+  const commitSha = pin.slice(at + 1);
+  return FULL_GIT_COMMIT_SHA_PATTERN.test(commitSha)
+    ? { id: pin.slice(0, at), commitSha }
+    : undefined;
+};
+
 /** Adds the discovery hit's redundant source agreement to the id check. */
 const parseHitId = (hit: SkillsShSearchHit): SkillsShAddressSegments => {
   const parsed = parseSkillsShSkillId(hit.id);
@@ -86,9 +112,7 @@ const parseHitId = (hit: SkillsShSearchHit): SkillsShAddressSegments => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 
 /** Fetches one GitHub API object, parsing the body rather than trusting status. */
 const fetchGithubObject = async (

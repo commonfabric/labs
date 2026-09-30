@@ -77,9 +77,65 @@ If `includeSource` is set, traversal also loads linked `source` and linked patte
 
 ### Logical schema operators
 
-- `anyOf`: all matching branches are evaluated; matches are merged via `objectCreator.mergeMatches`
+Every branch is evaluated against the whole value, and the branches that
+succeed are merged into one result (`objectCreator.mergeMatches`). How many
+must succeed is what separates the three:
+
+- `anyOf`: at least one branch must match; every branch that does contributes to the merged result
 - `oneOf`: exactly one branch must validate; zero or multiple matches reject
-- `allOf`: every branch must validate; successful branch results are merged via `objectCreator.mergeMatches`
+- `allOf`: every branch must validate, and one that fails fails the node. An `allOf` holding no branches is passed over, leaving the keywords beside it to decide the node
+
+#### Sibling keywords
+
+The keywords beside a combinator are merged into each branch before that
+branch is evaluated (`mergeSchemaOption`), and the branch's own keywords win.
+The merge is shallow, so a branch declaring `properties` replaces the sibling
+`properties` map rather than adding to it.
+
+What a branch inherits by not restating decides what it admits. A sibling
+`additionalProperties: false` rides into every branch, so under one a branch
+admits a key only by naming it in `properties` or by restating
+`additionalProperties` itself — a branch of `true` restates nothing and so
+admits nothing — and a key no branch admits is absent from the merged result.
+
+This is a different composition from the one the entry points in `schema.ts`
+use to narrow a compound schema against a concrete value
+(`resolveSchemaForValue`, and the `asCell` candidates behind
+`asCellCompoundSchemaForValue`). Those combine base and branch through the
+strict pseudo-intersection `combineSchema`, where properties and `required`
+from either side survive; see
+[Combining Schemas](../json_schema.md#combining-schemas).
+
+#### Merging branch results
+
+`mergeAnyOfMatches` is a union rather than an intersection: a property any
+surviving branch produced is in the result. A branch naming `name` while
+ignoring `address`, beside one naming `address` while ignoring `name`, gives a
+result carrying both — which is what keeps one branch's silence from hiding
+another branch's data.
+
+- Two or more matches merge only when each is a non-array record a walk may read by name. Otherwise the first match is the result and the rest are dropped, which is what keeps a special value — one carrying no properties for the merge to copy — from being lost
+- Keys are copied in branch order, so the last branch to produce a key decides its value. `anyOf` evaluates the branches carrying no `asCell` ahead of those that do, so a cell-bearing branch's value wins such a collision
+- A value projected from an opaque position carries nothing of what it names, so it never displaces a key another branch materialized, whichever order the two came in
+- The merged value is a fresh object, and the matches' symbol-keyed annotations are carried onto it, the first match to define one winning. Every match describes the same position, so the merged value still names the position it was read from — without them it would compare unequal to that position and write back as an inline copy. The opaque marker is not carried: it describes the match it came from rather than the merge
+
+The two object creators part over cells. A runtime transform whose matches
+include a `Cell` returns that cell rather than a merged object, since merging
+would produce a plain object and lose the cell. It re-points the cell at the
+whole compound schema with the branches' own `asCell` markers removed, so the
+union survives on the cell's schema and governs what a read through it
+returns — with one exception. A branch that declares `asCell` and constrains
+nothing is a true reader, and a true reader adopts the schema of the link it
+crosses, so a handle minted from such a branch already carries the link's own
+schema. The merge cannot see which branch minted the handle it holds, so the
+handle keeps that schema rather than the union only where every branch that
+can mint one — through nested combinators and resolved references, each read
+with the keywords beside its combinator merged in as traversal merges them —
+is such a bare branch, an `allOf` counting where its other parts are true; the
+union says only what the reader admits. One shaped `asCell` branch anywhere in
+the compound, a bare arm under an enclosing `type` and `properties` included,
+keeps the union on the handle. Query traversal produces no cells, and merges
+by the rules above.
 
 ### `$ref`
 
@@ -139,18 +195,34 @@ Defaults:
 
 ### Detection Rules
 
-`hasAsCell(schema)` is true when:
+`hasAsCell(schema)` reads the schema with its root `$ref` resolved, local or
+external, and is true when:
 
 - schema object has `asCell` property
-- or schema has `anyOf` and every option matches `hasAsCell`
-- or schema has `oneOf` and every option matches `hasAsCell`
+- or schema has `anyOf` and every option declares a handle, read the same way
+  against the definitions of the schema it sits in
+- or schema has `oneOf` and every option does, likewise
 
 Notes:
 
-- This check is shallow for `anyOf`/`oneOf` options; refs inside options are not fully resolved before this check.
+- A definition declares the handle for every position of its type: a position
+  written `{ "$ref": "#/$defs/Profile" }` is a handle exactly when `Profile`
+  declares `asCell`, as `{ "$ref": "#/$defs/Profile", "asCell": ["cell"] }` is
+  at the reference. When the object creator mints a handle from a link whose
+  schema declares none itself, it reads the schema through its root `$ref` to
+  the handle the definition declares; a schema that declares its handle at the
+  reference, or declares none, it uses as written.
+- A union of references to handle definitions declares a handle as the same union with `asCell` at each reference does. A union that reaches itself through an option is read once, and declares no handle by way of itself.
 - This check determines traversal boundary behavior, not whether final output is a JS Cell object. Output shape still depends on the active `objectCreator`.
 
 ### Behavior by Value Shape
+
+The runtime shortcuts below are taken where the schema declares the handle at
+its root, itself or through its root `$ref`. A union that declares its handle
+only through its options leaves which option's handle it is to the value, so
+its branches are traversed and their merge mints the handle, as it does across
+a link. As at a property, the reads that traversal makes at an array element
+resolve the reference and are not conflict dependencies.
 
 | Value shape | `traverseCells = false` (runtime transform path) | `traverseCells = true` (query path) |
 | --- | --- | --- |
@@ -207,13 +279,81 @@ Traversal uses cycle trackers to avoid infinite recursion across:
 
 For `CompoundCycleTracker`, disposal removes empty per-key entries.
 
+A combinator branch (`anyOf`, `oneOf`, `allOf`) evaluates the same value at the
+same address as the schema it belongs to, so no tracker keyed on values sees it
+come back. A union whose handle branch names the union itself, as
+`type Recursive = Cell<Recursive> | null` generates, returns to its own
+traversal that way. A branch that reaches a traversal still in progress at its
+own position, under the same schema, stands for that traversal's own result,
+which the traversal that began the position reaches as a fixed point in rounds:
+
+- The first round takes every such branch as no match.
+- Each later round takes, in a branch's place, the result the traversal it comes
+  back to had in the latest round that reached it. A traversal reached again
+  within a round takes its result from earlier in the round, so a round
+  traverses each schema at the position once.
+- Whether a branch matches turns on the value and on whether what it stands for
+  matched, never on what that holds. Under `anyOf` and `allOf` each round
+  matches everything the round before did. Once a round leaves no traversal a
+  branch came back to matching where what stood in for it did not, the next
+  round would take the same branches. That round matches as the schema
+  unrolled does, and selects every property the unrolled schema selects:
+  `R = anyOf(A, allOf(R, B))` selects what `A` and `B` both select. Every round
+  before it matches a traversal the rounds before it did not, so the rounds
+  number at most one more than the schemas at the position.
+- Where two matching branches project one property differently, the merge
+  keeps the later branch's projection, and the round's own merges decide which
+  that is, which need not be the one an unrolling keeps. An unrolling need not
+  settle on one: `R = anyOf(A, S)` with `S = anyOf(B, R)`, where `A` and `B`
+  select different parts of one property, keeps `A`'s projection unrolled to
+  an odd depth and `B`'s to an even one.
+- A `oneOf` can reject in one round what it accepted in the round before, and so
+  has no fixed point. There the round before the first such rejection stands.
+
+A result that took something standing in for a traversal, itself or through a
+branch below it, holds only for its round, so it is returned but not memoized.
+The traversal that began the position is memoized once its rounds settle.
+
+The schema-only walks that evaluate a union branch by branch without a value
+come back to such a union through its reference in the same way.
+
+- The type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`
+  reaches what a union comes to as a least fixed point in rounds, as traversal
+  does. A branch list reached again while it is being read matches nothing in
+  the first round, whichever of `anyOf`, `oneOf` and `allOf` holds it. In each
+  later round it comes to what it came to in the round before.
+- A round reads each branch list once, and reads every list even after another
+  has ruled the value out, so every round reaches the same lists. The rounds
+  stop at the first in which each list reached again came to what stood in for
+  it. `R = allOf(null, R)` accepts no type, just as traversal matches no value
+  against it.
+- The `asCell` follow cap (`ContextualFlowControl.getAsCellFollowScopeCap()`)
+  walks a branch list once along its path. Walking it again decides nothing
+  new, so it adds no narrower cap.
+
+The follow-cap walk identifies a branch list together with its owning document.
+Resolving an external reference carries only the local definitions reached by
+the keywords beside the reference, including their transitive dependencies.
+When those keywords reach no local name, resolution keeps the target document's
+identity even if the ref site's document holds unrelated definitions. Unresolved
+local names are still isolated from the target's definitions.
+
+One follow-cap walk expands each branch list once per owning document, and a
+route reaching a list again takes the cap it came to. A cap a list came to
+while a cycle through it was still open lacks the list the cycle returns to, so
+once the outermost list of that cycle has settled, a later route expands the
+list afresh.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior
 
 Traversal is intentionally not a full JSON-Schema validator. Notable differences:
 
-- Branch result merging (`anyOf`/`allOf`) is runtime-specific
+- Branch result merging (`anyOf`/`allOf`) is a union of what the surviving
+  branches produced, and the keywords beside a combinator are merged into
+  each branch shallowly rather than intersected; both are described under
+  [Logical schema operators](#logical-schema-operators) above
 - Parent/link schema composition on reference hops (`combineSchemaForLink`) is
   precedence, not intersection: the reader's schema is used as it stands, and
   the link's schema is adopted only when the reader's is true or empty (a
@@ -231,14 +371,22 @@ Traversal is intentionally not a full JSON-Schema validator. Notable differences
 Behavior in this spec is verified by:
 
 - `packages/runner/test/traverse.test.ts`
+- `packages/runner/test/handle-declared-by-definition.test.ts`
 - `packages/runner/test/query.test.ts`
+- `packages/runner/test/schema-view.test.ts`
+- `packages/runner/test/recursive-handle-union.test.ts`
 
 These include regression tests for:
 
 - oneOf exact-match semantics
 - allOf branch-result merging
+- the sibling-keyword merge into combinator branches, under a schema that
+  refuses the properties it does not name
 - defaults via resolved `$ref`
+- a handle declared by the definition a position names by `$ref`
 - cycle-tracker cleanup
+- a union whose branch returns to its own position, in traversal and in the
+  schema-only walks
 
 ---
 

@@ -1,5 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import {
   normalizePatternSource,
   resolveSystemPatternSource,
@@ -54,6 +55,20 @@ describe("resolveSystemPatternSource", () => {
     // Climbing back in is fine — it still addresses the route.
     expect(resolveSystemPatternSource("system:system/../system/home.tsx"))
       .toBe("/api/patterns/system/home.tsx");
+  });
+
+  it("rethrows a decoder's `TypeError` unchanged", () => {
+    const failure = new TypeError("Unexpected decoding failure");
+    using _decode = stub(globalThis, "decodeURIComponent", () => {
+      throw failure;
+    });
+    let caught: unknown;
+    try {
+      resolveSystemPatternSource("system:system/home.tsx");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
   });
 });
 

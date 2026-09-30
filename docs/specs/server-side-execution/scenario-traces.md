@@ -507,9 +507,12 @@ these.
   reload × optimistic window MAY re-enact — the record is the
   reload-wiped overlay — accepted for reversible effects, which
   every shipped kind is.) [protocol §5; speculation §1, §2]
-- Q7: allowed; overlay records the nonce under `origin:
-  intent(eventId)`; retires on the consequenced push; divergence =
-  silent value replacement. [protocol §5; speculation §1, §2, §4]
+- Q7: allowed; the overlay enacts through the channel, which records
+  the nonce under `origin: intent(eventId)` — and which stands the
+  overlay down when the authoritative intent arrived and enacted
+  first, so the journey navigates once in either order; retires on the
+  consequenced push; divergence = silent value replacement.
+  [protocol §5; speculation §1, §2, §4]
 
 ### T3 (GAPS(3))
 - Q1: `firedAt = {user:U1, session:S1}` INHERITED from H1's acting
@@ -673,8 +676,11 @@ these.
   from DROP (cannot run at all) — distinct again from the
   superseded-WRITE drop. [serving-loop §3d; events §5]
 - Q4: whole-wave CAS failure FORBIDDEN (livelock). [serving-loop §3d]
-- Q5: W advances NOT AT ALL on budget exhaustion; the commit carries
-  `derivedThrough` = current W; continuation waves carry the
+- Q5: on budget exhaustion W advances only to the input head the
+  settle's PREFIX COVERAGE proved (a completed frame barrier over the
+  head, then an idle scheduler with no re-armed root pending, clamped
+  by the shadow, event-visibility and re-armed-root floors); with no proof the commit
+  carries `derivedThrough` = current W; continuation waves carry the
   cascade. [serving-loop §3]
 
 ### T10 (COMPLETE)

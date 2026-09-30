@@ -395,7 +395,7 @@ describe("mention-refs", () => {
       expect(pill.shortName).toBeUndefined();
     });
 
-    it("returns a pill carrying the short name its destination published", () => {
+    it("returns a pill carrying the short name announced for its mention", () => {
       const state = withShortNames(createState(`[My Note][${KEY}]`), {
         [KEY]: "42",
       });

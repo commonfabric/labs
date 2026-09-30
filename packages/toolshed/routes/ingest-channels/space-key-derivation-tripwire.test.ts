@@ -23,6 +23,12 @@ import { createSession, Identity } from "@commonfabric/identity";
 // private key of any named space is reconstructible by anyone who knows the
 // space NAME, using only constants in this repo.
 //
+// The derivation resolves any named space, not only a known one, and is kept
+// by convention for the legacy space names used during development. It is
+// removed once those development-only spaces have been migrated
+// (docs/plans/random-space-identities.md). This tripwire's obligation covers
+// every capability issued against a named space, whatever named it.
+//
 // Self-serve ingest minting authorizes against the space ACL, and the memory
 // server grants implicit OWNER to a principal signing AS the space. So while
 // this holds, anyone who knows a space name can grant themselves OWNER and

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
+import { collectConsumedLabel } from "../src/cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 
@@ -65,6 +66,38 @@ describe("CFC runtime stats", () => {
     expect(runtime.getCfcStats().dereferenceTracesMax).toBe(3);
   });
 
+  it("counts attribution work without changing preparation or relevance and resets the counters", () => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+    const prepare = { ...tx.getCfcState().prepare };
+    const relevant = tx.getCfcState().relevant;
+    collectConsumedLabel(tx);
+    const snapshot = runtime.getCfcStats();
+    collectConsumedLabel(tx);
+    expect(snapshot.consumedLabelWalks).toBe(1);
+    expect(runtime.getCfcStats().consumedLabelWalks).toBe(2);
+    expect(runtime.getCfcStats().refusalDetailsRecorded).toBe(0);
+    tx.recordCfcRefusalDetail({
+      gate: "writer-fit",
+      offendingAtoms: ['"secret"'],
+      inputs: [],
+      attribution: "none",
+      reason: "stats fixture",
+    });
+    expect(runtime.getCfcStats().refusalDetailsRecorded).toBe(1);
+    expect(snapshot.refusalDetailsRecorded).toBe(0);
+    expect(tx.getCfcState().prepare).toEqual(prepare);
+    expect(tx.getCfcState().relevant).toBe(relevant);
+    runtime.resetCfcStats();
+    expect(runtime.getCfcStats().consumedLabelWalks).toBe(0);
+    expect(runtime.getCfcStats().refusalDetailsRecorded).toBe(0);
+    tx.abort("counted");
+  });
+
   it("tracks relevant, prepared, reject, invalidation, outbox, and sink dedupe counters", async () => {
     storageManager = StorageManager.emulate({
       as: signer,
@@ -80,6 +113,15 @@ describe("CFC runtime stats", () => {
       flowLabelProbeMemoHits: 0,
       dereferenceTracesRecorded: 0,
       dereferenceTracesMax: 0,
+      refusalDetailsRecorded: 0,
+      consumedLabelWalks: 0,
+      overlapWildcardQueries: 0,
+      overlapConcreteQueries: 0,
+      authoritativeCoverCalls: 0,
+      stagedReferenceDerivations: 0,
+      stagedReferenceCacheHits: 0,
+      flowTemplateEntriesMinted: 0,
+      flowTemplateContainers: 0,
       cfcPreparedTx: 0,
       cfcPrepareRejects: 0,
       cfcDigestInvalidations: 0,
@@ -220,6 +262,15 @@ describe("CFC runtime stats", () => {
       flowLabelProbeMemoHits: 0,
       dereferenceTracesRecorded: 0,
       dereferenceTracesMax: 0,
+      refusalDetailsRecorded: 0,
+      consumedLabelWalks: 0,
+      overlapWildcardQueries: 0,
+      overlapConcreteQueries: 0,
+      authoritativeCoverCalls: 0,
+      stagedReferenceDerivations: 0,
+      stagedReferenceCacheHits: 0,
+      flowTemplateEntriesMinted: 0,
+      flowTemplateContainers: 0,
       cfcPreparedTx: 3,
       cfcPrepareRejects: 1,
       cfcDigestInvalidations: 1,

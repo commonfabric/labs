@@ -53,7 +53,7 @@ export interface ExecCommandOptions {
  *
  * **The result cell's address goes to stderr, written the way the next command
  * takes it.** An address has three parts, and `canonicalAddress` renders all
- * three as one reference, the space embedded as its `/@did:.../` prefix. A
+ * three as one reference, the space embedded as its `//did:.../` prefix. A
  * reference is written positionally, so the address is printed into the
  * position the next command reads it from rather than behind a flag. Naming
  * the space is not decoration — `cf exec` takes

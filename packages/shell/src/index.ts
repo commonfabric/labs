@@ -25,7 +25,7 @@ import { Navigation } from "./lib/navigation.ts";
 import { ROOT_KEY } from "./lib/root-key.ts";
 import type { XRootView } from "./views/RootView.ts";
 
-import "./globals.ts";
+import { publishShellApp } from "./globals.ts";
 
 // Device-link login: /#k=<base64url 32-byte BIP39 entropy>.
 // Read and scrubbed FIRST, synchronously, before any await — so the secret
@@ -86,4 +86,4 @@ const _navigation = new Navigation(root);
 // it before Navigation is installed lets a driver change the view while this
 // module is awaiting the KeyStore, only for Navigation's initial URL apply to
 // overwrite that newer view when bootstrap resumes.
-globalThis.app = root;
+publishShellApp(root);

@@ -11,6 +11,8 @@
  * instead of going through these helpers.
  */
 
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+
 /**
  * Projects an outgoing Responses request back into the chat-shaped view these
  * suites assert against, so assertions about *content* ("the skills context
@@ -33,18 +35,16 @@ export interface ChatViewMessage {
 export const chatViewOfRequest = (
   body: unknown,
 ): { messages: ChatViewMessage[]; tools: string[] } => {
-  const record = (typeof body === "object" && body !== null)
-    ? body as Record<string, unknown>
-    : {};
+  const record = isObjectOrArray(body) ? body as Record<string, unknown> : {};
   // Turns that stay on Chat Completions (provider-native tools, non-OpenAI
   // models) are already in this shape.
   if (Array.isArray(record.messages)) {
     return {
       messages: record.messages as ChatViewMessage[],
       tools: ((record.tools as unknown[]) ?? []).flatMap((tool) => {
-        if (typeof tool !== "object" || tool === null) return [];
+        if (!isObjectOrArray(tool)) return [];
         const fn = (tool as Record<string, unknown>).function;
-        return typeof fn === "object" && fn !== null
+        return isObjectOrArray(fn)
           ? [String((fn as Record<string, unknown>).name)]
           : [];
       }),
@@ -55,7 +55,7 @@ export const chatViewOfRequest = (
     messages.push({ role: "system", content: record.instructions });
   }
   for (const rawItem of (record.input as unknown[]) ?? []) {
-    if (typeof rawItem !== "object" || rawItem === null) continue;
+    if (!isObjectOrArray(rawItem)) continue;
     const item = rawItem as Record<string, unknown>;
     if (item.type === "function_call") continue;
     if (item.type === "function_call_output") {
@@ -76,7 +76,7 @@ export const chatViewOfRequest = (
     const parts: Record<string, unknown>[] = content.flatMap((
       rawPart,
     ): Record<string, unknown>[] => {
-      if (typeof rawPart !== "object" || rawPart === null) return [];
+      if (!isObjectOrArray(rawPart)) return [];
       const part = rawPart as Record<string, unknown>;
       if (part.type === "input_text" || part.type === "output_text") {
         return [{ type: "text", text: part.text as string }];
@@ -99,7 +99,7 @@ export const chatViewOfRequest = (
     });
   }
   const tools = ((record.tools as unknown[]) ?? []).flatMap((tool) =>
-    typeof tool === "object" && tool !== null
+    isObjectOrArray(tool)
       ? [String((tool as Record<string, unknown>).name)]
       : []
   );
@@ -110,7 +110,7 @@ export const responsesBodyFromChatFixture = (
   body: unknown,
   requestBody?: BodyInit | null,
 ): unknown => {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+  if (!isObjectNotArray(body)) {
     return body;
   }
   const record = body as Record<string, unknown>;
@@ -128,9 +128,9 @@ export const responsesBodyFromChatFixture = (
   }
   const output: Record<string, unknown>[] = [];
   for (const rawChoice of record.choices) {
-    if (typeof rawChoice !== "object" || rawChoice === null) continue;
+    if (!isObjectOrArray(rawChoice)) continue;
     const message = (rawChoice as Record<string, unknown>).message;
-    if (typeof message !== "object" || message === null) continue;
+    if (!isObjectOrArray(message)) continue;
     const messageRecord = message as Record<string, unknown>;
     const content = messageRecord.content;
     if (typeof content === "string" && content.length > 0) {
@@ -145,7 +145,7 @@ export const responsesBodyFromChatFixture = (
     const toolCalls = messageRecord.tool_calls;
     if (Array.isArray(toolCalls)) {
       for (const rawCall of toolCalls) {
-        if (typeof rawCall !== "object" || rawCall === null) continue;
+        if (!isObjectOrArray(rawCall)) continue;
         const call = rawCall as Record<string, unknown>;
         const fn = call.function as Record<string, unknown> | undefined;
         // No item `id`: that would make the client record a provider

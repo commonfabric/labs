@@ -9,7 +9,7 @@ import {
 } from "./types.ts";
 import { getTopFrame } from "./pattern.ts";
 import { encodableFormOf } from "../encodable-form.ts";
-import { createCell } from "../cell.ts";
+import { createCell, schemaCellScope } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 
 /**
@@ -45,6 +45,7 @@ function reactiveWithCell<T>(
     frame.runtime,
     {
       path: [],
+      scope: schemaCellScope(schema),
       ...(schema !== undefined && { schema }),
       ...(frame.space && { space: frame.space }),
     },

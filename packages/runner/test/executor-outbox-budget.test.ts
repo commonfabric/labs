@@ -42,7 +42,7 @@ import {
 import { SpaceOutbox } from "../src/executor/outbox.ts";
 import { emptyServingLoopStats } from "../src/executor/stats.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
 
 const signer = await Identity.fromPassphrase("executor outbox budget test");
 const space = signer.did() as MemorySpace;
@@ -64,10 +64,12 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
     await server.close();
   });
 
+  /** An effect whose flush records its own start — the dispatch event
+   * every wait in this file sleeps on — and then holds until released. */
   const heldEffect = (
     id: string,
     kind: string,
-    started: string[],
+    started: ArrivalLog<string>,
   ): { effect: PostCommitSideEffect; release: () => void } => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -78,7 +80,7 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
         id,
         kind,
         flush: () => {
-          started.push(id);
+          started.record(id);
           return gate;
         },
       },
@@ -93,8 +95,12 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
   ): {
     outbox: SpaceOutbox;
     stats: ReturnType<typeof emptyServingLoopStats>;
+    retirements: ArrivalLog<void>;
   } => {
     const stats = emptyServingLoopStats();
+    /** Each in-flight effect as it retires — the counts that drop with
+     * it move inside the outbox's own continuations. */
+    const retirements = new ArrivalLog<void>();
     return {
       outbox: new SpaceOutbox({
         stats,
@@ -104,14 +110,16 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
         sessionId: holder,
         localSeqRef,
         budget,
+        onEffectRetired: retirements.record,
       }),
       stats,
+      retirements,
     };
   };
 
   it("caps dispatched-but-unsettled network effects per space, draining held dispatches FIFO as slots free", async () => {
     const { outbox, stats } = newBudgetOutbox({ maxOutstandingEffects: 2 });
-    const started: string[] = [];
+    const started = new ArrivalLog<string>();
     const held = ["a", "b", "c", "d", "e"].map((name) =>
       heldEffect(`llmTest:${name}`, "llmTest-start", started)
     );
@@ -123,22 +131,22 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
     // All five are ADMITTED (in-flight dedupe live from admission)…
     expect(outbox.inflightCount).toBe(5);
     // …but only the cap's worth DISPATCH.
-    await waitUntil(() => started.length === 2, "the first two starts");
-    // Hold a beat: nothing beyond the cap may start.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(started.length).toBe(2);
+    await started.reached(2);
     expect(outbox.outstandingCount).toBe(2);
-    expect(started).toEqual(["llmTest:a", "llmTest:b"]);
-    expect(stats.outbox.budgetDeferrals).toBeGreaterThanOrEqual(1);
-    // Settling one frees one slot — FIFO wake.
+    expect(started.entries.slice(0, 2)).toEqual(["llmTest:a", "llmTest:b"]);
+    // Settling one frees one slot — FIFO wake. The third start is the
+    // event, and its IDENTITY is what says nothing jumped the cap: had
+    // "c", "d" or "e" dispatched before the slot freed, it would hold
+    // this position instead.
     held[0].release();
-    await waitUntil(() => started.length === 3, "the third start");
-    expect(started[2]).toBe("llmTest:c");
+    await started.reached(3);
+    expect(started.entries[2]).toBe("llmTest:c");
     expect(outbox.outstandingCount).toBe(2);
+    expect(stats.outbox.budgetDeferrals).toBeGreaterThanOrEqual(1);
     // Drain the rest.
     for (const entry of held) entry.release();
     await outbox.settle();
-    expect(started.length).toBe(5);
+    expect(started.entries.length).toBe(5);
     expect(outbox.outstandingCount).toBe(0);
     expect(stats.outbox.completed).toBe(5);
   });
@@ -148,7 +156,7 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
       maxOutstandingEffects: 1,
       egressRatePerSecond: 1,
     });
-    const started: string[] = [];
+    const started = new ArrivalLog<string>();
     const held = ["x", "y", "z"].map((name) =>
       heldEffect(`sqlite:${name}`, "sqlite-query", started)
     );
@@ -159,16 +167,47 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
     }]);
     // Local kinds dispatch immediately (synchronously), uncounted and
     // unpaced.
-    expect(started.length).toBe(3);
+    expect(started.entries.length).toBe(3);
     expect(outbox.outstandingCount).toBe(0);
     expect(stats.outbox.budgetDeferrals).toBe(0);
     for (const entry of held) entry.release();
     await outbox.settle();
   });
 
+  it("retires an effect even when the retirement observer throws: settle() returns and the counts still move", async () => {
+    // The observer is a test diagnostic, and the caller resolves the
+    // entry's retirement promise only after the retirement returns, so a
+    // throw that escaped would leave `settle()` waiting forever.
+    const stats = emptyServingLoopStats();
+    const outbox = new SpaceOutbox({
+      stats,
+      server,
+      engine,
+      space,
+      sessionId: holder,
+      localSeqRef,
+      onEffectRetired: () => {
+        throw new Error("retirement observer failure (test-injected)");
+      },
+    });
+    const started = new ArrivalLog<string>();
+    const entry = heldEffect("llmTest:throwing", "llmTest-start", started);
+    outbox.admitSealedEffects([{
+      tx: {} as IExtendedStorageTransaction,
+      effects: [entry.effect],
+      context: undefined,
+    }]);
+    await started.reached(1);
+    entry.release();
+    await outbox.settle();
+    expect(outbox.inflightCount).toBe(0);
+    expect(stats.outbox.completed).toBe(1);
+    expect(stats.memo.inflight).toBe(0);
+  });
+
   it("publishes distinct local runner callbacks while network dispatch is blocked", async () => {
     const { outbox, stats } = newBudgetOutbox({ maxOutstandingEffects: 0 });
-    const started: string[] = [];
+    const started = new ArrivalLog<string>();
     const held = ["first", "second"].map((name) =>
       heldEffect(name, RUNNER_ACCEPTANCE_EFFECT_KIND, started)
     );
@@ -177,7 +216,7 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
       effects: held.map((entry) => entry.effect),
       context: undefined,
     }]);
-    expect(started).toEqual(["first", "second"]);
+    expect(started.entries).toEqual(["first", "second"]);
     expect(outbox.outstandingCount).toBe(0);
     expect(stats.outbox.budgetDeferrals).toBe(0);
     expect(stats.outbox.queued).toBe(0);
@@ -210,7 +249,9 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
   });
 
   it("carries the surviving attachment through dispatch and readable completion", async () => {
-    const { outbox, stats } = newBudgetOutbox({ maxOutstandingEffects: 1 });
+    const { outbox, stats, retirements } = newBudgetOutbox({
+      maxOutstandingEffects: 1,
+    });
     const blockerStarted = Promise.withResolvers<void>();
     const blocker = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
@@ -280,11 +321,13 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
       expect(outbox.carriageFor(key)).toEqual(survivor);
       outbox.deferRetirement(key, readable.promise);
       work.resolve();
-      await waitUntil(
-        () => stats.outbox.completed === 2,
-        "both dispatched requests to complete",
+      // Both halves, because the blocker retires before the survivor's
+      // work completes: an in-flight set of one alone can be that earlier
+      // retirement rather than the state this test is about.
+      await awaitEach(
+        retirements,
+        () => outbox.inflightCount === 1 && stats.outbox.completed === 2,
       );
-      expect(outbox.inflightCount).toBe(1);
       outbox.admitSealedEffects([{
         tx,
         context: first,
@@ -375,7 +418,7 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
   }
 
   it("admits a replacement immediately after every attachment fails release", async () => {
-    const { outbox, stats } = newBudgetOutbox({});
+    const { outbox, stats, retirements } = newBudgetOutbox({});
     const work = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
     const readable = Promise.withResolvers<void>();
@@ -415,11 +458,11 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
       await started.promise;
       outbox.deferRetirement(key, readable.promise);
       work.resolve();
-      await waitUntil(
-        () => stats.outbox.completed === 2,
-        "the replacement to complete behind its readability barrier",
-      );
-      expect(outbox.inflightCount).toBe(1);
+      // The retirement alone here: this test's completion count reaches
+      // two after the last retirement, so a predicate wanting both at one
+      // arrival would wait for an arrival that never comes.
+      await awaitEach(retirements, () => outbox.inflightCount === 1);
+      expect(stats.outbox.completed).toBe(2);
       expect(outbox.carriageFor(key)).toEqual(replacement);
       outbox.admitSealedEffects([{
         tx,
@@ -452,7 +495,7 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
     // 20/s → the 2-effect tail beyond the burst drains in ~100 ms of
     // real time; the assertions ride edges, never sleeps.
     const { outbox, stats } = newBudgetOutbox({ egressRatePerSecond: 20 });
-    const started: string[] = [];
+    const started = new ArrivalLog<string>();
     const held = Array.from(
       { length: 22 },
       (_, index) =>
@@ -468,17 +511,17 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
     }]);
     // The burst (one second's tokens = 20) dispatches promptly; the
     // remaining 2 hold for refill.
-    await waitUntil(() => started.length >= 20, "the burst dispatch");
+    await started.reached(20);
     expect(stats.outbox.budgetDeferrals).toBeGreaterThanOrEqual(1);
     // The refill drains the paced tail.
     await outbox.settle();
-    expect(started.length).toBe(22);
+    expect(started.entries.length).toBe(22);
     expect(stats.outbox.completed).toBe(22);
   });
 
   it("drops budget-held dispatches on close — the park path never egresses for a dead runtime", async () => {
     const { outbox } = newBudgetOutbox({ maxOutstandingEffects: 1 });
-    const started: string[] = [];
+    const started = new ArrivalLog<string>();
     const first = heldEffect("llmTest:first", "llmTest-start", started);
     const second = heldEffect("llmTest:second", "llmTest-start", started);
     outbox.admitSealedEffects([{
@@ -486,15 +529,17 @@ describe("Phase 6 outbox budgets (serving-loop.md §5)", () => {
       effects: [first.effect, second.effect],
       context: undefined,
     }]);
-    await waitUntil(() => started.length === 1, "the first dispatch");
+    await started.reached(1);
     // Park: the held dispatch must DROP (crash-equivalent; memo re-miss
     // covers it on re-activation), and retirement must not wedge.
     outbox.close();
     first.release();
+    // `close` wakes every held dispatch into its closed check, and the
+    // freed slot the release produces is the other thing that could
+    // wake one. `settle` runs the in-flight set to empty, so it is
+    // ordered after whichever of the two a late dispatch rode.
     await outbox.settle();
-    // A beat of real time: a buggy late dispatch would land here.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(started).toEqual(["llmTest:first"]);
+    expect(started.entries).toEqual(["llmTest:first"]);
     expect(outbox.inflightCount).toBe(0);
     expect(outbox.outstandingCount).toBe(0);
   });

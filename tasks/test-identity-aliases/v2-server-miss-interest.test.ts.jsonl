@@ -1,0 +1,2 @@
+{"date":"2026-09-08","from":{"k":"unit","s":"memory","n":"v2-server-lazy-interest > drops a retired registration from the session's wake set"},"to":{"k":"unit","s":"memory","n":"v2-server-miss-interest > drops a retired miss from the session's wake set"}}
+{"date":"2026-09-08","from":{"k":"unit","s":"memory","n":"v2-server-lazy-interest > notifies demand when a rewrite swaps one lazy target for another"},"to":{"k":"unit","s":"memory","n":"v2-server-miss-interest > notifies demand when a rewrite swaps one absent target for another"}}

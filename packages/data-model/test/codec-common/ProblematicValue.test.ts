@@ -13,15 +13,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze, isValidDeepFrozenFabricValue } from "@";
+import { CODEC, NULL_LIVE_ENVIRONMENT, ProblematicValue } from "@/codec-common";
 import {
   BaseFabricInstance,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { deepFreeze, isValidDeepFrozenFabricValue } from "@/deep-freeze.ts";
+} from "@/fabric-bases";
 import { subFreeze, subIsDeepFrozen } from "../fabric-instances/fixtures.ts";
 
 describe("ProblematicValue", () => {
@@ -177,6 +175,32 @@ describe("ProblematicValue", () => {
   });
 
   describe("static members", () => {
+    describe("make()", () => {
+      it("returns an instance equal to one the constructor builds", () => {
+        const state = { x: 1 };
+        const made = ProblematicValue.make("Weird@7", state, "oops");
+
+        expect(made).toBeInstanceOf(ProblematicValue);
+        expect(made.equals(new ProblematicValue("Weird@7", state, "oops")))
+          .toBe(true);
+      });
+
+      it("returns a frozen instance by default, and a mutable one when `mutable` is `true`", () => {
+        expect(Object.isFrozen(ProblematicValue.make("Weird@7", 1, "oops")))
+          .toBe(true);
+        expect(
+          Object.isFrozen(ProblematicValue.make("Weird@7", 1, "oops", true)),
+        ).toBe(false);
+      });
+
+      it("leaves the state it preserves unfrozen", () => {
+        const state = { x: 1 };
+        ProblematicValue.make("Weird@7", state, "oops");
+
+        expect(Object.isFrozen(state)).toBe(false);
+      });
+    });
+
     describe("[CODEC]", () => {
       describe("tagForValue()", () => {
         it("returns `Problematic@1` whatever tag the value preserved", () => {
@@ -204,6 +228,16 @@ describe("ProblematicValue", () => {
               state: { x: 1 },
               error: "oops",
             });
+        });
+
+        it("returns a frozen record", () => {
+          const pv = new ProblematicValue("Weird@7", { x: 1 }, "oops");
+
+          expect(
+            Object.isFrozen(
+              ProblematicValue[CODEC].encode(pv, NULL_LIVE_ENVIRONMENT),
+            ),
+          ).toBe(true);
         });
       });
 

@@ -9,6 +9,7 @@
  * a sandbox, or a disk.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessRunState, HarnessRunStatus } from "../src/run-state.ts";
 import type {
   HarnessToolCall,
@@ -136,9 +137,7 @@ const parseJson = (text: string): unknown => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  isObjectNotArray(value) ? value as Record<string, unknown> : {};
 
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value !== "" ? value : undefined;

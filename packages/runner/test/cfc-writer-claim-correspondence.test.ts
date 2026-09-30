@@ -8,11 +8,12 @@ import { writerClaimFilesCorrespond } from "../src/cfc/writer-claim-corresponden
 import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
 import { reportDroppedCfcRejectedWrite } from "../src/scheduler/cfc-rejection-report.ts";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 /**
- * labs#4772 / CT-1886: `writeAuthorizedBy` anchors on `moduleIdentity` +
- * `bindingPath`; the claim's file SPELLING is resolver-dependent (the same
- * module spells `/api/patterns/system/x.tsx` from a piece-deploy compile and
+ * `writeAuthorizedBy` anchors on `moduleIdentity` + `bindingPath`; the claim's
+ * file SPELLING is resolver-dependent (the same module spells
+ * `/api/patterns/system/x.tsx` from a piece-deploy compile and
  * `/patterns/system/x.tsx` from an HTTP-resolved one) and must not shear
  * authorization. These tests pin the spelling tolerance at the two sites
  * that read EXISTING stamps (verification, stored-claim reconciliation), pin
@@ -132,7 +133,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,
@@ -157,7 +158,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: HTTP_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,
@@ -185,7 +186,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: PIECE_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "would-be-thief-module-identity",
       sourceFile: HTTP_SPELLING,
@@ -214,7 +215,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "profile-home-module-identity-v2",
       sourceFile: HTTP_SPELLING,
@@ -240,7 +241,7 @@ describe("writeAuthorizedBy across resolver spellings (labs#4772)", () => {
       claimSchema({ file: PIECE_SPELLING, path: ["setBio"] }),
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: "attacker-module-identity",
       sourceFile: "/attacker/profile-home.tsx",
@@ -351,6 +352,32 @@ describe("stored-claim reconciliation across spellings", () => {
     expect((merged as any).properties.displayName).toEqual({ type: "string" });
   });
 
+  it("keeps the stored stamp on two different stamps under non-corresponding spellings", () => {
+    // The same authored tree served under `/api/patterns` and supplied from
+    // a checkout under `/packages/patterns` spells the module two ways that
+    // no single-segment strip relates. Both claims are stamped, so the
+    // binding each means is its stamp and path; the stored one wins, as it
+    // does when the spellings correspond, and the successor's writes are
+    // for `piece setsrc` delegation to authorize.
+    const merged = mergeCfcSchemaEnvelopes(
+      envelope({
+        moduleIdentity: "profile-home-module-identity-v1",
+        file: PIECE_SPELLING,
+        path: ["setBio"],
+      }),
+      envelope({
+        moduleIdentity: "profile-home-module-identity-v2",
+        file: "/packages/patterns/system/profile-home.tsx",
+        path: ["setBio"],
+      }),
+    );
+    expect(claimOf(merged)).toEqual({
+      moduleIdentity: "profile-home-module-identity-v1",
+      file: PIECE_SPELLING,
+      path: ["setBio"],
+    });
+  });
+
   it("still conflicts on different binding paths", () => {
     expect(() =>
       mergeCfcSchemaEnvelopes(
@@ -440,7 +467,7 @@ describe("the labs#4772 heal end-to-end: exact mint + tolerant adoption + identi
       merged as unknown as JSONSchema,
       tx,
     );
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "verified",
       moduleIdentity: MODULE_IDENTITY,
       sourceFile: HTTP_SPELLING,

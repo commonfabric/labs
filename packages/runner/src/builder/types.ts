@@ -31,6 +31,7 @@ import {
   TILE_UI,
   TYPE,
   UI,
+  VIEWS,
 } from "@commonfabric/utils/framework-result-keys";
 import type { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
@@ -56,7 +57,17 @@ import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
 // transformer that polices what a pattern may declare about them reads the
 // same list. They are re-exported here because this is the builder surface a
 // pattern sees them through.
-export { CHIP_UI, FRAMEWORK_RESULT_KEYS, FS, NAME, TESTS, TILE_UI, TYPE, UI };
+export {
+  CHIP_UI,
+  FRAMEWORK_RESULT_KEYS,
+  FS,
+  NAME,
+  TESTS,
+  TILE_UI,
+  TYPE,
+  UI,
+  VIEWS,
+};
 
 // Symbol for accessing self-reference in patterns
 export const SELF: typeof SELFSymbol = Symbol("SELF") as any;
@@ -88,6 +99,7 @@ export type {
   FabricExecArray,
   FabricExecFunction,
   FabricExecPlainObject,
+  FabricExecPlusType,
   FabricExecValue,
   FabricValue,
   FactoryInput,
@@ -161,9 +173,16 @@ export type StreamValue = {
   $stream: true;
 };
 
+/**
+ * The key a stream value carries, holding `true`. A reader that only needs
+ * to know whether a value is a stream reads this one path rather than the
+ * whole value.
+ */
+export const STREAM_MARKER_KEY = "$stream";
+
 export function isStreamValue(value: unknown): value is StreamValue {
-  return isObjectNotArray(value) && "$stream" in value &&
-    value.$stream === true;
+  return isObjectNotArray(value) && STREAM_MARKER_KEY in value &&
+    value[STREAM_MARKER_KEY] === true;
 }
 
 declare module "@commonfabric/api" {
@@ -461,7 +480,9 @@ type IntentionallyUnrequired =
   | "CFC_COMPILED_BY_ATOM_PREFIX"
   | "CFC_CONCEPT_KIND"
   | "CFC_FUSE_ATOM_CLASS"
+  | "CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM"
   | "CFC_RUNTIME_SUBJECT"
+  | "CFC_SYSTEM_STRING_ATOMS"
   | "THIS_POLICY"
   | "cfcAtom"
   | "cfcPattern"

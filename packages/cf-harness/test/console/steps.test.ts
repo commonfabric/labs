@@ -956,9 +956,8 @@ describe("console/steps CFC and disclosure", () => {
                 label: {
                   confidentiality: [
                     {
-                      type:
-                        "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                      version: 1,
+                      type: "test.cfc/ObservedOutput",
+                      subject: "did:key:observed",
                     },
                   ],
                 },
@@ -1190,6 +1189,40 @@ describe("console/steps provenance", () => {
       expect(args[0].ref).toBe("/@did:key:z6MkAbc/of:fid1:xyz");
     });
 
+    it("matches complete references to legacy handles by decoded address", () => {
+      const steps = consoleRunSteps([
+        call("c1", "run_pattern", {
+          sourceText: "y",
+          inputs: { source: "//did:key:z6MkAbc/of:fid1:abc@space/numbers" },
+        }),
+        result("c1", "run_pattern", { status: "ok" }),
+      ]);
+      const handles = consoleRunHandles(composed("cfh:a:aaaaa"), table).map(
+        (handle) => ({ ...handle, ref: `/@did:key:z6MkAbc${handle.ref}` }),
+      );
+      const args = consoleStepArguments(steps[0], handles);
+      expect(args[0].isReference).toBe(true);
+      expect(args[0].token).toBe("cfh:a:aaaaa");
+    });
+
+    it("preserves path whitespace when reading a padded reference", () => {
+      const steps = composed("  /of:fid1:abc/title ");
+      const handles = consoleRunHandles(steps, table);
+      const args = consoleStepArguments(steps[2], handles);
+      expect(args[0].isReference).toBe(true);
+      expect(consoleStepArguments(steps[2], [])[0].ref).toBe(
+        "/of:fid1:abc/title ",
+      );
+      expect(args[0].token).toBe("cfh:a:aaaaa");
+    });
+
+    it("refuses non-entity URI schemes as cell references", () => {
+      for (const value of ["/data:abc", "/fid1:abc"]) {
+        const steps = composed(value);
+        expect(consoleStepArguments(steps[2], [])[0].isReference).toBe(false);
+      }
+    });
+
     it("resolves a link naming a path inside a held cell to that cell", () => {
       const steps = composed("/of:fid1:abc/numbers");
       const handles = consoleRunHandles(steps, table);
@@ -1245,9 +1278,8 @@ describe("console/steps provenance", () => {
               label: {
                 confidentiality: [
                   {
-                    type:
-                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                    version: 1,
+                    type: "test.cfc/ObservedOutput",
+                    subject: "did:key:observed",
                   },
                 ],
               },
@@ -1278,9 +1310,70 @@ describe("console/steps provenance", () => {
       const args = consoleStepArguments(steps[0], []);
       const command = args.find((argument) => argument.key === "command");
       const cwd = args.find((argument) => argument.key === "cwd");
-      expect(command?.confidentiality).toEqual(["PromptSlotInfluence"]);
+      expect(command?.confidentiality).toEqual(["ObservedOutput"]);
       // The other argument carried no label, and must not borrow this one.
       expect(cwd?.confidentiality).toEqual([]);
+    });
+
+    it("puts the prompt slot's influence on the argument its path names, as integrity", () => {
+      const influenced: HarnessCfcInvocationContext = {
+        type: "cf-harness.cfc-invocation-context",
+        version: 1,
+        sequence: 1,
+        runId: "r",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        toolId: "bash",
+        toolOutputId: createToolOutputId("r", "bash", 1),
+        operation: "shell",
+        cfcEnforcementMode: "enforce-strict",
+        cwd: "/workspace",
+        runManifest: { present: false },
+        inputs: {},
+        promptSlotInfluenceLabels: {
+          version: 1,
+          entries: [
+            {
+              path: ["command"],
+              label: {
+                integrity: [
+                  {
+                    type:
+                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
+                    version: 1,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+      const steps = consoleRunSteps(
+        [
+          call("c1", "bash", { command: "cat x", cwd: "/workspace" }),
+          {
+            role: "tool",
+            toolCallId: "c1",
+            toolName: "bash",
+            content: JSON.stringify({ status: "ok" }),
+            resultRef: {
+              type: "cf-harness.tool-result-ref",
+              outputId: createToolOutputId("r", "bash", 1),
+              toolId: "bash",
+              runId: "r",
+            },
+          },
+        ],
+        [],
+        [],
+        [influenced],
+      );
+      const args = consoleStepArguments(steps[0], []);
+      const command = args.find((argument) => argument.key === "command");
+      const cwd = args.find((argument) => argument.key === "cwd");
+      expect(command?.integrity).toEqual(["PromptSlotInfluence"]);
+      // Influence is not taint: the argument carries no confidentiality.
+      expect(command?.confidentiality).toEqual([]);
+      expect(cwd?.integrity).toEqual([]);
     });
 
     it("keeps a label whose root names no argument of the call", () => {
@@ -1308,9 +1401,8 @@ describe("console/steps provenance", () => {
               label: {
                 confidentiality: [
                   {
-                    type:
-                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                    version: 1,
+                    type: "test.cfc/ObservedOutput",
+                    subject: "did:key:observed",
                   },
                 ],
               },
@@ -1340,7 +1432,7 @@ describe("console/steps provenance", () => {
       );
       const args = consoleStepArguments(steps[0], []);
       expect(args[0].key).toBe("path");
-      expect(args[0].confidentiality).toEqual(["PromptSlotInfluence"]);
+      expect(args[0].confidentiality).toEqual(["ObservedOutput"]);
     });
 
     it("reads a literal input as a value rather than a reference", () => {

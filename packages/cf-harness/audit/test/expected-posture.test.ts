@@ -195,6 +195,25 @@ describe("the expected-posture spec", () => {
       ]);
     });
 
+    it("names a boolean dial the record does not carry", () => {
+      // The boolean fields are equality, not a floor: a spec asking for one
+      // is unsatisfied by a record that does not carry it, whatever the rung
+      // fields say. Stated over `decomposedEnvelopes`, which no preset and no
+      // posture bundle turns on, so the case does not rest on a dial the
+      // fleet's own defaults may move.
+
+      const spec = parseExpectedPosture({ decomposedEnvelopes: true });
+      expect(postureMismatches(spec, MAX_ENFORCEMENT_RECORD)).toEqual([
+        { field: "decomposedEnvelopes", expected: "true", found: "false" },
+      ]);
+      expect(postureMismatches(
+        parseExpectedPosture({
+          decomposedEnvelopes: false,
+        }),
+        MAX_ENFORCEMENT_RECORD,
+      )).toEqual([]);
+    });
+
     it("names a policy digest the record does not carry", () => {
       const spec = parseExpectedPosture({ policyDigest: null });
       expect(
@@ -212,6 +231,7 @@ describe("the expected-posture spec", () => {
         "ungatedSinks[llmDialog]",
         "ungatedSinks[generateText]",
         "ungatedSinks[generateObject]",
+        "ungatedSinks[sqliteQuery]",
       ]);
     });
 
@@ -239,8 +259,9 @@ describe("the expected-posture spec", () => {
 
     it("requires a deviation for every ungated sink when the spec asks", () => {
       const spec = parseExpectedPosture({ requireDeviationsPublished: true });
-      // The fleet posture leaves the six network-fetch sinks ungated with no
-      // recorded rationale, so nothing publishes them as deviations.
+      // The fleet posture leaves the six network-fetch sinks and the agent
+      // sink ungated with no recorded rationale, so nothing publishes them as
+      // deviations.
       expect(
         postureMismatches(spec, FLEET_RECORD)
           .map((mismatch) => mismatch.field),
@@ -251,6 +272,7 @@ describe("the expected-posture spec", () => {
         "deviations[fetchJsonUnchecked]",
         "deviations[fetchProgram]",
         "deviations[streamData]",
+        "deviations[agent]",
       ]);
     });
   });

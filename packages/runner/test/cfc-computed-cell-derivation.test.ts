@@ -4,6 +4,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
@@ -69,7 +70,7 @@ describe("CFC derivation into a computed cell", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space,
       scope: "space",
       id,

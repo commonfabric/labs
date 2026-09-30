@@ -1,0 +1,4813 @@
+{
+  "reads": 2220,
+  "writes": 654,
+  "totalLinkInputs": 100,
+  "samples": [
+    {
+      "kind": "link-write",
+      "target": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:APjI95GmzCIKvKXsKH951gkvU7w4he9bCrTv6Rfm7Qw",
+        "scope": "space",
+        "path": [
+          "array"
+        ]
+      },
+      "source": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+        "scope": "space",
+        "path": []
+      },
+      "linkSchema": {
+        "$ref": "cid:fid1:J9nIS544JAsMjSKqYXacOcMW2JQCtO6TU1LpCAXb9Zg"
+      },
+      "cfcLabelView": {
+        "version": 1,
+        "entries": [
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:kwZKCii2bCK29UzSXrGje_KFlaq3gkMgmn-qoAE8Jq0",
+                    "path": [
+                      "values"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "enumerate"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "value"
+          },
+          {
+            "path": [
+              "0"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "1"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "10"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "11"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "12"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "13"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "14"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "15"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "16"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "17"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "18"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "19"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "2"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "20"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "21"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "22"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "23"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "24"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "25"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "26"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "27"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "28"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "29"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "3"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "30"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "31"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "32"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "33"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "34"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "35"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "36"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "37"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "38"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "39"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "4"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "40"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "41"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "42"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "43"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "44"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "45"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "46"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "47"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "48"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "49"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "5"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "6"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "7"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "8"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "9"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "link-write",
+      "target": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:APjI95GmzCIKvKXsKH951gkvU7w4he9bCrTv6Rfm7Qw",
+        "scope": "space",
+        "path": [
+          "array"
+        ]
+      },
+      "source": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+        "scope": "space",
+        "path": []
+      },
+      "linkSchema": {
+        "$ref": "cid:fid1:J9nIS544JAsMjSKqYXacOcMW2JQCtO6TU1LpCAXb9Zg"
+      },
+      "cfcLabelView": {
+        "version": 1,
+        "entries": [
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:kwZKCii2bCK29UzSXrGje_KFlaq3gkMgmn-qoAE8Jq0",
+                    "path": [
+                      "values"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "enumerate"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "value"
+          },
+          {
+            "path": [
+              "0"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "1"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "10"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "11"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "12"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "13"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "14"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "15"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "16"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "17"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "18"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "19"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "2"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "20"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "21"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "22"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "23"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "24"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "25"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "26"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "27"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "28"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "29"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "3"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "30"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "31"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "32"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "33"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "34"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "35"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "36"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "37"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "38"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "39"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "4"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "40"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "41"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "42"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "43"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "44"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "45"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "46"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "47"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "48"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "49"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "5"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "6"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "7"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "8"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "9"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "link-write",
+      "target": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:IrswqjXGqKnXv48eca6zbVP4u5Pe-vgmTZauOQEHY24",
+        "scope": "space",
+        "path": [
+          "array"
+        ]
+      },
+      "source": {
+        "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1",
+        "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+        "scope": "space",
+        "path": []
+      },
+      "linkSchema": {
+        "$ref": "cid:fid1:J9nIS544JAsMjSKqYXacOcMW2JQCtO6TU1LpCAXb9Zg"
+      },
+      "cfcLabelView": {
+        "version": 1,
+        "entries": [
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:kwZKCii2bCK29UzSXrGje_KFlaq3gkMgmn-qoAE8Jq0",
+                    "path": [
+                      "values"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "enumerate"
+          },
+          {
+            "path": [],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "shape"
+          },
+          {
+            "path": [
+              "*"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ]
+            },
+            "observes": "value"
+          },
+          {
+            "path": [
+              "0"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "0"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "1"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "1"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "10"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "10"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "11"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "11"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "12"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "12"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "13"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "13"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "14"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "14"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "15"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "15"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "16"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "16"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "17"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "17"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "18"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "18"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "19"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "19"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "2"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "2"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "20"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "20"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "21"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "21"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "22"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "22"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "23"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "23"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "24"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "24"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "25"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "25"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "26"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "26"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "27"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "27"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "28"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "28"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "29"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "29"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "3"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "3"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "30"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "30"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "31"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "31"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "32"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "32"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "33"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "33"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "34"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "34"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "35"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "35"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "36"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "36"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "37"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "37"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "38"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "38"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "39"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "39"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "4"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "4"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "40"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "40"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "41"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "41"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "42"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "42"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "43"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "43"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "44"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "44"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "45"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "45"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "46"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "46"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "47"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "47"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "48"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "48"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "49"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "49"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "5"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "5"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "6"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "6"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "7"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "7"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "8"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "8"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          },
+          {
+            "path": [
+              "9"
+            ],
+            "label": {
+              "confidentiality": [
+                "secret"
+              ],
+              "integrity": [
+                {
+                  "source": {
+                    "id": "of:fid1:Ct-PYENU-FOIo8w8EnnV3qqk_jkrgBDdTnrR6LD9IPY",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "target": {
+                    "id": "of:fid1:hSCvhdBVfB0Fqs1WzLXaSlfTPNzrvreBd3c1yrPXE58",
+                    "path": [
+                      "9"
+                    ],
+                    "space": "did:key:z6Mkp7sX39boTMEvMmd7MFX4hWjPxUJqvkkjNPG1eTqk4eE1"
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                }
+              ]
+            },
+            "observes": "followRef"
+          }
+        ]
+      }
+    }
+  ]
+}

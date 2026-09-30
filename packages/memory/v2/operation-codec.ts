@@ -2,6 +2,7 @@ import { rebaseUpdates, type Update } from "@codemirror/collab";
 import { ChangeSet, StateEffect, Text } from "@codemirror/state";
 import type { FabricValue } from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CODEMIRROR_CHANGESET_CODEC, encodeMemoryBoundary } from "../v2.ts";
 
 export { CODEMIRROR_CHANGESET_CODEC } from "../v2.ts";
@@ -77,7 +78,7 @@ const codeMirrorDedupeId = (update: Update): string | undefined => {
 
 const decodeUpdate = (value: unknown): DecodedCodeMirrorUpdate => {
   if (
-    value === null || typeof value !== "object" || Array.isArray(value) ||
+    !isObjectNotArray(value) ||
     typeof (value as { clientId?: unknown }).clientId !== "string" ||
     (value as { clientId: string }).clientId.length === 0 ||
     (value as { clientId: string }).clientId.length > 256
@@ -119,8 +120,7 @@ const decodeUpdate = (value: unknown): DecodedCodeMirrorUpdate => {
 
 const decodePayload = (payload: FabricValue): DecodedCodeMirrorUpdate[] => {
   if (
-    payload === null || typeof payload !== "object" ||
-    Array.isArray(payload) ||
+    !isObjectNotArray(payload) ||
     !Array.isArray((payload as { updates?: unknown }).updates)
   ) {
     throw new Error("CodeMirror operation payload requires an updates array");

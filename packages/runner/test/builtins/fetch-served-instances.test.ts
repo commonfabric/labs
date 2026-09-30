@@ -11,6 +11,7 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 
+import { servedCommitDestination } from "../support/served-commits.ts";
 import { fetchText } from "../../src/builtins/fetch.ts";
 import type { Cell } from "../../src/cell.ts";
 import type { PostCommitSideEffect } from "../../src/cfc/types.ts";
@@ -38,6 +39,7 @@ describe("fetch-served-instances", () => {
   let server: ReturnType<typeof newSharedServer>;
   let runtime: Runtime;
   const transactions: IExtendedStorageTransaction[] = [];
+  let destination: ReturnType<typeof servedCommitDestination>;
 
   beforeEach(async () => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
@@ -54,6 +56,7 @@ describe("fetch-served-instances", () => {
       storageManager: manager,
       experimental: { serverExecution: true },
     });
+    destination = servedCommitDestination(runtime, space, engine, lease);
   });
 
   afterEach(async () => {
@@ -371,6 +374,12 @@ describe("fetch-served-instances", () => {
       return tx;
     };
     const commit = async (tx: IExtendedStorageTransaction) => {
+      if (
+        bindingScope === "session" &&
+        runtime.installedSealDestination === undefined
+      ) {
+        runtime.installSealDestination(destination);
+      }
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit()).error).toBeUndefined();
       await runtime.settled();

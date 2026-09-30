@@ -21,6 +21,7 @@ import {
   SkillsShPinResolutionError,
 } from "../skills-sh/pin.ts";
 import { sanitizeRegistryString } from "../skills-sh/search-client.ts";
+import { AcquiredSkillDirectoryReadableError } from "../skills/acquired-skill-mount.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 export interface AcquireSkillToolInput {
@@ -91,7 +92,7 @@ export const acquireSkillToolDescriptor: HarnessToolDescriptor = {
   toolId: "acquire_skill",
   title: "Acquire Skill",
   description:
-    "Acquire a discovered skill id from its pinned GitHub commit after checking the complete recursive listing. The parent never receives skill text: a loaded result carries a handle only. A refusal is an expected outcome with its reason and offending paths as inert metadata; do not retry around it. Acquisition grants no permission and loads nothing into the parent. Loading the handle into a child is a separate later delegate_task decision.",
+    "Acquire a skill by its exact id, from the commit its repository's default branch points at, after checking the complete recursive listing. The id need not appear in search_skills results: a skill can be real and unlisted, so a search that does not return it is not evidence it does not exist, and an id a person named is acquired by that id rather than searched for first. The parent never receives skill text: a loaded result carries a handle only. A refusal is an expected outcome with its reason and offending paths as inert metadata; do not retry around it. Acquisition grants no permission and loads nothing into the parent. Loading the handle into a child is a separate later delegate_task decision.",
   effectClass: "write",
   inputSchema: {
     type: "object",
@@ -99,7 +100,7 @@ export const acquireSkillToolDescriptor: HarnessToolDescriptor = {
       id: {
         type: "string",
         description:
-          "Exact discovery id returned by search_skills, in owner/repository/slug form.",
+          "An exact skill id in owner/repository/slug form. It names a skill directly: search_skills is one way to find one, and this tool does not require the id to have come from it. An id a person gave you is acquired by that id.",
       },
     },
     required: ["id"],
@@ -250,6 +251,54 @@ export const acquireSkillTool: HarnessToolDefinition<
         );
       }
       await runtime.idle();
+      // The scripts are written before the handle is minted, so a refusal
+      // here — a mount of this run's sandbox covering the directory they
+      // would land in — leaves no handle to a skill whose scripts the
+      // acquiring run could read. That is a different boundary from the one
+      // CT-2302 forces a sidestep on: this is who may READ the bytes, which
+      // is the property the hostile-skill receipt rests on.
+      //
+      // `loadedPaths` already names them, so what the model is told it holds
+      // does not change shape: the handle still carries the instructions, and
+      // the scripts are something the operator's allowlist decides about.
+      if (acquired.scripts.length > 0) {
+        if (context.materializeAcquiredSkill === undefined) {
+          return errorOutput(
+            "acquire_skill cannot hold this skill's scripts: the run writes no artifacts",
+          );
+        }
+        try {
+          await context.materializeAcquiredSkill({
+            registryId: resolvedPin.id,
+            commitSha: resolvedPin.commitSha,
+            scripts: acquired.scripts.map((script) => ({
+              path: script.path,
+              bytes: script.bytes,
+              valueDigest: script.valueDigest,
+            })),
+          });
+        } catch (error) {
+          // A mount covering the directory is a policy answer about who could
+          // read the bytes, not a failure to write them, so it comes back as a
+          // refusal naming the mount rather than as an error.
+          if (error instanceof AcquiredSkillDirectoryReadableError) {
+            return {
+              outputId,
+              status: "refused",
+              reason: {
+                code: AcquiredSkillDirectoryReadableError.code,
+                message: safeErrorMessage(error),
+              },
+              pin: resolvedPin,
+            };
+          }
+          return errorOutput(
+            `acquire_skill could not hold this skill's scripts: ${
+              safeErrorMessage(error)
+            }`,
+          );
+        }
+      }
       // The same host-observed facts the mark on the write carries, kept on
       // the handle entry as well: the mark travels with the cell and the
       // entry travels with the token, and it is the token a later delegation

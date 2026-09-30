@@ -5,7 +5,10 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Logger, type LogMessage } from "@commonfabric/utils/logger";
 
-import { seedResultContainerWhenPullSettles } from "../src/builtins/list-result-container-seed.ts";
+import {
+  resumeContainerWait,
+  seedResultContainerWhenPullSettles,
+} from "../src/builtins/list-result-container-seed.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -23,6 +26,9 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("list result container seed");
 const space = signer.did();
+
+/** Stands in for a coordinator that is not being watched for a re-trigger. */
+const noop = () => {};
 
 /** A logger that keeps every warning rather than printing it. */
 class RecordingLogger extends Logger {
@@ -126,6 +132,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         Promise.resolve(),
         logger,
         "filter/resume-seed/of:absent-after-pull",
@@ -141,6 +148,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         pull.promise,
         logger,
         "filter/resume-seed/of:barrier-held-until-seeded",
@@ -169,6 +177,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         pull.promise,
         logger,
         "filter/resume-seed/of:arrived-during-pull",
@@ -183,17 +192,20 @@ describe("list-result-container-seed", () => {
       expect(logger.warnings).toEqual([]);
     });
 
-    it("writes nothing when the coordinator no longer holds the container", async () => {
+    it("writes nothing and re-triggers nothing when the coordinator no longer holds the container", async () => {
       const container = newContainer("coordinator-torn-down");
+      let rearms = 0;
       await seedResultContainerWhenPullSettles(
         runtime,
         container,
         () => false,
+        () => rearms++,
         Promise.resolve(),
         logger,
         "filter/resume-seed/of:coordinator-torn-down",
       );
       expect(valueOf(container)).toBeUndefined();
+      expect(rearms).toBe(0);
       expect(logger.warnings).toEqual([]);
     });
 
@@ -207,6 +219,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         Promise.reject(pullFailure),
         logger,
         "filter/resume-seed/of:rejected-pull",
@@ -234,6 +247,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => held,
+        noop,
         Promise.resolve(),
         logger,
         "filter/resume-seed/of:released-between-attempts",
@@ -256,6 +270,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         Promise.resolve(),
         logger,
         "filter/resume-seed/of:refused-seed",
@@ -294,6 +309,7 @@ describe("list-result-container-seed", () => {
           runtime,
           containers[index],
           () => true,
+          noop,
           pulls[index].promise,
           logger,
           `identity-seed-${index}`,
@@ -343,6 +359,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         Promise.resolve(),
         logger,
         "filter/resume-seed/of:stamped-seed",
@@ -354,6 +371,70 @@ describe("list-result-container-seed", () => {
       ]);
       expect(valueOf(container)).toEqual([]);
       expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-triggers the coordinator after seeding the container", async () => {
+      const container = newContainer("retrigger-after-seed");
+      let rearms = 0;
+      await seedResultContainerWhenPullSettles(
+        runtime,
+        container,
+        () => true,
+        () => rearms++,
+        Promise.resolve(),
+        logger,
+        "map/resume-seed/of:retrigger-after-seed",
+      );
+      expect(valueOf(container)).toEqual([]);
+      expect(rearms).toBe(1);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-triggers the coordinator when the container already held a value", async () => {
+      // The coordinator defers on its own read of the container, and the seed
+      // decides whether to write from the durable view. The two can disagree:
+      // a client speculation layer standing on the container hides a value the
+      // durable view has, and the coordinator then waits while the seed
+      // declines. Nothing was written, so a wait that ended only on the write
+      // would never end. The pull settling is what ends it.
+      const container = newContainer("retrigger-without-seed");
+      const { error } = await runtime.editWithRetry((tx) => {
+        container.withTx(tx).set(["already here"]);
+      });
+      expect(error).toBeUndefined();
+      let rearms = 0;
+      await seedResultContainerWhenPullSettles(
+        runtime,
+        container,
+        () => true,
+        () => rearms++,
+        Promise.resolve(),
+        logger,
+        "map/resume-seed/of:retrigger-without-seed",
+      );
+      expect(valueOf(container)).toEqual(["already here"]);
+      expect(rearms).toBe(1);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-triggers the coordinator after a rejected pull", async () => {
+      // A pull that rejects leaves the container as absent as a resolved one
+      // does, and leaves the coordinator waiting the same way.
+      const container = newContainer("retrigger-after-rejected-pull");
+      let rearms = 0;
+      await seedResultContainerWhenPullSettles(
+        runtime,
+        container,
+        () => true,
+        () => rearms++,
+        Promise.reject(new Error("the container pull could not complete")),
+        logger,
+        "map/resume-seed/of:retrigger-after-rejected-pull",
+      );
+      expect(valueOf(container)).toEqual([]);
+      expect(rearms).toBe(1);
+      expect(logger.warnings.length).toBe(1);
+      expect(logger.warnings[0].key).toBe("resume-pull");
     });
 
     it("carries the viewing identity into every deferred seed attempt", async () => {
@@ -381,6 +462,7 @@ describe("list-result-container-seed", () => {
         runtime,
         container,
         () => true,
+        noop,
         pull.promise,
         logger,
         "map/resume-seed/viewing-instance",
@@ -394,6 +476,101 @@ describe("list-result-container-seed", () => {
         identity,
         identity,
       ]);
+      expect(logger.warnings).toEqual([]);
+    });
+  });
+
+  describe("resumeContainerWait()", () => {
+    // The wait a resuming coordinator takes on one container. Its answer to
+    // `mayWait` is what the coordinator's reconcile asks before it reads the
+    // container, so the cases here are about which reconciles wait and which
+    // go on.
+
+    it("lets the reconcile after the pull through, having seeded the container", async () => {
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:waited-once",
+      );
+      const container = newContainer("waited-once");
+      let rearms = 0;
+      expect(wait.mayWait(container)).toBe(true);
+      wait.begin(container, () => true, () => rearms++);
+      await storageManager.synced();
+      // The wait ended: the coordinator was re-armed, the container carries
+      // the empty array the seed wrote, and the reconcile that re-arm starts
+      // reconciles rather than wait again.
+      expect(rearms).toBe(1);
+      expect(valueOf(container)).toEqual([]);
+      expect(wait.mayWait(container)).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("joins an outstanding wait rather than opening a second one", async () => {
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:joined-wait",
+      );
+      const container = newContainer("joined-wait");
+      let rearms = 0;
+      // Both calls land in one synchronous turn, so the first one's pull is
+      // still outstanding when the second arrives — the window a reconcile
+      // triggered while a coordinator waits falls in.
+      wait.begin(container, () => true, () => rearms++);
+      wait.begin(container, () => true, () => rearms++);
+      // One chain, not two: the settle barrier counts what the wait
+      // registered, and a second pull would have registered a second.
+      expect(storageManager.pendingCrossSpacePromiseCount()).toBe(1);
+      await storageManager.synced();
+      expect(rearms).toBe(1);
+      expect(valueOf(container)).toEqual([]);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("waits afresh for a container the coordinator let go and took up again", async () => {
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:returned-container",
+      );
+      const container = newContainer("returned-container");
+      let held = false;
+      let rearms = 0;
+      // The coordinator has swapped this container away by the time the pull
+      // settles, so the wait ends having told it nothing: nothing is re-armed
+      // and nothing is written.
+      wait.begin(container, () => held, () => rearms++);
+      await storageManager.synced();
+      expect(rearms).toBe(0);
+      expect(valueOf(container)).toBeUndefined();
+      expect(wait.mayWait(container)).toBe(true);
+
+      // It takes the same container up again. The wait it takes now runs to a
+      // re-arm of its own, where joining the settled one would answer nobody.
+      held = true;
+      wait.begin(container, () => held, () => rearms++);
+      await storageManager.synced();
+      expect(rearms).toBe(1);
+      expect(valueOf(container)).toEqual([]);
+      expect(wait.mayWait(container)).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("waits again for a container that replaced the one it waited for", async () => {
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:replacement-container",
+      );
+      const first = newContainer("replaced-container");
+      const second = newContainer("replacement-container");
+      wait.begin(first, () => true, noop);
+      await storageManager.synced();
+      // A replacement's own state is what its first reconcile confirms, so the
+      // wait the first container spent is not spent for it.
+      expect(wait.mayWait(first)).toBe(false);
+      expect(wait.mayWait(second)).toBe(true);
       expect(logger.warnings).toEqual([]);
     });
   });

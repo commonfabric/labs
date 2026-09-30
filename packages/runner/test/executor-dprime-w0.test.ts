@@ -42,8 +42,12 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitEach,
+} from "./support/serving-waits.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 const spaceSigner = await Identity.fromPassphrase("dprime w0 space");
 const space = spaceSigner.did() as MemorySpace;
@@ -233,16 +237,22 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      onWaveCycle: cycles.record,
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
     });
 
   beforeEach(() => {
+    sessions = new MemoryV2Server.SessionRegistry({ ttlMs: 500 });
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
-      sessionTtlMs: 500,
+      sessions,
     });
     managers = [];
     runtimes = [];
     servingRuntime = undefined;
+    cycles = new ArrivalLog();
+    activations = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -252,6 +262,41 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     for (const manager of managers) await manager.close();
     await server.close();
   });
+
+  /** Every wave cycle the host's tenure completes — the edge the demand
+   * pass's own bookkeeping moves behind. */
+  let cycles: ArrivalLog<unknown>;
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
+  /** The registry is the test's own: a departing client's session
+   * detaches and lingers for the resume window, and a lingering
+   * session's watches are still DEMAND, so departures remove the
+   * session outright rather than waiting the window out. */
+  let sessions: MemoryV2Server.SessionRegistry;
+
+  /** Resolves once the space has an ACTIVE tenure. */
+  const activated = (): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === space && entry.outcome === "active"
+    );
+
+  /** Wake the loop with a demand note and wait for the cycle it runs.
+   * Ordered after the demand pass, and it writes nothing — which is
+   * what a file measuring demand rows, waves and wakes needs from a
+   * barrier. */
+  const settleACycle = async (): Promise<void> => {
+    // The tenure has to exist before its demand can be poked. Activation
+    // is driven from the admission feed, so a caller that has only
+    // committed does not yet have one.
+    await activated();
+    const spaceServer = host!.spaceServer(space)!;
+    // Poke only once the loop is waiting for input. A cycle already in
+    // flight ends after the note and would satisfy the wait below without
+    // the note's own pass having run.
+    await awaitEach(cycles, () => spaceServer.suspendedOnInput);
+    const before = cycles.entries.length;
+    spaceServer.noteDemandChanged();
+    await cycles.reached(before + 1);
+  };
 
   const openClient = (signer: Identity): {
     runtime: Runtime;
@@ -347,25 +392,15 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       return client;
     };
     for (const signer of options.clients) await watchRoot(signer);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
-      () => {
-        const demanded = host!.spaceServer(space)?.demandedIdentitiesOf(
-          resultId,
-        ) ?? [];
-        return options.clients.every((signer) =>
-          demanded.some((i) => i.principal === signer.did())
-        );
-      },
-      () =>
-        "the registry to carry every root watcher (has " +
-        JSON.stringify(
-          host!.spaceServer(space)?.demandedIdentitiesOf(resultId),
-        ) + ")",
-    );
+    await activated();
+    await awaitEach(cycles, () => {
+      const demanded = host!.spaceServer(space)?.demandedIdentitiesOf(
+        resultId,
+      ) ?? [];
+      return options.clients.every((signer) =>
+        demanded.some((i) => i.principal === signer.did())
+      );
+    });
     const typedArg = (runtime: Runtime) =>
       runtime.getCell<{ draft: string; flag: boolean; n: number }>(
         space,
@@ -404,6 +439,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     expect(probeClient.runtime.scheduler.demandedWriterCount).toBe(0);
     await probeClient.runtime.dispose();
     await probeClient.manager.close();
+    sessions.remove(space, probeClient.manager.id);
     runtimes.splice(runtimes.indexOf(probeClient.runtime), 1);
     managers.splice(managers.indexOf(probeClient.manager), 1);
     host.close();
@@ -419,9 +455,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
 
     // T7′: the `label` and `echo` computeds' output docs are demanded
     // (in the closure) — the writer is a root — and land server-side.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, "space", '"label:1"'),
-      "the space-only label to land server-side",
     );
     const rowsAfterLanding = demandRows();
     const computedRows = rowsAfterLanding.filter((r) =>
@@ -440,22 +476,22 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // re-derives; W advances; ZERO walk runs.
     await setup.writeDraft(alice, "A");
     await setup.writeDraft(bob, "B");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      "each user's echo of their own draft",
     );
     const traceBefore = servingRuntime!.scheduler.getActionRunTrace().length;
     const wBefore = host!.spaceServer(space)!.watermark;
     await setup.writeDraft(alice, "A2");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A2"'),
-      "alice's second draft to re-derive",
     );
-    await waitUntil(
+    await awaitEach(
+      cycles,
       () => host!.spaceServer(space)!.watermark > wBefore,
-      "W to advance past alice's write",
     );
     const since = servingRuntime!.scheduler.getActionRunTrace().slice(
       traceBefore,
@@ -564,9 +600,10 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // Alice departs.
     await alice.dispose();
     await aliceClient.manager.close();
+    sessions.remove(space, aliceClient.manager.id);
     runtimes.splice(runtimes.indexOf(alice), 1);
     managers.splice(managers.indexOf(aliceClient.manager), 1);
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await settleACycle();
     // Bob: the ONLY demander, schema-narrowed root watch.
     const bobClient = openClient(bobSigner);
     const bob = bobClient.runtime;
@@ -595,28 +632,22 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       "dp-b-result",
       compiled.resultSchema,
     );
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
+    await activated();
+    await awaitEach(
+      cycles,
       () =>
         (host!.spaceServer(space)?.demandedIdentitiesOf(resultId) ?? [])
           .some((i) => i.principal === bobSigner.did()),
-      "bob's demand to register",
     );
     // Quiesce and let Alice's departed rows leave the set.
-    await waitUntil(
-      () => {
-        host!.spaceServer(space)!.noteDemandChanged();
-        return demandRows().every((r) =>
-          r.identity?.principal === bobSigner.did()
-        );
-      },
-      "alice's rows to leave (only bob's demand remains)",
-    );
+    await awaitEach(cycles, () => {
+      host!.spaceServer(space)!.noteDemandChanged();
+      return demandRows().every((r) =>
+        r.identity?.principal === bobSigner.did()
+      );
+    });
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await settleACycle();
     const before = demandRows();
     const guardedRowsBefore = before.filter((r) =>
       r.id.startsWith("computed:")
@@ -647,15 +678,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     bobFull.key("pick").send({});
     await bob.idle();
     await bob.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, "space", '"hidden:7"'),
-      () =>
-        "the guarded value to land server-side (space rows: " +
-        JSON.stringify([...rowsUnder(engine, "space").values()].slice(0, 12)) +
-        ")",
     );
     const landedMs = performance.now() - t0;
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await settleACycle();
     const stats = host!.stats();
     const after = demandRows();
     const newRows = after.filter((r) =>
@@ -719,14 +747,14 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     const bobKey = setup.userKey(bobSigner);
     await setup.writeDraft(alice, "A");
     await setup.writeDraft(bob.runtime, "B");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      "each user's echo",
     );
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleACycle();
     const writersBefore = servingRuntime!.scheduler.demandedWriterCount;
     const keysBefore = server.demandSetSizesForSpace(space, {
       excludePrincipal: serviceSigner.did(),
@@ -737,18 +765,16 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // after the (short) TTL; the next demand pass sees his rows gone.
     await bob.runtime.dispose();
     await bob.manager.close();
+    sessions.remove(space, bob.manager.id);
     runtimes.splice(runtimes.indexOf(bob.runtime), 1);
     managers.splice(managers.indexOf(bob.manager), 1);
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await settleACycle();
     // Drive a pass (a demand note; a real input would do the same).
-    await waitUntil(
-      () => {
-        host!.spaceServer(space)!.noteDemandChanged();
-        return demandRows().filter((r) => r.scopeKey === bobKey).length === 0;
-      },
-      "bob's rows to leave the demand set",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await awaitEach(cycles, () => {
+      host!.spaceServer(space)!.noteDemandChanged();
+      return demandRows().filter((r) => r.scopeKey === bobKey).length === 0;
+    });
+    await settleACycle();
     const writersAfter = servingRuntime!.scheduler.demandedWriterCount;
     const keysAfter = server.demandSetSizesForSpace(space, {
       excludePrincipal: serviceSigner.did(),
@@ -770,9 +796,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     expect(stats.demand.demandRootLeaves).toBeGreaterThanOrEqual(0);
     // Alice's demand still serves: her next draft re-derives.
     await setup.writeDraft(alice, "A2");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A2"'),
-      "alice's echo after bob left",
     );
     setup.cancel();
   });
@@ -853,22 +879,16 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     await watch(alice, "dp-r-sh-res", shared.compiled);
     await watch(bob, "dp-r-sh-res", shared.compiled);
     await watch(bob, "dp-r-so-res", solo.compiled);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
+    await activated();
+    await awaitEach(
+      cycles,
       () =>
         instanceHolds(engine, "space", '"label:1"') &&
         (host!.spaceServer(space)?.demandedIdentitiesOf(solo.resultId) ?? [])
           .some((i) => i.principal === bobSigner.did()),
-      "both pieces' labels to land and bob's solo demand to register",
     );
     await servingRuntime!.idle();
-    await waitUntil(
-      () => servingRuntime!.scheduler.demandedWriterCount >= 4,
-      "both pieces' writers to enter the demand root set",
-    );
+    await settleACycle();
     const writersBefore = servingRuntime!.scheduler.demandedWriterCount;
     const leavesBefore = host!.stats().demand.demandRootLeaves;
     expect(writersBefore).toBeGreaterThanOrEqual(4);
@@ -877,23 +897,17 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // demander; the shared piece's `label` doc still has Alice's.
     await bob.dispose();
     await bobClient.manager.close();
+    sessions.remove(space, bobClient.manager.id);
     runtimes.splice(runtimes.indexOf(bob), 1);
     managers.splice(managers.indexOf(bobClient.manager), 1);
-    await waitUntil(
-      () => {
-        host!.spaceServer(space)!.noteDemandChanged();
-        return demandRows().filter((r) =>
-          r.identity?.principal === bobSigner.did()
-        ).length === 0;
-      },
-      "bob's rows to leave the demand set",
-    );
-    await waitUntil(
-      () =>
-        servingRuntime!.scheduler.demandedWriterCount < writersBefore &&
-        host!.stats().demand.demandRootLeaves > leavesBefore,
-      "the departing session's writers to release their demand roots",
-    );
+    await settleACycle();
+    await awaitEach(cycles, () => {
+      host!.spaceServer(space)!.noteDemandChanged();
+      return demandRows().filter((r) =>
+        r.identity?.principal === bobSigner.did()
+      ).length === 0;
+    });
+    await settleACycle();
     const writersAfter = servingRuntime!.scheduler.demandedWriterCount;
     const leavesAfter = host!.stats().demand.demandRootLeaves;
     console.log(
@@ -937,9 +951,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       await alice.idle();
       await alice.storageManager.synced();
     }
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, "space", '"label:2"'),
-      "the SHARED piece's label to re-derive (its writer stays a root)",
     );
     // The dormant solo piece did NOT re-derive: exactly ONE `label:2`
     // landed (the shared piece's), never the solo piece's.
@@ -962,19 +976,19 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     const aliceKey = setup.userKey(aliceSigner);
     const bobKey = setup.userKey(bobSigner);
     await setup.writeDraft(alice, "A");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A"'),
-      "alice's instance",
     );
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleACycle();
     const traceBefore = servingRuntime!.scheduler.getActionRunTrace().length;
     const rearmsBefore = host!.stats().demand.notCurrentRearms;
     const arrivalsBefore = host!.stats().demandArrivals;
     const bob = await setup.watchRoot(bobSigner);
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, bobKey, '"echo:"'),
-      "bob's instance to materialize on arrival",
     );
     const since = servingRuntime!.scheduler.getActionRunTrace().slice(
       traceBefore,
@@ -1000,9 +1014,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     expect(stats.demand.notCurrentRearms - rearmsBefore)
       .toBeGreaterThanOrEqual(1);
     await setup.writeDraft(bob.runtime, "B");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, bobKey, '"echo:B"'),
-      "bob's instance to follow his draft",
     );
     expect(instanceHolds(engine, aliceKey, '"echo:B"')).toBe(false);
     setup.cancel();
@@ -1073,21 +1087,16 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // root set is sticky for a key that never departs).
     await creator.dispose();
     await creatorClient.manager.close();
+    sessions.remove(space, creatorClient.manager.id);
     runtimes.splice(runtimes.indexOf(creator), 1);
     managers.splice(managers.indexOf(creatorClient.manager), 1);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation (creator's session)",
-    );
-    await waitUntil(
-      () => {
-        host!.spaceServer(space)!.noteDemandChanged();
-        return demandRows().length === 0;
-      },
-      "the creator's rows to leave the demand set",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await settleACycle();
+    await activated();
+    await awaitEach(cycles, () => {
+      host!.spaceServer(space)!.noteDemandChanged();
+      return demandRows().length === 0;
+    });
+    await settleACycle();
     // Alice, a FRESH session: watches the outer root but by a NARROW
     // schema that reaches `child.echo` (so the child's `echo` narrows to
     // her and goes clean) and does NOT name `slot` — she does not root
@@ -1120,15 +1129,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       compiled.resultSchema,
     );
     await aliceFull.sync();
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
+    await activated();
+    await awaitEach(
+      cycles,
       () =>
         (host!.spaceServer(space)?.demandedIdentitiesOf(resultId) ?? [])
           .some((i) => i.principal === aliceSigner.did()),
-      "alice's demand on the outer root to register",
     );
     const aliceKey = resolveScopeKey("user", { principal: aliceSigner.did() });
     const bobKey = resolveScopeKey("user", { principal: bobSigner.did() });
@@ -1156,46 +1162,24 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
       await runtime.storageManager.synced();
     };
     await writeDraft(alice, "A");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A"'),
-      () =>
-        "alice's instance of the nested child's echo (rows=" +
-        JSON.stringify(
-          demandRows().map((
-            r,
-          ) => [
-            r.id.slice(0, 30),
-            r.scopeKey.slice(0, 14),
-            r.root,
-            r.identity?.principal?.slice(-6),
-          ]),
-        ) + " writers=" + servingRuntime!.scheduler.demandedWriterCount +
-        " label=" + instanceHolds(engine, "space", '"label:1"') +
-        " space rows=" +
-        JSON.stringify(
-          [...rowsUnder(engine, "space").entries()].map((
-            [k, v],
-          ) => [k.slice(0, 30), JSON.stringify(v).slice(0, 80)]),
-        ) +
-        ")",
     );
     // Alice fires publish: the served handler writes holder := link to
     // the CHILD'S result doc.
     aliceFull.key("publish").send({});
     await alice.idle();
     await alice.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         JSON.stringify(rowsUnder(engine, "space").get(holderId) ?? null)
           .includes("link"),
-      () =>
-        "the holder doc to carry the link to the child's result (holder=" +
-        JSON.stringify(rowsUnder(engine, "space").get(holderId) ?? null) +
-        ")",
     );
     // Quiesce.
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await settleACycle();
     const traceBefore = servingRuntime!.scheduler.getActionRunTrace().length;
     const rearmsBefore = host!.stats().demand.notCurrentRearms;
     const arrivalsBefore = host!.stats().demandArrivals;
@@ -1218,16 +1202,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     const bobCancel = bobHolder.sink(() => {});
     const bobRowsNow = () =>
       demandRows().filter((r) => r.identity?.principal === bobSigner.did());
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, bobKey, '"echo:"'),
-      () =>
-        "bob's instance of the child's echo to materialize through the " +
-        "per-key currency check (bob rows: " +
-        JSON.stringify(
-          bobRowsNow().map((
-            r,
-          ) => [r.id.slice(0, 24), r.scopeKey.slice(0, 12), r.root]),
-        ) + ")",
     );
     const stats = host!.stats();
     const bobRows = bobRowsNow();
@@ -1246,7 +1223,8 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
           ).join(", ")
         }]`,
     );
-    // Bob's ONLY space-scoped root row is the holder doc; every piece doc
+    // Bob's only mutable space-scoped root row is the holder doc; schema
+    // documents are immutable roots and cannot re-arm a piece. Every piece doc
     // he reaches (the child's result, `echo`'s output doc) is a CLOSURE
     // row. This is the isolation the pin exists for: the root-level
     // arrival re-arm (`invalidateActionsForDemandRoots`) re-arms a
@@ -1260,7 +1238,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // but its re-arm reaches no echo node; the LANDING is the assertion
     // that matters, and M-C makes it red.)
     expect(
-      bobRows.filter((r) => r.root && r.scopeKey === "space").map((r) => r.id),
+      bobRows.filter((r) =>
+        r.root && r.scopeKey === "space" && !r.id.startsWith("cid:")
+      ).map((r) => r.id),
     ).toEqual([holderId]);
     expect(bobEchoRows.length).toBeGreaterThan(0);
     expect(bobEchoRows.every((r) => !r.root)).toBe(true);
@@ -1277,9 +1257,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     ).toEqual([]);
     // Bob's demand now serves him: his draft re-derives his instance only.
     await writeDraft(bob, "B");
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, bobKey, '"echo:B"'),
-      "bob's instance to follow his draft",
     );
     expect(instanceHolds(engine, aliceKey, '"echo:B"')).toBe(false);
     expect(walkRuns()).toBe(0);
@@ -1334,7 +1314,7 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // walk followed the hop and dead-ended at the unwritten target doc,
     // and the run was REFUSAL-disposed — output undefined, no landing.
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await settleACycle();
     expect(instanceHolds(engine, "space", '"view:')).toBe(false);
     // The demand registry covers the piece (alice watches the result
     // root); the target doc never becomes a demanded ROOT of the piece.
@@ -1360,9 +1340,9 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     await carolClient.runtime.storageManager.synced();
     // The arrival re-fires the DISPOSED run through its registered
     // read, and the derived value lands.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, "space", '"view:hello"'),
-      "the disposed run to re-fire on the foreign arrival",
     );
     expect(
       servingRuntime!.scheduler.getActionRunTrace().length,
@@ -1478,9 +1458,10 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // demanded and pre-empt the growth. After the TTL nobody demands leaf.
     await alice.dispose();
     await aliceClient.manager.close();
+    sessions.remove(space, aliceClient.manager.id);
     runtimes.splice(runtimes.indexOf(alice), 1);
     managers.splice(managers.indexOf(aliceClient.manager), 1);
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await settleACycle();
     // Carol: the FIRING actor. She watches P1's result to append the
     // event; she does not watch P2's leaf beyond P1's own wiring.
     const carolClient = openClient(carolSigner);
@@ -1506,15 +1487,12 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     );
     await bobResult.sync();
     const bobCancel = bobResult.sink(() => {});
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
+    await activated();
+    await awaitEach(
+      cycles,
       () =>
         (host!.spaceServer(space)?.demandedIdentitiesOf(aResultId) ?? [])
           .some((i) => i.principal === bobSigner.did()),
-      "bob's demand on P1's result to register",
     );
     // Bump P2's `n` from Carol (a NON-runner of P2): the store's leaf:5 is
     // now stale, P2's writer dirty; nobody demands leaf, so the server
@@ -1534,17 +1512,14 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     }
     // Quiesce; let Alice's departed rows leave. The fresh value is ABSENT
     // and leaf is not yet in Bob's closure (the growth precondition).
-    await waitUntil(
-      () => {
-        host!.spaceServer(space)!.noteDemandChanged();
-        return !demandRows().some((r) =>
-          r.identity?.principal === aliceSigner.did()
-        );
-      },
-      "alice's rows to leave (nobody demands leaf before the link)",
-    );
+    await awaitEach(cycles, () => {
+      host!.spaceServer(space)!.noteDemandChanged();
+      return !demandRows().some((r) =>
+        r.identity?.principal === aliceSigner.did()
+      );
+    });
     await servingRuntime!.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await settleACycle();
     const bobTracksLeaf = () =>
       demandRows().some((r) =>
         r.id === bResultId && r.identity?.principal === bobSigner.did()
@@ -1587,19 +1562,13 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     // The FRESH value lands — the assertion (leaf:6 was never
     // client-computed; it exists only if the server derived it after the
     // link reached P2's writer).
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(x.engine, "space", '"leaf:6"'),
-      () =>
-        "the FRESH leaf (leaf:6) to land server-side after bob's link " +
-        "(bob tracks leaf=" + x.bobTracksLeaf() + ", leaf rows=" +
-        JSON.stringify(
-          [...rowsUnder(x.engine, "space").values()].filter((v) =>
-            JSON.stringify(v ?? null).includes("leaf:")
-          ),
-        ) + ")",
-      15_000,
     );
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // Bob's replica pulls the leaf and his watch set grows; the server
+    // sees that as a demand change, and the loop runs a pass for it.
+    await awaitEach(cycles, () => x.bobTracksLeaf());
     const stats = host!.stats();
     const growth = stats.settle.series.slice(seriesBefore).filter((s) =>
       s.class === "structural-growth"
@@ -1652,14 +1621,13 @@ describe("W1 (d′): demand = the tracked-ids closure, the walk deleted", () => 
     x.carolFire.key("push").send({});
     await x.carol.idle();
     await x.carol.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(x.engine, "space", '"leaf:6"'),
-      () =>
-        "the FRESH leaf (leaf:6) to land server-side after the appended " +
-        "element (bob tracks leaf=" + x.bobTracksLeaf() + ")",
-      15_000,
     );
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // Bob's replica pulls the leaf and his watch set grows; the server
+    // sees that as a demand change, and the loop runs a pass for it.
+    await awaitEach(cycles, () => x.bobTracksLeaf());
     const stats = host!.stats();
     const growth = stats.settle.series.slice(seriesBefore).filter((s) =>
       s.class === "structural-growth"

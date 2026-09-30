@@ -39,6 +39,86 @@ const writeTranscript = async (
 };
 
 describe("console/turn-result", () => {
+  for (const source of ["total", "legacy", "absent", "malformed"] as const) {
+    it(`projects ${source} usage without guessing missing counts`, async () => {
+      const artifactRoot = await Deno.makeTempDir();
+      try {
+        const turnId = "usage";
+        await writeTranscript(artifactRoot, turnId, [
+          { role: "user", content: "Read the note." },
+          { role: "assistant", content: "The note is ready." },
+        ]);
+        const reportPath = join(artifactRoot, turnId, "run-report.json");
+        const report = JSON.parse(await Deno.readTextFile(reportPath));
+        if (source !== "absent") report.usage = { inputTokens: 10 };
+        if (source === "total") {
+          report.totalUsage = {
+            inputTokens: 40,
+            outputTokens: 8,
+            secret: "private",
+          };
+        } else if (source === "malformed") {
+          report.totalUsage = "unavailable";
+        }
+        await Deno.writeTextFile(reportPath, JSON.stringify(report));
+        const result = await readConsoleTurnResult({
+          artifactRoot,
+          turnId,
+          sessionId: "conversation",
+          continuable: true,
+          spaceName: "usage-test",
+          timing: {
+            startedAt: "2026-09-21T00:00:00Z",
+            endedAt: "2026-09-21T00:00:03.250Z",
+          },
+        });
+        expect(result?.usage).toEqual(
+          source === "total"
+            ? { inputTokens: 40, outputTokens: 8 }
+            : source === "legacy"
+            ? { inputTokens: 10 }
+            : undefined,
+        );
+        expect(result?.elapsedMs).toBe(3250);
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+  }
+
+  it("reads an unfamiliar stored outcome as completed while preserving the result body", async () => {
+    const artifactRoot = await Deno.makeTempDir();
+    try {
+      const turnId = "turn-from-newer-console";
+      await writeTranscript(artifactRoot, turnId, [
+        { role: "user", content: "Prepare the request" },
+        { role: "assistant", content: "Your request is awaiting approval." },
+      ]);
+      const reportPath = join(artifactRoot, turnId, "run-report.json");
+      const report = JSON.parse(await Deno.readTextFile(reportPath));
+      report.taskOutcome = { outcome: "awaiting-approval", approvalId: "one" };
+      await Deno.writeTextFile(reportPath, JSON.stringify(report));
+
+      await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
+        artifactRoot,
+        turnId,
+        spaceName: "console-test",
+      })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
+        looms: [],
+        pieces: [],
+        spaceName: "console-test",
+        finalText: "Your request is awaiting approval.",
+      });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
   it("ties a named Pattern to its verified composition component without exposing its cell address", async () => {
     const artifactRoot = await Deno.makeTempDir();
     const call = (
@@ -101,6 +181,8 @@ describe("console/turn-result", () => {
     try {
       await writeTranscript(artifactRoot, "coverage", transcript);
       const result = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "coverage",
         spaceName: "space",
@@ -123,6 +205,8 @@ describe("console/turn-result", () => {
       );
       await writeTranscript(artifactRoot, "later-duplicates", transcript);
       const laterDuplicates = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "later-duplicates",
         spaceName: "space",
@@ -136,6 +220,8 @@ describe("console/turn-result", () => {
       });
       await writeTranscript(artifactRoot, "independent", transcript);
       const independent = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "independent",
         spaceName: "space",
@@ -277,6 +363,8 @@ describe("console/turn-result", () => {
         mutate(transcript);
         await writeTranscript(artifactRoot, name, transcript, first);
         const result = await readConsoleTurnResult({
+          sessionId: "session",
+          continuable: true,
           artifactRoot,
           turnId: name,
           spaceName: "space",
@@ -342,6 +430,8 @@ describe("console/turn-result", () => {
         },
       ], 2);
       const result = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "turn-looms",
         spaceName: "test-space",
@@ -381,10 +471,15 @@ describe("console/turn-result", () => {
       ]);
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "turn-with-piece",
         spaceName: "console-test",
       })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
         looms: [],
         pieces: [{
           slug: "reading-list",
@@ -418,10 +513,15 @@ describe("console/turn-result", () => {
       ]);
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "turn-without-piece",
         spaceName: "console-test",
       })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
         looms: [],
         pieces: [],
         spaceName: "console-test",
@@ -460,10 +560,15 @@ describe("console/turn-result", () => {
       ], 4);
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "follow-up-turn",
         spaceName: "console-test",
       })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
         looms: [],
         pieces: [],
         spaceName: "console-test",
@@ -490,10 +595,15 @@ describe("console/turn-result", () => {
       await Deno.writeTextFile(reportPath, JSON.stringify(report));
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId,
         spaceName: "console-test",
       })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
         looms: [],
         pieces: [],
         spaceName: "console-test",
@@ -528,6 +638,8 @@ describe("console/turn-result", () => {
       );
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId,
         spaceName: "console-test",
@@ -561,6 +673,8 @@ describe("console/turn-result", () => {
       );
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId,
         spaceName: "console-test",
@@ -576,6 +690,8 @@ describe("console/turn-result", () => {
     });
     try {
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId: "../another-run",
         spaceName: "console-test",
@@ -591,6 +707,8 @@ describe("console/turn-result", () => {
       );
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId,
         spaceName: "console-test",
@@ -624,10 +742,15 @@ describe("console/turn-result", () => {
       ]);
 
       await expect(readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
         artifactRoot,
         turnId,
         spaceName: "console-test",
       })).resolves.toEqual({
+        outcome: "completed",
+        sessionId: "session",
+        continuable: true,
         looms: [],
         pieces: [],
         spaceName: "console-test",

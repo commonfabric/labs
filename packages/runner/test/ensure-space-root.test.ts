@@ -192,6 +192,21 @@ describe("space-root ensure core", () => {
     expect(second.outcome).toBe("resolved-existing");
   });
 
+  it("refuses an existing root at a different reserved address", async () => {
+    createRuntime();
+    await ensureSpaceRootPattern(runtime, space, { isHomeSpace: true });
+    await runtime.idle();
+    const original = await resolveSpaceRootPattern(runtime, space);
+    await expect(ensureSpaceRootPattern(runtime, space, {
+      isHomeSpace: false,
+      genesisRoot: { source: HOME_PATTERN_SOURCE, cause: "another-root" },
+    })).rejects.toThrow(
+      "Default pattern conflicts with the genesis root reservation",
+    );
+    expect((await resolveSpaceRootPattern(runtime, space))?.equals(original!))
+      .toBe(true);
+  });
+
   it("non-home ensure uses the system default-app source (the unruled custom-URL fork's interim)", async () => {
     createRuntime();
     const result = await ensureSpaceRootPattern(runtime, space, {

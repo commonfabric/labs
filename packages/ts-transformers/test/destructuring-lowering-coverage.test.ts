@@ -1,7 +1,10 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import ts from "typescript";
 
-import type { TransformationContext } from "../src/core/mod.ts";
+import {
+  CrossStageState,
+  type TransformationContext,
+} from "../src/core/mod.ts";
 import {
   collectDestructureBindings,
   type DefaultDestructureBinding,
@@ -48,9 +51,7 @@ function testContext(checker: ts.TypeChecker): TransformationContext {
     checker,
     factory: ts.factory,
     options: {},
-    state: {
-      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
-    },
+    state: new CrossStageState(),
     cfHelpers: {
       getHelperExpr: (name: string) => ts.factory.createIdentifier(name),
     },

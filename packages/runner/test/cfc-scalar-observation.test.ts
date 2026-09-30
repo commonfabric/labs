@@ -12,6 +12,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -42,10 +43,10 @@ describe("cfc-scalar-observation", () => {
     const tx = runtime.edit();
     const source = runtime.getCell(space, "source", undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...source.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,

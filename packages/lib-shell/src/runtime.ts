@@ -1,16 +1,11 @@
 import type { CellScope } from "@commonfabric/api";
-import {
-  createSession,
-  DID,
-  Identity,
-  isDID,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, DID, Identity, Session } from "@commonfabric/identity";
 import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import { navigate } from "@commonfabric/navigation";
 import { slugIdForSpace } from "@commonfabric/runner/slugs";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import {
   attachOptionsFrom,
@@ -141,18 +136,18 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
 
   /**
-   * Flow-label propagation dial (S16). Shell hosts default to "observe"
-   * (Epic H1): derive the per-tx conservative join and emit diagnostics,
-   * persisting nothing — the measurement stage before "persist".
+   * Flow-label propagation dial (S16). Shell hosts default to "persist"
+   * (Epic H2): derive the per-tx conservative join and write it as a
+   * `derived` label component on every value write.
    */
   cfcFlowLabels?: RuntimeCfcFlowLabelsMode;
 
   /**
-   * Populate the default render confidentiality ceiling (Epic H3a). When
-   * true, the worker's display sinks gate labeled values against the
-   * §8.10.6 profile for the acting identity and author-supplied
-   * render-boundary declassification is denied. Dogfood flag, default off
-   * (= today's unbounded rendering).
+   * Populate the default render confidentiality ceiling. Defaults to on:
+   * the worker's display sinks gate labeled values against the §8.10.6
+   * profile for the acting identity, and author-supplied render-boundary
+   * declassification is denied. `false` opts a host out, which renders
+   * labeled content ungated.
    */
   cfcRenderCeiling?: boolean;
 
@@ -194,6 +189,24 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * StorageManager.open time so it takes effect on the next runtime (reload).
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Where this page serves the outer frame of `cf-iframe`'s sandbox, for a
+   * page whose own Content Security Policy refuses the frame the sandbox
+   * otherwise inlines. It says something of the page, not of the runtime: the
+   * client keeps it, the worker is sent none of it, and an attach asserts
+   * nothing by it. Unset, the outer frame is inlined.
+   */
+  iframeOuterFrameUrl?: string;
+
+  /**
+   * When true, the worker holds its initialization reply until the backend's
+   * health check has answered, and `create` rejects when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, and a
+   * host the check cannot reach arrives through `onError` as a
+   * `host-unreachable` report while storage reconnects on its own.
+   */
+  awaitHealth?: boolean;
 
   /**
    * Override the runtime worker URL. By default, deployed builds use the
@@ -315,7 +328,7 @@ export function createRuntimeClientOptions({
   apiUrl,
   spaceHostMap,
   experimental,
-  cfcEnforcementMode = "enforce-explicit",
+  cfcEnforcementMode = "enforce-strict",
   // Epic H2 (docs/history/plans/cfc-future-work-implementation.md): shell hosts run the
   // flow-label dial at "persist" — the per-tx conservative join is derived AND
   // written as a `derived` label component on every value write. This
@@ -327,16 +340,20 @@ export function createRuntimeClientOptions({
   // (§8.12.8) keeps the derived component tracking the current value rather
   // than ratcheting forever. H1 shipped "observe" as the measurement stage.
   cfcFlowLabels = "persist",
-  // Hosts opt into the §8.10.6 display ceiling. The worker resolves shared
+  // The §8.10.6 display ceiling, on by default. The worker resolves shared
   // `Space` labels through verified reader membership before the reconciler
   // fits them against the acting user's identity atoms and the admitted
   // influence-class caveat kinds. Author-supplied render declassification is
-  // denied, and labels that still do not fit the ceiling stay blocked.
-  cfcRenderCeiling = false,
+  // denied, and labels that still do not fit the ceiling stay blocked. The
+  // shell's per-profile `commonfabric.cfcRenderCeiling(false)` toggle opts a
+  // browser profile back out.
+  cfcRenderCeiling = true,
   trustSnapshot,
   forwardWorkerConsole,
   patternCoverage,
   concurrentWatchRefresh,
+  awaitHealth,
+  iframeOuterFrameUrl,
 }: {
   session: Session;
   apiUrl: URL;
@@ -349,21 +366,14 @@ export function createRuntimeClientOptions({
   forwardWorkerConsole?: boolean;
   patternCoverage?: boolean;
   concurrentWatchRefresh?: boolean;
+  awaitHealth?: boolean;
+  iframeOuterFrameUrl?: string;
 }) {
   // The identity the runtime renders as. A delegated host names it in its own
   // trust snapshot; a snapshot that names nobody leaves the session identity
   // as the render audience, the fallback the worker's own resolver applies to
-  // the same field in `runtime-processor.ts`. A named principal must be a DID:
-  // the ceiling's entries are identity atoms over one.
-  const namedPrincipal = trustSnapshot?.actingPrincipal;
-  if (namedPrincipal !== undefined && !isDID(namedPrincipal)) {
-    throw new Error(
-      `A trust snapshot's acting principal must be a DID: ${
-        JSON.stringify(namedPrincipal)
-      }`,
-    );
-  }
-  const actingPrincipal = namedPrincipal ?? session.as.did();
+  // the same field in `runtime-processor.ts`.
+  const actingPrincipal = trustSnapshot?.actingPrincipal ?? session.as.did();
   const resolvedTrustSnapshot = trustSnapshot === undefined
     ? { id: `principal:${actingPrincipal}`, actingPrincipal }
     : trustSnapshot ?? undefined;
@@ -391,6 +401,8 @@ export function createRuntimeClientOptions({
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
+    iframeOuterFrameUrl,
   };
 }
 
@@ -529,12 +541,14 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * Creates a piece in the given space, `options.argument` being the record of
-   * inputs it is created with.
+   * inputs it is created with. `options.cause` derives its identity within
+   * the space: repeated calls reapply setup to the same piece and require
+   * the same pattern identity. A different pattern is rejected.
    */
   async createPiece<T>(
     space: DID,
     source: URL | Program | string,
-    options?: { argument?: FabricPlainObject; run?: boolean },
+    options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
     const piece = await this.#client.createPiece<T>(source, space, options);
@@ -797,6 +811,15 @@ export class RuntimeInternals extends EventTarget {
     return await this.#client.registerSpaceHost(space, host);
   }
 
+  /** See RuntimeClient.registerSpaceHostDetailed. */
+  async registerSpaceHostDetailed(
+    space: DID,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    this.#check();
+    return await this.#client.registerSpaceHostDetailed(space, host);
+  }
+
   async idle(): Promise<void> {
     this.#check();
     await this.#client.idle();
@@ -941,6 +964,8 @@ export class RuntimeInternals extends EventTarget {
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
+    awaitHealth,
+    iframeOuterFrameUrl,
     getBuildHash = fetchBuildHash,
     workerUrl,
     transport,
@@ -971,8 +996,6 @@ export class RuntimeInternals extends EventTarget {
       `[Identity] User DID: ${identity.did()}`,
     );
 
-    // Built before anything is connected, so a host's bad options are
-    // refused while a worker this page would own is still unspawned.
     const clientOptions = createRuntimeClientOptions({
       session,
       apiUrl,
@@ -985,6 +1008,8 @@ export class RuntimeInternals extends EventTarget {
       forwardWorkerConsole,
       patternCoverage,
       concurrentWatchRefresh,
+      awaitHealth,
+      iframeOuterFrameUrl,
     });
 
     const connection = transport ??
@@ -995,12 +1020,20 @@ export class RuntimeInternals extends EventTarget {
           getBuildHash,
         }),
       });
-    const client = attach
-      ? await RuntimeClient.attach(
-        connection,
-        attachOptionsFrom(clientOptions),
-      )
-      : await RuntimeClient.initialize(connection, clientOptions);
+    let client: RuntimeClient;
+    try {
+      client = attach
+        ? await RuntimeClient.attach(
+          connection,
+          attachOptionsFrom(clientOptions),
+        )
+        : await RuntimeClient.initialize(connection, clientOptions);
+    } catch (error) {
+      // A worker this call spawned has nobody else to end it; one that came
+      // in over `transport` is the embedder's to keep or drop.
+      if (!transport) await connection.dispose();
+      throw error;
+    }
 
     // Expose a usable RuntimeInternals immediately. Callers that need
     // storage/piece-manager convergence should await `rt.synced(space)`

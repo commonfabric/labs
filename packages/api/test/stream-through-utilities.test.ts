@@ -11,6 +11,7 @@ import type {
   StripDefaultBrand,
   WrapOrPreserve,
 } from "@commonfabric/api";
+import type { Same } from "@commonfabric/utils/types";
 
 /**
  * The api's own type utilities, applied to a stream that DECLARES A RESULT.
@@ -35,7 +36,6 @@ import type {
  */
 
 type AssertAssignable<T, U> = [T] extends [U] ? true : never;
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 interface AddTopic {
   title: string;

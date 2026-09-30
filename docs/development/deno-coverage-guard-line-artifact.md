@@ -80,9 +80,110 @@ lines are tracked here rather than chased with contrived error-injection tests,
 since the branches are unreachable by construction.
 
 A guard line is one of two cases where an uncovered line is expected to stay
-uncovered; a block that is never invoked at all is the other, below. Everywhere
-else, a line whose coverage moves between runs or between shard layouts is a
-defect in the tests — see [COVERAGE.md](COVERAGE.md) for what to do about it.
+uncovered; a block that is never invoked at all is the other, below. A third
+case, a line two adjacent callbacks share, is not one of those: it is a count
+that moves with how the tests are packed into lanes, and it has a remedy.
+Everywhere else, a line whose coverage moves between runs, or between how tests
+are packed into lanes, is a defect in the tests — see [COVERAGE.md](COVERAGE.md)
+for what to do about it.
+
+## A line two adjacent callbacks share
+
+The third case is a line that two functions both claim. An uncalled function's
+range does not stop at that function's own text: projected back onto the
+original source through the source map, which names positions sparsely, it
+reaches from the last named position at or before the function to the next one
+after it. So it can zero the line closing the argument before it and the line
+opening the argument after it.
+
+Two callbacks passed one after another to the same call therefore share a
+line, and that line is reported covered only where both callbacks ran:
+
+```ts
+// Shown at module scope.
+function run(
+  name: string,
+  onStart: () => void,
+  onRefused: (error: Error) => void,
+): void {
+  if (name === "start") onStart();
+  else onRefused(new Error(name));
+}
+
+run(
+  "start",
+  () => {
+    console.log("started");
+  },
+  (error) => {
+    console.log(error.message);
+  },
+);
+```
+
+```
+deno run --coverage=cov main.ts
+deno coverage cov --lcov | grep '^DA:'
+```
+
+```
+DA:10,1   // run(
+DA:11,1   //   "start",
+DA:12,1   //   () => {
+DA:13,1   //     console.log("started");
+DA:14,0   //   },                        <- closes the callback that ran
+DA:15,0   //   (error) => {
+DA:16,0   //     console.log(error.message);
+DA:17,0   //   },
+```
+
+Line 14 closes a callback that ran. It reports zero because the callback under
+it did not.
+
+How far the reach goes depends on where the source map names positions, so
+read the counts rather than predicting them. Two instances measured in
+`packages/runner/src/builtins/compile-and-run.ts`: a single-line callback that
+never ran zeroed the three argument lines above it, its own line, and the line
+opening the callback after it; a block-bodied callback that never ran zeroed
+its own five lines and nothing else.
+
+This one is not an uncovered line that stays uncovered. Both functions run;
+what decides the count is whether one measurement ran both. Continuous
+integration merges the reports a run's lanes write, one per suite and workspace
+member in each lane, by adding per-line counts, so the line is covered only when
+both callbacks ran in the same report. Which test file lands in which lane is
+not something any test asserts.
+
+Give the second callback a name of its own and the sharing goes away:
+
+```ts
+// Shown at module scope.
+declare function run(
+  name: string,
+  onStart: () => void,
+  onRefused: (error: Error) => void,
+): void;
+declare function report(error: Error): void;
+
+const onRefused = (error: Error) => {
+  report(error);
+};
+
+run("start", () => {
+  console.log("started");
+}, onRefused);
+```
+
+Each function's lines are then its own: they are covered wherever that
+function runs, and no line needs two measurements at once. A `const` holding
+an uncalled function still reports its own declaration line as uncovered,
+which is the ordinary reading — that function did not run.
+
+`deno-coverage-ignore` is the wrong tool here, by this document's own bar:
+both functions are reached constantly, and a test could cover every line
+without changing what the lines are.
+[COVERAGE.md](COVERAGE.md) has the worked instances under "A line two
+callbacks share".
 
 ## A block that is never invoked: `deno-coverage-ignore`
 
@@ -111,7 +212,7 @@ removes one line and leaves five. A block wants the `-start` / `-stop` pair.
 The directive reaches the lcov report and not merely the terminal one, which
 is what makes it usable here: the ignored lines carry no `DA:` records at all,
 so `LF` falls while `LH` stays put — the lines removed were uncovered ones,
-never counted in `LH` to begin with — and the CI ratchet sees nothing
+never counted in `LH` to begin with — and the coverage metric sees nothing
 uncovered rather than seeing a gap it has been told to forgive.
 
 Measure a "before" figure while the source still lacks the directive. The

@@ -22,6 +22,30 @@ long way without a query-dependency analyzer.
   invalidation pass a narrower cell (e.g. a per-table or per-topic cell they bump
   themselves from the same handler that writes), trading precision for manual
   bookkeeping. v1 does not parse SQL to compute fine-grained read sets.
+- **A row document is immutable.** The write-back stores each result row as
+  an entity document of its own under the query's result cell, keyed on the
+  row's content and on the label that content is written under (CFC spec
+  §8.17.6, rule 4), and on the space's row salt, a runtime secret that makes
+  the id say nothing about the row (Section [06](./06-cfc.md)). A document
+  therefore holds one content under one label for as long as it exists. A row whose data changed is another document, and
+  the document it had stays as it was, so a reference retained to a row is a
+  snapshot: it reads the same content whatever the query selects later, and a
+  reader who wants the current rows reads the result. A row carrying no
+  confidentiality is keyed on the salt and its content: equal rows share one
+  document, and content the result cell has stored before, in the previous
+  run or any earlier one, reuses that document. A row carrying a per-column
+  label or a row label is keyed on the salt, its content, its row label, the selected
+  database (its space and id), the projection (each output column and its
+  origin), and the handle's `tables` declaration. The projection and the
+  declaration are what decide a column's label, and a commit attaches label
+  metadata only to the documents it writes, so a row whose label changed
+  under unchanged content lands on a document of its own that the commit
+  writes and labels. Any re-declaration of the handle re-keys every labeled
+  row the same way. What a re-run writes is the result cell (its `pending`
+  flag, request hash, and the array of row links) plus one document per row
+  whose key is new to this result cell. Documents no result references any
+  longer are not collected: a result cell accumulates one document per
+  distinct row it has ever held.
 
 This is deliberately the same shape the runtime uses elsewhere: reactivity is
 driven by observing cells, and the handle cell's changing `rev` stands in for

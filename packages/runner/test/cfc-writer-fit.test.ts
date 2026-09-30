@@ -4,8 +4,10 @@ import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -17,12 +19,12 @@ import { getDerivedInternalCellLink, parseLink } from "../src/link-utils.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-writer-fit");
 
@@ -149,7 +151,7 @@ const seedSecretSource = async (
   );
   const sourceId = parseLink(sourceCell.getAsLink()).id!;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: sourceId,
@@ -345,6 +347,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     const runtime = newRuntime(storageManager);
     try {
       await seedSecretSource(runtime, "writer-fit-explicit-source");
+      runtime.resetCfcStats();
 
       const tx = runtime.edit();
       const source = runtime.getCell(
@@ -382,6 +385,10 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       expect(flags[0]).toContain("writer-fit confidentiality misfit");
       expect(flags[0]).toContain(`for ${derivedId} at /`);
       expect(flags[0]).toContain("(canWrite, §8.12.4)");
+      expect(flags[0]).toContain("secret");
+      expect(tx.getCfcState().refusalDetails).toEqual([]);
+      expect(runtime.getCfcStats().refusalDetailsRecorded).toBe(0);
+      expect(runtime.getCfcStats().consumedLabelWalks).toBe(0);
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -983,7 +990,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         const foreignId = foreignCell.getAsNormalizedFullLink().id;
         writeSeedEnvelopeDoc(seed, foreign);
-        seed.writeOrThrow({
+        seedStoredEnvelope(seed, {
           space: foreign,
           scope: "space",
           id: foreignId,
@@ -1283,7 +1290,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         const foreignId = foreignCell.getAsNormalizedFullLink().id;
         writeSeedEnvelopeDoc(seed, foreign);
-        seed.writeOrThrow({
+        seedStoredEnvelope(seed, {
           space: foreign,
           scope: "space",
           id: foreignId,
@@ -1632,7 +1639,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         );
         const foreignId = foreignCell.getAsNormalizedFullLink().id;
         writeSeedEnvelopeDoc(seed, foreign);
-        seed.writeOrThrow({
+        seedStoredEnvelope(seed, {
           space: foreign,
           scope: "space",
           id: foreignId,
@@ -1883,7 +1890,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           .getAsNormalizedFullLink().id;
         const seed = runtime.edit();
         writeSeedEnvelopeDoc(seed, signer.did());
-        seed.writeOrThrow({
+        seedStoredEnvelope(seed, {
           space: signer.did(),
           scope: "space",
           id: targetId,
@@ -2016,7 +2023,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       expect(raw.secret).toBe("s3cr3t");
       // The trusted policy-writer authors under a builtin identity, the one
       // sanctioned writer of the reserved grant namespace.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "cfc-grant-writer",
       });
@@ -2753,7 +2760,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         // it changes — and the second clause stands beside it.
         expect(clauses.length).toBe(2);
         const orClause = clauses.find((clause) =>
-          typeof clause === "object" && clause !== null && "anyOf" in clause
+          isObjectOrArray(clause) && "anyOf" in clause
         ) as { anyOf: unknown[] } | undefined;
         expect(orClause).toBeDefined();
         expect(orClause!.anyOf.length).toBe(2);
@@ -3478,9 +3485,8 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     });
 
     it("rejects a substrate write named by a different provenance claim", async () => {
-      // The claim discriminates. The seed-materialization marker records a
-      // whole-document address too, so without it that unrelated runtime
-      // marker would carry the route.
+      // A whole-document address alone does not establish runtime ownership;
+      // the provenance claim must name that authority.
 
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = newRuntime(storageManager);
@@ -3511,7 +3517,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             id: link.id,
             path: [],
           },
-          claim: CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
+          claim: "unrelated.claim",
           sources: [{
             space: link.space,
             scope: link.scope,

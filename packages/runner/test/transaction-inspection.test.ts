@@ -1,4 +1,5 @@
 import { assertEquals, assertExists, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -13,6 +14,7 @@ import {
 } from "../src/storage/extended-storage-transaction.ts";
 import type {
   IExtendedStorageTransaction,
+  IReadActivity,
   ITransactionJournal,
   ITransactionWriteRequest,
   TransactionReactivityLog,
@@ -22,6 +24,7 @@ import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
+  getTransactionWrittenSpaces,
 } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("transaction-inspection");
@@ -293,6 +296,39 @@ describe("transaction inspection", () => {
     }
   });
 
+  it("forwards the current candidate journal without copying records or replacing absent capabilities", () => {
+    const records: IReadActivity[] = [{
+      space,
+      id: "test:candidate-journal",
+      path: ["value"],
+      meta: { internalVerifierRead: false },
+    }];
+    const inner = {
+      getPotentiallyExternalReadActivities() {
+        return records;
+      },
+    } as unknown as IExtendedStorageTransaction;
+    const wrapper = new TransactionWrapper(inner);
+    expect(wrapper.getPotentiallyExternalReadActivities()).toBe(records);
+    records[0].meta.internalVerifierRead = true;
+    records.push({
+      space,
+      id: "test:later-candidate",
+      path: ["value", "field"],
+      meta: {},
+    });
+    expect([...wrapper.getPotentiallyExternalReadActivities()!]).toEqual(
+      records,
+    );
+    expect([...wrapper.getPotentiallyExternalReadActivities()!][0]).toBe(
+      records[0],
+    );
+    delete inner.getPotentiallyExternalReadActivities;
+    expect(wrapper.getPotentiallyExternalReadActivities()).toBeUndefined();
+    inner.getPotentiallyExternalReadActivities = () => undefined;
+    expect(wrapper.getPotentiallyExternalReadActivities()).toBeUndefined();
+  });
+
   it("does not fan out batch writes when the wrapped transaction already handles them", () => {
     const writes: Array<{ address: NormalizedFullLink; value: FabricValue }> = [
       {
@@ -562,16 +598,112 @@ describe("transaction inspection", () => {
     }
   });
 
+  it("lists a space whose only write returned to its starting value among the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-revert" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      const address = {
+        space,
+        scope: "space",
+        id,
+        path: ["value", "count"],
+      } as const;
+      tx.write(address, 2);
+      tx.write(address, 1);
+
+      // The reactivity log lists only changed paths, so it names no write.
+      expect(tx.getReactivityLog?.().writes).toEqual([]);
+      expect(getTransactionWrittenSpaces(tx)).toEqual([space]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("names the direct reactivity log's spaces as written when the transaction keeps no write-attempt log or replayable journal", () => {
+    const journal = {
+      activity: () => {
+        throw new Error("no replay");
+      },
+      novelty: () => [],
+      history: () => [],
+    };
+    const tx = {
+      journal,
+      getReactivityLog: () => ({
+        reads: [],
+        shallowReads: [],
+        writes: [{
+          space: "did:key:written" as any,
+          scope: "space",
+          id: "of:write" as any,
+          path: ["field"],
+        }],
+        attemptedWrites: [{
+          space: "did:key:attempted" as any,
+          scope: "space",
+          id: "of:attempt" as any,
+          path: ["field"],
+        }],
+      }),
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(getTransactionWrittenSpaces(tx)).toEqual([
+      "did:key:written",
+      "did:key:attempted",
+    ]);
+  });
+
+  it("throws when a transaction offers no record of its writes", () => {
+    const tx = {
+      journal: {
+        activity: () => {
+          throw new Error("no replay");
+        },
+        novelty: () => [],
+        history: () => [],
+      },
+      tx: {} as any,
+    } as unknown as IExtendedStorageTransaction;
+
+    expect(() => getTransactionWrittenSpaces(tx)).toThrow("cannot be known");
+  });
+
+  it("leaves a space the transaction only read out of the written spaces", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const id = "test:transaction-inspection-written-spaces-read" as const;
+      const seed = storageManager.edit();
+      seed.write({ space, scope: "space", id, path: [] }, {
+        value: { count: 1 },
+      });
+      await seed.commit();
+
+      const tx = storageManager.edit();
+      tx.read({ space, scope: "space", id, path: ["value", "count"] });
+
+      expect(getTransactionWrittenSpaces(tx)).toEqual([]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
   it(
-    "preserves correct previousValue across distinct-path writes within a single transaction " +
-      "(regression: applyMutablePathWrite mutates current.value in place on 2nd+ write)",
+    "preserves correct previousValue across distinct-path writes within a single transaction",
     async () => {
       // Two writes at *different* leaf paths within one transaction. The
       // second write's `previousValue` must capture what was at path
       // ["value", "b"] BEFORE the second write (= the seed value), not the
       // value that's just been written. Reading the activity-path snapshot
-      // AFTER `applyMutablePathWrite()` would observe the post-mutation
-      // state because the helper mutates `current.value` in place on the
+      // AFTER the write is applied would observe the post-mutation state,
+      // because applying mutates `current.value` in place on the
       // second-and-later write (cloneForMutation short-circuits to
       // identity on an already-mutable root).
       const storageManager = StorageManager.emulate({ as: signer });
@@ -619,10 +751,9 @@ describe("transaction inspection", () => {
     async () => {
       // The first write thaws `doc.current.value` in place (sub-tree at
       // `/value/a` becomes mutable). The second write creates new parents
-      // at a sibling subtree `/value/new/nested`. Its
-      // `findMaterializedParentPath` walks the (already-mutable)
-      // `current.value` and returns `["value"]` as the materialization
-      // point. `previousActivityValue` at that path must capture the
+      // at a sibling subtree `/value/new/nested`. Its plan reads the
+      // (already-mutable) `current.value` and finds `["value"]` as the
+      // materialization point. `previousActivityValue` at that path must capture the
       // PRE-second-write state of `/value` (= `{a: 10}` from the first
       // write's in-place result, not the POST-second-write state with the
       // `new` child added).

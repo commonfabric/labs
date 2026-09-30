@@ -438,7 +438,7 @@ Deno.test("readTree marks a symlink so paths below it resolve", async () => {
 Deno.test("readTree surfaces a git failure", async () => {
   const root = await Deno.makeTempDir({ prefix: "check-skill-facts-nogit-" });
   try {
-    await assertRejects(() => readTree(root), Error, "git ls-files failed");
+    await assertRejects(() => readTree(root), Error, "`git ls-files` failed");
   } finally {
     await Deno.remove(root, { recursive: true });
   }

@@ -578,6 +578,13 @@ export class TypeScriptCompiler {
    * emitted bodies plus every error-severity diagnostic, each attributed to its
    * source file. For batch callers (cfcheck over the whole pattern corpus) that
    * must report all failing patterns by name, not abort on the first.
+   *
+   * `durations` says how long each authored file took, in milliseconds, which
+   * is what lets a caller that unioned several programs into one charge the
+   * run's cost back to the program each file came from. The per-file
+   * diagnostics and the emit below are where nearly all of that time goes;
+   * what is left is the program-wide parse and bind, which belongs to no one
+   * file and appears in no entry.
    */
   compileToModulesCollecting(
     program: Program,
@@ -585,6 +592,7 @@ export class TypeScriptCompiler {
   ): {
     modules: Map<string, CompiledTypeScriptModule>;
     diagnostics: { file: string; message: string }[];
+    durations: Map<string, number>;
   } {
     const runtimeModules = inputOptions.runtimeModules ?? [];
     validateSource(program);
@@ -623,6 +631,14 @@ export class TypeScriptCompiler {
     for (const d of tsProgram.getOptionsDiagnostics()) pushTs(d);
     for (const d of tsProgram.getGlobalDiagnostics()) pushTs(d);
 
+    const durations = new Map<string, number>();
+    const charge = (name: string, since: number): void => {
+      durations.set(
+        name,
+        (durations.get(name) ?? 0) + performance.now() - since,
+      );
+    };
+
     // Type + declaration diagnostics for authored files only (skipLibCheck
     // already excludes the declaration libs). The corpus check is an
     // AUTHORING surface, so no stored-source tolerance applies here: a
@@ -630,8 +646,10 @@ export class TypeScriptCompiler {
     // the author to remove.
     for (const sourceFile of tsProgram.getSourceFiles()) {
       if (!authored.has(sourceFile.fileName)) continue;
+      const at = performance.now();
       for (const d of tsProgram.getSemanticDiagnostics(sourceFile)) pushTs(d);
       for (const d of tsProgram.getSyntacticDiagnostics(sourceFile)) pushTs(d);
+      charge(sourceFile.fileName, at);
     }
 
     // Transform + emit, collecting (not throwing) transformer diagnostics.
@@ -644,14 +662,24 @@ export class TypeScriptCompiler {
       tsProgram,
       inputOptions,
     );
-    const { diagnostics: emitDiagnostics } = tsProgram.emit(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      { before: beforeTransformers },
-    );
-    for (const d of emitDiagnostics) pushTs(d);
+    // One emit call per file, as `compileToModules()` makes them, so that
+    // the time each file takes is the file's own. Diagnostics aggregate
+    // across the calls the same way they do there. The authored set is
+    // the emittable one: everything else the program holds is a
+    // declaration lib, which emits nothing.
+    for (const sourceFile of tsProgram.getSourceFiles()) {
+      if (!authored.has(sourceFile.fileName)) continue;
+      const at = performance.now();
+      const { diagnostics: emitDiagnostics } = tsProgram.emit(
+        sourceFile,
+        undefined,
+        undefined,
+        undefined,
+        { before: beforeTransformers },
+      );
+      for (const d of emitDiagnostics) pushTs(d);
+      charge(sourceFile.fileName, at);
+    }
     if (getDiagnostics) {
       for (const d of getDiagnostics()) {
         if (d.severity !== "error") continue;
@@ -697,7 +725,7 @@ export class TypeScriptCompiler {
           : {}),
       });
     }
-    return { modules, diagnostics };
+    return { modules, diagnostics, durations };
   }
 }
 

@@ -5,6 +5,7 @@ import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -71,7 +72,7 @@ describe("CFC trigger reads: cid: exclusion", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -95,7 +96,7 @@ describe("CFC trigger reads: cid: exclusion", () => {
       // attacker-controlled and must stay out of flow joins.
       const poisoned = { secret: "poisoned" };
       const cidId = `cid:${taggedHashStringOf(poisoned)}` as typeof sourceId;
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: cidId,

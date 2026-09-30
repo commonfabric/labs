@@ -2,7 +2,7 @@
 
 _Epic F of
 [`docs/history/plans/cfc-future-work-implementation.md`](../history/plans/cfc-future-work-implementation.md)
-(§8). Spec: `commontoolsinc/specs` `cfc/14-open-problems-and-proposals.md`
+(§8). Spec: `commonfabric/specs` `cfc/14-open-problems-and-proposals.md`
 §14.4.8 (collaborative documents, OT materialization, range-scoped integrity)
 plus the `views` storage hook the spec already reserves in
 `cfc/04-label-representation.md` §4.6.3. This doc is the F0 gate the plan
@@ -473,7 +473,7 @@ verified identities.
 
 ## Provenance
 
-Grounded in `commontoolsinc/specs` `cfc/`:
+Grounded in `commonfabric/specs` `cfc/`:
 `14-open-problems-and-proposals.md` §14.4.8.1–.5 (projections, whole-field vs
 range labels, claims/summaries, witness-bearing materialization,
 anchors/partial reads); `04-label-representation.md` §4.6.3

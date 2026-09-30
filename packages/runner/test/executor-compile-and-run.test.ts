@@ -11,7 +11,7 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -898,7 +898,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           ).toBe(scope);
 
           const firstDelivered = Promise.withResolvers<string>();
-          piece.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            piece.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               firstDelivered.resolve(tx.status().status);
@@ -911,7 +912,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           expect(other.result.key("compiled").get()?.result?.answer).toBe(0);
 
           const secondDelivered = Promise.withResolvers<string>();
-          other.result.key("compiled").key("result").key("bump").send(
+          sendEvent(
+            other.result.key("compiled").key("result").key("bump"),
             {},
             (tx) => {
               secondDelivered.resolve(tx.status().status);
@@ -949,16 +951,20 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await variantsFor(childId, 2);
 
       const aliceDelivered = Promise.withResolvers<string>();
-      piece.result.key("compiled").key("result").key("bump").send({}, (tx) => {
-        aliceDelivered.resolve(tx.status().status);
-      });
+      sendEvent(
+        piece.result.key("compiled").key("result").key("bump"),
+        {},
+        (tx) => {
+          aliceDelivered.resolve(tx.status().status);
+        },
+      );
       expect(await aliceDelivered.promise).not.toBe("error");
       await childValue(piece.result, 1);
       expect(bob.result.key("compiled").get()?.result?.answer).toBe(0);
       const bobBump = bob.result.key("compiled").key("result").key("bump")
         .resolveAsCell();
       const bobDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobDelivered.resolve(tx.status().status);
       });
       expect(await bobDelivered.promise).not.toBe("error");
@@ -969,7 +975,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(bob.result, 10, bob.runtime);
       await variantsFor(childId, 1);
       const bobReplacedDelivered = Promise.withResolvers<string>();
-      bobBump.send({}, (tx) => {
+      sendEvent(bobBump, {}, (tx) => {
         bobReplacedDelivered.resolve(tx.status().status);
       });
       expect(await bobReplacedDelivered.promise).not.toBe("error");
@@ -1073,4 +1079,123 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
       piece.cancelDemand();
     }
   });
+
+  /** Delivers one child write and observes its committed output. */
+  async function bumpChild(
+    result: Cell<{ compiled: CompiledView }>,
+    reader: Runtime,
+    answer: number,
+  ) {
+    const delivered = Promise.withResolvers<string>();
+    sendEvent(result.key("compiled").key("result").key("bump"), {}, (tx) => {
+      delivered.resolve(tx.status().status);
+    });
+    expect(await delivered.promise).not.toBe("error");
+    await childValue(result, answer, reader);
+    await covered();
+  }
+
+  for (const compiled of [false, true]) {
+    for (const initialCount of [undefined, 0]) {
+      it(`initializes later users' ${initialCount === undefined ? "missing" : "seeded"} session inputs in ${compiled ? "compiled" : "static"} children after reload`, async () => {
+        const code = handlerChildProgram(1);
+        const parentSource = (compiled ? PER_USER_PARENT : STATIC_CHILD_PARENT)
+          .replaceAll("PerUser", "PerSession");
+        const piece = await createParent(
+          code,
+          parentSource,
+          true,
+          initialCount,
+        );
+        const later: Awaited<ReturnType<typeof joinParent>>[] = [];
+        try {
+          await childValue(piece.result, 0);
+          await bumpChild(piece.result, client, 1);
+          const runtimeCount = servingRuntimes.length;
+          await host.spaceServer(space)!.park("test-session-input-recovery");
+          const bob = await joinParent(piece, bobSigner, code);
+          later.push(bob);
+          await childValue(bob.result, 0, bob.runtime);
+          expect(servingRuntimes).toHaveLength(runtimeCount + 1);
+          const bobOther = await joinParent(piece, bobSigner, code);
+          later.push(bobOther);
+          await childValue(bobOther.result, 0, bobOther.runtime);
+          for (const session of later) {
+            expect(
+              session.argument.key("count").resolveAsCell()
+                .getAsNormalizedFullLink().scope,
+            )
+              .toBe("session");
+          }
+          await bumpChild(bob.result, bob.runtime, 1);
+          await Promise.all([client.idle(), bobOther.runtime.idle()]);
+          expect(bobOther.result.key("compiled").get()?.result?.answer).toBe(0);
+          expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+          await bumpChild(bobOther.result, bobOther.runtime, 1);
+          await bumpChild(bobOther.result, bobOther.runtime, 2);
+          await bob.runtime.idle();
+          expect(bob.result.key("compiled").get()?.result?.answer).toBe(1);
+          expect(host.stats().unstampedSealRefusals).toBe(0);
+          expect(servingErrors).toEqual([]);
+        } finally {
+          for (const session of later) await session.dispose();
+          piece.cancelDemand();
+        }
+      });
+    }
+
+    it(`preserves a same-address explicit user input in ${compiled ? "compiled" : "static"} children after reload`, async () => {
+      const code = handlerChildProgram(1);
+      const parentSource = (compiled ? PER_USER_PARENT : STATIC_CHILD_PARENT)
+        .replaceAll("PerUser", "PerSession");
+      const piece = await createParent(code, parentSource, true);
+      const later: Awaited<ReturnType<typeof joinParent>>[] = [];
+      try {
+        await childValue(piece.result, 0);
+        await bumpChild(piece.result, client, 1);
+        const explicit = client.getCell(
+          space,
+          "compile-arg",
+          undefined,
+          undefined,
+          "user",
+        ).key("count");
+        const rebind = client.edit();
+        piece.argument.asSchema(undefined).withTx(rebind).key("count").set(
+          explicit,
+        );
+        expect((await rebind.commit()).error).toBeUndefined();
+        await covered();
+        const runtimeCount = servingRuntimes.length;
+        await host.spaceServer(space)!.park(
+          "test-explicit-session-input-recovery",
+        );
+        const bob = await joinParent(piece, bobSigner, code);
+        later.push(bob);
+        await childValue(bob.result, 0, bob.runtime);
+        expect(servingRuntimes).toHaveLength(runtimeCount + 1);
+        const bobOther = await joinParent(piece, bobSigner, code);
+        later.push(bobOther);
+        await childValue(bobOther.result, 0, bobOther.runtime);
+        for (const session of later) {
+          expect(
+            session.argument.key("count").resolveAsCell()
+              .getAsNormalizedFullLink().scope,
+          )
+            .toBe("user");
+        }
+        await bumpChild(bob.result, bob.runtime, 1);
+        await childValue(bobOther.result, 1, bobOther.runtime);
+        await bumpChild(bobOther.result, bobOther.runtime, 2);
+        await childValue(bob.result, 2, bob.runtime);
+        await client.idle();
+        expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+        expect(host.stats().unstampedSealRefusals).toBe(0);
+        expect(servingErrors).toEqual([]);
+      } finally {
+        for (const session of later) await session.dispose();
+        piece.cancelDemand();
+      }
+    });
+  }
 });

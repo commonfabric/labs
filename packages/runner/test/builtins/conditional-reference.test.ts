@@ -18,6 +18,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
@@ -52,10 +53,10 @@ describe("conditional-reference", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -70,18 +71,24 @@ describe("conditional-reference", () => {
       const target = runtime.getCell(space, "target", undefined, seed);
       const selected = runtime.getCell(space, "selected", undefined, seed);
       writeSeedEnvelopeDoc(seed, space);
-      seed.writeOrThrow({ ...target.getAsNormalizedFullLink(), path: [] }, {
+      seedStoredEnvelope(seed, {
+        ...target.getAsNormalizedFullLink(),
+        path: [],
+      }, {
         value: "visible",
         cfc: {
-          version: 2,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: { version: 1, entries: [] },
         },
       });
-      seed.writeOrThrow({ ...selected.getAsNormalizedFullLink(), path: [] }, {
+      seedStoredEnvelope(seed, {
+        ...selected.getAsNormalizedFullLink(),
+        path: [],
+      }, {
         value: target.getAsLink(),
         cfc: {
-          version: 2,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: {
             version: 1,
@@ -89,6 +96,7 @@ describe("conditional-reference", () => {
               path: [],
               origin: "link",
               observes: "followRef",
+              referenceAcquisition: "complete",
               label: { confidentiality: [selection] },
             }],
           },
@@ -191,6 +199,7 @@ describe("conditional-reference", () => {
             path: [],
             origin: "link",
             observes: "followRef",
+            referenceAcquisition: "complete",
             label: { confidentiality: [selection] },
           },
         ],

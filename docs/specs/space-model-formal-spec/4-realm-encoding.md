@@ -311,10 +311,13 @@ form.
 |---|---|---|
 | `FabricBytes` | `Bytes@1` | `ArrayBuffer` |
 | `FabricHash` | `Hash@1` | `{ tag: string, hash: ArrayBuffer }` |
+| `FabricDurationDay` | `DurationDay@1` | `bigint` |
+| `FabricDurationNsec` | `DurationNsec@1` | `bigint` |
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |
 | `FabricRegExp` | `RegExp@1` | `{ source, flags, flavor }` |
+| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, errorMessage }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
 
 Bytes travel as a bare `ArrayBuffer` rather than as a view onto one, that being
@@ -323,16 +326,16 @@ the transferable object in the tree rather than having to reach through a view
 and reason about its offset. Both byte-carrying types do this. A bare
 `Uint8Array` is therefore not a form this format emits.
 
-Three of these differ from their JSON counterparts in kind rather than in
+Four of these differ from their JSON counterparts in kind rather than in
 spelling, which is most of the reason this format exists, and they differ along
 two axes.
 
 `FabricBytes` carries bytes as bytes, where JSON must represent them as
-base64url text. `FabricRegExp` is terminal here and nonterminal under JSON —
-concrete proof that terminality belongs to the pair (class, format) rather than
-to the class. `FabricHash` differs on **both** axes at once: terminal here and
-nonterminal under JSON, and carrying its hash as a bare `ArrayBuffer` where
-JSON carries base64url text.
+base64url text. `FabricRegExp` and `FabricUnavailable` are terminal here and
+nonterminal under JSON — concrete proof that terminality belongs to the pair
+(class, format) rather than to the class. `FabricHash` differs on **both** axes
+at once: terminal here and nonterminal under JSON, and carrying its hash as a
+bare `ArrayBuffer` where JSON carries base64url text.
 
 `FabricKeyPair` differs from the others in that its state depends on the value
 rather than only on its class. A pair holding key material encodes to two
@@ -388,10 +391,13 @@ each is easy to get wrong in a way nothing reports.
 
 ### 5.1 Encoding
 
-**An encoded tree shares structure with the value it was built from, and is
-not frozen.** Copy-on-write is what makes that so: a subtree needing no
-encoding *is* that subtree rather than a reconstruction of it, which is the
-same mechanism Section 4 credits with preserving shared references.
+**An encoded tree shares structure with the value it was built from, and the
+encoder freezes none of it.** Copy-on-write is what makes that so: a subtree
+needing no encoding *is* that subtree rather than a reconstruction of it, which
+is the same mechanism Section 4 credits with preserving shared references. An
+instance's encoded state is a snapshot (Section 2.4 of `1-fabric-values.md`),
+so what the tree shares is the value's plain containers and whatever its
+instances hold by reference.
 
 So a value must not be mutated after it is encoded. A caller that does so
 changes the encoded tree, and over a transport that clones on send, changes
@@ -422,6 +428,12 @@ implementation that rebuilt everything would retain nothing, and a rule phrased
 around retention would then oblige it to freeze nothing and let it hand back
 mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
+
+An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
+2.9) freezes none of them instead, and copies a container that needed no
+decoding when it arrived frozen, that being the one way to hand it back
+mutable. A frozen container can arrive only from a decode in the realm that
+built the tree, since cloning produces none.
 
 An `ArrayBuffer` cannot be frozen, which is what makes ceding it a requirement
 rather than a courtesy: sole ownership is the only available defense for a
@@ -555,3 +567,9 @@ to `es2025`, and `source` and `flags` to the empty string, so `{}` decodes to
 an empty `es2025` pattern. That is what lets a narrower encoder omit what it
 has nothing to say about. `{ source: undefined }` is refused, being a `source`
 that is present and not a string.
+
+`Unavailable@1` has the same distinction on its two optional fields. An absent
+`errorKind` is the state of a transient reason and an absent `errorMessage`
+that of an error with no stored message; `{ reason: "error", errorKind:
+undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
+undefined }` are refused, each being a field that is present and not a string.

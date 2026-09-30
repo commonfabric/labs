@@ -1,4 +1,4 @@
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 import { getLogger } from "@commonfabric/utils/logger";
 import { unrefTimer } from "@commonfabric/utils/sleep";
@@ -11,6 +11,7 @@ import {
   Commands,
   ConsoleMessage,
   ErrorNotification,
+  EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
   IPCClientNotification,
@@ -18,21 +19,26 @@ import {
   isCellUpdateNotification,
   isConsoleNotification,
   isErrorNotification,
+  isEventIntentOutcomeNotification,
   isEventNeedsAttentionNotification,
   isIPCRemoteNotification,
   isIPCRemoteResponse,
   isNavigateRequestNotification,
   isOperationUpdateNotification,
   isPendingWritesNotification,
+  isPresenceUpdateNotification,
+  isSpaceAccessLostNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
   NavigateRequestNotification,
   NotificationType,
   OperationUpdateNotification,
   PendingWritesNotification,
+  PresenceUpdateNotification,
   RequestType,
   type RuntimeSecurityContext,
   SerializedDomEvent,
+  SpaceAccessLostNotification,
   TelemetryNotification,
   VDomBatchNotification,
   VDomMountResponse,
@@ -43,24 +49,15 @@ import { EventEmitter } from "./emitter.ts";
 import { $onCellUpdate, CellHandle } from "@/cell-handle.ts";
 import { cellRefToKey } from "@/shared/utils.ts";
 
-/**
- * Longest rendering of an unknown notification a warning carries. What
- * arrives is bounded only by the transport, and a warning names it rather
- * than carrying it.
- */
-const MAX_UNKNOWN_NOTIFICATION_RENDER = 512;
-
 const ipcLogger = getLogger("runtime-client");
 
 const DEBUG_IPC = false;
-const DEFAULT_TIMEOUT_MS = 60_000;
 
 interface PendingRequest<T = unknown> {
   msgId: number;
   type: RequestType;
   startTime: number;
   deferred: Deferred<T, Error>;
-  timeoutId: ReturnType<typeof setTimeout>;
   // Listener that settles this request if the connection is disposed while it
   // is still in flight. Removed when the request settles normally. Absent for
   // the Dispose request, which must outlive the abort.
@@ -83,7 +80,6 @@ export type PendingRequestDiagnostic = {
 export type RequestOutcome =
   | "success"
   | "error"
-  | "timeout"
   | "cancelled"
   | "send-error";
 
@@ -135,11 +131,14 @@ export type RuntimeConnectionEvents = {
   console: [ConsoleMessage];
   navigaterequest: [NavigateRequestNotification];
   error: [ErrorNotification];
+  spaceaccesslost: [SpaceAccessLostNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
   operationupdate: [OperationUpdateNotification];
+  presenceupdate: [PresenceUpdateNotification];
   eventneedsattention: [EventNeedsAttentionNotification];
+  eventintentoutcome: [EventIntentOutcomeNotification];
 };
 
 export interface InitializedRuntimeConnection extends RuntimeConnection {}
@@ -176,7 +175,6 @@ export interface VDomConnection {
 export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   #pendingRequests = new Map<number, PendingRequest>();
   #nextMsgId = 0;
-  #timeoutMs = DEFAULT_TIMEOUT_MS;
   #initialized = false;
 
   /**
@@ -318,19 +316,11 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
 
     const deferred = defer<CommandResponse<T>, Error>();
 
-    const timeoutId = setTimeout(() => {
-      this.#settle(msgId, "timeout");
-      deferred.reject(
-        new Error(`RuntimeClient request timed out: ${data.type}`),
-      );
-    }, this.#timeoutMs);
-
     const pending: PendingRequest<CommandResponse<T>> = {
       msgId,
       type: data.type,
       startTime: performance.now(),
       deferred,
-      timeoutId,
     };
 
     // The Dispose request is the one operation that must outlive the abort, so
@@ -361,21 +351,20 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         message.data,
       );
     }
-    // The bookkeeping above -- the timeout, the abort hook, the pending entry
-    // -- is registered on the promise below being returned to someone who will
-    // hold it until a reply settles it. A synchronous throw from `send()`
-    // means no reply is coming and the promise is never returned, so that
-    // bookkeeping would outlive its only holder and reject it into nobody:
-    // sixty seconds later at the timeout, or sooner at disposal, as an
-    // unhandled rejection. `send()` can throw two ways here -- the envelope's
-    // encode refuses a value that has none, and `postMessage()` refuses one
-    // structured cloning cannot carry -- and `T` is unconstrained, so an
-    // ordinary bad value reaches both.
+    // The bookkeeping above -- the abort hook and the pending entry -- is
+    // registered on the promise below being returned to someone who will hold
+    // it until a reply settles it. A synchronous throw from `send()` means no
+    // reply is coming and the promise is never returned, so that bookkeeping
+    // would outlive its only holder and reject it into nobody at disposal, as
+    // an unhandled rejection. `send()` can throw two ways here -- the
+    // envelope's encode refuses a value that has none, and `postMessage()`
+    // refuses one structured cloning cannot carry -- and `T` is unconstrained,
+    // so an ordinary bad value reaches both.
     //
-    // `#settle()` clears the three, and deliberately does not settle the
-    // deferred: an unsettled promise nobody holds is collected, where a
-    // rejected one is reported. The caller learns of the failure by the throw
-    // rather than through the promise it never received.
+    // `#settle()` clears both, and deliberately does not settle the deferred:
+    // an unsettled promise nobody holds is collected, where a rejected one is
+    // reported. The caller learns of the failure by the throw rather than
+    // through the promise it never received.
     try {
       this.#transport.send(message);
     } catch (error) {
@@ -387,14 +376,12 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
   }
 
   /**
-   * Records a terminal wait and releases its timeout and abort listener.
-   * Returns the entry so the caller can settle its deferred. Timeout durations
-   * measure the wait abandoned by the caller, not worker completion.
+   * Records a terminal wait and releases its abort listener. Returns the
+   * entry so the caller can settle its deferred.
    */
   #settle(msgId: number, outcome: RequestOutcome): PendingRequest | undefined {
     const pending = this.#pendingRequests.get(msgId);
     if (!pending) return undefined;
-    clearTimeout(pending.timeoutId);
     if (pending.onAbort) {
       this.#lifetime.signal.removeEventListener("abort", pending.onAbort);
     }
@@ -501,11 +488,14 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     // One coarse "dispose everything" message replaces per-consumer teardown
     // round-trips. The Dispose request is exempt from the abort above, so it
     // still reaches the worker, which flushes pending storage writes before
-    // replying. We wait for that confirmation under the default request timeout,
-    // so a normal flush is durable before the transport is torn down.
+    // replying. We wait for that confirmation, so the flush is durable before
+    // the transport is torn down. A worker that has not replied holds the
+    // teardown here, and the transport stands until it does. That hold lasts
+    // as long as the document does: a dedicated worker is terminated with the
+    // document that owns it.
     await this.request<RequestType.Dispose>({ type: RequestType.Dispose })
       .catch(() => {
-        // A worker-side error reply, or the timeout, still lets teardown proceed.
+        // A worker-side error reply still lets teardown proceed.
       });
     await this.#transport.dispose();
   }
@@ -516,7 +506,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
 
   /**
    * Snapshot of every request sent to the worker whose response has not yet
-   * arrived (and whose timeout/abort has not fired). Main-thread state only —
+   * arrived and whose abort has not fired. Main-thread state only —
    * safe to call even when the worker is wedged, which is exactly when it is
    * most useful: a probe reading this from a stuck page sees which request
    * types are stalled and for how long.
@@ -605,21 +595,23 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("navigaterequest", message);
       } else if (isErrorNotification(message)) {
         this.emit("error", message);
+      } else if (isEventIntentOutcomeNotification(message)) {
+        this.emit("eventintentoutcome", message);
+      } else if (isSpaceAccessLostNotification(message)) {
+        this.emit("spaceaccesslost", message);
       } else if (isVDomBatchNotification(message)) {
         this.emit("vdombatch", message);
       } else if (isPendingWritesNotification(message)) {
         this.emit("pendingwriteschange", message);
       } else if (isOperationUpdateNotification(message)) {
         this.emit("operationupdate", message);
+      } else if (isPresenceUpdateNotification(message)) {
+        this.emit("presenceupdate", message);
       } else if (isEventNeedsAttentionNotification(message)) {
         this.emit("eventneedsattention", message);
       } else {
         console.warn(
-          `Unknown notification: ${
-            toCompactDebugString(message, {
-              maxLength: MAX_UNKNOWN_NOTIFICATION_RENDER,
-            })
-          }`,
+          debugStr`Unknown notification: $quote,long${message}`,
         );
       }
       return;

@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import {
   discoverHarnessSkills,
@@ -177,52 +178,57 @@ Deno.test({
       const patternDev = registry.skills.find((skill) =>
         skill.name === "pattern-dev"
       );
-      assertEquals(
+      expect(
         patternDev?.resources.map((resource) => [
           resource.path,
           resource.kind,
           resource.contentKind,
           resource.sandboxResourcePath,
         ]),
+      ).toEqual([
         [
-          [
-            "assets/logo.bin",
-            "asset",
-            "binary",
-            "/workspace/labs/skills/pattern-dev/assets/logo.bin",
-          ],
-          [
-            "notes.txt",
-            "other",
-            "text",
-            "/workspace/labs/skills/pattern-dev/notes.txt",
-          ],
-          [
-            "references/guide.md",
-            "reference",
-            "text",
-            "/workspace/labs/skills/pattern-dev/references/guide.md",
-          ],
-          [
-            "scripts/check.ts",
-            "script",
-            "text",
-            "/workspace/labs/skills/pattern-dev/scripts/check.ts",
-          ],
-          [
-            "scripts/not-deno.sh",
-            "script",
-            "text",
-            "/workspace/labs/skills/pattern-dev/scripts/not-deno.sh",
-          ],
-          [
-            "templates/scaffold.sh",
-            "template",
-            "text",
-            "/workspace/labs/skills/pattern-dev/templates/scaffold.sh",
-          ],
+          "assets/logo.bin",
+          "asset",
+          "binary",
+          "/workspace/labs/skills/pattern-dev/assets/logo.bin",
         ],
-      );
+        [
+          "notes.txt",
+          "other",
+          "text",
+          "/workspace/labs/skills/pattern-dev/notes.txt",
+        ],
+        [
+          "references/guide.md",
+          "reference",
+          "text",
+          "/workspace/labs/skills/pattern-dev/references/guide.md",
+        ],
+        [
+          "scripts/check.ts",
+          "script",
+          "text",
+          "/workspace/labs/skills/pattern-dev/scripts/check.ts",
+        ],
+        [
+          "scripts/not-deno.sh",
+          "script",
+          "text",
+          "/workspace/labs/skills/pattern-dev/scripts/not-deno.sh",
+        ],
+        [
+          "SKILL.md",
+          "other",
+          "text",
+          "/workspace/labs/skills/pattern-dev/SKILL.md",
+        ],
+        [
+          "templates/scaffold.sh",
+          "template",
+          "text",
+          "/workspace/labs/skills/pattern-dev/templates/scaffold.sh",
+        ],
+      ]);
       assertEquals(patternDev?.resources[0].sizeBytes, 4);
       assertEquals(patternDev?.resources[0].digest.startsWith("sha256:"), true);
       const script = patternDev?.resources.find((resource) =>
@@ -332,7 +338,8 @@ Deno.test({
 
       const registry = await discoverHarnessSkills({ skillsRoot: root });
 
-      assertEquals(registry.skills[0].resources, []);
+      expect(registry.skills[0].resources.map((resource) => resource.path))
+        .toEqual(["SKILL.md"]);
       assertEquals(
         registry.skills[0].diagnostics.map((diagnostic) => diagnostic.code),
         ["skill-resource-outside-root"],
@@ -391,14 +398,26 @@ Deno.test("loadHarnessSkillContextFromText digests the exact text it wrapped", a
     text: "same text",
     handleToken: "cfh:a:wwwww",
     runId: "run-digest",
+    acquisition: {
+      registryId: "owner/repo/trip",
+      commitSha: "0123456789abcdef0123456789abcdef01234567",
+      sourceUrl:
+        "https://raw.githubusercontent.com/owner/repo/0123456789abcdef0123456789abcdef01234567/trip/SKILL.md",
+      verification: "git-commit-sha",
+      valueDigest: "sha256:instructions",
+      receivedAt: "2026-09-15T00:00:00.000Z",
+    },
   });
   const changed = await loadHarnessSkillContextFromText({
     text: "different text",
     handleToken: "cfh:a:3kk78",
     runId: "run-digest",
   });
-  assertEquals(first.activation.digest, second.activation.digest);
-  assertEquals(first.activation.digest === changed.activation.digest, false);
+  expect(second.contextText).toContain(
+    '<skill_context source="handle:cfh:a:wwwww" pin="owner/repo/trip@0123456789abcdef0123456789abcdef01234567">',
+  );
+  expect(first.activation.digest).toBe(second.activation.digest);
+  expect(first.activation.digest).not.toBe(changed.activation.digest);
 });
 
 Deno.test({

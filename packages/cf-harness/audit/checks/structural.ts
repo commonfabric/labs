@@ -15,6 +15,7 @@
  */
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { handleTokensIn } from "../../console/steps.ts";
 import type {
@@ -40,6 +41,7 @@ import { inspectHarnessTranscriptPairing } from "../../src/contracts/transcript.
 import {
   HARNESS_TRANSCRIPT_OMISSION_RULES,
   type HarnessTranscriptOmissionRule,
+  resultProvenanceOf,
 } from "../../src/contracts/transcript-omissions.ts";
 import { assertValidHarnessHandleTable } from "../../src/handle-table.ts";
 import type { HarnessRunState } from "../../src/run-state.ts";
@@ -232,7 +234,7 @@ export const isEnforcing = (mode: CfcEnforcementMode): boolean =>
   mode === "enforce-explicit" || mode === "enforce-strict";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /** A tool message's parsed contents, or `undefined` when it is not JSON. */
 const parsedToolContent = (message: HarnessToolTranscriptMessage): unknown => {
@@ -1742,16 +1744,19 @@ const omissionAccounting: AuditCheck = {
       }
       outputIds.add(result.outputId);
       const message = run.transcript.value[result.transcriptIndex];
+      const provenance = message === undefined
+        ? undefined
+        : resultProvenanceOf(message);
       if (
-        message?.role !== "tool" ||
-        message.toolCallId !== result.toolCallId ||
-        message.toolName !== result.toolId ||
-        String(message.resultRef?.outputId) !== result.outputId
+        provenance === undefined ||
+        provenance.toolCallId !== result.toolCallId ||
+        provenance.toolId !== result.toolId ||
+        provenance.outputId !== result.outputId
       ) {
         errors.push({
           artifact: "transcript-omissions.json",
           pointer,
-          detail: "result identity does not match its transcript tool message",
+          detail: "result identity does not match its transcript message",
         });
       }
       const rules = new Set<HarnessTranscriptOmissionRule>();
@@ -1785,17 +1790,18 @@ const omissionAccounting: AuditCheck = {
       }
     }
     for (const [transcriptIndex, message] of run.transcript.value.entries()) {
-      if (message.role !== "tool" || message.resultRef === undefined) {
-        continue;
-      }
-      const outputId = String(message.resultRef.outputId);
+      const provenance = resultProvenanceOf(message);
+      if (provenance === undefined) continue;
+      const { outputId } = provenance;
       const matches = recordsByTranscriptResult.get(
         `${transcriptIndex}\u0000${outputId}`,
       ) ?? 0;
       if (matches !== 1) {
         errors.push({
           artifact: "transcript.json",
-          pointer: `[${transcriptIndex}].resultRef`,
+          pointer: `[${transcriptIndex}].${
+            message.role === "user" ? "toolResultProvenance" : "resultRef"
+          }`,
           detail: `tool result \`${outputId}\` maps to ${
             count(matches, "omission entry", "omission entries")
           }; exactly one is required`,

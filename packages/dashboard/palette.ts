@@ -1,5 +1,5 @@
 /**
- * Chooses the wall's status colors, and works out every shade derived from
+ * Chooses the dashboard's status colors, and works out every shade derived from
  * them. Everything that paints a status in color reads from here: the tile,
  * the header dot, the headline, a sparkline's fade, a run cell, the drill-down
  * rows, and the favicon. The shape a header dot takes is CSS geometry rather
@@ -7,8 +7,8 @@
  *
  * Green sits at teal and amber at orange rather than at a yellow. The two then
  * differ along the blue-to-yellow axis, which red-green color blindness leaves
- * working, so good and warn stay apart for a viewer who cannot separate them
- * by the red-to-green axis alone. Color is one of four cues the wall carries:
+ * working, so good and warn stay apart for a viewer who cannot separate them by
+ * the red-to-green axis alone. Color is one of four cues the dashboard carries:
  * the header dot also takes a per-status shape, the tile's wash and border get
  * stronger as the status gets more serious, and warn and bad carry a texture.
  */

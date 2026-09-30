@@ -4,7 +4,9 @@
  * The memory server authenticates a client by verifying the signature on its
  * `session.open` invocation; the verified issuer becomes the session principal
  * that storage partitioning keys off. Toolshed's `/api/storage/memory` route
- * and the standalone test server use this shared verifier.
+ * and the standalone test server use this shared verifier, and
+ * {@link authorizeLoopbackSessionOpen} applies it to the signed opens an
+ * in-process memory server receives.
  *
  * The handshake adds three anti-replay checks on top of the signature:
  *
@@ -21,9 +23,13 @@
  *    identity. An open signed for host A cannot be replayed to host B.
  */
 
-import { hashOf } from "@commonfabric/data-model";
+import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
+import {
+  hashOf,
+  isFabricPlainObject,
+  valueEqual,
+} from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { isObjectNotArray } from "@commonfabric/utils/types";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 
@@ -47,12 +53,13 @@ export const authorizationError = (
   );
 
 const sameSessionDescriptor = (
-  left: Record<string, unknown>,
+  left: FabricPlainObject,
   right: {
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
     actingAs?: string;
+    genesisRoot?: FabricValue;
   },
 ): boolean =>
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===
@@ -65,19 +72,25 @@ const sameSessionDescriptor = (
   // a message-level marker that disagrees with the signed one is a
   // mismatch, so the binding cannot be injected or stripped in transit.
   (typeof left.actingAs === "string" ? left.actingAs : undefined) ===
-    right.actingAs;
+    right.actingAs &&
+  valueEqual(left.genesisRoot, right.genesisRoot);
 
 export type SessionOpenMessage = {
   space: string;
-  session: { sessionId?: string; seenSeq?: number; sessionToken?: string };
-  invocation?: Record<string, unknown>;
-  authorization?: unknown;
+  session: {
+    sessionId?: string;
+    seenSeq?: number;
+    sessionToken?: string;
+    genesisRoot?: FabricValue;
+  };
+  invocation?: FabricPlainObject;
+  authorization?: FabricValue;
 };
 
 /**
  * The `session.open` authorization AFTER validation. Deliberately not the
  * declared type of `SessionOpenMessage.authorization`: that field is whatever
- * the peer sent, so it stays `unknown` and only
+ * the peer sent, so it stays a bare `FabricValue` and only
  * {@link wireAuthorizationOf} may produce this type.
  *
  * The signature crosses the wire as a `FabricBytes` -- the canonical binary
@@ -94,9 +107,9 @@ export type WireSessionOpenAuthorization = {
  * the untrusted field to the named shape.
  */
 export const wireAuthorizationOf = (
-  authorization: unknown,
+  authorization: FabricValue,
 ): WireSessionOpenAuthorization | undefined => {
-  if (!isObjectNotArray(authorization)) return undefined;
+  if (!isFabricPlainObject(authorization)) return undefined;
   const { signature } = authorization;
   return signature instanceof FabricBytes ? { signature } : undefined;
 };
@@ -127,7 +140,7 @@ export const verifySessionOpenAuthorization = async (
 ): Promise<string> => {
   const wireAuthorization = wireAuthorizationOf(message.authorization);
   const signature = wireAuthorization?.signature.slice() ?? null;
-  if (!isObjectNotArray(message.invocation) || signature === null) {
+  if (!isFabricPlainObject(message.invocation) || signature === null) {
     throw authorizationError("memory session.open requires authorization");
   }
 
@@ -136,9 +149,9 @@ export const verifySessionOpenAuthorization = async (
     typeof invocation.iss !== "string" ||
     invocation.cmd !== "session.open" ||
     invocation.sub !== message.space ||
-    !isObjectNotArray(invocation.args) ||
+    !isFabricPlainObject(invocation.args) ||
     invocation.args.protocol !== MEMORY_PROTOCOL ||
-    !isObjectNotArray(invocation.args.session) ||
+    !isFabricPlainObject(invocation.args.session) ||
     !sameSessionDescriptor(invocation.args.session, message.session)
   ) {
     throw authorizationError("memory session.open authorization mismatch");
@@ -194,4 +207,27 @@ export const verifySessionOpenAuthorization = async (
   }
 
   return invocation.iss;
+};
+
+/**
+ * Authorizes a `session.open` on an in-process memory server. A signed open
+ * is verified as a deployed memory server verifies it, and admitted as the
+ * signature's issuer. An unsigned open is admitted, unverified, as the
+ * principal its `authorization.principal` names, or with no principal when it
+ * names none. Trusting that unsigned claim confines this authorizer to
+ * in-process emulation, where every client shares the process: tests, and
+ * local emulated storage such as `cf dev`.
+ */
+export const authorizeLoopbackSessionOpen = (
+  message: SessionOpenMessage,
+  context: VerifySessionOpenOptions,
+): Promise<string> | string | undefined => {
+  const { authorization } = message;
+  if (wireAuthorizationOf(authorization) !== undefined) {
+    return verifySessionOpenAuthorization(message, context);
+  }
+  return isFabricPlainObject(authorization) &&
+      typeof authorization.principal === "string"
+    ? authorization.principal
+    : undefined;
 };

@@ -9,7 +9,7 @@ Execution closed with the
 [implementation record](pattern-computation-cost-implementation.md) and
 [representative-copy report](../development/performance/2026-09-12-representative-lunch-poll-rehearsal.md).
 B3a remains explicitly deferred. Q9 transfers remaining D1/D2 execution to the
-[lazy-materialization fast-follow](../../plans/lazy-materialization-fast-follow.md).
+[lazy-materialization fast-follow](lazy-materialization-fast-follow.md).
 The proposal below records the original design, not a claim that deferred stages
 shipped or historical deployment timings were reproduced.
 

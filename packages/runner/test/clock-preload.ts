@@ -10,6 +10,7 @@
 // `docs/development/waiting-in-tests.md`.
 
 import { installFakeClock } from "@commonfabric/test-support/clock-preload";
+import { installSilentBackstopGuard } from "./support/silent-backstop-guard.ts";
 
 installFakeClock({
   mode: "auto-advance",
@@ -38,7 +39,7 @@ installFakeClock({
     // (T_flush), and IDLE_PARK_MS are real-time policies, and
     // auto-advance fires the renew interval and park timers as fast as
     // they arm — a semantics change, not a speedup. The test waits on
-    // watermark/subscription edges with bounded timeouts.
+    // watermark/subscription edges under the stuck-condition net.
     "executor-serving-loop",
     "executor-llm-supersession",
     // The engine read-through suite drives the same live ExecutorHost
@@ -52,6 +53,7 @@ installFakeClock({
     "executor-fetch-instances",
     "executor-fetch-program-instances",
     "executor-sqlite-instances",
+    "executor-home-sqlite",
     // Same wall-clock pacing, same machinery (the SpaceServer's renew
     // interval and flush deadline), one level down: the stage-G
     // recovery-seam tests drive a real SpaceServer directly.
@@ -94,6 +96,10 @@ installFakeClock({
     // The land-off all-no-op-wave pin drives the same serving loop and
     // S1 quiescence advance — the same wall-clock pacing contract.
     "executor-no-op-wave",
+    // The sustained-input suite drives a live ExecutorHost whose flush
+    // deadline must cut real settles while input keeps arriving, which is
+    // the wall-clock behavior under test.
+    "executor-sustained-input",
     // The Phase-3 client event-append suite drives a live memory server
     // plus the queue's real-time discharge pacing (retry backoff is a
     // wall-clock policy, and the tests wait on transport edges with
@@ -176,3 +182,22 @@ installFakeClock({
     "wish-sidecar-duplicate-launch",
   ],
 });
+
+// Installed after the clock, so its check runs inside the clock's wrapper. A
+// backstop listed here fires only when the event a wait is gated on never
+// arrives, and under auto-advance that firing is a logical jump a test would
+// otherwise ride in silence: the module logger sits above the warn, so the
+// count is its only trace. See the guard's header and
+// `docs/development/waiting-in-tests.md`.
+installSilentBackstopGuard([
+  {
+    logger: "storage.v2",
+    key: "conflict-read-repair-timeout",
+    meaning: "the conflict read-repair wait in src/storage/v2.ts gave up on " +
+      "the caught-up sync after CONFLICT_READ_REPAIR_TIMEOUT_MS and returned " +
+      "the rejection with the replica not caught up. Under auto-advance that " +
+      "is a 30 s logical jump the test rode instead of the frame: either the " +
+      "fixture withholds the frame (a manual fan-out it never flushed) or the " +
+      "caught-up path regressed.",
+  },
+]);

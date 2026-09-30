@@ -1,10 +1,10 @@
 import {
+  debugStr,
   fabricAwareEqual,
   FabricInstance,
   FabricPrimitive,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
-  toCompactDebugString,
   valueEqual,
 } from "@commonfabric/data-model";
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
@@ -20,24 +20,32 @@ import type {
   DerivedInternalCellDescriptor,
 } from "./builder/types.ts";
 import {
+  type FabricExecPlainObject,
   type FabricExecValue,
   isPattern,
   type JSONSchema,
   type JSONValue,
+  type Pattern,
+  type SchemaScope,
 } from "./builder/types.ts";
-import { type AnyCell, isCell } from "./cell.ts";
+import {
+  type AnyCell,
+  cellRuntime,
+  cellTx,
+  internCellLinkSchema,
+  isCell,
+} from "./cell.ts";
 import {
   carryCfcReferenceProvenance,
   getCfcReferenceProvenance,
+  joinCfcReferenceSelectionWitnesses,
   withCfcReferenceConfidentiality,
 } from "./cfc/reference-provenance.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
 import { joinCfcObservedConfidentiality } from "./cfc/observation.ts";
 import { diffAndUpdate, recordTrustedLinkValueWrite } from "./data-updating.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import { ContextualFlowControl } from "./cfc.ts";
+import { toMemorySpaceAddress } from "./link-types.ts";
 import {
   areNormalizedLinksSame,
   createSigilLinkFromParsedLink,
@@ -49,11 +57,11 @@ import {
   KeepAsCell,
   type NormalizedFullLink,
   parseLink,
-  sanitizeSchemaForLinks,
+  sanitizeAndInternSchemaForLinks,
   sigilLinkAddressOnly,
 } from "./link-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { isCellScope, scopeRank } from "./scope.ts";
+import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   internalVerifierRead,
@@ -61,13 +69,6 @@ import {
   machineryRead,
 } from "./storage/reactivity-log.ts";
 import { schemaWithRetainedReferenceScope } from "./cfc/reference-scope.ts";
-
-/**
- * Longest rendering of a binding an error message carries. A binding can
- * hold anything a cell can, and the message names it rather than carrying
- * it.
- */
-const MAX_BINDING_RENDER = 200;
 
 type SendValueToBindingOptions = {
   narrowestReadScope?: CellScope;
@@ -94,6 +95,14 @@ type UnwrapOneLevelOptions = {
   sourceSchemas?: {
     argument?: JSONSchema;
   };
+
+  /**
+   * The containing pattern's authored argument schema, read only for the
+   * follow caps an argument binding's path passes through (see
+   * `linkForPath`). Unlike `sourceSchemas`, it does not fold the slot's own
+   * declared scope into the binding.
+   */
+  argumentCapSchema?: JSONSchema;
 };
 
 /**
@@ -111,10 +120,9 @@ type UnwrapOneLevelOptions = {
  * through the link take the scope-narrowing branch and reads get the follow
  * cap, per "scope lives in the schema, realized at read/write".
  *
- * The scope is deliberately NOT stamped onto the link's own `scope`: the link
- * addresses the base-scope slot, where passed-in cell references legitimately
- * live (see "lift can read session-scoped cell passed from pattern input" in
- * pattern-scope.test.ts, and the matching guidance on
+ * The scope is not stamped onto the link's own `scope`, as for every binding
+ * `linkForPath` produces: the link addresses the base-scope slot, where
+ * passed-in cell references live (see the matching guidance on
  * ContextualFlowControl.getSchemaScopeCap).
  *
  * Folding applies exactly when the write-path narrowing branch would fire for
@@ -159,47 +167,67 @@ const foldDeclaredScopeIntoLinkSchema = (
   };
 };
 
-const scopedLinkForPath = (
+/** The narrower of the follow caps `schema` declares on a value or handle. */
+const declaredScopeCap = (
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined =>
+  narrowerScopeCap(
+    ContextualFlowControl.getSchemaScopeCap(schema),
+    ContextualFlowControl.getAsCellFollowScopeCap(schema),
+  );
+
+/**
+ * Returns `link` navigated to `path`, carrying the slot's schema. The link
+ * keeps its own scope: a scope the slot's schema declares is realized when
+ * the link is read (as a follow cap) or written (content narrows into the
+ * scoped instance behind a base-slot redirect). The base slot is where a
+ * passed-in reference is stored and where that redirect lives, so a binding
+ * that addressed the scoped instance directly would miss a passed reference.
+ *
+ * A cap declared on a slot the path passes through governs a link stored at
+ * that slot. A link schema drops cell wrappers and the caps they declare, so
+ * the caps are read from `authoredRootSchema` as well when the caller has it.
+ * The serialized binding has only the leaf schema to carry them, so when the
+ * leaf declares no scope of its own, the narrowest such cap is folded
+ * into the leaf schema's `scope`, which link resolution applies to links found
+ * above the leaf as well.
+ */
+const linkForPath = (
   link: NormalizedFullLink,
   path: readonly string[],
   schemaOverride?: JSONSchema,
+  authoredRootSchema?: JSONSchema,
 ): NormalizedFullLink => {
-  let scope = link.scope;
-  let schema = link.schema;
-  let childSchema: JSONSchema | undefined;
-
-  // The link keeps whatever schema form it carries; only the scope READS
-  // resolve a reference-form schema — a structural use, like the cap
-  // readers in cfc.ts.
-  const declaredScope = (candidate: JSONSchema | undefined) => {
-    if (!isObjectNotArray(candidate)) return undefined;
-    const structural = resolveExternalRootRefForStructure(candidate);
-    return isCellScope(structural.scope) ? structural.scope : undefined;
-  };
-
+  let ancestorCap: SchemaScope | undefined;
+  let walked = link.schema;
+  let authored = authoredRootSchema;
   for (const key of path) {
-    childSchema = ContextualFlowControl.getSchemaAtPath(schema, [key]);
-    scope = declaredScope(childSchema) ?? scope;
-    schema = childSchema;
+    ancestorCap = narrowerScopeCap(
+      ancestorCap,
+      narrowerScopeCap(declaredScopeCap(walked), declaredScopeCap(authored)),
+    );
+    walked = ContextualFlowControl.getSchemaAtPath(walked, [key]);
+    authored = ContextualFlowControl.getSchemaAtPath(authored, [key]);
   }
-
-  const finalSchema = schemaOverride ?? childSchema;
-  const linkSchema = finalSchema;
-  scope = declaredScope(linkSchema) ?? scope;
-
+  let schema = schemaOverride ?? (path.length > 0 ? walked : undefined);
+  if (
+    isObjectNotArray(schema) && isCellScope(ancestorCap) &&
+    declaredScopeCap(schema) === undefined
+  ) {
+    schema = deepFrozenCloneAndInternSchema({ ...schema, scope: ancestorCap });
+  }
   return {
     ...link,
     path: [...path],
-    scope,
-    ...(linkSchema !== undefined && { schema: linkSchema }),
+    ...(schema !== undefined && { schema }),
   };
 };
 
 const sanitizeAliasSchemaForBinding = (schema: JSONSchema): JSONSchema =>
-  // Compiled aliases retain asCell for schema fidelity. Live redirects use link
-  // schemas without cell wrappers so scoped asCell entries do not stamp the
-  // redirect link's own scope and bypass stored argument links.
-  sanitizeSchemaForLinks(schema, KeepAsCell.OnlyStream);
+  // Compiled aliases retain asCell for schema fidelity. A live redirect carries
+  // a link schema, which keeps only stream wrappers: the redirect addresses
+  // the slot, and a cell wrapper describes what is read through it.
+  sanitizeAndInternSchemaForLinks(schema, KeepAsCell.OnlyStream);
 
 /**
  * Returns a link with a canonical schema without freezing the caller's input.
@@ -208,10 +236,10 @@ const canonicalSchemaLink = (
   link: NormalizedFullLink | undefined,
 ): NormalizedFullLink | undefined => {
   if (link === undefined || !isObjectOrArray(link.schema)) return link;
-  const schema = deepFrozenCloneAndInternSchema(
-    sanitizeSchemaForLinks(link.schema, KeepAsCell.All),
-  );
-  return schema === link.schema ? link : { ...link, schema };
+  const schema = sanitizeAndInternSchemaForLinks(link.schema, KeepAsCell.All);
+  return schema === link.schema
+    ? link
+    : carryCfcReferenceProvenance(link, { ...link, schema });
 };
 
 const descriptorForPartialCauseAlias = (
@@ -287,9 +315,7 @@ function sendValueToBindingInner<T>(
       const alias = binding.$alias;
       if ((alias.defer ?? 0) > 0) {
         throw new Error(
-          `Cannot write to deferred alias: ${
-            toCompactDebugString(binding, { maxLength: MAX_BINDING_RENDER })
-          }`,
+          debugStr`Cannot write to deferred alias: $quote,long${binding}`,
         );
       }
       if (alias.partialCause !== undefined) {
@@ -299,7 +325,7 @@ function sendValueToBindingInner<T>(
           options.derivedInternalCells,
         )!;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(
+          linkForPath(
             getDerivedInternalCellLink(cell as any, descriptor),
             alias.path,
             alias.schema,
@@ -308,9 +334,7 @@ function sendValueToBindingInner<T>(
         );
       } else if (typeof alias.cell !== "string") {
         throw new Error(
-          `Invalid pseudo-alias cell: ${
-            toCompactDebugString(binding, { maxLength: MAX_BINDING_RENDER })
-          }`,
+          debugStr`Invalid pseudo-alias cell: $quote,long${binding}`,
         );
       } else {
         // Certain strings have special meaning as the cell id
@@ -325,7 +349,7 @@ function sendValueToBindingInner<T>(
         bindingSource = link;
         const path = alias.path;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(link, path, alias.schema),
+          linkForPath(link, path, alias.schema),
           { includeSchema: true, overwrite: "redirect" },
         );
       }
@@ -333,7 +357,7 @@ function sendValueToBindingInner<T>(
 
     const bindingLink = parseLink(binding, cell)!;
     const ref = resolveLink(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       bindingLink,
       "writeRedirect",
@@ -345,7 +369,7 @@ function sendValueToBindingInner<T>(
     ) => {
       const sigil = createSigilLinkFromParsedLink(source, { base: target });
       if (tx.getCfcState().flowLabelsMode === "persist") {
-        const acquired = cell.runtime.getCellFromLink(
+        const acquired = cellRuntime(cell).getCellFromLink(
           source,
           undefined,
           tx,
@@ -355,6 +379,16 @@ function sendValueToBindingInner<T>(
               [cell, bindingSource, value].map((carrier) =>
                 getCfcReferenceProvenance(carrier)?.confidentiality ?? []
               ),
+            ),
+            joinCfcReferenceSelectionWitnesses(
+              [cell, bindingSource, value].map((carrier) => {
+                const reference = getCfcReferenceProvenance(carrier);
+                return withCfcReferenceConfidentiality(
+                  undefined,
+                  reference?.confidentiality ?? [],
+                  reference?.selectionWitnesses,
+                );
+              }),
             ),
           ),
         );
@@ -380,7 +414,7 @@ function sendValueToBindingInner<T>(
         !areNormalizedLinksSame(valueLink, scopedRef)
       ) {
         diffAndUpdate(
-          cell.runtime,
+          cellRuntime(cell),
           tx,
           scopedRef,
           value,
@@ -454,12 +488,14 @@ function sendValueToBindingInner<T>(
           );
           recordTrustedLinkValueWrite(tx, bindingLink, newValue);
           tx.writeValueOrThrow(bindingLink, newValue);
+        } else {
+          tx.retainPendingWriteElision?.(toMemorySpaceAddress(bindingLink));
         }
         return;
       }
     }
     diffAndUpdate(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       ref,
       value,
@@ -505,11 +541,7 @@ function sendValueToBindingInner<T>(
     // constant fabric binding is compared by content rather than by identity.
     if (!fabricAwareEqual(binding, value)) {
       throw new Error(
-        `Got ${
-          toCompactDebugString(value, { maxLength: MAX_BINDING_RENDER })
-        } instead of ${
-          toCompactDebugString(binding, { maxLength: MAX_BINDING_RENDER })
-        }`,
+        debugStr`Got $quote,long${value} instead of $quote,long${binding}`,
       );
     }
   }
@@ -530,8 +562,8 @@ function sendValueToBindingInner<T>(
  * to kilobytes against a cause otherwise measured in hundreds of bytes.
  *
  * The reduction is to the address, not away from the schema specifically, so
- * anything else riding a link is left out too -- cfc's `cfcLabelView` being
- * the one that exists today. See `sigilLinkAddressOnly()`.
+ * anything else riding a link is left out too, including `cfcLabelView` and
+ * the `scopeInitialization` declaration. See `sigilLinkAddressOnly()`.
  *
  * So the reduction happens here rather than in the binding itself, and the two
  * trees part company at this call: what the node reads through keeps its
@@ -542,8 +574,16 @@ function sendValueToBindingInner<T>(
  *
  * A deferred `$alias` is left as it stands. It is not a link but a binding on
  * its way to a nested pattern, and what it carries is that pattern's structure.
+ *
+ * A record comes back a record: a link is reduced to another link, and any other
+ * record is copied member by member or returned as it is. Any other execution
+ * value comes back as an execution value.
  */
-export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
+export function causalFormOfBinding(
+  binding: FabricExecPlainObject,
+): FabricExecPlainObject;
+export function causalFormOfBinding(binding: FabricExecValue): FabricExecValue;
+export function causalFormOfBinding(binding: FabricExecValue): FabricExecValue {
   function reduce(value: FabricExecValue): FabricExecValue {
     if (isSigilLink(value)) return sigilLinkAddressOnly(value);
 
@@ -586,7 +626,7 @@ export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
     return reduced ?? value;
   }
 
-  return reduce(binding) as T;
+  return reduce(binding);
 }
 
 /**
@@ -612,32 +652,57 @@ export function causalFormOfBinding<T extends FabricExecValue>(binding: T): T {
  * @param options.targetSchema - Schema for the binding being produced. Source
  *   links still resolve through the argument/result links above, but emitted
  *   links are annotated with the corresponding target schema.
+ * The result keeps the kind of its argument where the argument is a pattern or
+ * a record. A pattern is walked key by key, so what comes back has the keys it
+ * had, each rebound, and is a pattern still. A record comes back a record: an
+ * alias binding becomes a link, and any other record is copied member by
+ * member or returned as it is. Any other execution value comes back as an
+ * execution value.
+ *
  * @returns The unwrapped binding.
  */
-export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
-  binding: T,
+export function unwrapOneLevelAndBindToDoc(
+  binding: Pattern,
   argumentCellLink: NormalizedFullLink | undefined,
   resultCell: AnyCell<unknown>,
   options?: UnwrapOneLevelOptions,
-): T {
-  const argumentSource = argumentCellLink;
+): Pattern;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecPlainObject,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecPlainObject;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecValue,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecValue;
+export function unwrapOneLevelAndBindToDoc(
+  binding: FabricExecValue,
+  argumentCellLink: NormalizedFullLink | undefined,
+  resultCell: AnyCell<unknown>,
+  options?: UnwrapOneLevelOptions,
+): FabricExecValue {
   const resultCellLink = canonicalSchemaLink(
     resultCell.getAsNormalizedFullLink(),
   )!;
   argumentCellLink = canonicalSchemaLink(argumentCellLink);
+  const argumentSource = argumentCellLink;
 
   const bindReference = (
     link: NormalizedFullLink,
     source: NormalizedFullLink | AnyCell<unknown>,
   ) => {
     if (
-      (resultCell.tx?.getCfcState().flowLabelsMode ??
-        resultCell.runtime.cfcFlowLabels) === "persist"
+      (cellTx(resultCell)?.getCfcState().flowLabelsMode ??
+        cellRuntime(resultCell).cfcFlowLabels) === "persist"
     ) {
-      const sourceCell = resultCell.runtime.getCellFromLink(
+      const sourceCell = cellRuntime(resultCell).getCellFromLink(
         source,
         undefined,
-        resultCell.tx,
+        cellTx(resultCell),
       );
       const sourceLink = sourceCell.getAsNormalizedFullLink();
       const underSource = sourceLink.space === link.space &&
@@ -663,11 +728,15 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           reference.scopeCaps,
         ),
       };
-      return resultCell.runtime.getCellFromLink(
+      return cellRuntime(resultCell).getCellFromLink(
         { ...link, scopeCaps: reference.scopeCaps },
         undefined,
-        resultCell.tx,
-        withCfcReferenceConfidentiality(undefined, reference.confidentiality),
+        cellTx(resultCell),
+        withCfcReferenceConfidentiality(
+          undefined,
+          reference.confidentiality,
+          reference.selectionWitnesses,
+        ),
       ).getAsWriteRedirectLink({ includeSchema: true });
     }
     return createSigilLinkFromParsedLink(link, {
@@ -764,7 +833,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           ? ContextualFlowControl.schemaAtPath(link.schema, path)
           : undefined;
         return bindReference(
-          scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+          linkForPath(link, path, targetSchema ?? sourceSchema),
           resultCell,
         );
       } else {
@@ -791,7 +860,14 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           : undefined;
         return bindReference(
           foldDeclaredScopeIntoLinkSchema(
-            scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+            linkForPath(
+              link,
+              path,
+              targetSchema ?? sourceSchema,
+              alias.cell === "argument"
+                ? authoredRootSchema ?? options?.argumentCapSchema
+                : undefined,
+            ),
             authoredRootSchema,
             path,
           ),
@@ -837,9 +913,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
     } else if (isObjectOrArray(binding)) {
       // Copy lazily, as the array branch does: allocate only once a value
       // actually converts to something else, so the shared path — the common
-      // one, and the majority of nodes — allocates nothing at all. Compare
-      // `overlayUnreadableLinkPlaceholders()` in `stored-argument-validation.ts`
-      // for the same idiom.
+      // one, and the majority of nodes — allocates nothing at all.
       let converted: Record<string, FabricExecValue> | undefined;
       for (const key of Object.keys(binding)) {
         const value = binding[key];
@@ -866,7 +940,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
     } else return binding;
   }
 
-  return convert(binding, options?.targetSchema) as T;
+  return convert(binding, options?.targetSchema);
 }
 
 /**
@@ -920,9 +994,7 @@ export function findAllWriteRedirectCells<T>(
 ): NormalizedFullLink[] {
   const skipTopLevelKeys = options?.skipTopLevelKeys;
   const seen: NormalizedFullLink[] = [];
-  // Binding traversal needs the base cell's address and transaction, regardless
-  // of its value type. Each redirect hop resolves against its own target.
-  function find(binding: unknown, baseCell: AnyCell<unknown>): void {
+  function find(binding: unknown): void {
     if (isAliasBinding(binding)) {
       // Callers unwrap bindings (unwrapOneLevelAndBindToDoc) before walking,
       // so a surviving `$alias` belongs to a nested level — it just crossed
@@ -930,24 +1002,45 @@ export function findAllWriteRedirectCells<T>(
       // and is not part of this level's read/write surface.
       return;
     } else if (isWriteRedirectLink(binding)) {
+      // Follow a *chain* of write redirects: record this redirect, then if its
+      // target value is ITSELF a write redirect, follow that too (one string of
+      // redirects). We stop as soon as the target is a non-redirect value — we
+      // do NOT recurse into it looking for further nested redirects.
       let link = parseLink(binding, baseCell.getAsNormalizedFullLink());
-      const tx = baseCell.runtime.readTx(baseCell.tx);
-      while (
-        !seen.some((candidate) => areNormalizedLinksSame(candidate, link))
-      ) {
+      // One transaction for the whole chain, so every hop shares a resolution
+      // memo, and none at all for a walk that stops at the first redirect.
+      let chainTx: IExtendedStorageTransaction | undefined;
+      while (true) {
+        if (seen.find((s) => areNormalizedLinksSame(s, link))) return;
         seen.push(link);
         if (options?.followRedirectChains === false) return;
-        // Dependency discovery observes redirect topology. A terminal value's
-        // contents and nested references belong to the action's later reads.
-        const target = resolveLink(baseCell.runtime, tx, link, "top", {
-          markIfcCrossings: true,
-          requestMissingDocs: false,
-        });
+        const tx = (chainTx ??= cellRuntime(baseCell).readTx(cellTx(baseCell)));
+        // Whether the target holds a further redirect is a question about
+        // which reference sits there, so the probe stops at the reference and
+        // leaves the target's content unread: it consumes the pointer's own
+        // label and none of the content labels at that position. The walk
+        // discovers topology from the current replica without starting pulls.
+        // The link's schema carries the scope caps
+        // resolution honors along the path, interned so that the schema-keyed
+        // caches downstream of the walk stay warm.
+        const target = resolveLink(
+          cellRuntime(baseCell),
+          tx,
+          link.schema === undefined
+            ? link
+            : { ...link, schema: internCellLinkSchema(link.schema) },
+          "top",
+          { markIfcCrossings: true, requestMissingDocs: false },
+        );
+        // A chained redirect resolves against the document it is stored in —
+        // where resolution landed — rather than against the original
+        // `baseCell`: a relative redirect in a cross-document target must
+        // resolve against its own document.
         const next = tx.runWithAmbientReadMeta(
           { ...ignoreReadForScheduling, ...linkResolutionProbe },
           () => readMaybeLink(tx, target, true),
         );
-        if (next === undefined) break;
+        if (next === undefined) return;
         link = next;
       }
     } else if (isCellLink(binding)) {
@@ -962,7 +1055,7 @@ export function findAllWriteRedirectCells<T>(
       return;
     } else if (Array.isArray(binding)) {
       // If the binding is an array, recurse into each element.
-      for (const value of binding) find(value, baseCell);
+      for (const value of binding) find(value);
       // A special object ends the walk. A `FabricPrimitive` is an opaque
       // scalar and can contain no redirect. An instance ends it here too; the
       // link arm above has already returned for every link, so this arm sees
@@ -973,7 +1066,7 @@ export function findAllWriteRedirectCells<T>(
       // nested inside is missed here.
     } else if (isKeyableObjectOrArray(binding)) {
       // If the binding is an object, recurse into each value.
-      for (const value of Object.values(binding)) find(value, baseCell);
+      for (const value of Object.values(binding)) find(value);
     }
   }
   if (
@@ -984,10 +1077,10 @@ export function findAllWriteRedirectCells<T>(
     // before traversing — they must not contribute to declared reads.
     for (const [key, value] of Object.entries(binding)) {
       if (skipTopLevelKeys.has(key)) continue;
-      find(value, baseCell);
+      find(value);
     }
   } else {
-    find(binding, baseCell);
+    find(binding);
   }
   return seen;
 }

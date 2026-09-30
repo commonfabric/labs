@@ -17,6 +17,7 @@
  * run shape.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { CheckResult, FailOnThreshold } from "./report.ts";
 import { verdictFailsThreshold } from "./report.ts";
 
@@ -106,7 +107,7 @@ export interface ExpectedFailuresFile {
 export const readExpectedFailures = (
   value: unknown,
 ): readonly ExpectedFailure[] => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     throw new Error("the file's top level is not an object");
   }
   const expected = (value as { expected?: unknown }).expected;

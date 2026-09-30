@@ -19,8 +19,8 @@ import {
 } from "../src/sandbox/ses-runtime.ts";
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 
-// The exact guard `calendar-write-client`'s waitIfTimersAreAvailable uses.
-// Evaluated verbatim inside a real compartment.
+// A backoff guarded by a member-access read of `setTimeout`, which yields
+// `undefined` in a compartment rather than raising a ReferenceError.
 const GUARDED_BACKOFF_SRC = `async function () {
   const sleep = (ms) => {
     if (ms <= 0) return Promise.resolve();
@@ -33,7 +33,7 @@ const GUARDED_BACKOFF_SRC = `async function () {
   return "backoff-complete";
 }`;
 
-// The un-guarded form the clients used to have: a raw setTimeout call.
+// The un-guarded form: a raw setTimeout call.
 const RAW_BACKOFF_SRC = `async function () {
   await new Promise((resolve) => setTimeout(resolve, 30000));
   return "backoff-complete";
@@ -78,8 +78,7 @@ describe("sandbox timers (channel: no fine clock)", () => {
 
   it("the same guard DOES wait when a timer is present (host behavior unchanged)", async () => {
     // Outside the sandbox (this test's own Deno global has setTimeout), the guard
-    // takes the waiting branch, so the API clients' plain-Deno unit tests keep
-    // exercising actual backoff. This runs under the package's fake clock, so the
+    // takes the waiting branch. This runs under the package's fake clock, so the
     // waiting branch's `setTimeout` is a frozen test-file timer: it does not
     // resolve on its own, and `clock.tick` advances logical time to fire it.
     const sleep = (ms: number): Promise<void> => {

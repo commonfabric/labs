@@ -40,6 +40,12 @@ export type ServingLoopStats = {
   /** Exhausted cycles, including zero-delta cycles that close no wave. */
   wavesBudgetExhausted: number;
 
+  /** Exhausted cycles whose committed wave still advanced W, to the input
+   * head the cut settle had proven covered (serving-loop.md §3's prefix
+   * coverage). A subset of `wavesBudgetExhausted`: the rest carried no
+   * watermark movement. */
+  exhaustedAdvances: number;
+
   supersededWrites: number;
   authoredSeen: number;
   effectAcks: number;
@@ -106,6 +112,19 @@ export type ServingLoopStats = {
    * Counted per terminalization, so a root that re-arms and
    * terminalizes again counts again. */
   structureLoadTerminal: number;
+
+  /** No-pattern-meta verdicts the ENGINE settled, sparing the confirming
+   * re-traversal (`SpaceServer.#confirmNoPatternMeta`): the co-hosted
+   * engine held no pattern pointer at any chain terminus the attempt
+   * resolved, so a second traversal could read none either and its
+   * per-address syncs were not issued. Counted once per verdict at the
+   * point the decision is taken — before the terminal park, which is
+   * what `structureLoadTerminal` counts, and which the
+   * confirmation-invalidated arm may pre-empt — so a root that re-arms
+   * and comes back counts again. The re-traversal still runs whenever
+   * the engine holds a pointer, cannot be addressed for a terminus, or
+   * the attempt resolved none, and those verdicts move nothing here. */
+  structureLoadConfirmationsSkipped: number;
 
   /** Terminal roots RE-ARMED by a commit touching one of their observed
    * docs (the OW19 re-arm half): the root returns to the pending set
@@ -239,10 +258,12 @@ export type ServingLoopStats = {
    * absolutely, since those counters reset on a fresh runtime);
    * `notCurrentRearms` (per-key not-current-for-pair re-arms, accumulated);
    * `demandPasses` the pass count and `demandPassMs` the pass's total WALL
-   * time (NOT pure reconcile cost: it INCLUDES the awaited structure-load
-   * segments — `ensurePieceRunning` / `#confirmNoPatternMeta` — for
-   * first-demand and pending ROOT keys, which dominate the early passes;
-   * the reconcile itself is the O(rows) map work — W1 review MINOR-3);
+   * time (NOT pure reconcile cost: it INCLUDES the pull of those keys' root
+   * documents — `structureRootsPreloaded` below — and the awaited
+   * structure-load segments after it — `ensurePieceRunning` /
+   * `#confirmNoPatternMeta` — for first-demand and pending ROOT keys, which
+   * dominate the early passes; the reconcile itself is map work over the
+   * keys whose rows changed — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
    * the 300 ms grace coalesces them into a pending callback. A callback
@@ -264,6 +285,31 @@ export type ServingLoopStats = {
     notCurrentRearms: number;
     demandPasses: number;
     demandPassMs: number;
+
+    /** Instance keys the passes reconciled against the registry, accumulated
+     * over the passes whose reconcile completed; a pass that throws partway
+     * adds nothing. A pass reconciles the keys whose rows changed since the
+     * pass before it, and the warm keys captured since, and no others, so a
+     * pass over unchanged demand adds nothing; the first pass of a tenure,
+     * and the pass after one that threw partway, reconcile every key. */
+    demandKeysReconciled: number;
+
+    /** Root documents the pass pulled TOGETHER before its sequential
+     * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
+     * instance each demand names and, for every scoped demand, the space
+     * instance as well. A load syncs that space instance only when the scoped
+     * read finds no pattern pointer and starts nothing, so a scoped root
+     * whose own instance resolves has one address requested that its load
+     * never syncs. Issuing them in one pull is what lets the replica's refresh
+     * queue coalesce them into a single `session.watch.add` instead of one per
+     * address inside the wave's settle. Counted per address REQUESTED per
+     * pass, so a scoped root contributes two and a root whose load stays
+     * owed across passes counts again in each. Most requested addresses are
+     * ones the replica already watches, which `pull()` answers from its
+     * tracker without a round trip, so this runs well above the number of
+     * adds the pull saves. */
+    structureRootsPreloaded: number;
+
     pushGrowthWakes: number;
     watchWakes: number;
 
@@ -400,7 +446,7 @@ export type ServingLoopStats = {
     /** Deferral backstops scheduled across all transient drain outcomes. */
     deferredRescansArmed: number;
 
-    /** Deferral backstops that fired during an active serving tenure. */
+    /** Deferral backstops that fired, each owing the scan another pass. */
     deferredRescansFired: number;
 
     /** Stage C build W3, (α1) — events.md §4's RULED one-entry-one-
@@ -496,6 +542,19 @@ export type ServingLoopStats = {
     /** The greatest failed-state time any one active checkpoint has accrued. */
     maxAccumulatedDeliveryFailureMs: number;
 
+    /** Delivery-failure backstops scheduled at a failed checkpoint's budget
+     * boundary. One wake stands per event at a time: re-deriving a
+     * checkpoint cancels the wake it replaces and arms another, so this
+     * counts arming passes and runs above the wakes standing. Its sibling
+     * `deferredRescansArmed` counts distinct backstops, since a deferred
+     * rescan with a timer standing arms nothing further. */
+    deliveryFailureWakesArmed: number;
+
+    /** Delivery-failure backstops that fired during an active serving
+     * tenure. An armed wake can be unnecessary if recovery, input, or a
+     * commit retires its checkpoint first. */
+    deliveryFailureWakesFired: number;
+
     /** Durable terminal covers, counted only after the carrying wave commits. */
     needsAttention: {
       total: number;
@@ -589,12 +648,28 @@ export type ServingLoopStats = {
     runs: number;
     failures: number;
   };
+
+  /**
+   * Serving runtimes kept across an idle park (serving-loop.md §1,
+   * "Parking"). `retained` counts runtimes kept as their tenure parked,
+   * `reused` those a successor tenure served with, and `discarded` those
+   * disposed unused: expired, evicted, tainted while parked, or turned
+   * down at a successor's activation because the store had moved. `held`
+   * is how many are kept now.
+   */
+  parkedRuntimes: {
+    retained: number;
+    reused: number;
+    discarded: number;
+    held: number;
+  };
 };
 
 export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
   waves: 0,
   wavesBudgetExhausted: 0,
+  exhaustedAdvances: 0,
   supersededWrites: 0,
   authoredSeen: 0,
   effectAcks: 0,
@@ -605,6 +680,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
+  structureLoadConfirmationsSkipped: 0,
   structureLoadRearmed: 0,
   watermarkClamped: 0,
   storeReads: 0,
@@ -632,6 +708,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     notCurrentRearms: 0,
     demandPasses: 0,
     demandPassMs: 0,
+    demandKeysReconciled: 0,
+    structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
     warmWakes: 0,
@@ -659,6 +737,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     deliveryDeferralsActive: 0,
     deliveryFailuresActive: 0,
     maxAccumulatedDeliveryFailureMs: 0,
+    deliveryFailureWakesArmed: 0,
+    deliveryFailureWakesFired: 0,
     needsAttention: {
       total: 0,
       byPhase: {
@@ -688,6 +768,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     failures: 0,
   },
   lifecycleVerbs: { runs: 0, failures: 0 },
+  parkedRuntimes: { retained: 0, reused: 0, discarded: 0, held: 0 },
 });
 
 type ActiveDeliveryCheckpointStat = {

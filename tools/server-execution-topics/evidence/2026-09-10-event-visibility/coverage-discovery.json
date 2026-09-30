@@ -182,7 +182,7 @@
       "download",
       "34454889755",
       "--repo",
-      "commontoolsinc/labs",
+      "commonfabric/labs",
       "--pattern",
       "coverage-profile-*",
       "--dir",

@@ -177,14 +177,14 @@ and main was re-measured here rather than quoted from the record. What the
 record holds is the shape of the finding; what this table holds is the current
 rig.
 
-What is left is one measurement and four design questions. The measurement is
+What is left is one measurement and three design questions. The measurement is
 stage 8: a session that settles at ~800 ms after roughly twenty clicks, which
 is waiting rather than compute, and which every instrument used here is blind
 to. The design questions are what a child piece's identity should depend on
 (stage 7's root), how a flow-relevance memo should be keyed (stage 3), and a
 harness that can reproduce a cross-session write refusal (stage 4a). Stage 7's
-pull half is a fourth, reopened: it measured well and was reverted on review
-for narrowing what the pull demands.
+pull half is closed: the start pull is removed, so nothing at start decides
+what a result demands.
 
 ## Stage 1 — Bound retained dereference traces
 
@@ -343,63 +343,42 @@ is what registers the dependencies — took the same five clicks to 138, 217,
    (`hashStringOf(flattenBuilderArtifacts(resultPattern))`) and compares it
    against `#resultPatternCache`. Any change at all takes the
    `!patternUnchanged` arm and **re-instantiates the child piece**.
-3. That instantiation registers a one-shot result pull
-   (`#pullCellOnceAfterSuccessfulCommit`).
-4. `Cell.pull()` deep-traverses its value, because the result cell it is built
-   from carries no schema and there is otherwise nothing to say which nested
-   values to read as dependencies — and its convergence loop runs the action
-   **twice**, so the whole result is walked twice.
+3. That instantiation registered a one-shot pull of the result, whose deep
+   traversal of the whole result was the two walks the table counts.
 
 That chain is what this pattern was measured doing. It is **not** what any
 changed artifact costs — a minimal pattern with the same click shape
 instantiates no child at all, which is measured further down and was this
 plan's own premise until it was tested. What provokes the re-instantiation here
-is still unexplained; the cost, once provoked, scales with the result's size
+is still unexplained; the cost, once provoked, scaled with the result's size
 rather than with the change's.
 
-**Candidate 2 was landed and then reverted.** The schema is computed three
-lines below the pull site, so handing it to `getCellFromLink` is a small change,
-and it measured well: eight alternating arms, run in both orders, paced click
-medians on a 37-thread list of plain 351, 351, 424, 343 ms (best 290) against
-schema 298, 191, 261, 270 ms (best 179) — complete separation, about a quarter
-off the median, with the runner and piece suites and four pattern integration
-tests green.
+**The pull is gone, and with it the question of what it should demand.** The
+runner pulled a freshly started result once so that the eager built-ins in it
+would run with nobody reading them. That is not what a pull is for: the
+scheduler already holds demand for the nodes that must run unread — an effect
+is a demand root, a computation that writes captured `Writable` inputs is a
+materializer with standing demand, and a computation registered during a live
+run gets provisional demand once — and the built-ins the pull was forcing are
+computations whose work is a no-op when nothing reads it. `generateText`,
+`generateObject`, `llm` and `sqliteQuery` were registered as effects to keep
+the pull's promise; they are computations now, the `fetch` family and
+`streamData` were always computations, and `navigateTo` stays an effect
+because the navigation is the point. `llmDialog` is a computation as well: its
+`flattenedTools` write carries only what a reader displays, which is what lets
+it hold still over inputs that did not change, and it declares its `messages`
+write as a materializer envelope so a piece that renders the transcript keeps
+it scheduled. With no eager set to serve, both
+start pulls are removed, and a child instantiated from a lift walks nothing at
+start: its result is read by whoever reads it.
 
-Review found the mechanism that makes it unsafe, and it is the under-demand
-risk the change shipped with as an unproven caveat. A schema-guided traversal
-descends only declared `properties` (`preparePlainSchemaPlan` in
-`traverse.ts`), while the walk this pull performs is what demands lazy
-producers under properties a result schema does not name. An eager node —
-`navigateTo`, `generateText`, a `fetch*`, the `EAGER_RESULT_BUILTIN_REFS` set —
-can sit under such a property and still be valid by structural typing, and its
-operation would then never run. That is a silent correctness failure in a
-general path, bought for a quarter of one interaction, with no test here that
-would catch it. Reverted, and `#pullCellOnceAfterSuccessfulCommit` now carries
-the reason in a comment so the next attempt starts from it.
-
-A fix that keeps the win has to demand the eager nodes some other way — a
-schema covering the whole artifact is the walk again, so it is not that.
-
-Review also found that the reverted state is not the schemaless one it was
-described as. `getCellFromLink` falls back to `link.schema` when no explicit
-schema is passed, and the cell is rebuilt from the result's own normalized
-link, so a result cell carrying a schema already gets a schema-guided pull and
-already skips undeclared properties. **The hazard is therefore latent on this
-path rather than introduced by the reverted change** — which widened it to
-every such pull, and is why it went back out. Whether the link's schema should
-be stripped there is the same decision, asked of behavior that is already
-shipping: it is unmeasured, it would make every result pull a deep walk, and it
-belongs to whoever owns what a start pull should demand rather than to a
-performance change.
-
-Review turned up one more fact that sharpens it: the behavior is **not uniform
-across output scopes**. A non-space scope builds its result cell through
-`getCell(space, _resultFor, undefined, tx)`, so a scoped result pulls
-schemaless and takes the deep walk — paying the cost but demanding everything —
-while a space-scoped result whose link carries a schema does not, and skips
-undeclared properties. The same interaction is therefore safe under one scope
-and not the other. That is the argument for deciding this once, deliberately,
-rather than by whichever direction the next caller is patched in.
+Narrowing the pull with the pattern's result schema had measured about a
+quarter off a thread open and was reverted, because a schema-guided traversal
+descends only declared `properties` and an eager node under an undeclared one
+would never have run. Removing the pull keeps the quarter and closes the
+hazard, since nothing at start decides what to demand any more; a reader's own
+schema decides what it reads, which is the walk-versus-schema trade where it
+belongs.
 
 **What is left, and two corrections that go with it.**
 
@@ -422,11 +401,11 @@ claims are now disproved, by two measurements taken on one build:
   click**, about 3%.
 
 So the re-instantiation mattered only because it dragged a schemaless pull
-behind it — and with candidate 2 reverted, that pull is schemaless again and
-walks the whole result on every click. At HEAD that walk is also cheap:
-`deepTraverse` is 2.0% of busy worker CPU. Which is why taking the schema back
-out cost nothing measurable, and is the clearest evidence that candidate 2 was
-never carrying the improvement this branch reports. The index was.
+behind it, and that pull no longer exists. Measured before its removal, with
+the index in, the walk was already cheap: `deepTraverse` was 2.0% of busy
+worker CPU, which is why taking the schema back out had cost nothing
+measurable, and is the clearest evidence that the narrowed pull was never
+carrying the improvement the index did.
 
 **The next lever was the read log's size, and it is pulled at its source.**
 Profiled at the index over four paced clicks in phase A, 3% idle, the two
@@ -477,10 +456,9 @@ nothing. The traversal is in the pull, not the sink and not the render.
 4. ~~**Stage 3's local half**~~ — landed; the pass is down to 7.1% of wall.
 5. ~~**Stage 6**~~ — landed: a benchmark that guards the curve's shape, and the
    authoring rule in `pattern-dev` and `pattern-critic`.
-6. **Stage 7's pull half** — landed, then reverted on review: it narrows what
-   the pull demands, and an eager node under an undeclared property would stop
-   running. Still worth about a quarter of a click to whoever finds a safe
-   shape.
+6. ~~**Stage 7's pull half**~~ — closed by removing the start pull: the
+   built-ins it forced are computations that run when read, and the scheduler
+   already holds demand for what must run unread.
 7. ~~**Stage 7's root**~~ — measured at 8-11 ms of a 300-450 ms click with the
    pull narrowed, and absent entirely from a minimal pattern with the
    same click shape. Not a performance item; left as a correctness question.

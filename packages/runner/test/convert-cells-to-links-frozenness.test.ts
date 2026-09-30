@@ -13,7 +13,7 @@ import { expect } from "@std/expect";
 
 import {
   deepFreeze,
-  type FabricConvertibleValue,
+  type FabricConvertibleJsValue,
 } from "@commonfabric/data-model";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
@@ -22,6 +22,7 @@ import {
 } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { type CellLinkInput, convertCellsToLinks } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -58,7 +59,7 @@ function reachableObjects(
   value: unknown,
   found: Set<object> = new Set(),
 ): Set<object> {
-  if ((value === null) || (typeof value !== "object")) return found;
+  if (!isObjectOrArray(value)) return found;
   if (found.has(value)) return found;
 
   found.add(value);
@@ -141,8 +142,8 @@ describe("convert-cells-to-links-frozenness", () => {
   it("returns a frozen back-link where a cycle was", () => {
     // A cycle's back-link is the walk's other minted value, and it carries a
     // `path` array of its own.
-    const inner: Record<string, FabricConvertibleValue> = {};
-    const cyclic: Record<string, FabricConvertibleValue> = { inner };
+    const inner: Record<string, FabricConvertibleJsValue> = {};
+    const cyclic: Record<string, FabricConvertibleJsValue> = { inner };
 
     inner.back = cyclic;
 

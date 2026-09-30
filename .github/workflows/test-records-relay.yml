@@ -14,7 +14,7 @@ name: Test Records Relay
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["CI", "Tomorrow's Test Order"]
     types:
       - completed
   workflow_dispatch:

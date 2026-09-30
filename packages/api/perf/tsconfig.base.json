@@ -16,13 +16,18 @@
       "@/*": [
         "../../data-model/src/*"
       ],
+      // `data-model`'s import map gives this key a target of its own, where
+      // the pattern above would resolve it to the directory of the same name.
+      "@/value-debug": [
+        "../../data-model/src/value-debug-internal.ts"
+      ],
       "@commonfabric/api": [
         "../index.ts"
       ],
       // `packages/api/cfc.ts` reaches the barrel for one function,
       // `deepFreeze()`. Resolving the specifier to the module that defines it
       // keeps the real signature in the compile, and keeps the rest of the
-      // barrel -- and the workspace packages `value-hash.ts` pulls in, each
+      // barrel -- and the workspace packages `value-hash/` pulls in, each
       // with its own `@/` alias this flat map cannot express -- out of a
       // profile whose whole subject is compile cost.
       "@commonfabric/data-model": [

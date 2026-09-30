@@ -94,6 +94,11 @@ import {
   markEffectCompletion,
 } from "../src/executor/effect-completion.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
+import {
+  authorizationRead,
+  ignoreReadForScheduling,
+  internalVerifierRead,
+} from "../src/storage/reactivity-log.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
@@ -587,6 +592,129 @@ describe("stage D seal-into-wave", () => {
     ).toBe(0);
     const stored = Engine.readState(engine, { id: xLink.id });
     expect(stored?.document).toEqual({ value: { value: 99 } });
+  });
+
+  it("drops a derived write over an intrusion the sealing replica had not taken, though the wave's basis covers it — never a blind clobber", async () => {
+    // A wave's basis is the serverSeq it OPENED at, while the view its runs
+    // read is the replica's. A commit admitted before the wave opened and
+    // never taken by the replica is counted in the basis and absent from
+    // the view, so the doc's head sits at or below the basis while the
+    // derivation that wrote it never saw the value there.
+
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-stale-read",
+      undefined,
+    );
+    // The replica takes the doc while it is ABSENT: confirmed read seq 0.
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    // The authored commit lands BEFORE the wave opens — the replica never
+    // takes it, a direct engine apply reaching no session — so the doc's
+    // head sits at or below the basis the wave is about to open at.
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "derive-w", kind: "derivation" });
+    expect(w.withTx(tx).get()).toBeUndefined();
+    w.withTx(tx).set({ value: 1 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.supersededWrites).toBe(1);
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    expect(
+      ((await settlement!).error as
+        | { waveWithdrawalCause?: unknown }
+        | undefined)?.waveWithdrawalCause,
+    ).toBe("contribution-dropped");
+    // The authored value stands: nothing of the wave reached the store.
+    expect(outcome.seq).toBeUndefined();
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 99 },
+    });
+  });
+
+  it("commits a derived write over a move the sealing replica had not taken when the move was this tenure's OWN derived commit — not every older view is an intrusion", async () => {
+    // The control for the drop above. A serving tenure advances its own
+    // output documents under runs still in flight, so a view older than
+    // the head is the ordinary case; only a writer the tenure's own
+    // derived commits do not account for makes it a conflict. Moving the
+    // check off that question stalls every re-derivation after a tenure
+    // restarts.
+
+    const lease = liveLease();
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-own-move",
+      undefined,
+    );
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    // This tenure's own derived commit, applied straight to the engine so
+    // the replica does not take it.
+    Engine.applyCommit(engine, {
+      sessionId: lease.holder,
+      space,
+      commitClass: "derived",
+      holder: lease.holder,
+      commit: {
+        // Out of the way of the sink's own counter, which shares this
+        // session id and dedupes by (session, localSeq).
+        localSeq: 900,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 41 } },
+        }],
+      },
+    });
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "derive-own", kind: "derivation" });
+    w.withTx(tx).set({ value: 42 });
+    expect((await tx.commit()).error).toBeUndefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.supersededWrites).toBe(0);
+    expect(outcome.dispositions[0]).toEqual({ kind: "committed" });
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 42 },
+    });
   });
 
   it("exempts a contribution that read a doc at or after the loop's own direct commit from the conflict on it; one sealed before drops, and one that read the doc stale is refused at its own commit", async () => {
@@ -2036,6 +2164,79 @@ describe("stage D seal-into-wave", () => {
     expect(outcome.requeuedEventIds).toEqual(["e-parent"]);
   });
 
+  for (const observedScope of ["space", "user"] as const) {
+    it(`keeps an ordinary ${observedScope} read in the basis beside verifier-only reads of another instance`, async () => {
+      const identity = {
+        principal: signer.did(),
+        sessionId: "wave-test-session",
+      };
+      const ignoredScope = observedScope === "space" ? "user" : "space";
+      const seedTx = runtime.edit();
+      seedTx.tx.scopeKeyIdentity = identity;
+      const observed = runtime.getCell<number>(
+        space,
+        "basis-scope-source",
+        undefined,
+        seedTx,
+        observedScope,
+      );
+      const ignored = runtime.getCell<number>(
+        space,
+        "basis-scope-source",
+        undefined,
+        seedTx,
+        ignoredScope,
+      );
+      observed.set(1);
+      ignored.set(2);
+      expect((await seedTx.commit()).error).toBeUndefined();
+      const lease = liveLease();
+      const wave = newWave({ lease });
+      runtime.installSealDestination(wave);
+      try {
+        const tx = runtime.edit();
+        tx.tx.scopeKeyIdentity = identity;
+        stampWaveRunContext(tx, {
+          actionId: "basis-with-verification",
+          kind: "derivation",
+          scopeKeyIdentity: identity,
+        });
+        for (const cell of [observed, ignored]) {
+          tx.readOrThrow({
+            ...cell.getAsNormalizedFullLink(),
+            path: ["cfc"],
+          }, {
+            meta: {
+              ...authorizationRead,
+              ...internalVerifierRead,
+              ...ignoreReadForScheduling,
+            },
+          });
+        }
+        const value = observed.withTx(tx).get();
+        runtime.getCell(space, "basis-output", undefined, tx).set(value);
+        expect((await tx.commit()).error).toBeUndefined();
+        runtime.clearSealDestination();
+        const outcome = await wave.commitWave(newSink());
+        await wave.settled();
+        expect(outcome.aborted).toBeUndefined();
+        const rows = selectSchedulerBasisRows(engine, {
+          branch: "",
+          action: "basis-with-verification",
+          actionScopeKey: Engine.resolveScopeKey(observedScope, identity),
+        }).filter((row) =>
+          row.entity === observed.getAsNormalizedFullLink().id
+        );
+        expect(rows.map((row) => row.entityScopeKey)).toEqual([
+          Engine.resolveScopeKey(observedScope, identity),
+        ]);
+      } finally {
+        runtime.clearSealDestination();
+        lease.release();
+      }
+    });
+  }
+
   it("the emit-path tail read is append mechanics, not a dependency (review 2026-08-11 M3, RULED let-stand 2026-08-13): a derivation emitter neither logs nor bases on the target sidecar", async () => {
     // LT6's case: a demanded DERIVATION that emits. Pre-fix, cell.ts's
     // LT1 emission read the sidecar tail UNMARKED, so the emitting
@@ -2057,10 +2258,10 @@ describe("stage D seal-into-wave", () => {
       experimental: { serverExecution: true },
     });
     try {
-      const streamCell = servingRuntime.getCell<{ $stream: boolean }>(
+      const streamCell = servingRuntime.getCell<unknown>(
         space,
         "m3-emitter-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
       const seed = servingRuntime.getCell<{ value: number }>(
         space,
@@ -2069,7 +2270,6 @@ describe("stage D seal-into-wave", () => {
       );
       {
         const tx = servingRuntime.edit();
-        streamCell.withTx(tx).set({ $stream: true });
         seed.withTx(tx).set({ value: 7 });
         expect((await tx.commit()).error).toBeUndefined();
       }
@@ -2177,16 +2377,11 @@ describe("stage D seal-into-wave", () => {
       experimental: { serverExecution: true },
     });
     try {
-      const streamCell = servingRuntime.getCell<{ $stream: boolean }>(
+      const streamCell = servingRuntime.getCell<unknown>(
         space,
         "symbol-payload-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
-      {
-        const tx = servingRuntime.edit();
-        streamCell.withTx(tx).set({ $stream: true });
-        expect((await tx.commit()).error).toBeUndefined();
-      }
       const wave = new WaveAccumulator({
         space,
         basisSeq: Engine.serverSeq(engine),

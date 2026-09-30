@@ -14,6 +14,7 @@ import {
   CFC_DIAL_LADDERS,
   type CfcPostureReport,
 } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** What a spec may assert about a posture record. */
 export interface ExpectedPosture {
@@ -34,6 +35,7 @@ export interface ExpectedPosture {
   declaredMonotonicity?: string;
   triggerReadGating?: boolean;
   decomposedEnvelopes?: boolean;
+  contentAddressedLabels?: boolean;
 
   /** The policy-snapshot digest, or `null` asserting that none is configured. */
   policyDigest?: string | null;
@@ -82,7 +84,11 @@ const RUNG_FIELD_DIALS = {
 const rungLadder = (field: typeof RUNG_FIELDS[number]): readonly string[] =>
   Object.keys(CFC_DIAL_LADDERS[RUNG_FIELD_DIALS[field]]);
 
-const BOOLEAN_FIELDS = ["triggerReadGating", "decomposedEnvelopes"] as const;
+const BOOLEAN_FIELDS = [
+  "triggerReadGating",
+  "decomposedEnvelopes",
+  "contentAddressedLabels",
+] as const;
 
 /** Every field that asserts something, so a spec asserting nothing is caught. */
 const ASSERTING_FIELDS: readonly string[] = [
@@ -120,7 +126,7 @@ const stringList = (
  * @throws Error naming the problem, for a caller to print.
  */
 export const parseExpectedPosture = (input: unknown): ExpectedPosture => {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+  if (!isObjectNotArray(input)) {
     throw new Error("an expected-posture spec must be a JSON object");
   }
   const raw = input as Record<string, unknown>;

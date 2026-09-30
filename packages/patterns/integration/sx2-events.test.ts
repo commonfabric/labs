@@ -34,7 +34,7 @@ import {
   waitForSettled,
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
-import type { MemorySpace } from "@commonfabric/runner";
+import { type MemorySpace, sendEvent } from "@commonfabric/runner";
 import {
   initializePiecesController,
   type PieceController,
@@ -213,15 +213,17 @@ describe("sx2 events (Phase 3 gates)", () => {
     // unscoped id is refused); the same (id, session, stream) pair
     // scopes to the same durable delivery id, which is exactly what
     // the dedupe horizon needs to see a duplicate.
-    resultCell.key("increment").send(
-      undefined as never,
+    sendEvent(
+      resultCell.key("increment"),
       undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" } as never,
+      undefined,
+      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
     );
-    resultCell.key("increment").send(
-      undefined as never,
+    sendEvent(
+      resultCell.key("increment"),
       undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" } as never,
+      undefined,
+      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
     );
     await cc.runtime.idle();
     await settleAfter(space, dupWatermark);

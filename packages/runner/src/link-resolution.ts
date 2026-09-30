@@ -6,7 +6,7 @@ import {
 } from "./schema-ifc.ts";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import {
   linkPayloadAtProbe,
   linkProbeSubPath,
@@ -17,13 +17,18 @@ import {
   type CellLink,
   type NormalizedFullLink,
   parseLink,
+  schemaForSpaceCrossing,
   type ScopeCapAtDepth,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
-import { linkResolutionProbe } from "./storage/reactivity-log.ts";
+import {
+  dereferenceResolutionProbe,
+  linkResolutionProbe,
+} from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import type { Runtime } from "./runtime.ts";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
 import { canFollowScopedLink, narrowerScopeCap } from "./scope.ts";
 import type { JSONSchema, SchemaScope } from "./builder/types.ts";
@@ -50,12 +55,19 @@ export type ResolvedFullLink = NormalizedFullLink & {
  * `$defs`. Such a schema selects every value, so it says nothing the
  * schema a resolution is already carrying does not, and a hop onto a link
  * bearing one keeps carrying rather than adopting it. `false` is not one
- * of these — it selects nothing, which is information.
+ * of these — it selects nothing, which is information. Nor is a schema
+ * that declares a stream: it selects every value too, but the document behind
+ * a stream holds nothing, so the declaration is the only thing that says what
+ * the position is, and a carried schema that lacks it cannot say so. Any
+ * other `asCell` entry keeps carrying: its document holds a value, which the
+ * carried schema is there to read.
  */
 export const schemaConstrainsNothing = (
   schema: JSONSchema | undefined,
 ): boolean =>
-  schema === undefined || ContextualFlowControl.isTrueSchema(schema);
+  schema === undefined ||
+  (ContextualFlowControl.isTrueSchema(schema) &&
+    !ContextualFlowControl.declaresStream(schema));
 
 /** A reference chain cannot terminate at a value. */
 export class LinkResolutionError extends Error {}
@@ -209,14 +221,23 @@ export const undefinedDataLink = (
   };
 };
 
-const canFollowLinkHop = (
+/**
+ * The cap a hop is decided by: what the resolving link declares at the hop's
+ * depth, narrowed by `carried`, the caps every hop before it was decided by.
+ *
+ * A cap has to outlive the hop that first applied it. The stored schema on a
+ * followed link replaces the one the resolution carried in, and with it the
+ * reader's own cap, so a reader whose schema caps at `user` would go on to
+ * follow a `session` link found one document further along. Every hop is a
+ * step toward the same leaf the reader declared, so a cap that governs the
+ * read governs the whole walk, and narrowing can only ever block more.
+ */
+const capForLinkHop = (
   source: NormalizedFullLink,
   hop: LinkHop,
-): boolean =>
-  canFollowScopedLink(
-    schemaScopeForLinkAtDepth(source, hop.depth),
-    hop.link.scope,
-  );
+  carried: SchemaScope | undefined,
+): SchemaScope | undefined =>
+  narrowerScopeCap(carried, schemaScopeForLinkAtDepth(source, hop.depth));
 
 /**
  * Force a fetch from the server when the local replica cannot serve a hop
@@ -243,12 +264,18 @@ const kickDocPull = (
   runtime: Runtime,
   link: NormalizedFullLink,
   reserved: boolean,
+  identity: ScopeKeyIdentity | undefined,
 ): void => {
   const mgr = runtime.storageManager;
   const { space, id, scope } = link;
+  // A served read loads the same principal's instance that its transaction
+  // reads. The detached cell keeps the asynchronous load from retaining tx.
   mgr.trackUntilSettled(
-    runtime.getCellFromLink(link).sync().catch(() => {
-      if (reserved) mgr.retractDocPullKick?.(space, id, scope);
+    mgr.syncCell(
+      runtime.getCellFromLink(link),
+      identity === undefined ? undefined : { scopeKeyIdentity: identity },
+    ).catch(() => {
+      if (reserved) mgr.retractDocPullKick?.(space, id, scope, identity);
     }),
   );
 };
@@ -394,7 +421,7 @@ const resolutionMemoVariant = (
   preserveOverwrite: boolean,
   requestMissingDocs: boolean,
 ): string => {
-  const schema = typeof link.schema === "object" && link.schema !== null
+  const schema = isObjectOrArray(link.schema)
     ? `#${identityTag(link.schema)}`
     : String(link.schema);
   const caps = link.scopeCaps === undefined
@@ -499,6 +526,14 @@ export function resolveLink(
      * resolutions leave relevance to the write-policy gate.
      */
     markIfcCrossings?: boolean;
+
+    /**
+     * Whether to kick a sync of each hop target in another space. On by
+     * default. A caller that resolves a link some read in the same pass has
+     * already resolved turns it off, since that read's resolution kicks the
+     * same targets and a second, unreserved kick would repeat the pull.
+     */
+    kickCrossSpaceTargets?: boolean;
   } = {},
 ): ResolvedFullLink {
   return resolveLinkTracingDereferences(runtime, tx, link, lastNode, options)
@@ -545,6 +580,14 @@ export function resolveLinkTracingDereferences(
      * resolutions leave relevance to the write-policy gate.
      */
     markIfcCrossings?: boolean;
+
+    /**
+     * Whether to kick a sync of each hop target in another space. On by
+     * default. A caller that resolves a link some read in the same pass has
+     * already resolved turns it off, since that read's resolution kicks the
+     * same targets and a second, unreserved kick would repeat the pull.
+     */
+    kickCrossSpaceTargets?: boolean;
   } = {},
 ): {
   link: ResolvedFullLink;
@@ -568,9 +611,12 @@ export function resolveLinkTracingDereferences(
         markIfcBearingLinkCrossing(tx, hop.space, hop.schema, hop.id);
       }
     }
-    if (options.requestMissingDocs !== false) {
+    if (
+      options.requestMissingDocs !== false &&
+      options.kickCrossSpaceTargets !== false
+    ) {
       for (const target of cached.crossSpaceTargets) {
-        kickDocPull(runtime, target, false);
+        kickDocPull(runtime, target, false, tx.tx?.scopeKeyIdentity);
       }
     }
     return {
@@ -602,7 +648,7 @@ export function resolveLinkTracingDereferences(
         ...link,
         path: [...position, ...linkProbeSubPath()],
       }),
-      { meta: linkResolutionProbe },
+      { meta: dereferenceResolutionProbe },
     );
     let record: ProbeRecord;
     if (probe.ok) {
@@ -632,7 +678,10 @@ export function resolveLinkTracingDereferences(
   // The stored link at `position`, which `record` says holds one. The first
   // walk to follow it reads the whole value there — the walk depends on the
   // siblings that could replace the link, not on the probe alone — and parses
-  // it; every later walk takes the parsed link from the record.
+  // it; every later walk takes the parsed link from the record. The read is a
+  // step of the dereference rather than a standalone reference-identity
+  // observation, and it is where a reader following the reference consumes a
+  // confidentiality the referring document declares at that position.
   const hopAt = (
     link: NormalizedFullLink,
     position: readonly string[],
@@ -676,6 +725,9 @@ export function resolveLinkTracingDereferences(
   // first-probe dead-end there is still a dead-end behind a hop — the
   // asCell boundary consumed the hop when it minted the handle.
   const inputViaLinkHop = link.viaLinkHop === true;
+  // The narrowest follow cap any hop so far was decided by; see
+  // `capForLinkHop` for why it travels.
+  let carriedCap: SchemaScope | undefined;
 
   while (true) {
     let deadEndDocMissing = false;
@@ -696,11 +748,11 @@ export function resolveLinkTracingDereferences(
       if (!options.silentFailures) {
         logger.error(
           "link-res-error",
-          `Link cycle detected ${key} [${toCompactDebugString([...seen])}]`,
+          debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
         );
       }
       throw new LinkResolutionError(
-        `Link cycle detected at ${key} [${toCompactDebugString([...seen])}]`,
+        debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
     seen.add(key);
@@ -787,19 +839,19 @@ export function resolveLinkTracingDereferences(
     }
 
     if (nextHop !== undefined) {
-      if (!canFollowLinkHop(link, nextHop)) {
+      const hopCap = capForLinkHop(link, nextHop, carriedCap);
+      if (!canFollowScopedLink(hopCap, nextHop.link.scope)) {
         // Blocked narrower-scope follow during link resolution — resolves to
         // undefined silently. Warn (not info) so the drop is observable; see
         // the matching site in traverse.ts followPointer (CT-1642).
-        const schemaScope = schemaScopeForLinkAtDepth(link, nextHop.depth);
         if (!options.silentFailures) {
           logger.warn("scope: blocked narrower link follow", () => [
-            `a "${schemaScope}"-scoped read cannot follow a ` +
+            `a "${hopCap}"-scoped read cannot follow a ` +
             `"${nextHop.link.scope}"-scoped link, so it resolves to undefined. ` +
             `If this is inside a .map()/lift, resolve the narrower-scoped value ` +
             `at the top level and pass the value down.`,
             {
-              schemaScope,
+              schemaScope: hopCap,
               linkScope: nextHop.link.scope,
               source: cfcAddressFromLink(link),
               target: cfcAddressFromLink(nextHop.link),
@@ -833,6 +885,7 @@ export function resolveLinkTracingDereferences(
           `Link cycle detected at ${key}: ${detail}`,
         );
       }
+      carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));
       if (readStatsActive) recordLinkResolution(tx);
       followedHop = true;
@@ -850,8 +903,23 @@ export function resolveLinkTracingDereferences(
           schema: crossingSchema,
         });
       }
+      const crossSpace = nextHop.link.space !== link.space;
       const nextLink = nextHop.link;
-      const crossSpace = nextLink.space !== link.space;
+      // Precedence and defaults depend on what a reference declares, in
+      // either space. The traveling schema keeps its reference form until
+      // a space boundary requires a self-contained representation.
+      let declaration = nextLink.schema;
+      if (
+        isObjectOrArray(declaration) && typeof declaration.$ref === "string"
+      ) {
+        declaration = ensureExternalSchemaClosure(
+            tx,
+            nextHop.source.space,
+            declaration,
+          )
+          ? ContextualFlowControl.resolveSchemaRefs(declaration) ?? false
+          : false;
+      }
       // The hop consumed `nextHop.depth` of our path and re-rooted the rest
       // under the target. Caps recorded for the consumed prefix have done
       // their job; caps for the REMAINING segments still have to travel, or a
@@ -867,16 +935,23 @@ export function resolveLinkTracingDereferences(
         // so the shift reduces to target-path length minus our own.
         nextHop.link.path.length - link.path.length,
       );
+      // A stored schema that is only a stream's declaration adds nothing to
+      // a carried schema that already declares the stream, and that one can
+      // also type the event, so it keeps carrying.
+      const carriedDeclaresStoredStream = declaration !== undefined &&
+        ContextualFlowControl.isTrueSchema(declaration) &&
+        ContextualFlowControl.declaresStream(link.schema);
       if (
-        schemaConstrainsNothing(nextLink.schema) && link.schema !== undefined
+        link.schema !== undefined &&
+        (schemaConstrainsNothing(declaration) || carriedDeclaresStoredStream)
       ) {
         // `default` still inherits from the last declaration even when the
         // stored schema is otherwise unconstrained — a top-level `default`
         // is trivially true, and narrowing can reduce a stored schema to
         // one. A false carried schema stays false: the reader selected
         // nothing, so no default stands in.
-        const storedDefault = isObjectOrArray(nextLink.schema)
-          ? nextLink.schema.default
+        const storedDefault = isObjectOrArray(declaration)
+          ? declaration.default
           : undefined;
         const carriedSchema = storedDefault !== undefined &&
             !ContextualFlowControl.isFalseSchema(link.schema)
@@ -896,16 +971,43 @@ export function resolveLinkTracingDereferences(
           ? nextLink
           : { ...nextLink, scopeCaps: carriedCaps };
       }
+      if (crossSpace) {
+        link = {
+          ...link,
+          schema: schemaForSpaceCrossing(tx, nextHop.source.space, link.schema),
+        };
+      } else if (link.schema !== nextLink.schema) {
+        // A carried reader schema keeps its reference form within a space,
+        // but its documents must still be at hand before anything reads
+        // through it: load the closure from the space the hop starts in,
+        // exactly as a crossing does, so the reader's `$ref` resolves.
+        //
+        // Unlike a crossing, an incomplete closure does not narrow the link
+        // to `false`. A crossing must hand the target space a self-contained
+        // schema, so a missing document leaves nothing honest to carry. Here
+        // the reference stays: while a document is missing, the read selects
+        // nothing (an unresolvable `$ref` matches no value), and once it
+        // arrives, the same link reads. A `false` would stay blind for as
+        // long as the link is held.
+        ensureExternalSchemaClosure(tx, nextHop.source.space, link.schema);
+      }
       const mgr = runtime.storageManager;
       const reserved = options.requestMissingDocs !== false && !crossSpace &&
-        mgr.shouldPullDoc?.(link.space, link.id, link.scope) === true;
+        mgr.shouldPullDoc?.(
+            link.space,
+            link.id,
+            link.scope,
+            tx.tx?.scopeKeyIdentity,
+          ) === true;
       if (options.requestMissingDocs !== false && (crossSpace || reserved)) {
         // Only the cross-space kick is replayed. A same-space one is taken
         // against a reservation, so a second resolution of this link would not
         // kick it either — and if the sync fails and retracts the reservation,
         // the read that retries is in a later transaction with its own memo.
         if (crossSpace) crossSpaceTargets.push(link);
-        kickDocPull(runtime, link, reserved);
+        if (!crossSpace || options.kickCrossSpaceTargets !== false) {
+          kickDocPull(runtime, link, reserved, tx.tx?.scopeKeyIdentity);
+        }
       }
       addressKey = linkAddressKey(link);
     } else {
@@ -1005,6 +1107,14 @@ export function resolveLinkTracingDereferences(
  * value, which might include siblings to the "/" and thus make the link
  * invalid. In these cases, we do need to be reactive to all changes there.
  *
+ * Both reads observe which reference sits at the position. The second runs
+ * only once the first has found a sigil payload beneath it, and what the
+ * function hands back is the parsed link alone, so nothing beyond the
+ * reference reaches the caller. They are journaled as reference-identity
+ * observations (`linkResolutionProbe`): they consume a pointer's own label and
+ * none of the content labels at the position, and they stay in the journal for
+ * reactivity.
+ *
  * @param tx - The storage transaction to read from.
  * @param link - The link to read.
  * @param onlyWriteRedirects - Whether to only read write redirects.
@@ -1016,7 +1126,9 @@ export function readMaybeLink(
   onlyWriteRedirects = false,
 ): NormalizedFullLink | undefined {
   const readSubPath = (extraPath: readonly string[]) =>
-    tx.readValueOrThrow({ ...link, path: [...link.path, ...extraPath] });
+    tx.readValueOrThrow({ ...link, path: [...link.path, ...extraPath] }, {
+      meta: linkResolutionProbe,
+    });
 
   const maybeSigilPayload = linkPayloadAtProbe(readSubPath(linkProbeSubPath()));
   if (

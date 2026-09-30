@@ -1,0 +1,2 @@
+{"date": "2026-09-22", "from": {"k": "unit", "s": "dashboard", "n": "registry: unique ids and positive intervals"}, "to": {"k": "unit", "s": "dashboard", "n": "registry: unique labels and positive intervals"}}
+{"date": "2026-09-22", "from": {"k": "unit", "s": "dashboard", "n": "tile labels: the labs/loom ci family is renamed and paired"}, "to": {"k": "unit", "s": "dashboard", "n": "ci trust: both repositories keep their strip at the tile bottom"}}

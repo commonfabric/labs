@@ -91,15 +91,16 @@ export const PROVIDER_NAMES: Set<string> = new Set();
 
 export type TaskType = "coding" | "json" | "creative" | "vision";
 
-// Default model resolution: prefer the gateway-hosted Sonnet 4.6 when available,
-// fall back to the direct Anthropic Sonnet 4.6 (then Sonnet 4.5). Updated by
-// `registerDefaultModel` after providers (including the gateway) have finished
-// loading.
+/**
+ * Allowed defaults, in order. After provider discovery, the first registered
+ * candidate wins; the default remains unavailable when none is registered.
+ */
 export const DEFAULT_MODEL_CANDIDATES = [
-  "gateway:claude-sonnet-4-6",
-  "anthropic:claude-sonnet-4-6",
-  "anthropic:claude-sonnet-4-5",
+  "gateway:claude-sonnet-5",
+  "gateway:gpt-5.6-luna",
+  "gateway:gemini-3.5-flash",
 ] as const;
+
 export const DEFAULT_MODEL_ALIAS = "default";
 
 export const TASK_MODELS: Record<TaskType, string> = {

@@ -1,0 +1,2 @@
+{"date": "2026-09-02", "from": {"k": "unit", "s": "cf-harness", "n": "CfHarnessEngine marks the run as failed when a tool invocation errors"}, "to": {"k": "unit", "s": "cf-harness", "n": "CfHarnessEngine records a tool invocation error without ending the run"}}
+{"date": "2026-09-02", "from": {"k": "unit", "s": "cf-harness", "n": "CfHarnessEngine terminalizes interrupted runs even after an intermediate tool completion"}, "to": {"k": "unit", "s": "cf-harness", "n": "CfHarnessEngine fails an interrupted run that has recorded a tool output"}}

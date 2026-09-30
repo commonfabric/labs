@@ -9,7 +9,11 @@ import {
   hasDataUriScheme,
   valueFromDataUri,
 } from "@commonfabric/data-model/codec-data-uri";
-import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  verifySchemaDocument,
+  walkSchemaDocumentClosure,
+} from "@commonfabric/data-model-schema/schema-closure";
+import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { aclDocId, sameAcl } from "@commonfabric/memory/acl";
 import type { ACL, Entity } from "@commonfabric/memory/interface";
 import {
@@ -39,22 +43,26 @@ import {
   type EntityIdListOptions,
   type EntityIdListResult,
   type EventAttentionResolveResult,
+  type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
   isScopeKey,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
   type SessionHolding,
+  type SessionReadCeiling,
   type SessionSync,
   type SessionSyncUpsert,
   type SqliteDbRef,
   type SqliteOperation,
   type SqliteParamsWire,
+  type SqliteQueryReader,
   type SqliteQueryResult,
   type SqliteRegisterDiskSourceResult,
   toDocumentPath,
@@ -63,6 +71,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
+import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -73,10 +82,15 @@ import {
   applyPatchToDocument,
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
+import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
+import {
+  cfcEnvelopeLabelDocumentHashes,
+  lookupCfcLabelDocument,
+} from "../cfc/label-documents.ts";
 import {
   isPrimitiveCellLink,
   type NormalizedLink,
@@ -87,17 +101,20 @@ import {
   classifySchemaMeta,
   collectExternalSchemaRefHashes,
   schemaMetaRefHashes,
-} from "../schema-decompose.ts";
+} from "@commonfabric/data-model-schema/schema-refs";
 import {
   acquireSchemaRegistryLease,
   lookupSchemaDocument,
   registerSchemaDocument,
 } from "../schema-registry.ts";
-import { isSubschema } from "../schema-walk.ts";
 import { isCellScope, normalizeCellScope } from "../scope.ts";
-import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
+import {
+  normalizeSpaceHost,
+  type SpaceHostRegistration,
+  SpaceHostValidationError,
+} from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
-import { combineOptionalSchema } from "../traverse.ts";
+import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
 import {
@@ -114,6 +131,7 @@ import {
   IMergedChanges,
   IOperationStorageCapability,
   IPreconditionFailedError,
+  IPresenceStorageCapability,
   IReadActivity,
   IRemoteStorageProviderSettings,
   ISpaceReplica,
@@ -179,10 +197,10 @@ import {
 } from "./v2-watch.ts";
 
 /**
- * Syncs the CFC schema document a document's `cfc.schemaHash` names, and
- * resolves to the sync's error if it had one: the shape of
- * `StorageManager`'s own step, and of the syncer a test supplies in its
- * place.
+ * Syncs the CFC schema document a document's `cfc.schemaHash` names and the
+ * label documents its envelope references, and resolves to the sync's
+ * error if it had one: the shape of `StorageManager`'s own step, and of
+ * the syncer a test supplies in its place.
  */
 export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
@@ -368,6 +386,51 @@ export const conflictEntityOf = (commit: ClientCommit): URI => {
   }
   return UNKNOWN_CONFLICT_ENTITY;
 };
+
+/**
+ * One address in a `storage.push.error` marker's read set: the entity, then
+ * the scope when it is not the space's own, then the path. Scope is part of
+ * the address because it selects the instance a read resolved against, the
+ * same way {@link commitReadActivities} keys its own exclusion by it.
+ */
+const readAddress = (
+  read: { id: string; scope?: CellScope; path: readonly string[] },
+): string => {
+  const scope = normalizeCellScope(read.scope);
+  const instance = scope === "space" ? read.id : `${read.id}@${scope}`;
+  // `encodePointer` escapes the separator within each segment, so an entity
+  // or a path segment holding one cannot spell another address. It writes a
+  // separator before every segment, including the first, which the entity
+  // does not take.
+  return encodePointer([instance, ...read.path]).slice(1);
+};
+
+/**
+ * The `storage.push.error` marker's account of a refused commit: the
+ * rejection's text, the addresses in the commit's conflict set, and the
+ * entities its operations address.
+ *
+ * Confirmed and pending reads become one list of addresses; the baseline each
+ * was measured against is not part of an address.
+ */
+const rejectionAttribution = (
+  rejection: StorageTransactionRejected,
+  commit: ClientCommit,
+): { message: string; reads: string[]; writes: string[] } => ({
+  message: rejection.message,
+  reads: [
+    ...new Set(
+      [...commit.reads.confirmed, ...commit.reads.pending].map(readAddress),
+    ),
+  ],
+  writes: [
+    ...new Set(
+      commit.operations
+        .filter((operation) => operation.op !== "sqlite")
+        .map((operation) => operation.id),
+    ),
+  ],
+});
 
 const activeCommitPreconditions = (
   preconditions: readonly CommitPrecondition[] | undefined,
@@ -815,7 +878,7 @@ const defaultGenesisAcl = (owner: string): ACL => ({
  *  a space with `"*": "OWNER"` is owned by everyone, and a document that
  *  did not say so is not what stands (a non-object has none). */
 const ownersOf = (document: unknown): string[] =>
-  typeof document === "object" && document !== null
+  isObjectOrArray(document)
     ? Object.entries(document as Record<string, unknown>)
       .filter(([, capability]) => capability === "OWNER")
       .map(([principal]) => principal)
@@ -1143,6 +1206,9 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+  #spaceAccessErrors = new Map<MemorySpace, Error>();
+  #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
+  #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
@@ -1197,6 +1263,11 @@ export class StorageManager implements IStorageManager {
   /** Phase 5: the serving manager's home space (Options.servingHomeSpace). */
   #servingHomeSpace?: MemorySpace;
 
+  /** The read ceiling every session this manager opens declares
+   * (`setSessionReadCeiling`); undefined on a manager whose sessions read
+   * unbounded. */
+  #sessionReadCeiling?: SessionReadCeiling;
+
   #spaceIdentities = new Map<MemorySpace, Signer>();
 
   /** Genesis ACL documents registered beside a space identity — the exact
@@ -1212,7 +1283,7 @@ export class StorageManager implements IStorageManager {
    * `#createInitializedSession`). */
   #spaceGenesisAcls = new Map<
     MemorySpace,
-    { document: ACL; supplied: boolean }
+    { document: ACL; supplied: boolean; root?: GenesisRoot }
   >();
 
   /** Resume options for a space's manager-wide session that
@@ -1463,9 +1534,25 @@ export class StorageManager implements IStorageManager {
    * - A different-host hint cannot replace a route after a stateful operation
    *   is issued.
    *
-   * Idempotent when the hint matches what is already in effect.
+   * Idempotent when the hint matches what is already in effect. The verdict is
+   * that of {@link registerSpaceHostDetailed}, which is the method a subclass
+   * overrides.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
+    return this.registerSpaceHostDetailed(space, host).accepted;
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHost}, and
+   * names the rule behind a refusal. A seed or an accepted hint for another
+   * host is refused as `known-different-host`, with that host. A hint for a
+   * provider that issued a stateful operation through the default route is
+   * refused as `default-route-in-use`, and no route is recorded for the space.
+   */
+  registerSpaceHostDetailed(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration {
     let route: URL;
     try {
       route = normalizeSpaceHost(host);
@@ -1478,25 +1565,28 @@ export class StorageManager implements IStorageManager {
     }
     const normalized = route.toString();
     const seeded = this.#seedHosts[space];
-    if (seeded !== undefined) {
-      return new URL(seeded).toString() === normalized;
-    }
-    const existing = this.#dynamicHosts.get(space);
+    const existing = seeded !== undefined
+      ? new URL(seeded).toString()
+      : this.#dynamicHosts.get(space);
     if (existing !== undefined) {
-      return existing === normalized;
+      return existing === normalized ? { accepted: true } : {
+        accepted: false,
+        reason: "known-different-host",
+        existingHost: existing,
+      };
     }
     const provider = this.#providers.get(space);
     const replacesDefaultRoute = provider !== undefined &&
       this.#resolveDefaultStorageRoute() !==
         toWebSocketAddress(storageAddressForHost(normalized)).toString();
     if (replacesDefaultRoute && !provider.canReplaceProvisionalReplica()) {
-      return false;
+      return { accepted: false, reason: "default-route-in-use" };
     }
     this.#dynamicHosts.set(space, normalized);
     if (replacesDefaultRoute) {
       this.trackUntilSettled(provider.replaceProvisionalReplica());
     }
-    return true;
+    return { accepted: true };
   }
 
   /**
@@ -1540,11 +1630,14 @@ export class StorageManager implements IStorageManager {
    */
   registerSpaceIdentity(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL },
+    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
   ): void {
     const space = identity.did() as MemorySpace;
     const owner = options?.owner;
     const genesisAcl = options?.genesisAcl;
+    if (options?.genesisRoot !== undefined && genesisAcl === undefined) {
+      throw new Error("genesisRoot requires an explicit genesisAcl");
+    }
     if (owner !== undefined && genesisAcl !== undefined) {
       throw new Error(
         `registerSpaceIdentity(${space}): supply either owner or genesisAcl, ` +
@@ -1585,6 +1678,9 @@ export class StorageManager implements IStorageManager {
       // caller's object holds by the time the space is first opened.
       this.#spaceGenesisAcls.set(space, {
         document: { ...genesisAcl },
+        ...(options?.genesisRoot === undefined
+          ? {}
+          : { root: cloneIfNecessary(options.genesisRoot, { frozen: false }) }),
         supplied: true,
       });
     }
@@ -1606,6 +1702,38 @@ export class StorageManager implements IStorageManager {
     return this.#servingHomeSpace !== undefined
       ? { actingAs: "space-owner" }
       : {};
+  }
+
+  /**
+   * The descriptor fields every session this manager opens carries beyond
+   * its id: the serving binding and the declared read ceiling. One place,
+   * so a reopen, a resume and a fresh mount all declare the same session.
+   */
+  #sessionDescriptorFields(space: MemorySpace): {
+    genesisRoot?: GenesisRoot;
+    actingAs?: "space-owner";
+    readCeiling?: SessionReadCeiling;
+  } {
+    return {
+      ...(this.#spaceGenesisAcls.get(space)?.root === undefined
+        ? {}
+        : { genesisRoot: this.#spaceGenesisAcls.get(space)!.root }),
+      ...this.#servingActingAs(),
+      ...(this.#sessionReadCeiling !== undefined
+        ? { readCeiling: this.#sessionReadCeiling }
+        : {}),
+    };
+  }
+
+  /** See `IStorageManager.setSessionReadCeiling`. */
+  setSessionReadCeiling(ceiling: SessionReadCeiling): void {
+    if (this.#providers.size > 0) {
+      throw new Error(
+        "setSessionReadCeiling: a session is already open; a ceiling " +
+          "declared now would leave it reading unbounded",
+      );
+    }
+    this.#sessionReadCeiling = ceiling;
   }
 
   /** The serving manager's HOME space (Options.servingHomeSpace) —
@@ -1761,11 +1889,37 @@ export class StorageManager implements IStorageManager {
           : (_routeGeneration, routeSignal) =>
             this.#sessionFactory.create(space, signer, {
               sessionId: this.#sessionId,
-              ...this.#servingActingAs(),
+              ...this.#sessionDescriptorFields(space),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        onAccessChange: (error) => {
+          const alreadyDenied = this.#spaceAccessErrors.has(space);
+          if (error === undefined) {
+            this.#spaceAccessErrors.delete(space);
+          } else {
+            this.#spaceAccessErrors.set(space, error);
+            if (!alreadyDenied) {
+              for (const observer of [...this.#spaceAccessObservers]) {
+                try {
+                  observer(space, error);
+                } catch (cause) {
+                  console.error("space-access-loss subscriber threw:", cause);
+                }
+              }
+            }
+          }
+          if (alreadyDenied !== (error !== undefined)) {
+            for (const observer of [...this.#spaceAccessChangeObservers]) {
+              try {
+                observer(space);
+              } catch (cause) {
+                console.error("space-access-change subscriber threw:", cause);
+              }
+            }
+          }
+        },
         eventAppendQueueStore: this.#eventAppendQueueStore,
         eventAppendPacing: this.#eventAppendPacing,
       });
@@ -1853,7 +2007,10 @@ export class StorageManager implements IStorageManager {
           signer,
           detached !== undefined && detached.routeGeneration === routeGeneration
             ? detached.options
-            : { sessionId: this.#sessionId, ...this.#servingActingAs() },
+            : {
+              sessionId: this.#sessionId,
+              ...this.#sessionDescriptorFields(space),
+            },
           routeSignal,
         ),
       );
@@ -1870,7 +2027,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#servingActingAs(),
+        ...this.#sessionDescriptorFields(space),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,
@@ -1983,15 +2140,21 @@ export class StorageManager implements IStorageManager {
       while (bootstrapSessionId === this.#sessionId) {
         bootstrapSessionId = crypto.randomUUID();
       }
-      const bootstrap = track(
-        await this.#sessionFactory.create(
-          space,
-          spaceIdentity,
-          { sessionId: bootstrapSessionId },
-          routeSignal,
-        ),
-      );
+      let bootstrap: OpenedSpaceSession | undefined;
       try {
+        bootstrap = track(
+          await this.#sessionFactory.create(
+            space,
+            spaceIdentity,
+            {
+              sessionId: bootstrapSessionId,
+              ...(registered?.root === undefined
+                ? {}
+                : { genesisRoot: registered.root }),
+            },
+            routeSignal,
+          ),
+        );
         assertCurrentRoute();
         const current = await bootstrap.session.queryGraph({
           roots: [{ id: aclId, selector: { path: [], schema: false } }],
@@ -2024,7 +2187,18 @@ export class StorageManager implements IStorageManager {
             const bootstrapAcl = isHomeSpace
               ? { [signer.did()]: "OWNER" }
               : registered?.document ?? defaultGenesisAcl(signer.did());
+            if (
+              registered?.root !== undefined &&
+              bootstrap.client.serverFlags?.genesisRoot !== true
+            ) {
+              throw new Error(
+                "Host does not support genesis root reservations",
+              );
+            }
             await bootstrap.session.transact({
+              ...(registered?.root === undefined
+                ? {}
+                : { genesisRoot: registered.root }),
               localSeq: 1,
               reads: {
                 confirmed: [{
@@ -2064,9 +2238,34 @@ export class StorageManager implements IStorageManager {
             }
           }
         }
+      } catch (error) {
+        if (
+          registered?.root === undefined || !(error instanceof Error) ||
+          !["ConflictError", "AuthorizationError", "SessionRevokedError"]
+            .includes(error.name)
+        ) throw error;
+        // A winning genesis can remove the bootstrap key's own READ access.
+        // Verify its immutable root and exact ACL through the management
+        // principal before treating that lost authority as a completed race.
+        const winner = track(
+          await this.#sessionFactory.create(
+            space,
+            signer,
+            resumeNormal,
+            routeSignal,
+          ),
+        );
+        const current = await winner.session.queryGraph({
+          roots: [{ id: aclId, selector: { path: [], schema: false } }],
+        });
+        assertCurrentRoute();
+        assertDemandedOwnershipStands(aclSnapshotOf(current.entities), "race");
+        return handOff(winner);
       } finally {
-        activeClients.delete(bootstrap.client);
-        await bootstrap.client.close();
+        if (bootstrap !== undefined) {
+          activeClients.delete(bootstrap.client);
+          await bootstrap.client.close();
+        }
       }
 
       assertCurrentRoute();
@@ -2117,6 +2316,7 @@ export class StorageManager implements IStorageManager {
         throw (rejected as PromiseRejectedResult).reason;
       }
       this.#providers.clear();
+      this.#spaceAccessErrors.clear();
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
@@ -2142,6 +2342,7 @@ export class StorageManager implements IStorageManager {
         throw (rejected as PromiseRejectedResult).reason;
       }
       this.#providers.clear();
+      this.#spaceAccessErrors.clear();
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
@@ -2194,6 +2395,25 @@ export class StorageManager implements IStorageManager {
    */
   authorizationError(space: MemorySpace): Error | undefined {
     return this.#providers.get(space)?.authorizationError();
+  }
+
+  /** @inheritDoc */
+  spaceAccessError(space: MemorySpace): Error | undefined {
+    return this.#spaceAccessErrors.get(space);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAccessLoss(
+    observer: (space: MemorySpace, error: Error) => void,
+  ): Cancel {
+    this.#spaceAccessObservers.add(observer);
+    return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAccessChange(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAccessChangeObservers.add(observer);
+    return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
   trackPendingCommit(promise: Promise<unknown>): void {
@@ -2602,9 +2822,13 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
-   * Syncs the CFC schema document `document`'s `cfc.schemaHash` names, and
-   * resolves to the sync's error if it had one; a document naming none
-   * resolves at once. A syncer a test supplied stands in for the whole step.
+   * Syncs the CFC schema document `document`'s `cfc.schemaHash` names and
+   * every label document its envelope references, in parallel, and
+   * resolves to the first sync error among them; a document naming none
+   * resolves at once. A reader of the envelope resolves its labels
+   * synchronously from the replica, so the label documents are pulled
+   * beside the schema document rather than on first read. A syncer a test
+   * supplied stands in for the whole step.
    */
   async #syncCfcSchemaDocument(
     space: MemorySpace,
@@ -2615,15 +2839,20 @@ export class StorageManager implements IStorageManager {
       return syncer(space, document);
     }
     const cfc = isObjectNotArray(document?.cfc) ? document.cfc : undefined;
+    const ids: URI[] = [];
     const schemaHash = cfc?.schemaHash;
-    if (typeof schemaHash !== "string" || schemaHash.length === 0) {
-      return undefined;
+    if (typeof schemaHash === "string" && schemaHash.length > 0) {
+      ids.push(`cid:${schemaHash}` as URI);
     }
-    const result = await this.open(space).sync(`cid:${schemaHash}` as URI, {
-      path: [],
-      schema: false,
-    });
-    return result.error;
+    for (const hash of cfcEnvelopeLabelDocumentHashes(cfc)) {
+      ids.push(`cid:${hash}` as URI);
+    }
+    if (ids.length === 0) return undefined;
+    const provider = this.open(space);
+    const results = await Promise.all(
+      ids.map((id) => provider.sync(id, { path: [], schema: false })),
+    );
+    return results.find((result) => result.error !== undefined)?.error;
   }
 
   /**
@@ -2648,21 +2877,20 @@ export class StorageManager implements IStorageManager {
       releaseLoad(error);
       throw error;
     }
-    return work.then(
-      (result) => {
-        // Same silent-collapse hazard as syncCell: a link-target pull that
-        // resolves while carrying an error reads as an absent target.
-        if (result.error !== undefined) {
-          this.#logSyncLoadFailure(address.space, address.id, result.error);
-        }
-        releaseLoad(result.error);
-        return result;
-      },
-      (error) => {
-        releaseLoad(error);
-        throw error;
-      },
-    );
+    const failLoad = (error: unknown): never => {
+      releaseLoad(error);
+      throw error;
+    };
+
+    return work.then((result) => {
+      // Same silent-collapse hazard as syncCell: a link-target pull that
+      // resolves while carrying an error reads as an absent target.
+      if (result.error !== undefined) {
+        this.#logSyncLoadFailure(address.space, address.id, result.error);
+      }
+      releaseLoad(result.error);
+      return result;
+    }, failLoad);
   }
 
   #resolveCrossSpace(resolve: () => void): Promise<void> {
@@ -2817,9 +3045,7 @@ export class StorageManager implements IStorageManager {
     if (isKeyableObjectOrArray(value)) {
       for (const key of Object.keys(value)) {
         const child = value[key];
-        if (
-          child === null || child === undefined || typeof child !== "object"
-        ) {
+        if (!isObjectOrArray(child)) {
           continue;
         }
         const childSchema = schema
@@ -2857,6 +3083,12 @@ export class StorageManager implements IStorageManager {
     identity: ScopeKeyIdentity | undefined,
   ): void {
     const space = link.space ?? base.space!;
+    // A handle with no declared value shape transfers only its
+    // address. Loading its target requires a read through that handle.
+    if (
+      !hasDataUriScheme(link.id) && link.overwrite !== "redirect" &&
+      isUnknownCellSchema(schema)
+    ) return;
     const scope = normalizeCellScope(link.scope as CellScope | undefined);
     if (hasDataUriScheme(link.id)) {
       const dataBase: NormalizedLink = { space, id: link.id, scope, path: [] };
@@ -2967,6 +3199,7 @@ type ProviderOptions = {
   space: MemorySpace;
   settings: IRemoteStorageProviderSettings;
   subscription: IStorageSubscription;
+  onAccessChange?: (error: Error | undefined) => void;
 
   /**
    * The owning manager's authenticated session identity
@@ -3033,13 +3266,35 @@ type ProviderOperationSubscription = {
 };
 
 /**
+ * One presence membership the provider holds across replica replacements:
+ * the room and observer the consumer gave it, and the membership on the
+ * current replica's session. The record the replacement's session is given
+ * again is the room's, held by the provider, since every membership of a
+ * room shares one.
+ */
+type ProviderPresenceMembership = {
+  room: string;
+  observer: (event: MemoryV2Client.PresenceEvent) => void;
+
+  /** The membership on the current replica, until a replacement retires it. */
+  inner?: MemoryV2Client.PresenceMembership;
+
+  install?: Promise<void>;
+  closed: boolean;
+};
+
+/**
  * Minimal marker sink — structurally the Runtime's `RuntimeTelemetry`.
  * Kept structural (type-only import) so the storage layer takes no runtime
  * dependency on the telemetry module.
  */
 type TelemetrySink = { submit(marker: RuntimeTelemetryMarker): void };
 
-class Provider implements IStorageProvider, IOperationStorageCapability {
+class Provider
+  implements
+    IStorageProvider,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   replica: SpaceReplica;
 
   /**
@@ -3057,6 +3312,14 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
   #destroyed = false;
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #presenceMemberships = new Set<ProviderPresenceMembership>();
+
+  /**
+   * The last publication per room, republished on a replacement's session.
+   * Kept per room rather than per membership: every membership of a room
+   * shares one record, so the latest across them is what stands.
+   */
+  #presencePublications = new Map<string, PresencePublication>();
 
   constructor(
     readonly options: ProviderOptions,
@@ -3193,6 +3456,120 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
     );
   }
 
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    if (this.#destroyed) throw new Error("memory provider closed");
+    const membership: ProviderPresenceMembership = {
+      room,
+      observer,
+      closed: false,
+    };
+    this.#presenceMemberships.add(membership);
+    try {
+      await this.#ensurePresenceMembership(membership);
+    } catch (error) {
+      this.#forgetPresenceMembership(membership);
+      throw error;
+    }
+    if (membership.closed || this.#destroyed) {
+      throw new Error("memory provider closed");
+    }
+    return {
+      get participantId() {
+        return membership.inner?.participantId ?? "";
+      },
+      publish: (publication) => {
+        if (membership.closed) return;
+        validatePresencePublication(publication);
+        this.#presencePublications.set(room, publication);
+        membership.inner?.publish(publication);
+      },
+      leave: async () => {
+        if (membership.closed) return;
+        this.#forgetPresenceMembership(membership);
+        await membership.inner?.leave();
+      },
+    };
+  }
+
+  /**
+   * Closes the membership and drops it, and with the room's last membership
+   * the room's record, so that a later join does not republish a record no
+   * member of the room made.
+   */
+  #forgetPresenceMembership(membership: ProviderPresenceMembership): void {
+    membership.closed = true;
+    this.#presenceMemberships.delete(membership);
+    if (
+      ![...this.#presenceMemberships].some((other) =>
+        other.room === membership.room
+      )
+    ) {
+      this.#presencePublications.delete(membership.room);
+    }
+  }
+
+  #ensurePresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    if (membership.install !== undefined) return membership.install;
+    const install = this.#installPresenceMembership(membership);
+    membership.install = install;
+    const clear = () => {
+      if (membership.install === install) membership.install = undefined;
+    };
+    install.then(clear, clear);
+    return install;
+  }
+
+  async #installPresenceMembership(
+    membership: ProviderPresenceMembership,
+  ): Promise<void> {
+    while (!membership.closed && !this.#destroyed) {
+      const replica = this.replica;
+      let inner: MemoryV2Client.PresenceMembership;
+      try {
+        inner = await replica.joinPresenceRoom(
+          membership.room,
+          (event) => this.#forwardPresence(membership, replica, event),
+        );
+      } catch (error) {
+        if (replica !== this.replica && !this.#destroyed) continue;
+        throw error;
+      }
+      if (membership.closed || this.#destroyed) {
+        void inner.leave();
+        return;
+      }
+      if (replica !== this.replica) {
+        void inner.leave();
+        continue;
+      }
+      membership.inner = inner;
+      const latest = this.#presencePublications.get(membership.room);
+      if (latest !== undefined) inner.publish(latest);
+      return;
+    }
+  }
+
+  /**
+   * Forwards a room event to the consumer. Nothing from a replica that has
+   * been replaced is forwarded: its failure is the replacement's to make
+   * good, with the snapshot its own join delivers, and any other event of
+   * its would be a view the replacement's snapshot has superseded.
+   */
+  #forwardPresence(
+    membership: ProviderPresenceMembership,
+    replica: SpaceReplica,
+    event: MemoryV2Client.PresenceEvent,
+  ): void {
+    if (membership.closed) return;
+    if (replica !== this.replica && !this.#destroyed) return;
+    membership.observer(event);
+  }
+
   async subscribeOperationField(
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
     callback: (snapshot: OperationFieldSnapshot) => void,
@@ -3284,6 +3661,11 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
       subscription.cancel?.();
       subscription.cancel = undefined;
     }
+    // The old session's memberships end with it; each is joined again on
+    // the replacement, which hands the consumer a fresh snapshot.
+    for (const membership of this.#presenceMemberships) {
+      membership.inner = undefined;
+    }
     previous.redirectOverlappingReadsTo((uri, selector, scope, instance) =>
       this.#replaySync(replacement, uri, selector, scope, instance)
     );
@@ -3297,6 +3679,9 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
       ),
       ...[...this.#operationSubscriptions].map((subscription) =>
         this.#ensureOperationSubscription(subscription)
+      ),
+      ...[...this.#presenceMemberships].map((membership) =>
+        this.#ensurePresenceMembership(membership)
       ),
     ]);
   }
@@ -3349,9 +3734,10 @@ class Provider implements IStorageProvider, IOperationStorageCapability {
     db: SqliteDbRef,
     sql: string,
     params?: SqliteParamsWire,
+    reader?: SqliteQueryReader,
   ): Promise<SqliteQueryResult> {
     return this.#followReplacement((replica) =>
-      replica.sqliteQuery(db, sql, params)
+      replica.sqliteQuery(db, sql, params, reader)
     );
   }
 
@@ -3534,7 +3920,10 @@ type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
  * class.
  */
 export class SpaceReplica
-  implements ISpaceReplica, IOperationStorageCapability {
+  implements
+    ISpaceReplica,
+    IOperationStorageCapability,
+    IPresenceStorageCapability {
   readonly #space: MemorySpace;
   readonly #subscription: IStorageSubscription;
   readonly #scopeKeyIdentity: () => ScopeKeyIdentity;
@@ -3858,6 +4247,8 @@ export class SpaceReplica
    * silent absent read.
    */
   #lastAuthorizationError: IAuthorizationError | null = null;
+  #onAccessChange?: (error: Error | undefined) => void;
+  #cancelAccessLoss: Cancel | undefined;
 
   readonly #routeState: ProviderRouteState;
   readonly #routeGeneration: number;
@@ -3887,6 +4278,7 @@ export class SpaceReplica
   constructor(options: SpaceReplicaOptions) {
     this.#space = options.space;
     this.#subscription = options.subscription;
+    this.#onAccessChange = options.onAccessChange;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
     this.#createSession = options.createSession;
     this.#getTelemetry = options.getTelemetry ?? (() => undefined);
@@ -3935,6 +4327,7 @@ export class SpaceReplica
       scope?: CellScope,
       identity?: ScopeKeyIdentity,
     ): boolean;
+    hydrateArrivedCfcSchemaRefs(sync: SessionSync): void;
   } {
     return {
       noteCaughtUpLocalSeq: (localSeq) => this.#noteCaughtUpLocalSeq(localSeq),
@@ -3952,6 +4345,8 @@ export class SpaceReplica
         this.#waitForConflictReadRepair(rejection),
       hasDocumentRecord: (id, scope, identity) =>
         this.#hasDocumentRecord(id, scope, identity),
+      hydrateArrivedCfcSchemaRefs: (sync) =>
+        this.#hydrateArrivedCfcSchemaRefs(sync),
     };
   }
 
@@ -4213,8 +4608,17 @@ export class SpaceReplica
    * seqs from its W advance via `unappliedForeignSeqFloor`, with the
    * shadow-flip notification in `#confirmPending` registering the
    * dirtiness the moment the parked overlay leaves.
+   *
+   * Arrival includes the transport handing over every frame it holds when
+   * this is called; frames the server sends later do not extend the wait. The
+   * serving runtime's loopback transport delivers one frame per event-loop
+   * turn, so a frame the server has already sent — the authored commit a
+   * wave is about to claim among it — can sit queued behind others for
+   * several turns. Handing a frame over is not processing it, so this wait
+   * cannot park behind a sealed commit.
    */
   async inputSynced(): Promise<void> {
+    await this.#sessionClient?.delivered();
     await Promise.all([...this.#syncPromises]);
   }
 
@@ -4266,6 +4670,9 @@ export class SpaceReplica
         (result.error as { retriable?: unknown }).retriable !== true
       ) {
         this.#lastAuthorizationError = result.error as IAuthorizationError;
+        this.#onAccessChange?.(
+          authorizationErrorToThrow(this.#lastAuthorizationError),
+        );
       }
       return;
     }
@@ -4298,7 +4705,9 @@ export class SpaceReplica
    * `#memoizedSessionHandle()`, and the serving loop already re-attempts a
    * deferred event's load every drain (see the scheduler's `failHeadEventLoadPark`
    * and the SpaceServer's deferral backstop), so the heal arrives on the
-   * cadence the deferral machinery already runs at.
+   * cadence the deferral machinery already runs at. A watch request in
+   * flight when the revocation lands consumes it as the request fails, and
+   * is made once more on the remounted session.
    */
   noteAclChanged(): void {
     if (this.#closed) return;
@@ -4551,6 +4960,14 @@ export class SpaceReplica
     };
   }
 
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: MemoryV2Client.PresenceEvent) => void,
+  ): Promise<MemoryV2Client.PresenceMembership> {
+    const { session } = await this.#activeSessionHandle();
+    return session.joinPresenceRoom(room, observer);
+  }
+
   async #removeOperationWatch(watchId: string): Promise<void> {
     try {
       const { session } = await this.#activeSessionHandle();
@@ -4578,9 +4995,10 @@ export class SpaceReplica
     db: SqliteDbRef,
     sql: string,
     params?: SqliteParamsWire,
+    reader?: SqliteQueryReader,
   ): Promise<SqliteQueryResult> {
     const { session } = await this.#activeSessionHandle();
-    return await session.sqliteQuery(db, sql, params);
+    return await session.sqliteQuery(db, sql, params, reader);
   }
 
   async listEntityIds(): Promise<string[] | undefined> {
@@ -4786,6 +5204,17 @@ export class SpaceReplica
       record?.pending.some((entry) => entry.op !== "patch") === true;
   }
 
+  /** ISpaceReplica.confirmedDocumentSeq: the accepted seq this replica's
+   * confirmed base stands at for the instance, pending writes excluded. */
+  confirmedDocumentSeq(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): number {
+    return this.#docs.get(this.#docKeyOf({ id, scope }, identity))
+      ?.confirmed.seq ?? 0;
+  }
+
   getDocument(
     uri: URI,
     scope?: CellScope,
@@ -4865,8 +5294,12 @@ export class SpaceReplica
   /** Whether an optimistic local write for this doc is still pending — not
    *  yet promoted into the confirmed mirror (a parked accept keeps it
    *  pending until its marker arrives; CT-1927). */
-  hasPendingWrite(id: URI, scope?: CellScope): boolean {
-    const record = this.#docs.get(this.#docKeyOf({ id, scope }));
+  hasPendingWrite(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    const record = this.#docs.get(this.#docKeyOf({ id, scope }, identity));
     return record !== undefined && record.pending.length > 0;
   }
 
@@ -5039,6 +5472,8 @@ export class SpaceReplica
   }
 
   async close(): Promise<void> {
+    this.#cancelAccessLoss?.();
+    this.#cancelAccessLoss = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -5214,6 +5649,8 @@ export class SpaceReplica
   }
 
   closeNow(): void {
+    this.#cancelAccessLoss?.();
+    this.#cancelAccessLoss = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -5924,7 +6361,7 @@ export class SpaceReplica
   ): Promise<Result<Unit, PullError>> {
     const refreshStart = performance.now();
     try {
-      const { session } = await this.#activeSessionHandle();
+      let { session } = await this.#activeSessionHandle();
       // Per-session (no global): mirror the storage setting onto the session so
       // its watch-mutation family (set + add) uses the ordered-issue concurrent
       // path. Idempotent; cheap to re-assert each refresh. Optional-chained so
@@ -6005,6 +6442,18 @@ export class SpaceReplica
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
         mutation = await session.watchAddSync(watches);
+      } catch (error) {
+        // An ACL verdict can terminate the session while this request is in
+        // flight, and the request may be the only load the space sees, so its
+        // failure is what consumes the remount. The request is made once more
+        // on the remounted session, which admits or refuses it against the
+        // ACL as it now stands.
+        if (!this.#remountedSince(session)) throw error;
+        ({ session } = await this.#activeSessionHandle());
+        session.setConcurrentWatchRefresh?.(
+          this.#settings.experimentalConcurrentWatchRefresh === true,
+        );
+        mutation = await session.watchAddSync(watches);
       } finally {
         logger.time(watchAddStart, "watchRefresh", "watchAddSync");
       }
@@ -6041,6 +6490,15 @@ export class SpaceReplica
     } finally {
       logger.time(refreshStart, "watchRefresh", "total");
     }
+  }
+
+  /**
+   * Helper for `#refreshWatchSet()`, which consumes any session remount owed
+   * and returns whether `session` has been replaced as this replica's session.
+   */
+  #remountedSince(session: MemoryV2Client.SpaceSession): boolean {
+    this.#consumeOwedSessionRemount();
+    return this.#sessionSession !== session;
   }
 
   #consumeWatchView(view: MemoryV2Client.WatchView): void {
@@ -6510,6 +6968,7 @@ export class SpaceReplica
             type: "storage.push.error",
             id: pushOpId,
             error: sealed.name,
+            ...rejectionAttribution(sealed, commit),
           });
           notifyRejectionSources(sealed);
           return await this.#finalizeRejection(
@@ -6603,6 +7062,7 @@ export class SpaceReplica
             id: pushOpId,
             sessionId: session.sessionId,
             error: sealed.name,
+            ...rejectionAttribution(sealed, commit),
           });
           notifyRejectionSources(sealed);
           return await this.#finalizeRejection(
@@ -6665,6 +7125,7 @@ export class SpaceReplica
             id: pushOpId,
             sessionId: session.sessionId,
             error: outcome.rejection.name ?? "TransactionError",
+            ...rejectionAttribution(outcome.rejection, commit),
           });
           notifyRejectionSources(outcome.rejection);
           return await this.#finalizeRejection(
@@ -6735,9 +7196,10 @@ export class SpaceReplica
           type: "storage.push.error",
           id: pushOpId,
           error: rejection.name ?? "TransactionError",
+          ...rejectionAttribution(rejection, commit),
         });
         if (schedulerDependencyRejection === undefined) {
-          this.#attachProviderReadyToRetry(rejection, localSeq);
+          this.#attachProviderReadyToRetry(rejection, localSeq, commit);
           if (admissionMode !== "off" && rejection.name === "ConflictError") {
             this.#recordStaleFloor(commit, localSeq);
           }
@@ -7463,14 +7925,9 @@ export class SpaceReplica
       if (id.startsWith("cid:")) {
         const value = (doc as { value?: unknown }).value;
         const hash = id.slice("cid:".length);
-        if (
-          isSubschema(value) &&
-          internSchemaAsTaggedHashString(value as JSONSchema) === hash
-        ) {
-          registered.push([
-            id,
-            registerSchemaDocument(hash, value as JSONSchema),
-          ]);
+        const schema = verifySchemaDocument(hash, value);
+        if (schema !== undefined) {
+          registered.push([id, registerSchemaDocument(hash, schema)]);
           // A schema document's own refs are collected below from its
           // registered form; schema keywords such as `default` may carry
           // link-shaped DATA, so it is not link-scanned.
@@ -7587,8 +8044,7 @@ export class SpaceReplica
       this.getDocument(`cid:${hash}` as URI);
     if (!isObjectNotArray(doc)) return false;
     const value = (doc as { value?: unknown }).value;
-    return isSubschema(value) &&
-      internSchemaAsTaggedHashString(value as JSONSchema) === hash;
+    return verifySchemaDocument(hash, value) !== undefined;
   }
 
   /**
@@ -7924,48 +8380,68 @@ export class SpaceReplica
       const cfc = (doc as { cfc?: unknown }).cfc;
       if (!isObjectNotArray(cfc)) continue;
       const schemaHash = (cfc as { schemaHash?: unknown }).schemaHash;
-      if (typeof schemaHash !== "string" || schemaHash.length === 0) {
-        continue;
+      if (typeof schemaHash === "string" && schemaHash.length > 0) {
+        this.#kickCfcDocumentPull(schemaHash, lookupSchemaDocument);
       }
-      if (this.#kickedCfcSchemaPulls.has(schemaHash)) continue;
-      if (
-        lookupSchemaDocument(schemaHash) !== undefined ||
-        this.getDocument(`cid:${schemaHash}` as URI) !== undefined
-      ) {
-        continue;
+      // A version-2 envelope is owed its label documents on the same
+      // terms: a reader resolves every reference synchronously, and one
+      // that arrives without its document fails closed on every read
+      // until the document is at hand.
+      for (const hash of cfcEnvelopeLabelDocumentHashes(cfc)) {
+        this.#kickCfcDocumentPull(hash, lookupCfcLabelDocument);
       }
-      this.#kickedCfcSchemaPulls.add(schemaHash);
-      queueMicrotask(() => {
-        this.sync(`cid:${schemaHash}` as URI)
-          .then((result) => {
-            if (result.error !== undefined) {
-              logger.warn("cfc-schema-hydration-failed", () => [
-                "arrived-metadata schema pull failed; a later frame " +
-                "carrying the reference re-kicks",
-                { schemaHash, error: String(result.error) },
-              ]);
-              this.#kickedCfcSchemaPulls.delete(schemaHash);
-              return;
-            }
-            if (
-              lookupSchemaDocument(schemaHash) === undefined &&
-              this.getDocument(`cid:${schemaHash}` as URI) === undefined
-            ) {
-              // Completed empty: the document is not installed
-              // server-side yet. Re-arm, so the next reference-carrying
-              // frame retries instead of the window going permanent.
-              this.#kickedCfcSchemaPulls.delete(schemaHash);
-            }
-          }, (error) => {
-            logger.warn("cfc-schema-hydration-failed", () => [
-              "arrived-metadata schema pull threw; a later frame " +
-              "carrying the reference re-kicks",
-              { schemaHash, error: String(error) },
-            ]);
-            this.#kickedCfcSchemaPulls.delete(schemaHash);
-          });
-      });
     }
+  }
+
+  /**
+   * Helper for `#hydrateArrivedCfcSchemaRefs()`, which pulls one `cid:`
+   * document an arrived envelope names, unless the replica or the realm
+   * registry `registered` consults already holds it: one pull per hash per
+   * frame batch, re-armed on a failure or an empty completion so a later
+   * frame carrying the reference retries.
+   */
+  #kickCfcDocumentPull(
+    hash: string,
+    registered: (hash: string) => unknown,
+  ): void {
+    if (this.#kickedCfcSchemaPulls.has(hash)) return;
+    if (
+      registered(hash) !== undefined ||
+      this.getDocument(`cid:${hash}` as URI) !== undefined
+    ) {
+      return;
+    }
+    this.#kickedCfcSchemaPulls.add(hash);
+    queueMicrotask(() => {
+      this.sync(`cid:${hash}` as URI)
+        .then((result) => {
+          if (result.error !== undefined) {
+            logger.warn("cfc-schema-hydration-failed", () => [
+              "arrived-metadata document pull failed; a later frame " +
+              "carrying the reference re-kicks",
+              { hash, error: String(result.error) },
+            ]);
+            this.#kickedCfcSchemaPulls.delete(hash);
+            return;
+          }
+          if (
+            registered(hash) === undefined &&
+            this.getDocument(`cid:${hash}` as URI) === undefined
+          ) {
+            // Completed empty: the document is not installed
+            // server-side yet. Re-arm, so the next reference-carrying
+            // frame retries instead of the window going permanent.
+            this.#kickedCfcSchemaPulls.delete(hash);
+          }
+        }, (error) => {
+          logger.warn("cfc-schema-hydration-failed", () => [
+            "arrived-metadata document pull threw; a later frame " +
+            "carrying the reference re-kicks",
+            { hash, error: String(error) },
+          ]);
+          this.#kickedCfcSchemaPulls.delete(hash);
+        });
+    });
   }
 
   /**
@@ -8221,6 +8697,7 @@ export class SpaceReplica
   #attachProviderReadyToRetry(
     rejection: StorageTransactionRejected,
     localSeq: number,
+    commit: ClientCommit,
   ): void {
     if (rejection.name !== "ConflictError") {
       return;
@@ -8230,6 +8707,18 @@ export class SpaceReplica
       return;
     }
     rejection.readyToRetry = async () => {
+      // A cold authorization read can name an unwatched document. Register
+      // its ordinary document watch so read repair loads the winning evidence
+      // and the provider receives the server's caught-up marker.
+      const repair = await this.pull([
+        ...commit.reads.confirmed,
+        ...commit.reads.pending,
+      ].map((read): [WatchAddress, undefined] => [{
+        id: read.id as URI,
+        type: DOCUMENT_MIME,
+        scope: read.scope,
+      }, undefined]));
+      if (repair.error !== undefined) throw repair.error;
       await readyToRetry();
       await this.#waitForCaughtUpLocalSeq(localSeq);
     };
@@ -8925,13 +9414,20 @@ export class SpaceReplica
   ): SessionSyncUpsert[] {
     const frame = [...upserts];
     const inFrame = new Set(frame.map((upsert) => upsert.id));
-    for (let index = 0; index < frame.length; index++) {
-      const upsert = frame[index]!;
-      if (upsert.deleted === true || !isObjectNotArray(upsert.doc)) continue;
+    // The hashes a document in the frame obliges it to hold: the
+    // document's `schema` metadata member and, for a schema document, its
+    // own refs, or otherwise its link positions. Verification is the
+    // validator's, not this chase's: a schema-shaped document's refs are
+    // followed whether or not it is the document its id names, as its
+    // arrival will be judged.
+    const obligationsOf = (upsert: SessionSyncUpsert): Set<string> => {
+      const hashes = new Set<string>();
+      if (upsert.deleted === true || !isObjectNotArray(upsert.doc)) {
+        return hashes;
+      }
       const metadata = classifySchemaMeta(upsert.doc);
-      // Leave malformed metadata in the frame for per-document quarantine.
-      if (metadata.kind === "malformed") continue;
-      const hashes = new Set(schemaMetaRefHashes(metadata));
+      if (metadata.kind === "malformed") return hashes;
+      for (const hash of schemaMetaRefHashes(metadata)) hashes.add(hash);
       if (upsert.id.startsWith("cid:")) {
         const value = (upsert.doc as { value?: unknown }).value;
         if (isSubschema(value)) {
@@ -8949,16 +9445,27 @@ export class SpaceReplica
           return schema;
         });
       }
-      for (const hash of hashes) {
+      return hashes;
+    };
+    const roots = new Set<string>();
+    for (const upsert of upserts) {
+      for (const hash of obligationsOf(upsert)) roots.add(hash);
+    }
+    walkSchemaDocumentClosure({
+      roots,
+      load: (hash, walk) => {
         const id = `cid:${hash}` as URI;
         if (inFrame.has(id) || this.isContentAddressedDocPersisted(hash)) {
-          continue;
+          return { kind: "settled" };
         }
         inFrame.add(id);
         const dependency = read({ id, scopeKey: "space" as ScopeKey });
-        if (dependency !== undefined) frame.push(dependency);
-      }
-    }
+        if (dependency === undefined) return undefined;
+        frame.push(dependency);
+        for (const next of obligationsOf(dependency)) walk.follow(next);
+        return { kind: "settled" };
+      },
+    });
     return frame;
   }
 
@@ -9081,6 +9588,16 @@ export class SpaceReplica
           }
           this.#sessionClient = resolved.client;
           this.#sessionSession = resolved.session;
+          this.#lastAuthorizationError = null;
+          this.#onAccessChange?.(undefined);
+          this.#cancelAccessLoss?.();
+          this.#cancelAccessLoss = resolved.session.subscribeAccessLoss(
+            (error) => {
+              if (!this.#closed && this.#sessionSession === resolved.session) {
+                this.#onAccessChange?.(error);
+              }
+            },
+          );
           // Session replacement resets the marker epoch: markers for the
           // parked accepts' localSeqs can never arrive from the fresh
           // session, so apply them immediately (the same rule as consumer
@@ -9103,6 +9620,11 @@ export class SpaceReplica
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
           this.#sessionHandle = undefined;
+          if (
+            !this.#closed && error instanceof Error &&
+            error.name === "AuthorizationError" &&
+            (error as { retriable?: unknown }).retriable !== true
+          ) this.#onAccessChange?.(error);
         }
         throw error;
       });

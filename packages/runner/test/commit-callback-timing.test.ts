@@ -1,4 +1,4 @@
-// The accepted-commit half of the CT-1950 callback split (the rejection
+// The accepted-commit half of the verdict/commit callback split (the rejection
 // half lives in commit-conflict-reconcile.test.ts): on accept, the verdict
 // callback fires at the verdict, while the commit callback and the commit
 // promise wait for marker coverage. The runtime talks to a real

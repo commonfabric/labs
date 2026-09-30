@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -37,6 +38,7 @@ import {
   type Cell,
   CompilerStackLoadError,
   entityIdFrom,
+  type EventIntentOutcome,
   parseLink,
   popFrame,
   pushFrame,
@@ -47,13 +49,18 @@ import {
 } from "@commonfabric/runner";
 import {
   atomsOutsideCeiling,
+  buildCfcPolicyArtifactManifest,
   CFC_ENFORCEMENT_MODES,
   cfcLabelViewForCell,
+  createRuntimeCfcModulePolicySource,
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
+import {
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
+import { linkRefPayload } from "@commonfabric/runner/shared";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 
 import {
@@ -61,6 +68,7 @@ import {
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
+  type IPCRemotePost,
   NotificationType,
   RequestType,
   RuntimeErrorCode,
@@ -82,8 +90,11 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import type { WorkerClient } from "@/backends/worker-client.ts";
-import { buildProcessor } from "./build-processor.ts";
+import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
+import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
+import { acquireCellRef, buildProcessor } from "./build-processor.ts";
+import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
 const cfcSigner = await Identity.fromPassphrase(
   "runtime-processor-cfc-label-tests",
@@ -128,16 +139,7 @@ const createRuntime = (
   actingPrincipal?: string,
   apiUrl = new URL("http://localhost/"),
 ) => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: {
-      audience: testSessionOpenAudience,
-    },
-  });
+  const server = newLoopbackServer();
   const storageManager = new SharedV2StorageManager({
     as: cfcSigner,
     memoryHost: new URL("memory://"),
@@ -160,12 +162,19 @@ const createRuntime = (
 const fid = (seed: string) => taggedHashStringOf(seed);
 
 describe("runtime-processor", () => {
-  describe("renderConfidentialityResolverFor", () => {
-    it("returns undefined when no ceiling is configured", async () => {
+  describe("renderConfidentialityResolverFor()", () => {
+    it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(
-          renderConfidentialityResolverFor(runtime, cfcSigner, undefined),
+          renderConfidentialityResolverFor(
+            runtime,
+            cfcSigner,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+          ),
         ).toBeUndefined();
       } finally {
         await runtime.dispose();
@@ -176,9 +185,14 @@ describe("runtime-processor", () => {
     it("resolves the acting user's own space against a ceiling", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         expect(resolver).toBeDefined();
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The acting user's own space (space DID == principal DID) is a verified
@@ -215,6 +229,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The session workspace resolves...
@@ -261,6 +277,8 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(delegate)] },
           sessionSpace,
+          undefined,
+          undefined,
         );
         const ceiling = [cfcAtom.user(delegate)];
         // The key holder's workspace stays blocked for the delegate.
@@ -306,7 +324,8 @@ describe("runtime-processor", () => {
         // Seeded as a path-`[]` full-document write — the shape hydration
         // delivers, and the one `ACLManager` uses. A value-surface write is
         // decomposed into `op: "patch"`, which the memory server refuses for the
-        // ACL document (INV-12), so the runner's write chokepoint rejects it.
+        // ACL document (INV-12 of `docs/specs/memory-v2/09-invariants.md`), so
+        // the runner's write chokepoint rejects it.
         const tx = runtime.edit();
         tx.writeOrThrow({
           space: grantedSpace as MemorySpace,
@@ -323,9 +342,14 @@ describe("runtime-processor", () => {
         await runtime.idle();
         await storageManager.synced();
 
-        const resolver = renderConfidentialityResolverFor(runtime, cfcSigner, {
-          atoms: [cfcAtom.user(cfcSigner.did())],
-        });
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         // The ACL-granted space resolves to User(actingUser).
         expect(
@@ -346,10 +370,240 @@ describe("runtime-processor", () => {
         await storageManager.close();
       }
     });
+
+    it("releases a PolicyOf label its installed module rule admits", async () => {
+      // A value labelled with a module policy stays sealed at the display
+      // boundary until its module rule fires, and the rule's manifest is read
+      // from the space the label is stored in, where the commit that labelled
+      // the value installed it.
+      const { runtime, storageManager } = createRuntime();
+      const space = cfcSigner.did();
+      const artifact = buildCfcPolicyArtifactManifest({
+        formatVersion: 1,
+        moduleIdentity: "sha256:render-release-module",
+        symbol: "releaseToMembers",
+        template: {
+          templateVersion: 1,
+          exchangeRules: [{
+            name: "releaseWhenTallied",
+            preCondition: {
+              confidentiality: [{ thisPolicy: true }],
+              integrity: [{
+                type: "TallyComplete",
+                space: { thisPolicyField: "subject" },
+              }],
+            },
+            postCondition: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Space,
+                id: { thisPolicyField: "subject" },
+              }],
+              integrity: [],
+            },
+          }],
+          dependencies: { authorityOnly: [], dataBearing: [] },
+          integrityRequirements: {},
+        },
+      });
+      const reference = cfcAtom.modulePolicyRef(
+        artifact.manifest.moduleIdentity,
+        artifact.manifest.symbol,
+        artifact.policyDigest,
+        space,
+      );
+      try {
+        // The manifest document as a labelling commit leaves it.
+        const install = storageManager.edit();
+        install.write({
+          space,
+          id: `of:cfc-policy-manifest:${artifact.policyDigest}` as URI,
+          type: "application/json",
+          path: ["value"],
+        }, artifact as never);
+        expect((await install.commit()).ok).toBeDefined();
+        await storageManager.synced();
+
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
+        const ceiling = [cfcAtom.user(cfcSigner.did())];
+        expect(
+          atomsOutsideCeiling(
+            resolver!({
+              confidentiality: [reference],
+              integrity: [{ type: "TallyComplete", space }],
+              spaces: () => [space],
+            }),
+            ceiling,
+          ),
+        ).toEqual([]);
+        // Without the release evidence the rule does not fire.
+        expect(
+          atomsOutsideCeiling(
+            resolver!({ confidentiality: [reference], spaces: () => [space] }),
+            ceiling,
+          ),
+        ).toEqual([reference]);
+        await storageManager.synced();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("releases a direct-release PolicyOf value to verified readers only", async () => {
+      // The manifest packages/patterns/cfc-exchange-rules/direct-release.tsx
+      // compiles (its digest is the one that pattern's baseline pins): a
+      // holder of HasRole(reader) on the policy's subject space gains
+      // User(reader). The labels carry no integrity, so nothing but the
+      // resolver's own membership facts can satisfy the rule.
+      const { runtime, storageManager } = createRuntime();
+      const own = cfcSigner.did();
+      const shared = "did:key:z6MkDirectReleaseSharedSpace";
+      const foreign = "did:key:z6MkDirectReleaseForeignSpace";
+      const missing = "did:key:z6MkDirectReleaseNoManifestSpace";
+      const tampered = "did:key:z6MkDirectReleaseTamperedSpace";
+      const artifact = buildCfcPolicyArtifactManifest({
+        formatVersion: 1,
+        moduleIdentity: "UsUHkONMerVZwnUOIBrbzrUlhEfaV0SByvpFqW28WLg",
+        symbol: "directReleaseRules",
+        template: {
+          templateVersion: 1,
+          exchangeRules: [{
+            name: "releaseToSpaceReader",
+            preCondition: {
+              confidentiality: [{ thisPolicy: true }],
+              integrity: [{
+                type: CFC_ATOM_TYPE.HasRole,
+                principal: { var: "reader" },
+                space: { thisPolicyField: "subject" },
+                role: "reader",
+              }],
+            },
+            postCondition: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { var: "reader" },
+              }],
+              integrity: [],
+            },
+          }],
+          dependencies: { authorityOnly: [], dataBearing: [] },
+          integrityRequirements: {},
+        },
+      });
+      expect(artifact.policyDigest).toEqual(
+        "jr6me2Bb11h2h9txejm-Vjp-5-YPtlpKsLaGcjSR4Sk",
+      );
+      const referenceIn = (subject: string) =>
+        cfcAtom.modulePolicyRef(
+          artifact.manifest.moduleIdentity,
+          artifact.manifest.symbol,
+          artifact.policyDigest,
+          subject,
+        );
+      const [rule] = artifact.manifest.template.exchangeRules;
+      try {
+        // The manifest documents as a labelling commit leaves them, written
+        // beneath the runtime's guard on that reserved state. A transaction
+        // writes one space, so each document commits on its own.
+        const manifestAt = async (space: string, value: unknown) => {
+          const install = storageManager.edit();
+          install.write({
+            space: space as MemorySpace,
+            id: `of:cfc-policy-manifest:${artifact.policyDigest}` as URI,
+            type: "application/json",
+            path: ["value"],
+          }, value as never);
+          expect((await install.commit()).ok).toBeDefined();
+        };
+        const aclAt = async (space: string, reader: string) => {
+          const tx = runtime.edit();
+          tx.writeOrThrow({
+            space: space as MemorySpace,
+            id: `of:${space}` as URI,
+            type: "application/json",
+            path: [],
+          }, { value: { [space]: "OWNER", [reader]: "READ" } });
+          expect((await tx.commit()).ok).toBeDefined();
+        };
+        for (const space of [own, shared, foreign]) {
+          await manifestAt(space, artifact);
+        }
+        // Same digest, module and symbol; the rule releases to anyone. Only
+        // recomputing the digest separates it from the real manifest.
+        await manifestAt(tampered, {
+          ...artifact,
+          manifest: {
+            ...artifact.manifest,
+            template: {
+              ...artifact.manifest.template,
+              exchangeRules: [{
+                ...rule,
+                preCondition: {
+                  confidentiality: [{ thisPolicy: true }],
+                  integrity: [],
+                },
+                postCondition: {
+                  confidentiality: [cfcAtom.user(own)],
+                  integrity: [],
+                },
+              }],
+            },
+          },
+        });
+        for (const space of [shared, missing, tampered]) {
+          await aclAt(space, own);
+        }
+        await aclAt(foreign, "did:key:z6MkSomebodyElse");
+        await runtime.idle();
+        await storageManager.synced();
+
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(own)] },
+          undefined,
+          undefined,
+          createRuntimeCfcModulePolicySource(runtime),
+        );
+        // The label read from `holding`, where a labeling commit installs
+        // the manifest; by default the subject space itself.
+        const outside = (subject: string, holding = subject) =>
+          atomsOutsideCeiling(
+            resolver!({
+              confidentiality: [referenceIn(subject)],
+              spaces: () => [holding],
+            }),
+            [cfcAtom.user(own)],
+          );
+        // The owner, and a reader the shared space's ACL grants.
+        expect(outside(own)).toEqual([]);
+        expect(outside(shared)).toEqual([]);
+        // A space whose ACL names somebody else.
+        expect(outside(foreign)).toEqual([referenceIn(foreign)]);
+        // A readable space holding no manifest, or one that fails
+        // verification.
+        expect(outside(missing)).toEqual([referenceIn(missing)]);
+        expect(outside(tampered)).toEqual([referenceIn(tampered)]);
+        // The same readable subject, copied into a space whose copy installed
+        // the manifest: the label's own space is where it is read.
+        expect(outside(missing, own)).toEqual([]);
+        await storageManager.synced();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
-  describe("renderMembershipProviderFor", () => {
-    it("returns undefined when no ceiling is configured", async () => {
+  describe("renderMembershipProviderFor()", () => {
+    it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(renderMembershipProviderFor(runtime, cfcSigner, undefined))
@@ -637,7 +891,9 @@ describe("runtime-processor", () => {
         storageManager,
       });
       const space = cfcSigner.did();
-      const cell = runtime.getCell(space, "source-refresh-failure");
+      const cell = patchableCell(
+        runtime.getCell(space, "source-refresh-failure"),
+      );
       await cell.sync();
       const sync = cell.sync.bind(cell);
       cell.sync = () => Promise.reject(new Error("refresh unavailable"));
@@ -697,11 +953,11 @@ describe("runtime-processor", () => {
       };
 
       expect(await refusalFor([1, 2]))
-        .toBe("A piece's argument must be a record, not: [1,2]");
+        .toBe("A piece's argument must be a record, not: `[1,2]`");
       expect(await refusalFor(null))
-        .toBe("A piece's argument must be a record, not: null");
+        .toBe("A piece's argument must be a record, not: `null`");
       expect(await refusalFor("a bare string"))
-        .toBe('A piece\'s argument must be a record, not: "a bare string"');
+        .toBe('A piece\'s argument must be a record, not: `"a bare string"`');
     });
 
     it("refuses a fabric class instance as the whole argument", async () => {
@@ -993,7 +1249,7 @@ describe("runtime-processor", () => {
       expect(result).toEqual({ slug: undefined });
     });
 
-    it("accepts bare and of:-schemed pieceIds as the same entity", async () => {
+    it("accepts bare and `of:`-schemed `pieceId`s as the same entity", async () => {
       // CellHandle.id() emits the full schemed URI while PieceHandle.id() emits
       // the bare routing form; the pieceId intake must resolve both to the SAME
       // entity. Without normalization, "of:fid1:H" parses as a hash whose tag
@@ -1111,7 +1367,7 @@ describe("runtime-processor", () => {
       };
     }
 
-    it("carries either spelling of a pieceId to the same entity", async () => {
+    it("carries either spelling of a `pieceId` to the same entity", async () => {
       const bare = fid("ordinary-piece");
       const requestedRef: CellRef = {
         id: `of:${bare}` as CellRef["id"],
@@ -1407,7 +1663,7 @@ describe("runtime-processor", () => {
     ] as const;
 
     for (const { handler, request } of cases) {
-      it(`${handler}() resolves the piece in the scope the request names`, async () => {
+      it(`\`${handler}()\` resolves the piece in the scope the request names`, async () => {
         const { processor, scopes } = makeProcessor();
         await expect(
           processor[handler]({ ...request, scope: "user" } as never),
@@ -1473,7 +1729,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("toConsoleDebugValue", () => {
+  describe("toConsoleDebugValue()", () => {
     /** A cell reference as it is rendered, whatever entity it names. */
     const CELL_LINK = /^\[Cell: of:fid1:[^\]]+\]$/;
 
@@ -1635,11 +1891,20 @@ describe("runtime-processor", () => {
 
         const { cell, done } = await withCell();
         try {
-          const result = toConsoleDebugValue(cell.get()) as Record<
-            string,
-            unknown
-          >;
-          expect(result.self).toEqual({ "/circle": 0 });
+          // The stored self-reference carries its own reference endorsement.
+          // Its first view differs from the directly acquired root, and its
+          // subsequent self-reference shares that acquired view.
+          const root = cell.get() as Record<string, unknown>;
+          const acquired = root.self as Record<string, unknown>;
+          expect(acquired).not.toBe(root);
+          expect(acquired.self).toBe(acquired);
+          const result = toConsoleDebugValue(root) as Record<string, unknown>;
+          expect(result.self).toEqual({
+            __ref: expect.stringMatching(CELL_LINK),
+            name: "test",
+            count: 42,
+            self: { "/circle": 1 },
+          });
         } finally {
           await done();
         }
@@ -1706,14 +1971,24 @@ describe("runtime-processor", () => {
               __ref: expect.stringMatching(CELL_LINK),
               name: "test",
               count: 42,
-              self: { "/circle": 1 },
+              self: {
+                __ref: expect.stringMatching(CELL_LINK),
+                name: "test",
+                count: 42,
+                self: { "/circle": 2 },
+              },
             },
             b: {
               c: {
                 __ref: expect.stringMatching(CELL_LINK),
                 name: "test",
                 count: 42,
-                self: { "/circle": 2 },
+                self: {
+                  __ref: expect.stringMatching(CELL_LINK),
+                  name: "test",
+                  count: 42,
+                  self: { "/circle": 3 },
+                },
               },
             },
           });
@@ -1814,7 +2089,7 @@ describe("runtime-processor", () => {
     });
 
     describe("primitives", () => {
-      it("returns null and undefined unchanged", () => {
+      it("returns `null` and `undefined` unchanged", () => {
         expect(toConsoleDebugValue(null)).toBe(null);
         expect(toConsoleDebugValue(undefined)).toBe(undefined);
       });
@@ -1962,8 +2237,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor diagnosis helpers", () => {
-    it("passes detectNonIdempotent duration through to scheduler.runDiagnosis", async () => {
+  describe("`RuntimeProcessor` diagnosis helpers", () => {
+    it("passes the `detectNonIdempotent()` duration through to `scheduler.runDiagnosis()`", async () => {
       const expected = {
         nonIdempotent: [],
         cycles: [],
@@ -2135,8 +2410,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor blob upload IPC", () => {
-    it("posts FabricBytes contents to the blob route and returns an absolute URL", async () => {
+  describe("`RuntimeProcessor` blob upload IPC", () => {
+    it("posts `FabricBytes` contents to the blob route and returns an absolute URL", async () => {
       const originalFetch = globalThis.fetch;
       let requestedUrl: string | undefined;
       let requestedPayload: unknown;
@@ -2205,8 +2480,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor home pattern IPC", () => {
-    it("routes the home root through ensureDefaultPattern even when the legacy pattern meta is present", async () => {
+  describe("`RuntimeProcessor` home pattern IPC", () => {
+    it("routes the home root through `ensureDefaultPattern()` even when the legacy `pattern` meta is present", async () => {
       // The sharpest pin of the always-controller contract: even with a legacy
       // `pattern` meta present and the update flag unset, the handler reaches
       // ensureDefaultPattern — the leg carrying the cold-start setup repair —
@@ -2304,7 +2579,7 @@ describe("runtime-processor", () => {
         expect(result.piece.cell).toEqual(ref);
       });
 
-      it("resolves the stored root without starting it when start is false", async () => {
+      it("resolves the stored root without starting it when `start` is `false`", async () => {
         const ref: CellRef = {
           id: "of:stored-root" as CellRef["id"],
           space: "did:key:test-space" as CellRef["space"],
@@ -2343,7 +2618,7 @@ describe("runtime-processor", () => {
         ]);
       });
 
-      it("creates the root for a space that has none, even when start is false", async () => {
+      it("creates the root for a space that has none, even when `start` is `false`", async () => {
         const ref: CellRef = {
           id: "of:created-root" as CellRef["id"],
           space: "did:key:test-space" as CellRef["space"],
@@ -2381,7 +2656,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor cell pull IPC", () => {
+  describe("`RuntimeProcessor` cell pull IPC", () => {
     it("waits for producer commit durability before returning a cell value", async () => {
       const ref: CellRef = {
         id: "of:lazy-cell" as CellRef["id"],
@@ -2420,7 +2695,39 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor CFC label IPC", () => {
+  describe("`RuntimeProcessor` CFC label IPC", () => {
+    /**
+     * Runs `body` with a cell naming `ref`, whose stored label metadata reads
+     * as `metadata` and whose members a case can replace.
+     */
+    async function withStoredLabel(
+      ref: CellRef,
+      metadata: unknown,
+      body: (cell: Cell<unknown>) => void | Promise<void>,
+    ): Promise<void> {
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const reads = interceptTransaction(
+          runtime.edit(),
+          (method, args, proceed) =>
+            method === "readOrThrow" &&
+              (args[0] as { path: readonly string[] }).path[0] === "cfc"
+              ? metadata
+              : proceed(),
+        );
+        await body(
+          patchableCell(runtime.getCellFromLink(ref, undefined, reads)),
+        );
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    }
+
     /**
      * Mints a cell carrying a label view whose one caveat names a source, the
      * shape the display redaction exists to rewrite. A read hands the response
@@ -2431,20 +2738,22 @@ describe("runtime-processor", () => {
       runtime: Runtime,
       id: string,
     ): Cell<unknown> {
-      const link = runtime.getCell(cfcSigner.did(), id).getAsLink();
-      setLinkCfcLabelView(link, {
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: [{
-              type: CFC_ATOM_TYPE.Caveat,
-              kind: "derived-from",
-              source: "did:key:alice",
-            }],
-          },
-        }],
-      } as CfcLabelView);
+      const link = withLinkCfcLabelView(
+        runtime.getCell(cfcSigner.did(), id).getAsLink(),
+        {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
+            },
+          }],
+        } as CfcLabelView,
+      );
       return runtime.getCellFromLink(link);
     }
 
@@ -2508,53 +2817,42 @@ describe("runtime-processor", () => {
       ).toThrow(/cfc/);
     });
 
-    it("returns a label view for a cell ref", () => {
+    it("returns a label view for a cell ref", async () => {
       const ref: CellRef = {
         id: "of:cfc-label-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
         scope: "space",
         path: [],
       };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({
-            runtime: {
-              readTx: () => ({
-                readOrThrow: () => ({
-                  value: "labeled data",
-                  cfc: {
-                    version: 1,
-                    schemaHash: "test-schema",
-                    labelMap: {
-                      version: 1,
-                      entries: [{
-                        path: [],
-                        label: { confidentiality: ["prompt-risk"] },
-                      }],
-                    },
-                  },
-                }),
-              }),
-            },
-            getAsNormalizedFullLink: () => ref,
-            getMetaRaw: () => undefined,
-          }),
-        },
-      });
-
-      expect(
-        processor.handleCellGetCfcLabel({
-          type: RequestType.CellGetCfcLabel,
-          cell: ref,
-        }),
-      ).toEqual({
-        cfcLabel: {
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
           version: 1,
           entries: [{
             path: [],
             label: { confidentiality: ["prompt-risk"] },
           }],
         },
+      }, (cell) => {
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
+
+        expect(
+          processor.handleCellGetCfcLabel({
+            type: RequestType.CellGetCfcLabel,
+            cell: ref,
+          }),
+        ).toEqual({
+          cfcLabel: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: ["prompt-risk"] },
+            }],
+          },
+        });
       });
     });
 
@@ -2565,50 +2863,39 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({
-            runtime: {
-              readTx: () => ({
-                readOrThrow: () => ({
-                  value: "labeled data",
-                  cfc: {
-                    version: 1,
-                    schemaHash: "test-schema",
-                    labelMap: {
-                      version: 1,
-                      entries: [{
-                        path: [],
-                        label: {
-                          confidentiality: [{
-                            type: CFC_ATOM_TYPE.Caveat,
-                            kind: "derived-from",
-                            source: "did:key:alice",
-                          }],
-                        },
-                      }],
-                    },
-                  },
-                }),
-              }),
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
             },
-            getAsNormalizedFullLink: () => ref,
-            getMetaRaw: () => undefined,
-            sync: () => Promise.resolve(),
-          }),
+          }],
         },
-      });
+      }, async (cell) => {
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
 
-      const response = await processor.handleCellGetCfcLabel({
-        type: RequestType.CellGetCfcLabel,
-        cell: ref,
+        const response = await processor.handleCellGetCfcLabel({
+          type: RequestType.CellGetCfcLabel,
+          cell: ref,
+        });
+        const atom = response.cfcLabel?.entries[0].label.confidentiality
+          ?.[0] as Record<string, unknown>;
+        // The caveat survives with its kind/type, but the source identity is
+        // gone.
+        expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
+        expect(atom.kind).toBe("derived-from");
+        expect("source" in atom).toBe(false);
       });
-      const atom = response.cfcLabel?.entries[0].label.confidentiality
-        ?.[0] as Record<string, unknown>;
-      // The caveat survives with its kind/type, but the source identity is gone.
-      expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
-      expect(atom.kind).toBe("derived-from");
-      expect("source" in atom).toBe(false);
     });
 
     it("redacts `Caveat.source` in the label views carried by cells inside `handleCellGet()` values", async () => {
@@ -2715,7 +3002,9 @@ describe("runtime-processor", () => {
             }),
             runtime: {
               readTx: () => ({
-                readOrThrow: () => ({ value: "plain value" }),
+                // Nothing at the reserved position: the cell carries no
+                // stored label.
+                readOrThrow: () => undefined,
               }),
             },
             getAsNormalizedFullLink: () => ref,
@@ -2853,7 +3142,7 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("redacts `Caveat.source` in label views on response cell refs", () => {
+    it("redacts `Caveat.source` in label views on response cell refs", async () => {
       const sourceRef: CellRef = {
         id: "of:cfc-ref-view-source" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -2866,55 +3155,41 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const resolvedCell = {
-        getAsLink: () => ({
-          "/": {
-            "link@1": resolvedRef,
+      await withStoredLabel(resolvedRef, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
+            },
+          }],
+        },
+      }, (resolvedCell) => {
+        const processor = buildProcessor({
+          runtime: {
+            getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
-        }),
-        getAsNormalizedFullLink: () => resolvedRef,
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              value: "resolved value",
-              cfc: {
-                version: 1,
-                schemaHash: "test-schema",
-                labelMap: {
-                  version: 1,
-                  entries: [{
-                    path: [],
-                    label: {
-                      confidentiality: [{
-                        type: CFC_ATOM_TYPE.Caveat,
-                        kind: "derived-from",
-                        source: "did:key:alice",
-                      }],
-                    },
-                  }],
-                },
-              },
-            }),
-          }),
-        },
-      };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
-        },
-      });
+        });
 
-      const response = processor.handleCellResolveAsCell({
-        type: RequestType.CellResolveAsCell,
-        cell: sourceRef,
+        const response = processor.handleCellResolveAsCell({
+          type: RequestType.CellResolveAsCell,
+          cell: sourceRef,
+        });
+        const atom = response.cell.cfcLabelView?.entries[0].label
+          .confidentiality?.[0] as Record<string, unknown>;
+        expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
+        expect("source" in atom).toBe(false);
       });
-      const atom = response.cell.cfcLabelView?.entries[0].label
-        .confidentiality?.[0] as Record<string, unknown>;
-      expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
-      expect("source" in atom).toBe(false);
     });
 
-    it("returns label views on resolved cell refs", () => {
+    it("returns label views on resolved cell refs", async () => {
       const sourceRef: CellRef = {
         id: "of:cfc-label-source" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -2927,57 +3202,40 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const resolvedCell = {
-        getAsLink: () => ({
-          "/": {
-            "link@1": resolvedRef,
+      await withStoredLabel(resolvedRef, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: ["authored-by-bob"] },
+          }],
+        },
+      }, (resolvedCell) => {
+        const processor = buildProcessor({
+          runtime: {
+            getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
-        }),
-        getAsNormalizedFullLink: () => resolvedRef,
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              value: "resolved value",
-              cfc: {
-                version: 1,
-                schemaHash: "test-schema",
-                labelMap: {
-                  version: 1,
-                  entries: [{
-                    path: [],
-                    label: { integrity: ["authored-by-bob"] },
-                  }],
-                },
-              },
-            }),
-          }),
-        },
-      };
-      const sourceCell = {
-        resolveAsCell: () => resolvedCell,
-      };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => sourceCell,
-        },
-      });
+        });
 
-      expect(
-        processor.handleCellResolveAsCell({
-          type: RequestType.CellResolveAsCell,
-          cell: sourceRef,
-        }),
-      ).toEqual({
-        cell: {
-          ...resolvedRef,
-          cfcLabelView: {
-            version: 1,
-            entries: [{
-              path: [],
-              label: { integrity: ["authored-by-bob"] },
-            }],
+        expect(
+          processor.handleCellResolveAsCell({
+            type: RequestType.CellResolveAsCell,
+            cell: sourceRef,
+          }),
+        ).toEqual({
+          cell: {
+            ...resolvedRef,
+            cfcLabelView: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { integrity: ["authored-by-bob"] },
+              }],
+            },
           },
-        },
+        });
       });
     });
 
@@ -3005,7 +3263,7 @@ describe("runtime-processor", () => {
         }),
         runtime: {
           readTx: () => ({
-            readOrThrow: () => ({ value: { id: "fid1:sqlite-database" } }),
+            readOrThrow: () => undefined,
           }),
         },
       };
@@ -3050,20 +3308,18 @@ describe("runtime-processor", () => {
           readOrThrow: (address: { id: string }) =>
             address.id === sourceRef.id
               ? {
-                value: "metadata cell",
-                cfc: {
+                version: 1,
+                schemaHash: "test-schema",
+                labelMap: {
                   version: 1,
-                  schemaHash: "test-schema",
-                  labelMap: {
-                    version: 1,
-                    entries: [{
-                      path: [],
-                      label: { confidentiality: ["source-label"] },
-                    }],
-                  },
+                  entries: [{
+                    path: [],
+                    label: { confidentiality: ["source-label"] },
+                  }],
                 },
               }
-              : { value: "result cell" },
+              // The result cell stores no envelope.
+              : undefined,
         }),
         getCellFromLink: (link: { id?: string }) =>
           link.id === sourceRef.id ? sourceCell : resultCell,
@@ -3107,63 +3363,53 @@ describe("runtime-processor", () => {
       expect(sourceSynced).toBe(false);
     });
 
-    it("reads the cell's own stored label without syncing", () => {
+    it("reads the cell's own stored label without syncing", async () => {
       const ref: CellRef = {
         id: "of:cfc-label-pure-read" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
         scope: "space",
         path: [],
       };
-      let synced = false;
-      const cell = {
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              value: "labeled data",
-              cfc: {
-                version: 1,
-                schemaHash: "test-schema",
-                labelMap: {
-                  version: 1,
-                  entries: [{
-                    path: [],
-                    label: { confidentiality: ["result-label"] },
-                  }],
-                },
-              },
-            }),
-          }),
-        },
-        getAsNormalizedFullLink: () => ref,
-        getMetaRaw: () => undefined,
-        sync: () => {
-          synced = true;
-          return Promise.resolve();
-        },
-      };
-      const processor = buildProcessor({
-        runtime: { getCellFromLink: () => cell },
-      });
-
-      expect(
-        processor.handleCellGetCfcLabel({
-          type: RequestType.CellGetCfcLabel,
-          cell: ref,
-        }),
-      ).toEqual({
-        cfcLabel: {
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
           version: 1,
           entries: [{
             path: [],
             label: { confidentiality: ["result-label"] },
           }],
         },
+      }, (cell) => {
+        let synced = false;
+        cell.sync = () => {
+          synced = true;
+          return Promise.resolve(cell);
+        };
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
+
+        expect(
+          processor.handleCellGetCfcLabel({
+            type: RequestType.CellGetCfcLabel,
+            cell: ref,
+          }),
+        ).toEqual({
+          cfcLabel: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: ["result-label"] },
+            }],
+          },
+        });
+        // No sync: keeping the cell live is the caller's job, and the label
+        // is read from the current store. A not-yet-loaded doc would yield an
+        // empty label that self-heals when the reactive caller's subscription
+        // delivers it.
+        expect(synced).toBe(false);
       });
-      // No sync: keeping the cell live is the caller's job, and the label is
-      // read from the current store. A not-yet-loaded doc would yield an empty
-      // label that self-heals when the reactive caller's subscription delivers
-      // it.
-      expect(synced).toBe(false);
     });
 
     it("ignores schema-bearing `anyOf` refs when reading nested stored labels", async () => {
@@ -3263,13 +3509,13 @@ describe("runtime-processor", () => {
 
         const response = await processor.handleCellGetCfcLabel({
           type: RequestType.CellGetCfcLabel,
-          cell: {
+          cell: acquireCellRef(processor, {
             id: nestedId as CellRef["id"],
             space: cfcSigner.did() as CellRef["space"],
             scope: "space",
             path: ["piece"],
             schema: pieceSchema,
-          },
+          }),
         });
         expect(response.cfcLabel).toBeDefined();
         expect(response.cfcLabel?.version).toBe(1);
@@ -3411,13 +3657,13 @@ describe("runtime-processor", () => {
 
         const response = await processor.handleCellGetCfcLabel({
           type: RequestType.CellGetCfcLabel,
-          cell: {
+          cell: acquireCellRef(processor, {
             id: nestedId as CellRef["id"],
             space: cfcSigner.did() as CellRef["space"],
             scope: "space",
             path: ["piece"],
             schema: { $ref: "#/$defs/TrustedMessage" },
-          },
+          }),
         });
         expect(response.cfcLabel).toEqual({
           version: 1,
@@ -3438,7 +3684,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor CFC commit preparation", () => {
+  describe("`RuntimeProcessor` CFC commit preparation", () => {
     const ref: CellRef = {
       id: "of:cfc-client-write" as CellRef["id"],
       space: "did:key:test" as CellRef["space"],
@@ -3789,7 +4035,7 @@ describe("runtime-processor", () => {
           try {
             await processor.handleCellPush({
               type: RequestType.CellPush,
-              cell: createCellRef(cell),
+              cell: acquireCellRef(processor, createCellRef(cell)),
               values: [value],
               awaitCommit: true,
             });
@@ -3848,14 +4094,7 @@ describe("runtime-processor", () => {
         `direct-scoped-cell-initialize-${crypto.randomUUID()}`,
       );
       const space = signer.did();
-      const server = new MemoryV2Server.Server({
-        authorizeSessionOpen(message) {
-          const principal = (message.authorization as { principal?: unknown })
-            ?.principal;
-          return typeof principal === "string" ? principal : undefined;
-        },
-        sessionOpenAuth: { audience: testSessionOpenAudience },
-      });
+      const server = newLoopbackServer();
       const managerOptions = {
         as: signer,
         memoryHost: new URL("memory://"),
@@ -3903,7 +4142,7 @@ describe("runtime-processor", () => {
 
         const selected = await processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(readerCell),
+          cell: acquireCellRef(processor, createCellRef(readerCell)),
           value: { winner: "default" },
         });
         await readerCell.pull();
@@ -3940,7 +4179,7 @@ describe("runtime-processor", () => {
         );
         await cell.sync();
         const processor = buildProcessor({ runtime });
-        const ref = createCellRef(cell);
+        const ref = acquireCellRef(processor, createCellRef(cell));
 
         const [first, second] = await Promise.all([
           processor.handleCellInitialize({
@@ -4017,7 +4256,7 @@ describe("runtime-processor", () => {
 
           await expect(processor.handleCellInitialize({
             type: RequestType.CellInitialize,
-            cell: createCellRef(cell),
+            cell: acquireCellRef(processor, createCellRef(cell)),
             value: initial,
           })).resolves.toEqual({ value: initial });
           expect(cell.asSchema(undefined).getRaw()).not.toBeUndefined();
@@ -4092,7 +4331,7 @@ describe("runtime-processor", () => {
         const processor = buildProcessor({ runtime });
         await expect(processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(alias),
+          cell: acquireCellRef(processor, createCellRef(alias)),
           value: initial,
         })).resolves.toEqual({ value: initial });
         expect(target.asSchema(undefined).getRaw()).not.toBeUndefined();
@@ -4152,7 +4391,7 @@ describe("runtime-processor", () => {
           const capped = alias.asSchema<{ n: number }>(schema);
           await expect(processor.handleCellInitialize({
             type: RequestType.CellInitialize,
-            cell: createCellRef(capped),
+            cell: acquireCellRef(processor, createCellRef(capped)),
             value: { n: 1 },
           })).rejects.toThrow("Cannot write to read-only address");
           expect(target.asSchema(undefined).getRaw()).toEqual(existing);
@@ -4191,7 +4430,7 @@ describe("runtime-processor", () => {
 
         await expect(processor.handleCellInitialize({
           type: RequestType.CellInitialize,
-          cell: createCellRef(projected),
+          cell: acquireCellRef(processor, createCellRef(projected)),
           value: { n: 1 },
         })).rejects.toThrow("incompatible with its schema");
         expect(raw.get()).toBe(42);
@@ -4222,17 +4461,31 @@ describe("runtime-processor", () => {
         );
         await target.sync();
         const processor = buildProcessor({ runtime });
-        const linkedRef = createCellRef(linked);
+        const linkedRef = acquireCellRef(processor, createCellRef(linked));
 
         const selected = await processor.handleRequest({
           type: RequestType.CellInitialize,
-          cell: createCellRef(target),
+          cell: acquireCellRef(processor, createCellRef(target)),
           value: { linked: linkedRef },
         }) as { value: unknown };
 
-        expect(selected.value).toEqual({
-          linked: cellRefToSigilLink(linkedRef),
+        const returned = (selected.value as { linked: SigilLink }).linked;
+        expect(parseLink(returned)).toMatchObject({
+          id: linkedRef.id,
+          space: linkedRef.space,
+          scope: linkedRef.scope,
+          path: linkedRef.path,
         });
+        const token = (linkRefPayload(returned) as {
+          cfcReferenceToken?: string;
+        }).cfcReferenceToken;
+        expect(token).toBeDefined();
+        expect(
+          processor.handleCellGet({
+            type: RequestType.CellGet,
+            cell: { ...linkedRef, cfcReferenceToken: token },
+          }).value,
+        ).toBeUndefined();
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -4240,7 +4493,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("runtime-client CellRef conversion", () => {
+  describe("runtime-client `CellRef` conversion", () => {
     it("does not forward an inbound label view into worker sigil links", () => {
       // A `cfcLabelView` riding an inbound `CellRef` is a main-thread display
       // artifact — round-tripped through `CellHandle.deserialize()` and back —
@@ -4304,10 +4557,9 @@ describe("runtime-processor", () => {
     });
 
     it("strips label views from raw sigil links in inbound values", () => {
-      // Raw sigil links inside inbound values (hand-crafted JSON, or a
-      // CellHandle serialized into CustomEvent.detail via toJSON) bypass the
-      // CellRef path — the value walker must drop their label views too
-      // (codex/cubic review on the Stage 0 PR).
+      // A raw sigil link inside an inbound value is not a `CellRef`, so it
+      // does not pass through `cellRefToSigilLink()`. The value walker must
+      // drop its label view too.
 
       const linkWithView = {
         "/": {
@@ -4398,7 +4650,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor.getLoggerCounts", () => {
+  describe("RuntimeProcessor.getLoggerCounts()", () => {
     // The handler reads process-global logger state, so each case raises its own
     // flag and clears it again rather than leaving one for the next. It also
     // reads the runtime's CFC counters, which travel in the same response so a
@@ -4460,7 +4712,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("assertFabricLoggerFlags", () => {
+  describe("assertFabricLoggerFlags()", () => {
     it("accepts metadata that vets, and a flag raised without any", () => {
       // A `Logger` takes `Record<string, unknown>` and constrains it no further,
       // so what it holds is established here or not at all.
@@ -4525,13 +4777,13 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor VDom event label-view ingress", () => {
+  describe("`RuntimeProcessor` VDom event label-view ingress", () => {
     it("strips label views from sigil links in inbound VDOM events", () => {
-      // CustomEvent.detail is JSON.stringify'd on the main thread (invoking
-      // CellHandle.toJSON) and re-enters the worker here, bypassing
-      // getCell/cellRefToSigilLink — a handler writing event.detail.sourceCell
-      // would persist the ref's view through the sigil-link write path. The
-      // worker strips inbound views at this ingress too (codex/cubic review).
+      // A sigil link in an event's `detail` enters the worker here, and passes
+      // through neither `getCell()` nor `cellRefToSigilLink()`. A handler
+      // that wrote `event.detail.sourceCell` would hand the write path
+      // whatever view the link carried, so the worker strips inbound views at
+      // this ingress too.
 
       const dispatched: unknown[] = [];
       const processor = buildProcessor();
@@ -4583,7 +4835,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor pattern coverage IPC", () => {
+  describe("`RuntimeProcessor` pattern coverage IPC", () => {
     const report = {
       spans: [{
         fileName: "/main.tsx",
@@ -4608,7 +4860,7 @@ describe("runtime-processor", () => {
       ).toEqual({ data: report });
     });
 
-    it("reports null when the worker was built without a collector", () => {
+    it("reports `null` when the worker was built without a collector", () => {
       const processor = buildProcessor();
       expect(
         processor.getPatternCoverage({
@@ -4617,7 +4869,7 @@ describe("runtime-processor", () => {
       ).toEqual({ data: null });
     });
 
-    it("routes a GetPatternCoverage request through the dispatcher", async () => {
+    it("routes a `GetPatternCoverage` request through the dispatcher", async () => {
       const processor = buildProcessor({
         runtime: { patternCoverage: { toData: () => report } },
         // handleRequest dispatches to this.getPatternCoverage; the stub carries
@@ -4631,7 +4883,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor event attention IPC", () => {
+  describe("`RuntimeProcessor` event attention IPC", () => {
     const space = "did:key:z6Mk-runtime-processor-attention" as never;
     const sidecarId = "of:stream-events:runtime-processor-attention";
     const attention = {
@@ -4644,6 +4896,38 @@ describe("runtime-processor", () => {
       failureCount: 1,
       recovery: "explicit-retry" as const,
     };
+
+    it("publishes a safe admission refusal without private diagnostic content", () => {
+      let subscriber: ((outcome: never) => void) | undefined;
+      const attention: unknown[] = [];
+      const refusals: unknown[] = [];
+      const cancel = () => {};
+      expect(subscribeEventAttentionNotifications(
+        {
+          subscribeEventIntentOutcomes(callback: (outcome: never) => void) {
+            subscriber = callback;
+            return cancel;
+          },
+        },
+        (notice: unknown) => attention.push(notice),
+        (notice: unknown) => refusals.push(notice),
+      )).toBe(cancel);
+      subscriber!({
+        kind: "refused",
+        space,
+        eventId: "read-only-click",
+        reason: "private server diagnostic",
+        payload: "private event payload",
+      } as never);
+      expect(refusals).toEqual([{
+        type: "callback:event-intent-outcome",
+        space,
+        eventId: "read-only-click",
+        kind: "refused",
+        reason: "admission-refused",
+      }]);
+      expect(attention).toEqual([]);
+    });
 
     it("forwards only complete terminal-attention outcomes", () => {
       let subscriber: ((outcome: never) => void) | undefined;
@@ -4701,17 +4985,17 @@ describe("runtime-processor", () => {
         as: cfcSigner,
         memoryHost: new URL("memory://"),
       }, server);
-      const originalOpen = WorkerStorageManager.open;
-      const originalHealthCheck = Runtime.prototype.healthCheck;
-      const originalWatchSiteTable = RuntimeProcessor.prototype.watchSiteTable;
+      const restoreBoot = stubWorkerBoot(() => storageManager);
       const originalSubscribe = Runtime.prototype.subscribeEventIntentOutcomes;
-      let subscribed = false;
+      let outcome: ((value: EventIntentOutcome) => void) | undefined;
       let cancelled = 0;
-      WorkerStorageManager.open = () => storageManager;
-      Runtime.prototype.healthCheck = () => Promise.resolve(true);
-      RuntimeProcessor.prototype.watchSiteTable = () => {};
-      Runtime.prototype.subscribeEventIntentOutcomes = () => {
-        subscribed = true;
+      const notices: IPCRemotePost[] = [];
+      const post = stub(ownerClient, "post", (notice) => {
+        notices.push(notice);
+        return true;
+      });
+      Runtime.prototype.subscribeEventIntentOutcomes = (observer) => {
+        outcome = observer;
         return () => cancelled++;
       };
       try {
@@ -4720,14 +5004,26 @@ describe("runtime-processor", () => {
           identity: cfcSigner.keyPair,
           spaceDid: space,
         });
-        expect(subscribed).toBe(true);
+        expect(outcome).toBeDefined();
+        outcome!({
+          space,
+          eventId: "standalone-owner-click",
+          kind: "refused",
+          reason: "private diagnostic",
+        });
+        expect(notices).toEqual([{
+          type: NotificationType.EventIntentOutcome,
+          space,
+          eventId: "standalone-owner-click",
+          kind: "refused",
+          reason: "admission-refused",
+        }]);
         await processor.dispose();
         expect(cancelled).toBe(1);
       } finally {
-        WorkerStorageManager.open = originalOpen;
-        Runtime.prototype.healthCheck = originalHealthCheck;
-        RuntimeProcessor.prototype.watchSiteTable = originalWatchSiteTable;
+        restoreBoot();
         Runtime.prototype.subscribeEventIntentOutcomes = originalSubscribe;
+        post.restore();
         await storageManager.close();
         await server.close();
       }
@@ -4962,7 +5258,7 @@ describe("runtime-processor", () => {
   });
 
   describe("worker/host server-execution posture agreement", () => {
-    it("threads the host's declared serverExecution flag through the params mapper verbatim", () => {
+    it("threads the host's declared `serverExecution` flag through the params mapper verbatim", () => {
       const params = browserWorkerParamsFromInitializationData(
         {
           apiUrl: "http://worker.test/",
@@ -5020,7 +5316,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("browserWorkerParamsFromInitializationData", () => {
+  describe("browserWorkerParamsFromInitializationData()", () => {
     it("threads CFC initialization settings through the preset into runtime options", () => {
       const telemetry = { marker() {} } as unknown as Parameters<
         typeof browserWorkerParamsFromInitializationData
@@ -5109,8 +5405,8 @@ describe("runtime-processor", () => {
           >[2],
         ),
       );
-      expect(options.cfcEnforcementMode).toBe("enforce-explicit");
-      expect(options.cfcFlowLabels).toBeUndefined();
+      expect(options.cfcEnforcementMode).toBe("enforce-strict");
+      expect(options.cfcFlowLabels).toBe("persist");
       expect(options.cfcReadMaxConfidentiality).toBeUndefined();
       expect(options.cfcReadOnExceed).toBeUndefined();
     });
@@ -5171,10 +5467,10 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor per-space piece contexts", () => {
-    // Federation PR2: one worker serves piece operations for many spaces.
-    // getSpaceCtx resolves the per-space PiecesController, lazily for
-    // foreign spaces, over the shared runtime/storage.
+  describe("`RuntimeProcessor` per-space piece contexts", () => {
+    // One worker serves piece operations for many spaces. `#getSpaceCtx()`
+    // resolves the per-space `PiecesController`, lazily for a space other
+    // than the home one, over the shared runtime.
 
     function makeProcessorState() {
       const { runtime } = createRuntime();
@@ -5378,7 +5674,7 @@ describe("runtime-processor", () => {
         }
       });
 
-      it("leaves a loopback entry on apiUrl when the page did not reach loopback", async () => {
+      it("leaves a loopback entry on `apiUrl` when the page did not reach loopback", async () => {
         // loom's daemon writes its own toolshed URL into the table, so a space
         // it serves reads as `http://localhost:8001`. A page served over the
         // tailnet cannot reach that, and WebKit refuses the ws:// socket it
@@ -5587,6 +5883,54 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("handleRegisterSpaceHostDetailed()", () => {
+      it("forwards to the runtime and returns each registration unchanged", () => {
+        const calls: Array<[string, string]> = [];
+        const registrations = {
+          "http://accepted.test/": { accepted: true },
+          "http://other.test/": {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          "http://late.test/": {
+            accepted: false,
+            reason: "default-route-in-use",
+          },
+          "http://local.test/": {
+            accepted: false,
+            reason: "no-remote-resolution",
+          },
+          "http://plain.test/": { accepted: false, reason: "unspecified" },
+        } as const;
+        const processor = buildProcessor({
+          runtime: {
+            registerSpaceHostDetailed: (
+              space: string,
+              host: keyof typeof registrations,
+            ) => {
+              calls.push([space, host]);
+              return registrations[host];
+            },
+          },
+        });
+        for (
+          const host of Object.keys(registrations) as Array<
+            keyof typeof registrations
+          >
+        ) {
+          expect(processor.handleRegisterSpaceHostDetailed({
+            type: RequestType.RegisterSpaceHostDetailed,
+            space: "did:key:z6Mk-ipc-detailed",
+            host,
+          })).toEqual({ registration: registrations[host] });
+        }
+        expect(calls.map(([, host]) => host)).toEqual(
+          Object.keys(registrations),
+        );
+      });
+    });
+
     describe("setMemoryMessageCompression()", () => {
       it("forwards the requested mode to storage", async () => {
         const modes: boolean[] = [];
@@ -5629,10 +5973,10 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor vdom mount render policy", () => {
-    // S16 phase D: the host's render confidentiality ceiling must reach every
-    // mount's reconciler — a ceiling configured at initialization that never
-    // arrives at the egress surface is silently unbounded rendering.
+  describe("`RuntimeProcessor` vdom mount render policy", () => {
+    // The host's render confidentiality ceiling must reach every mount's
+    // reconciler — a ceiling configured at initialization that never arrives
+    // at the egress surface is silently unbounded rendering.
 
     type RootRenderPolicy =
       WorkerReconciler["accessForTestingOnly"]["rootRenderPolicy"];
@@ -5667,7 +6011,7 @@ describe("runtime-processor", () => {
         state.handleVDomMount({
           type: RequestType.VDomMount,
           mountId: 1,
-          cell: cell.getAsNormalizedFullLink() as unknown as CellRef,
+          cell: acquireCellRef(state, createCellRef(cell)),
         });
         const mount = state.accessForTestingOnly.vdomMounts.get("0 1");
         expect(mount).toBeDefined();
@@ -5714,7 +6058,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor handleVDomEvent dropped-event warning", () => {
+  describe("`RuntimeProcessor.handleVDomEvent()` dropped-event warning", () => {
     // handleVDomEvent forwards a main-thread DOM event to the owning mount's
     // reconciler. The reconciler's dispatchEvent returns false when no handler
     // is registered for the handlerId, meaning the event was dropped. The
@@ -5753,7 +6097,7 @@ describe("runtime-processor", () => {
       return warnings;
     }
 
-    it("warns with mountId and handlerId when the handler is missing", () => {
+    it("warns with `mountId` and `handlerId` when the handler is missing", () => {
       const calls: unknown[][] = [];
       const state = makeState(false, calls);
       const warnings = captureWarn(() =>
@@ -5787,7 +6131,7 @@ describe("runtime-processor", () => {
       expect(warnings.length).toBe(0);
     });
 
-    it("warns when no mount exists for the event's mountId", () => {
+    it("warns when no mount exists for the event's `mountId`", () => {
       const calls: unknown[][] = [];
       const state = makeState(true, calls);
       const warnings = captureWarn(() =>
@@ -5805,7 +6149,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor.handleNotification", () => {
+  describe("RuntimeProcessor.handleNotification()", () => {
     // A real processor whose `vdomMounts` holds a stub that records what the
     // reconciler is asked to do.
 
@@ -5826,7 +6170,7 @@ describe("runtime-processor", () => {
       return { processor, events, acks };
     }
 
-    it("routes a VDomEvent notification to the mount's reconciler", () => {
+    it("routes a `VDomEvent` notification to the mount's reconciler", () => {
       const { processor, events } = fakeProcessor();
       processor.handleNotification({
         type: ClientNotificationType.VDomEvent,
@@ -5838,7 +6182,7 @@ describe("runtime-processor", () => {
       expect(events).toEqual([{ handlerId: 7, event: { type: "click" } }]);
     });
 
-    it("routes a VDomBatchApplied notification to the mount's reconciler", () => {
+    it("routes a `VDomBatchApplied` notification to the mount's reconciler", () => {
       const { processor, acks } = fakeProcessor();
       processor.handleNotification({
         type: ClientNotificationType.VDomBatchApplied,
@@ -5932,7 +6276,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor SQLite IPC", () => {
+  describe("`RuntimeProcessor` SQLite IPC", () => {
     const ref: CellRef = {
       id: "of:database" as CellRef["id"],
       space: "did:key:test" as CellRef["space"],
@@ -6322,7 +6666,7 @@ describe("runtime-processor", () => {
       ]]);
     });
 
-    it("uses durable labels for Cells bound to direct SQLite writes", async () => {
+    it("uses durable labels for `Cell`s bound to direct SQLite writes", async () => {
       const signer = await Identity.fromPassphrase(
         `sqlite-durable-label-${crypto.randomUUID()}`,
       );
@@ -6381,13 +6725,13 @@ describe("runtime-processor", () => {
         const exec = (id: number) =>
           processor.handleSqliteExec({
             type: RequestType.SqliteExec,
-            cell: createCellRef(database),
+            cell: acquireCellRef(processor, createCellRef(database)),
             sql: "INSERT INTO documents (id, target_cf_link) VALUES (?, ?)",
             params: {
               kind: "positional",
               values: [
                 id,
-                createCellRef(secret),
+                acquireCellRef(processor, createCellRef(secret)),
               ],
             },
           });
@@ -6537,7 +6881,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor multi-client namespacing", () => {
+  describe("`RuntimeProcessor` multi-client namespacing", () => {
     // One worker runs one runtime and serves several documents at once. Every
     // id a client supplies is minted inside that document -- a VDOM mount id
     // comes from a counter that starts at 1 in each of them -- so what one
@@ -6669,7 +7013,7 @@ describe("runtime-processor", () => {
         expect(commit.ok !== undefined).toBe(true);
 
         const processor = buildProcessor({ runtime });
-        const link = cell.getAsNormalizedFullLink() as unknown as CellRef;
+        const link = acquireCellRef(processor, createCellRef(cell));
         return { runtime, processor, link };
       }
 
@@ -6688,7 +7032,7 @@ describe("runtime-processor", () => {
         const mounting = processor.handleVDomMount({
           type: RequestType.VDomMount,
           mountId: 37,
-          cell: link,
+          cell: acquireCellRef(processor, link),
         }, client);
         try {
           expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
@@ -6746,9 +7090,9 @@ describe("runtime-processor", () => {
       });
 
       it("replaces a client's own mount when it mounts that id again", async () => {
-        // Scoping the key changed which mounts collide, not what a collision
-        // does: one client re-using its own mount id still replaces what was
-        // there, and is left holding one mount rather than two.
+        // Scoping the key decides which mounts collide, not what a collision
+        // does: one client re-using its own mount id replaces what was there,
+        // and is left holding one mount rather than two.
         const { runtime, processor, link } = await mountState();
         const { client } = testClient(1);
         const hadPostMessage = "postMessage" in globalThis;

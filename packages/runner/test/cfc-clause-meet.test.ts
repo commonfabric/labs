@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   type CfcConfClause,
+  clauseAlternatives,
   clausesEqual,
   normalizeClause,
 } from "../src/cfc/clause.ts";
@@ -47,6 +48,31 @@ const clauseSetsEqual = (
   );
 
 describe("CFC ceiling meet (pairwise alternative-set union)", () => {
+  it("matches a linear deduplication oracle across repeated clause pairs", () => {
+    const clauses: CfcConfClause[] = [
+      { anyOf: [] },
+      A,
+      { anyOf: [B, A] },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        anyOf: [A, `secret-${index % 10}`],
+      })),
+    ];
+    const expected: CfcConfClause[] = [];
+    for (const left of clauses) {
+      for (const right of [...clauses].reverse()) {
+        const a = clauseAlternatives(left);
+        const b = clauseAlternatives(right);
+        if (a.length === 0 || b.length === 0) continue;
+        const union = normalizeClause({ anyOf: [...a, ...b] });
+        if (!expected.some((kept) => clausesEqual(kept, union))) {
+          expected.push(union);
+        }
+      }
+    }
+    expect(meetCfcObservationCeilings(clauses, [...clauses].reverse()))
+      .toEqual(expected);
+  });
+
   describe("edge cases", () => {
     it("undefined (no ceiling) is the identity", () => {
       expect(meetCfcObservationCeilings(undefined, [A])).toEqual([A]);

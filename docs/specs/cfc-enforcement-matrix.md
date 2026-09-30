@@ -12,11 +12,11 @@ subsumes another. Their current homes and defaults:
 
 | Dial | Values (weak → strict) | `Runtime` default | Governs |
 |---|---|---|---|
-| `cfcEnforcementMode` | `disabled` · `observe` · `enforce-explicit` · `enforce-strict` | `enforce-explicit` | whether a boundary **reason rejects** the commit ([types.ts](../../packages/runner/src/cfc/types.ts) `cfcEnforcementStrictness`) |
-| `cfcFlowLabels` | `off` · `observe` · `persist` | `off` | whether the per-tx **flow join is derived and persisted** as `derived` label components (S16) |
-| `cfcWriteFloor` | `off` · `observe` · `enforce` | `off` | whether the **write-side `requiredIntegrity` floor** (SC-18, Epic D3) is checked against the written value's integrity |
-| `cfcTriggerReadGating` | `false` · `true` | `false` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../packages/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../packages/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`) |
-| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `off` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
+| `cfcEnforcementMode` | `disabled` · `observe` · `enforce-explicit` · `enforce-strict` | `enforce-strict` | whether a boundary **reason rejects** the commit ([types.ts](../../packages/runner/src/cfc/types.ts) `cfcEnforcementStrictness`) |
+| `cfcFlowLabels` | `off` · `observe` · `persist` | `persist` | whether the per-tx **flow join is derived and persisted** as `derived` label components (S16) |
+| `cfcWriteFloor` | `off` · `observe` · `enforce` | `enforce` | whether the **write-side `requiredIntegrity` floor** (SC-18, Epic D3) is checked against the written value's integrity |
+| `cfcTriggerReadGating` | `false` · `true` | `true` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../packages/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../packages/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`) |
+| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
 
 They are orthogonal because they gate different things: the **enforcement mode**
 decides what happens to a recorded reason (ignore / diagnose / reject); the
@@ -36,8 +36,8 @@ conforming, and the conforming ones are reachable only along a partial order.
 - **`disabled`** — the boundary pass does not run as a gate; runtime-authored
   provenance mints still run (e.g. the external-ingest mark), but no reason ever
   rejects. CFC is descriptive only. This posture exists only by **explicitly
-  passing** `cfcEnforcementMode: "disabled"` — no shipped host does today
-  (toolshed selects `enforce-explicit` with persistent flow labels; see §3).
+  passing** `cfcEnforcementMode: "disabled"` (toolshed constructs its `Runtime`
+  with no CFC options and therefore runs the `enforce-strict` default; see §3).
 - **`observe`** — the boundary pass runs and records reasons as **diagnostics**;
   the commit still succeeds. Used to measure reason volume before enforcing.
 - **`enforce-explicit`** — a recorded reason **rejects** the commit, and that
@@ -69,7 +69,8 @@ every `Runtime` resolves its dials, and it throws when `cfcEnforcementMode` is
 stated and is not one of the four names above; `setCfcEnforcementMode`
 ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts))
 throws the same way for the mid-transaction lever, which is on the public
-transaction interface and so reachable from pattern code. A transaction holding
+transaction interface and so reachable from any code holding a transaction. A
+transaction holding
 any other name would be on no rung: `cfcEnforcementStrictness` has no answer for
 such a name and returns `undefined`, so every floor comparison against it reads
 false — including the audit-S3 anti-downgrade floor, which therefore never
@@ -165,6 +166,14 @@ advance `cfcWriteFloor` / `cfcPolicyEvaluation` on their own schedules. The
 only forbidden moves are advancing a *consuming* enforcement ahead of the
 *production* dial it consumes.
 
+The `observe` rung on each ladder is a measurement stage, not a step the order
+requires. What the order forbids is a consuming enforcement running ahead of
+the dial that produces what it consumes; a deployment that moves a production
+dial and its consumers together satisfies that whatever rungs it passes
+through. The shipped defaults sit at the strict state directly, so an operator
+who wants the measurement first states the intermediate rung rather than
+finding it underneath.
+
 ```
 cfcFlowLabels:   off ──▶ observe ──▶ persist ─────────┐
                                                        ├─▶ enforce-strict on
@@ -182,24 +191,26 @@ dial is not yet producing. The states a deployment is expected to pass through:
 
 | State | enforcement | flow | write-floor | trigger | Meaning |
 |---|---|---|---|---|---|
-| **Operator (explicitly disabled)** | `disabled` | `off` | `off` | `false` | CFC descriptive only; provenance mints run, nothing rejects. Requires explicitly passing `cfcEnforcementMode: "disabled"` — no shipped host does today. |
-| **Server hosts (toolshed, background-piece-service)** | `enforce-explicit` | `persist` | `off` | `false` | The `productionServer` preset and toolshed's per-space serving Runtime persist reference acquisition history for precise readers. Flow propagation and explicit checks run in the trusted Runtime; storage admits the resulting revision dependencies. |
-| **Shell today** | `enforce-explicit` | `persist` | `off` | `false` | Explicit checks enforce; flow labels persisted (H2, inv-9 active); floor not yet dialed. |
-| **Shell + floor observe** | `enforce-explicit` | `persist` | `observe` | `false` | Add the write floor as diagnostics (D3 dial-up step). |
-| **Shell + floor enforce** | `enforce-explicit` | `persist` | `enforce` | `false` | Floor rejects and credits persisted flow integrity; content assertions require evidence within the destination space. |
-| **Strict** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. The end state. |
+| **Operator (explicitly disabled)** | `disabled` | `off` | `off` | `false` | CFC descriptive only; provenance mints run, nothing rejects. Requires explicitly passing `cfcEnforcementMode: "disabled"`. |
+| **Explicit** | `enforce-explicit` | `off` | `off` | `false` | Explicit checks enforce; nothing derived is produced or consumed. A host reaches this by stating the dials, since it is no longer what an unconfigured `Runtime` resolves. |
+| **Explicit + flow** | `enforce-explicit` | `persist` | `off` | `false` | Flow labels persisted (H2, inv-9 active); floor not yet dialed. |
+| **Explicit + floor observe** | `enforce-explicit` | `persist` | `observe` | `false` | Add the write floor as diagnostics (D3 dial-up step). |
+| **Explicit + floor enforce** | `enforce-explicit` | `persist` | `enforce` | `false` | Floor rejects; complete on flow-endorsed writes (flow persists). |
+| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server host ([toolshed/index.ts](../../packages/toolshed/index.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
 
 Trigger gating may flip to `true` at any of these states (ordering constraint
 #4: it is sound anywhere) — the table shows it flipping at the end state
 because before `cfcFlowLabels: persist` it closes only the one-hop channel.
 
-`cfcPolicyEvaluation` is omitted from the state columns above because it is
-`off` in every shipped host today (no host passes `cfcPolicyRecords`, so the
-evaluator has no rules to run). It advances on its own schedule (ordering
-constraint #5: sound anywhere, only loosening save fail-closed exhaustion), so
-a deployment adds `observe` then `enforce` alongside whichever of the states
-above it is in, once it configures a policy set (e.g. the §10.1 standard
-prompt-caveat profile).
+`cfcPolicyEvaluation` is omitted from the state columns above because it
+advances on its own schedule (ordering constraint #5: sound anywhere, only
+loosening save fail-closed exhaustion). It defaults to `enforce`, which decides
+gates on the rewritten label and fails closed on fuel exhaustion. A host that
+declares no `cfcPolicyRecords` has no rules for the evaluator to run, so at that
+rung it evaluates over an empty rule set and the decision is the one the raw
+label gives; what the rung buys such a host is that configuring a policy set
+later needs no second dial move. The `max-enforcement` bundle carries the §10.1
+standard prompt-caveat profile.
 
 **Non-conforming** examples (a linter/deploy-check should reject): any
 `enforce-strict` with `cfcFlowLabels ≠ persist` (strict consumes derived labels
@@ -249,7 +260,7 @@ The strict-only delta is:
   deployment's ACL posture. Under `enforce-strict` a misfit records a prepare
   reason and the commit rejects; every mode below persists the measurement and
   flags a `writer-fit(persist-and-flag)` diagnostic carrying the same reason
-  string — so `enforce-explicit` keeps the shipped persist-and-flag posture
+  string — so a deployment below strict keeps the persist-and-flag posture
   bit-for-bit on stored metadata. The reason string is stable and names the
   rule id, target, path, and offending clause(s) (SC-18c):
   `writer-fit confidentiality misfit for <doc> at /<path> (canWrite, §8.12.4):
@@ -277,7 +288,13 @@ The strict-only delta is:
   artifacts", and a transaction MUST NOT persist a module-policy reference
   unless that same transaction create-only installs the byte-verified manifest
   (spec §4.4.2) — which the writer-fit reject would otherwise make impossible
-  at this level. Implementation in
+  at this level. Create-only means an install never overwrites: it writes the
+  manifest only where the transaction read the document as absent, and that
+  confirmed read turns a manifest another writer created meanwhile into a
+  retryable conflict, whose retry accepts the same bytes and refuses different
+  ones. It carries no `receipt-exists` pin, because every participant of a
+  shared space installs the same content-addressed document, and a permanent
+  rejection there would drop the participant's labeled write. Implementation in
   [prepare.ts](../../packages/runner/src/cfc/prepare.ts) (`prepareBoundaryCommit`
   flow-persist stamping), asserted both ways in
   [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts).
@@ -530,6 +547,15 @@ The strict-only delta is:
   direction is over-taint, so reads stay protected; giving the envelope seam
   a path space of its own is what removes the collision.
 
+  What the check measures is bounded on the read side as well, and not only
+  at this rung: the write machinery's own reads of the region it is writing
+  leave the per-transaction join wherever the flow dial derives one, which is
+  what lets a document whose fields carry different confidentiality be
+  rewritten whole.
+  [`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md)
+  carries that class, the §8.11.3 objection to it, and the channel it leaves
+  open.
+
 - **Runtime-owned-store declaration (§8.12.5 route 2) — implemented.** The
   runtime materializes a set of documents to hold a piece's machinery rather
   than data an author named. There are four kinds: a piece's argument
@@ -538,8 +564,8 @@ The strict-only delta is:
   the state documents a builtin mints from its own node's cause, such as a
   dialog's result, internal state and pinned-cell list, or a list operation's
   result container; the per-event documents a builtin mints inside one
-  transaction, such as a dialog message; and the documents anchoring splits
-  out of a value written into any of those. The runtime fills all of them
+  transaction, such as a dialog message or a handler receipt; and the documents
+  anchoring splits out of a value written into any of those. The runtime fills all of them
   with whatever the writing transaction read. An author cannot know which
   atoms a given transaction will carry, so a declaration written into a schema
   either misses them or over-declares every instance of the pattern. The
@@ -597,9 +623,9 @@ The strict-only delta is:
   rung below keeps its `writer-fit(persist-and-flag)` diagnostic, which is
   the rollout signal, and stores no declared policy it could never take back.
   That last is a statement about the RUNG rather than about a deployment: the
-  shipped shell posture is `enforce-explicit` with per-transaction escalation
-  to strict, so an escalated transaction writes a permanent declared entry
-  that every rung's readers then consume, and §8.12.1 does not let it back.
+  shell posture below strict still escalates per transaction, so an escalated
+  transaction writes a permanent declared entry that every rung's readers then
+  consume, and §8.12.1 does not let it back.
   At strict, a declaration records a `writer-fit(runtime-owned-store-declared)`
   diagnostic naming the document, the path, and the clauses added: a
   permanent change to a store's policy leaves a trace even at the rung that
@@ -608,9 +634,8 @@ The strict-only delta is:
   What bounds the route, and what it declares once inside:
 
   - **Who recorded the marker.** The recording method is on the public
-    transaction interface, and pattern-authored code reaches the
-    transaction its cells are bound to, so an input's own fields say only
-    what its recorder wrote. The runtime passes an authorization alongside,
+    transaction interface, so an input's own fields say only what its
+    recorder wrote. The runtime passes an authorization alongside,
     the way `setMetaRaw` marks a meta write, and a marker without it counts
     for nothing however it is addressed. This is the difference between a
     gate that ACTS on an input and one that measures it: the two sibling
@@ -648,9 +673,28 @@ The strict-only delta is:
     the route gives up whatever its own ceiling was refusing, so the test is
     what refuses that write instead. A builtin that stages its request as a
     `sink-request` write-policy input has a ceiling to move the refusal to;
-    one that stages its effect directly — `sqliteQuery` and `navigateTo`
-    both call `enqueuePostCommitEffect` themselves — has none, so its stores
-    keep their own ceilings until the gate that should own them exists. Most
+    one that stages its effect directly — `navigateTo` calls
+    `enqueuePostCommitEffect` itself — has none, so its stores keep their own
+    ceilings until the gate that should own them exists. `sqliteQuery` has
+    that gate now. Its request stages under a `sqliteQuery` sink, which
+    releases ungated under the max-enforcement posture for a reason of its
+    own: the bound a read wants is the database's own SPACE, and a per-sink
+    ceiling holds a clause list and nothing else. That bound is also what the
+    store's own ceiling was refusing, and it was worth exactly one case — a
+    database in another space receiving a request that carries a label —
+    so the builtin applies it before staging, where which space the database
+    is in is a thing it can see, measuring the transaction's flow join rather
+    than the transaction-global consumed set the sink ceilings read. The
+    control state takes the route, because a request hash is a function of
+    parameters no author can foresee, while `/result`'s per-column entries
+    stay the author's: the route declines at a declared path, and the
+    transaction that settles a request reads its destination's hash as a read
+    of the write destination, so the clauses the control state accumulates
+    never reach the rows. The second thing that store's ceiling was refusing
+    was the membership of a result selected by a labeled parameter,
+    which no transaction's join can supply once the settle carries nothing;
+    the builtin declares it on `/result`'s shape itself, beside the rows'
+    own labels. Most
     builtins are in neither group: a list coordinator, `ifElse`, `when`,
     `unless`, `cellFromUrl` and `inspectConfLabel` stage nothing at all, so
     there is no egress to govern and no refusal to move,
@@ -675,18 +719,33 @@ The strict-only delta is:
   - **How ownership reaches an anchored document.** Anchoring splits one
     value across two documents, deriving the child's id from the parent's
     rather than from anything an author named, and nothing but that write
-    puts anything in the child. §8.2 treats either representation of a
+    puts anything in the child. A `set`, a `push` or an `addUnique` through
+    a cell splits every plain object it puts at an array position, and being
+    inside a handler or a lift is not what decides. The id the split draws on
+    comes from the builder frame the cell was made in, and the `Runtime`
+    constructor pushes a frame that nothing pops until that runtime is
+    disposed, so a cell made while a runtime is alive always carries one. Two
+    things the walk leaves alone: an element the write carries through by
+    reference from the stored array, which diffs to nothing, and one that is
+    already a link. Splitting is the shape §8.5.4.3 prefers rather than one
+    the spec tolerates: a coordinator reading a container of references
+    consumes membership and reference identities and no element contents, so
+    a per-element transaction's pointwise label is a fact about its journal
+    rather than a claim needing `flow-taint-precision` trust. Which writes
+    split is what an author needs in order to read a refusal: the split
+    decides which document a writer-fit reason names, and an anchored child's
+    id appears in no source file. §8.2 treats either representation of a
     pass-through as valid so long as the label is preserved, which is the
     nearest thing the spec says to "the choice must not decide a verdict";
-    the reading here goes one step past that text. A child the runtime split
-    out of a store it owns is therefore that store's, and it takes the marker
-    alone: the transaction that
-    anchors it writes it, and a later write reaching the same position walks
-    through the same place again. A transaction addressing the child
-    directly rather than through its parent finds no claim and measures
-    against the child's own ceiling, which is the fail-closed direction. The
-    marker also carries the claim down a nested anchor, whose own parent is
-    the child marked a step earlier.
+    the reading here goes one step past that text.
+    A child the runtime split out of a store it owns is therefore that
+    store's, and it takes the marker alone: the transaction that anchors it
+    writes it, and a later write reaching the same position walks through the
+    same place again. A transaction addressing the child directly rather than
+    through its parent finds no claim and measures against the child's own
+    ceiling, which is the fail-closed direction. The marker also carries the
+    claim down a nested anchor, whose own parent is the child marked a step
+    earlier.
 
     That direction has a shape an author meets rather than predicts, so it is
     stated here concretely. On a piece whose result projects a list of
@@ -708,7 +767,8 @@ The strict-only delta is:
     link-carried provenance (§8.12.8) — deriving the child's ownership from
     the parent link a write traverses — which is tracked separately.
     `cfc-runtime-owned-store-wiring.test.ts` pins both spellings, so the
-    refused half flips visibly the day that lands.
+    refused half flips visibly the day that lands. That file also reads the
+    split itself, from a write with neither a handler nor a lift around it.
 
     The claim reaches a child only from a parent that carries one, and the
     case where none does is worth stating because the refusal it produces
@@ -846,7 +906,7 @@ meaningful once strict carries distinct behavior.
 
 ## 5. Spec-owed
 
-A spec PR to `commontoolsinc/specs` records the §18.6.3 conformance text: the
+A spec PR to `commonfabric/specs` records the §18.6.3 conformance text: the
 four-dial matrix, the "no consuming enforcement ahead of its producing dial"
 ordering constraint, and the `enforce-strict` reject set. File it once H4's code
 step lands and the strict rejects have concrete reason contracts to cite.
@@ -868,8 +928,7 @@ Grounded in the four implemented dials — `cfcEnforcementMode`
 SC-13 rollout constraint in `cfc-spec-changes.md` and the current host
 postures: shell
 ([lib-shell/src/runtime.ts](../../packages/lib-shell/src/runtime.ts):
-`enforce-explicit` + flow `persist`, H2); toolshed and
-background-piece-service (`productionServer` and the per-space serving Runtime:
-`enforce-explicit` + flow `persist`). The deployed CLI also selects persistent
-flow labels; embedding clients must select a writer profile compatible with
-their readers. See [CFC references](cfc-references.md).
+`enforce-strict` + flow `persist`); toolshed (the `productionServer` preset's
+pins, `enforce-strict` + flow `persist`).
+Embedding clients must select a writer profile compatible with their readers.
+See [CFC references](cfc-references.md).

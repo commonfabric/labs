@@ -4,7 +4,7 @@ import { varint } from "multiformats";
 import { base58btc } from "multiformats/bases/base58";
 import { base64pad } from "multiformats/bases/base64";
 
-import { DIDKey } from "../interface.ts";
+import { DID_KEY_PREFIX, DIDKey } from "../did.ts";
 
 export const ED25519_ALG = "Ed25519";
 const ED25519_CODE = 0xed;
@@ -12,7 +12,6 @@ const ED25519_PUB_KEY_RAW_SIZE = 32;
 const ED25519_PUB_KEY_TAG_SIZE = varint.encodingLength(ED25519_CODE);
 const ED25519_PUB_KEY_TAGGED_SIZE = ED25519_PUB_KEY_RAW_SIZE +
   ED25519_PUB_KEY_TAG_SIZE;
-const DID_KEY_PREFIX = `did:key:`;
 const DID_KEY_PREFIX_SIZE = DID_KEY_PREFIX.length;
 
 // 0x302e020100300506032b657004220420
@@ -100,7 +99,7 @@ export function bytesToDid(publicKey: Uint8Array): DIDKey {
   const bytes = new Uint8Array(ED25519_PUB_KEY_TAGGED_SIZE);
   varint.encodeTo(ED25519_CODE, bytes);
   bytes.set(publicKey, ED25519_PUB_KEY_TAG_SIZE);
-  return `did:key:${base58btc.encode(bytes)}`;
+  return `${DID_KEY_PREFIX}${base58btc.encode(bytes)}`;
 }
 
 // Convert DID key into public key bytes.

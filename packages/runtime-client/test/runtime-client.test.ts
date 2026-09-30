@@ -43,6 +43,63 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("createPiece", () => {
+    it("preserves the host's cause and home address across repeated creation requests", async () => {
+      const space = "did:key:z6Mk-client-create-home" as CellRef["space"];
+      const ref: CellRef = {
+        id: "of:fid1:header",
+        space,
+        scope: "space",
+        path: [],
+      };
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ piece: { cell: ref } });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+      const input = "export default pattern(() => ({}));";
+      const options = {
+        cause: "host:participant-header:v1",
+        argument: {},
+        run: true,
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const piece = await client.createPiece(input, space, options);
+        expect(piece.cell().ref()).toEqual(ref);
+      }
+      expect(requests).toEqual(Array.from({ length: 2 }, () => ({
+        type: RequestType.PieceCreate,
+        space,
+        source: {
+          program: {
+            main: "/main.tsx",
+            files: [{ name: "/main.tsx", contents: input }],
+          },
+        },
+        cause: options.cause,
+        argument: {},
+        run: true,
+      })));
+      await client.createPiece(
+        new URL("https://fabric.example/header.tsx"),
+        space,
+      );
+      expect(requests[2]).toEqual({
+        type: RequestType.PieceCreate,
+        space,
+        source: { url: "https://fabric.example/header.tsx" },
+        argument: undefined,
+        run: undefined,
+      });
+    });
+  });
+
   describe("signal", () => {
     it("exposes the connection's lifetime signal", () => {
       const signal = new AbortController().signal;
@@ -794,6 +851,56 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("registerSpaceHostDetailed", () => {
+    function clientReturning(registration: unknown) {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ registration });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+      return { client, requests };
+    }
+
+    const space = "did:key:z6Mk-runtime-client-routed-space";
+
+    it("sends the hint and returns the worker's registration", async () => {
+      const { client, requests } = clientReturning({ accepted: true });
+
+      expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+        .toEqual({ accepted: true });
+      expect(requests).toEqual([{
+        type: RequestType.RegisterSpaceHostDetailed,
+        space,
+        host: "http://b.test/",
+      }]);
+    });
+
+    it("returns each refusal with its reason", async () => {
+      for (
+        const refusal of [
+          {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: "http://known.test/",
+          },
+          { accepted: false, reason: "default-route-in-use" },
+          { accepted: false, reason: "no-remote-resolution" },
+          { accepted: false, reason: "unspecified" },
+        ]
+      ) {
+        const { client } = clientReturning(refusal);
+        expect(await client.registerSpaceHostDetailed(space, "http://b.test/"))
+          .toEqual(refusal);
+      }
+    });
+  });
+
   describe("hasPendingWrites", () => {
     // The constructor registers connection listeners; capture them so the
     // pending-writes notification can be driven directly, no worker needed.
@@ -1065,5 +1172,20 @@ describe("attachOptionsFrom()", () => {
     expect(attach.cfcFlowLabels).toBe("persist");
     expect(attach.cfcReadMaxConfidentiality).toEqual([identity.did()]);
     expect(attach.cfcReadOnExceed).toBe("skip");
+  });
+
+  it("carries the page's settings, which the attaching client keeps", async () => {
+    const identity = await Identity.fromPassphrase("attach-options-page");
+    const options = {
+      apiUrl: new URL("http://backend.test/"),
+      identity,
+      spaceDid: identity.did(),
+    };
+
+    expect(
+      attachOptionsFrom({ ...options, iframeOuterFrameUrl: "/outer-frame" })
+        .iframeOuterFrameUrl,
+    ).toBe("/outer-frame");
+    expect(attachOptionsFrom(options).iframeOuterFrameUrl).toBeUndefined();
   });
 });

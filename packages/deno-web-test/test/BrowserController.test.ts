@@ -32,9 +32,9 @@ describe("BrowserController", () => {
       });
     });
 
-    describe("runNextTest()", () => {
+    describe("runTest()", () => {
       it("throws when no page has been loaded", async () => {
-        await expect(unloadedController().runNextTest()).rejects.toThrow(
+        await expect(unloadedController().runTest(0)).rejects.toThrow(
           "No page loaded.",
         );
       });

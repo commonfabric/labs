@@ -176,6 +176,8 @@ export class SpaceOutbox {
   #egressRefilledAt = 0;
   #closed = false;
 
+  readonly #onEffectRetired?: () => void;
+
   constructor(options: {
     stats: ServingLoopStats;
     server: MemoryServer;
@@ -197,6 +199,12 @@ export class SpaceOutbox {
 
     /** Per-space egress budgets (Phase 6); absent = unbounded. */
     budget?: OutboxBudgetPolicy;
+
+    /** DIAGNOSTIC (tests): called as each in-flight effect is retired,
+     * once the counts that drop with it have moved. Retirement happens
+     * inside the outbox's own continuations, which nothing else
+     * reports. */
+    onEffectRetired?: () => void;
   }) {
     this.#stats = options.stats;
     this.#server = options.server;
@@ -205,6 +213,7 @@ export class SpaceOutbox {
     this.#sessionId = options.sessionId;
     this.#localSeqRef = options.localSeqRef;
     this.#budget = options.budget;
+    this.#onEffectRetired = options.onEffectRetired;
     this.#now = options.budget?.now ?? Date.now;
     this.#egressRefilledAt = this.#now();
     this.#egressTokens = this.#burstCapacity();
@@ -444,6 +453,16 @@ export class SpaceOutbox {
     this.#inflight.delete(key);
     this.#carriage.delete(key);
     if (entry.countsAsRequest) this.#stats.memo.inflight -= 1;
+    try {
+      this.#onEffectRetired?.();
+    } catch (error) {
+      // The caller resolves the entry's retirement promise after this
+      // returns, and `settle()` sleeps on that promise.
+      logger.warn("effect-retired-observer-failed", () => [
+        `effect ${key} retirement observer threw`,
+        error,
+      ]);
+    }
   }
 
   async #runEffect(key: string, entry: InflightEffect): Promise<void> {

@@ -9,9 +9,21 @@
 
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { clausesEqual } from "@commonfabric/runner/cfc/clause";
+import {
+  buildCfcTrustConfig,
+  type CfcTrustConfigInput,
+} from "@commonfabric/runner/cfc/trust";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
 
 import type { RuntimeSecurityContext } from "@/protocol/mod.ts";
+
+/**
+ * Every field of `T`, each one required and keeping its own type, `undefined`
+ * included. A literal held to this names every field the type declares, so a
+ * field added to `T` and left out of a literal that builds one is a type error
+ * rather than a value that reads as absent.
+ */
+export type EveryFieldOf<T> = { [K in keyof Required<T>]: T[K] };
 
 /**
  * One spelling for one origin. A `URL` round-trip settles the variance two
@@ -61,6 +73,7 @@ const SECURITY_CONTEXT_FIELDS: Record<
   cfcFlowLabels: true,
   cfcReadMaxConfidentiality: true,
   cfcReadOnExceed: true,
+  cfcTrustConfig: true,
   experimental: true,
   identity: true,
   renderConfidentialityCeiling: true,
@@ -69,16 +82,6 @@ const SECURITY_CONTEXT_FIELDS: Record<
   spaceHostMap: true,
   trustSnapshot: true,
 };
-
-/**
- * The fields on which `asserted` and `running` disagree, in a fixed order, or
- * an empty list where they agree throughout.
- *
- * Compared field by field rather than as two whole objects: the two are built
- * in different documents and one of them crossed an encoding, so a posture
- * carried as an absent property in one and as an explicit `undefined` in the
- * other is the same posture and compares equal here.
- */
 
 /**
  * A read ceiling compares by clause with the runner's own structural clause
@@ -107,6 +110,40 @@ function readCeilingsEqual(
   return true;
 }
 
+/**
+ * A trust configuration compares by the digest the runner gives the
+ * configuration it normalizes (`buildCfcTrustConfig`), which is what a
+ * runtime holds and evaluates concept guards under. Key order, a key written
+ * as `undefined`, and an empty list written out or left out are spelling, not
+ * posture. The order of statements, delegations, and edges is kept, as the
+ * runner's digest keeps it. A configuration the runner refuses to normalize is
+ * one no runtime booted with, so it agrees with nothing. Imported through the
+ * `cfc/trust` subpath for the reason given at {@link readCeilingsEqual}.
+ */
+function trustConfigsEqual(
+  left: CfcTrustConfigInput | undefined,
+  right: CfcTrustConfigInput | undefined,
+): boolean {
+  const digestOf = (config: CfcTrustConfigInput | undefined) => {
+    try {
+      return { digest: buildCfcTrustConfig(config)?.digest };
+    } catch {
+      return undefined;
+    }
+  };
+  const [a, b] = [digestOf(left), digestOf(right)];
+  return a !== undefined && b !== undefined && a.digest === b.digest;
+}
+
+/**
+ * The fields on which `asserted` and `running` disagree, in a fixed order, or
+ * an empty list where they agree throughout.
+ *
+ * Compared field by field rather than as two whole objects: the two are built
+ * in different documents and one of them crossed an encoding, so a posture
+ * carried as an absent property in one and as an explicit `undefined` in the
+ * other is the same posture and compares equal here.
+ */
 export function securityContextDifferences(
   asserted: RuntimeSecurityContext,
   running: RuntimeSecurityContext,
@@ -117,6 +154,8 @@ export function securityContextDifferences(
   return fields.filter((field) =>
     field === "cfcReadMaxConfidentiality"
       ? !readCeilingsEqual(asserted[field], running[field])
+      : field === "cfcTrustConfig"
+      ? !trustConfigsEqual(asserted[field], running[field])
       : !deepEqual(asserted[field], running[field])
   );
 }

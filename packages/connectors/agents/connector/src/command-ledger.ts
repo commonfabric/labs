@@ -1,6 +1,7 @@
 import { dirname } from "@std/path";
 import {
   type AgentSessionCommandReceipt,
+  commandIdentity,
   parseCommandReceipt,
 } from "./commands.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "./protocol.ts";
@@ -16,6 +17,8 @@ type StoredReceipt = Omit<AgentSessionCommandReceipt, "result"> & {
   result?: string;
 };
 
+/** Receipts and the pending list are keyed by command identity (the ID
+ * qualified by its producer), not by the bare ID. */
 interface LedgerFile {
   schema: typeof AGENT_CONNECTOR_SCHEMAS.commandLedger;
   generation: number;
@@ -62,24 +65,33 @@ function storedReceipts(
 }
 
 function parseStoredReceipt(
-  commandId: string,
+  key: string,
   value: unknown,
 ): AgentSessionCommandReceipt {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`command ledger receipt must be an object: ${commandId}`);
+    throw new Error(`command ledger receipt must be an object: ${key}`);
   }
   const stored = value as Record<string, unknown>;
+  if (typeof stored.commandId !== "string") {
+    throw new Error(`command ledger receipt must name its commandId: ${key}`);
+  }
   if (stored.result !== undefined && typeof stored.result !== "string") {
     throw new Error(
-      `command ledger receipt result must use Fabric JSON: ${commandId}`,
+      `command ledger receipt result must use Fabric JSON: ${key}`,
     );
   }
-  return parseCommandReceipt(commandId, {
+  const receipt = parseCommandReceipt(stored.commandId, {
     ...stored,
     ...(typeof stored.result === "string"
       ? { result: fabricFromJsonValue(stored.result) }
       : {}),
   }, "command ledger receipt");
+  if (commandIdentity(receipt.commandId, receipt.producer) !== key) {
+    throw new Error(
+      `command ledger receipt key does not match its identity: ${key}`,
+    );
+  }
+  return receipt;
 }
 
 function validatePrivateInfo(
@@ -417,8 +429,11 @@ export class CommandLedger {
     return ledger;
   }
 
-  get(commandId: string): AgentSessionCommandReceipt | undefined {
-    const receipt = this.#receipts.get(commandId);
+  get(
+    commandId: string,
+    producer?: string,
+  ): AgentSessionCommandReceipt | undefined {
+    const receipt = this.#receipts.get(commandIdentity(commandId, producer));
     return receipt ? parseCommandReceipt(commandId, receipt) : undefined;
   }
 
@@ -437,19 +452,21 @@ export class CommandLedger {
       const pendingPublicationCommandIds = new Set(
         this.#pendingPublicationCommandIds,
       );
-      receipts.set(stored.commandId, stored);
-      pendingPublicationCommandIds.add(stored.commandId);
+      const key = commandIdentity(stored.commandId, stored.producer);
+      receipts.set(key, stored);
+      pendingPublicationCommandIds.add(key);
       await this.#persist(receipts, pendingPublicationCommandIds);
     });
   }
 
-  markPublished(commandId: string): Promise<void> {
+  markPublished(commandId: string, producer?: string): Promise<void> {
     return this.#mutations.run(async () => {
-      if (!this.#pendingPublicationCommandIds.has(commandId)) return;
+      const key = commandIdentity(commandId, producer);
+      if (!this.#pendingPublicationCommandIds.has(key)) return;
       const pendingPublicationCommandIds = new Set(
         this.#pendingPublicationCommandIds,
       );
-      pendingPublicationCommandIds.delete(commandId);
+      pendingPublicationCommandIds.delete(key);
       await this.#persist(this.#receipts, pendingPublicationCommandIds);
     });
   }
@@ -479,9 +496,10 @@ export class CommandLedger {
       await this.#persist(receipts, pendingPublicationCommandIds);
       return [...this.#pendingPublicationCommandIds]
         .sort((left, right) => left.localeCompare(right))
-        .map((commandId) =>
-          parseCommandReceipt(commandId, this.#receipts.get(commandId)!)
-        );
+        .map((key) => {
+          const receipt = this.#receipts.get(key)!;
+          return parseCommandReceipt(receipt.commandId, receipt);
+        });
     });
   }
 

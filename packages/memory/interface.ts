@@ -1,10 +1,12 @@
 import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
-import type { Signer as IdentitySigner } from "@commonfabric/identity";
+import type { DID, Signer as IdentitySigner } from "@commonfabric/identity";
 import type { CellScope, ClientCommit } from "./v2.ts";
 
 export type {
   AsBytes,
   AuthorizationError,
+  DID,
+  DIDKey,
   Principal,
   Signature,
   Verifier,
@@ -27,7 +29,7 @@ export type AsString<T> = string & {
 /**
  * Unique identifier for the memory space.
  */
-export type MemorySpace = `did:${string}:${string}`;
+export type MemorySpace = DID;
 
 /**
  * Unique identifier for the mutable entity.
@@ -62,10 +64,6 @@ export type State = {
 };
 
 export type Revision<T = Unit> = T & { since: number };
-
-export type DID = `did:${string}:${string}`;
-
-export type DIDKey = `did:key:${string}`;
 
 export type ANYONE = "*";
 

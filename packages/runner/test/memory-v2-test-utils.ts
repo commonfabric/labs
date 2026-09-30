@@ -60,7 +60,7 @@ export const TEST_MEMORY_SERVER_AUTH = {
 export const newSharedServer = (options?: {
   subscriptionRefreshDelayMs?: number | "manual";
   store?: URL;
-  sessionTtlMs?: number;
+  sessions?: MemoryV2Server.SessionRegistry;
 }): MemoryV2Server.Server =>
   newLoopbackServer({
     ...options,

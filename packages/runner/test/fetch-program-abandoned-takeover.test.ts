@@ -193,6 +193,13 @@ describe("a refused fetchProgram takeover", () => {
       }
     });
 
+    // Age the holder's claim past the bound before anything re-runs the
+    // taker, so the run the slot change below triggers is entitled to take
+    // the claim over and therefore stages a request at all. A run against a
+    // claim still inside the bound stages nothing and leaves the node clean,
+    // and aging the claim afterwards re-runs nothing.
+    await clock.tick(PAST_THE_STALENESS_BOUND);
+
     // Point the url slot at a caveated cell holding the same url. The request
     // is the same request — same hash, same cache entry — and the read that
     // builds it now carries a confidentiality the taker's result store does
@@ -216,10 +223,6 @@ describe("a refused fetchProgram takeover", () => {
     taker.prepareTxForCommit(caveatTx);
     const caveated = await caveatTx.commit();
     if (caveated.error) throw caveated.error;
-
-    // Age the holder's claim past the bound, so the taker's re-run is entitled
-    // to take it over and therefore stages a request at all.
-    await clock.tick(PAST_THE_STALENESS_BOUND);
 
     await takerRun.result.pull();
     await clock.settle();

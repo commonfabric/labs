@@ -8,6 +8,7 @@ import {
   reservesStdoutForCommandOutput,
 } from "../lib/json-output.ts";
 import { acl } from "./acl.ts";
+import { agent } from "./agent.ts";
 import { completion } from "./completion.ts";
 import { deps } from "./deps.ts";
 import { check } from "./dev.ts";
@@ -20,6 +21,7 @@ import { inspect } from "./inspect.ts";
 import { invocationSession } from "./invocation-session.ts";
 import { cell } from "./cell.ts";
 import { piece, pieceDataCommand } from "./piece.ts";
+import { profile } from "./profile.ts";
 import { space } from "./space.ts";
 import { sh } from "./sh.ts";
 import { createTestCommand } from "./test-command.ts";
@@ -120,9 +122,11 @@ export const main = new Command()
   .reset()
   // @ts-ignore for the above type issue
   .command("acl", acl)
+  .command("agent", agent)
   .command("ingest", ingest)
   // @ts-ignore for the above type issue
   .command("piece", piece)
+  .command("profile", profile)
   // @ts-ignore for the above type issue
   .command("cell", cell)
   .command("check", check)

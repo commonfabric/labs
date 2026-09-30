@@ -62,6 +62,7 @@ import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { sendEvent } from "../src/cell.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -80,7 +81,6 @@ import {
   flushMicrotasks,
   scriptedIntentManager,
 } from "./speculation-intent-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 const SPACE = "did:key:z6MkIntentListenerSpace" as MemorySpace;
 const SIDECAR = "of:stream-events:listener-a";
@@ -103,6 +103,30 @@ const scriptedDestination = () => {
   const destination = new SpeculationOverlayDestination(runtime);
   return { scripted, destination, edits: () => edits };
 };
+
+Deno.test("intent listener stops visiting hinted indices once the only pending intent is found", async () => {
+  const { scripted, destination } = scriptedDestination();
+  scripted.seed(SPACE, SIDECAR, {
+    entries: [
+      { eventId: "mine", stream: { id: "s", path: [] }, seq: 1 },
+      { eventId: "other", stream: { id: "s", path: [] }, seq: 2 },
+    ],
+  });
+  destination.trackIntent(SPACE, SIDECAR, "mine");
+  const visitsBefore = destination.intentCheckVisits;
+
+  scripted.deliver(SPACE, SIDECAR, (value) => {
+    value.entries![0].consequenced = true;
+  }, [
+    ["value", "entries", "0", "consequenced"],
+    ["value", "entries", "1", "consequenced"],
+  ]);
+  await flushMicrotasks();
+
+  expect(destination.pendingIntentCount).toBe(0);
+  expect(destination.intentCheckVisits - visitsBefore).toBe(1);
+  destination.close();
+});
 
 describe("intent listener — scripted notification seam (design (e) pins 1–5, 7–9; review pins MAJ-1, MIN-1, MIN-4)", () => {
   it("pin 1 + 3 + 4: a consequenced mark retires SILENTLY; errored and dropped marks retire AND signal; waitForIntentConsequence resolves per terminal kind (memo consumed); the listener releases with the last tracked id", async () => {
@@ -242,6 +266,41 @@ describe("intent listener — scripted notification seam (design (e) pins 1–5,
     ]);
     await flushMicrotasks();
     expect(outcomes).toEqual(["errored:mine"]);
+    expect(destination.pendingIntentCount).toBe(0);
+    destination.close();
+  });
+
+  it("skips a stream entry that is not an object and retires the tracked intent from a later well-formed one (mutation: drop the shape guard \u2014 the check reads `eventId` off a primitive and the whole check throws, stranding the intent)", async () => {
+    // The sidecar's entries are stored data, so their shape is not
+    // guaranteed by the type the check reads them through. A malformed
+    // entry is skipped rather than fatal: the entries after it are still
+    // considered, and the intent still retires.
+
+    const { scripted, destination } = scriptedDestination();
+    const outcomes: string[] = [];
+    destination.subscribeIntentOutcomes((outcome) => {
+      outcomes.push(`${outcome.kind}:${outcome.eventId}`);
+    });
+    scripted.seed(SPACE, SIDECAR, {
+      entries: [
+        null,
+        "not-an-entry",
+        7,
+        { eventId: "mine", stream: { id: "s", path: [] }, seq: 4 },
+      ] as unknown as StreamEventsDocValue["entries"],
+    });
+    destination.trackIntent(SPACE, SIDECAR, "mine");
+    expect(destination.pendingIntentCount).toBe(1);
+
+    scripted.deliver(SPACE, SIDECAR, (value) => {
+      value.entries![3].status = "dropped";
+      value.entries![3].reason = "gone";
+    }, [
+      ["value", "entries", "3", "status"],
+      ["value", "entries", "3", "reason"],
+    ]);
+    await flushMicrotasks();
+    expect(outcomes).toEqual(["dropped:mine"]);
     expect(destination.pendingIntentCount).toBe(0);
     destination.close();
   });
@@ -1210,6 +1269,13 @@ const JOIN_CASCADE_PATTERN = [
   "});",
 ].join("\n");
 
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitReplica,
+} from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+
 const sidecarIdsIn = (engine: Engine.Engine): string[] =>
   (engine.database.prepare(
     `SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'`,
@@ -1338,19 +1404,16 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     await manager.synced();
     // The append landed durably (no serving side: nothing marks it, so
     // the intent stays outstanding and the listener stays installed).
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     // The client keeps the stream subscribed while its intent is
     // outstanding: the sidecar doc arrives in ITS replica.
-    await waitUntil(
+    await awaitReplica(
+      manager,
       () =>
         ((manager.open(space).replica.getDocument(sidecarId as never, "space")
           ?.value as StreamEventsDocValue | undefined)?.entries?.length ??
           0) === 1,
-      "the sidecar to arrive at the client",
     );
     await runtime.idle();
     expect(streamEventsSinkNodes(runtime).length).toBe(0);
@@ -1386,22 +1449,16 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     host = newServingHost();
 
     let ackStatus: string | undefined;
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: { status(): { status: string } }) => void,
-      ): unknown;
-    }).send({}, (ackTx) => {
+    const ackArrivals = new ArrivalLog<void>();
+    sendEvent(result.key("bump"), {}, (ackTx) => {
       ackStatus = ackTx.status().status;
+      ackArrivals.record();
     });
     const overlay = runtime.speculationOverlay!;
     expect(overlay.pendingIntentCount).toBe(1);
     expect(overlay.intentListenerInstalled).toBe(true);
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const clientEntry = () =>
       (manager.open(space).replica.getDocument(sidecarId as never, "space")
@@ -1416,6 +1473,7 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     // frame — their continuations must find the intent resolved
     // (mutation: defer the check to a macrotask → both read 1).
     const afterMarkFrame = new Map<string, number>();
+    const frameBarriers = new ArrivalLog<string>();
     const probe: IStorageNotification = {
       next: (notification) => {
         if (notification.type === "reset" || afterMarkFrame.size > 0) {
@@ -1431,29 +1489,24 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
         afterMarkFrame.set("armed", overlay.pendingIntentCount);
         manager.synced().then(() => {
           afterMarkFrame.set("synced", overlay.pendingIntentCount);
+          frameBarriers.record("synced");
         });
         runtime.idle().then(() => {
           afterMarkFrame.set("idle", overlay.pendingIntentCount);
+          frameBarriers.record("idle");
         });
         return undefined;
       },
     };
     manager.subscribe(probe);
-    // The mark becomes VISIBLE in the client replica in some frame; the
-    // predicate polls on macrotask ticks, so the frame's microtask check
-    // has run by the time the predicate first reads true — the intent
-    // must be resolved in the SAME read, with no further wait.
-    await waitUntil(
-      () => clientEntry()?.consequenced === true,
-      "the consequenced mark to arrive at the client",
-    );
+    // Both barriers armed at the mark's own frame have resolved: that is
+    // the statement's own edge, and it is ordered after the frame the
+    // mark arrived on.
+    await frameBarriers.reached(2);
+    manager.unsubscribe(probe);
+    expect(clientEntry()?.consequenced).toBe(true);
     expect(overlay.pendingIntentCount).toBe(0);
     expect(overlay.intentListenerInstalled).toBe(false);
-    await waitUntil(
-      () => afterMarkFrame.has("synced") && afterMarkFrame.has("idle"),
-      "the synced()/idle() barriers armed at the mark's frame",
-    );
-    manager.unsubscribe(probe);
     // Still outstanding INSIDE the frame's dispatch (the check never acts
     // inline — contract point 3) ...
     expect(afterMarkFrame.get("armed")).toBe(1);
@@ -1466,15 +1519,14 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     expect(streamEventsSinkNodes(runtime).length).toBe(0);
     // The echo retired and the authoritative value renders; the durable
     // ack settled from the consequence, non-error.
-    await waitUntil(
-      () => overlay.entryCount(space) === 0,
-      "the echo to retire",
+    await awaitReplica(manager, () => overlay.entryCount(space) === 0);
+    await waitForCellValue(
+      runtime,
+      argument.key("value"),
+      (value: number | undefined) => value === 1,
+      { stuckLabel: "the handler's increment to render" },
     );
-    await waitUntil(
-      () => (argument.key("value").get() as number | undefined) === 1,
-      "the authoritative value to render",
-    );
-    await waitUntil(() => ackStatus !== undefined, "the durable ack");
+    await ackArrivals.reached(1);
     expect(ackStatus).not.toBe("error");
     cancelDemand();
   });
@@ -1499,10 +1551,7 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     // parentEventId = the click's id) writing the list + a new entity.
     expect(overlay.pendingIntentCount).toBe(1);
     await runtime.idle();
-    await waitUntil(
-      () => overlay.entryCount(space) >= 1,
-      "the cascade child's echo to register",
-    );
+    await awaitReplica(manager, () => overlay.entryCount(space) >= 1);
     const echoUsers = argument.key("users").get() as
       | Array<{ name?: string }>
       | undefined;
@@ -1512,53 +1561,42 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     // The serving side: TWO sidecars (the click's stream and joinAs's —
     // the served click emitted the join as an LT1 same-space cascade),
     // every entry consequenced.
-    await waitUntil(
-      () => {
-        const ids = sidecarIdsIn(engine);
-        if (ids.length < 2) return false;
-        return ids.every((id) => {
-          const value = Engine.read(engine, { id })?.value as
-            | StreamEventsDocValue
-            | undefined;
-          const entries = value?.entries ?? [];
-          return entries.length > 0 &&
-            entries.every((entry) => entry.consequenced === true);
-        });
-      },
-      "both streams' entries to consequence",
-      30_000,
-    );
+    await awaitAdmitted(server, () => {
+      const ids = sidecarIdsIn(engine);
+      if (ids.length < 2) return false;
+      return ids.every((id) => {
+        const value = Engine.read(engine, { id })?.value as
+          | StreamEventsDocValue
+          | undefined;
+        const entries = value?.entries ?? [];
+        return entries.length > 0 &&
+          entries.every((entry) => entry.consequenced === true);
+      });
+    });
     // The click's intent resolved by its mark.
-    await waitUntil(
-      () => overlay.pendingIntentCount === 0,
-      "the click's intent to resolve",
-    );
+    await awaitReplica(manager, () => overlay.pendingIntentCount === 0);
     // THE PIN: the cascade child's echo is GONE — no mark of its own
     // ever names its client-minted id and its entity doc never arrives,
     // so only the click's consequence can retire it (on the tip this
     // times out: the entry stands forever).
-    await waitUntil(
-      () => overlay.entryCount(space) === 0,
-      "the cascade child's echo to retire on the click's consequence",
-      10_000,
-    );
+    await awaitReplica(manager, () => overlay.entryCount(space) === 0);
     expect(overlay.cascadeEchoRetirementCount).toBe(1);
     // The child landed in the click's own wave (flushDeadlineMs 5 s, no
     // purge): the witness does not count a flicker.
     expect(overlay.cascadeEchoRetirementUnarrivedCount).toBe(0);
     // The rendered list is the SERVER's one Alice — not spec-Alice beside
     // the confirmed one.
-    await waitUntil(
-      () => {
-        const users = argument.key("users").get() as
-          | Array<{ name?: string }>
-          | undefined;
-        return users?.length === 1 && users[0]?.name === "Alice";
-      },
-      "the authoritative list to render",
+    await waitForCellValue(
+      runtime,
+      argument.key("users"),
+      (users: Array<{ name?: string }> | undefined) =>
+        users?.length === 1 && users[0]?.name === "Alice",
+      { stuckLabel: "the added user to render" },
     );
-    // And it STAYS one through a settle beat (no re-speculation).
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // And it STAYS one: a re-speculation would be this runtime's own
+    // scheduler work over a fresh echo, and the drain runs it.
+    await runtime.idle();
+    await manager.synced();
     const users = argument.key("users").get() as Array<{ name?: string }>;
     expect(users.length).toBe(1);
     expect(overlay.entryCount(space)).toBe(0);
@@ -1584,9 +1622,11 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     expect(runtime.speculationOverlay).toBeUndefined();
     expect(subscribes).toBe(0);
     expect(streamEventsSinkNodes(runtime).length).toBe(0);
-    await waitUntil(
-      () => (argument.key("value").get() as number | undefined) === 1,
-      "the local handler result",
+    await waitForCellValue(
+      runtime,
+      argument.key("value"),
+      (value: number | undefined) => value === 1,
+      { stuckLabel: "the handler's increment to render" },
     );
     cancelDemand();
   });

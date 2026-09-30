@@ -24,6 +24,7 @@ persists into a space-B document:
 | `HasRole`, `UserSurfaceInput`, vouched-channel `ExternalIngest`, `authored-by`/`represents-principal` | **yes — DIDs** | role guards; authorship UI (product feature); fetch-ingest provenance carries a URL and commit SHA instead |
 | sigil-link `cfcLabelView` **inside `value`** | same atom set, second copy | link-carried enforcement at B |
 | `cfc.schemaHash` + replicated schema doc (`ensureSchemaDocument`) | policy structure, field names | schema-driven enforcement |
+| version-2 envelope `label.$ref` + replicated `cid:` label document | same atom set as the inline label, one copy per space | label resolution (`resolveStoredCfcMetadata`) |
 
 Two corrections to the audit item's inherited wording: `Origin` URIs have **no
 mint site** in the runner (nothing persists them), and policy names were never
@@ -207,8 +208,9 @@ See [CFC references](cfc-references.md).
 - **Stage 1 (representation):** the cross-space persist transform
   (commitment/public per §2's table) behind a dial
   (`cfcLabelMetadataProtection: off | observe | enforce` — observe computes
-  the transformed form and diagnoses divergence without persisting it, the
-  established rollout idiom). Migration: transformed and verbatim envelopes
+  the transformed form and diagnoses divergence without persisting it, which
+  is the measurement stage a deployment states when it wants one; the dial
+  defaults to `enforce`). Migration: transformed and verbatim envelopes
   coexist (entries are self-describing; a commitment field carries a marker
   wrapper `{digestOf: <hash>}` so consumers dispatch on shape, and SC-11
   equality is computed post-transform). _Implementation note (2026-07-09):

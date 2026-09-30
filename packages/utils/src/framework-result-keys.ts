@@ -19,16 +19,23 @@ export const UI = "$UI";
 export const TILE_UI = "$TILE_UI";
 export const CHIP_UI = "$CHIP_UI";
 export const FS = "$FS";
+// The single field under which a pattern offers named groups of facts and
+// streams a host may draw with its own toolkit — `{ inboxView: … }` — as [UI]
+// and [FS] are single fields. One field is one round of discovery: a host
+// reads it through a schema to learn what is on offer before anything under
+// it is derived. [UI] remains the floor every host can draw.
+export const VIEWS = "$VIEWS";
 // The reserved key a test pattern addresses its test steps under; the test
 // runner reads `[TESTS]` off the pattern output.
 export const TESTS = "$TESTS";
 
 /**
  * Every reserved key the framework puts on a pattern result: the type marker,
- * the display name, the rendering variants, the filesystem view, and the test
- * steps. A reader that describes only the computed fields excuses these by
- * name instead of failing on them, and a pattern that declares one of them at
- * the root of its own result is describing a value it produced.
+ * the display name, the rendering variants, the filesystem view, the test
+ * steps, and the offered views. A reader that describes only the computed
+ * fields excuses these by name instead of failing on them, and a pattern that
+ * declares one of them at the root of its own result is describing a value it
+ * produced.
  */
 export const FRAMEWORK_RESULT_KEYS = [
   TYPE,
@@ -38,4 +45,5 @@ export const FRAMEWORK_RESULT_KEYS = [
   CHIP_UI,
   FS,
   TESTS,
+  VIEWS,
 ] as const;

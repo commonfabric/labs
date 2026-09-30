@@ -1,0 +1,1 @@
+{"date":"2026-09-24","from":{"k":"unit","s":"ui","n":"CFCFCAuthorship > retries the resolved cell label until its cold doc loads"},"to":{"k":"unit","s":"ui","n":"CFCFCAuthorship > re-reads the value's resolved label when that cell delivers one"}}

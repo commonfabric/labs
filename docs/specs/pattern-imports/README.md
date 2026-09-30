@@ -135,7 +135,7 @@ separate fields:
   "symbol": "default",
   "source": {
     "ref": "cf:pattern:<prefix-free-entry-module-hash>",
-    "repository": "https://github.com/commontoolsinc/labs",
+    "repository": "https://github.com/commonfabric/labs",
     "entry": "/packages/patterns/annotation.tsx",
     "origin": "cf:/did:key:z6Mk.../annotation"
   }
@@ -326,13 +326,13 @@ ref     = slug                ; no ":" — isSlugAddress convention
 space   = space-name | space-did ; parser shape; resolution currently requires a DID
 host    = domain[":"port]     ; a toolshed
 pin     = "@" hash            ; selected module identity
-hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash.ts):
+hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
                               ; [A-Za-z0-9_-], case-SENSITIVE, no padding —
                               ; e.g. Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`packages/data-model/src/value-hash.ts`), and entity URIs carry the
+(`packages/data-model/src/value-hash/impl.ts`), and entity URIs carry the
 `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces. The
 base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)
@@ -451,7 +451,9 @@ Why this shape:
   space-free `cf:pattern:<identity>` form. Authored static imports may still use
   a slug because deployment pins its terminal content identity. A piece origin
   does not accept that slug-shaped form under the tentative direction in Open
-  question 1. Human-readable URL aliases belong in a separate shortlink layer.
+  question 1. Human-readable browser aliases belong to the dormant
+  [Common Fabric URLs](../fabric-urls.md) concept, outside this retained-source
+  layer; no alias resolver is planned for deployment.
 - **Publication = naming.** `slug → a cell carrying patternIdentity` (a piece,
   or a published-pointer cell) in a readable space is the whole publish story;
   updating the slug is publishing a new version (dist-tag semantics). Pieces and
@@ -784,11 +786,18 @@ provenance-relevant flow flagged under § Security.
 A runtime is no longer bound to one memory host. `spaceHostMap` seeds known
 routes when storage is constructed. `registerSpaceHost` can register the first
 later hint even when an unseeded space already opened provisionally through the
-default host. These routes contain only an HTTP or HTTPS origin. The home-space
-site table hydrates durable hints into a new runtime. A foreign-host connection
-is an ordinary authenticated memory session. These mechanisms remain interim.
-This design depends only on the property that a space's cells are readable
-wherever the space lives, not on the current map or site-table shape.
+default host. `registerSpaceHostDetailed` applies the same rules and returns the
+reason for a refusal: `known-different-host`, with the host a seed or an
+accepted hint already fixed; `default-route-in-use`, when the space issued a
+stateful operation through the default host: that route stays fixed for the
+session, and the refusal says nothing against the offered host;
+`no-remote-resolution`, from storage that resolves no per-space host; and
+`unspecified`, from storage that gives a verdict alone. A host that is not valid
+throws from both methods. These routes contain only an HTTP or HTTPS origin. The
+home-space site table hydrates durable hints into a new runtime. A foreign-host
+connection is an ordinary authenticated memory session. These mechanisms remain
+interim. This design depends only on the property that a space's cells are
+readable wherever the space lives, not on the current map or site-table shape.
 
 Once a route is in effect, a `cf://host/space/ref` reference resolves exactly
 like a local one. Slug chase, piece metadata, and `pattern:<identity>` source
@@ -1087,7 +1096,7 @@ unchanged.
 
 ## Open questions
 
-1. **Identifier-only durable URLs and future shortlinks, tentative.** The
+1. **Identifier-only durable source URLs.** The
    current resolver rejects a name in the space position. The tentative
    direction is to preserve that boundary rather than add name-to-DID
    resolution to the fabric URL grammar. A durable piece-origin URL uses the
@@ -1099,12 +1108,14 @@ unchanged.
    the space-free content identity. The piece-origin validator rejects a
    slug-shaped or root-only fabric reference, including a pinned slug. Existing
    authored import aliases remain a separate case because deployment pins their
-   terminal content identity into source. A UI or future shortlink service may
-   map a custom string to a canonical identifier URL before the lifecycle sees
-   it. The shortlink is not itself the durable origin or a repoint target.
-   Further study must settle whether spaces should eventually have FIDs rather
-   than DIDs, shortlink ownership and reassignment, and whether supplied aliases
-   receive separate optional provenance metadata.
+   terminal content identity into source. Under the dormant
+   [Common Fabric URLs](../fabric-urls.md) concept, a UI could resolve a
+   registered browser name before the lifecycle sees the resulting DID. No such
+   resolver is planned for deployment. The registered name would not itself be
+   the durable origin or a repoint target. Further study must settle whether
+   spaces should
+   eventually have FIDs rather than DIDs and whether supplied aliases receive
+   separate optional provenance metadata.
 2. **Slug-cell typing.** The uniform chase duck-types its hops (a
    `patternIdentity` meta present ⇒ a pattern-bearing cell). Good enough, or
    should slug assignment stamp an explicit kind on the slug cell for better
@@ -1123,6 +1134,10 @@ unchanged.
    are authenticated, how stale site-table entries are replaced, whether
    failover is allowed, and how an open session closes and reconnects without
    losing or duplicating work after a seed or hint has made the route explicit.
+   The dormant
+   [Common Fabric URLs](../fabric-urls.md#moving-a-space-between-asps) concept
+   proposes a browser-level ASP handoff and old-ASP redirect. The
+   storage-session work remains separate.
 
 ### One way to build a local program
 

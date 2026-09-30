@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type {
   Cell,
   CollectionIndexData,
+  CollectionIndexHandle,
   CollectionIndexKeyEntry,
   GroupIndex,
   KeyIndex,
@@ -44,8 +45,24 @@ function checkIndexTypes(
     keys: [],
     buckets: {},
   };
+  // Each operator's handle names one mode in its descriptor type, which is
+  // what a lookup reads from its receiver's schema before the descriptor
+  // carrying that mode is published. A handle naming both modes instead of
+  // one fails these two assignments.
+  const groupedMode: CollectionIndexHandle<
+    CollectionIndexData<string, { name: string }[], "group">
+  > = grouped;
+  const uniqueMode: CollectionIndexHandle<
+    CollectionIndexData<
+      Cell<{ name: string }>,
+      { score: number } | undefined,
+      "key"
+    >
+  > = unique;
   return {
     incomplete,
+    groupedMode,
+    uniqueMode,
     group,
     emptyGroup,
     match,

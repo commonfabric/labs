@@ -16,6 +16,7 @@ import type {
   TestIdentity,
 } from "@commonfabric/test-support/records";
 import { testIdentityKey } from "@commonfabric/test-support/records";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   BREADTH_SATURATION,
   CATCH_BREADTH_WINDOW_DAYS,
@@ -46,7 +47,6 @@ export type CatchPlace = "local" | "pr" | "main";
 export interface Observation {
   test: TestIdentity;
   outcome: "pass" | "fail" | "skip";
-  durationMs: number;
 
   /** UTC calendar day, "yyyy-mm-dd". */
   day: string;
@@ -60,6 +60,15 @@ export interface Observation {
 
   /** The commit the tests ran against. */
   commit: string;
+
+  /**
+   * The seed the run shuffled its tests by, absent for a run that ran
+   * them in the order they were declared. Two observations at one commit
+   * ran under the same conditions only where this agrees too: an
+   * order-dependent test passes in one order and fails in another, and
+   * that is a bug in the test rather than chance.
+   */
+  seed?: number;
 
   /**
    * Who saw it: the branch for a continuous-integration run, the
@@ -98,11 +107,10 @@ export interface IdentityState {
   flakesByDay: Record<string, number>;
 
   /**
-   * The day's slowest passing durations, in milliseconds, and how many
-   * passed. A day is the unit because keeping every duration would make
-   * the state object grow with the number of runs rather than with the
-   * number of tests, and the slowest of them are what a percentile
-   * inside the slowest tenth is read from.
+   * The day's passing durations, counted by bucket. Counted rather than
+   * kept, because keeping every duration would make the state object
+   * grow with the number of runs rather than with the number of tests.
+   * A day is the unit because that is what ages out of the cost window.
    */
   costByDay: Record<string, DaySamples>;
 
@@ -115,7 +123,9 @@ export interface IdentityState {
    * between them, which makes it a catch; one that is still failing is
    * the same breakage continuing, and waits.
    */
-  pendingMain: Array<{ day: string; commit: string; source: string }>;
+  pendingMain: Array<
+    { day: string; commit: string; seed?: number; source: string }
+  >;
 }
 
 /** A fresh, empty history. */
@@ -171,12 +181,24 @@ function bump(counts: Record<string, number>, day: string): void {
 }
 
 /**
+ * The longest window any of a state's per-day counters is kept for, which
+ * is also how long a failure on the default branch waits to be judged.
+ */
+const LONGEST_WINDOW_DAYS = Math.max(CHURN_WINDOW_DAYS, FLAKE_WINDOW_DAYS);
+
+/**
  * Judges the failures on `main` that were waiting for a later `main` run.
  * A failure the next run still shows is the same breakage continuing, so
  * it keeps waiting and nothing new is learned. A failure the next run
- * does not show is a flake when that run is at the same commit, and a
- * catch otherwise. Nothing separates a failure a change fixed from one
- * that healed itself, so a failure that healed itself is credited as a
+ * does not show is a flake when that run is at the same commit in the
+ * same order, and a catch when it is at a later commit in the same
+ * order. A pass in a different order is neither, and the failures in
+ * other orders are dropped: an order-dependent test stops failing when
+ * the order moves on, so the pass says nothing about whether a change
+ * fixed anything. Failures in the pass's own order are judged whatever
+ * else is waiting beside them.
+ * Nothing separates a failure a change fixed from one that healed
+ * itself, so a failure that healed itself in one order is credited as a
  * catch as well.
  */
 function resolvePendingMain(
@@ -185,16 +207,27 @@ function resolvePendingMain(
 ): void {
   if (state.pendingMain.length === 0) return;
   if (observation.outcome === "fail") return;
+  // A failure nothing has judged inside the longest window a state keeps
+  // is one the default branch has carried for that long, and crediting a
+  // catch for it now would credit the test with a fix it did not find.
+  // `trimWindows` ages these by the same window, and applies it too late
+  // to answer this on its own: a fold resolves every observation it
+  // reads before it ages anything.
+  const live = state.pendingMain.filter((pending) =>
+    daysBetween(pending.day, observation.day) <= LONGEST_WINDOW_DAYS &&
+    pending.seed === observation.seed
+  );
+  state.pendingMain = [];
+  if (live.length === 0) return;
   // One breakage, one catch. A test that stays red across several runs on
   // the default branch has one thing wrong with it, and the change that
   // makes it green fixed that one thing; crediting every run it failed
   // would make a long outage look like the most valuable test in the
   // repository. The first failure is the one the catch belongs to, since
   // that is where the breakage entered.
-  const first = state.pendingMain.reduce((earliest, pending) =>
+  const first = live.reduce((earliest, pending) =>
     pending.day < earliest.day ? pending : earliest
   );
-  state.pendingMain = [];
   if (first.commit === observation.commit) {
     // The same commit, passing now and failing before, is the test
     // disagreeing with itself there. The two runs can arrive in separate
@@ -208,6 +241,18 @@ function resolvePendingMain(
 }
 
 /**
+ * Where an observation was made, as the rules that compare two runs need
+ * it: the commit, and the order its tests ran in. A run with no seed ran
+ * in declaration order, which is an order of its own, so its point is
+ * the bare commit and matches no seeded run's.
+ */
+function pointOf(observation: Pick<Observation, "commit" | "seed">): string {
+  return observation.seed === undefined
+    ? observation.commit
+    : `${observation.commit}#${observation.seed}`;
+}
+
+/**
  * The cross-batch context two of the rules need. A batch cannot be judged
  * on its own: whether an identity disagreed with itself at a commit, and
  * whether a failure spans enough sources to read as the environment, are
@@ -216,10 +261,11 @@ function resolvePendingMain(
  */
 export interface FoldContext {
   /**
-   * The outcomes seen at one commit, by identity, with the commit's day.
-   * Keyed by commit rather than by the pair so that the window below can
-   * drop a whole commit at once, and so that a commit's name is stored
-   * once instead of against every identity that ran at it.
+   * The outcomes seen at one commit in one order, by identity, with the
+   * commit's day. Keyed by that point (see `pointOf`) rather than by the
+   * pair of point and identity so that the window below can drop a whole
+   * point at once, and so that a point's name is stored once instead of
+   * against every identity that ran at it.
    */
   outcomesAtCommit: Map<
     string,
@@ -227,16 +273,17 @@ export interface FoldContext {
   >;
 
   /**
-   * The most recently seen commits, oldest first, at most
-   * `FLAKE_COMMIT_REACH` of them. Outcomes are remembered at a commit
+   * The most recently seen points (see `pointOf`), oldest first, at most
+   * `FLAKE_COMMIT_REACH` of them. Outcomes are remembered at a point
    * while it is in here, and afterwards only for identities the failure
-   * witness still names.
+   * witness still names. A commit run in one order is one point, which is
+   * every commit that runs without an override.
    */
   recentCommits: string[];
 
   /**
-   * What the default branch said about one identity at one commit, with
-   * the day. A rerun of a commit can arrive long after the run it
+   * What the default branch said about one identity at one point (see
+   * `pointOf`), with the day. A rerun of a commit can arrive long after the run it
    * repeats, so this outlives the batch: without it, a later pass
    * elsewhere would make that rerun look like the first failure at a
    * commit the branch had already shown broken.
@@ -320,7 +367,7 @@ export function serializeContext(context: FoldContext): StoredFoldContext {
  */
 export function parseContext(value: unknown): FoldContext {
   const context = emptyContext();
-  if (typeof value !== "object" || value === null) return context;
+  if (!isObjectOrArray(value)) return context;
   const stored = value as Partial<StoredFoldContext>;
   const pairs = (raw: unknown): Array<[string, unknown]> =>
     Array.isArray(raw)
@@ -330,7 +377,7 @@ export function parseContext(value: unknown): FoldContext {
       : [];
 
   for (const [commit, seen] of pairs(stored.outcomesAtCommit)) {
-    if (typeof seen !== "object" || seen === null) continue;
+    if (!isObjectOrArray(seen)) continue;
     const held = seen as { day?: unknown; identities?: unknown };
     if (!isDay(held.day)) continue;
     const identities = new Map<string, Set<string>>();
@@ -353,7 +400,7 @@ export function parseContext(value: unknown): FoldContext {
       .slice(-FLAKE_COMMIT_REACH);
   }
   for (const [at, seen] of pairs(stored.mainAtCommit)) {
-    if (typeof seen !== "object" || seen === null) continue;
+    if (!isObjectOrArray(seen)) continue;
     const held = seen as { day?: unknown; outcome?: unknown };
     if (!isDay(held.day)) continue;
     if (held.outcome !== "pass" && held.outcome !== "fail") continue;
@@ -370,7 +417,7 @@ export function parseContext(value: unknown): FoldContext {
       day: string;
       source: string;
     } =>
-      typeof failure === "object" && failure !== null &&
+      isObjectOrArray(failure) &&
       isDay((failure as { day?: unknown }).day) &&
       typeof (failure as { source?: unknown }).source === "string"
     );
@@ -427,8 +474,9 @@ export interface FoldOptions {
  * The observations must be in ascending time order, because the rules
  * that decide whether a failure is a catch look backwards at what `main`
  * last said and forwards at what it says next. Observations at one commit
- * are considered together: an identity that both passed and failed there
- * disagreed with itself, which is a flake observation and never a catch.
+ * in one order are considered together: an identity that both passed and
+ * failed there disagreed with itself, which is a flake observation and
+ * never a catch.
  *
  * Both of those need the whole batch in view before any one observation is
  * judged, so this walks the batch more than once and the iterable has to
@@ -485,9 +533,9 @@ export function foldObservations(
     if (observation.place !== "main" || observation.outcome === "skip") {
       continue;
     }
-    const at = `${key} ${observation.commit}`;
-    // A failure anywhere at one commit is the commit being broken; a pass
-    // beside it does not clear that.
+    const at = `${key} ${pointOf(observation)}`;
+    // A failure anywhere at one commit in one order is the commit being
+    // broken; a pass beside it does not clear that.
     if (observation.outcome === "fail" || !mainAtCommit.has(at)) {
       mainAtCommit.set(at, observation.outcome);
     }
@@ -509,12 +557,12 @@ export function foldObservations(
     // read a skip beside a failure as the test disagreeing with itself.
     if (observation.outcome === "skip") continue;
     const key = testIdentityKey(observation.test);
-    const commit = observation.commit;
-    let seen = outcomesAtCommit.get(commit);
+    const point = pointOf(observation);
+    let seen = outcomesAtCommit.get(point);
     if (seen === undefined) {
       seen = { day: observation.day, identities: new Map() };
-      outcomesAtCommit.set(commit, seen);
-      recent.push(commit);
+      outcomesAtCommit.set(point, seen);
+      recent.push(point);
       while (recent.length > FLAKE_COMMIT_REACH) {
         const dropped = recent.shift()!;
         const held = outcomesAtCommit.get(dropped);
@@ -525,7 +573,7 @@ export function foldObservations(
         if (held.identities.size === 0) outcomesAtCommit.delete(dropped);
       }
     }
-    if (!recent.includes(commit) && !failures.has(key)) continue;
+    if (!recent.includes(point) && !failures.has(key)) continue;
     const outcomes = seen.identities.get(key) ?? new Set<string>();
     outcomes.add(observation.outcome);
     seen.identities.set(key, outcomes);
@@ -569,10 +617,12 @@ export function foldObservations(
 
     bump(state.failuresByDay, day);
 
-    const seen = outcomesAtCommit.get(observation.commit)?.identities.get(key);
+    const seen = outcomesAtCommit.get(pointOf(observation))?.identities.get(
+      key,
+    );
     if ((seen?.size ?? 0) > 1) {
-      // It passed and failed at one commit, with nothing between the two
-      // runs but chance.
+      // It passed and failed at one commit in one order, with nothing
+      // between the two runs but chance.
       bump(state.flakesByDay, day);
       continue;
     }
@@ -583,7 +633,7 @@ export function foldObservations(
       // very commit outranks what it last said, and is known ahead of
       // time so that the order this batch happened to arrive in cannot
       // decide the verdict.
-      const here = mainAtCommit.get(`${key} ${observation.commit}`);
+      const here = mainAtCommit.get(`${key} ${pointOf(observation)}`);
       if (
         here === "fail" ||
         (here === undefined && state.lastMainOutcome === "fail")
@@ -597,6 +647,7 @@ export function foldObservations(
       state.pendingMain.push({
         day,
         commit: observation.commit,
+        ...(observation.seed === undefined ? {} : { seed: observation.seed }),
         source: observation.source,
       });
       continue;
@@ -611,80 +662,122 @@ export function foldObservations(
 }
 
 /**
- * How many of a day's slowest executions are kept for one identity. The
- * ninetieth percentile sits inside the slowest tenth, so keeping this
- * many is exact for any day with up to ten times as many executions, and
- * an identity runs about 250 times a day across the whole matrix. Past
- * that the estimate falls back to the smallest sample kept, which
- * over-estimates, and over-estimating is the safe direction for a budget.
+ * How finely a day's durations are counted: this many buckets to each
+ * doubling of a duration. A bucket is read as the largest duration it
+ * counts, so a percentile read from buckets is at most one bucket's
+ * width, about 2.2%, above the exact one, and never below it.
  */
-export const COST_SAMPLE_CAP = 64;
+export const COST_BUCKETS_PER_DOUBLING = 32;
 
-/** The slowest executions of one identity on one day, and how many ran. */
+/**
+ * The passing executions of one identity on one day, counted by bucket.
+ * Counts add, so any number of days, and any parts of one day, combine
+ * into exactly the counts one accumulation of all of them would give.
+ */
 export interface DaySamples {
-  /** Ascending, at most `COST_SAMPLE_CAP` of them. */
-  slowest: number[];
+  /** The bucket `counts[0]` counts. */
+  lowest: number;
 
-  /** How many ran in all, which is what a percentile's rank is taken over. */
-  count: number;
+  /** How many executions each bucket from `lowest` upward counts. */
+  counts: number[];
+
+  /**
+   * Which set of cost rules measured them, on a day a state holds. A
+   * batch on its way into one carries none, since the day it is sealed
+   * into is what records the set that sealed it.
+   */
+  rule?: number;
+}
+
+/**
+ * Which set of cost rules a day a state holds was sealed under: which
+ * executions reach a day's sample. Change it to any other value in the
+ * same change that alters that. A change to how a day's sample is stored
+ * leaves it alone and reads the days stored before it forward instead,
+ * as `readCostsForward()` does. The values are not ordered and nothing
+ * but equality is asked of them; a day carrying none was sealed before
+ * the stamps began, under the first set.
+ */
+export const COST_RULE = 3;
+
+/** The largest duration a bucket counts, in milliseconds. */
+function bucketBound(bucket: number): number {
+  return 2 ** (bucket / COST_BUCKETS_PER_DOUBLING);
+}
+
+/**
+ * The bucket a duration is counted in: the lowest whose bound is at
+ * least the duration. Everything up to a millisecond is counted in
+ * bucket zero.
+ */
+function bucketOf(durationMs: number): number {
+  if (!(durationMs > 1)) return 0;
+  const bucket = Math.ceil(Math.log2(durationMs) * COST_BUCKETS_PER_DOUBLING);
+  // The logarithm can round a duration just past a bound down onto it.
+  return bucketBound(bucket) < durationMs ? bucket + 1 : bucket;
 }
 
 /** A fresh, empty sample. */
 export function emptySamples(): DaySamples {
-  return { slowest: [], count: 0 };
+  return { lowest: 0, counts: [] };
 }
 
-/** Folds one duration into a day's bounded sample of its slowest runs. */
-export function sampleDuration(samples: DaySamples, durationMs: number): void {
-  samples.count++;
-  if (
-    samples.slowest.length === COST_SAMPLE_CAP &&
-    durationMs <= samples.slowest[0]!
-  ) {
-    return;
+/** Adds `count` executions to one bucket of a sample. */
+function countInto(samples: DaySamples, bucket: number, count: number): void {
+  if (count === 0) return;
+  if (samples.counts.length === 0) samples.lowest = bucket;
+  if (bucket < samples.lowest) {
+    samples.counts.unshift(...new Array(samples.lowest - bucket).fill(0));
+    samples.lowest = bucket;
   }
-  let at = samples.slowest.length;
-  while (at > 0 && samples.slowest[at - 1]! > durationMs) at--;
-  samples.slowest.splice(at, 0, durationMs);
-  if (samples.slowest.length > COST_SAMPLE_CAP) samples.slowest.shift();
+  const at = bucket - samples.lowest;
+  while (samples.counts.length <= at) samples.counts.push(0);
+  samples.counts[at]! += count;
+}
+
+/** Counts one duration into a day's sample. */
+export function sampleDuration(samples: DaySamples, durationMs: number): void {
+  countInto(samples, bucketOf(durationMs), 1);
 }
 
 /**
- * The ninetieth percentile of a day, from its bounded sample. Exact while
- * the percentile's rank falls inside what was kept; past that it is the
- * smallest kept sample, which is an over-estimate.
+ * The ninetieth percentile of a list of values in ascending order, by
+ * nearest rank: the value at that rank rather than one between two.
  */
-export function sampledPercentile90(samples: DaySamples): number {
-  if (samples.count === 0) return 0;
-  const rank = Math.ceil(0.9 * samples.count);
-  const fromTop = samples.count - rank;
-  const index = samples.slowest.length - 1 - fromTop;
-  return samples.slowest[Math.max(0, index)] ?? 0;
+export function percentile90(sorted: readonly number[]): number {
+  if (sorted.length === 0) return 0;
+  return sorted[Math.ceil(0.9 * sorted.length) - 1]!;
 }
 
-/** One list of a day's durations, as the day's bounded sample of them. */
+/**
+ * The ninetieth percentile of the executions a sample counts, by nearest
+ * rank, read as the bound of the bucket that rank falls in.
+ */
+export function sampledPercentile90(samples: DaySamples): number {
+  const count = samples.counts.reduce((sum, each) => sum + each, 0);
+  if (count === 0) return 0;
+  const rank = Math.ceil(0.9 * count);
+  let seen = 0;
+  const at = samples.counts.findIndex((each) => (seen += each) >= rank);
+  return bucketBound(samples.lowest + at);
+}
+
+/** One list of a day's durations, as the day's sample of them. */
 export function samplesOf(durationsMs: readonly number[]): DaySamples {
   const samples = emptySamples();
   for (const durationMs of durationsMs) sampleDuration(samples, durationMs);
   return samples;
 }
 
-/**
- * Two parts of one day read as a whole: the slowest of the union, and the
- * count of both.
- *
- * This is the same sample one accumulation of the whole day would have
- * kept. A duration either part dropped already had `COST_SAMPLE_CAP`
- * larger durations above it in that part alone, so the union holds at
- * least that many above it too and it falls outside the cap either way.
- */
+/** Two samples read as one: the counts of both, bucket by bucket. */
 export function mergeSamples(a: DaySamples, b: DaySamples): DaySamples {
-  return {
-    slowest: [...a.slowest, ...b.slowest]
-      .sort((x, y) => x - y)
-      .slice(-COST_SAMPLE_CAP),
-    count: a.count + b.count,
-  };
+  const merged = emptySamples();
+  for (const part of [a, b]) {
+    for (const [at, count] of part.counts.entries()) {
+      countInto(merged, part.lowest + at, count);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -693,63 +786,109 @@ export function mergeSamples(a: DaySamples, b: DaySamples): DaySamples {
  * A day is read across as many runs as it takes for its objects to
  * arrive, so this is given part of a day at a time and combines rather
  * than replaces. Combining the samples rather than a figure taken from
- * them is what makes the day's cost a percentile of the day: a batch
- * carrying one execution contributes one duration, where a percentile of
- * that batch would be that one duration standing for every execution the
- * day holds.
+ * them is what makes the cost a percentile of every execution it covers:
+ * a batch carrying one execution contributes one duration, where a
+ * percentile of that batch would be that one duration standing for every
+ * execution the day holds.
  */
 export function sealDay(
   state: IdentityState,
   day: string,
   batch: DaySamples,
 ): void {
+  if (batch.counts.length === 0) return;
+  // A day another set of rules sealed answers only until these rules
+  // have sealed one, and this is that sealing, so the rest of what that
+  // set left goes here. What is left afterwards is one set's days.
+  for (const [sealed, samples] of Object.entries(state.costByDay)) {
+    if (samples.rule !== COST_RULE) delete state.costByDay[sealed];
+  }
   // The only writer of a day's sample, so what is already there is
   // another sealing of the same day from an earlier run and can be
   // combined with this one. Nothing writes a provisional value alongside
-  // it, whose count would then be added to a count that already includes
+  // it, whose counts would then be added to counts that already include
   // it.
-  if (batch.count === 0) return;
-  state.costByDay[day] = mergeSamples(
-    state.costByDay[day] ?? emptySamples(),
-    batch,
-  );
-}
-
-/** A day as an older state wrote it: the percentile rather than the samples. */
-interface StoredPercentile {
-  p90: number;
-  count: number;
+  state.costByDay[day] = {
+    ...mergeSamples(state.costByDay[day] ?? emptySamples(), batch),
+    rule: COST_RULE,
+  };
 }
 
 /**
- * Reads a state's stored days forward. A day carrying a percentile and a
- * count is read as a day of that many executions standing at that
- * percentile, capped the way any day's sample is capped. It gives the
- * same cost back, and a later part of the same day merges into it
- * against the whole day's weight: one execution standing for the day
- * would be outweighed by the first part to arrive after it, which is
- * how a day of slow runs would come to report a fast one.
+ * A day as it was stored before it was counted by bucket: its slowest
+ * durations, or its percentile alone, and how many executions it held.
+ * It has no `counts`, which is what tells it from a day counted by
+ * bucket.
+ */
+type StoredSlowest =
+  | { slowest: number[]; count: number; rule?: number; counts?: undefined }
+  | { p90: number; count: number; rule?: number; counts?: undefined };
+
+/**
+ * Reads a state's stored days forward. A day stored as its slowest
+ * durations and a count is read as those durations, with each execution
+ * that was not kept counted at the smallest that was. A day stored as a
+ * percentile and a count is read the same way, as one kept duration.
+ * Either reading is at or above the executions it stands for, so a
+ * percentile read from it errs high, and the whole day's count stays in
+ * it: one execution standing for the day would be outweighed by the
+ * first part to arrive after it, which is how a day of slow runs would
+ * come to report a fast one. The day keeps the stamp of the rules that
+ * sealed it, since those decided which executions it holds, and how they
+ * were stored did not.
  */
 export function readCostsForward(state: IdentityState): void {
-  const days = state.costByDay ?? {};
+  const held = state.costByDay;
+  const days = isObjectNotArray(held) ? held : {};
   state.costByDay = days;
-  // A stored day is one shape or the other, which the state's own
-  // declared type cannot say.
-  const read: Record<string, DaySamples | StoredPercentile> = days;
+  // A stored day is one shape or another, which the state's own declared
+  // type cannot say.
+  const read: Record<string, DaySamples | StoredSlowest> = days;
   for (const [day, held] of Object.entries(read)) {
-    if ("slowest" in held) continue;
-    // A day whose stored figures are not numbers is read as a day with
-    // nothing in it, which is what a day this cannot make sense of is
-    // worth. Ending the read of the whole state is not.
-    days[day] = Number.isInteger(held.count) && held.count > 0 &&
-        Number.isFinite(held.p90)
-      ? {
-        slowest: new Array(Math.min(held.count, COST_SAMPLE_CAP))
-          .fill(held.p90),
-        count: held.count,
-      }
-      : emptySamples();
+    // A day that is not a record of figures at all is read as a day
+    // with nothing in it, which is what a day this cannot make sense of
+    // is worth. Ending the read of the whole state is not, and a state
+    // is read back through this before anything has looked at what it
+    // holds.
+    if (!isObjectOrArray(held)) {
+      days[day] = emptySamples();
+      continue;
+    }
+    if (held.counts === undefined) days[day] = readSlowest(held);
+    else if (!isCounted(held)) days[day] = emptySamples();
   }
+}
+
+/**
+ * Whether a day stored by bucket holds figures this can count with: a
+ * bucket index and a count per bucket, each a whole number and none
+ * negative. A day that does not is read as a day with nothing in it,
+ * for the reason a day that is not a record is.
+ */
+function isCounted(held: DaySamples): boolean {
+  const whole = (value: number) => Number.isInteger(value) && value >= 0;
+  return whole(held.lowest) && Array.isArray(held.counts) &&
+    held.counts.every(whole);
+}
+
+/**
+ * One day as earlier rules stored it, as these rules count it. A day
+ * whose stored figures are not numbers is read as a day with nothing in
+ * it, for the reason a day that is not a record is.
+ */
+function readSlowest(held: StoredSlowest): DaySamples {
+  const kept = "slowest" in held ? held.slowest : [held.p90];
+  if (
+    !Array.isArray(kept) || kept.length === 0 ||
+    !kept.every(Number.isFinite) || !Number.isInteger(held.count) ||
+    held.count < kept.length
+  ) {
+    return emptySamples();
+  }
+  const samples = samplesOf(kept);
+  countInto(samples, bucketOf(Math.min(...kept)), held.count - kept.length);
+  if (held.rule !== undefined) samples.rule = held.rule;
+  return samples;
 }
 
 /** Ages a state's per-day counters, dropping days past their windows. */
@@ -763,10 +902,19 @@ export function trimWindows(state: IdentityState, today: string): void {
   // term's denominator, the flake rate's, and how recently `lastRun` saw
   // the test. They are kept for the longer of the two windows, and each
   // reader reads back only as far as its own.
-  drop(state.runsByDay, Math.max(CHURN_WINDOW_DAYS, FLAKE_WINDOW_DAYS));
+  drop(state.runsByDay, LONGEST_WINDOW_DAYS);
   drop(state.failuresByDay, CHURN_WINDOW_DAYS);
   drop(state.flakesByDay, FLAKE_WINDOW_DAYS);
   drop(state.costByDay, COST_WINDOW_DAYS);
+  // A failure on the default branch waits here for a later run to judge
+  // it, and a test the branch does not go red for is one no run has to
+  // arrive for. So this is aged like everything else, over the longest
+  // window a state keeps: a failure nothing has judged in that time is
+  // one the branch has carried for that long, and crediting a catch for
+  // it afterwards would credit the test with a fix it did not find.
+  state.pendingMain = state.pendingMain.filter((pending) =>
+    daysBetween(pending.day, today) <= LONGEST_WINDOW_DAYS
+  );
 }
 
 /**
@@ -896,20 +1044,20 @@ export function flakeCounts(
 }
 
 /**
- * What one execution of this identity costs, in seconds: the largest of
- * the days' ninetieth percentiles inside the cost window. Largest rather
- * than averaged, because a cost model that under-estimates blows the time
- * budget, and each day's own percentile has already absorbed that day's
- * unlucky runners.
+ * What one execution of this identity costs, in seconds: the ninetieth
+ * percentile of every passing execution inside the cost window, taken
+ * together. Each execution counts once, however the days fall, so a slow
+ * day raises the cost by as much of the window as it holds rather than
+ * setting the cost alone. The ninetieth percentile rather than the mean,
+ * because a cost model that under-estimates blows the time budget.
  */
 export function costSeconds(state: IdentityState, today: string): number {
-  let worst = 0;
+  let window = emptySamples();
   for (const [day, samples] of Object.entries(state.costByDay)) {
     if (daysBetween(day, today) > COST_WINDOW_DAYS) continue;
-    const p90 = sampledPercentile90(samples);
-    if (p90 > worst) worst = p90;
+    window = mergeSamples(window, samples);
   }
-  return worst / 1000;
+  return sampledPercentile90(window) / 1000;
 }
 
 export type { FlakeEvidence, ScoreInputs };

@@ -1,8 +1,11 @@
 /**
  * Decomposition of a self-contained JSON Schema into content-addressed schema
  * documents, and its inverse. The design is
- * `docs/specs/content-addressed-schemas.md`; this module is the pure value
- * layer — nothing here reads or writes storage.
+ * `docs/specs/content-addressed-schemas.md`; this module is the value layer —
+ * nothing here reads or writes storage. Its one tie to the realm is its memo:
+ * a decomposition that resolved external refs through the schema-document
+ * registry is reused only until that registry clears (see
+ * {@link decomposeSchema}).
  *
  * A decomposition splits a schema at `$defs` granularity. Each definition that
  * stands alone becomes its own document, referenced by bare document id; a
@@ -30,20 +33,32 @@
  */
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
+import {
+  decodeJsonPointer,
+  encodeJsonPointer,
+} from "@commonfabric/utils/json-pointer";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
-import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
-  anySchema,
+  classifySchemaMetaValue,
+  collectExternalSchemaRefHashes,
+  formatExternalSchemaRef,
+  isExternalSchemaRef,
+  MalformedSchemaMetaError,
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
   forEachSubschema,
   isSubschema,
   mapSubschemas,
   type SchemaWalkOptions,
-  walkSchema,
-} from "./schema-walk.ts";
-import { decodeJsonPointer, encodeJsonPointer } from "./link-types.ts";
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isEmbeddedCfcSchemaRef } from "./embedded-schemas.ts";
+import {
+  lookupSchemaDocument,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 
 // Every walk in this module must be COMPLETE over the subschema keywords,
 // including the never-emitted tier: a ref a walk misses is a ref the
@@ -63,27 +78,6 @@ const RESOURCE_SCOPE_KEYWORDS = [
   "$recursiveAnchor",
   "$recursiveRef",
 ] as const;
-
-/**
- * The URI scheme prefix of a content-addressed schema document reference,
- * `cid` being short for content identifier. RFC 2392 registers the same
- * name for a body part of a MIME message, addressed by its `Content-ID`
- * header. The two uses share the name and nothing else. `entity-kind.ts`
- * records the other scheme names this tree uses.
- */
-export const SCHEMA_DOCUMENT_REF_PREFIX = "cid:";
-
-/** A parsed external schema reference. */
-export type ExternalSchemaRef = {
-  /** Tagged hash of the referenced document (the id without `cid:`). */
-  readonly taggedHash: string;
-
-  /**
-   * For a reference into a cyclic-group document: the member definition's
-   * name. Absent for a bare reference to a document's own schema.
-   */
-  readonly defName?: string;
-};
 
 /** The result of {@link decomposeSchema}. */
 export type DecomposedSchema = {
@@ -110,259 +104,8 @@ export class SchemaNotDecomposableError extends Error {
   }
 }
 
-/** Formats an external schema reference from its parts. */
-export function formatExternalSchemaRef(
-  taggedHash: string,
-  defName?: string,
-): string {
-  const fragment = defName === undefined
-    ? ""
-    : encodeJsonPointer(["#", "$defs", defName]);
-  return `${SCHEMA_DOCUMENT_REF_PREFIX}${taggedHash}${fragment}`;
-}
-
 /**
- * Parses an external schema reference. Returns `undefined` when `ref` does
- * not carry the `cid:` prefix or its fragment is not a `#/$defs/<name>`
- * pointer.
- */
-export function parseExternalSchemaRef(
-  ref: string,
-): ExternalSchemaRef | undefined {
-  if (!ref.startsWith(SCHEMA_DOCUMENT_REF_PREFIX)) return undefined;
-  const rest = ref.slice(SCHEMA_DOCUMENT_REF_PREFIX.length);
-  const fragmentAt = rest.indexOf("#");
-  const taggedHash = fragmentAt === -1 ? rest : rest.slice(0, fragmentAt);
-  if (taggedHash.length === 0) return undefined;
-  if (fragmentAt === -1) return { taggedHash };
-  const pointer = decodeJsonPointer(rest.slice(fragmentAt));
-  if (
-    pointer.length !== 3 || pointer[0] !== "#" || pointer[1] !== "$defs" ||
-    pointer[2]!.length === 0
-  ) {
-    return undefined;
-  }
-  return { taggedHash, defName: pointer[2] };
-}
-
-/** Whether `ref` parses as an external schema reference. */
-export function isExternalSchemaRef(ref: string): boolean {
-  return parseExternalSchemaRef(ref) !== undefined;
-}
-
-// Presence of an external ref anywhere in a schema, memoized for frozen
-// inputs. This is the guard the resolution caches consult before memoizing a
-// FAILED resolution: a schema that can reach an external ref may resolve
-// later, once the referenced document arrives, so pinning the miss would
-// pin the failure past the arrival. Presence itself is safe to memoize —
-// frozen content cannot gain or lose a ref.
-const externalRefPresenceCache = new WeakMap<JSONSchemaObj, boolean>();
-
-/**
- * Whether `schema` contains an external schema reference anywhere — its own
- * `$ref`, any subschema's (the never-emitted keywords included), or inside
- * a `$defs` body.
- */
-export function containsExternalSchemaRef(
-  schema: JSONSchema | undefined,
-): boolean {
-  if (!isObjectNotArray(schema)) return false;
-  const cached = externalRefPresenceCache.get(schema);
-  if (cached !== undefined) return cached;
-  const result = anySchema(
-    schema,
-    (node) =>
-      isObjectNotArray(node.schema) &&
-      typeof node.schema.$ref === "string" &&
-      isExternalSchemaRef(node.schema.$ref),
-    { includeDefs: true, includeUnused: true },
-  );
-  if (isDeepFrozen(schema)) externalRefPresenceCache.set(schema, result);
-  return result;
-}
-
-const EMPTY_HASHES: ReadonlySet<string> = new Set();
-const externalRefHashCache = new WeakMap<JSONSchemaObj, ReadonlySet<string>>();
-
-/**
- * The tagged hashes of every schema document `schema` references — its own
- * `$ref`, any subschema's (the never-emitted keywords included), and inside
- * `$defs` bodies. Memoized for frozen inputs.
- */
-export function collectExternalSchemaRefHashes(
-  schema: JSONSchema | undefined,
-): ReadonlySet<string> {
-  if (!isObjectNotArray(schema)) return EMPTY_HASHES;
-  const cached = externalRefHashCache.get(schema);
-  if (cached !== undefined) return cached;
-  const hashes = new Set<string>();
-  walkSchema(
-    schema,
-    (node) => {
-      if (
-        isObjectNotArray(node.schema) && typeof node.schema.$ref === "string"
-      ) {
-        const parsed = parseExternalSchemaRef(node.schema.$ref);
-        if (parsed !== undefined) hashes.add(parsed.taggedHash);
-      }
-    },
-    { includeDefs: true, includeUnused: true },
-  );
-  const result: ReadonlySet<string> = hashes.size === 0 ? EMPTY_HASHES : hashes;
-  if (isDeepFrozen(schema)) externalRefHashCache.set(schema, result);
-  return result;
-}
-
-/**
- * The reserved root member of a stored document that carries the
- * document's schema metadata — a result document's result schema, a
- * receipt's shape (`EntityDocument.schema`,
- * `docs/specs/memory-v2/01-data-model.md`). Its grammar is two forms and
- * nothing else: a self-contained inline schema carrying no `cid:`
- * reference, or a single-member `{ "$ref": "cid:<hash>" }` root (the
- * `#/$defs/<name>` fragment form included). Every layer that collects a
- * document's schema-document obligations — the commit boundary, result
- * assembly, arrival validation, and the writer's own closure staging —
- * classifies it through {@link classifySchemaMeta} and refuses the third
- * shape, a hybrid, at its own boundary.
- */
-export const SCHEMA_META_MEMBER = "schema";
-
-/** The form a document's {@link SCHEMA_META_MEMBER} takes. */
-export type SchemaMetaForm =
-  /** No member, or a member holding `undefined`/`null`. */
-  | { readonly kind: "absent" }
-  /** A self-contained schema: no `cid:` reference anywhere in it. */
-  | { readonly kind: "inline"; readonly schema: JSONSchema }
-  /** A single-member `{ "$ref": "cid:…" }` root. */
-  | {
-    readonly kind: "reference";
-    readonly ref: string;
-    readonly taggedHash: string;
-    readonly defName?: string;
-  }
-  /** A `cid:` reference in any other position: nested, or with siblings. */
-  | { readonly kind: "malformed"; readonly reason: string };
-
-/**
- * Thrown for a {@link SCHEMA_META_MEMBER} in the malformed form. Each
- * boundary translates it into its own refusal — a `ProtocolError` at the
- * commit boundary, a `SchemaClosureError` in result assembly, a quarantine
- * on arrival — and the writer's staging lets it propagate, so a malformed
- * member never reaches a transaction's writes.
- */
-export class MalformedSchemaMetaError extends Error {
-  constructor(reason: string) {
-    super(`Malformed schema metadata: ${reason}`);
-    this.name = "MalformedSchemaMetaError";
-  }
-}
-
-/** Classifies a stored document's {@link SCHEMA_META_MEMBER}. */
-export function classifySchemaMeta(document: unknown): SchemaMetaForm {
-  if (!isObjectNotArray(document)) return { kind: "absent" };
-  const schema = (document as { [SCHEMA_META_MEMBER]?: unknown })[
-    SCHEMA_META_MEMBER
-  ];
-  return classifySchemaMetaValue(schema);
-}
-
-/**
- * Classifies a value held AT a {@link SCHEMA_META_MEMBER}, for a writer
- * that has the member's value rather than the document around it.
- */
-export function classifySchemaMetaValue(schema: unknown): SchemaMetaForm {
-  if (schema === undefined || schema === null) return { kind: "absent" };
-  if (typeof schema === "boolean") return { kind: "inline", schema };
-  if (!isObjectNotArray(schema)) {
-    return {
-      kind: "malformed",
-      reason: "the member holds a value that is not a schema",
-    };
-  }
-  const obj = schema as JSONSchemaObj;
-  if (typeof obj.$ref === "string" && isCidPrefixedRef(obj.$ref)) {
-    const parsed = parseExternalSchemaRef(obj.$ref);
-    if (parsed === undefined) {
-      return {
-        kind: "malformed",
-        reason:
-          `the root \`$ref\` is not a well-formed \`cid:\` reference: \`${obj.$ref}\``,
-      };
-    }
-    if (Object.keys(obj).length !== 1) {
-      return {
-        kind: "malformed",
-        reason: "a `cid:` root reference carries sibling keywords",
-      };
-    }
-    return { kind: "reference", ref: obj.$ref, ...parsed };
-  }
-  // Any `cid:`-prefixed ref below the root is outside the grammar, whether
-  // or not it parses: an unparseable one names no document at all, and a
-  // classifier that let it through as inline would persist metadata whose
-  // closure nothing can install.
-  if (containsCidPrefixedRef(obj)) {
-    return {
-      kind: "malformed",
-      reason:
-        "a `cid:` reference appears inside an inline schema; only a single " +
-        '`{ "$ref": "cid:…" }` root may reference a schema document',
-    };
-  }
-  return { kind: "inline", schema: obj };
-}
-
-/** Whether `ref` claims the `cid:` scheme, well-formed or not. */
-function isCidPrefixedRef(ref: string): boolean {
-  return ref.startsWith(SCHEMA_DOCUMENT_REF_PREFIX);
-}
-
-/**
- * Whether any `$ref` anywhere in `schema` — subschemas and `$defs` bodies
- * included — claims the `cid:` scheme, parseable or not. Broader than
- * {@link containsExternalSchemaRef} by design: this is the grammar check,
- * and a `cid:` string that does not parse is exactly the kind of member
- * the grammar exists to keep out.
- */
-function containsCidPrefixedRef(schema: JSONSchemaObj): boolean {
-  return anySchema(
-    schema,
-    (node) =>
-      isObjectNotArray(node.schema) &&
-      typeof node.schema.$ref === "string" &&
-      isCidPrefixedRef(node.schema.$ref),
-    { includeDefs: true, includeUnused: true },
-  );
-}
-
-/**
- * The tagged hash a stored document's {@link SCHEMA_META_MEMBER}
- * references: one for the reference form, none for the inline or absent
- * forms. Throws {@link MalformedSchemaMetaError} for the malformed form.
- * This inspects document-level metadata. A `schema` keyword inside a schema
- * document's `value` belongs to that schema and is not a metadata position.
- */
-export function collectSchemaMetaRefHashes(
-  document: unknown,
-): ReadonlySet<string> {
-  return schemaMetaRefHashes(classifySchemaMeta(document));
-}
-
-/** {@link collectSchemaMetaRefHashes} over an already classified form. */
-export function schemaMetaRefHashes(form: SchemaMetaForm): ReadonlySet<string> {
-  switch (form.kind) {
-    case "reference":
-      return new Set([form.taggedHash]);
-    case "malformed":
-      throw new MalformedSchemaMetaError(form.reason);
-    default:
-      return EMPTY_HASHES;
-  }
-}
-
-/**
- * The inline form of a schema in the {@link SCHEMA_META_MEMBER} grammar:
+ * The inline form of a schema in the `schema` metadata member grammar:
  * the reference form recomposes from the document it names, the inline
  * form is returned as it is, and the malformed form throws
  * {@link MalformedSchemaMetaError}. `lookup` supplies documents by tagged
@@ -540,10 +283,25 @@ export type DecomposeSchemaOptions = {
 
 // Memo for decompositions of interned inputs. `decomposeSchema` interns its
 // input, so in steady state every call after the first for a given schema is
-// one `WeakMap` probe. A memoized success is resolver-independent: supplied
-// documents are hash-verified, so any resolver that succeeds supplies the
-// same closure. A refusal (throw) is never memoized.
+// one `WeakMap` probe. A refusal (throw) is never memoized.
+//
+// A decomposition that consulted no resolver is a pure function of its input
+// and memoizes for the realm. One that resolved an external ref is a fact
+// about what the resolver held at the time: handing it to a later caller
+// whose resolver would miss — no resolver at all, or the registry after its
+// lease epoch cleared — returns a closure that caller could not have built,
+// and callers register what comes back, resurrecting documents the current
+// epoch never received. So a resolver-dependent result memoizes only for the
+// registry's own lookup, and only until the registry clears: within an epoch
+// the registry is monotonic, so a success stays true.
 const decompositionCache = new WeakMap<JSONSchemaObj, DecomposedSchema>();
+let registryDecompositionCache = new WeakMap<
+  JSONSchemaObj,
+  DecomposedSchema
+>();
+onSchemaRegistryClear(() => {
+  registryDecompositionCache = new WeakMap();
+});
 
 /**
  * Decomposes a self-contained schema into content-addressed documents.
@@ -551,7 +309,13 @@ const decompositionCache = new WeakMap<JSONSchemaObj, DecomposedSchema>();
  * The input is interned (and therefore deep-frozen in place — callers must be
  * okay with that, as with `internSchema` itself). The result is deterministic
  * for structurally equal inputs regardless of key order, and memoized on the
- * interned input.
+ * interned input — for the realm's lifetime when the decomposition resolved no
+ * external ref. A decomposition that did resolve one depends on what the
+ * resolver held, so it is memoized only when the resolver is the registry's
+ * {@link lookupSchemaDocument}, and only until the registry clears; with any
+ * other resolver it is recomputed on every call. A caller whose resolver would
+ * now miss is therefore refused rather than handed a closure from an earlier
+ * registry epoch.
  *
  * Definitions unreachable from the root body are dropped: they are inert for
  * matching, and carrying them would make two schemas that match identically
@@ -573,7 +337,10 @@ export function decomposeSchema(
   options: DecomposeSchemaOptions = {},
 ): DecomposedSchema {
   const interned = internSchema(schema);
-  const cached = decompositionCache.get(interned);
+  const cached = decompositionCache.get(interned) ??
+    (options.resolveDocument === lookupSchemaDocument
+      ? registryDecompositionCache.get(interned)
+      : undefined);
   if (cached !== undefined) return cached;
 
   const defs = interned.$defs ?? {};
@@ -632,9 +399,11 @@ export function decomposeSchema(
 
   // Pre-existing external refs: resolve their documents (hash-verified) and
   // include the transitive closure, dependencies before dependents.
+  let resolvedExternal = false;
   const includeExternalClosure = (fromFragment: JSONSchema): void => {
     for (const hash of collectExternalSchemaRefHashes(fromFragment)) {
       if (documents.has(hash)) continue;
+      resolvedExternal = true;
       const supplied = options.resolveDocument?.(hash);
       if (supplied === undefined) {
         throw new SchemaNotDecomposableError(
@@ -706,7 +475,10 @@ export function decomposeSchema(
     : formatExternalSchemaRef(addDocument(rewrittenRoot));
 
   const result: DecomposedSchema = { rootRef, documents };
-  decompositionCache.set(interned, result);
+  if (!resolvedExternal) decompositionCache.set(interned, result);
+  else if (options.resolveDocument === lookupSchemaDocument) {
+    registryDecompositionCache.set(interned, result);
+  }
   return result;
 }
 

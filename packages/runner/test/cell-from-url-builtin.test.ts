@@ -8,6 +8,7 @@ import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { slugIdForSpace } from "../src/slugs.ts";
 import { parseLink } from "../src/link-utils.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 const signer = await Identity.fromPassphrase("test cellFromUrl builtin");
 const space = signer.did();
@@ -39,10 +40,23 @@ describe("cellFromUrl builtin", () => {
   async function resolve(
     url: string,
     hosts?: string[],
-  ): Promise<{ pending: unknown; id: string | undefined }> {
+    spaceHost?: string,
+  ): Promise<
+    {
+      pending: unknown;
+      id: string | undefined;
+      path?: readonly unknown[];
+      scope?: string;
+    }
+  > {
     const builtin = byRef("cellFromUrl");
     const testPattern = pattern<{ url: string }>(
-      ({ url }) => builtin(hosts ? { url, hosts } : { url }),
+      ({ url }) =>
+        builtin({
+          url,
+          ...(hosts ? { hosts } : {}),
+          ...(spaceHost ? { spaceHost } : {}),
+        }),
     );
 
     const resultCell = runtime.getCell(
@@ -68,7 +82,12 @@ describe("cellFromUrl builtin", () => {
     const sub = runtime.getCellFromLink(parseLink(slotRaw, slot)!);
     const held = sub.getRaw();
     const link = held === undefined ? undefined : parseLink(held, sub);
-    return { pending, id: link?.id as string | undefined };
+    return {
+      pending,
+      id: link?.id as string | undefined,
+      path: link?.path,
+      scope: link?.scope,
+    };
   }
 
   /** A cell in this space, and the id a URL would have to name to reach it. */
@@ -90,6 +109,30 @@ describe("cellFromUrl builtin", () => {
     expect(resolved).toBe(id);
   });
 
+  it("selects an arguments document before traversing its path", async () => {
+    const result = runtime.getCell(space, "member-result", undefined, tx);
+    const argument = runtime.getCell(space, "member-argument", undefined, tx);
+    result.setMetaRaw(
+      "argument",
+      argument.getAsLink(),
+      rawMetaWriteAuthorization,
+    );
+    const id = result.getAsNormalizedFullLink().id;
+    const selected = await resolve(`//${space}/${id}#argument/title/`);
+    expect(selected.id).toBe(argument.getAsNormalizedFullLink().id);
+    expect(selected.path).toEqual(["title", ""]);
+    expect(selected.scope).toBe("space");
+  });
+
+  it("returns no cell for a missing argument member and preserves explicit scope", async () => {
+    const id = anExistingCell();
+    expect((await resolve(`/${id}#argument`)).id).toBeUndefined();
+    const selected = await resolve(`/${id}@user/title`);
+    expect(selected.id).toBe(id);
+    expect(selected.scope).toBe("user");
+    expect(selected.path).toEqual(["title"]);
+  });
+
   it("resolves a bare tagged hash to the same cell", async () => {
     const id = anExistingCell();
     const { id: resolved } = await resolve(id.replace(/^of:/, ""));
@@ -105,6 +148,37 @@ describe("cellFromUrl builtin", () => {
     );
 
     expect(resolved).toBe(id);
+  });
+
+  it("registers an explicit toolshed before resolving a cross-space address", async () => {
+    const id = anExistingCell();
+    const routes: Array<[string, string]> = [];
+    runtime.registerSpaceHost = (routedSpace, host) => {
+      routes.push([routedSpace, host]);
+      return true;
+    };
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBe(id);
+    expect(routes).toEqual([[space, "https://remote.example"]]);
+  });
+
+  it("returns no cell when an explicit toolshed conflicts with the fixed route", async () => {
+    const id = anExistingCell();
+    runtime.registerSpaceHost = () => false;
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBeUndefined();
   });
 
   it("resolves a slug to the document that redirects to the piece", async () => {
@@ -147,38 +221,47 @@ describe("cellFromUrl builtin", () => {
     expect(resolved).toBeUndefined();
   });
 
-  it("clears a resolved cell once the URL stops naming one", async () => {
-    // Reading through the stored link returns `undefined` for an empty target,
-    // so a guard on that would leave the previous URL's answer in place.
-    const id = anExistingCell();
-    const url = runtime.getCell<string>(space, "cell-from-url-input", {
-      type: "string",
-    }, tx);
-    url.withTx(tx).set(`/${id}`);
+  for (const destination of ["invalid URL", "missing argument member"]) {
+    it(`clears a resolved cell after selecting ${destination}`, async () => {
+      // Reading through the stored link returns `undefined` for an empty target,
+      // so a guard on that would leave the previous URL's answer in place.
+      const id = anExistingCell();
+      const url = runtime.getCell<string>(space, "cell-from-url-input", {
+        type: "string",
+      }, tx);
+      url.withTx(tx).set(`/${id}`);
 
-    const builtin = byRef("cellFromUrl");
-    const testPattern = pattern<{ url: string }>(({ url }) => builtin({ url }));
-    const resultCell = runtime.getCell(
-      space,
-      "cell-from-url-clear",
-      undefined,
-      tx,
-    );
-    const result = runtime.run(tx, testPattern, { url }, resultCell);
-    tx.commit();
-    tx = runtime.edit();
-    await result.pull();
-    expect(result.key("cell").getRaw()).toBeDefined();
+      const builtin = byRef("cellFromUrl");
+      const testPattern = pattern<{ url: string }>(({ url }) =>
+        builtin({ url })
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "cell-from-url-clear",
+        undefined,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, { url }, resultCell);
+      tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      expect(result.key("cell").getRaw()).toBeDefined();
+      const slot = result.key("cell");
+      const sub = runtime.getCellFromLink(parseLink(slot.getRaw(), slot)!);
+      expect(parseLink(sub.getRaw(), sub)?.id).toBe(id);
 
-    const edit = runtime.edit();
-    url.withTx(edit).set("https://example.com/not-a-cell");
-    edit.commit();
-    await result.pull();
+      const edit = runtime.edit();
+      url.withTx(edit).set(
+        destination === "invalid URL"
+          ? "https://example.com/not-a-cell"
+          : `/${id}#argument`,
+      );
+      edit.commit();
+      await result.pull();
 
-    const slot = result.key("cell");
-    const sub = runtime.getCellFromLink(parseLink(slot.getRaw(), slot)!);
-    expect(sub.getRaw()).toBeUndefined();
-  });
+      expect(sub.getRaw()).toBeUndefined();
+    });
+  }
 
   it("resolves prose to no cell", async () => {
     expect((await resolve("just some words")).id).toBeUndefined();

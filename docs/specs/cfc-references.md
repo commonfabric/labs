@@ -22,16 +22,21 @@ slots before encoding; decoding an address alone cannot restore that history.
 Cells supplied to precise immutable construction retain their effective follow
 scope in an inline scope-only schema; their reader value projections do not
 change immutable identity. Raw schema-bearing references retain their supplied
-schemas, with external references inlined for the immutable document. Eager and
-lazy schema reads that box inline array objects capture references at their
-original slots and rebase inherited scope caps onto the immutable result. A
-later target-label change is resolved on the next content observation.
-Raw reads acquire nested references from their exact stored slots and isolate
-the returned carriers from other reads. Replaying a partial argument update
-therefore retains the acquisition history of every untouched reference slot.
-Collection removals capture surviving references at their original slots before
-compacting indices; neither nested references nor their selection history become
-raw, unauthenticated links during that move.
+schemas, with external references inlined for the immutable document. A
+materialized handle writes to its selected storage instance. Its serialized
+follow cap does not redeclare that instance's scope. The Runtime retains its
+mutation declaration through path projection and transaction rebinding; an
+explicit schema change supplies a new declaration. Worker reference tokens
+distinguish these mutation semantics and preserve them when the client echoes
+the issued schema. Eager and lazy schema reads that box inline array objects
+capture references at their original slots and rebase inherited scope caps onto
+the immutable result. A later target-label change is resolved on the next
+content observation. Raw reads acquire nested references from their exact stored
+slots and isolate the returned carriers from other reads. Replaying a partial
+argument update therefore retains the acquisition history of every untouched
+reference slot. Collection removals capture surviving references at their
+original slots before compacting indices; neither nested references nor their
+selection history become raw, unauthenticated links during that move.
 
 Precise immutable construction, raw reads and writes, and pattern result
 projection preserve link-free instance values through their canonical codecs,
@@ -49,6 +54,21 @@ coordinator reference retains broader selection history from its creation or
 reconciliation. Dereferencing through that coordinator still consumes its
 history.
 
+Authenticated reference acquisition also retains the input witnesses of the
+exact source slot's selection. The slot's value stamp must describe the actual
+reference stored there. This evidence participates only in the input-witness
+meet for the reference choice; it neither endorses target contents nor satisfies
+a target integrity floor. Unknown selectors and handwritten observation records
+retain no such evidence. Live view copies and verified event receipts preserve
+it independently of serialized display labels.
+
+Static runtime bindings replay their captured acquisitions pointwise, so reading
+one sibling does not retroactively change another sibling's selection history.
+Only the runtime can mark those exact immutable slots as transport. Ordinary
+application selection, event payloads, and pending writes include the current
+control flow when acquiring a reference; the transport marker is not exported
+through event receipts.
+
 Setup discovers dependency chains through redirect probes. Terminal values and
 their nested references are consumed only when the action reads them, so merely
 installing sibling nodes does not add their stored contents to an input's
@@ -62,11 +82,10 @@ absence.
 
 The Runtime admits an unchanged root Cell output as a repeated projection. It
 marks the exact comparison activities and binds their evidence to the stored
-revision. This exception to
-`writeAuthorizedBy` covers only those runtime comparisons: an ordinary no-op
-attempt or an overlapping payload write in the same transaction still requires
-the declared writer. Reference confidentiality and linked content floors remain
-independent checks.
+revision. This exception to `writeAuthorizedBy` covers only those runtime
+comparisons: an ordinary no-op attempt or an overlapping payload write in the
+same transaction still requires the declared writer. Reference confidentiality
+and linked content floors remain independent checks.
 
 `LinkReference` integrity records a relationship. It does not endorse B's
 contents. A receiver's `addIntegrity` declaration cannot satisfy a floor on a
@@ -75,6 +94,13 @@ it is not proof that the target currently satisfies a content assertion.
 Declared receiving policies apply to the reference slot and projected paths
 structurally. Merely declaring confidentiality there does not inspect the
 target's type or contents.
+
+Writer and UI authorization on an explicit `asCell` handle governs the reference
+binding without inspecting the target projection. This remains true when the
+handle field sits under a containing union: the applicable handle writer claims
+are conservatively conjoined. The runtime does not use a foreign target's shape
+to choose among those writers. Content integrity floors and confidentiality
+screens retain their separate applicability checks.
 
 Stored policies that condition a write on its value retain that condition and
 its schema definition scope when a reference is written. Independent union
@@ -90,6 +116,13 @@ An overlapping value replacement or deletion invalidates them, including when
 flow labeling is off. Each write captures its author independently of subsequent
 identity changes in the transaction. An existing wildcard runtime attestation
 cannot prove which concrete values were certified and is not carried forward.
+Branch-local `addIntegrity` declarations containing only `LlmDerived` and
+`InjectionSafe` are supported as value evidence even in overlapping unions;
+confidentiality, writer policy, and ordinary endorsements retain the
+divergent-policy guard. `InjectionSafe` additionally requires the concrete
+inline value to satisfy the sanitizer's branch schema, including its
+closed-object rules. A branch that certifies numbers cannot certify a different
+branch's free-form text.
 
 A stored stream binding retains its own CFC declarations. Child schemas under
 the stream wrapper describe future event payloads, so publishing that binding
@@ -117,8 +150,8 @@ storage. Generated scope redirects retain these caps in a scope-only schema,
 including an intermediate user hop. A same-binding write can remain a no-op only
 when the stored reference already enforces the newly required scope restriction.
 An alias may project a field within an already-held scoped document while
-retaining that field's outgoing follow cap. That cap still governs links followed
-from the field; it does not reject the scope of its existing container.
+retaining that field's outgoing follow cap. That cap still governs links
+followed from the field; it does not reject the scope of its existing container.
 
 A content assertion can itself reveal protected information through success or
 failure. Its evidence, including traversed bindings and protected metadata, must
@@ -135,12 +168,16 @@ no positive endorsement or copy evidence. An unavailable document or a
 scope-blocked reference cannot prove absence.
 
 Verification reads carry authorization dependencies separately from application
-taint. Storage checks ordinary document revisions, including the confirmed and
-pending revision basis captured with the read. CFC metadata, schema, binding,
-and value changes cannot disappear through internal-read or mergeable-write
-conflict filters. These dependencies use Memory's generic `required` validation
-class, so an identical output cannot waive stale evidence. When a storage commit
-is submitted, transactions releasing queued effects or processing durable events
+taint. Internal verifier reads also leave an action's input scope unchanged:
+replaying a user-scoped trigger's metadata does not make a public input a
+user-scoped payload read. Trigger confidentiality still joins the flow, and an
+ordinary user-scoped payload observation still narrows the action's input scope.
+Storage checks ordinary document revisions, including the confirmed and pending
+revision basis captured with the read. CFC metadata, schema, binding, and value
+changes cannot disappear through internal-read or mergeable-write conflict
+filters. These dependencies use Memory's generic `required` validation class, so
+an identical output cannot waive stale evidence. When a storage commit is
+submitted, transactions releasing queued effects or processing durable events
 also require their retained read dependencies. This marker does not cause a
 read-only transaction with no document operations to submit a storage commit.
 Storage does not interpret CFC policy and verification does not write B.
@@ -187,8 +224,8 @@ subtree retains that subtree's path boundary.
 
 Resolving a slug for `piece:get` retains the stored reference's acquisition
 history. When the slug names a path inside a piece, the returned handle keeps
-the redirect's scope restrictions while adopting the schema along that path.
-The piece document's root sync covers this lookup without loading the returned
+the redirect's scope restrictions while adopting the schema along that path. The
+piece document's root sync covers this lookup without loading the returned
 value's descendants.
 
 Durable events carry an optional opaque `runtimeReferenceContext` outside the
@@ -196,15 +233,15 @@ application payload. The sending Runtime captures authenticated acquisitions at
 exact payload slots, binds the context to the canonical payload hash and full
 reference bindings, and joins the sending attempt's confidentiality. Context
 version 2 additionally binds the dispatch to its selected stream and carries
-that selection and sending flow into the handler. The serving
-Runtime validates completeness and restores confidentiality, scope caps, and
-private immutable reference tables onto an isolated payload before dispatch.
-This conveys no target-content integrity. The handler owns value projection;
-links carry only an inline scope restriction needed to retain their caps.
-Converter-generated cycles retain a proof bound to their ancestor path inside
-the exact immutable payload. Their reference table includes every payload slot,
-so following a cycle retains the acquisitions reachable through that ancestor.
-Raw relative links cannot claim that cycle proof.
+that selection and sending flow into the handler. The serving Runtime validates
+completeness and restores confidentiality, scope caps, and private immutable
+reference tables onto an isolated payload before dispatch. This conveys no
+target-content integrity. The handler owns value projection; links carry only an
+inline scope restriction needed to retain their caps. Converter-generated cycles
+retain a proof bound to their ancestor path inside the exact immutable payload.
+Their reference table includes every payload slot, so following a cycle retains
+the acquisitions reachable through that ancestor. Raw relative links cannot
+claim that cycle proof.
 
 The context has the same admitted producer trust as renderer and
 runtime-injected event attestations. It is not a signature, and a payload field
@@ -216,14 +253,15 @@ apply, so decoded reference bytes cannot become public acquisitions. A primitive
 event's dispatch can still require context for the stream-selection history.
 
 Memory advertises opaque context preservation through the `eventContext`
-capability. Clients require it for declared event appends and Retry requests and recheck it before
-sending after reconnect. This transport guarantee is independent of the
-deployment requirement that every participating Runtime support context
-version 2; an older Runtime must not author or dispatch events in that cohort.
+capability. Clients require it for declared event appends and Retry requests and
+recheck it before sending after reconnect. This transport guarantee is
+independent of the deployment requirement that every participating Runtime
+support context version 2; an older Runtime must not author or dispatch events
+in that cohort.
 
 Explicit host acquisition APIs, including `GetCell(cause)`,
-`RuntimeClient.acquireCell(address)`, `Runtime.acquireExternalInput(space, data)`,
-and piece/home/slug loaders, remain
+`RuntimeClient.acquireCell(address)`,
+`Runtime.acquireExternalInput(space, data)`, and piece/home/slug loaders, remain
 trusted entry points. The shell inspector and string-link components acquire
 their independently selected addresses through that host operation. Ordinary
 CellRef operations require the issued token. Address-only wire strings cannot
@@ -231,13 +269,13 @@ encode historical selection provenance. Metadata projections retain the
 requesting handle's restrictions, including references returned in internal
 manifests.
 
-CLI callable arguments use external-input acquisition after address normalization
-and handler input validation. An independently supplied address must name a
-document; its omitted space is the invocation's space. Existing private carriers
-retain their acquisition history. This operation observes no target contents and
-grants no target-content integrity. A relative raw reference without a source is
-refused, and an opaque immutable document still needs authenticated acquisition
-history for references inside it.
+CLI callable arguments use external-input acquisition after address
+normalization and handler input validation. An independently supplied address
+must name a document; its omitted space is the invocation's space. Existing
+private carriers retain their acquisition history. This operation observes no
+target contents and grants no target-content integrity. A relative raw reference
+without a source is refused, and an opaque immutable document still needs
+authenticated acquisition history for references inside it.
 
 Display views preserve held-reference confidentiality as covering restrictions
 under the existing view format. Inbound display fields are stripped. Render and
@@ -254,24 +292,29 @@ query result, introspection returns the common unavailable result.
 ## Format and rollout
 
 The [precise reference rollout plan](../plans/cfc-precise-reference-rollout.md)
-allows the intended deployment activation to precede the existing-Home migration.
-An activation that includes this reference profile admits only fresh or verified
-ready Homes and their participating reference graph; unresolved Homes remain on
-a compatible deployment until migration. The Home contract transition requires a
-state-preserving migration and compatibility replay. A global flag change alone
-cannot establish readiness or waive that gate.
+allows the intended deployment activation to precede the existing-Home
+migration. An activation that includes this reference profile admits only fresh
+or verified ready Homes and their participating reference graph; unresolved
+Homes remain on a compatible deployment until migration. The Home contract
+transition requires a state-preserving migration and compatibility replay. A
+global flag change alone cannot establish readiness or waive that gate.
 
-CFC envelope version 2 supports precise reference entries. Each stored reference
+CFC envelope version 3 supports precise reference entries. Each stored reference
 slot requires its own complete entry; upgrading one slot does not authenticate
-untouched legacy references. `origin: "link"` with `observes: "followRef"`
-carries reference confidentiality; content is resolved independently. Other
-label components retain their existing update disciplines. Readers accept
-versions 1 and 2 and reject unknown versions at protected reads. A metadata
-retrieval failure propagates as a failure; it cannot establish that a reference
-or its contents are unrestricted. Protected assertions normalize unreadable or
+untouched legacy references. An entry with `origin: "link"`,
+`observes: "followRef"`, and `referenceAcquisition: "complete"` attests that
+this slot's acquisition restrictions are accounted for. The runtime may account
+for an unresolved acquisition by stamping unavailable confidentiality; this
+preserves diagnostics while protected uses remain fail-closed. An unmarked entry
+remains incomplete even inside a version-3 envelope. The reference entry carries
+reference confidentiality; content is resolved independently. Other label
+components retain their existing update disciplines. Readers accept versions 1,
+2, and 3 and reject unknown versions at protected reads. A metadata retrieval
+failure propagates as a failure; it cannot establish that a reference or its
+contents are unrestricted. Protected assertions normalize unreadable or
 unsupported metadata to unavailable evidence, while unexpected storage failures
 remain operational errors. Deploy compatible Runtime, worker, and boundary
-readers before enabling precise writes; older readers that reject version 2
+readers before enabling precise writes; older readers that reject version 3
 cannot participate in that profile. Cooperating reference writers must also
 persist complete per-slot acquisition history before precise readers consume
 their output. The shell, deployed CLI, production server preset, and serving
@@ -279,21 +322,21 @@ Runtime persist this history. Embedding controllers must select persistence when
 writing for these readers; a flow-off writer can produce references they refuse.
 Reader compatibility alone does not establish writer provenance.
 
-Version 1 remains available to the legacy profile. Missing envelopes and slots
-without complete reference entries also have unresolved acquisition history.
-Keeping recorded restrictions does not reconstruct selection dependencies that
-its writer omitted. Precise acquisition or traversal of a legacy stored
-reference therefore requires trusted re-acquisition; unresolved history fails
-closed. No bulk rewrite or automatic removal of legacy confidentiality is
-performed. Direct, independently authorized acquisition of a document address is
-a separate operation.
+Versions 1 and 2 remain available to the legacy profile. Missing envelopes and
+slots without complete reference entries also have unresolved acquisition
+history. Keeping recorded restrictions does not reconstruct selection
+dependencies that its writer omitted. Precise acquisition or traversal of a
+legacy stored reference therefore requires trusted re-acquisition; unresolved
+history fails closed. No bulk rewrite or automatic removal of legacy
+confidentiality is performed. Direct, independently authorized acquisition of a
+document address is a separate operation.
 
 Diagnostic or disabled settings do not establish enforcement guarantees.
 `enforce-strict`, persistent flow labels, enforcing floors, and enabled trigger
 gating remain separate deployment choices described in the
 [enforcement matrix](cfc-enforcement-matrix.md).
 
-Legacy aggregate combine states encode selected addresses as ordinary data.
-The non-precise profile resolves those addresses for `minBy` and `maxBy`.
-Before enabling precise CFC, those states must be recomputed into acquired
-reference slots; the precise profile refuses an unproven legacy address.
+Legacy aggregate combine states encode selected addresses as ordinary data. The
+non-precise profile resolves those addresses for `minBy` and `maxBy`. Before
+enabling precise CFC, those states must be recomputed into acquired reference
+slots; the precise profile refuses an unproven legacy address.

@@ -1,8 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { JSONSchema } from "../src/builder/types.ts";
@@ -14,6 +18,7 @@ import {
   diffAndUpdate,
   normalizeAndDiff,
   schemaIfcOverlapsPath,
+  writeAuthorizationCoversPath,
 } from "../src/data-updating.ts";
 import {
   areLinksSame,
@@ -24,11 +29,64 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { decomposeSchema } from "../src/schema-decompose.ts";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toURI } from "../src/uri-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+
+/**
+ * Commits a map of `size` entries, each holding a cell of its own, rewrites it
+ * whole with one entry changed, and returns how many times the rewrite's
+ * `set()` enumerated the keys of a link envelope, along with the changed entry
+ * as read back after the rewrite commits.
+ *
+ * In the legacy link representation, recognizing a value as a link and
+ * reading the link out of it each run `Object.keys()` on the `{ "/": ... }`
+ * envelope, so the count is how many times the walk asked a link what it is.
+ */
+const linkRecognitionsOfOneEntryRewrite = async (
+  runtime: Runtime,
+  size: number,
+): Promise<{ recognitions: number; changed: unknown }> => {
+  const people = Array.from(
+    { length: size },
+    (_, index) => runtime.getCell(space, `rewrite of ${size}: person ${index}`),
+  );
+  const entries = (changed: string) =>
+    Object.fromEntries(people.map((person, index) => [
+      `key-${index}`,
+      { person, fallbackName: index === 0 ? changed : `name-${index}` },
+    ]));
+  const map = runtime.getCell<Record<string, unknown>>(
+    space,
+    `rewrite of ${size}`,
+  );
+
+  const seed = runtime.edit();
+  map.withTx(seed).set(entries("before"));
+  expect((await seed.commit()).error).toBeUndefined();
+
+  const rewritten = entries("after");
+  const tx = runtime.edit();
+  let recognitions: number;
+  {
+    using keys = spy(Object, "keys");
+    map.withTx(tx).set(rewritten);
+    recognitions =
+      keys.calls.filter(({ args: [value] }) =>
+        isObjectOrArray(value) && Object.hasOwn(value, "/")
+      ).length;
+  }
+  expect((await tx.commit()).error).toBeUndefined();
+
+  return {
+    recognitions,
+    changed: map.key("key-0").key("fallbackName").get(),
+  };
+};
 
 describe("data-updating", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -354,41 +412,122 @@ describe("data-updating", () => {
       expect(changes[1].value).toBe(3);
     });
 
-    it("should generate correct paths when setting array length to 0", () => {
-      const testCell = runtime.getCell<{ items: number[] }>(
-        space,
-        "normalizeAndDiff array length to zero",
-        undefined,
-        tx,
-      );
-      // Create array with 100 items
-      const largeArray = Array.from({ length: 100 }, (_, i) => i);
-      testCell.set({ items: largeArray });
+    describe("a write to an array's `length`", () => {
+      /** Returns a fresh cell whose `items` holds `items`. */
+      const itemsCell = (cause: string, items: unknown[]) => {
+        const cell = runtime.getCell<{ items: unknown[] }>(
+          space,
+          cause,
+          undefined,
+          tx,
+        );
+        cell.set({ items });
+        return cell;
+      };
 
-      // Now set length to 0 through the length property
-      const lengthLink = testCell.key("items").key("length")
-        .getAsNormalizedFullLink();
-      const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+      it("returns just the length write for a grow, which applies as holes", () => {
+        const cell = itemsCell("normalizeAndDiff array length grow", [1, 2]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 5);
 
-      // Should have 101 changes total
-      expect(changes.length).toBe(101);
+        expect(changes).toEqual([{ location: lengthLink, value: 5 }]);
 
-      // Find the length change
-      const lengthChange = changes.find((c) =>
-        c.location.path[c.location.path.length - 1] === "length"
-      );
-      expect(lengthChange).toBeDefined();
-      expect(lengthChange!.value).toBe(0);
+        applyChangeSet(tx, changes);
+        const items = cell.getRaw()!.items;
+        expect(items.length).toBe(5);
+        expect(Object.keys(items)).toEqual(["0", "1"]);
+      });
 
-      // Verify all elements are marked undefined with correct paths
-      const elementChanges = changes.filter((c) =>
-        c.location.path[c.location.path.length - 1] !== "length"
-      );
-      expect(elementChanges.length).toBe(100);
+      it("returns just the length write for a grow to `2 ** 32 - 1`", () => {
+        // What a grow costs here does not depend on how far it reaches, so
+        // the largest length an array can have returns as fast as `5` does.
 
-      elementChanges.forEach((change, i) => {
-        expect(change.location.path).toEqual(["items", i.toString()]);
-        expect(change.value).toBe(undefined);
+        const cell = itemsCell("normalizeAndDiff array length grow max", [1]);
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2 ** 32 - 1))
+          .toEqual([{ location: lengthLink, value: 2 ** 32 - 1 }]);
+      });
+
+      it("returns just the length write for a shrink to `0`, which empties the array", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length to zero",
+          Array.from({ length: 100 }, (_, i) => i),
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+        const changes = normalizeAndDiff(runtime, tx, lengthLink, 0);
+
+        expect(changes).toEqual([{ location: lengthLink, value: 0 }]);
+
+        applyChangeSet(tx, changes);
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("returns just the length write for a fractional length", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length fractional",
+          ["a", "b", "c", "d", "e"],
+        );
+        const lengthLink = cell.key("items").key("length")
+          .getAsNormalizedFullLink();
+
+        expect(normalizeAndDiff(runtime, tx, lengthLink, 2.5))
+          .toEqual([{ location: lengthLink, value: 2.5 }]);
+      });
+
+      it("keeps every surviving element for a negative length, which counts from the end", () => {
+        const cell = itemsCell(
+          "normalizeAndDiff array length negative",
+          ["a", "b", "c", "d", "e"],
+        );
+
+        cell.key("items").key("length").set(-1);
+
+        expect(cell.getRaw()!.items).toEqual(["a", "b", "c", "d"]);
+      });
+
+      it("empties the array for `-Infinity`", () => {
+        const cell = itemsCell("normalizeAndDiff array length -Infinity", [
+          "a",
+          "b",
+        ]);
+
+        cell.key("items").key("length").set(-Infinity);
+
+        expect(cell.getRaw()!.items).toEqual([]);
+      });
+
+      it("keeps every key of an object that replaces the array, `length` included", () => {
+        // The new values differ from the old elements at the same indices, so
+        // no key is lost to a comparison against the array being replaced.
+
+        const numeric = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, numeric length",
+          undefined,
+          tx,
+        );
+        numeric.set({ x: ["a", "b", "c"] });
+        numeric.set({ x: { "0": "x", "1": "y", length: 1 } });
+
+        const named = runtime.getCell<{ x: unknown }>(
+          space,
+          "normalizeAndDiff array replaced by object, named length",
+          undefined,
+          tx,
+        );
+        named.set({ x: ["a", "b"] });
+        named.set({ x: { "0": "x", "1": "y", length: "two" } });
+
+        expect(numeric.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: 1 },
+        });
+        expect(named.getRaw()).toEqual({
+          x: { "0": "x", "1": "y", length: "two" },
+        });
       });
     });
 
@@ -902,6 +1041,57 @@ describe("data-updating", () => {
         metadata: { description: "Contains a nested link" },
       });
     });
+
+    it("recognizes each link of a rewritten map of cells a fixed number of times, at 200 entries as at 20", async () => {
+      // Every check the walk makes about whether a value is a link, or where
+      // it points, reads a parse made once per call, so each entry costs the
+      // same small number of recognitions however large the map. The equal
+      // per-entry counts say the cost does not grow with the map; the bound
+      // says it stays this small, which a check that recognized and parsed
+      // again on its own would break. The lower bound fails the case if the
+      // links stop being envelopes that `Object.keys()` enumerates, rather
+      // than letting it pass on a count of zero.
+      const short = await linkRecognitionsOfOneEntryRewrite(runtime, 20);
+      const long = await linkRecognitionsOfOneEntryRewrite(runtime, 200);
+
+      expect(short.changed).toBe("after");
+      expect(long.changed).toBe("after");
+      expect(long.recognitions / 200).toBe(short.recognitions / 20);
+      expect(long.recognitions / 200).toBeGreaterThan(0);
+      expect(long.recognitions / 200).toBeLessThanOrEqual(19);
+    });
+
+    it("replaces a stored link whose path does not parse with a write redirect", () => {
+      const aliased = runtime.getCell<{ v: number }>(
+        space,
+        "the cell a write redirect names",
+        undefined,
+        tx,
+      );
+      aliased.set({ v: 1 });
+      const slot = runtime.getCell<Record<string, unknown>>(
+        space,
+        "a slot holding a link whose path does not parse",
+        undefined,
+        tx,
+      );
+      tx.writeValueOrThrow(slot.getAsNormalizedFullLink(), {
+        x: linkRefFrom({
+          id: aliased.getAsNormalizedFullLink().id,
+          path: [null],
+        }),
+      });
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot.key("x").getAsNormalizedFullLink(),
+        aliased.getAsWriteRedirectLink(),
+      );
+
+      expect(changes).toHaveLength(1);
+      expect(parseLink(changes[0].value)?.overwrite).toBe("redirect");
+    });
   });
 
   it("should handle data: URI links that contain nested links and references go through it", () => {
@@ -1004,11 +1194,10 @@ describe("data-updating", () => {
 
     const current = targetCell.key("result").getAsNormalizedFullLink();
 
-    // Write the data cell (which contains a redirect to sourceCell) to the target
-    // Before the fix: data URI was not inlined early enough, and the redirect
-    // would be written to destinationCell.value instead of target.result
-    // After the fix: data URI is inlined first, exposing the redirect, which is
-    // then properly written to target.result
+    // Write the data cell (which contains a redirect to sourceCell) to the
+    // target. The data URI is inlined ahead of the check for a redirect in the
+    // current value, so the redirect it holds is written to `target.result`,
+    // and the current value's redirect to `destinationCell` is not followed.
     const changes = normalizeAndDiff(
       runtime,
       tx,
@@ -1121,6 +1310,76 @@ describe("data-updating", () => {
       expect(Object.isFrozen(written)).toBe(false);
     });
 
+    it("asserts an array of equal links in its stored form", () => {
+      // The transaction itself is marked, rather than reporting the posture
+      // through `authoritative()`, so that applying the change set skips the
+      // write layer's equal-value elision as well and writes it in full.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (array)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ items: unknown[] }>(
+        space,
+        "authoritative re-assert equal links array",
+        undefined,
+        tx,
+      );
+      testCell.set({ items: [target] });
+      const current = testCell.key("items").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, [target]);
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(isPrimitiveCellLink((changes[0].value as unknown[])[0])).toBe(
+        true,
+      );
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
+    it("asserts a record of equal links in its stored form", () => {
+      // Marked on the transaction itself, as in the array case above.
+
+      const target = runtime.getCell<number>(
+        space,
+        "authoritative re-assert link target (record)",
+        undefined,
+        tx,
+      );
+      target.set(1);
+      const testCell = runtime.getCell<{ rec: Record<string, unknown> }>(
+        space,
+        "authoritative re-assert equal links record",
+        undefined,
+        tx,
+      );
+      testCell.set({ rec: { a: target } });
+      const current = testCell.key("rec").getAsNormalizedFullLink();
+      const stored = tx.readValueOrThrow(current);
+      tx.tx.markAuthoritativeWrites!();
+      expect(tx.isAuthoritativeWrites?.()).toBe(true);
+
+      const changes = normalizeAndDiff(runtime, tx, current, { a: target });
+
+      expect(changes.length).toBe(1);
+      expect(changes[0].location).toEqual(current);
+      expect(changes[0].value).toEqual(stored);
+      expect(
+        isPrimitiveCellLink((changes[0].value as Record<string, unknown>).a),
+      ).toBe(true);
+      applyChangeSet(tx, changes);
+      expect(tx.readValueOrThrow(current)).toEqual(stored);
+    });
+
     it("emits nothing for an equal array outside the authoritative posture", () => {
       const testCell = runtime.getCell<{ items: number[] }>(
         space,
@@ -1137,8 +1396,10 @@ describe("data-updating", () => {
 
   describe("array-element anchoring in normalizeAndDiff", () => {
     it("stores array-element objects inline when no anchor id source is supplied", () => {
-      // `diffAndUpdate` without an anchor id source is the frameless write:
-      // objects in arrays stay inline rather than becoming documents.
+      // A direct `diffAndUpdate` call with no id source: objects in arrays
+      // stay inline rather than becoming documents. The `Cell` write paths
+      // always pass one, so this shape is reached by a caller that builds the
+      // walk itself.
       const testCell = runtime.getCell<unknown>(
         space,
         "no anchor source stores inline",
@@ -1158,13 +1419,78 @@ describe("data-updating", () => {
       expect(raw[0]).toEqual({ name: "Ada" });
     });
 
+    it("stores each array-element object as a link when one is supplied", () => {
+      // The positive half of the case above, over the same call: with an id
+      // source each object leaves a link to a document of its own, and two
+      // objects at two positions leave two distinct documents.
+
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "anchor source stores links",
+        undefined,
+        tx,
+      );
+      let seed = 0;
+      diffAndUpdate(
+        runtime,
+        tx,
+        testCell.getAsNormalizedFullLink(),
+        [{ name: "Ada" }, { name: "Grace" }],
+        "anchor source stores links",
+        undefined,
+        () => seed++,
+      );
+
+      const raw = testCell.getRaw() as unknown[];
+      const ids = raw.map((entry) => parseLink(entry)?.id);
+      expect(ids).toEqual([expect.any(String), expect.any(String)]);
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(ids).not.toContain(testCell.getAsNormalizedFullLink().id);
+    });
+
+    it("leaves an element that arrives as a link alone", () => {
+      // An element already carrying a link is stored as that link and draws
+      // no id: nothing re-homes a value the writer addressed by reference.
+
+      const target = runtime.getCell<unknown>(
+        space,
+        "link element target",
+        undefined,
+        tx,
+      );
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "link element container",
+        undefined,
+        tx,
+      );
+      const link = target.getAsLink();
+      let draws = 0;
+      diffAndUpdate(
+        runtime,
+        tx,
+        testCell.getAsNormalizedFullLink(),
+        [link],
+        "link element container",
+        undefined,
+        () => `seed-${draws++}`,
+      );
+
+      expect(draws).toBe(0);
+      const raw = testCell.getRaw() as unknown[];
+      expect(parseLink(raw[0], testCell)?.id).toBe(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
     it("draws anchor ids pre-order: containing element before nested children", () => {
       // The id source is consumed for an anchored element BEFORE the
       // recursion into its content, so an element containing its own
       // objects-in-arrays draws a lower seed than they do. This pins the
-      // sequence deliberately: the annotation scheme this replaced drew
-      // post-order (children first), and nothing else pins either order --
-      // a change here silently re-derives every nested anchored id.
+      // sequence deliberately: a change to it would silently re-derive every
+      // nested anchored id. Each element takes its array's position as its
+      // context, read from the written value, so the arrays written fresh
+      // here derive what a rewrite of stored ones would.
       const testCell = runtime.getCell<unknown>(
         space,
         "pre-order anchor ids",
@@ -1192,7 +1518,7 @@ describe("data-updating", () => {
       const rootLink = testCell.getAsNormalizedFullLink();
       const outerId = toURI(createRef({ id: "seed-0" }, {
         parent: { id: rootLink.id, space: rootLink.space },
-        path: ["0"],
+        path: [],
         context,
       }));
       const raw = testCell.getRaw() as unknown[];
@@ -1201,7 +1527,7 @@ describe("data-updating", () => {
 
       const innerId = toURI(createRef({ id: "seed-1" }, {
         parent: { id: outerId, space: rootLink.space },
-        path: ["kids", "0"],
+        path: ["kids"],
         context,
       }));
       const outerDoc = runtime.getCellFromLink(outerLink!, undefined, tx);
@@ -1209,11 +1535,87 @@ describe("data-updating", () => {
       expect(parseLink(outerRaw.kids[0], outerDoc)?.id).toBe(innerId);
     });
 
+    it("anchors a fresh array's element under the identity a stored one's takes", () => {
+      // The element's identity takes its array's position as context. That
+      // is read from the value the walk writes, so it does not depend on
+      // whether the array was stored before the write.
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "fresh and stored anchor ids",
+        undefined,
+        tx,
+      );
+      const link = testCell.getAsNormalizedFullLink();
+      const context = "fresh and stored anchor ids";
+      const ids: (string | undefined)[] = [];
+      for (const note of ["first", "second"]) {
+        diffAndUpdate(
+          runtime,
+          tx,
+          link,
+          [{ note }],
+          context,
+          undefined,
+          () => "seed",
+        );
+        const raw = testCell.getRaw() as unknown[];
+        ids.push(parseLink(raw[0], testCell)?.id);
+      }
+      expect(ids[0]).toBe(toURI(createRef({ id: "seed" }, {
+        parent: { id: link.id, space: link.space },
+        path: [],
+        context,
+      })));
+      expect(ids[1]).toBe(ids[0]);
+    });
+
+    it("anchors a fresh scope-narrowed array element under the identity a stored one's takes", () => {
+      // Each element's schema narrows it to the user's instance, so the
+      // element is anchored at the same position in that instance. The array
+      // the element sits in is the one this walk writes, whichever instance
+      // holds its content.
+      const schema = {
+        type: "array",
+        items: {
+          type: "object",
+          scope: "user",
+          properties: { note: { type: "string" } },
+        },
+      } as const satisfies JSONSchema;
+      const testCell = runtime.getCell<unknown>(
+        space,
+        "fresh and stored scoped anchor ids",
+        schema,
+        tx,
+      );
+      const link = testCell.getAsNormalizedFullLink();
+      const context = "fresh and stored scoped anchor ids";
+      const ids: (string | undefined)[] = [];
+      for (const note of ["first", "second"]) {
+        diffAndUpdate(
+          runtime,
+          tx,
+          link,
+          [{ note }],
+          context,
+          undefined,
+          () => "seed",
+        );
+        const scoped = runtime.getCellFromLink(
+          { ...link, scope: "user", path: ["0"], schema: undefined },
+          undefined,
+          tx,
+        );
+        ids.push(parseLink(scoped.getRaw(), scoped)?.id);
+      }
+      expect(ids[0]).toBeDefined();
+      expect(ids[1]).toBe(ids[0]);
+    });
+
     it("converges repeated references on one document", () => {
       // The same object in two array slots is one entity: both slots link to
-      // a single document and the id source is consumed once. (The
-      // annotation scheme stamped a fresh copy per occurrence and stored two
-      // documents; preserving the written graph's aliasing is deliberate.)
+      // a single document and the id source is consumed once. Preserving the
+      // written graph's aliasing is deliberate.
       const testCell = runtime.getCell<unknown>(
         space,
         "shared reference converges",
@@ -1343,7 +1745,7 @@ describe("data-updating", () => {
 
     it("normalizes addUnique candidates before stored-value comparison", () => {
       // The dedup comparison must see the candidate in its fabric form: a
-      // repeated native `Date` matches the stored `FabricEpochNsec` and
+      // repeated JS `Date` matches the stored `FabricEpochNsec` and
       // no-ops rather than throwing (or duplicating). The normalization is
       // comparison-only -- an ACCEPTED candidate writes the original value.
       const frame = pushFrame({
@@ -1656,8 +2058,7 @@ describe("data-updating", () => {
 
     it("draws no anchor id for an addUnique candidate rejected as duplicate", () => {
       // A candidate `addUnique` rejects never reaches the write, so it draws
-      // no id. (The annotation scheme anchored all candidates before
-      // filtering, so a rejected duplicate still consumed one.)
+      // no id.
       const frame = pushFrame({
         generatedIdCounter: 0,
         cause: "addUnique duplicate draws nothing",
@@ -1974,20 +2375,16 @@ describe("compactChangeSet", () => {
       expect(result[0].location.path).toEqual(["foo"]);
     });
 
-    it("should NOT subsume child when parent sets different key (BUG TEST)", () => {
+    it("does not subsume a child whose key the parent does not set", () => {
       // Parent writes {a: 1} to 'foo', child writes 99 to 'foo.b' (DIFFERENT key!)
       // Child write is NOT redundant - it sets a key not in parent!
-      //
-      // IMPORTANT: This test documents the EXPECTED behavior.
-      // If this fails, it reveals the bug in compactChangeSet.
       const changes: ChangeSet = [
         makeChange(["foo"], { a: 1 }),
         makeChange(["foo", "b"], 99),
       ];
       const result = compactChangeSet(changes);
 
-      // We EXPECT both changes to be kept because parent doesn't include 'b'
-      // If this assertion fails with length 1, the bug exists.
+      // Both changes are kept because parent doesn't include 'b'
       expect(result).toHaveLength(2);
       expect(result[0].location.path).toEqual(["foo"]);
       expect(result[1].location.path).toEqual(["foo", "b"]);
@@ -2089,7 +2486,7 @@ describe("compactChangeSet", () => {
       ];
       const result = compactChangeSet(changes);
 
-      // With the fix, only children whose paths exist in parent are subsumed
+      // Only children whose paths exist in parent are subsumed
       // Parent {x: 1} doesn't contain 'y' or 'z', so all 3 changes are kept
       expect(result).toHaveLength(3);
       expect(result[0].location.path).toEqual(["root"]);
@@ -2125,7 +2522,7 @@ describe("compactChangeSet", () => {
       // Parent writes array [1, 2], child writes to index "01"
       // "01" is not a valid array index (has leading zero), so the child
       // path does NOT exist in the parent and should NOT be subsumed.
-      // Fixed by isArrayIndexPropertyName() which correctly rejects "01".
+      // `isArrayIndexPropertyName()` decides, and it returns `false` for "01".
       const changes: ChangeSet = [
         makeChange(["items"], [1, 2]),
         makeChange(["items", "01"], 99),
@@ -2283,13 +2680,12 @@ describe("scope-isolation write guard", () => {
   // in docs/development/debugging/gotchas/scoped-cell-pitfalls.md): links do
   // not carry a principal, so a narrower-scoped link stored in a broader-scoped
   // slot resolves to a DIFFERENT instance for every reader — shared data
-  // written that way can never propagate (the B2 reader-blackout investigation,
-  // #4457). The guard WARNS loudly at the write site unless the slot's schema
-  // declares the scope (per-reader semantics opted into by the author). It is a
-  // warn, not a throw, because the runtime's own machinery legitimately writes
-  // scoped links into scope-silent slots today (.asScope() result links,
-  // navigateTo result cells, updateArgument setup wiring); see the enumeration
-  // on #4561 for the flip-to-throw checklist.
+  // written that way can never propagate. The guard WARNS loudly at the write
+  // site unless the slot's schema declares the scope (per-reader semantics
+  // opted into by the author). It is a warn, not a throw, because the runtime's
+  // own machinery legitimately writes scoped links into scope-silent slots
+  // today (.asScope() result links, navigateTo result cells, updateArgument
+  // setup wiring).
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -2409,7 +2805,7 @@ describe("scope-isolation write guard", () => {
     expect(warnCounts()).toBe(before + 1);
   });
 
-  it("does not warn when the slot's schema tolerates undefined (ubik2's criterion)", () => {
+  it("does not warn when the slot's schema tolerates `undefined`", () => {
     // A slot that matches undefined degrades harmlessly for readers whose
     // resolution comes up empty — per-reader links there are a legitimate
     // pattern, not the blackout footgun.
@@ -2486,7 +2882,7 @@ describe("scope-isolation write guard", () => {
     expect(warnCounts()).toBe(before + 1);
   });
 
-  it("does not warn for an optional slot, even when strictly typed (ubik2's criterion)", () => {
+  it("does not warn for an optional slot, even when strictly typed", () => {
     // The parent's `required` list is what makes a missing cell void the
     // read; an optional property is simply dropped and the object survives —
     // per-reader links there degrade harmlessly.
@@ -2518,9 +2914,8 @@ describe("scope-isolation write guard", () => {
   });
 
   it("resolves $defs/$ref slot schemas before judging tolerance (still warns on strict refs)", () => {
-    // CTS-emitted slot schemas routinely carry $defs + $ref (the original
-    // convergence-chat repro's stored link schema had exactly this shape);
-    // tolerance must be judged on the resolved schema, not the ref wrapper.
+    // CTS-emitted slot schemas routinely carry $defs + $ref; tolerance must be
+    // judged on the resolved schema, not the ref wrapper.
     const dest = runtime.getCell<{ profile?: unknown }>(
       space,
       "scope-guard-ref-dest",
@@ -2639,10 +3034,59 @@ describe("scope-isolation write guard", () => {
   });
 });
 
+describe("a write into a slot whose schema names a scoped definition", () => {
+  // The slot holds a `$ref`, and the scope sits on the definition it names,
+  // which is where a recursive type puts it: the definition is what every
+  // position of that type refers to.
+
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+  let tx: IExtendedStorageTransaction;
+
+  const scopedDefinitionSchema = {
+    type: "object",
+    properties: { nickname: { $ref: "#/$defs/Nickname" } },
+    $defs: { Nickname: { type: "string", scope: "user" } },
+  } as const satisfies JSONSchema;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("stores a redirect to the scoped instance rather than the value", () => {
+    const dest = runtime.getCell<{ nickname: string }>(
+      space,
+      "scoped-definition-dest",
+      scopedDefinitionSchema,
+      tx,
+    );
+
+    dest.set({ nickname: "Alice" });
+
+    const stored = tx.readValueOrThrow(
+      dest.key("nickname").getAsNormalizedFullLink(),
+    );
+    expect(isSigilLink(stored)).toBe(true);
+    expect(parseLink(stored as any, dest.getAsNormalizedFullLink())?.scope)
+      .toBe("user");
+  });
+});
+
 describe("schemaIfcOverlapsPath", () => {
-  // CT-1895: the overlap predicate deciding whether a schema-policy write input
-  // might cover a written path missed ifc labels in tuple slots, so
-  // schema-policy inputs for tuple positions were skipped (fail-open).
+  // The predicate decides whether a schema-policy write input might cover a
+  // written path. An `ifc` label in a tuple slot overlaps at the slot's
+  // concrete index.
 
   const tupleSchema = {
     type: "object",
@@ -2679,8 +3123,8 @@ describe("schemaIfcOverlapsPath", () => {
   });
 
   it("sees labels inside combinator branches (shared-walk descent)", () => {
-    // Gained by the forEachSubschema rework: ifc under an anyOf branch was
-    // previously invisible to the predicate (fail-open).
+    // Combinator branches descend at the same path, so an `ifc` label under an
+    // `anyOf` branch overlaps a write to the field.
     const branchSchema = {
       type: "object",
       properties: {
@@ -2693,5 +3137,137 @@ describe("schemaIfcOverlapsPath", () => {
       },
     } as const satisfies JSONSchema;
     expect(schemaIfcOverlapsPath(branchSchema, [], ["field"])).toBe(true);
+  });
+});
+
+describe("writeAuthorizationCoversPath", () => {
+  // The predicate decides whether a write authorization arriving with a
+  // transaction protects the location a link is written to, so the link is
+  // held to the same source check it meets once the claim is stored.
+  const writeAuthorizedBy = ["writer"];
+
+  it("covers an element of a protected list", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["items", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("does not cover a sibling of the protected field", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: { type: "array", ifc: { writeAuthorizedBy } },
+        notes: { type: "array" },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["notes", "0"])).toBe(
+      false,
+    );
+  });
+
+  it("covers through allOf, which every value is held to", () => {
+    const schema = {
+      type: "array",
+      allOf: [{ ifc: { writeAuthorizedBy } }],
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["0"])).toBe(true);
+  });
+
+  it("does not cover through an anyOf branch, which holds only some values", () => {
+    const schema = {
+      type: "array",
+      items: {
+        anyOf: [
+          { type: "object", ifc: { writeAuthorizedBy } },
+          { type: "string" },
+        ],
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["0"])).toBe(false);
+  });
+
+  it("covers a list whose claim is reached through a reference", () => {
+    const schema = {
+      type: "object",
+      properties: { items: { $ref: "#/$defs/Protected" } },
+      $defs: {
+        Protected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["items", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("does not hold a named property to the additionalProperties claim", () => {
+    const schema = {
+      type: "object",
+      properties: { open: { type: "array" } },
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["open", "0"])).toBe(
+      false,
+    );
+  });
+
+  it("covers a key only the additionalProperties schema describes", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["any", "0"])).toBe(true);
+  });
+
+  it("covers a claim whose schema document arrives after a first ask", () => {
+    const decomposed = decomposeSchema({
+      type: "object",
+      properties: { lateItems: { $ref: "#/$defs/LateProtected" } },
+      $defs: {
+        LateProtected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    });
+    const schema = internSchema({ $ref: decomposed.rootRef });
+
+    // The first ask resolves nothing, so it must not be remembered.
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      false,
+    );
+    for (const [hash, document] of decomposed.documents) {
+      registerSchemaDocument(hash, document);
+    }
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("ignores claims that are not write authorizations", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "Save" } },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["title"])).toBe(false);
   });
 });

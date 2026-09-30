@@ -8,6 +8,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -78,7 +79,7 @@ describe("CFC privileged system write (S18)", () => {
       const result = await tx.commit();
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
-        "unprivileged write to protected cfc path",
+        "unprivileged write to protected runtime surface",
       );
     } finally {
       await runtime.dispose();
@@ -231,7 +232,7 @@ describe("CFC privileged system write (S18)", () => {
       const result = await tx.commit();
       expect(isCfcEnforcementRejection(result.error)).toBe(true);
       expect(String((result.error as Error).message)).toContain(
-        "unprivileged write to protected cfc path",
+        "unprivileged write to protected runtime surface",
       );
     } finally {
       await runtime.dispose();
@@ -303,21 +304,13 @@ describe("CFC privileged system write (S18)", () => {
     }
   });
 
-  it("does not gate a path-[] full-document write carrying a cfc field", async () => {
-    // Open residual: a path-[] full-document write that leaves a label map
-    // behind is not gated, whether it mints one where the document stored
-    // none or substitutes one for another. This is the raw-seed idiom the CFC
-    // tests are built on (seedPrivilegedCfc in cfc-boundary.test.ts, and the
-    // metadata re-pointing in speculation-overlay.test.ts), and it is
-    // reachable from untrusted code: a handler holds a runtime cell and the
-    // transaction it is bound to addresses the whole document
-    // (docs/plans/runner_cfc_implementation.md "Document Surface Rules").
-    // The meta seam is gated across both addressing modes
-    // (meta-seam-write-authorization.test.ts); label-map forgery through the
-    // document root is what this test records as ungated. This case mints
-    // onto a document that stored no map; the case below strips a live one. A
-    // root write that leaves NO readable map behind is a different case and
-    // IS gated — see the erasure cases after that.
+  it("gates a path-[] full-document write that mints a label map", async () => {
+    // A path-[] write replaces the whole envelope, so an envelope carrying a
+    // `cfc` record of the writer's own installs a label map the derivation
+    // pass never derived, with the address never naming ["cfc"]. This case
+    // mints onto a document that stored no map; the case further down
+    // substitutes one for another. Both are recorded like a write that names
+    // the path.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -327,35 +320,25 @@ describe("CFC privileged system write (S18)", () => {
       const tx = runtime.edit();
       const target = runtime.getCell(
         signer.did(),
-        "s18-root-seed",
+        "s18-root-mint",
         undefined,
         tx,
       );
       const id = target.getAsNormalizedFullLink().id as URI;
       writeSeedEnvelopeDoc(tx, signer.did());
-      // Mirror seedPrivilegedCfc: read the current doc, then write the whole
-      // envelope at path [] with the cfc record embedded.
-      const docAddress = {
+      tx.writeOrThrow({
         space: signer.did(),
         id,
         type: "application/json" as const,
         path: [],
-      };
-      let current: unknown;
-      try {
-        current = tx.readOrThrow(docAddress);
-      } catch {
-        current = undefined;
-      }
-      const base = current && typeof current === "object" ? current : {};
-      tx.writeOrThrow(
-        docAddress,
-        { ...base, cfc: forgedMetadata },
+      }, { value: { note: "one" }, cfc: forgedMetadata });
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([`${id}/cfc`]);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-cfc-forgery",
       );
-      expect(tx.getCfcState().unprivilegedSystemWrites.length).toBe(0);
 
       const result = await tx.commit();
-      expect(result.ok).toBeDefined();
+      expect(result.error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -407,7 +390,10 @@ describe("CFC privileged system write (S18)", () => {
     // schema reference, so the seed names the backed seed document and
     // installs it in the same transaction.
     writeSeedEnvelopeDoc(seed, signer.did());
-    seed.writeOrThrow(address, { value: { note: "one" }, cfc: storedMetadata });
+    seedStoredEnvelope(seed, address, {
+      value: { note: "one" },
+      cfc: storedMetadata,
+    });
     const seedResult = await seed.commit();
     expect(seedResult.ok).toBeDefined();
     return address;
@@ -430,7 +416,7 @@ describe("CFC privileged system write (S18)", () => {
 
       const { reasons, result } = await prepareAndCommit(tx);
       expect(reasons).toContain(
-        `unprivileged write to protected cfc path ${address.id}/cfc`,
+        `unprivileged write to protected runtime surface ${address.id}/cfc`,
       );
       expect(result.error?.name).toBe("CfcCommitRefusalError");
 
@@ -446,19 +432,12 @@ describe("CFC privileged system write (S18)", () => {
     }
   });
 
-  it("does not gate a loaded writer stripping a live label map to an empty one", async () => {
-    // The half of the forge residual that decides how much the erasure arm
-    // above is worth. A writer holding the document — the arm's best case,
-    // where its transaction-local read sees the stored map — strips every
-    // label by substituting a well-formed map with no entries. Nothing is
-    // recorded, the commit lands, and policy then applies on no path at all:
-    // the same unlabeled document an erasure would leave, reached without
-    // ever dropping the member.
-    //
-    // So an erasure gate is not the boundary here while this stands. It is
-    // pinned rather than described because it is what a reader weighing the
-    // erasure arm's reach needs to see, and because it fails the day the
-    // forge residual closes.
+  it("gates a loaded writer stripping a live label map to an empty one", async () => {
+    // The substituting half of the same forgery. A writer holding the
+    // document strips every label by replacing the stored map with a
+    // well-formed one carrying no entries. The `cfc` member is present either
+    // way, so an omission test sees nothing; what is recorded is that the map
+    // left behind is not the map that was stored.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -485,11 +464,17 @@ describe("CFC privileged system write (S18)", () => {
         value: { note: "stripped" },
         cfc: { ...storedMetadata, labelMap: { version: 1, entries: [] } },
       });
-      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+        `${address.id}/cfc`,
+      ]);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-cfc-forgery",
+      );
+      expect((await tx.commit()).error).toBeDefined();
 
+      // The stored label map survives the refused commit.
       const after = runtime.edit();
-      expect(storedCfcMetadataAppliesToPath(after, target)).toBe(false);
+      expect(storedCfcMetadataAppliesToPath(after, target)).toBe(true);
       await after.commit();
     } finally {
       await runtime.dispose();
@@ -526,6 +511,69 @@ describe("CFC privileged system write (S18)", () => {
 
       const result = await tx.commit();
       expect(result.ok).toBeDefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("gates a rebuilt envelope whose labels work out the same", async () => {
+    // What a whole-document write owes the sibling is the value the document
+    // holds. An OR clause listing the same alternatives in another order
+    // names the same label, and the envelope around it is still one this
+    // writer composed rather than the one it read, so it records. The rule
+    // holds at the value, which is the one answer that fits every spelling a
+    // stored envelope takes.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    try {
+      const seed = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "s18-root-reorder",
+        undefined,
+        seed,
+      );
+      const address = {
+        space: signer.did(),
+        id: target.getAsNormalizedFullLink().id as URI,
+        type: "application/json" as const,
+        path: [] as string[],
+      };
+      writeSeedEnvelopeDoc(seed, signer.did());
+      const entry = (...anyOf: string[]) => ({
+        path: [] as string[],
+        label: { confidentiality: [{ anyOf }] },
+      });
+      seedStoredEnvelope(seed, address, {
+        value: { note: "one" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [entry("alpha", "beta")] },
+        },
+      });
+      expect((await seed.commit()).ok).toBeDefined();
+
+      const tx = runtime.edit();
+      tx.writeOrThrow(address, {
+        value: { note: "two" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [entry("beta", "alpha")] },
+        },
+      });
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+        `${address.id}/cfc`,
+      ]);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-cfc-forgery",
+      );
+      expect((await tx.commit()).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -583,7 +631,7 @@ describe("CFC privileged system write (S18)", () => {
         ]);
         const { reasons, result } = await prepareAndCommit(tx);
         expect(reasons).toContain(
-          `unprivileged write to protected cfc path ${address.id}/cfc`,
+          `unprivileged write to protected runtime surface ${address.id}/cfc`,
         );
         expect(result.error?.name).toBe("CfcCommitRefusalError");
       }
@@ -594,15 +642,14 @@ describe("CFC privileged system write (S18)", () => {
   });
 
   it("refuses the commit as a preparation crash when the stored `cfc` member cannot be walked", async () => {
-    // A record at the reserved position with no `version` is one
-    // `readStoredCfcMetadata` reports as absent, so the erasure lands in
-    // `unprivilegedSystemWrites` like the shapes above. Prepare reads the same
-    // member through `storedMetadataFor`, which refuses a record it cannot
-    // walk, and that refusal replaces every reason the pass had collected, the
-    // S18 verdict among them. `CommitPreparationError` is not a terminal
-    // rejection, so the scheduler spends its bounded retry budget on a commit
-    // that refuses identically every time, where the verdict would have
-    // stopped it at the first attempt.
+    // A record at the reserved position with no `version` is one no reader
+    // can produce labels from. It is not the stored map either, so the S18
+    // arm records the substitution. Prepare then reads the same member and
+    // crashes on it, and that crash replaces every reason the pass had
+    // collected, the S18 verdict among them. `CommitPreparationError` is not
+    // a terminal rejection, so the scheduler spends its bounded retry budget
+    // on a commit that refuses identically every time, where the verdict it
+    // discarded would have stopped at the first attempt.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -627,7 +674,7 @@ describe("CFC privileged system write (S18)", () => {
         "carries no label map this build can read",
       );
       expect(reasons.join(" ")).not.toContain(
-        "unprivileged write to protected cfc path",
+        "unprivileged write to protected runtime surface",
       );
       expect(result.error?.name).toBe("CommitPreparationError");
     } finally {
@@ -636,10 +683,12 @@ describe("CFC privileged system write (S18)", () => {
     }
   });
 
-  it("does not gate a root envelope carrying a label map this build cannot read", async () => {
+  it("records a root envelope carrying a label map this build cannot read as a forgery", async () => {
     // An envelope whose `version` this build does not interpret is not an
     // erasure: the reader throws on it and every consumer fails closed, so the
-    // document it leaves behind is not an unlabeled one.
+    // document it leaves behind is not an unlabeled one. It is still not the
+    // map that was stored, so it is recorded, and the diagnostic says which of
+    // the two it was.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -652,7 +701,12 @@ describe("CFC privileged system write (S18)", () => {
         value: { note: "two" },
         cfc: { ...storedMetadata, version: 99 },
       });
-      expect(tx.getCfcState().unprivilegedSystemWrites.length).toBe(0);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-cfc-forgery",
+      );
+      expect(tx.getCfcState().diagnostics).not.toContain(
+        "unprivileged-cfc-erasure",
+      );
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -707,9 +761,227 @@ describe("CFC privileged system write (S18)", () => {
       tx.setCfcEnforcementMode("enforce-explicit");
       const { reasons, result } = await prepareAndCommit(tx);
       expect(reasons).toContain(
-        `unprivileged write to protected cfc path ${address.id}/cfc`,
+        `unprivileged write to protected runtime surface ${address.id}/cfc`,
       );
       expect(result.error?.name).toBe("CfcCommitRefusalError");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("diagnoses a forged label map in observe mode", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "observe",
+    });
+    try {
+      const address = await seedLabeledDocument(runtime, "s18-forge-observe");
+
+      const tx = runtime.edit();
+      tx.writeOrThrow(address, {
+        value: { note: "two" },
+        cfc: forgedMetadata,
+      });
+      expect((await tx.commit()).ok).toBeDefined();
+      expect(tx.getCfcState().diagnostics).toContain(
+        `unprivileged write to protected runtime surface ${address.id}/cfc`,
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("records a forged label map written while disabled so a mid-tx escalation rejects", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "disabled",
+    });
+    try {
+      const address = await seedLabeledDocument(runtime, "s18-forge-escalate");
+
+      const tx = runtime.edit();
+      tx.writeOrThrow(address, {
+        value: { note: "two" },
+        cfc: forgedMetadata,
+      });
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+        `${address.id}/cfc`,
+      ]);
+      tx.setCfcEnforcementMode("enforce-explicit");
+      expect((await tx.commit()).error).toBeDefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("gates a write addressed at the ['source'] sibling", async () => {
+    // `source` is the other reserved sibling. The prepare pass leaves it out
+    // of schema write policy and out of the flow join, on the strength of the
+    // runtime being its only writer, so a write reaching it from outside the
+    // privileged scope is recorded like a label-map write.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+    });
+    try {
+      const tx = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "s18-source-path",
+        undefined,
+        tx,
+      );
+      const id = target.getAsNormalizedFullLink().id as URI;
+      tx.writeOrThrow(
+        {
+          space: signer.did(),
+          id,
+          type: "application/json" as const,
+          path: ["source"],
+        },
+        { note: "smuggled" } as never,
+      );
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+        `${id}/source`,
+      ]);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-source-write",
+      );
+      expect((await tx.commit()).error).toBeDefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("gates a path-[] write whose envelope carries a ['source'] sibling", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+    });
+    try {
+      const tx = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "s18-source-envelope",
+        undefined,
+        tx,
+      );
+      const id = target.getAsNormalizedFullLink().id as URI;
+      tx.writeOrThrow(
+        {
+          space: signer.did(),
+          id,
+          type: "application/json" as const,
+          path: [],
+        },
+        { value: { note: "one" }, source: { note: "smuggled" } } as never,
+      );
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+        `${id}/source`,
+      ]);
+      expect(tx.getCfcState().diagnostics).toContain(
+        "unprivileged-source-forgery",
+      );
+      expect((await tx.commit()).error).toBeDefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("does not gate a path-[] write made inside the privileged scope", async () => {
+    // The one route a fixture has. `seedStoredEnvelope` runs the write inside
+    // the privileged persistence scope, reached through the transaction's
+    // `accessForTestingOnly` getter, so a seed lands the label state a test
+    // needs without being recorded as the forgery it resembles.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+    });
+    try {
+      const tx = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "s18-root-seed",
+        undefined,
+        tx,
+      );
+      const id = target.getAsNormalizedFullLink().id as URI;
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, {
+        space: signer.did(),
+        id,
+        type: "application/json" as const,
+        path: [],
+      }, { value: { note: "one" }, cfc: forgedMetadata });
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
+      expect((await tx.commit()).ok).toBeDefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("accepts no write option as authorization", async () => {
+    // The guard has no options-carried key, so a caller cannot reach past it
+    // by supplying one. Every write option below — a plain flag, a registered
+    // symbol, and a fresh one — leaves the write recorded. Reintroducing an
+    // options-carried bypass fails here.
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+    });
+    try {
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, signer.did());
+      const lookalikes = [
+        { "reserved-sibling-write": true },
+        { [Symbol.for("reserved-sibling-write")]: true },
+        { [Symbol("privileged")]: true },
+      ];
+      // One document apiece: a second write of the same envelope over the
+      // first one's result changes nothing, and would be left alone for that
+      // reason rather than for anything to do with the options it carried.
+      const ids = lookalikes.map((_, index) =>
+        runtime.getCell(
+          signer.did(),
+          `s18-root-no-option-${index}`,
+          undefined,
+          tx,
+        ).getAsNormalizedFullLink().id as URI
+      );
+      lookalikes.forEach((options, index) => {
+        tx.writeOrThrow(
+          {
+            space: signer.did(),
+            id: ids[index],
+            type: "application/json" as const,
+            path: [],
+          },
+          { value: { note: "one" }, cfc: forgedMetadata },
+          options as never,
+        );
+      });
+      expect(tx.getCfcState().unprivilegedSystemWrites).toEqual(
+        ids.map((id) => `${id}/cfc`),
+      );
+      expect((await tx.commit()).error).toBeDefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -776,20 +1048,10 @@ describe("CFC privileged system write (S18)", () => {
     }
   });
 
-  it("does not reach a writer whose transaction never loaded the document", async () => {
-    // The bound on the arm above, pinned rather than described. The stored
-    // half reads through the writing transaction, and a transaction whose
-    // view does not hold the document answers the same "no map here" a
-    // document with no map answers. So a writer that simply does not sync
-    // first erases the map and commits: no race, the map present throughout.
-    //
-    // What the arm establishes is therefore narrower than "a root envelope
-    // write cannot erase a stored label map" — it is that such a write cannot
-    // erase a label map THIS TRANSACTION HAS LOADED. Closing the rest means
-    // either forcing the document into view before deciding, which turns
-    // every blind root write into a read-modify-write, or making the commit
-    // boundary establish what the space holds. Both are open design choices,
-    // and this test fails when either lands, which is the point of it.
+  it("refuses metadata erasure by a writer whose transaction never loaded the document", async () => {
+    // Required metadata reads authenticate a cold writer's assumption that
+    // the destination has no stored policy. A concurrent durable policy makes
+    // that absent-base assumption conflict at commit.
     const server: MemoryV2Server.Server = await newSharedServer();
     const space = signer.did();
     let id: URI;
@@ -807,7 +1069,7 @@ describe("CFC privileged system write (S18)", () => {
           const cell = runtime.getCell(space, "s18-unloaded", undefined, seed);
           id = cell.getAsNormalizedFullLink().id as URI;
           writeSeedEnvelopeDoc(seed, space);
-          seed.writeOrThrow({
+          seedStoredEnvelope(seed, {
             space,
             id,
             type: "application/json",
@@ -840,7 +1102,28 @@ describe("CFC privileged system write (S18)", () => {
             path: [],
           }, { value: { note: "erased" } });
           expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([]);
-          expect((await tx.commit()).ok).toBeDefined();
+          expect((await tx.commit()).error).toMatchObject({
+            name: "ConflictError",
+            transaction: {
+              reads: {
+                confirmed: expect.arrayContaining([{
+                  id: id!,
+                  path: ["cfc"],
+                  scope: "space",
+                  seq: 0,
+                  validation: "required",
+                }]),
+              },
+            },
+          });
+          const repaired = runtime.edit();
+          expect(repaired.readOrThrow({
+            space,
+            id: id!,
+            type: "application/json",
+            path: ["cfc"],
+          })).toEqual(storedMetadata);
+          repaired.abort();
           await storage.synced();
         } finally {
           await runtime.dispose();
@@ -848,7 +1131,7 @@ describe("CFC privileged system write (S18)", () => {
         }
       }
 
-      // The stored label map is gone from the durable document.
+      // Refusal preserves both the payload and its stored label metadata.
       {
         const storage = EmulatedStorageManager.connectTo(server, {
           as: signer,
@@ -866,7 +1149,7 @@ describe("CFC privileged system write (S18)", () => {
             id: id!,
             type: "application/json",
             path: [],
-          })).toEqual({ value: { note: "erased" } });
+          })).toEqual({ value: { note: "one" }, cfc: storedMetadata });
           await tx.commit();
         } finally {
           await runtime.dispose();

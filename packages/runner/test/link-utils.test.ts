@@ -25,7 +25,9 @@ import {
   parseLinkOrThrow,
   parseLLMFriendlyLink,
   parseReferenceParts,
+  sanitizeAndInternSchemaForLinks,
   sanitizeSchemaForLinks,
+  schemaForSpaceCrossing,
 } from "../src/link-utils.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
@@ -60,6 +62,44 @@ describe("link-utils", () => {
     tx.abort();
     await runtime?.dispose();
     await storageManager?.close();
+  });
+
+  describe("schemaForSpaceCrossing()", () => {
+    it("recovers after a missing closure arrives and shares the self-contained result", () => {
+      const schema = {
+        type: "string",
+        title: "crossing cache recovery",
+      } as const;
+      const hash = internSchemaAsTaggedHashString(schema);
+      const reference = { $ref: `cid:${hash}` };
+      expect(schemaForSpaceCrossing(tx, space, reference)).toBe(false);
+
+      registerSchemaDocument(hash, schema);
+      const first = schemaForSpaceCrossing(tx, space, reference);
+      expect(first).toEqual(schema);
+      expect(schemaForSpaceCrossing(tx, space, { ...reference })).toBe(first);
+    });
+
+    it("requires the closure again after the storage manager's registry lease ends", async () => {
+      const schema = { type: "number", title: "crossing cache epoch" } as const;
+      const hash = internSchemaAsTaggedHashString(schema);
+      const reference = { $ref: `cid:${hash}` };
+      registerSchemaDocument(hash, schema);
+      expect(schemaForSpaceCrossing(tx, space, reference)).toEqual(schema);
+
+      tx.abort();
+      await runtime.dispose();
+      await storageManager.close();
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      tx = runtime.edit();
+      expect(schemaForSpaceCrossing(tx, space, reference)).toBe(false);
+      registerSchemaDocument(hash, schema);
+      expect(schemaForSpaceCrossing(tx, space, reference)).toEqual(schema);
+    });
   });
 
   describe("isSigilLink", () => {
@@ -746,6 +786,42 @@ describe("link-utils", () => {
   });
 
   describe("sanitizeSchemaForLinks through references", () => {
+    for (const position of ["root", "nested"]) {
+      it(`revisits canonical bindings when a ${position} schema arrives`, () => {
+        setContentAddressedSchemasConfig(true);
+        const document: JSONSchema = { type: "string", asCell: ["cell"] };
+        const hash = internSchemaAsTaggedHashString(document);
+        const schema: JSONSchema = deepFreeze(
+          position === "root" ? { $ref: `cid:${hash}` } : {
+            type: "object",
+            properties: { name: { $ref: `cid:${hash}` } },
+          },
+        );
+        const before = sanitizeAndInternSchemaForLinks(schema);
+        expect(before).toEqual(schema);
+        // Exercise the next link-emission pass on the canonical result while
+        // the declaration is still missing too.
+        const missing = createSigilLinkFromParsedLink({
+          id: "of:late-schema",
+          path: [],
+          schema: before,
+        }, { includeSchema: true });
+        expect(missing).toBeDefined();
+        registerSchemaDocument(hash, document);
+        const after = sanitizeAndInternSchemaForLinks(schema);
+        expect(after).not.toBe(before);
+        const emitted = createSigilLinkFromParsedLink({
+          id: "of:late-schema",
+          path: [],
+          schema: before,
+        }, { includeSchema: true });
+        const emittedSchema = linkRefPayload(emitted).schema;
+        expect(JSON.stringify(resolvedSchema(emittedSchema as JSONSchema)))
+          .not.toContain("asCell");
+        expect(JSON.stringify(resolvedSchema(after!))).not.toContain("asCell");
+      });
+    }
+
     it("re-externalizes a nested document the strip changed", () => {
       // Document B carries the marker; document A reaches it only by
       // reference. A sanitize that stops at the reference looks clean and
@@ -806,6 +882,44 @@ describe("link-utils", () => {
   });
 
   describe("stripAsCellAndStreamFromSchema", () => {
+    it("shares canonical sanitized schemas without sharing mutable roots", () => {
+      const schema: JSONSchema = deepFreeze({
+        type: "object",
+        properties: { name: { type: "string", asCell: ["cell"] } },
+      });
+      for (const mode of Object.values(KeepAsCell)) {
+        const first = sanitizeAndInternSchemaForLinks(schema, mode);
+        const second = sanitizeAndInternSchemaForLinks(schema, mode);
+        expect(first).toEqual(sanitizeSchemaForLinks(schema, mode));
+        expect(second).toBe(first);
+        expect(Object.isFrozen(first)).toBe(true);
+        const mutable = sanitizeSchemaForLinks(schema, mode);
+        expect(mutable).not.toBe(first);
+        expect(Object.isFrozen(mutable)).toBe(false);
+      }
+    });
+
+    it("interns a mutable input without freezing it or caching later edits", () => {
+      const schema = {
+        type: "object",
+        properties: { name: { type: "string", title: "before" } },
+      } satisfies JSONSchema;
+      const first = sanitizeAndInternSchemaForLinks(schema);
+      expect(Object.isFrozen(schema)).toBe(false);
+      expect(Object.isFrozen(schema.properties.name)).toBe(false);
+      schema.properties.name.title = "after";
+      const second = sanitizeAndInternSchemaForLinks(schema);
+      expect(second).not.toBe(first);
+      expect(first).toEqual({
+        type: "object",
+        properties: { name: { type: "string", title: "before" } },
+      });
+      expect(second).toEqual(schema);
+      for (const primitive of [undefined, true, false]) {
+        expect(sanitizeAndInternSchemaForLinks(primitive)).toBe(primitive);
+      }
+    });
+
     it("memoizes a frozen input per keepAsCell mode, handing out a fresh top that shares the cached sub-tree", () => {
       // The memo only engages for deep-frozen inputs (a mutable input's identity
       // could go stale), so it no-ops for the non-frozen literals other tests
@@ -1045,6 +1159,53 @@ describe("link-utils", () => {
       const result = sanitizeSchemaForLinks(schema, KeepAsCell.OnlyStream);
 
       expect(result).toEqual(schema);
+    });
+
+    it("retains only an explicitly marked scoped pattern-result cell", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          ordinary: {
+            type: "number",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+            __ctPreservePatternResultCell: true,
+          },
+        },
+        required: ["ordinary", "retained"],
+      } as const;
+
+      expect(sanitizeSchemaForLinks(schema, KeepAsCell.OnlyStream)).toEqual({
+        type: "object",
+        properties: {
+          ordinary: { type: "number" },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+          },
+        },
+        required: ["ordinary", "retained"],
+      });
+      expect(sanitizeSchemaForLinks(schema, KeepAsCell.All)).toEqual({
+        type: "object",
+        properties: {
+          ordinary: {
+            type: "number",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          retained: {
+            type: "number",
+            asCell: ["cell"],
+            scope: "user",
+          },
+        },
+        required: ["ordinary", "retained"],
+      });
     });
 
     it("respects KeepAsCell modes for mixed cell wrappers", () => {
@@ -1580,8 +1741,8 @@ describe("link-utils", () => {
       expect(() => parseLLMFriendlyLink(`/${longId}@any/path`, space)).toThrow(
         /Invalid scope suffix/,
       );
-      expect(() => parseLLMFriendlyLink(`/${longId}@inherit/path`, space))
-        .toThrow(/Invalid scope suffix/);
+      expect(parseLLMFriendlyLink(`/${longId}@inherit/path`, space).scope)
+        .toBe("space");
       expect(() => parseLLMFriendlyLink(`/${longId}@/path`, space)).toThrow(
         /Invalid scope suffix/,
       );
@@ -1625,8 +1786,8 @@ describe("link-utils", () => {
     it("should throw if the embedded space is a name rather than a DID", () => {
       // A link resolves from the string alone, so a space that needs looking
       // up is refused here even though the grammar admits it.
-      expect(() => parseLLMFriendlyLink(`/@my:space/${longId}`, space))
-        .toThrow(/Link spaces must be DIDs.*"my:space"/);
+      expect(() => parseLLMFriendlyLink(`//my-space/${longId}`, space))
+        .toThrow(/Link spaces must be DIDs.*"my-space"/);
     });
   });
 
@@ -1636,7 +1797,7 @@ describe("link-utils", () => {
     it("splits the parts without holding either to a form", () => {
       // The wider vocabulary a session can resolve: a space by name and a
       // piece by slug, in the positions a DID and a handle occupy.
-      expect(parseReferenceParts("/@my-space/tracker@user/items/0")).toEqual({
+      expect(parseReferenceParts("//my-space/tracker@user/items/0")).toEqual({
         id: "tracker",
         scope: "user",
         space: "my-space",
@@ -1650,13 +1811,13 @@ describe("link-utils", () => {
 
     it("throws for a string that is not a reference at all", () => {
       expect(() => parseReferenceParts(`${longId}/path`)).toThrow(
-        "Target must start with a slash",
+        "requires a context piece",
       );
       expect(() => parseReferenceParts(`/@${space}`)).toThrow(
         "Target must include a piece handle",
       );
       expect(() => parseReferenceParts("/@/tracker")).toThrow(
-        'Target must name a space after "@"',
+        "Invalid space",
       );
     });
   });
@@ -1664,17 +1825,27 @@ describe("link-utils", () => {
   describe("createLLMFriendlyLink", () => {
     const longId = "of:bafyabc12345678901234567890";
 
+    it("round-trips trailing whitespace as part of the final path key", () => {
+      const link = {
+        id: longId,
+        space,
+        scope: "space" as const,
+        path: ["..", "a#argument "],
+      } as const;
+      expect(parseLLMFriendlyLink(createLLMFriendlyLink(link), space)).toEqual(
+        link,
+      );
+    });
+
     it("should create LLM friendly link from normalized link", () => {
       const link: NormalizedLink = {
         id: longId,
         path: ["path", "to", "cell"],
         space: space,
       };
-      // We need to cast to NormalizedFullLink because createLLMFriendlyLink expects it,
-      // but it only uses id and path.
       const result = createLLMFriendlyLink(link as any);
 
-      expect(result).toBe(`/${longId}/path/to/cell`);
+      expect(result).toBe(`//${space}/${longId}@space/path/to/cell`);
     });
 
     it("should create LLM friendly links with non-space scope suffixes", () => {
@@ -1686,17 +1857,17 @@ describe("link-utils", () => {
       };
       const result = createLLMFriendlyLink(link as any);
 
-      expect(result).toBe(`/${longId}@user/path`);
+      expect(result).toBe(`//${space}/${longId}@user/path`);
     });
 
-    it("should omit explicit space scope when creating LLM friendly links", () => {
+    it("omits the base scope when a context space is supplied", () => {
       const link: NormalizedLink = {
         id: longId,
         path: ["path"],
         space: space,
         scope: "space",
       };
-      const result = createLLMFriendlyLink(link as any);
+      const result = createLLMFriendlyLink(link as any, space);
 
       expect(result).toBe(`/${longId}/path`);
     });
@@ -1709,7 +1880,7 @@ describe("link-utils", () => {
       };
       const result = createLLMFriendlyLink(link as any);
 
-      expect(result).toBe(`/${longId}`);
+      expect(result).toBe(`//${space}/${longId}@space`);
     });
 
     it("should encode special characters in path", () => {
@@ -1720,7 +1891,9 @@ describe("link-utils", () => {
       };
       const result = createLLMFriendlyLink(link as any);
 
-      expect(result).toBe(`/${longId}/path~1with~1slash/path~0with~0tilde`);
+      expect(result).toBe(
+        `//${space}/${longId}@space/path~1with~1slash/path~0with~0tilde`,
+      );
     });
   });
 });

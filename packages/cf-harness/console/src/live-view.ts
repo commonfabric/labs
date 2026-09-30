@@ -20,6 +20,7 @@
  */
 
 import { html, LitElement, nothing, type TemplateResult } from "lit";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type ConsoleChatEventEnvelope,
   type ConsoleRunDetail,
@@ -52,7 +53,10 @@ export type ConsoleLiveEntry =
     turnId?: string;
     toolCallId: string;
     toolName: string;
-    status: "running" | "completed" | "failed" | "denied";
+    title?: string;
+    startedAt?: string;
+    endedAt?: string;
+    status: "running" | "completed" | "failed" | "denied" | "canceled";
     progress?: string;
     resultSummary?: string;
     subagent?: LiveSubagent;
@@ -70,6 +74,10 @@ export type ConsoleLiveEntry =
     key: string;
     turnId: string;
     status: "completed" | "failed" | "canceled";
+
+    /** Task disposition inside a successfully ended turn. */
+    outcome?: "completed" | "question" | "gave-up";
+
     text?: string;
     pieces: readonly ConsoleTurnResultPiece[];
 
@@ -82,7 +90,14 @@ export type ConsoleLiveEntry =
  * them. A tool the run's own reading does not cover — every tool but the four
  * it names — is described by the first of these its call carried.
  */
-const SUBJECT_ARGUMENTS = ["question", "query", "path", "slug", "name"];
+const SUBJECT_ARGUMENTS = [
+  "task",
+  "question",
+  "query",
+  "path",
+  "slug",
+  "name",
+];
 
 /** How much of a result or a goal one line carries before it is elided. */
 const LINE_LIMIT = 140;
@@ -94,9 +109,7 @@ const elide = (text: string, limit = LINE_LIMIT): string =>
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 const asRecord = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  isObjectNotArray(value) ? value as Record<string, unknown> : {};
 
 const parsedRecord = (text: string | undefined): Record<string, unknown> => {
   try {
@@ -327,6 +340,10 @@ export const consoleLiveEntries = (
           ...named,
           toolCallId: event.tool.toolCallId,
           toolName: event.tool.toolId,
+          ...(event.tool.title === undefined ? {} : {
+            title: event.tool.title,
+            startedAt: envelope.emittedAt,
+          }),
           status: "running",
           ...under(event.subagent),
         };
@@ -343,7 +360,7 @@ export const consoleLiveEntries = (
       }
       case "tool_completed": {
         const held = tools.get(event.tool.toolCallId);
-        const entry = held ?? {
+        const entry: Extract<ConsoleLiveEntry, { kind: "tool" }> = held ?? {
           kind: "tool" as const,
           ...named,
           toolCallId: event.tool.toolCallId,
@@ -352,6 +369,8 @@ export const consoleLiveEntries = (
           ...under(event.subagent),
         };
         entry.status = event.status;
+        if (event.tool.title !== undefined) entry.title = event.tool.title;
+        if (entry.startedAt !== undefined) entry.endedAt = envelope.emittedAt;
         if (event.resultSummary !== undefined) {
           entry.resultSummary = event.resultSummary;
         }
@@ -382,20 +401,33 @@ export const consoleLiveEntries = (
         break;
       }
       case "turn_completed": {
-        // A completed turn's final text is its last assistant message, which
-        // the feed has already rendered; what the closing block adds is the
-        // links the turn produced.
+        // Normal final answers already appear in the assistant feed. A
+        // finish_task question or reason lives in a tool result, so the
+        // closing block renders that sentence alongside any piece links.
         entries.push({
           kind: "ended",
           key: named.key,
           turnId: event.turnId,
           status: "completed",
+          outcome: event.result.outcome ?? "completed",
+          ...(event.result.outcome === "question" ||
+              event.result.outcome === "gave-up"
+            ? { text: event.result.finalText }
+            : {}),
           pieces: event.result.pieces,
           spaceName: event.result.spaceName,
         });
         break;
       }
       case "turn_failed": {
+        for (const entry of tools.values()) {
+          if (
+            entry.turnId === event.turnId && entry.startedAt && !entry.endedAt
+          ) {
+            entry.endedAt = envelope.emittedAt;
+            entry.status = "failed";
+          }
+        }
         entries.push({
           kind: "ended",
           key: named.key,
@@ -407,6 +439,14 @@ export const consoleLiveEntries = (
         break;
       }
       case "turn_canceled": {
+        for (const entry of tools.values()) {
+          if (
+            entry.turnId === event.turnId && entry.startedAt && !entry.endedAt
+          ) {
+            entry.endedAt = envelope.emittedAt;
+            entry.status = "canceled";
+          }
+        }
         entries.push({
           kind: "ended",
           key: named.key,
@@ -491,7 +531,13 @@ export const consoleLiveState = (
 ): string => {
   for (const entry of [...entries].reverse()) {
     if (entry.kind === "ended") {
-      return entry.status === "completed" ? "done" : entry.status;
+      return entry.outcome === "question"
+        ? "waiting for your answer"
+        : entry.outcome === "gave-up"
+        ? "stopped"
+        : entry.status === "completed"
+        ? "done"
+        : entry.status;
     }
     if (entry.kind === "tool" && entry.status === "running") {
       return entry.toolName;
@@ -570,6 +616,7 @@ export class ConsoleLive extends LitElement {
   #lastSequence = 0;
 
   #stream: EventSource | undefined;
+  #elapsedTimer: ReturnType<typeof setInterval> | undefined;
 
   /** Which read of a run is the current one, by run id. */
   #reads = new Map<string, number>();
@@ -594,6 +641,18 @@ export class ConsoleLive extends LitElement {
   }
 
   protected override updated(): void {
+    if (
+      this.#stream !== undefined &&
+      this.entries.some((entry) =>
+        entry.kind === "tool" && entry.startedAt !== undefined &&
+        entry.endedAt === undefined
+      )
+    ) {
+      this.#elapsedTimer ??= setInterval(() => this.requestUpdate(), 1000);
+    } else {
+      clearInterval(this.#elapsedTimer);
+      this.#elapsedTimer = undefined;
+    }
     if (!this.#pinned) {
       return;
     }
@@ -614,11 +673,15 @@ export class ConsoleLive extends LitElement {
       return;
     }
     this.#subscribe(this.sessionId);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.#stream?.close();
+    this.#stream = undefined;
+    clearInterval(this.#elapsedTimer);
+    this.#elapsedTimer = undefined;
   }
 
   /**
@@ -711,13 +774,25 @@ export class ConsoleLive extends LitElement {
     const record = this.#recordOf(entry.toolCallId);
     const step = record?.step;
     const line = consoleLiveToolLine(entry, record?.detail, step);
+    const elapsed = entry.startedAt === undefined ? undefined : Math.max(
+      0,
+      Math.floor(
+        ((entry.endedAt === undefined
+          ? Date.now()
+          : Date.parse(entry.endedAt)) -
+          Date.parse(entry.startedAt)) / 1000,
+      ),
+    );
     return html`
       <div class="live-entry tool ${entry.subagent === undefined
         ? ""
         : "child"}">
         <div class="live-head">
           <span class="live-dot ${entry.status}"></span>
-          <span class="tool">${entry.toolName}</span>
+          <span class="tool">${entry.title ?? entry.toolName}</span>
+          ${elapsed === undefined ? nothing : html`
+            <span class="muted">${elapsed}s elapsed</span>
+          `}
           ${entry.status === "running" ? nothing : html`
             <span class="badge ${entry.status === "completed"
               ? "ok"
@@ -784,7 +859,11 @@ export class ConsoleLive extends LitElement {
             <div class="live-head">
               <span class="badge ${entry.status === "completed"
                 ? "ok"
-                : "denied"}">${entry.status}</span>
+                : "denied"}">${entry.outcome === "question"
+                ? "question"
+                : entry.outcome === "gave-up"
+                ? "stopped"
+                : entry.status}</span>
             </div>
             ${entry.text === undefined ? nothing : html`
               <div class="live-final">${entry.text}</div>

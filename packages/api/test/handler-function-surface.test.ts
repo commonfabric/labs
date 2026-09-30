@@ -1,10 +1,3 @@
-import { assertEquals } from "@std/assert";
-import type {
-  HandlerFactory,
-  HandlerFunction,
-  Stream,
-} from "@commonfabric/api";
-
 /**
  * `HandlerFunction` is the `handler` a PATTERN sees — the same hand-maintained
  * mirror situation as `ActionFunction` (see `action-function-surface.test.ts`):
@@ -15,8 +8,13 @@ import type {
  * half. Both must hold.
  */
 
-type MustBeTrue<T extends true> = T;
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+import { assertEquals } from "@std/assert";
+import type {
+  HandlerFactory,
+  HandlerFunction,
+  Stream,
+} from "@commonfabric/api";
+import type { MustBeTrue, Same } from "@commonfabric/utils/types";
 
 interface AddTopic {
   title: string;

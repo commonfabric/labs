@@ -15,8 +15,8 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { commandWriterAuthorization } from "../src/command-authorization.ts";
 import {
-  debugCommandWriterAuthorization,
   defaultDebugPatternLocation,
   deployAgentSessionsDebugView,
   describeAgentFabricTarget,
@@ -31,10 +31,14 @@ import {
   SharedServerStorageManager,
   sourceDescriptor,
 } from "./debug_view_support.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
 
 Deno.test("debug command authorization resolves local schema definitions", () => {
   assertEquals(
-    debugCommandWriterAuthorization({
+    commandWriterAuthorization({
       resultSchema: {
         type: "object",
         properties: {
@@ -48,6 +52,36 @@ Deno.test("debug command authorization resolves local schema definitions", () =>
       },
     } as never),
     ["verified-writer"],
+  );
+  // A definition named with pointer-escaped characters resolves; a reference
+  // reaching below one definition does not.
+  assertEquals(
+    commandWriterAuthorization({
+      resultSchema: {
+        type: "object",
+        properties: {
+          commandAuthorization: { $ref: "#/$defs/command~1authorization" },
+        },
+        $defs: {
+          "command/authorization": {
+            ifc: { writeAuthorizedBy: ["escaped-writer"] },
+          },
+        },
+      },
+    } as never),
+    ["escaped-writer"],
+  );
+  assertEquals(
+    commandWriterAuthorization({
+      resultSchema: {
+        type: "object",
+        properties: {
+          commandAuthorization: { $ref: "#/$defs/outer/inner" },
+        },
+        $defs: { outer: { inner: { ifc: { writeAuthorizedBy: ["nested"] } } } },
+      },
+    } as never),
+    undefined,
   );
 });
 
@@ -316,11 +350,11 @@ Deno.test("debug registration rejects writes from another owner", async () => {
       true,
     );
     const attack = readerRuntime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
-    attack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(attack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -353,11 +387,11 @@ Deno.test("debug registration rejects writes from another owner", async () => {
     );
     const originalArgument = argument.getRaw();
     const argumentAttack = readerRuntime.edit();
-    argumentAttack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(argumentAttack, {
       id: "principal:did:key:other-owner",
       actingPrincipal: "did:key:other-owner",
     });
-    argumentAttack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(argumentAttack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -371,7 +405,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
     assertEquals(argument.getRaw(), originalArgument);
 
     const ownerUpdate = readerRuntime.edit();
-    ownerUpdate.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(ownerUpdate, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -430,7 +464,7 @@ Deno.test("debug registration rejects another owner-scoped writer", async () => 
       agentPrincipalSchema(session.as.did(), [otherWriter]),
     );
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "builtin",
       builtinId: otherWriter,
     });

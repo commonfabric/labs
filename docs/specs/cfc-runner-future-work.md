@@ -7,10 +7,10 @@ formalization) against the implementation in `packages/runner` (primarily
 needs); this file tracks work the **runner** needs._
 
 > **Spec references.** The CFC prose spec + Lean formalization live in the separate
-> [`commontoolsinc/specs`](https://github.com/commontoolsinc/specs) repo under
+> [`commonfabric/specs`](https://github.com/commonfabric/specs) repo under
 > `cfc/`. References below of the form `§3.1.8`, `04-label-representation.md`,
 > `notes/…`, or `proposals/…` are paths within that repo — e.g.
-> [`cfc/proposals/author-disjunctive-confidentiality.md`](https://github.com/commontoolsinc/specs/blob/main/cfc/proposals/author-disjunctive-confidentiality.md).
+> [`cfc/proposals/author-disjunctive-confidentiality.md`](https://github.com/commonfabric/specs/blob/main/cfc/proposals/author-disjunctive-confidentiality.md).
 > References of the form `packages/…` and `docs/specs/…` are in this repo.
 
 This list is ordered **big chunks first**: close the load-bearing structural
@@ -39,17 +39,15 @@ facet of that one representational distance. Most of the flat model's narrowness
 holes, called out explicitly.
 
 **Default posture.** The commit gate is on by default: the Runtime constructor
-defaults `cfcEnforcementMode` to `enforce-explicit`
+defaults `cfcEnforcementMode` to `enforce-strict`
 ([`runtime.ts:495`](../../packages/runner/src/runtime.ts)), as does lib-shell's
 `createRuntimeClientOptions` — the types-level
 `DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"`
 ([`types.ts:42`](../../packages/runner/src/cfc/types.ts)) is only the
-bare-transaction fallback. What *is* dormant: flow-labels are `persist` in the
-shell and `off` in every other host, the render confidentiality ceiling is wired
-end-to-end but the shell builds one only behind a flag that defaults off, and no
-host runs at `enforce-strict`, leaving the one reject that rung adds — the
-writer-fit misfit — unexercised in deployment. So the flow-taint and display
-protections below are *built but dormant* until a host turns them on — see Epic H.
+bare-transaction fallback. Flow labels persist and the render confidentiality
+ceiling is built by default, so the one reject the strict rung adds — the
+writer-fit misfit — is exercised in deployment rather than dormant. A host that
+wants less states it.
 
 ---
 
@@ -247,20 +245,21 @@ collaborative-doc model as a downgraded/future area. Ref: §14.4.8, §3.1.6.
 
 Not new machinery so much as turning the system on:
 
-- **Flow-labels `off` outside the shell → inv-9 partial.** The router-attack
+- **Flow-labels `off` outside the presets → inv-9 partial.** The router-attack
   flow-taint (§10's own worked example) is stamped where the shell runs
   ([`lib-shell/src/runtime.ts`](../../packages/lib-shell/src/runtime.ts) defaults
-  `cfcFlowLabels` to `persist`) and nowhere else: the `Runtime` default is `off`,
-  and toolshed and background-piece-service pass no CFC options at all, so they
-  inherit it. Move them through `observe` to `persist`. `cfcTriggerReadGating` is
-  `false` in every host on the same footing — turning it on joins the §8.9.2
-  trigger reads to both enforcement gates, the sink-request ceiling and the
+  `cfcFlowLabels` to `persist`) and on toolshed, whose `productionServer`
+  preset pins it to `persist`. The bare `Runtime` default is `off`, so a host
+  that builds a `Runtime` without a preset runs without it. Move that default
+  through `observe` to `persist`. `cfcTriggerReadGating` is `false` in every host on the
+  same footing — turning it on joins the §8.9.2 trigger reads to both
+  enforcement gates, the sink-request ceiling and the
   `requiredIntegrity` input gate
   ([`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`),
   which closes the direct trigger channel; multi-hop closure follows once flow
   persists (SC-3).
 - **`enforce-strict` default deployment states.** The effective deployment
-  default is `enforce-explicit` (Runtime + lib-shell; the types-level `disabled`
+  default is `enforce-strict` (Runtime + lib-shell; the types-level `disabled`
   is the bare-transaction fallback). The strict rung carries one differentiated
   reject: the SC-18b writer-fit misfit. The per-transaction flow join landing on
   a written document must fit that document's declared store policy; under
@@ -355,7 +354,7 @@ Each is bounded and mostly independent. Several are fail-safe today.
 # Tier 3 — Spec promotion, not runner code
 
 Shipped, security-conscious runner mechanisms with **no normative home**. These are
-`commontoolsinc/specs` edits (they belong in `cfc/notes/FUTURE-SPEC-WORK.md`), not
+`commonfabric/specs` edits (they belong in `cfc/notes/FUTURE-SPEC-WORK.md`), not
 runner work — but they are load-bearing and an implementer could weaken them with no
 spec test failing.
 
@@ -429,7 +428,7 @@ safety-invariant completeness cross-check, and three focused sweeps
 2026-07-01. Load-bearing claims (vacuous requiredIntegrity gate, flow/enforcement
 defaults, ceiling-fit reader-enumeration hole) were spot-verified against the code.
 Cross-references: [`cfc-spec-changes.md`](./cfc-spec-changes.md) (SC-1..22 + audit
-queue), and in [`commontoolsinc/specs`](https://github.com/commontoolsinc/specs):
+queue), and in [`commonfabric/specs`](https://github.com/commonfabric/specs):
 `cfc/notes/RUNNER_IMPLEMENTATION_PLAN.md` (12 workstreams),
 `cfc/notes/FUTURE-SPEC-WORK.md`, and
 `cfc/proposals/author-disjunctive-confidentiality.md` (Adopted; §9 is Epic A's

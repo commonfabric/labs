@@ -20,6 +20,7 @@ import type {
   CfcRefusalAttribution,
   CfcRefusalGate,
 } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
  * What a boundary refused, in terms the caller can act on: the boundary that
@@ -202,7 +203,7 @@ export const harnessReleaseDecisionOutcome = (
     : "denied";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /**
  * The boundary decision a tool output states, if it states one.

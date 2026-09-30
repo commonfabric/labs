@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { symbolDeclaresCommonFabricDefault } from "@commonfabric/schema-generator/common-fabric-symbols";
 
 import {
   getExpressionText,
@@ -7,7 +8,6 @@ import {
   setParentPointers,
 } from "./utils.ts";
 import { isFunctionLikeExpression } from "./function-predicates.ts";
-import { symbolDeclaresCommonFabricDefault } from "../core/common-fabric-symbols.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";
 import {
   unwrapExpression,

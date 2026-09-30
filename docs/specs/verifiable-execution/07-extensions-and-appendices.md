@@ -193,7 +193,7 @@ or Unclaimed (genesis).
 | Fact                  | `Assertion \| Retraction`                        | memory  |
 | Unclaimed             | `{the, of}` with no `is` or `cause`              | memory  |
 | Commit                | `ClientCommit` (`packages/memory/v2.ts`)         | memory  |
-| Space                 | `MemorySpace` (`did:${string}:${string}`)        | memory  |
+| Space                 | `MemorySpace` (`did:${string}`)                  | memory  |
 | Append-only log       | SQLite `fact` table                              | memory  |
 | Current state         | SQLite `memory` table                            | memory  |
 | ACL                   | `ACL` type with `Capability`                     | memory  |

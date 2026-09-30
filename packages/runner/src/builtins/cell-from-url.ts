@@ -1,5 +1,6 @@
 import { type Cell } from "../cell.ts";
 import { parseFabricUrl } from "../fabric-url.ts";
+import { getMetaLink } from "../link-utils.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { URI } from "../sigil-types.ts";
@@ -14,7 +15,8 @@ import type {
 } from "../storage/interface.ts";
 
 /**
- * cellFromUrl({ url, hosts }) — the cell a URL names, if it names one.
+ * cellFromUrl({ url, hosts, spaceHost }) — the cell a URL names, if it names
+ * one. `spaceHost` supplies the toolshed origin for an explicitly named space.
  *
  * A URL that names no cell resolves with no `cell`. That is an answer, not a
  * failure: most URLs are web pages, and a caller asking this question expects
@@ -35,7 +37,12 @@ import type {
  * carries a DID.
  */
 export function cellFromUrl(
-  inputsCell: Cell<{ url: string; hosts?: string[] }>,
+  inputsCell: Cell<{
+    url: string;
+    hosts?: string[];
+    spaceHost?: string;
+    writable?: boolean;
+  }>,
   sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
   _addCancel: (cancel: () => void) => void,
   cause: Cell<any>[],
@@ -68,13 +75,17 @@ export function cellFromUrl(
     const inputs = inputsCell.withTx(tx);
     const url = inputs.key("url").get();
     const hosts = inputs.key("hosts").get();
+    const spaceHost = inputs.key("spaceHost").get();
 
     const target = typeof url === "string"
       ? parseFabricUrl(url, { hosts: Array.isArray(hosts) ? hosts : undefined })
       : undefined;
 
     const space = resolveSpace(runtime, parentCell.space, target?.space);
-    const id = target && space ? entityUri(space, target) : undefined;
+    const routed = target?.space === undefined || typeof spaceHost !== "string"
+      ? true
+      : space !== undefined && routeSpace(runtime, space, spaceHost);
+    const id = target && space && routed ? entityUri(space, target) : undefined;
 
     const cellWithTx = cell.withTx(tx);
     if (id === undefined) {
@@ -83,18 +94,54 @@ export function cellFromUrl(
       // previous URL's link in place after the input stopped naming anything.
       if (cellWithTx.getRaw() !== undefined) cellWithTx.set(undefined);
     } else {
-      const targetCell = runtime.getCellFromLink({
-        id,
-        space,
-        path: target!.path,
-        scope: "space",
-      } as any);
-      cellWithTx.setRawUntyped(targetCell.getAsLink({ base: cell }));
+      const root = runtime.getCellFromLink(
+        {
+          id,
+          space,
+          path: [],
+          scope: target!.scope ?? "space",
+        },
+        undefined,
+        tx,
+      );
+      const argument = target!.member === "argument"
+        ? getMetaLink(root, "argument", {})
+        : undefined;
+      const selected = target!.member === "argument"
+        ? argument && runtime.getCellFromLink(argument, undefined, tx)
+        : root;
+      const targetCell = selected?.key(...target!.path);
+      if (targetCell) {
+        cellWithTx.setRawUntyped(targetCell.getAsLink({ base: cell }));
+      } else if (cellWithTx.getRaw() !== undefined) {
+        cellWithTx.set(undefined);
+      }
     }
 
     const pendingWithTx = pending.withTx(tx);
     if (pendingWithTx.get() !== false) pendingWithTx.set(false);
   };
+}
+
+/**
+ * Applies an explicit route without overriding a route the runtime already
+ * fixed. A storage manager without remote routing can still confirm its own
+ * default origin, which keeps local and emulated runtimes useful.
+ */
+function routeSpace(
+  runtime: Runtime,
+  space: MemorySpace,
+  host: string,
+): boolean {
+  let requested: string;
+  try {
+    requested = new URL(host).origin;
+    if (runtime.registerSpaceHost(space, host)) return true;
+  } catch {
+    return false;
+  }
+  const effective = runtime.mappedHostFor(space) ?? runtime.apiUrl.toString();
+  return new URL(effective).origin === requested;
 }
 
 /**

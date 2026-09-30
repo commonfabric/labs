@@ -4,16 +4,30 @@
  * runs and the token-gated tiles get an empty env (their gray-out contract).
  */
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
-import { runSource, type Ctx, type Run } from "./types.ts";
-import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
-import { labsCi, loomCi } from "./tiles/main-build.ts";
-import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
-import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
+import { type Ctx, type Run, runSource, type RunSource } from "./types.ts";
+import {
+  CI_WORKFLOW,
+  LOOM_CI_WORKFLOW,
+  LOOM_REPO,
+  REPO,
+  WEAVER_CI_WORKFLOW,
+  WEAVER_REPO,
+} from "./config.ts";
+import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
+import {
+  labsCiDuration,
+  loomCiDuration,
+  weaverCiDuration,
+} from "./tiles/ci-duration.ts";
 import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
 import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
-import { coverageDebt } from "./tiles/coverage-debt.ts";
 import { githubMembers } from "./tiles/github-members.ts";
 import { buildSnapshot, discordOnline } from "./tiles/discord-online.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
@@ -24,13 +38,14 @@ import {
 } from "./tiles/github-ci-spend.ts";
 import { projectMonthly, settled } from "./spend.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
-import {
-  benchmark,
-  formatNs,
-  trendPct,
-  trendStatus,
-} from "./tiles/benchmark.ts";
+import { benchmark, trendPct, trendStatus } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
+import {
+  byUrl,
+  collectFromWorkingRuns,
+  type GithubAnswer,
+  withGithubAttempt,
+} from "./test/github-attempts.ts";
 
 function ctx(
   runs: Run[],
@@ -39,7 +54,7 @@ function ctx(
 ): Ctx {
   return {
     runs: () => Promise.resolve(runs),
-    runsFor: (repo: string) =>
+    runsFor: ({ repo }) =>
       Promise.resolve(runsByRepo ? runsByRepo(repo) : runs),
     env: (k) => env[k],
   };
@@ -66,39 +81,328 @@ function run(over: Partial<Run>): Run {
   };
 }
 
-Deno.test("labs ci:passing tip -> good", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "success" })]));
-  assertEquals(v.status, "good");
-  assertEquals(v.value, "passing");
-});
+// An earlier attempt of `of`, as GitHub's attempt endpoint returns it.
+function attemptOf(of: Run, attempt: number, conclusion: string): Run {
+  return { ...of, run_attempt: attempt, conclusion };
+}
 
-Deno.test("labs ci:failing tip -> bad (shows the raw conclusion)", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "failure" })]));
-  assertEquals(v.status, "bad");
-  assertEquals(v.value, "failure");
-});
+function attemptUrl(attempt: Run, repo = REPO): string {
+  return `https://api.github.com/repos/${repo}/actions/runs/${attempt.id}/attempts/${attempt.run_attempt}`;
+}
 
-Deno.test("labs ci:no completed runs -> unknown", async () => {
-  const v = await labsCi.collect(
-    ctx([run({ status: "in_progress", conclusion: null })]),
-  );
-  assertEquals(v.status, "unknown");
-  assertEquals(v.value, "—");
-});
+// Where the job count of `attempt` is requested.
+function jobsUrl(attempt: Run, repo = REPO): string {
+  return `${attemptUrl(attempt, repo)}/jobs?per_page=1`;
+}
+
+// The trust grid's cell colors, in the newest-first order the runs arrive in.
+function cellColors(extra: string | undefined): string[] {
+  return [...(extra ?? "").matchAll(/background:(var\(--[^)]+\))/g)]
+    .map((match) => match[1])
+    .reverse();
+}
 
 Deno.test("labs ci trust: only first-attempt success counts as green", async () => {
   // Two of four completed runs passed first try. A success on retry remains in
   // the denominator but does not count as first-try green.
+  const retried = run({ conclusion: "success", run_attempt: 2 });
   const runs = [
     run({ conclusion: "success", run_attempt: 1 }),
     run({ conclusion: "success", run_attempt: 1 }),
-    run({ conclusion: "success", run_attempt: 2 }),
+    retried,
     run({ conclusion: "failure" }),
   ];
-  const v = await labsCiTrust.collect(ctx(runs));
-  assertEquals(v.value, "50.0%");
-  assertEquals(v.status, "bad");
-  assertEquals(v.sub, "first-try green · last 4 runs");
+  await withGithubAttempt(
+    attemptOf(retried, 1, "failure"),
+    async () => {
+      const v = await labsCiTrust.collect(ctx(runs));
+      assertEquals(v.value, "50.0%");
+      assertEquals(v.status, "bad");
+      assertEquals(v.sub, "first-try green · last 4 runs");
+    },
+  );
+});
+
+Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const cancelled = [
+      run({ conclusion: "cancelled" }),
+      run({ conclusion: "cancelled" }),
+    ];
+    const runs = [
+      run({ conclusion: "success" }),
+      cancelled[0],
+      cancelled[1],
+      run({ conclusion: "failure" }),
+    ];
+    const jobs = cancelled.map((attempt) => jobsUrl(attempt, repo));
+    await withGithubAttempt(
+      byUrl(jobs.map((url) => [url, { total_count: 0 }])),
+      async (urls) => {
+        const v = await tile.collect(ctx(runs));
+        assertEquals(v.value, "50.0%");
+        assertEquals(v.sub, "first-try green · 2 of last 4 runs");
+        assertEquals(cellColors(v.extra), [
+          "var(--status-good)",
+          "var(--status-unknown)",
+          "var(--status-unknown)",
+          "var(--status-bad)",
+        ]);
+        assertEquals(urls.toSorted(), jobs.toSorted());
+      },
+    );
+  }
+});
+
+Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a failure", async () => {
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const timedOut = run({ conclusion: "cancelled" });
+    const runs = [
+      run({ conclusion: "success" }),
+      timedOut,
+      run({ conclusion: "success" }),
+      run({ conclusion: "failure" }),
+    ];
+    await withGithubAttempt(
+      byUrl([[jobsUrl(timedOut, repo), { total_count: 38 }]]),
+      async (urls) => {
+        const v = await tile.collect(ctx(runs));
+        assertEquals(v.value, "50.0%");
+        assertEquals(v.sub, "first-try green · last 4 runs");
+        assertEquals(cellColors(v.extra), [
+          "var(--status-good)",
+          "var(--status-bad)",
+          "var(--status-good)",
+          "var(--status-bad)",
+        ]);
+        assertEquals(urls, [jobsUrl(timedOut, repo)]);
+      },
+    );
+  }
+});
+
+Deno.test("labs ci trust: a run is green only when its one attempt not cancelled before starting succeeded", async () => {
+  const afterUnstartedGreen = run({ conclusion: "success", run_attempt: 2 });
+  const afterUnstartedRed = run({ conclusion: "failure", run_attempt: 2 });
+  const redAfterUnstarted = run({ conclusion: "success", run_attempt: 3 });
+  const rerunOfGreen = run({ conclusion: "success", run_attempt: 2 });
+  const neverStarted = run({ conclusion: "cancelled", run_attempt: 2 });
+  const cancelledRetry = run({ conclusion: "cancelled", run_attempt: 2 });
+  const successAfterTimeout = run({ conclusion: "success", run_attempt: 2 });
+  const failedRerunOfGreen = run({ conclusion: "failure", run_attempt: 2 });
+  const timedOutRerunOfGreen = run({ conclusion: "cancelled", run_attempt: 2 });
+  const unstartedRerunOfGreen = run({
+    conclusion: "cancelled",
+    run_attempt: 2,
+  });
+  const earlier = [
+    attemptOf(afterUnstartedGreen, 1, "cancelled"),
+    attemptOf(afterUnstartedRed, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 2, "failure"),
+    attemptOf(rerunOfGreen, 1, "success"),
+    attemptOf(neverStarted, 1, "cancelled"),
+    attemptOf(cancelledRetry, 1, "failure"),
+    attemptOf(successAfterTimeout, 1, "cancelled"),
+    attemptOf(failedRerunOfGreen, 1, "success"),
+    attemptOf(timedOutRerunOfGreen, 1, "success"),
+    attemptOf(unstartedRerunOfGreen, 1, "success"),
+  ];
+  const unstarted = [
+    attemptOf(afterUnstartedGreen, 1, "cancelled"),
+    attemptOf(afterUnstartedRed, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 1, "cancelled"),
+    attemptOf(neverStarted, 1, "cancelled"),
+    neverStarted,
+    unstartedRerunOfGreen,
+  ];
+  const ranJobs = [
+    attemptOf(successAfterTimeout, 1, "cancelled"),
+    timedOutRerunOfGreen,
+  ];
+
+  await withGithubAttempt(
+    byUrl([
+      ...earlier.map((attempt) => [attemptUrl(attempt), attempt] as const),
+      ...unstarted.map((attempt) =>
+        [jobsUrl(attempt), { total_count: 0 }] as const
+      ),
+      ...ranJobs.map((attempt) =>
+        [jobsUrl(attempt), { total_count: 38 }] as const
+      ),
+    ]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([
+        afterUnstartedGreen,
+        afterUnstartedRed,
+        redAfterUnstarted,
+        rerunOfGreen,
+        neverStarted,
+        cancelledRetry,
+        successAfterTimeout,
+        failedRerunOfGreen,
+        timedOutRerunOfGreen,
+        unstartedRerunOfGreen,
+      ]));
+      // Green: the first and last, each left with one successful attempt once
+      // the attempt cancelled before starting is passed over. The fifth was
+      // cancelled before starting on every attempt and is left out. Every other
+      // run is red: it failed, or ran jobs before it was cancelled, or needed a
+      // rerun of an attempt that was left.
+      assertEquals(cellColors(v.extra), [
+        "var(--status-good)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-unknown)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-good)",
+      ]);
+      assertEquals(v.value, "22.2%");
+      assertEquals(v.sub, "first-try green · 9 of last 10 runs");
+      assertEquals(
+        urls.toSorted(),
+        [
+          ...earlier.map((attempt) => attemptUrl(attempt)),
+          ...[...unstarted, ...ranJobs].map((attempt) => jobsUrl(attempt)),
+        ].toSorted(),
+      );
+    },
+  );
+});
+
+Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  const earlier = attemptOf(retried, 1, "cancelled");
+  await withGithubAttempt(
+    byUrl([
+      [attemptUrl(earlier), earlier],
+      [jobsUrl(earlier), { total_count: 0 }],
+    ]),
+    async (urls) => {
+      assertEquals((await labsCiTrust.collect(ctx([retried]))).value, "100.0%");
+      assertEquals((await labsCiTrust.collect(ctx([retried]))).value, "100.0%");
+      assertEquals(urls, [attemptUrl(earlier), jobsUrl(earlier)]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: the job count of a cancelled attempt is requested once, and no other attempt's is", async () => {
+  const neverStarted = run({ conclusion: "cancelled" });
+  const timedOut = run({ conclusion: "cancelled" });
+  const runs = [
+    run({ conclusion: "success" }),
+    neverStarted,
+    run({ conclusion: "failure" }),
+    timedOut,
+    run({ conclusion: "timed_out" }),
+  ];
+  const jobs = [jobsUrl(neverStarted), jobsUrl(timedOut)];
+  await withGithubAttempt(
+    byUrl([[jobs[0], { total_count: 0 }], [jobs[1], { total_count: 38 }]]),
+    async (urls) => {
+      for (let collection = 0; collection < 2; collection++) {
+        const v = await labsCiTrust.collect(ctx(runs));
+        assertEquals(v.value, "25.0%");
+        assertEquals(v.sub, "first-try green · 4 of last 5 runs");
+      }
+      assertEquals(urls.toSorted(), jobs.toSorted());
+    },
+  );
+});
+
+Deno.test("labs ci trust: a job count is forgotten once its run leaves the window", async () => {
+  const cancelled = run({ conclusion: "cancelled" });
+  const other = run({ conclusion: "success" });
+  await withGithubAttempt({ total_count: 0 }, async (urls) => {
+    await labsCiTrust.collect(ctx([cancelled]));
+    await labsCiTrust.collect(ctx([other]));
+    await labsCiTrust.collect(ctx([cancelled]));
+    assertEquals(urls, [jobsUrl(cancelled), jobsUrl(cancelled)]);
+  });
+});
+
+Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the collection", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  await withGithubAttempt(
+    new Error("attempt endpoint unavailable"),
+    async () => {
+      await assertRejects(
+        () => labsCiTrust.collect(ctx([retried])),
+        Error,
+        "attempt endpoint unavailable",
+      );
+    },
+  );
+});
+
+Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  const answers: Run[] = [
+    // Still going, so it carries no verdict to read.
+    { ...attemptOf(retried, 1, "failure"), status: "in_progress", conclusion: null },
+    // Another run's attempt.
+    { ...attemptOf(retried, 1, "failure"), id: retried.id + 1 },
+    // Another attempt of the same run.
+    attemptOf(retried, 2, "failure"),
+  ];
+  for (const answer of answers) {
+    await withGithubAttempt(answer, async () => {
+      await assertRejects(
+        () => labsCiTrust.collect(ctx([retried])),
+        Error,
+        "did not include a completed conclusion",
+      );
+    });
+  }
+});
+
+Deno.test("labs ci trust: a job count GitHub does not return fails the collection", async (t) => {
+  const cases: { name: string; answer: GithubAnswer; message: string }[] = [
+    {
+      name: "failed request",
+      answer: new Error("job listing unavailable"),
+      message: "job listing unavailable",
+    },
+    {
+      name: "count that is not a number",
+      answer: { total_count: "38" },
+      message: "did not include a numeric `total_count`",
+    },
+    {
+      name: "missing count",
+      answer: { total_count: undefined },
+      message: "did not include a numeric `total_count`",
+    },
+  ];
+  for (const { name, answer, message } of cases) {
+    await t.step(name, async () => {
+      const cancelled = run({ conclusion: "cancelled" });
+      await withGithubAttempt(answer, async (urls) => {
+        await assertRejects(
+          () =>
+            labsCiTrust.collect(ctx([
+              run({ conclusion: "success" }),
+              cancelled,
+            ])),
+          Error,
+          message,
+        );
+        assertEquals(urls, [jobsUrl(cancelled)]);
+      });
+    });
+  }
 });
 
 Deno.test(
@@ -137,26 +441,38 @@ Deno.test(
 );
 
 Deno.test("labs ci trust grid: cell colors match trust scoring", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  const neverStarted = run({ conclusion: "cancelled" });
+  const timedOut = run({ conclusion: "cancelled" });
   const runs = [
     run({ conclusion: "success", run_attempt: 1 }),
-    run({ conclusion: "success", run_attempt: 2 }),
+    retried,
     run({ conclusion: "failure" }),
-    run({ conclusion: "cancelled" }),
+    neverStarted,
+    timedOut,
     run({ status: "in_progress", conclusion: null }),
     run({ status: "queued", conclusion: null }),
     run({ status: "completed", conclusion: null }),
   ];
-  const view = await labsCiTrust.collect(ctx(runs));
-  const colors = [
-    ...(view.extra ?? "").matchAll(/background:(var\(--[^)]+\))/g),
-  ].map((match) => match[1]);
-  assertEquals(view.value, "25.0%");
-  assertEquals(colors.filter((color) => color === "var(--status-good)").length, 1);
-  assertEquals(colors.filter((color) => color === "var(--status-bad)").length, 3);
-  assertEquals(colors.filter((color) => color === "var(--running)").length, 1);
-  assertEquals(
-    colors.filter((color) => color === "var(--status-unknown)").length,
-    2,
+  const earlier = attemptOf(retried, 1, "failure");
+  await withGithubAttempt(
+    byUrl([
+      [attemptUrl(earlier), earlier],
+      [jobsUrl(neverStarted), { total_count: 0 }],
+      [jobsUrl(timedOut), { total_count: 38 }],
+    ]),
+    async () => {
+      const view = await labsCiTrust.collect(ctx(runs));
+      const colors = cellColors(view.extra);
+      assertEquals(view.value, "25.0%");
+      assertEquals(colors.filter((color) => color === "var(--status-good)").length, 1);
+      assertEquals(colors.filter((color) => color === "var(--status-bad)").length, 3);
+      assertEquals(colors.filter((color) => color === "var(--running)").length, 1);
+      assertEquals(
+        colors.filter((color) => color === "var(--status-unknown)").length,
+        3,
+      );
+    },
   );
 });
 
@@ -197,8 +513,8 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
   // 25 runs within the last ~25 min -> the 6h window wins (25 >= 20).
   const busy = Array.from({ length: 25 }, (_, i) => at(i));
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(busy))).sub ?? "",
-    "25 passing runs in the last 6h",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(busy))).sub ?? "",
+    "median of 25 PR runs in 6h",
   );
   // 5 recent + 30 from two days ago -> only 5 in 6h (< 20) -> fall back to the last 20.
   const quiet = [
@@ -206,8 +522,8 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
     ...Array.from({ length: 30 }, () => at(60 * 48)),
   ];
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(quiet))).sub ?? "",
-    "last 20 passing runs",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(quiet))).sub ?? "",
+    "median of last 20 PR runs",
   );
 });
 
@@ -226,12 +542,13 @@ Deno.test("ci-duration: only runs that passed end to end count", async () => {
     at(1, { conclusion: "cancelled" }),
     at(2, { conclusion: "timed_out" }),
     at(3, { status: "in_progress", conclusion: null }),
-    at(4, { event: "workflow_dispatch", conclusion: "success" }),
+    // Passed on a rerun, so its span includes the wait before the rerun.
+    at(4, { run_attempt: 2, conclusion: "success" }),
   ];
-  // Only the 20 successful push runs are counted; the rest are ignored.
+  // Only the 20 runs that passed on their first attempt are counted.
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(runs))).sub ?? "",
-    "20 passing runs in the last 6h",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(runs))).sub ?? "",
+    "median of 20 PR runs in 6h",
   );
 });
 
@@ -256,17 +573,123 @@ Deno.test("ci-duration: a run without a usable landing span is dropped", async (
     updated_at: new Date(now).toISOString(),
   });
 
-  const mixed = await labsCiDuration.collect(
+  const mixed = await collectFromWorkingRuns(labsCiDuration, 
     ctx([usable, endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(mixed.value, "10m");
-  assertStringIncludes(mixed.sub ?? "", "last 1 passing runs");
+  assertStringIncludes(mixed.sub ?? "", "median of last 1 PR run");
 
-  const none = await labsCiDuration.collect(
+  const none = await collectFromWorkingRuns(labsCiDuration, 
     ctx([endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(none.status, "unknown");
   assertEquals(none.value, "—");
+  assertEquals(none.sub, "no passing PR runs");
+});
+
+// Where page `page` of the job listing of `attempt` is requested.
+function jobPageUrl(attempt: Run, page: number, repo = REPO): string {
+  return `${attemptUrl(attempt, repo)}/jobs?per_page=100&page=${page}`;
+}
+
+// A job listing page holding one job for each conclusion in `conclusions`.
+function jobPage(total: number, conclusions: readonly string[]): GithubAnswer {
+  return {
+    total_count: total,
+    jobs: conclusions.map((conclusion) => ({ conclusion })),
+  };
+}
+
+Deno.test("weaver ci duration: a run that ran no job, or ran one job and skipped the rest, did no work and is left out", async () => {
+  const now = Date.now();
+  const minutes = (m: number) =>
+    run({
+      created_at: new Date(now - m * 60_000).toISOString(),
+      run_started_at: new Date(now - m * 60_000).toISOString(),
+      updated_at: new Date(now).toISOString(),
+    });
+  const statusOnly = minutes(1);
+  const jobless = minutes(2);
+  const oneJobWorkflow = minutes(8);
+  const worked = minutes(12);
+  const view = await withGithubAttempt(
+    byUrl([
+      [
+        jobPageUrl(statusOnly, 1, WEAVER_REPO),
+        jobPage(3, ["skipped", "success", "skipped"]),
+      ],
+      [jobPageUrl(jobless, 1, WEAVER_REPO), jobPage(0, [])],
+      [jobPageUrl(oneJobWorkflow, 1, WEAVER_REPO), jobPage(1, ["success"])],
+      [
+        jobPageUrl(worked, 1, WEAVER_REPO),
+        jobPage(3, ["skipped", "success", "success"]),
+      ],
+    ]),
+    () =>
+      weaverCiDuration.collect(
+        ctx([statusOnly, jobless, oneJobWorkflow, worked]),
+      ),
+  );
+  // The median of 8 and 12 minutes; the one- and two-minute runs are not
+  // counted.
+  assertEquals(view.value, "10m");
+  assertStringIncludes(view.sub ?? "", "median of last 2 PR runs");
+});
+
+Deno.test("ci-duration: a job listing is read to its last page, once", async () => {
+  const now = Date.now();
+  const long = run({
+    created_at: new Date(now - 20 * 60_000).toISOString(),
+    run_started_at: new Date(now - 20 * 60_000).toISOString(),
+    updated_at: new Date(now).toISOString(),
+  });
+  const skippedPage = Array.from({ length: 100 }, () => "skipped");
+  const pages = [jobPageUrl(long, 1), jobPageUrl(long, 2)];
+  await withGithubAttempt(
+    byUrl([
+      [pages[0], jobPage(102, skippedPage)],
+      [pages[1], jobPage(102, ["success", "success"])],
+    ]),
+    async (urls) => {
+      // Only the second page shows that more than one job ran.
+      assertEquals((await labsCiDuration.collect(ctx([long]))).value, "20m");
+      assertEquals(urls, pages);
+      await labsCiDuration.collect(ctx([long]));
+      assertEquals(urls, pages, "a completed run's job counts are held");
+    },
+  );
+});
+
+Deno.test("ci-duration: a job listing that cannot be read fails the collection", async () => {
+  const unreadable = run({});
+  await withGithubAttempt(
+    byUrl([[jobPageUrl(unreadable, 1), { total_count: 1 }]]),
+    () =>
+      assertRejects(
+        () => labsCiDuration.collect(ctx([unreadable])),
+        Error,
+        "job listing page 1",
+      ),
+  );
+});
+
+Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snapshot", async () => {
+  const kept = run({});
+  const passing = run({});
+  const listing = jobPage(2, ["success", "success"]);
+  await withGithubAttempt(
+    byUrl([[jobPageUrl(kept, 1), listing], [jobPageUrl(passing, 1), listing]]),
+    async (urls) => {
+      await labsCiDuration.collect(ctx([kept, passing]));
+      await labsCiDuration.collect(ctx([kept]));
+      await labsCiDuration.collect(ctx([kept, passing]));
+      assertEquals(urls, [
+        jobPageUrl(kept, 1),
+        jobPageUrl(passing, 1),
+        jobPageUrl(passing, 1),
+      ]);
+    },
+  );
 });
 
 Deno.test("recent-runs: wide, failure tip -> bad, rows link to the landing PR", async () => {
@@ -376,50 +799,49 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
   assertStringIncludes(html, '>42s</a><a class="evarrow"');
 });
 
-Deno.test("tile labels: the labs/loom ci family is renamed and paired", async () => {
+Deno.test("ci trust: every repository keeps its strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  const labsTrust = await labsCiTrust.collect(one);
-  const loomTrust = await loomCiTrust.collect(one);
-  assertEquals((await labsCi.collect(one)).label, "labs ci");
-  assertEquals((await loomCi.collect(one)).label, "loom ci");
-  assertEquals(labsTrust.label, "labs ci trust");
-  assertEquals(loomTrust.label, "loom ci trust");
-  assertEquals(labsTrust.alignChartBottom, true);
-  assertEquals(loomTrust.alignChartBottom, true);
-  assertEquals((await labsCiDuration.collect(one)).label, "labs ci duration");
-  assertEquals((await loomCiDuration.collect(one)).label, "loom ci duration");
+  for (const tile of [labsCiTrust, loomCiTrust, weaverCiTrust]) {
+    assertEquals((await tile.collect(one)).alignChartBottom, true);
+  }
 });
 
 Deno.test("runSource creates workflow snapshot metadata", () => {
-  assertEquals(runSource(REPO, CI_WORKFLOW), {
+  assertEquals(runSource(REPO, CI_WORKFLOW, "main"), {
     repo: REPO,
     workflow: CI_WORKFLOW,
+    scope: "main",
+  });
+  assertEquals(runSource(REPO, CI_WORKFLOW, "pull requests"), {
+    repo: REPO,
+    workflow: CI_WORKFLOW,
+    scope: "pull requests",
   });
 });
 
 Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
-  const labsSource = [{ repo: REPO, workflow: CI_WORKFLOW }];
-  const loomSource = [{ repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW }];
-  for (const tile of [labsCi, labsCiTrust, labsCiDuration]) {
-    assertEquals(tile.runSources, labsSource);
-  }
-  for (const tile of [loomCi, loomCiTrust, loomCiDuration]) {
-    assertEquals(tile.runSources, loomSource);
-  }
-  assertEquals(recentRuns.runSources, [...labsSource, ...loomSource]);
-});
-
-Deno.test("labs ci: an in-flight build renders at the bottom (extra), not the header (aside)", async () => {
-  const runs = [
-    run({ status: "in_progress", conclusion: null, display_title: "wip" }),
-    run({ conclusion: "success" }),
+  const main = (repo: string, workflow: string): RunSource[] => [
+    { repo, workflow, scope: "main" },
   ];
-  const v = await labsCi.collect(ctx(runs));
-  assertStringIncludes(v.extra ?? "", "next build running");
-  assert(
-    !(v.aside ?? "").includes("next build running"),
-    "the badge is no longer in the header aside",
+  const pulls = (repo: string, workflow: string): RunSource[] => [
+    { repo, workflow, scope: "pull requests" },
+  ];
+  assertEquals(labsCiTrust.runSources, main(REPO, CI_WORKFLOW));
+  assertEquals(loomCiTrust.runSources, main(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(
+    weaverCiTrust.runSources,
+    main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
+  assertEquals(labsCiDuration.runSources, pulls(REPO, CI_WORKFLOW));
+  assertEquals(loomCiDuration.runSources, pulls(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(
+    weaverCiDuration.runSources,
+    pulls(WEAVER_REPO, WEAVER_CI_WORKFLOW),
+  );
+  assertEquals(recentRuns.runSources, [
+    ...main(REPO, CI_WORKFLOW),
+    ...main(LOOM_REPO, LOOM_CI_WORKFLOW),
+  ]);
 });
 
 Deno.test("recent runs: labs and loom runs interleave chronologically, each tagged", async () => {
@@ -445,6 +867,9 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
   assertEquals(order, ["3", "7", "2", "6"]);
   assertStringIncludes(v.extra ?? "", "labs · ");
   assertStringIncludes(v.extra ?? "", "loom · ");
+  assertStringIncludes(v.aside ?? "", ">4 in window</span>");
+  // The list's scroll position carries over live updates.
+  assertStringIncludes(v.extra ?? "", '<div class="evscroll" data-focus-key="runs">');
 });
 
 Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
@@ -492,7 +917,6 @@ Deno.test("gated tiles gray out cleanly without their env", async () => {
     [benchmark, "GH_TOKEN"],
     [dau, "SIGNOZ_URL"],
     [githubMembers, "GH_TOKEN"],
-    [coverageDebt, "GH_TOKEN"],
   ] as const;
   for (const [tile, needle] of cases) {
     const v = await tile.collect(ctx([]));
@@ -648,12 +1072,6 @@ Deno.test("benchmark: trend classification — flat/down good, up warn, steep up
   assertEquals(st([100, 120, 140, 160, 180, 200, 240]), "bad"); // steep rise
 });
 
-Deno.test("benchmark: fewer than a week of days claims no trend", () => {
-  const t = (v: number[]) => v.map((_, i) => i * 86_400_000);
-  // A big jump, but only three days of data -> reported flat (too little to judge).
-  assertEquals(trendPct(t([100, 500, 2000]), [100, 500, 2000]), 0);
-});
-
 Deno.test("benchmark: the trend ignores a lone spike", () => {
   const flat = [100, 100, 100, 100, 100, 100, 100, 100];
   const spiked = [...flat];
@@ -662,45 +1080,37 @@ Deno.test("benchmark: the trend ignores a lone spike", () => {
   assertEquals(trendStatus(trendPct(times, spiked)), "good");
 });
 
-Deno.test("benchmark: formatNs picks a readable unit", () => {
-  assertEquals(formatNs(500), "500ns");
-  assertEquals(formatNs(1500), "1.5µs");
-  assertEquals(formatNs(2_000_000), "2.0ms");
-  assertEquals(formatNs(50_000_000), "50ms");
-  assertEquals(formatNs(NaN), "—");
-});
-
-Deno.test("registry: unique ids and positive intervals", () => {
-  const ids = TILES.map((t) => t.id);
-  assertEquals(new Set(ids).size, ids.length, "tile ids must be unique");
+Deno.test("registry: unique labels and positive intervals", () => {
+  const labels = TILES.map((t) => t.label);
+  assertEquals(new Set(labels).size, labels.length, "tile labels must be unique");
   for (const t of TILES) {
-    assert(t.intervalMs > 0, `${t.id} needs a positive intervalMs`);
+    assert(t.intervalMs > 0, `${t.label} needs a positive intervalMs`);
   }
 });
 
-Deno.test("every tile's drill-down link reaches a route the wall serves", () => {
-  // An unrecognized path falls through to the wall itself, so a tile linking
-  // at a page nobody serves lands the viewer back where they started.
+Deno.test("every tile's drill-down link reaches a route the dashboard serves", () => {
+  // An unrecognized path falls through to the dashboard itself, so a tile
+  // linking at a page nobody serves lands the viewer back where they started.
   const served = new Set(
     TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
   );
-  for (const { id, view } of TILE_LAYOUT_FIXTURES) {
+  for (const { label, view } of TILE_LAYOUT_FIXTURES) {
     if (view.href === undefined || /^https?:/.test(view.href)) continue;
-    const path = new URL(view.href, "http://wall").pathname;
+    const path = new URL(view.href, "http://dashboard").pathname;
     assert(
       served.has(path),
-      `${id} links to ${path}, which no registered tile serves`,
+      `${label} links to ${path}, which no registered tile serves`,
     );
   }
 });
 
 Deno.test("layout fixtures cover every registered tile in registry order", () => {
   assertEquals(
-    TILE_LAYOUT_FIXTURES.map(({ id }) => id),
-    TILES.map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.map(({ label }) => label),
+    TILES.map(({ label }) => label),
   );
   assertEquals(
-    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ id }) => id),
-    TILES.filter(({ wide }) => wide).map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ label }) => label),
+    TILES.filter(({ wide }) => wide).map(({ label }) => label),
   );
 });

@@ -7,7 +7,8 @@
  */
 
 import type { AssertPart, AssertRecord } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * Recognizes the record an `assert(...)` assertion carries. A `computed(...)`
@@ -15,7 +16,7 @@ import { toCompactDebugString } from "@commonfabric/data-model";
  * apart at the point the harness reads the value.
  */
 export function asAssertRecord(value: unknown): AssertRecord | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const candidate = value as Partial<AssertRecord>;
   if (
     typeof candidate.ok !== "boolean" ||
@@ -25,7 +26,7 @@ export function asAssertRecord(value: unknown): AssertRecord | undefined {
     return undefined;
   }
   const parts = candidate.parts.filter((part): part is AssertPart =>
-    typeof part === "object" && part !== null &&
+    isObjectOrArray(part) &&
     typeof (part as Partial<AssertPart>).src === "string" &&
     typeof (part as Partial<AssertPart>).rendered === "string"
   );
@@ -78,6 +79,6 @@ export function assertionOutcome(
   }
   return {
     passed: false,
-    error: `Expected true, got ${toCompactDebugString(value)}`,
+    error: debugStr`Expected true, got $quote,long${value}`,
   };
 }

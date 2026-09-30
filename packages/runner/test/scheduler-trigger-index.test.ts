@@ -106,6 +106,70 @@ describe("applyActionReadDelta", () => {
     );
   });
 
+  it("leaves a shallow read to a write more than one component below it", () => {
+    // A shallow read of `value` sees `value` replaced and sees its own
+    // members replaced, and nothing deeper. The index hands the read over,
+    // because the write descends through it, and the depth test drops it.
+
+    const triggerIndex = new SchedulerTriggerIndex(identityThunk);
+    const state = new SchedulerTriggerSubscriptions({
+      triggerIndex,
+      cancels: new WeakMap(),
+      getActionId: () => "test-action",
+    });
+    const action: Action = () => {};
+    const shallowRead: IMemorySpaceAddress = {
+      space: "did:key:trigger-index-shallow",
+      scope: "space",
+      id: "of:cell",
+      path: ["value"],
+    };
+    const log: ReactivityLog = {
+      reads: [],
+      shallowReads: [shallowRead],
+      writes: [],
+    };
+    applyActionReadDelta(state, action, emptyLog, log);
+
+    const member = { ...shallowRead, path: ["value", "member"] };
+    expect(triggerIndex.collectReadersForWrite(member).has(action)).toBe(true);
+
+    const deeper = { ...shallowRead, path: ["value", "member", "field"] };
+    expect(triggerIndex.collectReadersForWrite(deeper).has(action)).toBe(false);
+  });
+
+  it("re-registers an action whose reads are unchanged since the index forgot them", () => {
+    // What an action last read and what the index currently holds are two
+    // different facts, and `removeSpace()` moves only the second. An action
+    // re-registering identical reads after one has to land in the index
+    // again, so the delta is taken against what the index holds.
+
+    const triggerIndex = new SchedulerTriggerIndex(identityThunk);
+    const state = new SchedulerTriggerSubscriptions({
+      triggerIndex,
+      cancels: new WeakMap(),
+      getActionId: () => "test-action",
+    });
+    const action: Action = () => {};
+    const read: IMemorySpaceAddress = {
+      space: "did:key:trigger-index-forgotten",
+      scope: "space",
+      id: "of:cell",
+      path: ["value"],
+    };
+    const log: ReactivityLog = { reads: [read], shallowReads: [], writes: [] };
+
+    applyActionReadDelta(state, action, emptyLog, log);
+    expect(triggerIndex.collectReadersForWrite(read).has(action)).toBe(true);
+
+    triggerIndex.removeSpace("did:key:trigger-index-forgotten");
+    expect(triggerIndex.collectReadersForWrite(read).has(action)).toBe(false);
+
+    applyActionReadDelta(state, action, log, log);
+
+    expect(triggerIndex.collectReadersForWrite(read).has(action)).toBe(true);
+  });
+
   it("keeps one cancel that removes the latest trigger entities", () => {
     const triggerIndex = new SchedulerTriggerIndex(identityThunk);
     const cancels = new WeakMap<Action, () => void>();

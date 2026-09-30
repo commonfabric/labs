@@ -21,10 +21,13 @@
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  mapSubschemas,
+  type SchemaWalkOptions,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { decodeJsonPointer, encodeJsonPointer } from "./link-types.ts";
-import { mapSubschemas, type SchemaWalkOptions } from "./schema-walk.ts";
 import { rendererVDOMSchema, vnodeSchema } from "./schemas.ts";
 
 const ALL_SUBSCHEMAS: SchemaWalkOptions = { includeUnused: true };

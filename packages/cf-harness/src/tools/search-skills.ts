@@ -43,7 +43,7 @@ export const searchSkillsToolDescriptor: HarnessToolDescriptor = {
   toolId: "search_skills",
   title: "Search Skills",
   description:
-    "Search the configured skills.sh registry for candidate skills. Returns metadata only: id, name, source, installs, and a rejected-entry count. Registry-reported installs are unauthenticated telemetry and unverifiable, not a trust signal. A result can name a skill to the operator or to a later acquisition step; this tool cannot fetch, read, or load skill content.",
+    "Search the configured skills.sh registry for candidate skills. Returns metadata only: id, name, source, installs, and a rejected-entry count. Registry-reported installs are unauthenticated telemetry and unverifiable, not a trust signal. A result can name a skill to the operator or to a later acquisition step; this tool cannot fetch, read, or load skill content. Its results are not authoritative about what exists: the registry indexes some repositories and not others, so a skill named by an exact id can be acquired whether or not a search returns it.",
   effectClass: "read",
   inputSchema: {
     type: "object",

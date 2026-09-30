@@ -5,11 +5,8 @@ import type {
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -20,14 +17,14 @@ import {
   REALM_CODEC,
   type TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import type { FabricValue } from "@/interface.ts";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
-} from "@/value-tags.ts";
+} from "./interface.ts";
 
-/** The only regex flavor currently representable as a native `RegExp`. */
+/** The only regex flavor currently representable as a JS `RegExp`. */
 const DEFAULT_FLAVOR = "es2025";
 
 /**
@@ -53,11 +50,11 @@ type FabricRegExpState = {
  * each call.
  *
  * `flavor` identifies the regex dialect. Only `"es2025"` (the default) is
- * currently representable as a native JS `RegExp`; for that flavor the
+ * currently representable as a JS `RegExp`; for that flavor the
  * constructor proactively builds and retains a private `RegExp`, which both
  * validates the pattern syntax eagerly and makes `value` cheap. Other flavors
  * are stored faithfully (`source` / `flags` / `flavor`) but cannot yet produce
- * a native `RegExp`, so `value` throws for them -- leaving room to represent
+ * a JS `RegExp`, so `value` throws for them -- leaving room to represent
  * other regex syntaxes in the future. See Section 1.4.1 of the formal spec.
  */
 export class FabricRegExp extends BaseFabricPrimitive
@@ -72,19 +69,19 @@ export class FabricRegExp extends BaseFabricPrimitive
   readonly #flavor: string;
 
   /**
-   * The native `RegExp`, built eagerly for the `"es2025"` flavor (and only
+   * The JS `RegExp`, built eagerly for the `"es2025"` flavor (and only
    * that flavor). `undefined` for other flavors, which cannot yet produce a
-   * native `RegExp`. Never handed out directly -- `value` returns a fresh
+   * JS `RegExp`. Never handed out directly -- `value` returns a fresh
    * clone.
    */
   readonly #value: RegExp | undefined;
 
   /**
-   * Constructs an instance, either from a native `RegExp` (implying the
+   * Constructs an instance, either from a JS `RegExp` (implying the
    * `"es2025"` flavor) or from explicit `flavor` / `source` / `flags`.
    *
    * When the resulting flavor is `"es2025"`, the `source` and `flags` are
-   * validated eagerly by building the retained native `RegExp`. A native
+   * validated eagerly by building the retained JS `RegExp`. A JS
    * `RegExp` argument with extra enumerable own properties is rejected (the
    * built-in `.lastIndex` is non-enumerable, so `Object.keys()` only sees
    * user-added properties).
@@ -109,9 +106,9 @@ export class FabricRegExp extends BaseFabricPrimitive
       this.#flags = flags ?? "";
     }
 
-    // Only `"es2025"` is representable as a native `RegExp`; build it eagerly
+    // Only `"es2025"` is representable as a JS `RegExp`; build it eagerly
     // (which also validates the pattern). Other flavors store their strings but
-    // have no native form yet.
+    // have no convertible JS form yet.
     this.#value = (this.#flavor === DEFAULT_FLAVOR)
       ? new RegExp(this.#source, this.#flags)
       : undefined;
@@ -124,6 +121,11 @@ export class FabricRegExp extends BaseFabricPrimitive
   /** @inheritDoc */
   get [VALUE_TAG](): FabricPrimitiveValueTag {
     return FABRIC_PRIMITIVE_VALUE_TAGS.FabricRegExp;
+  }
+
+  /** @inheritDoc */
+  get schemaType(): "FabricRegExp" {
+    return "FabricRegExp";
   }
 
   /** The pattern source text. */
@@ -142,17 +144,17 @@ export class FabricRegExp extends BaseFabricPrimitive
   }
 
   /**
-   * A fresh native `RegExp` equivalent to this value, returned anew on each
+   * A fresh JS `RegExp` equivalent to this value, returned anew on each
    * call so the internal instance is never aliased out (the caller cannot
    * reach its `lastIndex` etc.). Throws when the flavor is not `"es2025"`,
-   * which has no native `RegExp` representation.
+   * which has no JS `RegExp` representation.
    */
   get value(): RegExp {
     if (this.#value === undefined) {
       throw new Error(
         `Cannot represent flavor ${
           backtickQuote(this.#flavor)
-        } as a native \`RegExp\`.`,
+        } as a JS \`RegExp\`.`,
       );
     }
     return new RegExp(this.#value);
@@ -163,7 +165,8 @@ export class FabricRegExp extends BaseFabricPrimitive
   //
 
   static #jsonCodec = Object.freeze(
-    new (class RegExpCodec extends BaseNonterminalCodec<FabricRegExpState> {
+    new (class RegExpCodec
+      extends BaseNonterminalCodec<never, FabricRegExpState> {
       /** Constructs an instance. */
       constructor() {
         super(CODEC_TYPE_TAGS.RegExp, FabricRegExp);
@@ -171,11 +174,11 @@ export class FabricRegExp extends BaseFabricPrimitive
 
       /** @inheritDoc */
       encode(value: FabricRegExp, _env: LiveEnvironment): FabricRegExpState {
-        return {
+        return Object.freeze({
           source: value.#source,
           flags: value.#flags,
           flavor: value.#flavor,
-        };
+        });
       }
 
       /**
@@ -214,7 +217,7 @@ export class FabricRegExp extends BaseFabricPrimitive
        *
        * Beyond the three fields being strings, this class does not enforce
        * regex syntax as part of its wire participation: only the `es2025`
-       * flavor is validated, eagerly, by the constructor building a native
+       * flavor is validated, eagerly, by the constructor building a JS
        * `RegExp`. Another flavor's `source` and `flags` are stored faithfully
        * and may be any strings at all, that dialect being one this runtime
        * cannot check.
@@ -223,6 +226,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         typeTag: string,
         state: FabricRegExpState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const flavor = state.flavor ?? DEFAULT_FLAVOR;
         const source = state.source ?? "";
@@ -231,10 +235,11 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `RegExp: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -250,11 +255,11 @@ export class FabricRegExp extends BaseFabricPrimitive
 
       /** @inheritDoc */
       encode(value: FabricRegExp, _env: LiveEnvironment): RealmCodecValue {
-        return {
+        return Object.freeze({
           source: value.#source,
           flags: value.#flags,
           flavor: value.#flavor,
-        };
+        });
       }
 
       /** @inheritDoc */
@@ -290,6 +295,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         typeTag: string,
         state: FabricRegExpState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const flavor = state.flavor ?? DEFAULT_FLAVOR;
         const source = state.source ?? "";
@@ -298,10 +304,11 @@ export class FabricRegExp extends BaseFabricPrimitive
         try {
           return new FabricRegExp(flavor, source, flags);
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             (e instanceof Error) ? e.message : String(e),
+            mutable,
           );
         }
       }
@@ -324,9 +331,9 @@ export class FabricRegExp extends BaseFabricPrimitive
    * has to gain by: the walk hands the record to the transport rather than
    * descending into three strings whose shape it already knows.
    *
-   * Structured cloning carrying a native `RegExp` is not the reason, and would
-   * not have been a good one. `flavor` has no native carrier, and a flavor
-   * other than `es2025` has no native `RegExp` at all, so a state of that
+   * Structured cloning carrying a JS `RegExp` is not the reason, and would
+   * not have been a good one. `flavor` has no JS carrier, and a flavor
+   * other than `es2025` has no JS `RegExp` at all, so a state of that
    * shape would drop the first and be unreachable for the second.
    */
   static get [REALM_CODEC](): TerminalCodec<RealmCodecValue> {

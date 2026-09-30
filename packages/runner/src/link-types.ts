@@ -1,10 +1,16 @@
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
+import { isDID } from "@commonfabric/identity/did";
 import {
   isLinkRef,
   linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
+import {
+  decodeJsonPointer,
+  encodeJsonPointer,
+} from "@commonfabric/utils/json-pointer";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { parseCellReference, renderCellReference } from "./cell-reference.ts";
 import {
   type CellScope,
   type JSONSchema,
@@ -24,6 +30,8 @@ import type {
   IMemorySpaceAddress,
   MemoryAddressPathComponent,
 } from "./storage/interface.ts";
+
+export { decodeJsonPointer, encodeJsonPointer };
 
 /** The scopes an `@scope` suffix on a link handle may name. */
 export const CELL_SCOPE_VALUES: ReadonlySet<string> = new Set([
@@ -158,9 +166,15 @@ export type NormalizedFullLink = NormalizedLink & {
   scope: CellScope;
 };
 
-export type ValuePath = readonly ["value", ...string[]];
+/**
+ * A path rooted at a stored document that reaches into its payload, so its
+ * first segment is the `value` member holding the payload. A path relative to
+ * the payload, as a normalized link's is, has no such segment.
+ */
+export type StoredValuePath = readonly ["value", ...string[]];
+
 export type IMemorySpaceValueAddress = IMemorySpaceAddress & {
-  path: ValuePath;
+  path: StoredValuePath;
 };
 
 /**
@@ -279,9 +293,7 @@ export function parseLinkPrimitive(
     };
   }
   throw new Error(
-    `Link is not a primitive: ${
-      toCompactDebugString(value, { backtickQuote: true })
-    }`,
+    debugStr`Link is not a primitive: $quote${value}`,
   );
 }
 
@@ -377,30 +389,6 @@ export function addressKey(
   ]);
 }
 
-/**
- * Encodes a JSON Pointer path according to RFC 6901.
- * Each token has ~ replaced with ~0 and / replaced with ~1, then joined with /.
- * @param path - Array of path tokens to encode
- * @returns The encoded JSON Pointer string
- */
-export function encodeJsonPointer(path: readonly string[]): string {
-  return path
-    .map((token) => token.replace(/~/g, "~0").replace(/\//g, "~1"))
-    .join("/");
-}
-
-/**
- * Decodes a JSON Pointer string according to RFC 6901.
- * Splits by / then replaces ~1 with / and ~0 with ~ in each token.
- * @param pointer - The JSON Pointer string to decode
- * @returns Array of decoded path tokens
- */
-export function decodeJsonPointer(pointer: string): string[] {
-  return pointer
-    .split("/")
-    .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
-}
-
 /** A canonical array-index token: `0`, or digits without a leading zero. */
 const canonicalArrayIndex = /^(0|[1-9][0-9]*)$/;
 
@@ -428,10 +416,9 @@ export function linkPathSegmentToCellPathSegment(
 }
 
 // Matches both standard links (/of:...) and cross-space links (/@did:...)
-export const matchLLMFriendlyLink = new RegExp("^/[@a-zA-Z0-9]+:");
-
-// Matches the space DID a link's leading `@` segment names, the `@` removed.
-const matchSpaceDid = new RegExp("^did:[^:]+:[^/]+$");
+export const matchLLMFriendlyLink = new RegExp(
+  "^/(?:/[^/]+/|@[^/]+/)?[a-zA-Z0-9]+:",
+);
 
 /**
  * The shortest an id segment may be and still be a piece handle.
@@ -449,79 +436,10 @@ export function isPieceHandle(id: string): boolean {
   return id.length >= HANDLE_MIN_LENGTH;
 }
 
-/**
- * The parts a reference names, each still in the spelling it was written in.
- *
- * `space` is whatever the leading `@` segment carried — a DID, or a name that
- * only a session can resolve — and `id` is whatever the segment after it
- * carried, a handle or a slug. Holding either to a form is the caller's, which
- * is the difference between this and {@link parseLLMFriendlyLink}.
- */
-export interface ReferenceParts {
-  id: string;
-  scope?: CellScope;
-  space?: string;
-  path: string[];
-}
-
-/**
- * Split a reference into the parts it names, without holding any of them to a
- * form.
- *
- * This is the grammar itself: rooted at `/`, an optional `@`-prefixed space
- * segment, the id, and a JSON Pointer path. What a reader may write in the
- * space and id segments differs by where the reference is read — the runner
- * resolves a link with nothing but the string, so it requires the
- * self-identifying spellings {@link parseLLMFriendlyLink} enforces, while a
- * caller holding a session can resolve a space name and a slug as well.
- * Splitting the grammar from those rules is what keeps the two readings one
- * language.
- *
- * Throws when the string is not a reference at all: unrooted, or naming no id.
- */
-export function parseReferenceParts(target: string): ReferenceParts {
-  const [empty, firstSegment, ...rest] = decodeJsonPointer(target.trim());
-
-  if (empty !== "") {
-    throw new Error("Target must start with a slash.");
-  }
-
-  let space: string | undefined;
-  let idSegment: string | undefined;
-  let path: string[];
-  if (firstSegment !== undefined && firstSegment.startsWith("@")) {
-    space = firstSegment.slice(1);
-    if (space === "") {
-      throw new Error(
-        'Target must name a space after "@", e.g. "/@did:key:z6Mk.../of:fid1:abc123".',
-      );
-    }
-    [idSegment, ...path] = rest;
-  } else {
-    idSegment = firstSegment;
-    path = rest;
-  }
-
-  if (idSegment === undefined || idSegment === "") {
-    throw new Error(
-      'Target must include a piece handle, e.g. "/of:fid1:abc123/path".',
-    );
-  }
-
-  const scopedId = parseScopedIdSegment(idSegment);
-
-  // Remove path element from trailing slash
-  if (path.length > 0 && path[path.length - 1] === "") {
-    path.pop();
-  }
-
-  return {
-    id: scopedId.id,
-    ...(scopedId.scope && { scope: scopedId.scope }),
-    ...(space !== undefined && { space }),
-    path,
-  };
-}
+export {
+  parseCellReference as parseReferenceParts,
+  type ReferenceParts,
+} from "./cell-reference.ts";
 
 /**
  * Parses a LLM friendly link from a target string.
@@ -545,7 +463,7 @@ export function parseLLMFriendlyLink(
   target: string,
   space?: MemorySpace,
 ): NormalizedLink {
-  target = target.trim();
+  target = target.trimStart();
 
   if (!matchLLMFriendlyLink.test(target)) {
     throw new Error(
@@ -553,18 +471,23 @@ export function parseLLMFriendlyLink(
     );
   }
 
-  const parsed = parseReferenceParts(target);
+  const parsed = parseCellReference(target, space ? { space } : undefined);
+  if (parsed.member === "argument") {
+    throw new Error(
+      "Resolving `#argument` requires a piece reader; use `parseCellReference` to read its member.",
+    );
+  }
 
   // A link resolves from the string alone, so both parts have to say what they
   // are: a space name and a slug each need a session to look up, and there is
   // none here.
   if (parsed.space !== undefined) {
-    if (!matchSpaceDid.test(parsed.space)) {
+    if (!isDID(parsed.space)) {
       throw new Error(
         `Link spaces must be DIDs (e.g., "/@did:key:z6Mk.../of:fid1:abc123"), not names (e.g., "${parsed.space}").`,
       );
     }
-    space = parsed.space as MemorySpace;
+    space = parsed.space;
   }
   if (!isPieceHandle(parsed.id)) {
     throw new Error(
@@ -582,8 +505,8 @@ export function parseLLMFriendlyLink(
 
 /**
  * Creates an LLM-friendly link string from a normalized link.
- * If contextSpace is provided and differs from the link's space,
- * includes the space DID in the link for cross-space resolution.
+ * Uses the caller's space and base scope as context when supplied. Without a
+ * context, writes the complete address, including its space and scope.
  *
  * @param link - The normalized link to encode
  * @param contextSpace - The current execution space (optional)
@@ -593,12 +516,8 @@ export function createLLMFriendlyLink(
   link: NormalizedFullLink,
   contextSpace?: MemorySpace,
 ): string {
-  const id = link.scope && link.scope !== "space"
-    ? `${link.id}@${link.scope}`
-    : link.id;
-  // If contextSpace provided and differs, include space in link
-  if (contextSpace && link.space && link.space !== contextSpace) {
-    return encodeJsonPointer(["", `@${link.space}`, id, ...link.path]);
-  }
-  return encodeJsonPointer(["", id, ...link.path]);
+  return renderCellReference(
+    link,
+    contextSpace === undefined ? {} : { space: contextSpace, scope: "space" },
+  );
 }

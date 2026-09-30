@@ -15,7 +15,10 @@ import {
   parseJUnit,
   preloadModulePath,
   readNameMaps,
+  recordingArguments,
+  RECORDS_DIR_VARIABLE,
   serializeSkipList,
+  SKIP_LIST_VARIABLE,
   type SkipList,
 } from "../../src/records/mod.ts";
 
@@ -33,10 +36,6 @@ const FIXTURE_CONFIG = {
       .href,
     "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
-    "@records/registration": new URL(
-      "../../src/records/registration.ts",
-      import.meta.url,
-    ).href,
   },
 };
 
@@ -80,35 +79,96 @@ async function makeFixture(
   return { dir, runIn: runDir, spool, junit: join(dir, "report.xml") };
 }
 
+/** What a fixture run carries beyond the files it is given. */
+interface RunOptions {
+  /**
+   * The skip list the run carries, either as a list or as the text of a
+   * file that is meant not to parse as one. Without it the run carries
+   * no skip list at all.
+   */
+  skips?: SkipList | string;
+
+  /**
+   * Modules preloaded ahead of the records preload, which is how a
+   * module reaches the process before that preload does.
+   */
+  before?: readonly string[];
+
+  /**
+   * Whether the run may write, and so whether the preload has a spool it
+   * can leave a name map in. True unless a test says otherwise.
+   */
+  write?: boolean;
+
+  /**
+   * The permission flags of a test task the run stands in for, which it
+   * is started with alongside what `recordingArguments()` adds to them.
+   * Without them, the run may read and write everything that `write`
+   * lets it and takes the preload alone.
+   */
+  flags?: readonly string[];
+}
+
+/**
+ * Runs a fixture tree. It is the only place in this file that starts a
+ * process, so that every fixture is given the same environment.
+ *
+ * A process inherits the environment of the process that started it, and
+ * a lane runs this file with a skip list of its own. A skip list is one
+ * of the two things that make the preload wrap `Deno.test`, so a fixture
+ * is given both variables the preload reads, and an empty value — which
+ * both read as unset — for whichever of them its test wants none of.
+ *
+ * The run carries no `--quiet`, so that what the preload writes reaches
+ * `output()`, which two of the cases below read their assertion out of.
+ */
 async function runFixture(
   fixture: Fixture,
   files: readonly string[],
-  skips?: SkipList,
+  options: RunOptions = {},
 ): Promise<Deno.CommandOutput> {
-  const env: Record<string, string> = {
-    CF_TEST_RECORDS_DIR: fixture.spool,
-  };
+  const { before = [], flags, skips, write = true } = options;
+  let skipList: string | undefined;
   if (skips !== undefined) {
-    const path = join(fixture.dir, "skips.json");
-    await Deno.writeTextFile(path, serializeSkipList(skips));
-    env.CF_TEST_SKIP_LIST = path;
+    skipList = join(fixture.dir, "skips.json");
+    await Deno.writeTextFile(
+      skipList,
+      typeof skips === "string" ? skips : serializeSkipList(skips),
+    );
   }
+  const permissions = flags ??
+    ["--allow-read", ...(write ? ["--allow-write"] : []), "--allow-env"];
+  const recording = flags === undefined
+    ? [`--preload=${preloadModulePath()}`]
+    : recordingArguments(flags, {
+      spool: fixture.spool,
+      root: fixture.dir,
+      ...(skipList === undefined ? {} : { skipList }),
+    });
   return await new Deno.Command(Deno.execPath(), {
     args: [
       "test",
-      "--quiet",
-      "--allow-read",
-      "--allow-write",
-      "--allow-env",
-      `--preload=${preloadModulePath()}`,
+      "--no-check",
+      ...permissions,
+      ...before.map((module) => `--preload=${module}`),
+      ...recording,
       `--junit-path=${fixture.junit}`,
       ...files,
     ],
     cwd: fixture.runIn,
-    env,
+    env: {
+      [RECORDS_DIR_VARIABLE]: fixture.spool,
+      [SKIP_LIST_VARIABLE]: skipList ?? "",
+    },
     stdout: "piped",
     stderr: "piped",
   }).output();
+}
+
+/** Returns everything a run wrote, in the order a reader would see it. */
+function output(run: Deno.CommandOutput): string {
+  const decoder = new TextDecoder();
+  return decoder.decode(run.stdout) + decoder.decode(run.stderr);
 }
 
 /** The leaf cases a run reported, by name, with their outcomes. */
@@ -296,26 +356,29 @@ describe("emptied", () => {
 });
 `;
 
-// Two modules that register a suite for whoever calls them, one
-// declaring itself machinery and one not. What each leaf's file comes
-// out as is the whole of what the declaration does.
-const DECLARED_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-import { registerFrameworkModule } from "@records/registration";
-registerFrameworkModule(import.meta.url);
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
+// A module that registers tests for whichever file calls it, the way a
+// shared suite does: leaves inside the caller's own describe, and a
+// top-level test named by the caller.
+const REGISTRAR = `import { it } from "@std/testing/bdd";
+export function leaves(): void {
+  it("kept", () => {});
+  it("dropped", () => {});
+}
+export function test(name: string): void {
+  Deno.test(name, () => {});
 }
 `;
 
-const BARE_REGISTRAR = `import { describe, it } from "@std/testing/bdd";
-export function suite(title: string): void {
-  describe(title, () => {
-    it("leaf", () => {});
-  });
-}
+/** A test file registering all of its tests through `REGISTRAR`. */
+function registeredThrough(title: string): string {
+  return `import { describe } from "@std/testing/bdd";
+import { leaves, test } from "./registrar.ts";
+describe("${title}", () => {
+  leaves();
+});
+test("${title} bare");
 `;
+}
 
 const BARE_FILE = `Deno.test("bare kept", () => {});
 Deno.test("bare dropped", () => {});
@@ -341,7 +404,7 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bdd.test.ts", "bare.test.ts"]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
       expect(names.get("outer")).toEqual("bdd.test.ts");
       expect(names.get("bare kept")).toEqual("bare.test.ts");
@@ -378,7 +441,7 @@ describe("preload", () => {
         "own.test.ts",
         "../tools/away.test.ts",
       ]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool, { ranIn: "member" });
       expect(names.get("outer > kept")).toEqual("member/own.test.ts");
       expect(names.get("elsewhere > dropped")).toEqual("tools/away.test.ts");
@@ -411,7 +474,7 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bdd.test.ts", "shared.test.ts"]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
       // The title both files register under says nothing about either,
       // so it carries no file; each leaf carries its own.
@@ -444,7 +507,7 @@ describe("preload", () => {
         "second.test.ts",
         "bdd.test.ts",
       ]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
       // Both hooked files register a root suite under the one name, so
       // that name carries no file and each leaf carries its own.
@@ -476,7 +539,7 @@ describe("preload", () => {
     const fixture = await makeFixture({ "hooks.test.ts": EVERY_HOOK_FILE });
     try {
       const run = await runFixture(fixture, ["hooks.test.ts"]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
 
       // The order the runner ran them in. A binding reaching a function
       // other than the one it names moves or drops a line here, which
@@ -513,7 +576,7 @@ describe("preload", () => {
         "first.test.ts",
         "second.test.ts",
       ]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
       expect(names.get("first > kept")).toEqual("first.test.ts");
       expect(names.get("second > kept")).toEqual("second.test.ts");
@@ -555,7 +618,7 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["leaf.test.ts", "empty.test.ts"]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
       expect(names.get("outer > kept")).toEqual("leaf.test.ts");
       // A body with no name of its own leaves the last element of the
@@ -588,28 +651,13 @@ describe("preload", () => {
       "early.ts": `import "@std/testing/bdd";\n`,
     });
     try {
-      // Without `--quiet`, which folds what a preload writes into a
-      // section of its own and shows it.
-      const run = await new Deno.Command(Deno.execPath(), {
-        args: [
-          "test",
-          "--allow-read",
-          "--allow-write",
-          "--allow-env",
-          "--preload=./early.ts",
-          `--preload=${preloadModulePath()}`,
-          `--junit-path=${fixture.junit}`,
-          "bdd.test.ts",
-        ],
-        cwd: fixture.dir,
-        env: { CF_TEST_RECORDS_DIR: fixture.spool },
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-      const output = new TextDecoder().decode(run.stdout) +
-        new TextDecoder().decode(run.stderr);
-      assert(run.success, output);
-      expect(output).toContain("the bdd re-export loaded before this preload");
+      const run = await runFixture(fixture, ["bdd.test.ts"], {
+        before: ["./early.ts"],
+      });
+      assert(run.success, output(run));
+      expect(output(run)).toContain(
+        "the bdd re-export loaded before this preload",
+      );
       // What the warning names: the wrapper around `Deno.test` still
       // sees the suite the describe chain registers, and nothing sees
       // the leaves inside it.
@@ -621,25 +669,45 @@ describe("preload", () => {
     }
   });
 
-  it("attributes a suite a declared registrar built to its caller", async () => {
+  it("attributes a test a helper module registered to the file the run was given", async () => {
     const fixture = await makeFixture({
-      "declared.ts": DECLARED_REGISTRAR,
-      "bare.ts": BARE_REGISTRAR,
-      "declared.test.ts":
-        `import { suite } from "./declared.ts";\nsuite("declared");\n`,
-      "bare.test.ts": `import { suite } from "./bare.ts";\nsuite("bare");\n`,
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
     });
     try {
-      const run = await runFixture(fixture, [
-        "declared.test.ts",
-        "bare.test.ts",
-      ]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"]);
+      assert(run.success, output(run));
       const names = await readNameMaps(fixture.spool);
-      expect(names.get("declared > leaf")).toEqual("declared.test.ts");
-      // Undeclared, so the map names the module that called `describe`
-      // rather than the file that asked it to.
-      expect(names.get("bare > leaf")).toEqual("bare.ts");
+      expect(names.get("one > kept")).toEqual("one.test.ts");
+      expect(names.get("one bare")).toEqual("one.test.ts");
+      expect(names.get("two > kept")).toEqual("two.test.ts");
+      expect(names.get("two bare")).toEqual("two.test.ts");
+      expect([...names.values()]).not.toContain("registrar.ts");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("skips a test a helper module registered by the file the run was given", async () => {
+    const fixture = await makeFixture({
+      "registrar.ts": REGISTRAR,
+      "one.test.ts": registeredThrough("one"),
+      "two.test.ts": registeredThrough("two"),
+    });
+    try {
+      const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"], {
+        skips: { "one.test.ts": ["one > dropped", "one bare"] },
+      });
+      assert(run.success, output(run));
+      const reported = await outcomes(fixture);
+      expect(reported.get("one > kept")).toEqual("pass");
+      expect(reported.get("one > dropped")).toEqual("skip");
+      expect(reported.get("one bare")).toEqual("skip");
+      // The other file registered the same leaves through the same
+      // module, and the list names nothing of it.
+      expect(reported.get("two > dropped")).toEqual("pass");
+      expect(reported.get("two bare")).toEqual("pass");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }
@@ -651,33 +719,17 @@ describe("preload", () => {
       "early.ts": `import "@std/testing/bdd";\n`,
     });
     try {
-      const skips = join(fixture.dir, "skips.json");
-      await Deno.writeTextFile(
-        skips,
-        serializeSkipList({ "bdd.test.ts": ["outer > dropped"] }),
-      );
-      const run = await new Deno.Command(Deno.execPath(), {
-        args: [
-          "test",
-          "--allow-read",
-          "--allow-write",
-          "--allow-env",
-          "--preload=./early.ts",
-          `--preload=${preloadModulePath()}`,
-          "bdd.test.ts",
-        ],
-        cwd: fixture.dir,
-        env: { CF_TEST_RECORDS_DIR: fixture.spool, CF_TEST_SKIP_LIST: skips },
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
+      const run = await runFixture(fixture, ["bdd.test.ts"], {
+        before: ["./early.ts"],
+        skips: { "bdd.test.ts": ["outer > dropped"] },
+      });
       // A skip list says what this invocation is not to run, and nothing
       // reaches inside a describe chain to apply it, so the run ends
       // rather than running the leaf it was told to leave alone.
       expect(run.success).toBe(false);
-      const output = new TextDecoder().decode(run.stdout) +
-        new TextDecoder().decode(run.stderr);
-      expect(output).toContain("the bdd re-export loaded before this preload");
+      expect(output(run)).toContain(
+        "the bdd re-export loaded before this preload",
+      );
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
     }
@@ -687,7 +739,7 @@ describe("preload", () => {
     const fixture = await makeFixture({ "overloads.test.ts": OVERLOAD_FILE });
     try {
       const run = await runFixture(fixture, ["overloads.test.ts"]);
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect([...reported.keys()].sort()).toEqual([
         "bodyAlone",
@@ -715,9 +767,11 @@ describe("preload", () => {
     const fixture = await makeFixture({ "overloads.test.ts": OVERLOAD_FILE });
     try {
       const run = await runFixture(fixture, ["overloads.test.ts"], {
-        "overloads.test.ts": ["name, options and body", "options and body"],
+        skips: {
+          "overloads.test.ts": ["name, options and body", "options and body"],
+        },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("name, options and body")).toEqual("skip");
       expect(reported.get("options and body")).toEqual("skip");
@@ -727,13 +781,41 @@ describe("preload", () => {
     }
   });
 
+  it("skips a listed test in a run whose own flags read and write nothing", async () => {
+    // A workspace member whose task grants `--allow-env` and nothing else
+    // is started with that and what the recording arguments add to it.
+    // Those additions are all the preload has to read the skip list with,
+    // and to climb from the test file to the repository root that the
+    // list is keyed from.
+
+    const fixture = await makeFixture(
+      { "member/bare.test.ts": BARE_FILE },
+      "member",
+    );
+    try {
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        flags: ["--allow-env"],
+        skips: { "member/bare.test.ts": ["bare dropped"] },
+      });
+      assert(run.success, output(run));
+      expect(output(run)).not.toContain("test records:");
+      const reported = await outcomes(fixture);
+      expect(reported.get("bare kept")).toEqual("pass");
+      expect(reported.get("bare dropped")).toEqual("skip");
+      const names = await readNameMaps(fixture.spool);
+      expect(names.get("bare kept")).toEqual("member/bare.test.ts");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
   it("reports a listed test as skipped rather than missing", async () => {
     const fixture = await makeFixture({ "bare.test.ts": BARE_FILE });
     try {
       const run = await runFixture(fixture, ["bare.test.ts"], {
-        "bare.test.ts": ["bare dropped"],
+        skips: { "bare.test.ts": ["bare dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("bare kept")).toEqual("pass");
       expect(reported.get("bare dropped")).toEqual("skip");
@@ -748,9 +830,9 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bare.test.ts"], {
-        "bare.test.ts": ["bare kept", "bare dropped"],
+        skips: { "bare.test.ts": ["bare kept", "bare dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("added later")).toEqual("pass");
       expect(reported.get("bare kept")).toEqual("skip");
@@ -763,9 +845,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "bdd.test.ts": BDD_FILE });
     try {
       const run = await runFixture(fixture, ["bdd.test.ts"], {
-        "bdd.test.ts": ["outer > dropped"],
+        skips: { "bdd.test.ts": ["outer > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("outer > kept")).toEqual("pass");
       expect(reported.get("outer > dropped")).toEqual("skip");
@@ -778,9 +860,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "leaf.test.ts": BODY_NAMED_LEAF_FILE });
     try {
       const run = await runFixture(fixture, ["leaf.test.ts"], {
-        "leaf.test.ts": ["outer > "],
+        skips: { "leaf.test.ts": ["outer > "] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("outer > ")).toEqual("skip");
       expect(reported.get("outer > kept")).toEqual("pass");
@@ -793,9 +875,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "hooked.test.ts": HOOKED_FILE });
     try {
       const run = await runFixture(fixture, ["hooked.test.ts"], {
-        "hooked.test.ts": ["global > hooked > dropped"],
+        skips: { "hooked.test.ts": ["global > hooked > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("global > hooked > kept")).toEqual("pass");
       expect(reported.get("global > hooked > dropped")).toEqual("skip");
@@ -808,9 +890,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "nested.test.ts": NESTED_BDD_FILE });
     try {
       const run = await runFixture(fixture, ["nested.test.ts"], {
-        "nested.test.ts": ["outer > inner > dropped"],
+        skips: { "nested.test.ts": ["outer > inner > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("outer > inner > kept")).toEqual("pass");
       expect(reported.get("outer > inner > dropped")).toEqual("skip");
@@ -823,9 +905,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "handle.test.ts": HANDLE_BDD_FILE });
     try {
       const run = await runFixture(fixture, ["handle.test.ts"], {
-        "handle.test.ts": ["outer > inner > dropped"],
+        skips: { "handle.test.ts": ["outer > inner > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       // A skip list keyed by the name the report gives leaves the leaf
       // out, which it can only do if the two are the same identity.
       const reported = await outcomes(fixture);
@@ -858,9 +940,9 @@ describe("preload", () => {
     const fixture = await makeFixture({ "both.test.ts": HOOKED_HANDLE_FILE });
     try {
       const run = await runFixture(fixture, ["both.test.ts"], {
-        "both.test.ts": ["global > outer > dropped"],
+        skips: { "both.test.ts": ["global > outer > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("global > outer > kept")).toEqual("pass");
       expect(reported.get("global > outer > dropped")).toEqual("skip");
@@ -877,9 +959,9 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bdd.test.ts", "other.test.ts"], {
-        "bdd.test.ts": ["outer > dropped"],
+        skips: { "bdd.test.ts": ["outer > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("outer > dropped")).toEqual("skip");
       expect(reported.get("elsewhere > dropped")).toEqual("pass");
@@ -894,9 +976,9 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bdd.test.ts"], {
-        "bdd.test.ts": ["outer > kept", "outer > dropped"],
+        skips: { "bdd.test.ts": ["outer > kept", "outer > dropped"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       const reported = await outcomes(fixture);
       expect(reported.get("outer > added later")).toEqual("pass");
       expect(reported.get("outer > kept")).toEqual("skip");
@@ -911,9 +993,9 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["bare.test.ts"], {
-        "bare.test.ts": ["the old name"],
+        skips: { "bare.test.ts": ["the old name"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       expect((await outcomes(fixture)).get("the new name")).toEqual("pass");
     } finally {
       await Deno.remove(fixture.dir, { recursive: true });
@@ -928,9 +1010,9 @@ describe("preload", () => {
     });
     try {
       const run = await runFixture(fixture, ["one.test.ts", "two.test.ts"], {
-        "one.test.ts": ["shared name"],
+        skips: { "one.test.ts": ["shared name"] },
       });
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      assert(run.success, output(run));
       // The report names both by the same identity, so the pair is one
       // passed case and one skipped one under that name.
       const xml = await Deno.readTextFile(fixture.junit);
@@ -955,23 +1037,10 @@ describe("preload", () => {
       // re-export hands back the real `describe` and `it` where there is
       // no capture, so a bdd file's class name is the file too, and both
       // kinds of leaf carry one without a name map to join onto.
-      const run = await new Deno.Command(Deno.execPath(), {
-        args: [
-          "test",
-          "--quiet",
-          "--allow-read",
-          "--allow-env",
-          `--preload=${preloadModulePath()}`,
-          `--junit-path=${fixture.junit}`,
-          "bdd.test.ts",
-          "bare.test.ts",
-        ],
-        cwd: fixture.dir,
-        env: { CF_TEST_RECORDS_DIR: fixture.spool },
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      const run = await runFixture(fixture, ["bdd.test.ts", "bare.test.ts"], {
+        write: false,
+      });
+      assert(run.success, output(run));
       expect((await readNameMaps(fixture.spool)).size).toEqual(0);
       const records = ingestJUnit(await Deno.readTextFile(fixture.junit), {
         kind: "unit",
@@ -989,29 +1058,47 @@ describe("preload", () => {
   it("runs everything when the skip list is malformed", async () => {
     const fixture = await makeFixture({ "bare.test.ts": BARE_FILE });
     try {
-      const path = join(fixture.dir, "skips.json");
-      await Deno.writeTextFile(path, "not a skip list");
-      const run = await new Deno.Command(Deno.execPath(), {
-        args: [
-          "test",
-          "--quiet",
-          "--allow-read",
-          "--allow-write",
-          "--allow-env",
-          `--preload=${preloadModulePath()}`,
-          `--junit-path=${fixture.junit}`,
-          "bare.test.ts",
-        ],
-        cwd: fixture.dir,
-        env: { CF_TEST_RECORDS_DIR: fixture.spool, CF_TEST_SKIP_LIST: path },
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-      assert(run.success, new TextDecoder().decode(run.stderr));
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        skips: "not a skip list",
+      });
+      assert(run.success, output(run));
+      // The warning is what tells a reader that the file was read and
+      // refused, rather than never reaching the preload at all.
+      expect(output(run)).toContain("is malformed");
       const reported = await outcomes(fixture);
       expect(reported.get("bare kept")).toEqual("pass");
       expect(reported.get("bare dropped")).toEqual("pass");
     } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("runs a test the skip list of the run that started it names", async () => {
+    // A process inherits the environment of the process that started it,
+    // and a lane runs this file with a skip list of its own. What an
+    // invocation is not to run is what its own environment names, so the
+    // list a fixture inherits reaches none of its tests.
+
+    const fixture = await makeFixture({ "bare.test.ts": BARE_FILE });
+    const outside = Deno.env.get(SKIP_LIST_VARIABLE);
+    try {
+      const path = join(fixture.dir, "outside.json");
+      await Deno.writeTextFile(
+        path,
+        serializeSkipList({ "bare.test.ts": ["bare kept"] }),
+      );
+      Deno.env.set(SKIP_LIST_VARIABLE, path);
+      const run = await runFixture(fixture, ["bare.test.ts"]);
+      assert(run.success, output(run));
+      const reported = await outcomes(fixture);
+      expect(reported.get("bare kept")).toEqual("pass");
+      expect(reported.get("bare dropped")).toEqual("pass");
+      // What the fixture is given is an empty value, which the preload
+      // reads as no skip list rather than as a file at the empty path.
+      expect(output(run)).not.toContain("cannot read the skip list");
+    } finally {
+      if (outside === undefined) Deno.env.delete(SKIP_LIST_VARIABLE);
+      else Deno.env.set(SKIP_LIST_VARIABLE, outside);
       await Deno.remove(fixture.dir, { recursive: true });
     }
   });

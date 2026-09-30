@@ -12,9 +12,9 @@ MMC4CAQAwBQYDK2VwBCIEICWSvx4QOW+mogjWSsjInQaPpmjErsDBqf2ZOoK+Y4IO
 const PKCS8_KEY_DID =
   "did:key:z6MkspRA3aXp7T1GmTo92Q33EV33oJSNDzaoKkFUV5WkW9NC";
 
-// DID from an identity derived from the passphrase "common user"
-const COMMON_USER_DID =
-  "did:key:z6Mkj5HyygpAVo2baUcx7kwTRoUbbBmk5egUQPHnV8arQ3SY";
+// DID from an identity derived from the passphrase "example passphrase"
+const EXAMPLE_PASSPHRASE_DID =
+  "did:key:z6MkkB8nsWvJhu3d4CBhhcEuHvDEYmtAWJTgBVmDPaR8iJXj";
 
 // Canonical BIP-39 all-zero-entropy 24-word test vector, and the DID that
 // `Identity.fromMnemonic` (the browser's mnemonic login path) produces from it.
@@ -45,10 +45,10 @@ describe("cli id", () => {
   });
 
   it("Reads DID from key", async () => {
-    const { code, stdout, stderr } = await cf(`id derive "common user"`);
+    const { code, stdout, stderr } = await cf(`id derive "example passphrase"`);
     const keyBuffer = encode(stdout.join("\n"));
     const identity = await Identity.fromPkcs8(keyBuffer);
-    expect(identity.did()).toBe(COMMON_USER_DID);
+    expect(identity.did()).toBe(EXAMPLE_PASSPHRASE_DID);
     expect(code).toBe(0);
     checkStderr(stderr);
   });
@@ -79,22 +79,22 @@ describe("cli id", () => {
     // Trailing newline (as `echo`/files produce) must be stripped so the
     // result matches the equivalent argv invocation.
     const { code, stdout, stderr } = await cf("id derive -", {
-      stdin: "common user\n",
+      stdin: "example passphrase\n",
     });
     const keyBuffer = encode(stdout.join("\n"));
     const identity = await Identity.fromPkcs8(keyBuffer);
-    expect(identity.did()).toBe(COMMON_USER_DID);
+    expect(identity.did()).toBe(EXAMPLE_PASSPHRASE_DID);
     expect(code).toBe(0);
     checkStderr(stderr);
   });
 
   it("Derives a passphrase key from stdin when the argument is omitted", async () => {
     const { code, stdout, stderr } = await cf("id derive", {
-      stdin: "common user",
+      stdin: "example passphrase",
     });
     const keyBuffer = encode(stdout.join("\n"));
     const identity = await Identity.fromPkcs8(keyBuffer);
-    expect(identity.did()).toBe(COMMON_USER_DID);
+    expect(identity.did()).toBe(EXAMPLE_PASSPHRASE_DID);
     expect(code).toBe(0);
     checkStderr(stderr);
   });
@@ -120,10 +120,10 @@ describe("cli id", () => {
   it("Derives a passphrase key from a file via '-- <file>'", async () => {
     const file = await Deno.makeTempFile();
     // Trailing newline (as editors/`echo` produce) must be stripped.
-    await Deno.writeTextFile(file, "common user\n");
+    await Deno.writeTextFile(file, "example passphrase\n");
     const { code, stdout, stderr } = await cf(`id derive -- ${file}`);
     const identity = await Identity.fromPkcs8(encode(stdout.join("\n")));
-    expect(identity.did()).toBe(COMMON_USER_DID);
+    expect(identity.did()).toBe(EXAMPLE_PASSPHRASE_DID);
     expect(code).toBe(0);
     checkStderr(stderr);
   });
@@ -140,7 +140,7 @@ describe("cli id", () => {
 
   it("Errors when both an inline value and a -- <file> are given", async () => {
     const file = await Deno.makeTempFile();
-    await Deno.writeTextFile(file, "common user");
+    await Deno.writeTextFile(file, "example passphrase");
     const { code, stdout } = await cf(`id derive inline -- ${file}`);
     expect(code).not.toBe(0);
     expect(stdout.length).toBe(0);

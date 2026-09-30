@@ -1,9 +1,8 @@
 /**
  * This module is the package's public surface: the runtime machinery for the
  * JSON Schema dialect the fabric uses. Interning and content-hashing a schema,
- * deriving one from a value, rewriting one, interning the path selectors that
- * pair a schema with a location in a document, and naming the schema type of a
- * `FabricPrimitive`.
+ * deriving one from a value, rewriting one, and interning the path selectors
+ * that pair a schema with a location in a document.
  *
  * The declarations these operate on -- `JSONSchema` and its family -- belong to
  * `@commonfabric/api`, and nothing here re-exports them.
@@ -21,8 +20,6 @@ export {
   internSchemaPairAsKey,
   isInternedSchema,
 } from "./schema-intern.ts";
-
-export { schemaTypeOfFabricPrimitive } from "./schemaTypeOfFabricPrimitive.ts";
 
 export {
   DEFAULT_SELECTOR,

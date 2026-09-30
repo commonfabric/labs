@@ -120,8 +120,12 @@ export function compileAndRun(
     tx.resetNarrowestReadScope();
     // TODO(seefeld): Ideally, this cell already has this schema, because we set
     // it on the node itself.
-    const program = inputsCell.asSchema<RuntimeProgram>(programSchema)
-      .withTx(tx).get();
+    // Detached from the input view once, here: the program is hashed, handed
+    // to the compiler, and queued as an outbox request, and each of those would
+    // otherwise read the whole program through the view again.
+    const program = snapshotQueryResult(
+      inputsCell.asSchema<RuntimeProgram>(programSchema).withTx(tx).get(),
+    );
     const input = inputsCell.withTx(tx).key("input");
     const outputScope = narrowestScope([
       tx.getNarrowestReadScope(),
@@ -210,6 +214,16 @@ export function compileAndRun(
       // Each acting instance owns its output binding, even when the node
       // shares initialized cells with another instance of the same scope.
       sendResult(tx, { pending, result, error, errors });
+
+      const announce = (settleTx: IExtendedStorageTransaction) =>
+        sendResult(settleTx, { pending, result, error, errors });
+
+      const reportCreated = (hash: string) => {
+        if (reportedCreatedHash === hash) return;
+        reportedCreatedHash = hash;
+        runtime.pieceCreatedCallback?.(result);
+      };
+
       return compileAndRunServed(
         runtime,
         tx,
@@ -224,12 +238,8 @@ export function compileAndRun(
         },
         program,
         issuedRequests,
-        (settleTx) => sendResult(settleTx, { pending, result, error, errors }),
-        (hash) => {
-          if (reportedCreatedHash === hash) return;
-          reportedCreatedHash = hash;
-          runtime.pieceCreatedCallback?.(result);
-        },
+        announce,
+        reportCreated,
       );
     }
 
@@ -342,7 +352,11 @@ export function compileAndRun(
         // inputs from other pieces, we will need to think more about
         // how we pass input into the builtin.
 
-        runtime.runSynced(result, pattern, input.get());
+        // The instantiation is the builtin's, in a continuation of its
+        // action: no principal's act attributes what its setup initializes.
+        runtime.runSynced(result, pattern, input.get(), {
+          attributeInitialization: false,
+        });
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
         });
@@ -482,8 +496,9 @@ function compileAndRunServed(
   errors.withTx(tx).set(undefined);
   pending.withTx(tx).set(true);
   internal.withTx(tx).set({ requestHash: hash, phase: "pending" });
-  // The outbox owns an immutable request, detached from the issuing transaction.
-  const request = snapshotQueryResult(program);
+  // The outbox owns the request, and `program` is already detached from the
+  // issuing transaction.
+  const request = program;
   enqueueSinkRequestPostCommitEffect(
     tx,
     "compileAndRun",
@@ -532,8 +547,10 @@ function compileAndRunServed(
             effectKey,
             (settleTx) => {
               settleTx.tx.scopeKeyIdentity = identity;
-              const current = inputs.asSchema<RuntimeProgram>(programSchema)
-                .withTx(settleTx).get();
+              const current = snapshotQueryResult(
+                inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
+                  .get(),
+              );
               if (
                 hashOf(current ?? { files: [], main: "" }).toString() !== hash
               ) {

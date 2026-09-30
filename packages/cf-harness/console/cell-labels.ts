@@ -33,7 +33,8 @@ import {
   type LabelObservationClass,
   rebaseCfcLabelView,
 } from "@commonfabric/runner/cfc/label-view-core";
-import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+import { parseConsoleReference } from "./reference.ts";
 
 import type {
   HarnessCellLabelEntry,
@@ -157,7 +158,7 @@ const dedupe = (names: readonly string[]): string[] => [...new Set(names)];
 /** What a provenance atom's identity resolves to, in as few words as carry it. */
 const producerOf = (atom: HarnessCfcAtom | undefined): string | undefined => {
   const identity = atom?.fields?.identity;
-  if (typeof identity !== "object" || identity === null) {
+  if (!isObjectOrArray(identity)) {
     return undefined;
   }
   const fields = identity as Record<string, unknown>;
@@ -411,61 +412,18 @@ interface ConsoleCellAddress {
 }
 
 /**
- * A JSON Pointer split into its segments, `~1` decoding to `/` and `~0` to
- * `~`. Mirrors `parsePointer` in `packages/memory/v2/path.ts`, which is the
- * definition; two lines of it are restated rather than imported, so that the
- * module the page reads its cell types from takes on no package for one
- * string function.
- */
-const pointerSegments = (pointer: string): string[] =>
-  pointer.split("/").slice(1).map((segment) =>
-    segment.replaceAll("~1", "/").replaceAll("~0", "~")
-  );
-
-/**
- * The address of a reference the canonical parser will not take — one whose
- * id is shorter than a minted handle, which it reads as a human name. The
- * pointer is decoded by the same rule either way, so a segment holding a
- * separator survives the fallback as it does the parse.
- */
-const looseAddressOf = (ref: string): ConsoleCellAddress | undefined => {
-  const segments = pointerSegments(ref.startsWith("/") ? ref : `/${ref}`);
-  const at = segments.findIndex((segment) =>
-    segment.startsWith("of:") || segment.startsWith("computed:")
-  );
-  if (at < 0) {
-    return undefined;
-  }
-  const space = segments.slice(0, at).find((segment) =>
-    segment.startsWith("@")
-  );
-  return {
-    entityId: segments[at].split("@")[0],
-    path: segments.slice(at + 1),
-    ...(space === undefined ? {} : { space: space.slice(1) }),
-  };
-};
-
-/**
  * The address a reference resolves to. Parsed rather than split: a reference
  * is a JSON Pointer, so a segment holding a `/` or a `~` is escaped in it,
  * and splitting on the separator would cut such a segment in two and leave
  * neither half matching anything.
  */
 const addressOf = (ref: string): ConsoleCellAddress | undefined => {
-  const trimmed = ref.trim();
-  try {
-    const link = parseLLMFriendlyLink(
-      trimmed.startsWith("/") ? trimmed : `/${trimmed}`,
-    );
-    return link.id === undefined ? undefined : {
-      entityId: link.id,
-      path: link.path,
-      ...(link.space ? { space: link.space } : {}),
-    };
-  } catch {
-    return looseAddressOf(trimmed);
-  }
+  const link = parseConsoleReference(ref);
+  return link === undefined ? undefined : {
+    entityId: link.id,
+    path: link.path,
+    ...(link.space ? { space: link.space } : {}),
+  };
 };
 
 /**

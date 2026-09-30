@@ -13,6 +13,7 @@ import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
 import { $conn, type CellRef } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";
@@ -159,6 +160,24 @@ function createMockDocument() {
 describe("DomApplicator", () => {
   describe("instance members", () => {
     describe("applyBatch()", () => {
+      it("removes an ARIA attribute when its property is dropped", () => {
+        const doc = createMockDocument();
+        const applicator = new DomApplicator({
+          document: doc,
+          onEvent: () => {},
+        });
+        applicator.applyBatch({
+          batchId: 1,
+          ops: [{ op: "create-element", nodeId: 1, tagName: "button" }],
+        });
+        const element = applicator.getNode(1) as Element;
+        element.setAttribute("aria-label", "Edit name");
+        applicator.applyBatch({
+          batchId: 2,
+          ops: [{ op: "remove-prop", nodeId: 1, key: "aria-label" }],
+        });
+        expect(element.hasAttribute("aria-label")).toBe(false);
+      });
       describe("create elements", () => {
         it("creates an element from create-element op", () => {
           const doc = createMockDocument();
@@ -674,8 +693,7 @@ describe("DomApplicator", () => {
             setProp: (target, key, value) => {
               if (
                 key.startsWith("data-") &&
-                typeof target === "object" &&
-                target !== null &&
+                isObjectOrArray(target) &&
                 "setAttribute" in target &&
                 typeof target.setAttribute === "function"
               ) {
@@ -718,8 +736,7 @@ describe("DomApplicator", () => {
             setProp: (target, key, value) => {
               if (
                 key.startsWith("data-") &&
-                typeof target === "object" &&
-                target !== null &&
+                isObjectOrArray(target) &&
                 "setAttribute" in target &&
                 typeof target.setAttribute === "function"
               ) {

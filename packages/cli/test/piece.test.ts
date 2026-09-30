@@ -1,11 +1,12 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { FabricSpecialObject } from "@commonfabric/data-model";
+import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { pieceId, SlugResolutionError } from "@commonfabric/piece";
+import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import {
   type Cell,
   getCellOrThrow,
@@ -20,8 +21,11 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+
 import { toCell } from "../../runner/src/back-to-cell.ts";
 import { setResultCell } from "../../runner/src/result-utils.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   applyPieceSourceCommandAction,
   checkPieceSourceFromCommand,
@@ -34,6 +38,7 @@ import {
   parsePieceOptions,
   parseSpaceOptions,
   piece,
+  type PieceCellCommandDependencies,
   pieceDataCommand,
   readCallTarget,
   readTargetPositionals,
@@ -42,6 +47,7 @@ import {
   setsrcSuccessLine,
 } from "../commands/piece.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
+import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";
 import { space } from "../commands/space.ts";
 import {
   CellSelectionError,
@@ -70,6 +76,7 @@ import {
 import { safeStringify } from "../lib/render.ts";
 import { cf, checkStderr, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 const API_URL = "https://cf.dev";
 const SPACE = "common-knowledge";
@@ -115,11 +122,11 @@ describe("cli piece parsing", () => {
       symbol: "named",
       source: {
         ref: `cf:pattern:${identity}`,
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         entry: "/packages/patterns/notes/note.tsx",
       },
     })).toBe(
-      "https://github.com/commontoolsinc/labs#/packages/patterns/notes/note.tsx",
+      "https://github.com/commonfabric/labs#/packages/patterns/notes/note.tsx",
     );
     expect(formatPatternRef({
       identity,
@@ -183,6 +190,20 @@ describe("cli piece parsing", () => {
     expect(closeNowCalls).toBe(1);
     expect(disposeCalls).toBe(1);
     expect(cleanupOrder).toEqual(["closeNow", "dispose"]);
+  });
+
+  it("disposes failed runtime when storage has no force-close capability", async () => {
+    let disposed = false;
+    const originalError = new Error("sync failed");
+
+    await expect(withRuntimeCleanupOnFailure({
+      dispose: () => {
+        disposed = true;
+        return Promise.resolve();
+      },
+    }, () => Promise.reject(originalError))).rejects.toBe(originalError);
+
+    expect(disposed).toBe(true);
   });
 
   it("still disposes failed runtime when force-close cleanup fails", async () => {
@@ -273,6 +294,26 @@ describe("cli piece parsing", () => {
       identity: ID,
     })).toMatchObject(expected);
   });
+  it("parseSpaceOptions() refuses malformed URLs and missing spaces", () => {
+    expect(() => parseSpaceOptions({ url: "not a URL", identity: ID }))
+      .toThrow(/not a URL/);
+    expect(() => parseSpaceOptions({ url: API_URL, identity: ID }))
+      .toThrow(/does not contain a space/);
+    expect(() =>
+      parseSpaceOptions({ url: `${API_URL}/foo%2Fbar/${PIECE}`, identity: ID })
+    )
+      .toThrow(/Invalid space/);
+    for (
+      const url of [
+        `${API_URL}/${SPACE}/${PIECE}%23argument`,
+        `${API_URL}/space%23argument/${PIECE}`,
+      ]
+    ) {
+      expect(() => parseSpaceOptions({ url, identity: ID }))
+        .toThrow(/selects a piece member/);
+    }
+  });
+
   it("parseSpaceOptions() throws on incomplete input", () => {
     expect(() =>
       parseSpaceOptions({
@@ -391,6 +432,16 @@ describe("cli piece parsing", () => {
     });
     expect(mergePiecePath(config, "title")).toEqual(["items", 0, "title"]);
     expect(mergePiecePath(config)).toEqual(["items", 0]);
+    expect(() => mergePiecePath(config, "/other/title")).toThrow(
+      /piece-relative/,
+    );
+    expect(() => mergePiecePath(config, "//other-space/other/title")).toThrow(
+      /piece-relative/,
+    );
+    expect(() => mergePiecePath(config, "../../.."))
+      .toThrow(/above the piece/);
+    expect(() => mergePiecePath(config, ".@unknown"))
+      .toThrow(/Invalid scope suffix/);
     expect(() => parsePieceOptions({ ...base, cell: `/${LLM_HANDLE}/items` }))
       .toThrow(/takes a piece id only/);
   });
@@ -489,7 +540,7 @@ describe("cli piece parsing", () => {
       .toMatchObject({ piece: "thermostat", pieceInput: true });
     // The suffix comes off before the scope is read, so the two compose in
     // the order the reference form writes them.
-    expect(parseSpaceOptions({ ...base, cell: "thermostat@session#argument" }))
+    expect(parseSpaceOptions({ ...base, cell: "thermostat#argument@session" }))
       .toMatchObject({
         piece: "thermostat",
         pieceScope: "session",
@@ -509,10 +560,10 @@ describe("cli piece parsing", () => {
     // it. One sentence covers both spellings, since one reader splits both.
 
     const base = { apiUrl: API_URL, space: SPACE, identity: ID };
-    expect(() => parseSpaceOptions({ ...base, cell: "thermostat#result" }))
-      .toThrow(/Unknown suffix "#result"/);
-    expect(() => parseSpaceOptions({ ...base, cell: `/${LLM_HANDLE}#result` }))
-      .toThrow(/Unknown suffix "#result"/);
+    expect(parseSpaceOptions({ ...base, cell: "thermostat#result" }))
+      .toEqual(parseSpaceOptions({ ...base, cell: "thermostat" }));
+    expect(parseSpaceOptions({ ...base, cell: `/${LLM_HANDLE}#result` }))
+      .toEqual(parseSpaceOptions({ ...base, cell: `/${LLM_HANDLE}` }));
   });
 
   it("readTargetPositionals() reads a leading canonical reference as the address", () => {
@@ -556,7 +607,7 @@ describe("cli piece parsing", () => {
     const base = { apiUrl: API_URL, identity: ID };
     // A slug where a handle goes, a name where a DID goes: one token carrying
     // the whole target, in the spelling a person writes.
-    expect(parsePieceOptions({ ...base, cell: `/@${SPACE}/tracker` }))
+    expect(parsePieceOptions({ ...base, cell: `//${SPACE}/tracker` }))
       .toMatchObject({ space: SPACE, piece: "tracker" });
     // The named space is checked against `--space` rather than ignored, and
     // two names are settled without a session.
@@ -564,7 +615,7 @@ describe("cli piece parsing", () => {
       parsePieceOptions({
         ...base,
         space: "other-space",
-        cell: `/@${SPACE}/tracker`,
+        cell: `//${SPACE}/tracker`,
       })
     ).toThrow(
       `Reference names space "${SPACE}" but the command targets ` +
@@ -573,7 +624,7 @@ describe("cli piece parsing", () => {
     // Across spellings only a derivation can compare them, so the reference's
     // space is carried to the session check instead.
     expect(
-      parsePieceOptions({ ...base, space: SPACE_DID, cell: "/@n-space/t" }),
+      parsePieceOptions({ ...base, space: SPACE_DID, cell: "//n-space/t" }),
     ).toMatchObject({ space: SPACE_DID, embeddedSpaces: ["n-space"] });
   });
 
@@ -584,8 +635,8 @@ describe("cli piece parsing", () => {
       address: "/tracker",
       pathString: "items/0",
     });
-    expect(readTargetPositionals({}, `/@${SPACE}/tracker`)).toEqual({
-      address: `/@${SPACE}/tracker`,
+    expect(readTargetPositionals({}, `//${SPACE}/tracker`)).toEqual({
+      address: `//${SPACE}/tracker`,
     });
     expect(readTargetPositionals({}, "tracker")).toEqual({
       pathString: "tracker",
@@ -651,15 +702,13 @@ describe("cli piece parsing", () => {
     ).toThrow(/is not valid percent-encoding/);
   });
 
-  it("parseSpaceOptions() refuses a URL part holding the reference terminator", () => {
-    // Folded into the reference this decomposes to, "#" would read as the
-    // suffix and silently address the arguments cell instead.
-    expect(() =>
-      parsePieceOptions(
-        { url: `${FULL_URL}/foo%23argument`, identity: ID },
-        { acceptsPath: true, acceptsArgument: true },
-      )
-    ).toThrow(/"#" closes a reference/);
+  it("parsePieceOptions() preserves an encoded `#argument` path key from a URL", () => {
+    const config = parsePieceOptions(
+      { url: `${FULL_URL}/foo%23argument`, identity: ID },
+      { acceptsPath: true, acceptsArgument: true },
+    );
+    expect(config.piecePath).toEqual(["foo#argument"]);
+    expect(config.pieceInput).not.toBe(true);
   });
 
   it("readCallTarget() lets the flag name the target for a rooted callable", () => {
@@ -685,24 +734,23 @@ describe("cli piece parsing", () => {
     // not one — whichever spelling of the target asks for it.
     expect(() => parseLink(`${LLM_HANDLE}#argument`))
       .toThrow(/does not apply to a link endpoint/);
-    expect(() => parseLink("thermostat/draft#argument"))
-      .toThrow(/does not apply to a link endpoint/);
   });
 
   it("parseLink() keeps a `#` inside a bare endpoint's path key", () => {
-    // Why the refusal above tests `endsWith` rather than reading the fragment
-    // the way the shared reader does. A bare endpoint carries its piece and
-    // path in one word and has no positional path beside it, so reading every
-    // fragment here would leave a key holding `#` with no spelling at all.
-
     expect(parseLink("tracker/we#ird")).toEqual({
       pieceId: "tracker",
       path: ["we#ird"],
     });
-    // The reference form reserves `#` outright, which is the difference the
-    // two readers exist for.
-    expect(() => parseLink("/tracker/we#ird"))
-      .toThrow(/Unknown suffix "#ird"/);
+    expect(parseLink("/tracker/we#ird")).toEqual({
+      pieceId: "tracker",
+      path: ["we#ird"],
+    });
+    for (const prefix of ["", "/"]) {
+      expect(parseLink(`${prefix}thermostat/draft#argument`)).toEqual({
+        pieceId: "thermostat",
+        path: ["draft#argument"],
+      });
+    }
   });
 
   it("parseSpaceOptions() refuses a piece reference beside a URL that names a piece", () => {
@@ -782,6 +830,62 @@ describe("cli piece parsing", () => {
     );
     expect(reads[1]?.slice(1)).toEqual([[], { input: true, step: undefined }]);
     expect(rendered).toEqual([{ ok: true }, { ok: true }]);
+  });
+
+  it("getCellValueFromCommand() resolves relative heads, members, and scope before reading", async () => {
+    const base = { apiUrl: API_URL, space: SPACE, identity: ID, quiet: true };
+    const reads: {
+      scope?: string;
+      input?: boolean;
+      path: readonly (string | number)[];
+    }[] = [];
+    const deps = {
+      getCellValue: (
+        config: Parameters<
+          NonNullable<PieceCellCommandDependencies["getCellValue"]>
+        >[0],
+        path: Parameters<
+          NonNullable<PieceCellCommandDependencies["getCellValue"]>
+        >[1],
+        options: Parameters<
+          NonNullable<PieceCellCommandDependencies["getCellValue"]>
+        >[2],
+      ) => {
+        reads.push({ scope: config.pieceScope, input: options?.input, path });
+        return Promise.resolve({});
+      },
+      render: () => {},
+    };
+    await getCellValueFromCommand(
+      base,
+      `/${LLM_HANDLE}@user/items/0`,
+      "../1/title",
+      deps,
+    );
+    await getCellValueFromCommand(
+      base,
+      `/${LLM_HANDLE}@user/items/0`,
+      ".@session/title",
+      deps,
+    );
+    await getCellValueFromCommand(
+      base,
+      `/${LLM_HANDLE}@user/items/0`,
+      ".#argument/title",
+      deps,
+    );
+    await getCellValueFromCommand(
+      { ...base, input: true },
+      `/${LLM_HANDLE}/items/0`,
+      ".#result/",
+      deps,
+    );
+    expect(reads).toEqual([
+      { scope: "user", input: undefined, path: ["items", 1, "title"] },
+      { scope: "session", input: undefined, path: ["items", 0, "title"] },
+      { scope: "user", input: true, path: ["title"] },
+      { scope: undefined, input: false, path: [""] },
+    ]);
   });
 
   it('getCellValueFromCommand() reads "#argument" on a bare target as --input does', async () => {
@@ -1094,13 +1198,18 @@ describe("cli piece parsing", () => {
           pieceId: PIECE,
           pattern: { identity: "i", symbol: "default" },
           slug: "named",
+          requestKey: "retry-key",
+          registration: { status: "handled" as const },
         });
       },
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const entry = { mainPath: "/main.tsx", repository: "repo" };
 
-    const started = await newPiece(config, entry, { slug: "named" }, deps);
+    const started = await newPiece(config, entry, {
+      slug: "named",
+      requestKey: "retry-key",
+    }, deps);
     expect(started).toBe(PIECE);
     expect(seen.requests[0]).toEqual({
       space: SPACE_DID,
@@ -1108,13 +1217,14 @@ describe("cli piece parsing", () => {
       repository: "repo",
       slug: "named",
       register: true,
+      requestKey: "retry-key",
     });
     expect(seen.started).toEqual([cell]);
 
     const unstarted = await newPiece(
       config,
       entry,
-      { start: false, force: true },
+      { start: false, force: true, requestKey: "retry-key" },
       deps,
     );
     expect(unstarted).toBe(PIECE);
@@ -1124,10 +1234,190 @@ describe("cli piece parsing", () => {
       repository: "repo",
       force: true,
       register: true,
+      requestKey: "retry-key",
       start: false,
     });
     expect(seen.started).toEqual([cell]);
     expect(seen.ensured).toBeUndefined();
+  });
+
+  describe("served registration", () => {
+    type Dependencies = NonNullable<Parameters<typeof newPiece>[3]>;
+    type Instantiate = NonNullable<Dependencies["instantiatePieceOnServer"]>;
+    type Request = Parameters<Instantiate>[1];
+    type Receipt = Awaited<ReturnType<Instantiate>>;
+
+    /** Observe the CLI boundary without starting a runtime or a live service. */
+    async function fixture() {
+      const requests: Request[] = [];
+      const opened: string[] = [];
+      const started: unknown[] = [];
+      const cell = { name: "created piece" };
+      const controller = {
+        runtime: { experimental: { serverExecution: true } },
+        getSpace: () => SPACE_DID,
+        getPieceCell: (id: string, run: boolean) => {
+          expect(run).toBe(false);
+          opened.push(id);
+          return Promise.resolve(cell);
+        },
+        startPiece: (value: unknown) => {
+          started.push(value);
+          return Promise.resolve();
+        },
+      };
+      const identity = await Identity.fromPassphrase("cli served registration");
+      const state: {
+        status: Receipt["registration"]["status"];
+        transportError?: Error;
+      } = { status: "handled" };
+      const deps: Dependencies = {
+        loadPieces: () =>
+          Promise.resolve(
+            controller as unknown as Awaited<
+              ReturnType<NonNullable<Dependencies["loadPieces"]>>
+            >,
+          ),
+        loadIdentity: () => Promise.resolve(identity),
+        getPinnedProgramFromFile: () =>
+          Promise.resolve({ main: "/main.tsx", files: [] }),
+        instantiatePieceOnServer: (_config, request) => {
+          requests.push(request);
+          if (state.transportError) return Promise.reject(state.transportError);
+          return Promise.resolve({
+            pieceId: PIECE,
+            pattern: { identity: "i", symbol: "default" },
+            requestKey: request.requestKey ?? "server-created-key",
+            registration: {
+              status: state.status,
+              ...(state.status === "failed"
+                ? { error: "root addPiece refused" }
+                : {}),
+            },
+          });
+        },
+      };
+      const create = (options?: Parameters<typeof newPiece>[2]) =>
+        newPiece(
+          { apiUrl: API_URL, space: SPACE, identity: ID },
+          { mainPath: "/main.tsx" },
+          options,
+          deps,
+        );
+      return { create, state, requests, opened, started, cell };
+    }
+
+    for (const status of ["pending", "failed"] as const) {
+      it(`stops before opening or starting a piece when registration is ${status}`, async () => {
+        const run = await fixture();
+        run.state.status = status;
+        const result = await run.create({ requestKey: "registration-retry" })
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error).message).toContain(
+          `Piece ${PIECE} was created but registration is ${status}`,
+        );
+        expect((result as Error).message).toContain(
+          "--request-key registration-retry",
+        );
+        if (status === "failed") {
+          expect((result as Error).message).toContain("root addPiece refused");
+        }
+        expect(run.opened).toEqual([]);
+        expect(run.started).toEqual([]);
+      });
+    }
+
+    it("registers an unstarted piece and leaves it unstarted after registration completes", async () => {
+      const run = await fixture();
+      expect(await run.create({ start: false, requestKey: "unstarted-retry" }))
+        .toBe(PIECE);
+      expect(run.requests).toHaveLength(1);
+      expect(run.requests[0]).toMatchObject({
+        register: true,
+        start: false,
+        requestKey: "unstarted-retry",
+      });
+      expect(run.opened).toEqual([PIECE]);
+      expect(run.started).toEqual([]);
+    });
+
+    it("reports its generated key and forwards that same key when failed registration is retried", async () => {
+      const run = await fixture();
+      run.state.status = "failed";
+      const result = await run.create().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(result).toBeInstanceOf(Error);
+      const retryKey = run.requests[0].requestKey;
+      expect(typeof retryKey).toBe("string");
+      expect(retryKey).not.toBe("");
+      expect((result as Error).message).toContain(`--request-key ${retryKey}`);
+      expect(run.started).toEqual([]);
+      run.state.status = "handled";
+      expect(await run.create({ requestKey: retryKey })).toBe(PIECE);
+      expect(run.requests.map((request) => request.requestKey)).toEqual([
+        retryKey,
+        retryKey,
+      ]);
+      expect(run.opened).toEqual([PIECE]);
+      expect(run.started).toEqual([run.cell]);
+    });
+
+    it("preserves a deterministic serving refusal without reporting an uncertain creation", async () => {
+      const run = await fixture();
+      const refusal = new ServedLifecycleError(
+        "unauthorized",
+        403,
+        "Access denied",
+      );
+      run.state.transportError = refusal;
+      const result = await run.create().catch((error: unknown) => error);
+      expect(result).toBe(refusal);
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
+    });
+
+    it("retains the retry key after an unknown transport outcome and does not start", async () => {
+      const run = await fixture();
+      run.state.transportError = new Error("response connection closed");
+      const result = await run.create().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).cause).toBe(run.state.transportError);
+      const retryKey = run.requests[0].requestKey;
+      expect(typeof retryKey).toBe("string");
+      expect(retryKey).not.toBe("");
+      expect((result as Error).message).toContain(`--request-key ${retryKey}`);
+      expect((result as Error).message).toContain("response connection closed");
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
+    });
+
+    it("retains retry guidance for malformed success, timeout, and server-error replies", async () => {
+      for (const status of [200, 408, 500, 503]) {
+        const run = await fixture();
+        run.state.transportError = new ServedLifecycleError(
+          `http-${status}`,
+          status,
+          "Unconfirmed response",
+        );
+        const error = await run.create().catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).cause).toBe(run.state.transportError);
+        expect((error as Error).message).toContain(
+          `--request-key ${run.requests[0].requestKey}`,
+        );
+        expect(run.opened).toEqual([]);
+        expect(run.started).toEqual([]);
+      }
+    });
   });
 
   it("setPiecePattern() asks a serving deployment to replace the source and refreshes the piece here", async () => {
@@ -1321,7 +1611,7 @@ describe("cli piece parsing", () => {
     it("should reject invalid scope suffixes on the piece ID segment", () => {
       expect(() => parseLink("piece1@any")).toThrow(/Invalid scope suffix/);
       expect(() => parseLink("piece1@inherit")).toThrow(
-        /Invalid scope suffix/,
+        /requires a reference context/,
       );
       expect(() => parseLink("piece1@")).toThrow(/Invalid scope suffix/);
     });
@@ -1999,8 +2289,8 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
-        idle: () => {
-          order.push("runtime.idle");
+        settled: () => {
+          order.push("runtime.settled");
           return Promise.resolve();
         },
       },
@@ -2039,7 +2329,7 @@ describe("cli piece parsing", () => {
       "result.key:value",
       "result.pull",
       "pieces.synced",
-      "runtime.idle",
+      "runtime.settled",
       "pieces.synced",
       "result.get",
       // The read-path guard classifies the read path after the value read
@@ -2091,8 +2381,8 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
-        idle: () => {
-          order.push("runtime.idle");
+        settled: () => {
+          order.push("runtime.settled");
           return Promise.resolve();
         },
       },
@@ -2125,7 +2415,7 @@ describe("cli piece parsing", () => {
       "input.key:values",
       "input.pull",
       "pieces.synced",
-      "runtime.idle",
+      "runtime.settled",
       "pieces.synced",
       "input.get",
       "input.key:values",
@@ -2177,8 +2467,8 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
-        idle: () => {
-          order.push("runtime.idle");
+        settled: () => {
+          order.push("runtime.settled");
           return Promise.resolve();
         },
       },
@@ -2214,7 +2504,7 @@ describe("cli piece parsing", () => {
       "result.key:<root>",
       "result.pull",
       "pieces.synced",
-      "runtime.idle",
+      "runtime.settled",
       "pieces.synced",
       "result.get",
       `stop:${PIECE}`,
@@ -2430,7 +2720,7 @@ describe("cli piece parsing", () => {
         key: (...segments: (string | number)[]) => {
           let child: unknown = value;
           for (const segment of segments) {
-            child = typeof child === "object" && child !== null
+            child = isObjectOrArray(child)
               ? (child as Record<string | number, unknown>)[segment]
               : undefined;
           }
@@ -2443,7 +2733,7 @@ describe("cli piece parsing", () => {
     const readPath = (value: unknown, path: (string | number)[]): unknown =>
       path.reduce(
         (current: unknown, segment) =>
-          typeof current === "object" && current !== null
+          isObjectOrArray(current)
             ? (current as Record<string | number, unknown>)[segment]
             : undefined,
         value,
@@ -2800,11 +3090,14 @@ describe("cli piece parsing", () => {
 
       try {
         const tx = runtime.edit();
-        const cell = runtime.getCell<{
-          name: string;
-          submit: { $stream: boolean };
-        }>(signer.did(), "piece-get-live-stream", undefined, tx);
-        cell.set({ name: "Ada", submit: { $stream: true } });
+        // Nothing is stored where the stream stands; the schema declares it.
+        const cell = runtime.getCell<{ name: string }>(
+          signer.did(),
+          "piece-get-live-stream",
+          undefined,
+          tx,
+        );
+        cell.set({ name: "Ada" });
         const schema = {
           type: "object",
           properties: {
@@ -2855,7 +3148,7 @@ describe("cli piece parsing", () => {
       "set-home",
       "--reset",
       "--repository",
-      "https://github.com/commontoolsinc/labs",
+      "https://github.com/commonfabric/labs",
     ])).rejects.toThrow("Cannot use --repository with --reset");
   });
 
@@ -2894,14 +3187,14 @@ describe("cli piece parsing", () => {
   it("builds repository-aware entries from deployment flags", () => {
     expect(localPatternEntry("/repo/pattern.tsx", {
       mainExport: "named",
-      repository: "https://github.com/commontoolsinc/labs",
+      repository: "https://github.com/commonfabric/labs",
       root: "/repo",
       test: ["/repo/pattern.test.tsx", "/repo/other.test.tsx"],
       datafile: ["/repo/data/cities.json"],
     })).toEqual({
       mainPath: "/repo/pattern.tsx",
       mainExport: "named",
-      repository: "https://github.com/commontoolsinc/labs",
+      repository: "https://github.com/commonfabric/labs",
       rootPath: "/repo",
       testPaths: ["/repo/pattern.test.tsx", "/repo/other.test.tsx"],
       dataFilePaths: ["/repo/data/cities.json"],
@@ -2926,7 +3219,7 @@ describe("cli piece parsing", () => {
         identity: "/tmp/test.key",
         cell: PIECE,
         mainExport: "named",
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         root: "/repo",
         test: ["/repo/pattern.test.tsx"],
         dangerouslyAllowIncompatibleSchema: true,
@@ -2952,7 +3245,7 @@ describe("cli piece parsing", () => {
       entry: {
         mainPath: "/repo/pattern.tsx",
         mainExport: "named",
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         rootPath: "/repo",
         testPaths: ["/repo/pattern.test.tsx"],
       },
@@ -3220,7 +3513,7 @@ describe("cli piece parsing", () => {
         identity: "/tmp/test.key",
         cell: PIECE,
         mainExport: "named",
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         root: "/repo",
         test: ["/repo/pattern.test.tsx"],
       },
@@ -3244,7 +3537,7 @@ describe("cli piece parsing", () => {
       entry: {
         mainPath: "/repo/pattern.tsx",
         mainExport: "named",
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         rootPath: "/repo",
         testPaths: ["/repo/pattern.test.tsx"],
       },
@@ -3292,45 +3585,283 @@ describe("cli piece parsing", () => {
   });
 
   it("lists pattern provenance and isolates unreadable pieces", async () => {
-    const patternRef = {
-      identity: "A".repeat(43),
-      symbol: "default",
-      source: {
-        ref: `cf:pattern:${"A".repeat(43)}`,
-        repository: "https://github.com/commontoolsinc/labs",
-        entry: "/notes/note.tsx",
-      },
-    };
-    const controller = {
-      getRegisteredPieces: () =>
-        Promise.resolve([
-          { id: "of:readable" },
-          { id: "of:unreadable" },
-        ]),
-      get: (id: string) =>
-        id === "of:unreadable"
-          ? Promise.reject(new Error("not readable"))
-          : Promise.resolve({
-            getCell: () => ({
-              key: () => ({ pull: () => Promise.resolve("Readable") }),
-            }),
-            getPatternRef: () => Promise.resolve(patternRef),
-          }),
-    };
-
-    const listed = await listPieces({
-      apiUrl: API_URL,
-      space: SPACE,
-      identity: ID,
-    }, {
-      loadPieces: () => Promise.resolve(controller as any),
-    });
-
-    expect(listed).toEqual([
-      { id: "of:readable", name: "Readable", patternRef },
-      { id: "of:unreadable", error: "not readable" },
-    ]);
+    const signer = await Identity.fromPassphrase("cli list provenance");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const owner = new PiecesController(
+        { as: signer, space: signer.did() },
+        runtime,
+      );
+      const readable = await owner.create({
+        main: "/notes/note.tsx",
+        files: [{
+          name: "/notes/note.tsx",
+          contents:
+            'import { NAME, pattern } from "commonfabric"; export default pattern(() => ({[NAME]: "Readable"}));',
+        }],
+      }, { start: false, repository: "https://github.com/commonfabric/labs" });
+      const patternRef = await readable.getPatternRef();
+      expect(patternRef?.source?.repository).toBe(
+        "https://github.com/commonfabric/labs",
+      );
+      const inaccessible = new PiecesController({
+        as: signer,
+        space: OTHER_SPACE_DID,
+      }, runtime);
+      inaccessible.getPieceCell = () =>
+        Promise.reject(new Error("not readable"));
+      const unreadable = new PieceController(
+        inaccessible,
+        runtime.getCell(OTHER_SPACE_DID, "unreadable"),
+      );
+      const listed = await listPieces({
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: ID,
+      }, {
+        loadPieces: () =>
+          Promise.resolve({
+            getRegisteredPieces: () => Promise.resolve([readable, unreadable]),
+            get: (id: string) =>
+              id === unreadable.id
+                ? Promise.reject(new Error("not readable"))
+                : owner.get(id, true),
+          } as PiecesController),
+      });
+      expect(listed).toEqual([
+        {
+          id: readable.id,
+          reference: createLLMFriendlyLink(
+            readable.getCell().getAsNormalizedFullLink(),
+          ),
+          name: "Readable",
+          patternRef,
+        },
+        {
+          id: unreadable.id,
+          reference: createLLMFriendlyLink(
+            unreadable.getCell().getAsNormalizedFullLink(),
+          ),
+          error: "not readable",
+        },
+      ]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
+
+  it("lists equal document IDs in different spaces using each registered target", async () => {
+    const signer = await Identity.fromPassphrase("cli list foreign targets");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const local = new PiecesController(
+        { as: signer, space: SPACE_DID },
+        runtime,
+      );
+      const foreign = new PiecesController({
+        as: signer,
+        space: OTHER_SPACE_DID,
+      }, runtime);
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents:
+            'import { NAME, pattern } from "commonfabric"; export default pattern<{title:string}>(({title}) => ({[NAME]: title}));',
+        }],
+      };
+      const localPiece = await local.create(program, {
+        input: { title: "Local" },
+        start: false,
+      }, "same-document");
+      const foreignPiece = await foreign.create(program, {
+        input: { title: "Foreign" },
+        start: false,
+      }, "same-document");
+      expect(localPiece.id).toBe(foreignPiece.id);
+      local.getRegisteredPieces = () =>
+        Promise.resolve([localPiece, foreignPiece]);
+      const rows = await listPieces({
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: ID,
+      }, { loadPieces: () => Promise.resolve(local) });
+      expect(rows.map((row) => row.reference)).toEqual([
+        createLLMFriendlyLink(localPiece.getCell().getAsNormalizedFullLink()),
+        createLLMFriendlyLink(foreignPiece.getCell().getAsNormalizedFullLink()),
+      ]);
+      expect(rows.map((row) => row.name)).toEqual(["Local", "Foreign"]);
+      expect(rows.map((row) => row.error)).toEqual([undefined, undefined]);
+      expect(foreignPiece.getCell().getAsNormalizedFullLink().space).toBe(
+        OTHER_SPACE_DID,
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  for (
+    const target of [
+      { space: OTHER_SPACE_DID, scope: "space", difference: "space" },
+      { space: SPACE_DID, scope: "user", difference: "scope" },
+    ] as const
+  ) {
+    it(`does not attribute another ${target.difference}'s piece data to a local piece with the same document ID`, async () => {
+      const signer = await Identity.fromPassphrase("cli search equal IDs");
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+      try {
+        const foreignTx = runtime.edit();
+        const foreignResult = runtime.getCell<{ text: string }>(
+          target.space,
+          "same-result",
+          undefined,
+          foreignTx,
+          target.scope,
+        );
+        const foreignInput = runtime.getCell(
+          target.space,
+          "input",
+          undefined,
+          foreignTx,
+          target.scope,
+        );
+        foreignResult.set({ text: "foreign-only-needle" });
+        foreignInput.set({});
+        setResultCell(foreignInput, foreignResult);
+        expect((await foreignTx.commit()).error).toBeUndefined();
+        const tx = runtime.edit();
+        const localResult = runtime.getCell(
+          SPACE_DID,
+          "same-result",
+          undefined,
+          tx,
+        );
+        const localInput = runtime.getCell(SPACE_DID, "input", {
+          type: "object",
+          properties: {
+            linked: {
+              type: "object",
+              properties: { text: { type: "string" } },
+              asCell: ["cell"],
+            },
+          },
+        }, tx);
+        localResult.set({});
+        localInput.set({ linked: foreignResult.withTx() });
+        setResultCell(localInput, localResult);
+        expect((await tx.commit()).error).toBeUndefined();
+        await runtime.idle();
+        expect(pieceId(localResult)).toBe(pieceId(foreignResult));
+        const linked = (await localInput.pull()).linked;
+        expect(isCell(linked)).toBe(true);
+        expect(await (linked as Cell<unknown>).pull()).toEqual({
+          text: "foreign-only-needle",
+        });
+        const member = (
+          name: string,
+          input: Cell<unknown>,
+          result: Cell<unknown>,
+        ) => ({
+          id: pieceId(result)!,
+          name: () => name,
+          getCell: () => result,
+          getPatternRef: () => Promise.resolve(undefined),
+          input: { getCell: () => Promise.resolve(input) },
+          result: { getCell: () => Promise.resolve(result) },
+        });
+        const registered = [
+          member("Local", localInput, localResult),
+          member("Foreign", foreignInput, foreignResult),
+        ];
+        const matches = await searchPieces(
+          { apiUrl: API_URL, space: SPACE, identity: ID },
+          "foreign-only-needle",
+          {
+            loadPieces: () =>
+              Promise.resolve({
+                getRegisteredPieces: () => Promise.resolve(registered),
+              } as unknown as PiecesController),
+          },
+        );
+        expect(matches.map((match) => match.reference)).toEqual([
+          createLLMFriendlyLink(foreignResult.getAsNormalizedFullLink()),
+        ]);
+        expect(matches.map((match) => match.name)).toEqual(["Foreign"]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
+  const searchFixtures = new WeakMap<object, Promise<PiecesController>>();
+
+  /** Supply root addresses to search fixtures that model data with plain objects. */
+  function searchFixtureController(controller: {
+    getRegisteredPieces(): Promise<
+      Array<{
+        id: string;
+        getCell?: () => unknown;
+        result: { getCell(): Promise<unknown> };
+      }>
+    >;
+  }): Promise<PiecesController> {
+    const previous = searchFixtures.get(controller);
+    if (previous) return previous;
+    const prepared = (async () => {
+      const registered = await controller.getRegisteredPieces();
+      const complete = await Promise.all(registered.map(async (piece) => {
+        if (piece.getCell) return piece;
+        let result: unknown;
+        try {
+          result = await piece.result.getCell();
+        } catch {
+          // Unreadable-data fixtures still have an address; the search reports their error.
+        }
+        const address = isCell(result)
+          ? result.getAsNormalizedFullLink()
+          : { space: SPACE_DID, id: piece.id, scope: "space", path: [] };
+        return {
+          ...piece,
+          getCell: () => ({ getAsNormalizedFullLink: () => address }),
+        };
+      }));
+      return {
+        getRegisteredPieces: () => Promise.resolve(complete),
+      } as unknown as PiecesController;
+    })();
+    searchFixtures.set(controller, prepared);
+    return prepared;
+  }
+
+  async function searchFixtureRows(
+    controller: Parameters<typeof searchFixtureController>[0],
+    rows: Array<
+      {
+        id: string;
+        name?: string;
+        patternRef?: Awaited<ReturnType<PieceController["getPatternRef"]>>;
+      }
+    >,
+  ) {
+    const registered = await (await searchFixtureController(controller))
+      .getRegisteredPieces();
+    return rows.map((row) => {
+      const piece = registered.find((piece) => piece.id === row.id);
+      if (!piece) throw new Error(`Missing search fixture ${row.id}`);
+      return {
+        ...row,
+        reference: createLLMFriendlyLink(
+          piece.getCell().getAsNormalizedFullLink(),
+        ),
+      };
+    });
+  }
 
   it("searches nested input and result data without matching metadata", async () => {
     const patternRef = {
@@ -3425,25 +3956,29 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
     const matches = await searchPieces(config, "NEEDLE", deps);
 
-    expect(matches).toEqual([
-      { id: "of:input-match", name: "Input match", patternRef },
-      { id: "of:key-match", name: "Key match", patternRef },
-      {
-        id: "of:fabric-special-object",
-        name: "Fabric special object",
+    expect(matches).toEqual(
+      await searchFixtureRows(controller, [
+        { id: "of:input-match", name: "Input match", patternRef },
+        { id: "of:key-match", name: "Key match", patternRef },
+        {
+          id: "of:fabric-special-object",
+          name: "Fabric special object",
+          patternRef,
+        },
+      ]),
+    );
+    expect(await searchPieces(config, fabricHash.toString(), deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:fabric-hash",
+        name: "Fabric hash",
         patternRef,
-      },
-    ]);
-    expect(await searchPieces(config, fabricHash.toString(), deps)).toEqual([{
-      id: "of:fabric-hash",
-      name: "Fabric hash",
-      patternRef,
-    }]);
+      }]),
+    );
   });
 
   it("searches scalar data and rejects an empty query", async () => {
@@ -3462,14 +3997,16 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
-    expect(await searchPieces(config, "048", deps)).toEqual([{
-      id: "of:number-match",
-      name: "Number match",
-      patternRef: undefined,
-    }]);
+    expect(await searchPieces(config, "048", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:number-match",
+        name: "Number match",
+        patternRef: undefined,
+      }]),
+    );
     await expect(searchPieces(config, "", deps)).rejects.toThrow(
       "Search query must not be empty.",
     );
@@ -3501,16 +4038,18 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
     expect(
       await searchPieces(config, "named array property", deps),
-    ).toEqual([{
-      id: "of:named-array-property",
-      name: "Named array property",
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:named-array-property",
+        name: "Named array property",
+        patternRef: undefined,
+      }]),
+    );
     expect(
       await searchPieces(config, "ignored result metadata", deps),
     ).toEqual([]);
@@ -3530,7 +4069,7 @@ describe("cli piece parsing", () => {
       },
     };
     const stringError = new Error("Fabric string representation unavailable");
-    class UnrepresentableFabricValue extends FabricSpecialObject {
+    class UnrepresentableFabricValue extends BaseFabricSpecialObject {
       override toString(): string {
         throw stringError;
       }
@@ -3561,7 +4100,7 @@ describe("cli piece parsing", () => {
         { apiUrl: API_URL, space: SPACE, identity: ID },
         "absent search value",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (_pieceId, _source, error) => errors.push(error),
         },
       ),
@@ -3598,7 +4137,7 @@ describe("cli piece parsing", () => {
           { apiUrl: API_URL, space: SPACE, identity: ID },
           "needle",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
           },
         ),
       ).toEqual([]);
@@ -3637,16 +4176,18 @@ describe("cli piece parsing", () => {
         { apiUrl: API_URL, space: SPACE, identity: ID },
         "needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (_pieceId, source, error) =>
             errors.push({ source, error }),
         },
       ),
-    ).toEqual([{
-      id: "of:unreadable-metadata",
-      name: undefined,
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:unreadable-metadata",
+        name: undefined,
+        patternRef: undefined,
+      }]),
+    );
     expect(errors).toEqual([
       { source: "metadata", error: nameError },
       { source: "metadata", error: patternError },
@@ -3676,29 +4217,37 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
-    expect(await searchPieces(config, "MASSE", deps)).toEqual([{
-      id: "of:full-fold",
-      name: "of:full-fold",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "CAFE\u0301", deps)).toEqual([{
-      id: "of:canonical-equivalence",
-      name: "of:canonical-equivalence",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "\u{16EBB}", deps)).toEqual([{
-      id: "of:unicode-17",
-      name: "of:unicode-17",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "ष", deps)).toEqual([{
-      id: "of:indic-substring",
-      name: "of:indic-substring",
-      patternRef: undefined,
-    }]);
+    expect(await searchPieces(config, "MASSE", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:full-fold",
+        name: "of:full-fold",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "CAFE\u0301", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:canonical-equivalence",
+        name: "of:canonical-equivalence",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "\u{16EBB}", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:unicode-17",
+        name: "of:unicode-17",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "ष", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:indic-substring",
+        name: "of:indic-substring",
+        patternRef: undefined,
+      }]),
+    );
     expect(await searchPieces(config, "s", deps)).toEqual([]);
     expect(await searchPieces(config, "CAFE", deps)).toEqual([]);
   });
@@ -3783,14 +4332,16 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
 
-      expect(await searchPieces(config, "nested runtime", deps)).toEqual([{
-        id: "of:runtime-cell-piece",
-        name: "needle only in the piece name",
-        patternRef: undefined,
-      }]);
+      expect(await searchPieces(config, "nested runtime", deps)).toEqual(
+        await searchFixtureRows(controller, [{
+          id: "of:runtime-cell-piece",
+          name: "needle only in the piece name",
+          patternRef: undefined,
+        }]),
+      );
       expect(await searchPieces(config, "opaque-search-secret", deps)).toEqual(
         [],
       );
@@ -3833,22 +4384,23 @@ describe("cli piece parsing", () => {
       };
       expect(
         await searchPieces(config, "nested runtime cell", {
-          loadPieces: () => Promise.resolve(viewController as any),
+          loadPieces: () => searchFixtureController(viewController),
         }),
-      ).toEqual([{
-        id: "of:multiple-runtime-cell-views",
-        name: "Multiple runtime cell views",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(viewController, [{
+          id: "of:multiple-runtime-cell-views",
+          name: "Multiple runtime cell views",
+          patternRef: undefined,
+        }]),
+      );
 
-      const brokenNested = runtime.getCell(
+      const brokenNested = patchableCell(runtime.getCell(
         space,
         "piece-search-broken-nested",
         nestedSchema,
-      );
-      Object.defineProperty(brokenNested, "pull", {
-        value: () => Promise.reject(new Error("nested cell unavailable")),
-      });
+      ));
+      brokenNested.pull = () =>
+        Promise.reject(new Error("nested cell unavailable"));
       const nestedErrors: unknown[] = [];
       const partialController = {
         getRegisteredPieces: () =>
@@ -3874,16 +4426,91 @@ describe("cli piece parsing", () => {
       };
       expect(
         await searchPieces(config, "surviving nested", {
-          loadPieces: () => Promise.resolve(partialController as any),
+          loadPieces: () => searchFixtureController(partialController),
           reportSearchError: (_pieceId, _source, error) =>
             nestedErrors.push(error),
         }),
-      ).toEqual([{
-        id: "of:partial-runtime-cell-piece",
-        name: "Partial runtime cell piece",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(partialController, [{
+          id: "of:partial-runtime-cell-piece",
+          name: "Partial runtime cell piece",
+          patternRef: undefined,
+        }]),
+      );
       expect(nestedErrors).toEqual([new Error("nested cell unavailable")]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("attributes omitted and explicit space scopes to the same registered owner", async () => {
+    const signer = await Identity.fromPassphrase("cli search default scope");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const tx = runtime.edit();
+      const owner = runtime.getCell(signer.did(), "scope-owner", undefined, tx);
+      const registeredOwner = runtime.getCell(
+        signer.did(),
+        "scope-owner",
+        undefined,
+        undefined,
+        "space",
+      );
+      const referrer = runtime.getCell(
+        signer.did(),
+        "scope-referrer",
+        undefined,
+        tx,
+      );
+      const input = runtime.getCell(signer.did(), "scope-referrer-input", {
+        type: "object",
+        properties: { linked: { asCell: ["cell"] } },
+      }, tx);
+      const ownerInput = runtime.getCell(
+        signer.did(),
+        "scope-owner-input",
+        undefined,
+        tx,
+      );
+      owner.set({ text: "same-scope-owner-needle" });
+      ownerInput.set({});
+      referrer.set({});
+      input.set({ linked: owner });
+      setResultCell(input, referrer);
+      setResultCell(ownerInput, owner);
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(owner.getAsNormalizedFullLink()).toEqual(
+        registeredOwner.getAsNormalizedFullLink(),
+      );
+      const member = (
+        name: string,
+        input: Cell<unknown>,
+        result: Cell<unknown>,
+      ) => ({
+        id: pieceId(result)!,
+        name: () => name,
+        getCell: () => result,
+        getPatternRef: () => Promise.resolve(undefined),
+        input: { getCell: () => Promise.resolve(input.withTx()) },
+        result: { getCell: () => Promise.resolve(result.withTx()) },
+      });
+      const registered = [
+        member("Referrer", input, referrer),
+        member("Owner", ownerInput, registeredOwner),
+      ];
+      const matches = await searchPieces(
+        { apiUrl: API_URL, space: SPACE, identity: ID },
+        "same-scope-owner-needle",
+        {
+          loadPieces: () =>
+            Promise.resolve({
+              getRegisteredPieces: () => Promise.resolve(registered),
+            } as unknown as PiecesController),
+        },
+      );
+      expect(matches.map((match) => match.name)).toEqual(["Owner"]);
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -4120,34 +4747,40 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
 
       expect(
         await searchPieces(config, "explicit ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(
         await searchPieces(config, "proxy ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(
         await searchPieces(config, "scalar ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
-      const referrerAndOwner = [
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
+      const referrerAndOwner = await searchFixtureRows(controller, [
         { id: referrerId, name: "Referrer", patternRef: undefined },
         { id: ownerId, name: "Owner", patternRef: undefined },
-      ];
+      ]);
       expect(
         await searchPieces(config, "ownerless explicit", deps),
       ).toEqual(referrerAndOwner);
@@ -4245,54 +4878,26 @@ describe("cli piece parsing", () => {
 
       const sourceError = new Error("source ownership unavailable");
       let repeatedCellPulls = 0;
-      const repeatedCellView = new Proxy(repeatedCell, {
-        get(target, property) {
-          if (property === "pull") {
-            return async () => {
-              repeatedCellPulls++;
-              return await target.pull();
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const repeatedCellView = patchableCell(repeatedCell);
+      repeatedCellView.pull = async () => {
+        repeatedCellPulls++;
+        return await repeatedCell.pull();
+      };
       let repeatedProxyMaterializations = 0;
-      const repeatedProxyCellView = new Proxy(repeatedProxySource, {
-        get(target, property) {
-          if (property === "asSchema") {
-            return (schema?: JSONSchema) => {
-              repeatedProxyMaterializations++;
-              return target.asSchema(schema);
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-      const brokenSourceView = new Proxy(brokenSource, {
-        get(target, property) {
-          if (property === "resolveAsCell") {
-            return () => {
-              throw sourceError;
-            };
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
-      const brokenRootView = new Proxy(brokenRoot, {
-        get(target, property) {
-          if (property === "key") {
-            return () => brokenSourceView;
-          }
-          if (property === "pull") {
-            return () => Promise.resolve({ field: "unreachable source value" });
-          }
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const repeatedProxyCellView = patchableCell(repeatedProxySource);
+      repeatedProxyCellView.asSchema = ((schema?: JSONSchema) => {
+        repeatedProxyMaterializations++;
+        return repeatedProxySource.asSchema(schema);
+      }) as typeof repeatedProxyCellView.asSchema;
+      const brokenSourceView = patchableCell(brokenSource);
+      brokenSourceView.resolveAsCell = () => {
+        throw sourceError;
+      };
+      const brokenRootView = patchableCell(brokenRoot);
+      brokenRootView.key = (() =>
+        brokenSourceView) as unknown as typeof brokenRootView.key;
+      brokenRootView.pull = () =>
+        Promise.resolve({ field: "unreachable source value" });
 
       const ownerId = pieceId(ownerResult);
       if (ownerId === undefined) {
@@ -4316,7 +4921,10 @@ describe("cli piece parsing", () => {
         getRegisteredPieces: () =>
           Promise.resolve([
             piece("of:owned-proxy-referrer", "Referrer", [ownedProxy]),
-            piece(ownerId, "Owner", "owned proxy coverage needle"),
+            {
+              ...piece(ownerId, "Owner", "owned proxy coverage needle"),
+              getCell: () => ownerResult,
+            },
             piece("of:repeated-cell", "Repeated cell", [
               repeatedCellView,
               repeatedCellView,
@@ -4340,7 +4948,7 @@ describe("cli piece parsing", () => {
         error: unknown;
       }> = [];
       const searchDeps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
         reportSearchError: (
           pieceId: string,
           source: "input data" | "result data" | "metadata",
@@ -4354,11 +4962,13 @@ describe("cli piece parsing", () => {
           "owned proxy coverage needle",
           searchDeps,
         ),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(repeatedCellPulls).toBe(1);
       expect(repeatedProxyMaterializations).toBe(1);
       expect(errors.length).toBeGreaterThan(0);
@@ -4448,7 +5058,7 @@ describe("cli piece parsing", () => {
           { apiUrl: API_URL, space: SPACE, identity: ID },
           "cyclic ownership",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
             reportSearchError: (_pieceId, _source, error) => errors.push(error),
           },
         ),
@@ -4551,14 +5161,16 @@ describe("cli piece parsing", () => {
           },
           "cold-cache-needle",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
           },
         ),
-      ).toEqual([{
-        id: "of:cold-runtime-piece",
-        name: "Cold runtime piece",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: "of:cold-runtime-piece",
+          name: "Cold runtime piece",
+          patternRef: undefined,
+        }]),
+      );
     } finally {
       await reader.dispose();
       await readerStorage.close();
@@ -4595,14 +5207,16 @@ describe("cli piece parsing", () => {
         },
         "large-array-needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
         },
       ),
-    ).toEqual([{
-      id: "of:large-array",
-      name: "Large array",
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:large-array",
+        name: "Large array",
+        patternRef: undefined,
+      }]),
+    );
   });
 
   it("searches current data after a query proxy changes shape", async () => {
@@ -4674,13 +5288,13 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
-      const match = [{
+      const match = await searchFixtureRows(controller, [{
         id: "of:stale-array-proxy",
         name: "Stale array proxy",
         patternRef: undefined,
-      }];
+      }]);
 
       expect(
         await searchPieces(config, "changedShape", deps),
@@ -4779,38 +5393,40 @@ describe("cli piece parsing", () => {
         },
         "needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (pieceId, source, error) =>
             errors.push({ pieceId, source, error }),
         },
       ),
-    ).toEqual([
-      {
-        id: "of:first-match",
-        name: "of:first-match",
-        patternRef: undefined,
-      },
-      {
-        id: "of:unreadable",
-        name: "Result-only match",
-        patternRef: undefined,
-      },
-      {
-        id: "of:partial-object",
-        name: "Partial object",
-        patternRef: undefined,
-      },
-      {
-        id: "of:partial-array",
-        name: "Partial array",
-        patternRef: undefined,
-      },
-      {
-        id: "of:second-match",
-        name: "of:second-match",
-        patternRef: undefined,
-      },
-    ]);
+    ).toEqual(
+      await searchFixtureRows(controller, [
+        {
+          id: "of:first-match",
+          name: "of:first-match",
+          patternRef: undefined,
+        },
+        {
+          id: "of:unreadable",
+          name: "Result-only match",
+          patternRef: undefined,
+        },
+        {
+          id: "of:partial-object",
+          name: "Partial object",
+          patternRef: undefined,
+        },
+        {
+          id: "of:partial-array",
+          name: "Partial array",
+          patternRef: undefined,
+        },
+        {
+          id: "of:second-match",
+          name: "of:second-match",
+          patternRef: undefined,
+        },
+      ]),
+    );
     expect(errors).toHaveLength(3);
     expect(errors).toContainEqual({
       pieceId: "of:unreadable",
@@ -4830,7 +5446,7 @@ describe("cli piece parsing", () => {
   });
 
   it("forwards repository metadata through piece creation and updates", async () => {
-    const repository = "https://github.com/commontoolsinc/labs";
+    const repository = "https://github.com/commonfabric/labs";
     const entry = { mainPath: "/repo/main.tsx", repository };
     const program = {} as any;
     let createOptions: unknown;
@@ -5002,7 +5618,7 @@ describe("cli piece parsing", () => {
   });
 
   it("forwards repository metadata when deploying a home pattern", async () => {
-    const repository = "https://github.com/commontoolsinc/labs";
+    const repository = "https://github.com/commonfabric/labs";
     let recreateOptions: unknown;
 
     await setHomePattern(

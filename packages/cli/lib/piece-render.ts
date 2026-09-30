@@ -4,7 +4,7 @@ import { type Cell, UI } from "@commonfabric/runner";
 import { uiSchema } from "@commonfabric/runner/schemas";
 import { getLogger } from "@commonfabric/utils/logger";
 
-import { loadPieces } from "./piece.ts";
+import { loadPieces, resolveAddressedPieceConfig } from "./piece.ts";
 import type { PieceConfig, PieceResolutionDeps } from "./piece.ts";
 
 const logger = getLogger("piece-render", { level: "info", enabled: false });
@@ -113,7 +113,7 @@ export function renderVDomToHtml(
 }
 
 /**
- * Renders a piece's UI to HTML using htmlparser2.
+ * Resolves a piece reference and renders the piece's UI to HTML.
  * Supports both static and reactive rendering with --watch mode.
  */
 export async function renderPiece(
@@ -122,11 +122,12 @@ export async function renderPiece(
   deps: Pick<PieceResolutionDeps, "loadPieces"> = {},
 ): Promise<string | (() => void)> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const resolvedConfig = await resolveAddressedPieceConfig(pieces, config);
   const piece = await pieces.get(
-    config.piece,
+    resolvedConfig.piece,
     options.start ?? true,
     undefined,
-    config.pieceScope,
+    resolvedConfig.pieceScope,
   );
   const cell = piece.getCell().asSchema(uiSchema) as Cell<
     Record<string, unknown>

@@ -167,7 +167,7 @@ resolves".
 Two of these describe this runtime rather than the CFC specification, and an
 author who goes looking for them in the specification will not find them. The
 specification checks a write target's `requiredIntegrity` against the written
-value alone (`commontoolsinc/specs` `cfc/08-12-store-label-monotonicity.md`
+value alone (`commonfabric/specs` `cfc/08-12-store-label-monotonicity.md`
 §8.12.4.1), and scopes the shared-witness rule to the reads at or below the
 annotated path (`cfc/08-10-validation-at-boundaries.md` §8.10.3). This runtime
 screens a floored write against every labeled read that preceded it in the

@@ -4,6 +4,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -54,7 +55,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space,
       scope: "space",
       id,
@@ -92,6 +93,7 @@ describe("CFC: creation anchors membership at the canonical container path", () 
       // `entriesOf` reads the label map the replica stores, and flow labels
       // reach storage at "persist".
       cfcFlowLabels: "persist",
+      cfcEnforcementMode: "observe",
     });
 
     await seedLabeledDoc(runtime, "anchor-el-0", { n: 1 }, "alice-secret");

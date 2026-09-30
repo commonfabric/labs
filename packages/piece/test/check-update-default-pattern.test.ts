@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  getMetaLink,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
@@ -17,6 +18,7 @@ import { CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON } from "@commonfabric/runner/c
 import { createSession, Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
@@ -48,9 +50,9 @@ const patternSource = (marker: string) =>
 
 const SOURCE_V1 = patternSource("v1");
 const SOURCE_V2 = patternSource("v2");
-// A roll target WITH a handler: handler nodes need their { "$stream": true }
-// markers materialized on the (reused) root doc — the dimension the plain
-// sources above never exercise, and the estuary post-swap failure class.
+// A roll target WITH a handler: a handler's stream is an internal cell the
+// (reused) root doc has to materialize — the dimension the plain sources
+// above never exercise, and the estuary post-swap failure class.
 const SOURCE_V3_HANDLER = [
   "import { Writable, handler, pattern } from 'commonfabric';",
   "const bump = handler<void, { count: Writable<number> }>((_, { count }) => {",
@@ -125,6 +127,33 @@ const SOURCE_HOME_TWO_EXPORT = [
   "  const favorites = new Writable<string[]>([]).for('favorites');",
   "  const count = new Writable<number>(0).for('count');",
   "  return { items, favorites, count, bump: bump({ count }) };",
+  "});",
+  "",
+].join("\n");
+
+const SOURCE_HOME_GUARDED_DEFAULT = [
+  "import { Cfc, Default, RepresentsCurrentUser, Writable, WriteAuthorizedBy, handler, pattern } from 'commonfabric';",
+  "const bump = handler<void, { count: Writable<number> }>((_, { count }) => {",
+  "  count.set((count.get() ?? 0) + 1);",
+  "});",
+  "type GuardedRow = { label: string };",
+  "const addGuardedRow = handler<",
+  "  { label?: string },",
+  "  { guarded: Writable<GuardedRow[]> }",
+  ">((event, { guarded }) => {",
+  "  guarded.push({ label: event.label ?? '' });",
+  "});",
+  "type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };",
+  "type GuardedList = RepresentsCurrentUser<Cfc<",
+  "  WriteAuthorizedBy<GuardedRow[], typeof addGuardedRow>,",
+  "  { ownerPrincipal: CurrentPrincipal }",
+  ">>;",
+  "export default pattern<{",
+  "  items?: string[];",
+  "  guarded: Default<GuardedList, []>;",
+  "}>(({ items, guarded }) => {",
+  "  const count = new Writable<number>(0).for('count');",
+  "  return { items, guarded, addGuardedRow: addGuardedRow({ guarded }), count, bump: bump({ count }) };",
   "});",
   "",
 ].join("\n");
@@ -293,7 +322,10 @@ describe("opening a space root", () => {
   }
 
   async function setupHome(
-    extraRuntimeOptions: { cfcEnforcementMode?: "disabled" } = {},
+    extraRuntimeOptions: {
+      cfcEnforcementMode?: "disabled";
+      cfcFlowLabels?: "off";
+    } = {},
   ) {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -1538,7 +1570,9 @@ describe("opening a space root", () => {
   it("leaves the current root untouched when the identity swap cannot commit", async () => {
     await setup();
     await controller.ensureDefaultPattern();
-    const root = (await controller.getDefaultPattern(false))!;
+    const root = patchableCell(
+      (await controller.getDefaultPattern(false))!,
+    );
     const before = getPatternIdentityRef(root);
     const originalWithTx = root.withTx;
     root.withTx = (() => {
@@ -1718,9 +1752,9 @@ describe("opening a space root", () => {
     // The estuary post-#4883 failure class: the swap engages, writes the new
     // patternIdentity onto the EXISTING result cell, and the replacement
     // pattern must then start over that reused doc — including materializing
-    // { "$stream": true } markers for handler nodes the old program never
-    // had. A handler-less roll target (every other test here) cannot see
-    // this; home.tsx is handler-rich.
+    // the internal cells of handler nodes the old program never had. A
+    // handler-less roll target (every other test here) cannot see this;
+    // home.tsx is handler-rich.
 
     await setupHome();
     await controller.recreateDefaultPattern({
@@ -1743,11 +1777,9 @@ describe("opening a space root", () => {
     await runtime.idle();
 
     // The swap alone is not the contract — the replacement must RUN. Start
-    // it the way bootstrap would and let the scheduler settle; a missing
-    // stream marker surfaces as "Handler used as lift" at instantiation and
-    // the pattern body never executes, so the functional read below is the
-    // pin: `count` only reads 0 if the swapped-in program actually ran its
-    // setup (internal cells materialized) and instantiated.
+    // it the way bootstrap would and let the scheduler settle; the functional
+    // read below is the pin: `count` only reads 0 if the swapped-in program
+    // actually ran its setup (internal cells materialized) and instantiated.
     const after = (await controller.getDefaultPattern(true))!;
     await runtime.idle();
     expect(getPatternIdentityRef(after)?.identity).toBe(
@@ -1796,7 +1828,7 @@ describe("opening a space root", () => {
     // (startEnsuredDefaultPattern -> checkAndUpdateDefaultPattern), then
     // cold-starts the piece — and `Runner.#startCore()`'s initial
     // instantiation does not run the setup phase, so the incoming pattern's
-    // { "$stream": true } markers were never materialized on the reused doc.
+    // internal cells were never materialized on the reused doc.
 
     await setupHome();
     await controller.recreateDefaultPattern({
@@ -1884,6 +1916,67 @@ describe("opening a space root", () => {
     await (after as unknown as { pull: () => Promise<unknown> }).pull();
     const afterEvent = (await controller.getDefaultPattern(false))!;
     expect(afterEvent.key("count").get()).toBe(1);
+  });
+
+  it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
+    await setupHome();
+    expect(runtime.cfcEnforcementMode).not.toBe("disabled");
+    await controller.recreateDefaultPattern({
+      customProgram: {
+        main: "/custom-home.tsx",
+        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
+      },
+    });
+    const root = (await controller.getDefaultPattern(false))!;
+    const staleRef = getPatternIdentityRef(root)!;
+    const edit = runtime.edit();
+    root.withTx(edit).key("items").set(["saved"]);
+    runtime.prepareTxForCommit(edit);
+    expect((await edit.commit()).error).toBeUndefined();
+    await controller.stopPiece(root);
+
+    stub.setSource(SOURCE_HOME_GUARDED_DEFAULT);
+    const restore = shadowLoadProbe(staleRef.identity, "undefined");
+    try {
+      await controller.ensureDefaultPattern();
+    } finally {
+      restore();
+    }
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(true))!;
+    await runtime.idle();
+    expect(getPatternIdentityRef(after)?.identity).toBe(
+      await identityForSource(
+        SOURCE_HOME_GUARDED_DEFAULT,
+        {},
+        HOME_PATTERN_PATH,
+      ),
+    );
+    expect(after.key("count").get()).toBe(0);
+    expect(after.key("items").get()).toEqual(["saved"]);
+    expect(after.key("guarded").get()).toEqual([]);
+    const append = runtime.edit();
+    after.withTx(append).key("addGuardedRow").send({ label: "owner edit" });
+    runtime.prepareTxForCommit(append);
+    expect((await append.commit()).error).toBeUndefined();
+    await after.pull();
+    await runtime.idle();
+    const updated = (await controller.getDefaultPattern(false))!;
+    expect(updated.key("guarded").get()).toEqual([{ label: "owner edit" }]);
+
+    const attack = runtime.edit();
+    const argument = getMetaLink(after.withTx(attack), "argument")!;
+    runtime.getCellFromLink(
+      { ...argument, schema: undefined },
+      undefined,
+      attack,
+    )
+      .key("guarded").set([]);
+    runtime.prepareTxForCommit(attack);
+    expect((await attack.commit()).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("heals a root whose pinned pattern fails CFC migration by rolling forward to official", async () => {
@@ -2109,7 +2202,9 @@ describe("opening a space root", () => {
 
   it("fails clearly when a root loses its source state during repair", async () => {
     const { oldRef } = await pinOldRequiredHome();
-    const root = (await controller.getDefaultPattern(false))!;
+    const root = patchableCell(
+      (await controller.getDefaultPattern(false))!,
+    );
     const restoreRun = patchRunSynced((opts) =>
       opts?.expectedPatternIdentity?.identity === oldRef.identity
         ? Promise.reject(new Error(MIGRATION_REJECTION))
@@ -2175,7 +2270,7 @@ describe("opening a space root", () => {
       restore();
     }
     // Fail-closed: the ORIGINAL cold-start failure surfaces, not a heal error…
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("default-root heal failed");
     // …and the root's identity is untouched — no roll-forward, no displacement.
     const after = (await controller.getDefaultPattern(false))!;
@@ -2216,7 +2311,7 @@ describe("opening a space root", () => {
       restore();
     }
     // The ORIGINAL cold-start failure surfaces (fail-closed), not a heal error.
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("default-root heal failed");
     const after = (await controller.getDefaultPattern(false))!;
     expect(getPatternIdentityRef(after)?.identity).toBe(oldRef.identity);
@@ -2624,7 +2719,7 @@ describe("opening a space root", () => {
       rt.runSynced = originalRunSynced;
     }
     // The original start failure surfaces, not the repair's own error.
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("repair backend unavailable");
 
     // Nothing was torn down or corrupted: with the repair path restored, the
@@ -2824,7 +2919,10 @@ describe("opening a space root", () => {
     // root that cannot start therefore surfaces its failure rather than being
     // replaced.
 
-    await setupHome({ cfcEnforcementMode: "disabled" });
+    await setupHome({
+      cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
+    });
     await controller.recreateDefaultPattern({
       customProgram: {
         main: "/custom-home.tsx",

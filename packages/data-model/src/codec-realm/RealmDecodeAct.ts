@@ -2,9 +2,8 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseDecodeAct } from "@/codec-common/BaseDecodeAct.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
-import { quotedDebugString } from "@/codec-common/quotedDebugString.ts";
+import { BaseDecodeAct, ProblematicStateError } from "@/codec-common";
+import { debugStr } from "@/value-debug";
 import {
   REALM_FORMAT_VERSION,
   type RealmCodecValue,
@@ -129,9 +128,7 @@ export class RealmDecodeAct
       return this.reportMalformed(
         "",
         data,
-        `Cannot decode ${
-          quotedDebugString(data)
-        }: not a form this format emits.`,
+        debugStr`Cannot decode $quote${data}: not a form this format emits.`,
       );
     } finally {
       this.leave(data);
@@ -144,7 +141,9 @@ export class RealmDecodeAct
    * a length an array cannot hold.
    *
    * Frozen on the way out whether it was rebuilt or passed through, per what
-   * `4-realm-encoding.md` Section 5.2 says a caller cedes to it.
+   * `4-realm-encoding.md` Section 5.2 says a caller cedes to it, unless this
+   * act is mutable. A mutable act copies an array that arrived frozen and
+   * needed no rebuilding, that being the one way to hand it back mutable.
    */
   #decodeArray(
     data: readonly RealmCodecValue[],
@@ -173,7 +172,13 @@ export class RealmDecodeAct
       }
     }
 
-    return Object.freeze(result ?? (data as FabricValue));
+    if (result === undefined) {
+      result = (this.config.mutable && Object.isFrozen(data))
+        ? data.slice() as FabricValue[]
+        : data as FabricValue[];
+    }
+
+    return this.freezeUnlessMutable(result);
   }
 
   /**
@@ -182,7 +187,9 @@ export class RealmDecodeAct
    * container a payload cannot produce.
    *
    * Frozen on the way out whether it was rebuilt or passed through, per what
-   * `4-realm-encoding.md` Section 5.2 says a caller cedes to it.
+   * `4-realm-encoding.md` Section 5.2 says a caller cedes to it, unless this
+   * act is mutable. A mutable act copies an object that arrived frozen and
+   * needed no rebuilding, as {@link #decodeArray} does an array.
    */
   #decodePlainObject(
     data: Record<string, RealmCodecValue>,
@@ -211,7 +218,13 @@ export class RealmDecodeAct
       }
     }
 
-    return Object.freeze(result ?? (data as FabricValue));
+    if (result === undefined) {
+      result = (this.config.mutable && Object.isFrozen(data))
+        ? { ...data } as Record<string, FabricValue>
+        : data as Record<string, FabricValue>;
+    }
+
+    return this.freezeUnlessMutable(result);
   }
 
   /**

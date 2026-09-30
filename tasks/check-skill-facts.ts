@@ -33,6 +33,9 @@
 
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
+import { gitLsFiles, repositoryFiles } from "./repository-files.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -99,20 +102,6 @@ export class Tree {
   }
 }
 
-/** Runs `git ls-files` with `args` under `root` and splits its NUL-separated output. */
-async function gitLsFiles(root: string, args: string[]): Promise<string[]> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args: ["-C", root, "ls-files", "-z", ...args],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    const message = new TextDecoder().decode(stderr).trim();
-    throw new Error(`git ls-files failed in ${root}: ${message}`);
-  }
-  return new TextDecoder().decode(stdout).split("\0").filter((p) => p !== "");
-}
-
 /** The mode git gives a symlink entry in `ls-files -s` output. */
 const SYMLINK_MODE = "120000";
 
@@ -145,16 +134,12 @@ async function gitSymlinks(root: string): Promise<string[]> {
  * lingering until the deletion is staged.
  */
 export async function readTree(root: string): Promise<Tree> {
-  const [present, deleted, symlinks] = await Promise.all([
-    gitLsFiles(root, ["--cached", "--others", "--exclude-standard"]),
-    gitLsFiles(root, ["--deleted"]),
+  const [present, symlinks] = await Promise.all([
+    repositoryFiles(root),
     gitSymlinks(root),
   ]);
-  const gone = new Set(deleted);
-  return new Tree(
-    present.filter((path) => !gone.has(path)),
-    symlinks.filter((path) => !gone.has(path)),
-  );
+  const held = new Set(present);
+  return new Tree(present, symlinks.filter((path) => held.has(path)));
 }
 
 /**
@@ -227,7 +212,7 @@ export function resolvesInTree(
 /** Does `key` ("." or "./sub") resolve against a deno.jsonc `exports` value? */
 function resolvesExport(exports: unknown, key: string): boolean {
   if (typeof exports === "string") return key === "."; // string = root export only
-  if (exports !== null && typeof exports === "object") {
+  if (isObjectOrArray(exports)) {
     return key in (exports as Record<string, unknown>);
   }
   return false;

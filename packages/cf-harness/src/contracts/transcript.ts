@@ -1,8 +1,8 @@
-import type { LLMNativeModelToolResult } from "@commonfabric/llm/types";
+import type { HarnessNativeModelToolResult } from "./native-model-tool.ts";
 
 import type { HarnessImageAttachment } from "./image.ts";
 import type { HarnessSubagentProfile } from "./subagent.ts";
-import type { ToolResultRef } from "./tool-result.ts";
+import type { ToolOutputId, ToolResultRef } from "./tool-result.ts";
 
 export interface HarnessToolCall {
   id: string;
@@ -13,7 +13,7 @@ export interface HarnessToolCall {
   };
 }
 
-export type HarnessNativeModelToolResult = LLMNativeModelToolResult;
+export type { HarnessNativeModelToolResult } from "./native-model-tool.ts";
 
 export interface HarnessProviderContinuation {
   providerId: string;
@@ -25,10 +25,19 @@ export interface HarnessSystemTranscriptMessage {
   content: string;
 }
 
+/** Tool-result identity carried by host-supplied user context. */
+export interface HarnessToolResultProvenance {
+  type: "cf-harness.tool-result-provenance";
+  toolCallId: string;
+  toolId: string;
+  outputId: ToolOutputId;
+}
+
 export interface HarnessUserTranscriptMessage {
   role: "user";
   content: string;
   imageAttachments?: readonly HarnessImageAttachment[];
+  toolResultProvenance?: HarnessToolResultProvenance;
 }
 
 export interface HarnessAssistantTranscriptMessage {

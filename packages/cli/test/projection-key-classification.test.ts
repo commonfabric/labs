@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { ANNOTATION_KEYS } from "@commonfabric/piece/schema-compatibility";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   deriveSelectedValue,
   outputSchemaWithSourceRequired,
@@ -69,7 +70,7 @@ const TOLERATED_PROBE_VALUES = new Map<string, unknown>([
 
 /** Every key in keyword position anywhere in `schema`. */
 function keywordsIn(schema: unknown, into = new Set<string>()): Set<string> {
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
+  if (!isObjectNotArray(schema)) {
     return into;
   }
   for (
@@ -77,7 +78,7 @@ function keywordsIn(schema: unknown, into = new Set<string>()): Set<string> {
   ) {
     into.add(key);
     if (key === "properties") {
-      if (child !== null && typeof child === "object") {
+      if (isObjectOrArray(child)) {
         for (const value of Object.values(child as Record<string, unknown>)) {
           keywordsIn(value, into);
         }

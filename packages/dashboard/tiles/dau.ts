@@ -27,9 +27,9 @@
  *
  * The tile names its service explicitly, through PROD_SERVICE, rather than
  * counting whatever reports. A service that sends nothing comes back with no
- * aggregations at all, which reads here as gray, so this can sit on the wall
- * against a deployment whose tracing is still switched off and light up on its
- * own when it is turned on.
+ * aggregations at all, which reads here as gray, so this can sit on the
+ * dashboard against a deployment whose tracing is still switched off and light
+ * up on its own when it is turned on.
  */
 
 import type { Status, Tile, TileView } from "../types.ts";
@@ -125,14 +125,13 @@ async function activeByDay(
 }
 
 export const dau: Tile = {
-  id: "dau",
+  label: "dau",
   intervalMs: 300_000,
   async collect(ctx): Promise<TileView> {
-    const label = "dau";
     const base = ctx.env("SIGNOZ_URL");
     const key = ctx.env("SIGNOZ_API_KEY");
     if (!base || !key) {
-      return { label, status: "unknown", value: "—", sub: "set SIGNOZ_URL + SIGNOZ_API_KEY" };
+      return { status: "unknown", value: "—", sub: "set SIGNOZ_URL + SIGNOZ_API_KEY" };
     }
     const service = serviceName(ctx.env);
     const uiBase = ctx.env("SIGNOZ_UI_URL") ?? (base.startsWith("https://") ? base : undefined);
@@ -144,7 +143,7 @@ export const dau: Tile = {
     } catch (e) {
       // SigNoz being unreachable says nothing about how many people were here.
       const msg = e instanceof Error ? e.message : "";
-      return { ...drill, label, status: "unknown", value: "—", sub: msg.startsWith("HTTP") ? `SigNoz ${msg}` : "SigNoz unavailable" };
+      return { ...drill, status: "unknown", value: "—", sub: msg.startsWith("HTTP") ? `SigNoz ${msg}` : "SigNoz unavailable" };
     }
 
     // Today's bucket is still filling, and a part-day always reads as a drop, so the
@@ -152,13 +151,12 @@ export const dau: Tile = {
     const today = Math.floor(Date.now() / DAY_MS) * DAY_MS;
     const days = [...byDay.keys()].filter((t) => t < today).sort((a, b) => a - b);
     if (days.length === 0) {
-      // Two different nothings, and they read differently on the wall. A service
+      // Two different nothings, and they read differently on the dashboard. A service
       // that has sent identity-bearing spans only today has just started exporting,
       // and has a number tomorrow; one that has sent none at all is not exporting.
       const seen = byDay.size > 0;
       return {
         ...drill,
-        label,
         status: "unknown",
         value: "—",
         sub: seen ? "insufficient data" : `no ${service} spans`,
@@ -180,7 +178,6 @@ export const dau: Tile = {
 
     return {
       ...drill,
-      label,
       status: "good" as Status,
       value: String(value),
       // "identities", not "users": the tile counts keypairs and the sub-line should not

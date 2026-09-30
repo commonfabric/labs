@@ -1,5 +1,5 @@
 import {
-  fabricFromNativeValue,
+  fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
 import type { Cell, MemorySpace, Runtime } from "@commonfabric/runner";
@@ -40,7 +40,7 @@ export async function writeGithubFabricCells(
     for (const entry of entries) {
       tx.writeValueOrThrow(
         entry.cell.getAsNormalizedFullLink(),
-        fabricFromNativeValue(entry.value) as FabricValue,
+        fabricFromConvertibleJsValue(entry.value) as FabricValue,
       );
     }
   } catch (error) {

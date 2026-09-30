@@ -53,6 +53,7 @@ export {
   TILE_UI,
   TYPE,
   UI,
+  VIEWS,
 } from "./builder/types.ts";
 export { type Cancel, useCancelGroup } from "./cancel.ts";
 export { parseFabricRef } from "./sandbox/fabric-import-specifier.ts";
@@ -89,3 +90,16 @@ export type {
   PatternCoverageKind,
   PatternCoverageSpan,
 } from "./pattern-coverage.ts";
+
+export {
+  parseCellReference,
+  parsePieceSegment,
+  parseReferenceContext,
+  parseRelativeReference,
+  type ReferenceContext,
+  type ReferenceMember,
+  type RelativeReferenceParts,
+  type RenderableCellReference,
+  renderCellReference,
+  renderReferenceContext,
+} from "./cell-reference.ts";

@@ -105,20 +105,23 @@ its output is narrower than the declared output address:
 - writes the value at the narrower-scope address — one address per
   principal at that scope; those addresses are the INSTANCES.
 
-A space→session narrowing writes CHAINED redirects,
-space→user→session — ALWAYS via user, even when discovery jumps
-straight to session, so every chain has the one uniform shape
-("just in case": a later user-level reader finds a well-formed user
-link to follow). **The eager double-hop is a v2 CHOICE, and it
-DIFFERS from the OFF arm.** It is flag-gated at both narrowing
-sites — the discovered-scope redirect in `sendValueToBindingInner`
-(`pattern-binding.ts`) and the declared-scope branch of
-`normalizeAndDiff` (`data-updating.ts`): with the flag ON, a single
-space→session narrowing writes both hops; OFF, each narrowing EVENT
-writes exactly ONE hop, and chains only ACCUMULATE across successive
-events, because the write-redirect resolution starts from the current
-chain end (a later session-narrowing lands its redirect inside the
-user instance). v2 implementations MUST keep the eager via-user hop.
+With server execution enabled, a space→session narrowing writes chained
+redirects, space→user→session, even when discovery jumps straight to session.
+The user link gives user-level readers a stable intermediate instance. Both
+hops are emitted for the discovering actor; other users' instances materialize
+on their own demand. The discovered-scope redirect in `sendValueToBindingInner`
+(`pattern-binding.ts`) and the declared-scope branch of `normalizeAndDiff`
+(`data-updating.ts`) gate this eager double hop on server execution. With the
+flag disabled, each narrowing writes one hop from the current chain end;
+successive narrowings can accumulate a chain.
+
+Declared session input storage carries a non-addressing initialization
+declaration on its automatic space→user link. A graph-owned setup action reads
+the demanded user's intermediate slot and fills it only when absent. Explicit
+references and values remain authoritative, including a same-address user link
+that replaces the automatic declaration. The link value and compatibility
+boundary are specified in
+[scoped cell instances](../scoped-cell-instances.md).
 
 ```
 outDoc@space ─redirect─► outDoc@user(u) ─redirect─► outDoc@sess(u,s)
@@ -348,9 +351,10 @@ scope, the child's `space→…` redirect is materialized even if the
 value omits the key, so a later schema-less write (a handler's
 `draft.set(…)`) follows the redirect into the narrower instance. The
 invariant that makes this safe was never written down and is added
-here: **a declared scope must be VISIBLE TO THE WRITE PATH at the top
-level of the slot's own schema.** `ContextualFlowControl.getSchemaScope
-Cap` reads only the top level, so a scope declared inside an
+here: **a declared scope must be VISIBLE TO THE WRITE PATH on the slot's
+own schema** — its top level, or the definition a `$ref` there names.
+`ContextualFlowControl.getSchemaScope
+Cap` reads those and no compound branch, so a scope declared inside an
 `anyOf`/`oneOf` branch (`PerUser<T> | undefined` spelled with the union
 OUTSIDE the wrapper) is invisible to the write side — `declaredCellScope`
 and `foldDeclaredScopeIntoLinkSchema` miss it while the READ side folds

@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { hashStringOf } from "@commonfabric/data-model";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   ENTITY_URI_SCHEMES,
@@ -15,11 +16,11 @@ import {
 } from "@commonfabric/runner/entity-kind";
 import {
   addressKey,
-  CELL_SCOPE_VALUES,
-  createLLMFriendlyLink,
   type NormalizedFullLink,
   parseLLMFriendlyLink,
+  renderCellReference,
 } from "@commonfabric/runner/shared";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
   HANDLE_TOKEN_ALPHABET,
@@ -27,10 +28,15 @@ import {
   HARNESS_HANDLE_TABLE_TYPE,
   type HarnessHandleCapability,
   type HarnessHandleEntry,
+  type HarnessHandleReferent,
+  type HarnessHandleReferentDraft,
   type HarnessHandleTable,
   MIN_HANDLE_TOKEN_SUFFIX_LENGTH,
+  REFERENT_HANDLE_TOKEN_PREFIX,
+  REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
+import { isCfcLabelShape } from "./cfc-label-shape.ts";
 
 /** Acquisition fields every recorded provenance must carry as a non-empty string. */
 const ACQUISITION_STRING_FIELDS = [
@@ -56,20 +62,11 @@ const sha256Hasher: HandleTokenHasher = (input) =>
   Promise.resolve(sha256(input) as Uint8Array<ArrayBuffer>);
 
 /**
- * Context space handed to `createLLMFriendlyLink()` when a link carries its
- * own space: the serializer embeds a link's space DID only when it differs
- * from the context, and the handle table has no execution space of its own,
- * so every carried DID must survive into the canonical `ref`.
- */
-const HANDLE_REF_CONTEXT_SPACE =
-  "did:cf-harness:handle-table" as NormalizedFullLink["space"];
-
-/**
  * Normalizes `refText` — an LLM-friendly link string, or a bare `of:`- or
  * `computed:`-schemed entity URI — to a normalized link. A ref with no
  * embedded space DID yields a link without `space`; the two operations
  * applied to the result tolerate that (`addressKey()` serializes the absence
- * deterministically, and `createLLMFriendlyLink()` omits the DID), which is
+ * deterministically, and the reference renderer preserves the absence), which is
  * what the cast relies on.
  *
  * This is the rule minting holds a ref to, exported so a surface taking a
@@ -80,7 +77,7 @@ const HANDLE_REF_CONTEXT_SPACE =
  * entity URI schemes (a bare hash, an `opaque:` handle, a human name).
  */
 export const parseHandleRef = (refText: string): NormalizedFullLink => {
-  const trimmed = refText.trim();
+  const trimmed = refText.trimStart();
   const parsed = parseLLMFriendlyLink(
     trimmed.startsWith("/") ? trimmed : `/${trimmed}`,
   );
@@ -90,19 +87,19 @@ export const parseHandleRef = (refText: string): NormalizedFullLink => {
     );
   }
   return {
-    id: parsed.id,
+    id: parsed.path.length === 0 ? parsed.id.trimEnd() : parsed.id,
     path: parsed.path,
     scope: parsed.scope ?? "space",
     ...(parsed.space !== undefined ? { space: parsed.space } : {}),
   } as NormalizedFullLink;
 };
 
-/** Helper for minting, which serializes a link to its canonical `ref`. */
+/**
+ * Helper for minting, which serializes a complete link without context.
+ * Unresolved references retain the implicit base scope of their intake form.
+ */
 const canonicalRef = (link: NormalizedFullLink): string =>
-  createLLMFriendlyLink(
-    link,
-    link.space === undefined ? undefined : HANDLE_REF_CONTEXT_SPACE,
-  );
+  renderCellReference(link, link.space === undefined ? { scope: "space" } : {});
 
 /**
  * Helper for minting, which derives one fixed-width token suffix: SHA-256 of
@@ -278,6 +275,173 @@ export const mintAddressHandle = async (
   };
 };
 
+/** Helper for minting, which names a referent by everything but its token. */
+const referentIdentityKey = (
+  referent: Pick<
+    HarnessHandleReferent,
+    "kind" | "source" | "value" | "label" | "labelSource"
+  >,
+): string =>
+  hashStringOf([
+    "referent",
+    referent.kind,
+    referent.source,
+    referent.value,
+    referent.label,
+    referent.labelSource,
+  ]);
+
+/**
+ * A referent of `referent`'s kind with its token removed, for minting it into
+ * another table under that table's own salt.
+ */
+export const referentDraft = (
+  referent: HarnessHandleReferent,
+): HarnessHandleReferentDraft =>
+  referent.kind === "document"
+    ? {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    }
+    : {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    };
+
+/**
+ * Mints a referent handle for `referent` — content a tool observed, or an
+ * admitted research kit, as its `kind` says — returning the updated table and
+ * the token. Minting is idempotent per referent: the same kind, source,
+ * content, label, and label source share one token, so a row a run retrieves
+ * twice is held once, and a document and a research kit with the same content
+ * are two referents. The suffix is derived the way an address handle's is.
+ */
+export const mintReferentHandle = async (
+  table: HarnessHandleTable,
+  referent: HarnessHandleReferentDraft,
+  options: { hasher?: HandleTokenHasher } = {},
+): Promise<{ table: HarnessHandleTable; token: string }> => {
+  const hasher = options.hasher ?? sha256Hasher;
+  const referents = table.referents ?? [];
+  const key = referentIdentityKey(referent);
+  const existing = referents.find((held) => referentIdentityKey(held) === key);
+  if (existing !== undefined) return { table, token: existing.token };
+  let attempt = 0;
+  let suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  while (
+    referents.some((held) =>
+      held.token === REFERENT_HANDLE_TOKEN_PREFIX + suffix
+    )
+  ) {
+    attempt += 1;
+    suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  }
+  const token = REFERENT_HANDLE_TOKEN_PREFIX + suffix;
+  return {
+    table: {
+      ...table,
+      referents: [...referents, { token, ...referent }],
+    },
+    token,
+  };
+};
+
+/**
+ * Folds the entries and referents of `incoming` into `current`, answering a
+ * table that holds everything either held. Both were minted from one run's
+ * table, and a mint only ever fills a field an entry left undefined, so an
+ * address present in both is merged field by field: each optional field is
+ * taken from whichever side defines it, and from `current` where both do. A
+ * writer's table carries a copy of every entry it read, so neither side's
+ * copy of an entry can simply stand; two writers that each extended the
+ * table they read both keep their additions, whichever recorded second.
+ *
+ * @throws Error when the tables carry different salts, since their tokens
+ * were then derived from different runs and cannot share a table; or when
+ * two writers minting from one base drew different tokens for one address,
+ * or one token for two different addresses or referents, none of which
+ * either writer could see of the other.
+ */
+export const mergeHarnessHandleTables = (
+  current: HarnessHandleTable,
+  incoming: HarnessHandleTable,
+): HarnessHandleTable => {
+  if (current.salt !== incoming.salt) {
+    throw new Error(
+      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+    );
+  }
+  const entries = [...current.entries];
+  for (const entry of incoming.entries) {
+    const index = entries.findIndex((held) =>
+      held.addressKey === entry.addressKey
+    );
+    if (index === -1) {
+      if (entries.some((held) => held.token === entry.token)) {
+        throw new Error(
+          `handle token ${entry.token} was minted for two different addresses`,
+        );
+      }
+      entries.push(entry);
+      continue;
+    }
+    const held = entries[index];
+    if (held.token !== entry.token) {
+      throw new Error(
+        `handle address ${held.addressKey} was recorded under two different tokens`,
+      );
+    }
+    const schemaSide = held.schema !== undefined ? held : entry;
+    const capability = held.capability ?? entry.capability;
+    const acquisition = held.acquisition ?? entry.acquisition;
+    entries[index] = {
+      token: held.token,
+      kind: held.kind,
+      ref: held.ref,
+      addressKey: held.addressKey,
+      ...(capability !== undefined ? { capability } : {}),
+      ...(schemaSide.schema !== undefined ? { schema: schemaSide.schema } : {}),
+      ...(schemaSide.schemaSource !== undefined
+        ? { schemaSource: schemaSide.schemaSource }
+        : {}),
+      ...(acquisition !== undefined ? { acquisition } : {}),
+    };
+  }
+  const referents = [...(current.referents ?? [])];
+  for (const referent of incoming.referents ?? []) {
+    const held = referents.find((candidate) =>
+      candidate.token === referent.token
+    );
+    if (held === undefined) {
+      referents.push(referent);
+    } else if (
+      referentIdentityKey(held) !== referentIdentityKey(referent)
+    ) {
+      throw new Error(
+        `handle token ${referent.token} was minted for two different referents`,
+      );
+    }
+  }
+  return {
+    ...current,
+    entries,
+    ...(referents.length > 0 ? { referents } : {}),
+  };
+};
+
+/** Returns the referent holding `token`, or `undefined` when none does. */
+export const resolveReferentToken = (
+  table: HarnessHandleTable,
+  token: string,
+): HarnessHandleReferent | undefined =>
+  table.referents?.find((held) => held.token === token);
+
 /** Returns the entry holding `token`, or `undefined` when none does. */
 export const resolveHandleToken = (
   table: HarnessHandleTable,
@@ -331,23 +495,14 @@ const ENTITY_ID_SOURCE = `(?:${
 // A path segment ends at whitespace, quotes, backticks, or closing
 // punctuation, so an address at the end of a sentence does not swallow it.
 const PATH_SEGMENT_SOURCE = `[^/\\s"'\`\\)\\]\\}>,;]+`;
-const SCOPE_SUFFIX_SOURCE = `(?:@(?:${[...CELL_SCOPE_VALUES].join("|")}))?`;
-// This scans free prose for occurrences — unanchored, global, with the
-// leading slash optional — which is a different job from the runner's
-// `matchLLMFriendlyLink`, an anchored gate over a whole string that is
-// already known to be a reference. Neither can stand in for the other.
-const LINK_OCCURRENCE_SOURCE =
-  // An optional cross-space prefix ending in `/`, or a bare leading `/`.
-  `((?:/@did:[^/\\s]+)?/)?` +
-  // At a word boundary: when the leading `/` is present the lookbehind sees
-  // it and passes; when absent it keeps `proof:fid1:…` and `x-of:fid1:…`
-  // from half-matching.
+// The scanner captures the whole occurrence; the shared reader decides whether
+// its member and qualifiers are valid. Complete prefixes are consumed with the
+// piece, so a refused occurrence cannot be rescanned as a shorter reference.
+const LINK_OCCURRENCE_SOURCE = `(?:(?://|/@)[^/\\s]+/|/)?` +
   `(?<![A-Za-z0-9_:.@-])` +
-  `${ENTITY_ID_SOURCE}` +
-  // `@space` is consumed too: it is the default scope, so the canonical
-  // serialization of the minted ref simply drops it.
-  SCOPE_SUFFIX_SOURCE +
-  `((?:/${PATH_SEGMENT_SOURCE})*)`;
+  ENTITY_ID_SOURCE +
+  `(?:[#@](?:${PATH_SEGMENT_SOURCE})?)?` +
+  `(?:/(?:${PATH_SEGMENT_SOURCE})?)*`;
 
 /**
  * Replaces every positively-marked address occurrence in `value` with a
@@ -377,7 +532,7 @@ export const swapLinksForTokens = async (
     }
     return { table, value: swapped };
   }
-  if (typeof value === "object" && value !== null) {
+  if (isObjectOrArray(value)) {
     const record = value as Record<string, unknown>;
     const keys = Object.keys(record);
     const target = record["@link"];
@@ -483,7 +638,7 @@ export const swapTokensForRefs = (
   if (Array.isArray(value)) {
     return value.map((item) => swapTokensForRefs(table, item));
   }
-  if (typeof value === "object" && value !== null) {
+  if (isObjectOrArray(value)) {
     const swapped: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
       defineOwnEntry(
@@ -499,6 +654,78 @@ export const swapTokensForRefs = (
 
 /** Token grammar accepted by {@link assertValidHarnessHandleTable}. */
 const FULL_TOKEN_PATTERN = new RegExp(`^${HANDLE_TOKEN_PATTERN.source}$`);
+
+/** Referent token grammar accepted by the same check. */
+const FULL_REFERENT_TOKEN_PATTERN = new RegExp(
+  `^${REFERENT_TOKEN_PATTERN.source}$`,
+);
+
+/** Helper for the table check, which validates the referents it holds. */
+const assertValidReferents = (referents: unknown): void => {
+  if (referents === undefined) return;
+  if (!Array.isArray(referents)) {
+    throw new Error("invalid handle table: referents must be an array");
+  }
+  const tokens = new Set<string>();
+  const identities = new Set<string>();
+  for (const referent of referents) {
+    if (!isObjectNotArray(referent)) {
+      throw new Error("invalid handle table: referent is not an object");
+    }
+    const { token, kind, source, label, labelSource } = referent;
+    if (
+      typeof token !== "string" || !FULL_REFERENT_TOKEN_PATTERN.test(token)
+    ) {
+      throw new Error(
+        `invalid handle table: malformed referent token \`${String(token)}\``,
+      );
+    }
+    if (kind !== "document" && kind !== "research") {
+      throw new Error(
+        `invalid handle table: referent kind must be \`document\` or \`research\`, got \`${
+          String(kind)
+        }\``,
+      );
+    }
+    if (typeof source !== "string" || source.length === 0) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an empty source`,
+      );
+    }
+    if (!isCfcLabelShape(label)) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has a malformed label`,
+      );
+    }
+    // A label source belongs to a kind: a row or a query labels a document,
+    // and only research labels research. A record pairing them otherwise was
+    // not minted by this module.
+    if (
+      kind === "document"
+        ? labelSource !== "row" && labelSource !== "query"
+        : labelSource !== "research"
+    ) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
+          String(labelSource)
+        }\``,
+      );
+    }
+    if (tokens.has(token)) {
+      throw new Error(`invalid handle table: duplicate token \`${token}\``);
+    }
+    tokens.add(token);
+    const identity = referentIdentityKey(
+      referent as unknown as HarnessHandleReferent,
+    );
+    if (identities.has(identity)) {
+      throw new Error(
+        `invalid handle table: duplicate referent identity at \`${token}\``,
+      );
+    }
+    identities.add(identity);
+  }
+};
 
 /**
  * Asserts that `table` is a well-formed version-1 handle table, guarding the
@@ -531,10 +758,11 @@ export const assertValidHarnessHandleTable = (
   if (!Array.isArray(raw.entries)) {
     throw new Error("invalid handle table: entries must be an array");
   }
+  assertValidReferents(raw.referents);
   const tokens = new Set<string>();
   const addressKeys = new Set<string>();
   for (const entry of table.entries) {
-    if (typeof entry !== "object" || entry === null) {
+    if (!isObjectOrArray(entry)) {
       throw new Error("invalid handle table: entry is not an object");
     }
     if (
@@ -563,8 +791,7 @@ export const assertValidHarnessHandleTable = (
     }
     if (
       entry.schema !== undefined && typeof entry.schema !== "boolean" &&
-      (typeof entry.schema !== "object" || entry.schema === null ||
-        Array.isArray(entry.schema))
+      !isObjectNotArray(entry.schema)
     ) {
       throw new Error(
         `invalid handle table: entry \`${entry.token}\` has a schema that is not a JSON Schema object or boolean`,
@@ -595,10 +822,7 @@ export const assertValidHarnessHandleTable = (
       // Shape before fields: a persisted table is untrusted input, and reading
       // a field off a null or an array would fail as a TypeError naming
       // neither the table nor the entry.
-      if (
-        typeof entry.acquisition !== "object" || entry.acquisition === null ||
-        Array.isArray(entry.acquisition)
-      ) {
+      if (!isObjectNotArray(entry.acquisition)) {
         throw new Error(
           `invalid handle table: entry \`${entry.token}\` has an acquisition that is not an object`,
         );

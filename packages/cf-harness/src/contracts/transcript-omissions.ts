@@ -4,15 +4,17 @@
  * artifacts and never enter this file.
  *
  * The runtime annotation lives on a transcript message's object identity and
- * is deliberately absent from its serialized shape. Code that replaces a tool
- * message before persistence must carry the annotation across by passing the
- * original message as `inheritFrom` to
- * `annotateHarnessToolResultOmissions()`.
+ * is deliberately absent from its serialized shape. Code that replaces a
+ * result-bearing message before persistence must carry the annotation across
+ * by passing the original message as `inheritFrom` to the matching annotation
+ * helper.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type {
   HarnessToolTranscriptMessage,
   HarnessTranscriptMessage,
+  HarnessUserTranscriptMessage,
 } from "./transcript.ts";
 import type { ToolResultRef } from "./tool-result.ts";
 
@@ -64,14 +66,16 @@ export interface HarnessTranscriptOmissions {
   results: readonly HarnessToolResultOmissions[];
 }
 
-const toolMessageOmissions = Symbol("cf-harness.tool-message-omissions");
+const transcriptMessageOmissions = Symbol(
+  "cf-harness.transcript-message-omissions",
+);
 
-type AnnotatedToolMessage = HarnessToolTranscriptMessage & {
-  [toolMessageOmissions]?: readonly HarnessTranscriptOmissionRuleRecord[];
+type AnnotatedTranscriptMessage = HarnessTranscriptMessage & {
+  [transcriptMessageOmissions]?: readonly HarnessTranscriptOmissionRuleRecord[];
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /** Whether `value` is a supported omission rule. */
 export const isHarnessTranscriptOmissionRule = (
@@ -128,19 +132,21 @@ export const createHarnessTranscriptOmissionRuleRecord = (
 };
 
 /**
- * Attaches omission locations to an in-memory tool message. The symbol is
+ * Attaches omission locations to an in-memory transcript message. The symbol is
  * non-enumerable and ignored by JSON serialization, so ordinary object reads,
  * provider requests, and `transcript.json` keep their established shape.
  * The annotation belongs to `message`'s object identity: a spread, clone, or
- * JSON round trip drops it. Code that replaces a tool message before
+ * JSON round trip drops it. Code that replaces a result-bearing message before
  * persistence must pass the original message as `inheritFrom`.
  */
-export const annotateHarnessToolResultOmissions = (
-  message: HarnessToolTranscriptMessage,
+const annotateHarnessTranscriptResultOmissions = <
+  Message extends HarnessTranscriptMessage,
+>(
+  message: Message,
   records: readonly HarnessTranscriptOmissionRuleRecord[],
-  inheritFrom?: HarnessToolTranscriptMessage,
-): HarnessToolTranscriptMessage => {
-  const annotated = message as AnnotatedToolMessage;
+  inheritFrom?: HarnessTranscriptMessage,
+): Message => {
+  const annotated = message as Message & AnnotatedTranscriptMessage;
   const byRule = new Map<
     HarnessTranscriptOmissionRule,
     HarnessTranscriptOmissionLocation[]
@@ -148,7 +154,7 @@ export const annotateHarnessToolResultOmissions = (
   for (
     const record of [
       ...(inheritFrom === undefined ? [] : omissionsOf(inheritFrom) ?? []),
-      ...(annotated[toolMessageOmissions] ?? []),
+      ...(annotated[transcriptMessageOmissions] ?? []),
       ...records,
     ]
   ) {
@@ -165,7 +171,7 @@ export const annotateHarnessToolResultOmissions = (
     }
     byRule.set(record.rule, locations);
   }
-  Object.defineProperty(annotated, toolMessageOmissions, {
+  Object.defineProperty(annotated, transcriptMessageOmissions, {
     value: [...byRule].map(([rule, locations]) => ({ rule, locations })),
     writable: true,
     configurable: true,
@@ -173,10 +179,55 @@ export const annotateHarnessToolResultOmissions = (
   return message;
 };
 
-const omissionsOf = (
+/** Attaches omission locations to an ordinary model-facing tool result. */
+export const annotateHarnessToolResultOmissions = (
   message: HarnessToolTranscriptMessage,
+  records: readonly HarnessTranscriptOmissionRuleRecord[],
+  inheritFrom?: HarnessToolTranscriptMessage,
+): HarnessToolTranscriptMessage =>
+  annotateHarnessTranscriptResultOmissions(message, records, inheritFrom);
+
+/** Attaches tool-result omissions to a host-supplied user-context message. */
+export const annotateHarnessUserResultOmissions = (
+  message: HarnessUserTranscriptMessage,
+  records: readonly HarnessTranscriptOmissionRuleRecord[],
+  inheritFrom?: HarnessTranscriptMessage,
+): HarnessUserTranscriptMessage =>
+  annotateHarnessTranscriptResultOmissions(message, records, inheritFrom);
+
+const omissionsOf = (
+  message: HarnessTranscriptMessage,
 ): readonly HarnessTranscriptOmissionRuleRecord[] | undefined =>
-  (message as AnnotatedToolMessage)[toolMessageOmissions];
+  (message as AnnotatedTranscriptMessage)[transcriptMessageOmissions];
+
+/** Returns the tool-output identity carried by an ordinary or host result. */
+export const resultProvenanceOf = (
+  message: HarnessTranscriptMessage,
+): { toolCallId: string; toolId: string; outputId: string } | undefined => {
+  if (message.role === "tool" && message.resultRef !== undefined) {
+    return {
+      toolCallId: message.toolCallId,
+      toolId: message.toolName,
+      outputId: String(message.resultRef.outputId),
+    };
+  }
+  if (message.role !== "user") return undefined;
+  const provenance: unknown = message.toolResultProvenance;
+  if (
+    !isRecord(provenance) ||
+    provenance.type !== "cf-harness.tool-result-provenance" ||
+    typeof provenance.toolCallId !== "string" ||
+    typeof provenance.toolId !== "string" ||
+    typeof provenance.outputId !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    toolCallId: provenance.toolCallId,
+    toolId: provenance.toolId,
+    outputId: provenance.outputId,
+  };
+};
 
 const mergeRuleRecords = (
   previous: readonly HarnessTranscriptOmissionRuleRecord[],
@@ -207,6 +258,42 @@ const mergeRuleRecords = (
 };
 
 /**
+ * Restores host-only annotations after validating unique, exact result joins.
+ * Unrecorded legacy results retain unknown omission status.
+ */
+export const restoreHarnessTranscriptOmissions = (
+  transcript: readonly HarnessTranscriptMessage[],
+  omissions: HarnessTranscriptOmissions,
+): void => {
+  const indices = new Set<number>();
+  const outputIds = new Set<string>();
+  for (const result of omissions.results) {
+    if (indices.has(result.transcriptIndex) || outputIds.has(result.outputId)) {
+      throw new Error("Stored transcript omissions repeat a result");
+    }
+    indices.add(result.transcriptIndex);
+    outputIds.add(result.outputId);
+    const message = transcript[result.transcriptIndex];
+    const identity = message === undefined
+      ? undefined
+      : resultProvenanceOf(message);
+    if (
+      identity === undefined || identity.outputId !== result.outputId ||
+      identity.toolId !== result.toolId ||
+      identity.toolCallId !== result.toolCallId
+    ) {
+      throw new Error("Stored transcript omissions do not match their result");
+    }
+  }
+  for (const result of omissions.results) {
+    annotateHarnessTranscriptResultOmissions(
+      transcript[result.transcriptIndex],
+      result.rules,
+    );
+  }
+};
+
+/**
  * Builds the durable omission join for `transcript`, retaining entries already
  * recorded for messages loaded from a prior process.
  *
@@ -223,19 +310,16 @@ export const createHarnessTranscriptOmissions = (
   );
   const results: HarnessToolResultOmissions[] = [];
   for (const [transcriptIndex, message] of transcript.entries()) {
-    if (message.role !== "tool" || message.resultRef === undefined) {
-      continue;
-    }
+    const provenance = resultProvenanceOf(message);
+    if (provenance === undefined) continue;
     const current = omissionsOf(message);
-    const prior = previousByOutput.get(String(message.resultRef.outputId));
+    const prior = previousByOutput.get(provenance.outputId);
     if (current === undefined && prior === undefined) {
       continue;
     }
     results.push({
       transcriptIndex,
-      toolCallId: message.toolCallId,
-      toolId: message.toolName,
-      outputId: String(message.resultRef.outputId),
+      ...provenance,
       rules: mergeRuleRecords(prior?.rules ?? [], current ?? []),
     });
   }

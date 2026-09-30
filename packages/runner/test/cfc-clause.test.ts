@@ -224,7 +224,7 @@ describe("CFC clause kernel", () => {
       const canonical = canonicalizeWritePolicyInput({
         kind: "link-write",
         target: address("of:target"),
-        source: { ...address("of:source"), path: ["value", "value", "field"] },
+        source: { ...address("of:source"), path: ["value", "field"] },
         reference: {
           binding: { ...address("of:source"), path: ["value", "field"] },
           confidentiality: [],

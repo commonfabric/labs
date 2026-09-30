@@ -8,6 +8,7 @@ import { getPatternIdentityRef } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { pieceId } from "@commonfabric/piece";
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { parseHandleRef, resolveHandleToken } from "../handle-table.ts";
 import {
@@ -71,9 +72,7 @@ export type LoomAuthoringToolOutput =
 
 /** Helper for projection, which recognizes decoded JSON objects. */
 const record = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  isObjectNotArray(value) ? value as Record<string, unknown> : {};
 
 /** Helper for projection, which picks named fields without expanding a schema. */
 const pick = (value: unknown, keys: readonly string[]) => {

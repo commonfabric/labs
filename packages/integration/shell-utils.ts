@@ -39,7 +39,7 @@ import "../shell/src/globals.ts";
  * the shell publishes it as the last step of its bootstrap module, after
  * opening the browser key store. That module body runs on past the document's
  * `load` event, so a navigation that resolves on `load` hands back a page whose
- * shell is still booting, for the couple of milliseconds the key store takes.
+ * shell is still booting. The `cf-shell-ready` event announces publication.
  *
  * A document that is not the shell never publishes the handle, and returns
  * here without a wait. `goto` reports such a document through
@@ -49,22 +49,19 @@ import "../shell/src/globals.ts";
 export async function waitForShellReady(page: Page): Promise<void> {
   if (!await isShellDocument(page)) return;
   try {
-    await waitForCondition(page, () => globalThis.app !== undefined);
+    await waitForCondition(page, () => globalThis.app !== undefined, {
+      events: ["cf-shell-ready"],
+    });
   } catch (cause) {
-    throw new Error(await describeShellReadyFailure(page), { cause });
+    // The wait renders the page it ran out against, and the cause carries that
+    // whole report. What is left to say is the one thing the wait cannot: that
+    // the document is the shell's own, and the bootstrap that publishes the
+    // handle did not run to the end. The console tail in the wait's block is
+    // where a bootstrap that threw says so.
+    throw new Error("The shell never published itself on globalThis.app.", {
+      cause,
+    });
   }
-}
-
-/**
- * Render what `page` held when the shell it carries never published itself on
- * `globalThis.app`: the shell's own document loaded, and its bootstrap did not
- * run to the end. The console tail in the block is where a bootstrap that
- * threw says so.
- */
-export async function describeShellReadyFailure(page: Page): Promise<string> {
-  return `The shell never published itself on globalThis.app.\n${await readAndDescribeShellPage(
-    page,
-  )}`;
 }
 
 /**
@@ -169,6 +166,41 @@ async function loginToPublishedApp(
   );
 }
 
+/**
+ * Drops the runtime `page` is holding, so its worker stops and the storage it
+ * has buffered is flushed.
+ *
+ * A disposal that never returns is a worker that never answered the `Dispose`
+ * request, which nothing else settles. Astral bounds the evaluate on its own
+ * account, and what it throws at the end of that names nothing, so the
+ * warning reports the page: the request is still in flight there, and the
+ * block names it and how long it has been outstanding. A rejection raised
+ * inside the page arrives here as a protocol record rather than an `Error`,
+ * which is the other reason the raw value is not what gets printed.
+ *
+ * A failure warns rather than throws. This is cleanup, called where a run's
+ * work is already done or where a `finally` has a failure of its own to
+ * carry, and neither wants a second one raised over it.
+ */
+export async function disposePageRuntime(page: Page): Promise<void> {
+  // Before disposing: the worker owns the collector, and disposing the
+  // runtime takes it with it.
+  await collectPatternCoverage(page);
+  try {
+    await page.evaluate(async () => {
+      await globalThis.commonfabric?.rt?.dispose();
+      if (globalThis.commonfabric) {
+        globalThis.commonfabric.rt = undefined;
+      }
+    });
+  } catch (error) {
+    console.warn(
+      `Disposing the shell page runtime failed: ${describeThrown(error)}\n` +
+        await readAndDescribeShellPage(page),
+    );
+  }
+}
+
 /** How a serialized `AppState` reads in a failure message. */
 function describeAppState(state: AppStateSerialized | undefined): string {
   if (!state) return "none (the page never yielded a state)";
@@ -212,12 +244,12 @@ const RENDER_CEILING_KEY = "cfcRenderCeiling";
  *
  * `true` writes `"true"`, `false` writes `"false"`, and undefined removes the
  * key. What each of those means is
- * `packages/shell/src/lib/render-ceiling.ts`'s to decide;
- * `isCfcRenderCeilingEnabled` reads the key as `=== "true"`, so `false` and
- * undefined select the same profile there and differ only in what the caller
- * said. Removing the key on undefined is what stops one navigation inheriting
- * the side the previous navigation over the same page asked for, one page
- * serving every case in a file.
+ * `packages/shell/src/lib/render-ceiling.ts`'s to decide; the key records an
+ * opt-out, read as `!== "false"`, so `true` and undefined select the ceiling
+ * and only `false` turns it off. Removing the key on undefined is what stops
+ * one navigation inheriting the side the previous navigation over the same
+ * page asked for, one page serving every case in a file — and a caller that
+ * states nothing gets the ceiling, which is the posture a shell host runs.
  *
  * The worker runtime reads the key when it is constructed, at login, so this
  * runs after the navigation that gives the page an origin to store it against
@@ -349,8 +381,13 @@ export class ShellIntegration {
     await login(this.page(), identity);
   }
 
+  /**
+   * Drops the runtime this suite's page is holding, through
+   * {@link disposePageRuntime}. A suite that has opened no page has none to
+   * drop, and returns.
+   */
   async disposeRuntime(): Promise<void> {
-    await this.#disposePageRuntime();
+    if (this.#page) await disposePageRuntime(this.#page);
   }
 
   /**
@@ -534,31 +571,13 @@ export class ShellIntegration {
     if (this.#page) {
       await getPresentationSession()?.close(this.#page);
     }
-    await this.#disposePageRuntime();
+    await this.disposeRuntime();
     await this.#page?.close();
     await this.#browser?.close();
   };
 
   #checkIsOk() {
     if (!this.#page) throw new Error("Page not initialized.");
-  }
-
-  async #disposePageRuntime(): Promise<void> {
-    const page = this.#page;
-    if (!page) return;
-    // Before disposing: the worker owns the collector, and disposing the
-    // runtime takes it with it.
-    await collectPatternCoverage(page);
-    try {
-      await page.evaluate(async () => {
-        await globalThis.commonfabric?.rt?.dispose();
-        if (globalThis.commonfabric) {
-          globalThis.commonfabric.rt = undefined;
-        }
-      });
-    } catch (error) {
-      console.warn("Failed to dispose shell page runtime:", error);
-    }
   }
 
   #attachPage(page: Page) {

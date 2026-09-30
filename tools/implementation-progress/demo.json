@@ -1,7 +1,8 @@
 {
   "revision": "89e5524c23 (#7246) with #7241 accounting fixes; 14 options, 8 voters, 74 votes. Five functional assertions pass; durations are not benchmark results.",
   "date": "2026-09-10",
-  "command": "CF_TEST_CONTINUOUS_UI=1 deno task cf test packages/patterns/lunch-poll/read-cost.test.tsx --verbose --stats-threshold 0 --timeout 60000",
+  "command": "CF_TEST_CONTINUOUS_UI=1 deno task cf test packages/patterns/lunch-poll/read-cost.test.tsx --verbose --stats-threshold 0",
+  "recordedCommand": "CF_TEST_CONTINUOUS_UI=1 deno task cf test packages/patterns/lunch-poll/read-cost.test.tsx --verbose --stats-threshold 0 --timeout 60000",
   "intervals": [
     {
       "runs": 673,

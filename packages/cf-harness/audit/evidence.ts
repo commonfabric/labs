@@ -14,6 +14,7 @@
  */
 
 import { basename, join, resolve } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { HarnessCellLabels } from "../src/contracts/cell-labels.ts";
 import type { HarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snapshot.ts";
@@ -137,7 +138,7 @@ const readJsonFile = async (path: string): Promise<JsonRead> => {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /**
  * Loads one artifact, admitting its contents only where `accept` recognizes

@@ -6,6 +6,16 @@ import type { Action } from "../../src/scheduler/types.ts";
 describe("NodeRegistry", () => {
   describe("instance members", () => {
     describe("remove()", () => {
+      it("retires the owed retry before the action is registered again", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function retiredRetry() {};
+        const record = nodes.register(action, "computation");
+        record.gate.retryOwed = true;
+        nodes.remove(action);
+        expect(nodes.register(action, "computation").gate.retryOwed)
+          .toBeUndefined();
+      });
+
       it("returns the removed record", () => {
         const nodes = new NodeRegistry();
         const action: Action = function removed() {};

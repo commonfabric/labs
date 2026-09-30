@@ -2,6 +2,7 @@ import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { defer } from "@commonfabric/utils/defer";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   connect,
   loopback,
@@ -1039,8 +1040,7 @@ describe("v2-operation-client", () => {
     const operationCodecs = new OperationCodecRegistry([{
       id: "test-counter@1",
       integrate({ materialized, submitted }) {
-        const by = submitted !== null && typeof submitted === "object" &&
-            !Array.isArray(submitted)
+        const by = isObjectNotArray(submitted)
           ? (submitted as { by?: unknown }).by
           : undefined;
         if (

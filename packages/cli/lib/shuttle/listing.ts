@@ -7,7 +7,9 @@
  * same string for nearly every row and differ wherever a name's own characters
  * are readings — a key called `..`, one holding the separator — which is a
  * question about the place rather than about the listing, so
- * `operandForChild` answers it and this module asks.
+ * `operandForChild` answers it and this module asks. Registered pieces outside
+ * the current space, scope, or document root carry their complete reference
+ * instead; selection preserves it, while `cd` refuses foreign spaces.
  *
  * A row also carries what it is. The kind is recorded as the row is made
  * rather than worked out again by whoever reads it, which is what lets a
@@ -18,9 +20,10 @@
  *
  * The reads are `packages/cli`'s, over the connection this process holds: a
  * space root has nothing to read, the two facets are `listSpaceSlugs` and
- * `listPieces`, and the cell inside a piece is `getCellValue`. Each takes the
- * connection through `deps.loadPieces`, which is the seam a held connection
- * fills.
+ * `listPieces`, and the cell inside a piece is `getCellValue` for what its
+ * keys hold and `listCallableKeys` for which of them are verbs. Each takes
+ * the connection through `deps.loadPieces`, which is the seam a held
+ * connection fills.
  *
  * The cell is read for its value where a listing of keys alone would do, and
  * that costs nothing: `listCellKeys` (`lib/cell-listing.ts`) is `keysOf` over
@@ -29,11 +32,14 @@
  * that seam lists.
  */
 
-import { isStreamValue } from "@commonfabric/runner";
+import { idStringForEntityAddress, isStreamValue } from "@commonfabric/runner";
+import { renderCellReference } from "@commonfabric/runner/shared";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { keysOf } from "../cell-listing.ts";
 import {
   getCellValue,
+  listCallableKeys,
   listPieces,
   listSpaceSlugs,
   type PieceConfig,
@@ -65,11 +71,13 @@ const SLUG_INDEX_BOUND = "the space's slug index names these, and a slug it " +
 /**
  * What a row turned out to be, recorded where the row is made.
  *
- * Five kinds and no sixth, closed by the projection {@link ANNOTATED} makes of
- * them: what stands at a space root is a facet, which is a `container`; what
- * stands in the two facets is a `slug` or a `piece`; and what stands inside a
+ * Six kinds and no seventh, closed by the projection {@link ANNOTATED} makes
+ * of them: what stands at a space root is a facet, which is a `container`;
+ * what stands in the two facets is a `slug` or a `piece`; what stands inside a
  * piece is a `container` where a walk continues through it, a `callable` where
- * the position is a verb's dispatch surface, and a `value` otherwise.
+ * the position is a verb's dispatch surface, and a `value` otherwise; and a
+ * `watch` is what `watches` numbers, which is a session object rather than
+ * anything standing at a place.
  *
  * A link is not among them, and its absence is a fact about the read rather
  * than a gap in the vocabulary: a cell read resolves a link on the way past,
@@ -83,7 +91,8 @@ export type RowKind =
   | "value"
   | "callable"
   | "piece"
-  | "slug";
+  | "slug"
+  | "watch";
 
 /** One thing a listing found standing where it was read. */
 export interface ListingRow {
@@ -96,8 +105,9 @@ export interface ListingRow {
   /**
    * The operand `cd` takes to reach it, as `cd` reads it, and absent where
    * `operandForChild` offers none. Absent is the narrower claim it makes:
-   * that neither the name nor the reference names the row, not that nothing
-   * reaches it.
+   * that no spelling `operandForChild` tries names the row, not that nothing
+   * reaches it. A registered piece outside the current space, scope, or
+   * document root supplies its complete reference as the operand instead.
    *
    * It is the decoded operand rather than the quoted token a line writes it
    * as. A row is read back by two consumers that want different forms — a
@@ -122,6 +132,19 @@ export interface ListingRow {
 
   /** What the read said is wrong with what the name points at. */
   readonly error?: string;
+
+  /**
+   * The watch a `watch` row stands for, by the key that names one
+   * (`watch.ts`), and absent on every other kind of row.
+   *
+   * It is here because a handle is a bound reference rather than a row number
+   * (decision 27), and what binds a watch row is neither of the two things
+   * every other row is bound by: a watch stands at no place, and its name is a
+   * rendering rather than an identifier. The key is the complete reference of
+   * the cell it watches, so a row read back names the watch it was minted for
+   * whatever has been armed or disarmed since.
+   */
+  readonly watch?: string;
 }
 
 /** What `ls` found at a place. */
@@ -185,6 +208,19 @@ export interface ListingDeps {
 
   /** Reads the cell a listing inside a piece names its keys off. */
   readonly getCellValue?: typeof getCellValue;
+
+  /** Names which of that cell's keys stand at a verb's dispatch surface. */
+  readonly listCallableKeys?: typeof listCallableKeys;
+
+  /**
+   * The line's cancel. A listing inside a piece is two reads, and it is one
+   * act to the guard the verb runs it under, so the rule that every read has
+   * a check in front of it with nothing awaited between (`VerbDeps.signal`,
+   * `vocabulary.ts`) reaches the second read only through this. A listing
+   * cancelled between its reads comes back empty, which that guard drops on
+   * the way back.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -307,9 +343,10 @@ export function handleFor(number: number): string {
  * compile here instead of silently taking the other one's read.
  *
  * A piece stands as its id and carries the name it holds beside it, where
- * `listPieces` read one. The id is what the row is called in the facet and
- * what `cd` takes back to it; the name is what the piece calls itself, and
- * costs nothing to show, that read having already fetched it.
+ * `listPieces` read one. An id alone is the operand only when its complete
+ * reference names the local document at the current scope. Otherwise the
+ * registered reference is the operand, preserving a foreign space, scope,
+ * or path instead of resolving that id against the listing's space.
  */
 async function listFacet(
   config: SpaceConfig,
@@ -336,12 +373,21 @@ async function listFacet(
         loadPieces,
       });
       return {
-        rows: pieces.map((row) =>
-          rowFor(place, row.id, "piece", {
+        rows: pieces.map((row) => {
+          const entry = rowFor(place, row.id, "piece", {
             ownName: row.name,
             error: row.error,
-          })
-        ),
+          });
+          const localReference = renderCellReference({
+            space: place.position.space,
+            id: idStringForEntityAddress(row.id),
+            scope: place.scope,
+            path: [],
+          });
+          return row.reference === localReference
+            ? entry
+            : { ...entry, operand: row.reference };
+        }),
       };
     }
   }
@@ -362,6 +408,11 @@ async function listFacet(
  * An empty listing means the path names a leaf, and nothing here says which:
  * `keysOf` gives a leaf no keys and gives an empty container none either, and
  * telling the two apart is not something this read can do.
+ *
+ * Which keys are callables is a second read, of the cell rather than of its
+ * value: a stream's position holds nothing, and what says it is a stream is
+ * the schema its stored links carry, which is what `listCallableKeys` reads
+ * for each key the first read named.
  */
 async function listKeys(
   config: SpaceConfig,
@@ -375,15 +426,33 @@ async function listKeys(
     piece: position.piece,
     pieceScope: place.scope,
   };
+  const pieceDeps = { loadPieces: () => connection.pieces() };
   const level = await (deps.getCellValue ?? getCellValue)(
     pieceConfig,
     [...position.path],
     {},
-    { loadPieces: () => connection.pieces() },
+    pieceDeps,
   );
+  const keys = keysOf(level);
+  // The check in front of the second read: the first was awaited, and a
+  // cancel that landed meanwhile is one this read must not go out after.
+  if (deps.signal?.aborted) return { rows: [] };
+  const callables = keys.length === 0
+    ? new Set<string>()
+    : await (deps.listCallableKeys ?? listCallableKeys)(
+      pieceConfig,
+      [...position.path],
+      keys,
+      {},
+      pieceDeps,
+    );
   return {
-    rows: keysOf(level).map((key) =>
-      rowFor(place, key, kindOf(childOf(level, key)))
+    rows: keys.map((key) =>
+      rowFor(
+        place,
+        key,
+        kindOf(childOf(level, key), callables.has(key)),
+      )
     ),
   };
 }
@@ -401,22 +470,25 @@ function childOf(level: unknown, key: string): unknown {
 }
 
 /**
- * Helper for {@link listKeys}, which is what a position holding `value` is.
+ * Helper for {@link listKeys}, which is what a position holding `value` is,
+ * given whether the piece's stored links say it is a `callable`.
  *
  * A stream is a dispatch surface rather than a value — nothing is stored at
  * it to read, and a read aimed at one is refused (`classifyReadPathVerb`,
- * `lib/piece.ts`) — so it is the piece's callable and is marked as one. The
- * test is the runner's own (`isStreamValue`), over the `{ $stream: true }`
- * sentinel a stream position reads as, so a listing and the read that refuses
- * such a position agree about which positions those are.
+ * `lib/piece.ts`) — so it is the piece's callable and is marked as one. That
+ * is decided off the same link-derived schema the refusing read decides off
+ * (`listCallableKeys`), so a listing and the read that refuses such a
+ * position agree about which positions those are. A position that still
+ * reads as the retired `{ $stream: true }` sentinel is a callable too, until
+ * no stored document holds one.
  *
  * Everything else divides by whether a walk continues through it: an array or
  * an object holds keys and `cd` descends into it, and anything else is where a
  * path ends.
  */
-function kindOf(value: unknown): RowKind {
-  if (isStreamValue(value)) return "callable";
-  return value !== null && typeof value === "object" ? "container" : "value";
+function kindOf(value: unknown, callable: boolean): RowKind {
+  if (callable || isStreamValue(value)) return "callable";
+  return isObjectOrArray(value) ? "container" : "value";
 }
 
 /**
@@ -457,7 +529,9 @@ function rowFor(
  * promises: a piece's callables surface inline in listings, annotated as
  * callable, rather than behind a reserved name. The rest are not marked
  * because the annotation would be on every row and would say what the next
- * `ls` says anyway — a container lists, and a value does not.
+ * `ls` says anyway — a container lists, and a value does not. A watch is that
+ * case at its plainest: every row of the one listing that mints one is a
+ * watch, so the mark would be on all of them and distinguish none.
  */
 const ANNOTATED = {
   container: undefined,
@@ -465,6 +539,7 @@ const ANNOTATED = {
   callable: "callable",
   piece: undefined,
   slug: undefined,
+  watch: undefined,
 } satisfies Record<RowKind, string | undefined>;
 
 /**

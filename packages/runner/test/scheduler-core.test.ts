@@ -25,22 +25,25 @@ import type {
 import { getDirectTransactionReactivityLog } from "../src/storage/transaction-inspection.ts";
 import { PASS_RUN_BUDGET } from "../src/scheduler/constants.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
+import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
+import type { FabricValue } from "@commonfabric/data-model";
 
-// Seed stored CFC metadata via an ungated path-[] full-document write (the
-// shape hydration delivers it), reading the current doc first so the value
-// survives. A direct (unprivileged) ["cfc"] write is rejected as label forgery
-// (audit S18); the runtime's own ["cfc"] writes go through prepareCfc's
-// ECMAScript-private privileged scope, which tests can't (and shouldn't) reach.
+// Seed stored CFC metadata with a path-[] full-document write, reading the
+// current doc first so the value survives. Every write that reaches a
+// document's reserved siblings from outside the runtime's privileged
+// persistence scope is recorded as label forgery (audit S18), so the seed
+// goes through `seedStoredEnvelope`, which runs inside that scope.
 const seedPrivilegedCfc = (
   tx: unknown,
   address: unknown,
   metadata: unknown,
 ): void => {
-  const t = tx as {
-    readOrThrow(address: unknown): unknown;
-    writeOrThrow(address: unknown, value: unknown): void;
-  };
-  const docAddress = { ...(address as Record<string, unknown>), path: [] };
+  const t = tx as IExtendedStorageTransaction;
+  const docAddress = {
+    ...(address as Record<string, unknown>),
+    path: [],
+  } as unknown as IMemorySpaceAddress;
   let current: unknown;
   try {
     current = t.readOrThrow(docAddress);
@@ -48,7 +51,10 @@ const seedPrivilegedCfc = (
     current = undefined;
   }
   const base = current && typeof current === "object" ? current : {};
-  t.writeOrThrow(docAddress, { ...base, cfc: metadata });
+  seedStoredEnvelope(t, docAddress, {
+    ...base,
+    cfc: metadata,
+  } as FabricValue);
 };
 
 describe("scheduler", () => {

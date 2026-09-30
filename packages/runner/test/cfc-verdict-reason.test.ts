@@ -43,7 +43,7 @@ describe("cfc-verdict-reason", () => {
   it("is terminal only when every reason is a verdict", () => {
     expect(isTerminalRefusal([
       verdictReason("writer-fit confidentiality misfit at /body"),
-      verdictReason("unprivileged write to protected cfc path of:z/cfc"),
+      verdictReason("unprivileged write to protected runtime surface of:z/cfc"),
     ])).toBe(true);
     // Mixed: the transaction was never fully evaluated, and the attempt that
     // resolves the missing input may reach a different set of reasons.

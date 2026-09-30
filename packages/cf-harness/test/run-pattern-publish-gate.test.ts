@@ -188,9 +188,10 @@ interface IndexStub {
   calls: { fn: string; body: Record<string, unknown> }[];
 }
 
-/** An index that accepts every publication and records every event. */
+/** An index that returns the chosen publication status and records events. */
 const stubIndex = (
   served: Record<string, unknown> = {},
+  publishStatus = 200,
 ): IndexStub => {
   const calls: { fn: string; body: Record<string, unknown> }[] = [];
   const fetchFn: HarnessFetch = (input, init) => {
@@ -202,8 +203,12 @@ const stubIndex = (
     if (fn === "publishPattern") {
       return Promise.resolve(
         new Response(
-          JSON.stringify({ patternId: body.patternId, created: true }),
-          { status: 200 },
+          JSON.stringify(
+            publishStatus === 200
+              ? { patternId: body.patternId, created: true }
+              : { error: "DID is not allowlisted" },
+          ),
+          { status: publishStatus },
         ),
       );
     }
@@ -318,6 +323,40 @@ describe("run_pattern publish render gate", () => {
   const published = (index: IndexStub) =>
     index.calls.filter((call) => call.fn === "publishPattern");
 
+  for (const publishStatus of [200, 403]) {
+    it(`returns a queued publication report when the index later returns ${publishStatus}`, async () => {
+      const index = stubIndex({}, publishStatus);
+      const engine = createEngine(index);
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: DOUBLER,
+        inputs: { n: 21 },
+        resultSchema: {
+          type: "object",
+          properties: { doubled: { type: "number" } },
+          required: ["doubled"],
+        },
+        description: "Doubles a number",
+      });
+      // Tool artifacts and model context retain the result at tool return,
+      // before the session flush learns whether the index accepted it.
+      const output = JSON.parse(
+        JSON.stringify(result.output),
+      ) as RunPatternToolSuccessOutput;
+      const attemptsAtReturn = published(index).length;
+      await engine.flushPatternIndexLedger();
+
+      expect(attemptsAtReturn).toBe(0);
+      expect(published(index)).toHaveLength(1);
+      expect(output.status).toBe("ok");
+      expect(output.value).toEqual({ doubled: 42 });
+      expect(output.patternPublication).toMatchObject({
+        status: "queued",
+        reason: "recorded-automatically",
+      });
+      expect(output.patternPublication?.message).toContain("not confirmed");
+    });
+  }
+
   it("has no publication ledger when the run has no index", async () => {
     // The engine hands the ledger over with the index client, so a run
     // without a client has neither — and `run_pattern` then records nothing
@@ -385,7 +424,7 @@ describe("run_pattern publish render gate", () => {
       hashtags: ["table", "sort"],
     });
 
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("ui-default-tostring");
     // Recorded in full: `getPattern` answers for it and a `cf:pattern:`
     // import resolves it. Only search is denied it.
@@ -451,7 +490,7 @@ describe("run_pattern publish render gate", () => {
       hashtags: ["table"],
     });
 
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("recorded-automatically");
     expect(published(index)).toHaveLength(1);
     expect(published(index)[0].body.discoverable).toBe(false);
@@ -476,7 +515,7 @@ describe("run_pattern publish render gate", () => {
     await engine.flushPatternIndexLedger();
     const output = result.output as RunPatternToolSuccessOutput;
 
-    expect(output.patternPublication?.status).toBe("discoverable");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("ui-rendered");
     expect(published(index)[0].body.discoverable).toBe(true);
     expect(published(index)[0].body.discoverabilityReason).toBeUndefined();
@@ -516,7 +555,7 @@ describe("run_pattern publish render gate", () => {
     const output = result.output as RunPatternToolSuccessOutput;
 
     expect(output.patternPublication?.reason).toBe("ui-rendered");
-    expect(output.patternPublication?.status).toBe("discoverable");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.rawCauseMessage).toBeUndefined();
   });
 
@@ -528,7 +567,7 @@ describe("run_pattern publish render gate", () => {
       description: "Doubles a number",
     });
 
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("recorded-automatically");
     expect(output.patternPublication?.syntheticInputsComplete).toBe(true);
     expect(published(index)).toHaveLength(1);
@@ -546,7 +585,7 @@ describe("run_pattern publish render gate", () => {
       description: "Renders nothing",
     });
 
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("ui-rendered-empty");
     expect(published(index)).toHaveLength(1);
     expect(published(index)[0].body.discoverable).toBe(false);
@@ -701,7 +740,7 @@ describe("run_pattern publish render gate", () => {
     );
 
     expect(output.status).toBe("ok");
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(output.patternPublication?.reason).toBe("probe-failed");
     expect(output.rawCauseMessage).toContain("probeExplodedForItsOwnReasons");
     expect(JSON.stringify(output.patternPublication)).not.toContain(
@@ -736,7 +775,7 @@ describe("run_pattern publish render gate", () => {
     await engine.flushPatternIndexLedger();
     const output = result.output as RunPatternToolSuccessOutput;
     expect(output.patternPublication?.reason).toBe("probe-failed");
-    expect(output.patternPublication?.status).toBe("recorded");
+    expect(output.patternPublication?.status).toBe("queued");
   });
 
   it("gives a composed pattern a verdict rather than no verdict", async () => {
@@ -794,7 +833,7 @@ describe("run_pattern publish render gate", () => {
     // A verdict, not `probe-failed` — the composed import resolved inside the
     // isolated runtime.
     expect(output.patternPublication?.reason).toBe("ui-rendered");
-    expect(output.patternPublication?.status).toBe("discoverable");
+    expect(output.patternPublication?.status).toBe("queued");
     expect(published(index)).toHaveLength(1);
     expect(published(index)[0].body.dependencies).toEqual([doublerId]);
   });

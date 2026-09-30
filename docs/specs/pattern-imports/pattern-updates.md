@@ -263,8 +263,10 @@ record an origin nothing can follow. Editing that template later does **not**
 change an existing root. Changing that root's source is an ordinary repoint,
 edit, revert, or other lifecycle operation. Under the tentative identifier-only
 URL policy, a template stores a canonical space DID with a stable entity FID,
-or it stores a space-free content identity. A future shortlink service resolves
-a custom string before the template reaches the lifecycle operation.
+or it stores a space-free content identity. Under the dormant
+[Common Fabric URLs](../fabric-urls.md) concept, a registry would resolve a
+browser name before the template reaches the lifecycle operation. No such
+resolver is planned for deployment.
 
 Today `defaultAppUrl` is output state on the home root. That is not a durable
 home for creation configuration once the home root can be repointed or
@@ -314,9 +316,10 @@ it has a pin.
   root shorthand. An outer authoring layer may resolve it to the current root
   piece FID before invoking the lifecycle. Later relinking of the space root
   then does not redirect the follower.
-- Space is a **DID**. The tentative policy rejects names in fabric URLs and
-  leaves human-readable aliases to a future shortlink service. README Open
-  question 1 retains this decision for further study.
+- Space is a **DID**. The retained-source grammar rejects names in `cf:` URLs.
+  Under the dormant [Common Fabric URLs](../fabric-urls.md) concept,
+  human-readable browser aliases would resolve before the stable source
+  reference is stored. No such resolver is planned for deployment.
 
 ## In-place apply
 

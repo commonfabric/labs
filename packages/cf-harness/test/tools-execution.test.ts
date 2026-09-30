@@ -1,8 +1,13 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { decodeBase64 } from "@std/encoding/base64";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import type {
   HarnessAllowedSkillScript,
@@ -18,6 +23,8 @@ import { discoverHarnessSkills } from "../src/skills/registry.ts";
 import {
   BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE,
   BASH_CWD_OUTSIDE_SANDBOX_PREFIX,
+  BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH,
+  BASH_SESSION_UNAVAILABLE_EXIT_CODE,
   BASH_TIMEOUT_EXIT_CODE,
   bashTool,
 } from "../src/tools/bash.ts";
@@ -47,6 +54,11 @@ import type {
   SandboxRuntime,
   SandboxRuntimeDescription,
   SandboxShellRequest,
+} from "../src/sandbox/types.ts";
+import {
+  SANDBOX_SESSION_NAME_PATTERN,
+  SandboxSessionUnavailableError,
+  type SandboxSessionUnavailableReason,
 } from "../src/sandbox/types.ts";
 
 const ONE_PIXEL_PNG = decodeBase64(
@@ -228,6 +240,7 @@ const createContext = (
   skillScriptExecutionTarget: HarnessToolContext["skillScriptExecutionTarget"] =
     "sandbox",
   browserAccess?: HarnessBrowserAccessLease,
+  allowSkillScripts = false,
 ): HarnessToolContext => {
   let currentDir = initialCurrentDir;
   let sequence = 0;
@@ -238,6 +251,7 @@ const createContext = (
     workspaceHostPath,
     skillRegistry,
     skillActivations,
+    allowSkillScripts,
     allowedSkillScripts,
     skillScriptExecutionTarget,
     browserAccess,
@@ -1740,6 +1754,141 @@ Deno.test("read_file tool denies reserved artifact paths before shelling out", a
   assertEquals(sandbox.calls, []);
 });
 
+describe("readSkillResourceTool", () => {
+  const skillContent = [
+    "---",
+    "name: pattern-dev",
+    "description: Build Common Fabric patterns",
+    "---",
+    "",
+    "# Pattern Dev",
+    "Build a café menu.",
+  ].join("\n");
+  let root: string;
+  let skillPath: string;
+  let registry: HarnessSkillRegistry;
+  let reads: HarnessSkillResourceRead[];
+  let context: HarnessToolContext;
+
+  beforeEach(async () => {
+    root = await Deno.makeTempDir({ prefix: "cf-harness-skill-body-" });
+    skillPath = join(root, "pattern-dev", "SKILL.md");
+    await Deno.mkdir(join(root, "pattern-dev"));
+    await Deno.writeTextFile(skillPath, skillContent);
+    registry = await discoverHarnessSkills({
+      skillsRoot: root,
+      sandboxSkillsRoot: "/workspace/labs/skills",
+    });
+    reads = [];
+    context = createContext(
+      new FakeSandboxRuntime(),
+      "/workspace",
+      new FakeProcessRunner(),
+      "observe",
+      undefined,
+      registry,
+      reads,
+    );
+  });
+
+  afterEach(async () => {
+    await Deno.remove(root, { recursive: true });
+  });
+
+  it("returns the registered skill's `SKILL.md` as context with read provenance", async () => {
+    const output = await readSkillResourceTool.invoke(context, {
+      skill: "pattern-dev",
+      path: "SKILL.md",
+    });
+
+    expect(output).toMatchObject({
+      status: "read",
+      path: "SKILL.md",
+      kind: "other",
+      content: skillContent,
+      contentKind: "text",
+      cfcPromptRole: "context",
+      sandboxResourcePath: "/workspace/labs/skills/pattern-dev/SKILL.md",
+      registryDigest: registry.skills[0].digest,
+      observedDigest: registry.skills[0].digest,
+      registrySizeBytes: new TextEncoder().encode(skillContent).length,
+      digestMatchesRegistry: true,
+      truncated: false,
+      diagnostics: [],
+    });
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({
+      outputId: output.outputId,
+      skillName: "pattern-dev",
+      path: "SKILL.md",
+      status: "read",
+      cfcPromptRole: "context",
+      observedDigest: registry.skills[0].digest,
+    });
+  });
+
+  it("returns changed `SKILL.md` content with a snapshot mismatch diagnostic", async () => {
+    const content = `${skillContent}\nList the available pastries.\n`;
+    await Deno.writeTextFile(skillPath, content);
+
+    const output = await readSkillResourceTool.invoke(context, {
+      skill: "pattern-dev",
+      path: "SKILL.md",
+    });
+
+    expect(output.status).toBe("read");
+    expect(output.content).toBe(content);
+    expect(output.registryDigest).toBe(registry.skills[0].digest);
+    expect(output.digestMatchesRegistry).toBe(false);
+    expect(output.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "skill-resource-snapshot-mismatch",
+    ]);
+    expect(reads).toHaveLength(1);
+    expect(reads[0].digestMatchesRegistry).toBe(false);
+  });
+
+  it("returns `SKILL.md` when supporting files exhaust the resource scan budget", async () => {
+    const referencesPath = join(root, "pattern-dev", "references");
+    await Deno.mkdir(referencesPath);
+    for (let index = 0; index < 2000; index += 1) {
+      await Deno.writeTextFile(
+        join(referencesPath, `${index}.md`),
+        "Supporting guidance.",
+      );
+    }
+    const largeRegistry = await discoverHarnessSkills({ skillsRoot: root });
+
+    const output = await readSkillResourceTool.invoke(
+      { ...context, skillRegistry: largeRegistry },
+      { skill: "pattern-dev", path: "SKILL.md" },
+    );
+
+    expect(output.status).toBe("read");
+    expect(output.content).toBe(skillContent);
+    expect(largeRegistry.skills[0].resources).toHaveLength(2000);
+    expect(largeRegistry.skills[0].diagnostics.map(({ code }) => code))
+      .toContain("resource-file-limit-exceeded");
+  });
+
+  it("returns `resource_outside_root` when `SKILL.md` becomes a symlink outside its skill directory", async () => {
+    const outsidePath = join(root, "outside.md");
+    await Deno.writeTextFile(outsidePath, "Outside the registered skill.");
+    await Deno.remove(skillPath);
+    await Deno.symlink(outsidePath, skillPath);
+
+    const output = await readSkillResourceTool.invoke(context, {
+      skill: "pattern-dev",
+      path: "SKILL.md",
+    });
+
+    expect(output.status).toBe("error");
+    expect(output.error?.code).toBe("resource_outside_root");
+    expect(output.content).toBeUndefined();
+    expect(reads).toHaveLength(1);
+    expect(reads[0].error?.code).toBe("resource_outside_root");
+  });
+});
+
 Deno.test({
   name:
     "read_skill_resource reads indexed text resources and records provenance",
@@ -2757,10 +2906,65 @@ Deno.test({
         { skill: "pattern-test", path: "scripts/check.ts" },
       );
 
+      // The operator's one switch reaches a registry script too: no entry
+      // names this one, and with the switch on it is no longer refused as
+      // un-allowlisted. It is still held to the run-start digest, which this
+      // file no longer matches — so the switch decides whether scripts run,
+      // and decides nothing about which bytes.
+      const allowedByTheSwitch = await runSkillScriptTool.invoke(
+        createContext(
+          new FakeSandboxRuntime(),
+          "/workspace",
+          new FakeProcessRunner(),
+          "observe",
+          undefined,
+          registry,
+          [],
+          "/tmp/cf-harness-workspace",
+          activations,
+          [],
+          [],
+          "sandbox",
+          undefined,
+          true,
+        ),
+        { skill: "pattern-test", path: "scripts/check.ts" },
+      );
+
       assertEquals(notActivated.status, "error");
       assertEquals(notActivated.error?.code, "skill_activations_missing");
       assertEquals(notAllowlisted.status, "error");
       assertEquals(notAllowlisted.error?.code, "script_not_allowlisted");
+      // The switch is about the sandbox, so a host-target run is still held to
+      // an exactly-named script: it must not open host execution to every
+      // activated script on the strength of a decision that never said host.
+      const hostUnderTheSwitch = await runSkillScriptTool.invoke(
+        createContext(
+          new FakeSandboxRuntime(),
+          "/workspace",
+          new FakeProcessRunner(),
+          "observe",
+          undefined,
+          registry,
+          [],
+          "/tmp/cf-harness-workspace",
+          activations,
+          [],
+          [],
+          "host",
+          undefined,
+          true,
+        ),
+        { skill: "pattern-test", path: "scripts/check.ts" },
+      );
+
+      assertEquals(allowedByTheSwitch.status, "error");
+      assertEquals(
+        allowedByTheSwitch.error?.code,
+        "script_snapshot_mismatch",
+      );
+      assertEquals(hostUnderTheSwitch.status, "error");
+      assertEquals(hostUnderTheSwitch.error?.code, "script_not_allowlisted");
       assertEquals(drift.status, "error");
       assertEquals(drift.error?.code, "script_snapshot_mismatch");
       assertEquals(drift.digestMatchesRegistry, false);
@@ -3381,4 +3585,471 @@ Deno.test("view_image tool denies reserved artifact paths", async () => {
     },
   });
   assertEquals(sandbox.calls, []);
+});
+
+/** What the bash tool shows the model for a runtime without sessions. */
+const NO_SESSIONS_REFUSAL_TEXT =
+  "this sandbox runtime has no sessions; rerun the command without `session`";
+
+/** What the bash tool shows the model for a name that is not a session name. */
+const INVALID_SESSION_NAME_REFUSAL_TEXT =
+  "invalid `session` name: use 1 to 32 characters from letters, digits, `_`, `.` and `-`, starting with a letter or a digit; rerun the command with such a name, or without `session`";
+
+Deno.test("bash tool refuses a session on a runtime without sessions, recoverably", async () => {
+  const sandbox = new FakeSandboxRuntime([{
+    stdout: "x\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    cwd: "repo",
+    session: "build",
+  });
+  // The whole of what the model is shown, so that nothing of the runtime's
+  // description, its mounts and host paths among it, is there beside it.
+  assertEquals(output, {
+    outputId: "run-1:bash:1",
+    stdout: "",
+    stderr: NO_SESSIONS_REFUSAL_TEXT,
+    exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+    cwd: "/workspace",
+  });
+  // Nothing ran: the model is told rather than silently given a fresh sandbox,
+  // and the working directory is the one it had, not the one it asked for.
+  assertEquals(sandbox.calls, []);
+  assertEquals(context.currentDir, "/workspace");
+});
+
+/**
+ * A runtime with sessions whose every shell call is refused with `refusal`.
+ */
+class RefusingSessionsRuntime extends FakeSandboxRuntime {
+  constructor(readonly refusal: SandboxSessionUnavailableError) {
+    super();
+  }
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+  override runShell(): Promise<SandboxCommandResult> {
+    return Promise.reject(this.refusal);
+  }
+}
+
+/**
+ * A message of the kind a runtime writes for its operator: a host path, a
+ * container id and what `runsc` wrote to stderr, all in one.
+ */
+const RUNTIME_REFUSAL_MESSAGE =
+  'sandbox session "build" could not start: open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container; run without a session, or try again';
+
+/** What must not reach the model out of {@link RUNTIME_REFUSAL_MESSAGE}. */
+const RUNTIME_REFUSAL_LEAKS = [
+  "/Users/operator",
+  "s-run-1-0a1b2c3d-0001",
+  "runsc",
+  "FATAL",
+  "permission denied",
+  '"build"',
+];
+
+/** The text the bash tool shows the model for each reason, written out. */
+const SESSION_REFUSAL_TEXTS: Array<
+  [SandboxSessionUnavailableReason, string]
+> = [
+  ["invalid-name", INVALID_SESSION_NAME_REFUSAL_TEXT],
+  [
+    "enforcing-mode",
+    "sandbox sessions are not available under this run's CFC enforcement mode; the command did not run; rerun it without `session`",
+  ],
+  [
+    "session-lost",
+    "the sandbox session ended and its state is lost: files outside the mounts and background processes are gone; the command did not run; rerun it with the same `session` to start an empty session, or without `session`",
+  ],
+  [
+    "session-ended-during-call",
+    "the sandbox session ended while this call was in it and its state is lost: files outside the mounts and background processes are gone; the command may have run in whole or in part, and its output was not kept; check what it changed before running it again; the same `session` named again starts an empty session",
+  ],
+  [
+    "session-limit",
+    "this run already holds as many sandbox sessions as it may; the command did not run; rerun it with the `session` of a session this run already started, or without `session`",
+  ],
+  [
+    "start-failed",
+    "the sandbox session could not be started; the command did not run; rerun it without `session`; a start that failed is likely to fail again, so do not retry the session in a loop",
+  ],
+];
+
+Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
+  const contexts = countInvocationContexts(context);
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    cwd: "repo",
+    session: "build",
+  });
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(output.stdout, "");
+  assertStringIncludes(output.stderr, "could not be started");
+  // The call was handed to the runtime, so the run holds the record it was
+  // prepared with. Nothing ran, so the working directory is the one the run
+  // had and not the one the call asked for.
+  assertEquals(contexts.created, 1);
+  assertEquals(output.cwd, "/workspace");
+  assertEquals(context.currentDir, "/workspace");
+  assertEquals(logged.calls.length, 1);
+});
+
+Deno.test("bash tool shows the model its own text for each reason a runtime refuses a session", async () => {
+  using _logged = stub(console, "error");
+  for (const [reason, text] of SESSION_REFUSAL_TEXTS) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(RUNTIME_REFUSAL_MESSAGE, reason),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, reason);
+    assertEquals(output.stderr, text, reason);
+    for (const leak of RUNTIME_REFUSAL_LEAKS) {
+      assertEquals(output.stderr.includes(leak), false, `${reason}: ${leak}`);
+    }
+  }
+  // Every reason is covered, and no two read the same to the model.
+  assertEquals(
+    new Set(SESSION_REFUSAL_TEXTS.map(([, text]) => text)).size,
+    SESSION_REFUSAL_TEXTS.length,
+  );
+});
+
+Deno.test("bash tool shows the model a refusal of its own for a reason it does not know", async () => {
+  using _logged = stub(console, "error");
+  // A runtime is injected, and tests run unchecked: a reason outside the
+  // set, or none, can arrive whatever the type says. The last three are not
+  // strings, and each converts to the string of a reason in the set.
+  const reasons: unknown[] = [
+    undefined,
+    "out-of-memory",
+    "toString",
+    { toString: () => "session-lost" },
+    ["session-lost"],
+    new String("session-lost"),
+  ];
+  for (const reason of reasons) {
+    const context = createContext(
+      new RefusingSessionsRuntime(
+        new SandboxSessionUnavailableError(
+          RUNTIME_REFUSAL_MESSAGE,
+          reason as SandboxSessionUnavailableReason,
+        ),
+      ),
+    );
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      session: "build",
+    });
+    assertEquals(
+      output.exitCode,
+      BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+      String(reason),
+    );
+    assertEquals(
+      output.stderr,
+      "the sandbox runtime refused the `session` of this call; whether the command ran is not known, and no output of it was kept; check what it changed before running it again, and run it without `session`",
+      String(reason),
+    );
+  }
+});
+
+Deno.test("bash tool logs the runtime's own words about a refused session for the operator", async () => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(
+        RUNTIME_REFUSAL_MESSAGE,
+        "start-failed",
+      ),
+    ),
+  );
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  const line = logged.calls[0].args.join(" ");
+  assertStringIncludes(line, "start-failed");
+  // The log renders the message quoted, so its parts are what is looked for.
+  assertStringIncludes(
+    line,
+    "open /Users/operator/.cf-harness/scratch/bundles/s-run-1-0a1b2c3d-0001/config.json: permission denied; runsc: FATAL ERROR: loading container",
+  );
+});
+
+/**
+ * The one line the bash tool writes to the operator's log when a runtime
+ * refuses a session with `message`, for a call by the run `runId`.
+ */
+const loggedSessionRefusal = async (
+  message: string,
+  runId = "run-1",
+): Promise<string> => {
+  using logged = stub(console, "error");
+  const context = createContext(
+    new RefusingSessionsRuntime(
+      new SandboxSessionUnavailableError(message, "start-failed"),
+    ),
+  );
+  context.runId = runId;
+  await bashTool.invoke(context, { command: "echo hi", session: "build" });
+  assertEquals(logged.calls.length, 1);
+  assertEquals(logged.calls[0].args.length, 1);
+  return String(logged.calls[0].args[0]);
+};
+
+/**
+ * Matches a character that must not reach the operator's log as itself: a
+ * control character, a line or paragraph separator, or a character that sets
+ * the direction text is laid out in.
+ */
+const RAW_IN_LOG_LINE =
+  // deno-lint-ignore no-control-regex
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/;
+
+Deno.test("bash tool logs the end of a runtime's message longer than 200 characters", async () => {
+  // The cause is what a runtime's message ends in, so the end is what is
+  // looked for.
+  const message =
+    `sandbox session "build" could not start: Failed to spawn '/opt/operator/toolchains/gvisor/bin/runsc': ${
+      "Permission denied (os error 13); ".repeat(20)
+    }the binary is not executable by uid 501, WHICH-IS-WHY`;
+  assertEquals(message.length > 600, true);
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "is not executable by uid 501, WHICH-IS-WHY");
+  assertStringIncludes(line, "sandbox session");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool logs every line of a runtime's message of more than five lines", async () => {
+  const message = [
+    "sandbox session could not start:",
+    "line 2",
+    "line 3",
+    "line 4",
+    "line 5",
+    "line 6",
+    "the seventh line, WHICH-IS-WHY",
+  ].join("\n");
+
+  const line = await loggedSessionRefusal(message);
+
+  assertStringIncludes(line, "line 6\\nthe seventh line, WHICH-IS-WHY");
+  assertEquals(line.includes("length:"), false);
+});
+
+Deno.test("bash tool cuts a runtime's message at its bound in the log and says so", async () => {
+  const bound = BASH_SESSION_REFUSAL_LOG_MESSAGE_MAX_LENGTH;
+  assertEquals(bound >= 4000, true);
+  const kept = `${"k".repeat(bound - 10)}KEPT-TAIL.`;
+  assertEquals(kept.length, bound);
+
+  // A message as long as the bound is carried whole, and a longer one is cut.
+  const whole = await loggedSessionRefusal(kept);
+  assertStringIncludes(whole, "KEPT-TAIL.");
+  assertEquals(whole.includes("length:"), false);
+
+  const cut = await loggedSessionRefusal(`${kept}CUT-TAIL${"c".repeat(3000)}`);
+  assertStringIncludes(cut, "KEPT-TAIL.");
+  assertEquals(cut.includes("CUT-TAIL"), false);
+  // The note of the cut gives the length of the whole message.
+  assertStringIncludes(cut, `length:${bound + "CUT-TAIL".length + 3000}`);
+  assertEquals(cut.length < bound + 500, true);
+});
+
+Deno.test("bash tool logs a runtime's message as one line with nothing in it that drives a terminal", async () => {
+  const message =
+    "start\ncf-harness: FORGED LINE\r\x1b[2J\x1b]0;title\x07 c1:\u009b31m nel:\u0085 del:\x7f ls:\u2028 ps:\u2029 rlo:\u202eDESREVER lri:\u2066 end";
+
+  const line = await loggedSessionRefusal(message);
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  // Each is there escaped, in the place it had.
+  assertStringIncludes(line, "start\\ncf-harness: FORGED LINE\\r\\u001b[2J");
+  assertStringIncludes(line, "\\u001b]0;title\\u0007 c1:\\u009b31m");
+  assertStringIncludes(line, "nel:\\u0085 del:\\u007f");
+  assertStringIncludes(line, "ls:\\u2028 ps:\\u2029");
+  assertStringIncludes(line, "rlo:\\u202eDESREVER lri:\\u2066 end");
+});
+
+Deno.test("bash tool escapes what a run id holds that would break the log line", async () => {
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run\ncf-harness: FORGED\u009b\u202e",
+  );
+
+  assertEquals(RAW_IN_LOG_LINE.exec(line), null);
+  assertStringIncludes(line, "run\\ncf-harness: FORGED\\u009b\\u202e");
+});
+
+Deno.test("bash tool logs nothing of the call's input for a refused session", async () => {
+  using logged = stub(console, "error");
+  const runtime = new RefusingSessionsRuntime(
+    new SandboxSessionUnavailableError(
+      RUNTIME_REFUSAL_MESSAGE,
+      "start-failed",
+    ),
+  );
+  const context = createContext(runtime);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo MARKER-IN-COMMAND",
+    cwd: "MARKER-IN-CWD",
+    session: "MARKER-IN-SESSION",
+  });
+
+  // The call reached the runtime and the refusal was logged, so there is a
+  // line for the input to be absent from.
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(logged.calls.length, 1);
+  const written = logged.calls[0].args.map(String).join(" ");
+  assertStringIncludes(written, "FATAL ERROR: loading container");
+  assertEquals(written.includes("MARKER-IN-COMMAND"), false);
+  assertEquals(written.includes("MARKER-IN-SESSION"), false);
+  assertEquals(written.includes("MARKER-IN-CWD"), false);
+});
+
+Deno.test("bash tool names the run and the tool output in the log of a refused session", async () => {
+  // A run id the output id does not hold, so each is found by itself.
+  const line = await loggedSessionRefusal(
+    RUNTIME_REFUSAL_MESSAGE,
+    "run-of-the-operator",
+  );
+
+  assertStringIncludes(line, 'run `"run-of-the-operator"`');
+  assertStringIncludes(line, 'output `"run-1:bash:1"`');
+  assertStringIncludes(line, 'reason `"start-failed"`');
+});
+
+class SessionsFakeSandboxRuntime extends FakeSandboxRuntime {
+  override describe(): SandboxRuntimeDescription {
+    return { ...super.describe(), kind: "runsc-cfc", sessions: true };
+  }
+}
+
+/** Counts the invocation contexts a tool call asks the run to create. */
+const countInvocationContexts = (
+  context: HarnessToolContext,
+): { created: number } => {
+  const counter = { created: 0 };
+  const create = context.createCfcInvocationContext.bind(context);
+  context.createCfcInvocationContext = (options) => {
+    counter.created += 1;
+    return create(options);
+  };
+  return counter;
+};
+
+Deno.test("bash tool hands an accepted session to the runtime", async () => {
+  const sandbox = new SessionsFakeSandboxRuntime([{
+    stdout: "built\n",
+    stderr: "",
+    exitCode: 0,
+  }]);
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "make",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls.length, 1);
+  assertEquals(sandbox.calls[0].type, "runShell");
+  assertEquals(sandbox.calls[0].request.session, "build");
+  assertEquals(contexts.created, 1);
+
+  // And a call that names none carries none, not an empty one.
+  await bashTool.invoke(context, { command: "make" });
+  assertEquals(sandbox.calls.length, 2);
+  assertEquals("session" in sandbox.calls[1].request, false);
+});
+
+Deno.test("bash tool accepts the longest session name the pattern allows", async () => {
+  const longest = "a".repeat(32);
+  assertEquals(SANDBOX_SESSION_NAME_PATTERN.test(longest), true);
+  const sandbox = new SessionsFakeSandboxRuntime();
+  const output = await bashTool.invoke(createContext(sandbox), {
+    command: "true",
+    session: longest,
+  });
+  assertEquals(output.exitCode, 0);
+  assertEquals(sandbox.calls[0]?.request.session, longest);
+});
+
+Deno.test("bash tool refuses a session name that is not an identifier, recoverably", async () => {
+  const refused: Array<[string, unknown]> = [
+    ["a path separator", "a/b"],
+    ["a path that climbs out", "a/../../x"],
+    ["a leading climb", "../escape"],
+    ["a space", "a b"],
+    ["one character past the longest", "a".repeat(33)],
+    ["a valid name with a tail", "build;rm"],
+    ["a trailing newline", "build\n"],
+    ["a leading separator", "-build"],
+    ["an empty name", ""],
+    ["a number", 5],
+  ];
+  for (const [what, session] of refused) {
+    const sandbox = new SessionsFakeSandboxRuntime();
+    const context = createContext(sandbox);
+    const contexts = countInvocationContexts(context);
+
+    const output = await bashTool.invoke(context, {
+      command: "echo hi",
+      cwd: "repo",
+      session: session as string,
+    });
+
+    assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE, what);
+    assertEquals(output.stdout, "", what);
+    // The text is the rule and nothing of the name that broke it.
+    assertEquals(output.stderr, INVALID_SESSION_NAME_REFUSAL_TEXT, what);
+    // Nothing ran and nothing was recorded for it.
+    assertEquals(sandbox.calls, [], what);
+    assertEquals(contexts.created, 0, what);
+    assertEquals(output.cwd, "/workspace", what);
+    assertEquals(context.currentDir, "/workspace", what);
+  }
+});
+
+Deno.test("bash tool refuses a session before it records an invocation", async () => {
+  // A runtime without sessions: the refusal is the whole of the call.
+  const sandbox = new FakeSandboxRuntime();
+  const context = createContext(sandbox);
+  const contexts = countInvocationContexts(context);
+
+  const output = await bashTool.invoke(context, {
+    command: "echo hi",
+    session: "build",
+  });
+
+  assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
+  assertEquals(output.stderr, NO_SESSIONS_REFUSAL_TEXT);
+  assertEquals(sandbox.calls, []);
+  assertEquals(contexts.created, 0);
+
+  // The counter counts: the same call without the session records one.
+  await bashTool.invoke(context, { command: "echo hi" });
+  assertEquals(contexts.created, 1);
 });

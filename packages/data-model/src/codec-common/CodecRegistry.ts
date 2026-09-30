@@ -13,7 +13,10 @@
  */
 
 import { backtickQuote } from "@commonfabric/utils/markdown";
-import type { Constructor } from "@commonfabric/utils/types";
+import {
+  type Constructor,
+  typeOfIncludingNull,
+} from "@commonfabric/utils/types";
 
 import type { FabricValue } from "@/interface.ts";
 import {
@@ -23,11 +26,7 @@ import {
 } from "@/codec-interface/interface.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import {
-  jsTagFromValue,
-  type JsTypeValueTag,
-  VALUE_TAGS,
-} from "@/value-tags.ts";
+import { type JsTypeValueTag, VALUE_TAGS } from "@/types";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 
 /**
@@ -138,6 +137,11 @@ export class CodecRegistry<Encoded> {
    * roster must not do. So this refuses at run time what a type cannot rule
    * out. A registry is built at module scope, so the refusal still lands
    * before anything has been encoded.
+   *
+   * What it does not check is the codec's `PlusType`. A `[CODEC]` is read as
+   * the one at `never`, the only kind with a wire form, and a class binding
+   * one at another `PlusType` registers all the same; its state is refused by
+   * the encode walk instead, as holding a value no codec claims.
    *
    * @throws If the class supplies a codec under neither symbol.
    */
@@ -287,7 +291,7 @@ export class CodecRegistry<Encoded> {
   ): CodecForFormat<Encoded> | typeof SELF_REP | undefined {
     // Primitive dispatch on the value's primitive `type` key, which is its JS
     // type tag. The type's codec is tried first, then self-representation.
-    const type = jsTagFromValue(value);
+    const type = typeOfIncludingNull(value);
 
     if (type === VALUE_TAGS.function) {
       // Not a `FabricValue`; nothing can encode it.

@@ -124,7 +124,6 @@ Deno.test(
   "cloud spend: no GCP_BILLING_TABLE is gray and names the setting",
   async () => {
     const view = await gcpSpend.collect(ctx({}));
-    assertEquals(view.label, "cloud spend");
     assertEquals(view.status, "unknown");
     assertEquals(view.value, "—");
     assertEquals(view.sub, "set GCP_BILLING_TABLE");

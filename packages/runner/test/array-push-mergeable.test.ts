@@ -6,6 +6,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import {
   getDirectTransactionMergeableOpAddresses,
@@ -102,6 +103,29 @@ async function readDurableNumber(
     await rt.dispose();
     await storage.close();
   }
+}
+
+/** Refreshes required policy evidence after a stale metadata decision. */
+async function expectCfcConflictAndRefresh(
+  tx: IExtendedStorageTransaction,
+  server: MemoryV2Server.Server,
+): Promise<void> {
+  const settled = Promise.withResolvers<void>();
+  tx.addCommitCallback(() => settled.resolve());
+  const result = await tx.commit({ resolveAt: "verdict" });
+  expect(result.error?.name).toBe("ConflictError");
+  if (result.error?.name !== "ConflictError") {
+    throw new Error("Expected a CFC evidence conflict");
+  }
+  expect(
+    result.error.transaction.reads.confirmed.some((read) =>
+      read.path.length === 1 && read.path[0] === "cfc" &&
+      read.validation === "required"
+    ),
+  ).toBe(true);
+  await server.flushSessions([space]);
+  await result.error.readyToRetry?.();
+  await settled.promise;
 }
 
 describe("mergeable array appends", () => {
@@ -555,7 +579,13 @@ describe("mergeable array appends", () => {
       // not pulled ["one","two"]).
       const txB = rt2.edit();
       rt2.getCell<string[]>(space, CAUSE, stringListSchema, txB).push("three");
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      rt2.getCell<string[]>(space, CAUSE, stringListSchema, retry).push(
+        "three",
+      );
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurable(server);
@@ -1839,23 +1869,29 @@ describe("mergeable array appends", () => {
       await txA.commit({ resolveAt: "verdict" });
       await rt1.storageManager.synced();
 
-      // Session 2, WITHOUT having observed that edit, performs a framed
-      // addUnique. The candidate is new, so it is accepted and anchored; the
-      // stale inline prefix must pass through untouched.
-      const frame = pushFrame({
-        generatedIdCounter: 0,
-        cause: "stale addUnique",
-        reactives: new Set(),
-      });
-      try {
-        const txB = rt2.edit();
-        rt2.getCell<Item[]>(space, OBJ_CAUSE, objListSchema, txB).addUnique(
-          { v: 3 },
-        );
-        await txB.commit({ resolveAt: "verdict" });
-      } finally {
-        popFrame(frame);
-      }
+      // A framed addUnique against the stale prefix must refresh its policy
+      // evidence before replay preserves the concurrent edit and new member.
+      const append = (tx: IExtendedStorageTransaction) => {
+        const frame = pushFrame({
+          generatedIdCounter: 0,
+          cause: "stale addUnique",
+          reactives: new Set(),
+        });
+        try {
+          rt2.getCell<Item[]>(space, OBJ_CAUSE, objListSchema, tx).addUnique(
+            { v: 3 },
+          );
+        } finally {
+          popFrame(frame);
+        }
+      };
+      const txB = rt2.edit();
+      append(txB);
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      append(retry);
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       // Durable truth from a fresh session: the concurrent edit AND the
@@ -2076,7 +2112,19 @@ describe("keyed collections via elementById", () => {
       const b = votesB.elementById("bob|opt2");
       b.set({ voterName: "bob", optionId: "opt2", voteType: "no" });
       votesB.addUnique(b);
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      const votesRetry = rt2.getCell<Vote[]>(
+        space,
+        VOTES_CAUSE,
+        voteListSchema,
+        retry,
+      );
+      const bob = votesRetry.elementById("bob|opt2");
+      bob.set({ voterName: "bob", optionId: "opt2", voteType: "no" });
+      votesRetry.addUnique(bob);
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurableVotes(server);
@@ -2143,7 +2191,19 @@ describe("keyed collections via elementById", () => {
       const b = votesB.elementById("alice|opt1");
       b.set({ voterName: "alice", optionId: "opt1", voteType: "yes" });
       votesB.addUnique(b);
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      const votesRetry = rt2.getCell<Vote[]>(
+        space,
+        VOTES_CAUSE,
+        voteListSchema,
+        retry,
+      );
+      const bob = votesRetry.elementById("alice|opt1");
+      bob.set({ voterName: "alice", optionId: "opt1", voteType: "yes" });
+      votesRetry.addUnique(bob);
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurableVotes(server);
@@ -2958,7 +3018,19 @@ describe("keyed object list (home spaces shape)", () => {
       const b = spacesB.elementById("beta");
       b.set({ name: "beta" });
       spacesB.addUnique(b);
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      const spacesRetry = rt2.getCell<NamedEntry[]>(
+        space,
+        NAMED_CAUSE,
+        namedListSchema,
+        retry,
+      );
+      const beta = spacesRetry.elementById("beta");
+      beta.set({ name: "beta" });
+      spacesRetry.addUnique(beta);
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurableNamed(server);
@@ -3020,7 +3092,19 @@ describe("keyed object list (home spaces shape)", () => {
       const b = spacesB.elementById("dup");
       b.set({ name: "dup" });
       spacesB.addUnique(b);
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      const spacesRetry = rt2.getCell<NamedEntry[]>(
+        space,
+        NAMED_CAUSE,
+        namedListSchema,
+        retry,
+      );
+      const beta = spacesRetry.elementById("dup");
+      beta.set({ name: "dup" });
+      spacesRetry.addUnique(beta);
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurableNamed(server);
@@ -3088,7 +3172,17 @@ describe("keyed object list (home spaces shape)", () => {
         txB,
       );
       spacesB.removeByValue(spacesB.elementById("c"));
-      await txB.commit({ resolveAt: "verdict" });
+      await expectCfcConflictAndRefresh(txB, server);
+      const retry = rt2.edit();
+      const spacesRetry = rt2.getCell<NamedEntry[]>(
+        space,
+        NAMED_CAUSE,
+        namedListSchema,
+        retry,
+      );
+      spacesRetry.removeByValue(spacesRetry.elementById("c"));
+      expect((await retry.commit({ resolveAt: "verdict" })).error)
+        .toBeUndefined();
       await rt2.storageManager.synced();
 
       const durable = await readDurableNamed(server);

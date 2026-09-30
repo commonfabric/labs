@@ -12,6 +12,11 @@ import type { Action } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createGraphFixture } from "./memory-v2-graph.fixture.ts";
+import {
+  SEED_ENVELOPE_SCHEMA,
+  SEED_ENVELOPE_SCHEMA_HASH,
+  storedReferenceEnvelope,
+} from "./cfc-seed-envelope.ts";
 import { testSessionOpenAuthFactory } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("memory-v2-pull-reactivity");
@@ -160,11 +165,18 @@ describe("Memory v2 pull reactivity", () => {
     await remoteSession.transact({
       localSeq: remoteLocalSeq++,
       reads: { confirmed: [], pending: [] },
-      operations: fixture.docs.map(({ id, value }) => ({
-        op: "set" as const,
-        id,
-        value: { value },
-      })),
+      operations: [
+        {
+          op: "set",
+          id: `cid:${SEED_ENVELOPE_SCHEMA_HASH}` as URI,
+          value: { value: SEED_ENVELOPE_SCHEMA },
+        },
+        ...fixture.docs.map(({ id, value }) => ({
+          op: "set" as const,
+          id,
+          value: storedReferenceEnvelope({ value }),
+        })),
+      ],
     });
 
     if (!expandedChildValue) {
@@ -230,7 +242,7 @@ describe("Memory v2 pull reactivity", () => {
       operations: [{
         op: "set",
         id: fixture.rootId,
-        value: { value: fixture.expandedRootValue },
+        value: storedReferenceEnvelope({ value: fixture.expandedRootValue }),
       }],
     });
 
@@ -256,7 +268,7 @@ describe("Memory v2 pull reactivity", () => {
       operations: [{
         op: "set",
         id: expandedChildId,
-        value: { value: expandedChildValue },
+        value: storedReferenceEnvelope({ value: expandedChildValue }),
       }],
     });
 

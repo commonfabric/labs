@@ -8,11 +8,14 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { Runtime } from "../src/runtime.ts";
-import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { ignoreReadForScheduling } from "../src/storage/reactivity-log.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  seedStoredReferenceEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 describe("scoped-conflict-retry", () => {
   it("restores an unwatched user output after one conflict and a scoped recovery pull", async () => {
@@ -35,6 +38,7 @@ describe("scoped-conflict-retry", () => {
     });
     try {
       const seed = writer.edit();
+      writeSeedEnvelopeDoc(seed, space);
       const previous = writer.getCell<string>(
         space,
         "output",
@@ -81,9 +85,13 @@ describe("scoped-conflict-retry", () => {
           trackReadWithoutLoad: true,
         });
         tx.write(scopedAddress, "updated user value");
-        tx.write(
-          toMemorySpaceAddress(output.getAsNormalizedFullLink()),
-          createSigilLinkFromParsedLink(scoped.getAsNormalizedFullLink()),
+        seedStoredReferenceEnvelope(
+          tx,
+          {
+            ...toMemorySpaceAddress(output.getAsNormalizedFullLink()),
+            path: [],
+          },
+          { value: scoped.getAsLink() },
         );
         return tx.commit();
       };
@@ -96,13 +104,33 @@ describe("scoped-conflict-retry", () => {
         output.getAsNormalizedFullLink().id,
       );
       expect(rejected.error.conflict.scope).toBe("user");
-      expect(
-        readerStorage.open(space).replica.getDocument(
-          output.getAsNormalizedFullLink().id,
-          "user",
-        ),
-      )
-        .toBeUndefined();
+      // Recovery must work from a cold replica independently of any rows
+      // preparation or conflict reconciliation loaded in the failed reader.
+      const recoveryStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const recovery = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: recoveryStorage,
+      });
+      try {
+        expect(
+          recoveryStorage.open(space).replica.getDocument(
+            output.getAsNormalizedFullLink().id,
+            "user",
+          ),
+        ).toBeUndefined();
+        await recovery.awaitCommitRetryReadiness(rejected.error);
+        expect(
+          recoveryStorage.open(space).replica.getDocument(
+            output.getAsNormalizedFullLink().id,
+            "user",
+          ),
+        ).toEqual({ value: "previous user value" });
+      } finally {
+        await recovery.dispose();
+        await recoveryStorage.close();
+      }
       await reader.awaitCommitRetryReadiness(rejected.error);
       expect(
         readerStorage.open(space).replica.getDocument(

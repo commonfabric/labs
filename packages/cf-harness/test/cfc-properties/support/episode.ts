@@ -26,6 +26,7 @@ import type {
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../../runner/test/cfc-seed-envelope.ts";
 
@@ -252,7 +253,7 @@ export const seedLabeledSecret = async (
   );
   const sourceId = sourceCell.getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id: sourceId, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id: sourceId, path: [] }, {
     value: { secret: "s3cr3t" },
     cfc: {
       version: 1,

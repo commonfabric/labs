@@ -8,25 +8,22 @@ import {
 } from "@commonfabric/utils/bigint";
 
 import type { FabricValue } from "@/interface.ts";
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import {
   JSON_CODEC,
   type LiveEnvironment,
   REALM_CODEC,
   type TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { ProblematicValue } from "@/codec-common";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
-} from "@/value-tags.ts";
+} from "./interface.ts";
 
 /**
  * Temporal type representing nanoseconds from the POSIX Epoch
@@ -54,6 +51,11 @@ export class FabricEpochNsec extends BaseFabricPrimitive
   /** @inheritDoc */
   get [VALUE_TAG](): FabricPrimitiveValueTag {
     return FABRIC_PRIMITIVE_VALUE_TAGS.FabricEpochNsec;
+  }
+
+  /** @inheritDoc */
+  get schemaType(): "FabricEpochNsec" {
+    return "FabricEpochNsec";
   }
 
   /**
@@ -91,14 +93,16 @@ export class FabricEpochNsec extends BaseFabricPrimitive
         typeTag: string,
         state: string,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         try {
           return new FabricEpochNsec(bigintFromUnpaddedBase64url(state));
         } catch {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `EpochNsec: invalid base64: ${state}`,
+            mutable,
           );
         }
       }

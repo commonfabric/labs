@@ -41,7 +41,7 @@ directory, and details come from navigating to the topic.
 ## The demand
 
 `TopicDemand` in `packages/patterns/topics/main.tsx` is what the board requires
-of a stored topic. Eight members, no verbs:
+of a stored topic. Nine members, no verbs:
 
 | member | why it is demanded |
 | --- | --- |
@@ -52,23 +52,29 @@ of a stored topic. Eight members, no verbs:
 | `lastActivityAt` | the card, the index row, and the activity sort |
 | `createdAt` | the index row |
 | `mentions` | the crossref pivot's join |
-| `[NAME]` | published onward as each topic's mention universe, where the editor requires it |
+| `[NAME]` | the display name of each topic's mention-universe row, which the autocomplete matches on, with the title behind it |
+| `shortName` | the card's badge, and the mention-universe row that `#42` matches |
 
-`[NAME]` is the one no reader of the board shows: the board hands the same
-array on as the mention universe, so the name has to survive the demand to
-reach the editor. Counting only what the board reads is what drops it, and
-dropping it costs no type error and empties every `@`-mention completion.
+Neither the card nor the index row carries `[NAME]`. `mentionableIndex` reads
+it off each topic and copies it into that topic's row of the board's mention
+universe as the display name the editor's autocomplete lists and matches on,
+with the topic's title standing in where `[NAME]` is absent or blank.
 
-Seven of the eight carry a default. `createdAt` is the exception, and it is
-safe for a different reason rather than by oversight: the topic pattern
-defaults its own `createdAt` input to `0` and publishes it unconditionally, so
-every topic produces the path whether or not it was ever stamped.
+Seven of the nine carry a default, and the two that do not are safe for
+different reasons rather than by oversight. `createdAt` is required: the topic
+pattern defaults its own `createdAt` input to `0` and publishes it
+unconditionally, so every topic produces the path whether or not it was ever
+stamped. `shortName` is optional rather than defaulted, because a default
+there would sit below an array constraint the compatibility proof cannot show
+stable under default insertion, while an optional property carries no default
+to move and tolerates a topic that publishes no name.
 
 That is the property the demand rests on, and defaults are how it is usually
 bought. A demanded path a stored topic cannot produce makes the whole array
 unreadable — not the one row, the array — while a value the topic always
-produces is simply read. A ninth member is safe when one of the two holds, and
-a default is the only one of them a board can grant itself.
+produces is simply read. A tenth member is safe to read when the topic always
+produces its path, and otherwise when the demand grants itself the tolerance:
+a default, or an optional declaration.
 
 ## Stages
 
@@ -181,10 +187,7 @@ usage:
   cannot retract one, because these verbs name their target by reference and a
   comment carries no fid an inline JSON event could name — [#6713], where the
   candidate keys are set out. And the rule that a retracted link stops
-  resolving into `mentions` is carried by reading rather than by a test: it
-  needs a link whose URL names a real piece, and `cellFromUrl` answers with no
-  cell for any URL a pattern test can build, so a retracted link and a plain
-  web link are indistinguishable to the suite.
+  resolving into `mentions` is carried by reading rather than by a test.
 
 - **`AgentActor` execution provenance** replacing per-event `agentName`, when
   the retention-and-provenance track clears its review. That review has not
@@ -210,8 +213,7 @@ usage:
 
 ## Testing the board through a narrowed demand
 
-A pattern test reaches a stored topic only through the holder's projection, so
-the narrowing takes several properties out of its reach. They are guarded in
+Several properties of the topics a board creates are guarded in
 `packages/patterns/integration/topic-board-child-contract.test.ts`, which does
 what a caller does: file through the board, resolve the row to the topic's own
 address, then read and call the topic there. That covers `addTopic` wiring its
@@ -219,19 +221,23 @@ child to the pivot, a body given at create not being recorded as a body update,
 an index row tracking a thread that grew after the row was built, and the
 pivot's own rules.
 
-Two constraints shape what can be tested where, and both are worth knowing
-before writing a case:
+Two facts shape what can be tested where, and both are worth knowing before
+writing a case:
 
-- A piece built in a pattern body cannot be placed on a board. Pushing one in
-  reports a schema mismatch and the write never runs, seeding the array at
-  construction is refused because a cell constructor takes static data, and
-  writing the board's input through the piece controller is refused by the
-  contract check. A test therefore cannot hold a topic that is both on a board
-  and callable.
+- A board built in a pattern test with topics in its argument lists them, one
+  topic twice included, and runs its pivot over them. Those topics get no
+  `referencedBy` of their own, because the board wires `boardCrossrefs` only
+  into the topics `addTopic` and the composer create. An action that pushes a
+  Topic built in a pattern body does not run: its argument reads as undefined,
+  which the runner logs as a potential schema mismatch.
 - The pivot excludes a topic from its own inbound edges by identity rather than
-  array position. Only a list holding the same topic twice separates those, and
-  no board can produce one, so `mentionedBy` is exported for a test to call
-  with a list built by hand.
+  array position. Only a list holding the same topic twice separates those. A
+  board can hold one: writing the live handle of a topic the board already
+  lists into its `topics` through the piece controller's `input`, or linking
+  that topic there with `PiecesController.link`, adds a second entry for it.
+  The pivot hands its join the list `distinctByIdentity` returns, which names
+  that topic once, so `mentionedBy` is exported for a test to hand a duplicated
+  list directly.
 
 ## Deploying to the team board
 
@@ -274,9 +280,9 @@ Two preconditions belong to the board rather than to the code:
   topic's activity *backwards* and visibly reorder the board, while a stamped
   one cannot. `lastActivityOf` therefore keeps counting stamped records, and
   changing it to skip them reintroduces that silently. `commentCount` is the
-  other side: it counts the array's length today, so it has to exclude stamped
-  records or a card reads more comments than the topic shows. Both are
-  computations rather than schema, so neither needs a migration.
+  other side: it counts the records carrying no `removedAt` stamp, so a card
+  never promises more comments than the topic shows. Both are computations
+  rather than schema, so neither needs a migration.
 - Every field a stamped removal adds is optional, for the reason recorded on
   `TopicComment`: a stored record type has to accept what is already stored,
   and the deployed board holds records written before these fields existed.
@@ -312,9 +318,9 @@ Two preconditions belong to the board rather than to the code:
 - Stage B keeps the existing verb names. The rehearsed break is the *one*
   deliberate break in this plan: anything break-shaped discovered along the way
   rides it, and every other change stays gate-clean.
-- The board's demand names the eight members above, and losing the excluded
+- The board's demand names the nine members above, and losing the excluded
   fields from the board's published projection is accepted.
 
-[#6573]: https://github.com/commontoolsinc/labs/issues/6573
-[#6673]: https://github.com/commontoolsinc/labs/issues/6673
-[#6713]: https://github.com/commontoolsinc/labs/issues/6713
+[#6573]: https://github.com/commonfabric/labs/issues/6573
+[#6673]: https://github.com/commonfabric/labs/issues/6673
+[#6713]: https://github.com/commonfabric/labs/issues/6713

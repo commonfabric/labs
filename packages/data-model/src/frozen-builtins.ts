@@ -2,7 +2,7 @@
  * Effectively immutable wrappers for built-in collection types (`Map`, `Set`).
  *
  * These wrappers preserve the public collection surface and `instanceof`
- * behavior, but they intentionally do not carry native `Map` / `Set` internal
+ * behavior, but they intentionally do not carry JS `Map` / `Set` internal
  * slots. Their data lives in module-private backing stores keyed by the wrapper
  * instance. That makes intrinsic mutators like `Map.prototype.set.call(...)`
  * and `Set.prototype.add.call(...)` fail with an incompatible receiver instead

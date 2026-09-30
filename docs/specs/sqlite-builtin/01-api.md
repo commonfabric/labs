@@ -294,6 +294,14 @@ decode-to-`Cell` (Section [02](./02-cf-link-encoding.md)). The column schema and
 the runtime's durable object-or-entry-list representation therefore stay
 aligned.
 
+A TEXT column reaches the row as a string, including the text SQLite's JSON
+functions build: `json_object(...)`, `json_group_array(...)`, `json(...)`, the
+`->` operator, and `json_extract` of an object or array path all yield a string
+holding JSON, which the pattern parses itself. The read connection does not
+parse it, because whether SQLite marks such a column as JSON depends on the
+query plan (a sort or a materialized subquery unmarks it), and a column's type
+under `Row` has to hold under every plan. Declare the column `string` in `Row`.
+
 This handles projections the table schema can't: because `Cell<T>` lowers to
 `asCell`, declaring a result field as `Cell<User>` tells the runtime that column
 is cell-bearing **even when an alias hides the `_cf_link` suffix**:

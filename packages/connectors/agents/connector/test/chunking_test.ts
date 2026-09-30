@@ -1,5 +1,9 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { chunkEvents, encodedJsonBytes } from "../src/chunking.ts";
+import {
+  chunkEvents,
+  encodedJsonBytes,
+  iterateEventChunks,
+} from "../src/chunking.ts";
 
 Deno.test("event chunking rejects invalid byte targets", () => {
   for (const targetBytes of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
@@ -73,6 +77,24 @@ Deno.test("chunkEvents serializes each provider event once", () => {
     encodedJsonBytes([{ id: "a", text: "é" }]),
     encodedJsonBytes([{ id: "b", text: "世界" }]),
   ]);
+});
+
+Deno.test("event chunk iteration does not inspect the whole session", () => {
+  let captures = 0;
+  const events = ["a", "b", "c"].map((id) => ({
+    toJSON() {
+      captures++;
+      return { id, text: "event" };
+    },
+  }));
+  const chunks = iterateEventChunks(events, 1);
+
+  assertEquals(chunks.next().value?.events, [events[0]]);
+  assertEquals(captures, 2);
+  assertEquals(chunks.next().value?.events, [events[1]]);
+  assertEquals(captures, 3);
+  assertEquals(chunks.next().value?.events, [events[2]]);
+  assertEquals(chunks.next().done, true);
 });
 
 Deno.test("chunkEvents measures bigint using the Fabric JSON encoding", () => {

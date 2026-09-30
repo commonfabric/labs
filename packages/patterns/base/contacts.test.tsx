@@ -109,7 +109,9 @@ export default pattern(() => {
     email: "ada@example.com",
     phone: "",
     notes: "",
-    tags: [],
+    // Typed, because `[]` alone infers `never[]`, whose schema admits no
+    // element, and the tags written below are read back through this cell.
+    tags: [] as string[],
     addresses: [],
     socialProfiles: [],
     relationship: "cousin",

@@ -28,15 +28,16 @@ What is missing falls into two groups that barely touch each other:
    fingerprint, and no runtime-neutral digest. Revert restores what the entry
    could reach rather than what the author wrote, and the manifest is what
    [hosted pattern authoring](hosted-pattern-authoring.md) waits on.
-2. **A space still has to be found before it can be opened.** Routing accepts a
-   host hint and hydrates durable ones, but nothing appends a route with commit
-   acknowledgment and no share link carries one.
+2. **A learned space route is not persisted.** Routing accepts a host hint and
+   hydrates durable ones, but nothing appends a route with commit
+   acknowledgment.
 
-The build order below is **five pull requests in two tracks**, which can run
-concurrently. The count is held down by grouping each pull request around one
-guarantee rather than one file, and the tracks are separated along the lines
-where two authors would otherwise be editing `piece-controller.ts`,
-`source-reconciler.ts`, and `runner.ts` at the same time.
+The build order below, summarized in the [plan index](README.md), is **four pull
+requests in two tracks**, which can run concurrently. The count is held down by
+grouping each pull request around one guarantee rather than one file, and the
+tracks are separated along the lines where two authors would otherwise be
+editing `piece-controller.ts`, `source-reconciler.ts`, and `runner.ts` at the
+same time.
 
 ## Findings
 
@@ -155,13 +156,15 @@ and nothing validates a root-interface contract when `defaultPattern` is
 created or relinked.
 
 **6. Routing stops at the live registry.** `registerSpaceHost` makes a hint
-effective in the session and returns a boolean; nothing appends it to the site
-table with commit acknowledgment, and the spec is explicit that the optimistic
-`CellHandle` paths cannot be used for it. The shell's **Copy link** copies
-`globalThis.location.href`
-([`HeaderView.ts:877`](../../packages/shell/src/views/HeaderView.ts)), so
-neither share-link emission nor receipt exists, and the runtime exposes no
-effective host for a space.
+effective in the session and returns a boolean, and `registerSpaceHostDetailed`
+returns the reason for a refusal; nothing appends the hint to the site table
+with commit acknowledgment, and the spec is explicit that the optimistic
+`CellHandle` paths cannot be used for it. A `known-different-host` refusal
+carries the host the space is routed to. `Runtime.hostForSpace` returns the
+effective host inside the worker, and no runtime-client request exposes it, so
+that refusal is the only route an embedder is told. Common Fabric browser-link
+receipt remains a dormant concept in the specification and is not work ordered
+by this plan.
 
 **7. There is no data migration across a contract change.** The spec names it
 as required work and describes the refusal it replaces. Nothing in the tree
@@ -191,18 +194,17 @@ tracks below are drawn so that at most one in-flight pull request is editing the
 transition path.
 
 **Routing touches none of it.** Gap 6 lives in `StorageManager`,
-`runtime-processor.ts`, the runtime-client protocol, and the shell. It shares no
-file with the source lifecycle apart from the one place a host-qualified `cf://`
-origin registers a route. That makes it a genuinely parallel track for a second
-author.
+`runtime-processor.ts`, and the runtime-client protocol. It shares no file with
+the source lifecycle apart from the one place a host-qualified `cf://` origin
+registers a route. That makes it a genuinely parallel track for a second author.
 
 ## The sequence
 
-Five pull requests. The two tracks are independent and can run concurrently.
+Four pull requests. The two tracks are independent and can run concurrently.
 
 ```
 Track A   A1 ──> A2 ──> A3     what a revision records
-Track B   B1 ──> B2            where a space lives
+Track B   B1                    how a learned route persists
 ```
 
 ### A1 — What a revision records
@@ -307,7 +309,7 @@ cannot be baselined says so rather than gaining a broken one.
 
 ### B1 — One route operation that can fail
 
-Independent of Tracks A and B apart from its consumer.
+Independent of Track A apart from its consumer.
 
 - A dedicated runtime operation, exposed through the runtime-client
   protocol, that revalidates the DID and normalized origin in the worker,
@@ -335,49 +337,16 @@ nothing.
 *Files:* `packages/runner/src/storage`, `runtime-processor.ts`, the
 runtime-client protocol, `piece-origin.ts`.
 
-### B2 — Share links
-
-- **Copy link** emits the DID-based shell URL with a single `spaceHost`
-  parameter taken from the effective host the runtime reports, not from
-  the shell's default API host.
-- Receipt parses the shell path into its DID-based `AppView`, validates
-  and normalizes the toolshed origin, sends both through B1's operation
-  with `source: "share-link"`, waits for the durable transaction, then
-  removes the parameter and hands the canonical hostless view to ordinary
-  navigation. An initial share URL is intercepted before the target
-  `AppView` opens its space. Malformed links, live conflicts, and durable
-  write failures report without navigating.
-- The browser-level integration test the spec specifies: two independent
-  toolshed servers, the target data only on the non-default one, the
-  production **Copy link** action, the emitted URL read from the
-  clipboard, receipt in a second shell, then a fresh runtime with no seed
-  that renders the target through a running pattern after hydration wins
-  a race it was allowed to lose. Plus the worker-path persistence cases —
-  unsynchronized table, synchronization failure, conflicting table route,
-  and two receipts racing one snapshot.
-
-*Reviewer's check:* the test exists and passes with `HEADLESS=1`, and
-does not inject the hint through a test-only registration endpoint.
-
-*Files:* `HeaderView.ts`, the shell's navigation and `AppView` paths,
-`packages/integration`.
-
 ## Tests
 
-Each pull request carries its own cases. The spec's two test items —
-numbers 12 and 13 under *Work required* — are not a pull request of
-their own, because a fixture written after the behavior it covers is a
-fixture written against the implementation rather than against the
-design.
-
-Two things ride along with a pull request rather than standing alone:
-
-- The **general version-to-version golden replay fixtures** ride with A1.
-  That is where a fingerprint and a digest first make "the previous
-  version" a thing a fixture can name. The existing synthetic home-shaped
-  and default-app-shaped replays in `packages/piece/test` are the
-  template.
-- The **two-toolshed browser test** rides with B2, as above.
+Each pull request carries its own cases. Item 11 under the specification's
+*Work required* is not a pull request of its own, because a fixture written
+after the behavior it covers is a fixture written against the implementation
+rather than against the design. Its general version-to-version golden replay
+fixtures ride with A1. That is where a fingerprint and a digest first make
+"the previous version" a thing a fixture can name. The existing synthetic
+home-shaped and default-app-shaped replays in `packages/piece/test` are the
+template.
 
 The transition matrix — every transition, concurrent source and origin
 races, failed and incompatible updates, self-follow, concurrent
@@ -412,7 +381,8 @@ source lifecycle, and it should be designed where readers are designed.
 **Reliable route discovery** — host unavailability, replicated hosts,
 failover, stale site-table entries, authenticated replacement of an
 explicit route — is called open design work by the spec and stays open.
-B1 and B2 finish the ingestion half only.
+B1 supplies only the durable route-ingestion operation needed by a
+host-qualified fabric origin.
 
 **Asking for a change in words** — a menu item on a piece that takes a
 description, runs an agent session to author the update, and publishes it
@@ -429,22 +399,6 @@ The dependency runs one way and is worth stating: that spec disables its
 menu item when a piece has no complete retained authored program, so **A2
 gates hosted authoring**. Its own status section says as much. Nothing
 else in this plan blocks it.
-
-## If five is still too many
-
-One merge would take it to four, at a stated cost. This is an inference about
-review load rather than a measured fact.
-
-- **B1 and B2 into one.** The route operation has no consumer until share links
-  exist, so reviewing them together is arguably more honest. The cost is that
-  the integration test — likely the largest single artifact in this plan,
-  judging by what the spec asks it to cover — arrives in the same change as the
-  operation it exercises.
-
-Merging inside Track A is the obvious next candidate, and is not recommended.
-A2 is the heaviest change here and the one the hosted authoring plan is waiting
-on; putting anything else in the same review makes the thing everyone is
-waiting for harder to land.
 
 ## Related
 

@@ -4,6 +4,7 @@
 import * as htmlparser2 from "htmlparser2";
 import * as domhandler from "domhandler";
 import * as domserializer from "dom-serializer";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { RenderOptions } from "./render.ts";
 import { styleObjectToCssString } from "./render-utils.ts";
 
@@ -35,9 +36,7 @@ function renderOptionsFromDoc(document: globalThis.Document): RenderOptions {
       if (
         key === "style" &&
         el.attribs &&
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value)
+        isObjectNotArray(value)
       ) {
         const cssString = styleObjectToCssString(value as Record<string, any>);
         el.attribs["style"] = cssString;

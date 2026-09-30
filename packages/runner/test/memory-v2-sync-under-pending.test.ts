@@ -6,6 +6,7 @@ import {
   type SessionSync,
   type SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type {
   IStorageProvider,
   StorageNotification,
@@ -62,9 +63,7 @@ const getObjectValue = (
   uri: URI,
 ): Record<string, unknown> | undefined => {
   const value = provider.get(uri)?.value;
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  return isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 };
 
 type HeldCommitRead = {
@@ -201,8 +200,8 @@ const notificationCarriesField = (
       return false;
     }
     const after = change.after as { value?: Record<string, unknown> } | null;
-    return after != null && typeof after === "object" &&
-      after.value != null && typeof after.value === "object" &&
+    return isObjectOrArray(after) &&
+      isObjectOrArray(after.value) &&
       after.value[key] === expected;
   });
 

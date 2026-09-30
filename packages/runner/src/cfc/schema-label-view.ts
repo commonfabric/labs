@@ -1,7 +1,10 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  forEachSubschema,
+  isSubschema,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
-import { forEachSubschema, isSubschema } from "../schema-walk.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,
@@ -17,6 +20,12 @@ export interface CfcSchemaEntry {
 
   /** The schema document that resolves local references inside `.schema`. */
   readonly root: JSONSchema;
+
+  /**
+   * Set when the declaration sits inside an `anyOf` or `oneOf` branch, so it
+   * holds only for the values that branch matches.
+   */
+  readonly conditional?: true;
 }
 
 interface IfcSchemaVisit {
@@ -33,6 +42,8 @@ interface IfcSchemaVisit {
  * their concrete index. Stream children describe future event payloads; only
  * the stream slot's own declaration applies to stored data. Negated schemas do
  * not describe labels on real data.
+ * A declaration reached through an `anyOf` or `oneOf` branch is marked
+ * `conditional`.
  */
 export const cfcSchemaEntries = (
   schema: JSONSchema,
@@ -40,6 +51,7 @@ export const cfcSchemaEntries = (
   entries: CfcSchemaEntry[] = [],
   root: JSONSchema = schema,
   active?: IfcSchemaVisit,
+  conditional = false,
 ): CfcSchemaEntry[] => {
   if (!isSubschema(schema) || typeof schema === "boolean") {
     return entries;
@@ -79,6 +91,7 @@ export const cfcSchemaEntries = (
       },
       schema: resolved,
       root: childRoot,
+      ...(conditional ? { conditional: true as const } : {}),
     });
   }
   if (
@@ -90,53 +103,44 @@ export const cfcSchemaEntries = (
   const recordOnly = resolved.properties === undefined ||
     (isObjectOrArray(resolved.properties) &&
       Object.keys(resolved.properties).length === 0);
+  const walk = (
+    child: JSONSchema,
+    childPath: readonly string[],
+    childConditional = conditional,
+  ) =>
+    cfcSchemaEntries(
+      child,
+      childPath,
+      entries,
+      childRoot,
+      nextActive,
+      childConditional,
+    );
   forEachSubschema(resolved, (child, keyword, key, index) => {
     switch (keyword) {
       case "properties":
-        cfcSchemaEntries(
-          child,
-          [...path, key!],
-          entries,
-          childRoot,
-          nextActive,
-        );
+        walk(child, [...path, key!]);
         break;
       case "anyOf":
       case "oneOf":
+        walk(child, path, true);
+        break;
       case "allOf":
-        cfcSchemaEntries(child, path, entries, childRoot, nextActive);
+        walk(child, path);
         break;
       case "items":
         // The wildcard covers tuple positions and the rest schema when
         // `.prefixItems` is present.
-        cfcSchemaEntries(
-          child,
-          [...path, "*"],
-          entries,
-          childRoot,
-          nextActive,
-        );
+        walk(child, [...path, "*"]);
         break;
       case "prefixItems":
-        cfcSchemaEntries(
-          child,
-          [...path, String(index!)],
-          entries,
-          childRoot,
-          nextActive,
-        );
+        walk(child, [...path, String(index!)]);
         break;
       case "additionalProperties":
         // A wildcard cannot express "all properties except the named ones".
         // It is exact only when the schema declares no named properties.
         if (recordOnly) {
-          cfcSchemaEntries(
-            child,
-            [...path, "*"],
-            entries,
-            childRoot,
-            nextActive,
-          );
+          walk(child, [...path, "*"]);
         }
         break;
       case "not":
@@ -144,7 +148,7 @@ export const cfcSchemaEntries = (
         break;
       default:
         // Unknown structural keywords contribute at the current position.
-        cfcSchemaEntries(child, path, entries, childRoot, nextActive);
+        walk(child, path);
         break;
     }
   });

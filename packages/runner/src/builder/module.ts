@@ -355,17 +355,18 @@ export const assertCapture = <T>(
 };
 
 /**
- * Rendering options for a failing assertion's operands: as deep, as many
- * array elements, and as long a string as the conversion allows. A view tree
- * costs two levels per node and a nested cell three, so the renderer's
- * default depth elides an operand after a handful of nodes; a list or a
- * string differs from what was expected at whatever index it does, and the
- * renderer's default lengths would elide exactly that. A diagnostic wants
- * the whole of it.
+ * Rendering options for a failing assertion's operands: as deep, as many array
+ * elements and buffer bytes, and as long a string as the conversion allows.
+ * A view tree costs two levels per node and a nested cell three, so the
+ * renderer's default depth elides an operand after a handful of nodes; a
+ * list or a string differs from what was expected at whatever index it does,
+ * and the renderer's default lengths would elide exactly that. A diagnostic
+ * wants the whole of it.
  */
 const ASSERT_RENDER_OPTIONS: DebugValueOptions = {
   maxDepth: Infinity,
   maxArrayLength: Infinity,
+  maxBufferLength: Infinity,
   maxProperties: Infinity,
   maxStringLines: Infinity,
 };

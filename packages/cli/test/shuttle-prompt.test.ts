@@ -27,8 +27,10 @@ import { UI } from "@commonfabric/runner";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
+import type { FrameCursor } from "../lib/shuttle/lens.ts";
 import { moved } from "./shuttle-place-helpers.ts";
 import { type PromptTerminal, runPrompt } from "../lib/shuttle/prompt.ts";
 import type { Shuttle, VerbDeps } from "../lib/shuttle/vocabulary.ts";
@@ -56,13 +58,22 @@ type Write =
   /** It ended the line it was drawing. */
   | { readonly kind: "finish" }
   /** It wrote `text` above the line being edited. */
-  | { readonly kind: "announce"; readonly text: string };
+  | { readonly kind: "announce"; readonly text: string }
+  /** It drew `rows` as a full-screen frame, the cursor where `cursor` says. */
+  | {
+    readonly kind: "frame";
+    readonly rows: readonly string[];
+    readonly cursor: FrameCursor | undefined;
+  }
+  /** It gave the screen back. */
+  | { readonly kind: "unframe" };
 
 /** Helper for the cases below, which is a shuttle at the space root. */
 function shuttleIn(): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({
       kind: "borrowed",
       pieces: {
@@ -160,6 +171,7 @@ async function running(
 ): Promise<Write[]> {
   const writes: Write[] = [];
   const terminal: PromptTerminal = {
+    ...framing(writes),
     keys: Array.isArray(keys)
       ? ReadableStream.from(keys as readonly Key[])
       : keys as AsyncIterable<Key>,
@@ -188,6 +200,32 @@ async function running(
     ...deps,
   });
   return writes;
+}
+
+/**
+ * Helper for the cases below, which is the frame half of a terminal, recording
+ * into `writes`.
+ *
+ * It holds whether a frame has the screen because the contract does: giving
+ * the screen back where no frame took it does nothing, which is what lets a
+ * caller put a terminal back without asking first. A stand-in that recorded
+ * every call would make a case read one write where a terminal makes none.
+ */
+function framing(
+  writes: Write[],
+): Pick<PromptTerminal, "frame" | "unframe"> {
+  let framed = false;
+  return {
+    frame: (rows, cursor) => {
+      framed = true;
+      writes.push({ kind: "frame", rows, cursor });
+    },
+    unframe: () => {
+      if (!framed) return;
+      framed = false;
+      writes.push({ kind: "unframe" });
+    },
+  };
 }
 
 /** Helper for the cases below, which is the last line the prompt drew. */
@@ -225,7 +263,8 @@ describe("prompt", () => {
           kind: "announce",
           text: "`pw` is not a verb. The verbs are `call`, `cd`, " +
             "`describe`, `edit`, `get`, `help`, `link`, `ls`, `more`, " +
-            "`pwd`, `set`, `verbs`, `where`, and `wish`.",
+            "`pwd`, `set`, `unwatch`, `verbs`, `watch`, `watches`, " +
+            "`where`, `wish`, `xcd`, and `xpwd`.",
         },
         { kind: "edit", text: AT_ROOT, column: 18 },
         { kind: "finish" },
@@ -310,7 +349,7 @@ describe("prompt", () => {
       );
       expect(produced(writes)).toEqual([
         "The server cannot be reached.",
-        `position  /@${SPACE}/${HANDLE}@space\nscope     @space`,
+        `position  //${SPACE}/${HANDLE}@space\nscope     @space`,
       ]);
     });
 
@@ -421,7 +460,7 @@ describe("prompt", () => {
       );
       expect(produced(writes)).toEqual([
         '{\n  "title": "a"\n}',
-        `position  /@${SPACE}/${HANDLE}@space\nscope     @space`,
+        `position  //${SPACE}/${HANDLE}@space\nscope     @space`,
       ]);
     });
 
@@ -452,7 +491,7 @@ describe("prompt", () => {
         },
       );
       expect(produced(writes)).toEqual([
-        `position  /@${SPACE}/${board}@space\nscope     @space`,
+        `position  //${SPACE}/${board}@space\nscope     @space`,
       ]);
     });
 
@@ -475,7 +514,7 @@ describe("prompt", () => {
       );
       expect(produced(writes)).toEqual([
         "Interrupted.",
-        `position  /@${SPACE}/${HANDLE}@space\nscope     @space`,
+        `position  //${SPACE}/${HANDLE}@space\nscope     @space`,
       ]);
     });
 
@@ -565,6 +604,40 @@ describe("prompt", () => {
         reading(read),
       );
       expect(produced(writes)).toEqual(['{\n  "title": "a"\n}']);
+    });
+
+    it("keeps what ended the run where the terminal will not be put back", async () => {
+      // A terminal that will not take the writing on the way out is one
+      // nothing here could put back, and a throw raised over it would replace
+      // whatever ended the run — which is the part a reader needs. So the
+      // writing is attempted and its failure goes no further, and the
+      // keyboard's own error is still what the run rejects with.
+
+      const writes: Write[] = [];
+      const terminal: PromptTerminal = {
+        ...framing(writes),
+        unframe: () => {
+          throw new Error("The terminal went.");
+        },
+        keys: (async function* (): AsyncGenerator<Key> {
+          throw new Error("The keyboard went.");
+        })(),
+        edit: (text, column) => {
+          writes.push({ kind: "edit", text, column });
+        },
+        finish: () => {
+          writes.push({ kind: "finish" });
+        },
+        announce: (text) => {
+          writes.push({ kind: "announce", text });
+        },
+        suspend: () => {
+          throw new Error("The prompt handed the terminal over.");
+        },
+      };
+      await expect(runPrompt(shuttleIn(), terminal, {})).rejects.toThrow(
+        "The keyboard went.",
+      );
     });
   });
 
@@ -867,6 +940,768 @@ describe("prompt", () => {
     });
   });
 
+  describe("a lens over the prompt", () => {
+    // A lens is a state of this loop rather than a program beside it, because
+    // the keyboard is this loop's: a verb reading keys of its own would be
+    // reading them out of the stream the loop has already asked for one from.
+    //
+    // So the cases here are about the loop — what it draws, where the keys go
+    // while a frame is up, and what comes back when the frame goes away.
+    //
+    // Each drives the keys against the frame rather than against the line: a
+    // key typed while a line is still in flight goes to the line being typed
+    // next, which is the loop's own rule, so a case that wants a key to reach
+    // the lens types it once the frame is on screen. The wait is on the
+    // drawing itself and on no clock.
+
+    /** The label a lens onto the piece's `title` carries. */
+    const WATCHED = `${HANDLE}/title @space`;
+
+    /** What driving a lens through the prompt produced. */
+    interface Framed {
+      /** Every write the prompt made, in order. */
+      readonly writes: Write[];
+
+      /** Settles the first time a frame is drawn. */
+      readonly framed: Promise<void>;
+    }
+
+    /**
+     * Helper for the cases below, which runs `keys` against a shuttle standing
+     * on a piece, with the subscriptions a `watch` takes stood in for.
+     *
+     * The keys are a generator so that a case can hold one back until the
+     * frame is drawn, which {@link Framed.framed} is what says.
+     */
+    function driving(
+      keys: (framed: Promise<void>) => AsyncIterable<Key>,
+      sink: () => Promise<() => void> = () => Promise.resolve(() => {}),
+      refuseAnnounce = false,
+      refuseUnframe = false,
+      shuttle: Shuttle = atPiece(),
+      deps: VerbDeps = {},
+      saw: (write: Write) => void = () => {},
+    ): {
+      writes: Promise<Write[]>;
+      drawn: Write[];
+      framed: Promise<void>;
+    } {
+      const writes: Write[] = [];
+      const drawn = Promise.withResolvers<void>();
+      const framer = framing(writes);
+      const terminal: PromptTerminal = {
+        ...framer,
+        unframe: () => {
+          if (refuseUnframe) throw new Error("The screen would not go back.");
+          framer.unframe();
+        },
+        keys: {
+          [Symbol.asyncIterator]: () =>
+            keys(drawn.promise)[Symbol.asyncIterator](),
+        },
+        edit: (text, column) => {
+          writes.push({ kind: "edit", text, column });
+        },
+        finish: () => {
+          writes.push({ kind: "finish" });
+        },
+        announce: (text) => {
+          if (refuseAnnounce) {
+            throw new Error("The terminal would not take it.");
+          }
+          writes.push({ kind: "announce", text });
+          saw(writes[writes.length - 1]!);
+        },
+        frame: (rows, cursor) => {
+          framer.frame(rows, cursor);
+          drawn.resolve();
+          saw(writes[writes.length - 1]!);
+        },
+        suspend: () => {
+          throw new Error("The prompt handed the terminal over.");
+        },
+      };
+      return {
+        framed: drawn.promise,
+        // The array itself as well as the promise over it, because a run that
+        // threw hands back no array and what it drew on the way out is exactly
+        // what such a case is about.
+        drawn: writes,
+        writes: runPrompt(shuttle, terminal, {
+          warmPiece: (config) => Promise.resolve({ piece: config.piece }),
+          sinkCellValue: () => sink(),
+          ...deps,
+        }).then(() => writes),
+      };
+    }
+
+    /** Helper for the cases below, which is every frame the prompt drew. */
+    function frames(writes: readonly Write[]): (readonly string[])[] {
+      return writes.filter((write) => write.kind === "frame")
+        .map((write) => write.rows);
+    }
+
+    /**
+     * Helper for the cases below, which types `line`, runs it, and then types
+     * `after` once the frame it opened is on screen.
+     */
+    function opening(
+      line: string,
+      after: readonly Key[],
+    ): (framed: Promise<void>) => AsyncIterable<Key> {
+      return async function* (framed) {
+        yield* typed(line);
+        yield ENTER;
+        await framed;
+        yield* after;
+      };
+    }
+
+    it("draws a frame naming the cell the line armed a watch on", async () => {
+      const { writes } = driving(opening("watch title", typed("q")));
+      const rule = "─".repeat(80 - 4 - WATCHED.length);
+      expect(frames(await writes)[0]?.[0]).toBe(`┌ ${WATCHED} ${rule}┐`);
+    });
+
+    it("writes what the line produced before the frame takes the screen", async () => {
+      // The order it happened in: the verb armed the watch and said what is
+      // armed, and the lens opened onto it. Written after, it would reach the
+      // transcript below the changes the frame was up for.
+
+      const drawn = await driving(opening("watch title", typed("q"))).writes;
+      const said = drawn.findIndex((write) => write.kind === "announce");
+      expect(drawn[said]).toEqual({ kind: "announce", text: `%1 ${WATCHED}` });
+      expect(said).toBeLessThan(
+        drawn.findIndex((write) => write.kind === "frame"),
+      );
+    });
+
+    it("draws no prompt while the frame has the screen", async () => {
+      const drawn = await driving(opening("watch title", typed("jq"))).writes;
+      const framed = drawn.findIndex((write) => write.kind === "frame");
+      const gave = drawn.findIndex((write) => write.kind === "unframe");
+      expect(drawn.slice(framed, gave).every((write) => write.kind === "frame"))
+        .toBe(true);
+    });
+
+    it("sends a key to the lens rather than to the line being typed", async () => {
+      // `j` scrolls the frame; a `j` that reached the buffer would be a
+      // character on a line nobody can see.
+
+      const drawn = await driving(opening("watch title", typed("jq"))).writes;
+      expect(frames(drawn).length).toBe(2);
+      expect(drawn.at(-2))
+        .toEqual({ kind: "edit", text: AT_PIECE, column: AT_PIECE.length });
+    });
+
+    it("gives the screen back on `q` and draws the prompt again", async () => {
+      const drawn = await driving(opening("watch title", typed("q"))).writes;
+      const gave = drawn.findIndex((write) => write.kind === "unframe");
+      expect(gave).toBeGreaterThan(-1);
+      expect(drawn[gave + 1])
+        .toEqual({ kind: "edit", text: AT_PIECE, column: AT_PIECE.length });
+    });
+
+    it("gives the screen back when the keys run out with a lens open", async () => {
+      // A lens is closed by a key and there are no more keys, so the run
+      // closes it: a run that ended with the screen still held would leave a
+      // person at an alternate screen with nothing drawing on it.
+
+      const drawn = await driving(opening("watch title", [])).writes;
+      expect(drawn.filter((write) => write.kind === "unframe").length).toBe(1);
+    });
+
+    /**
+     * Helper for the two cases below, which types `line`, then `ahead` while
+     * that line is still arming its watch, then `after` once the frame it
+     * opened is on screen.
+     *
+     * The gate is the subscription the line takes: it is entered while the
+     * line is still running, so what is typed against it is type-ahead at the
+     * prompt rather than a key at a frame. Both waits are on the run's own
+     * events and neither is a clock.
+     */
+    function typedAhead(
+      line: string,
+      ahead: readonly Key[],
+      after: readonly Key[],
+    ): { writes: Promise<Write[]> } {
+      const arming = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      return driving(
+        async function* (framed) {
+          yield* typed(line);
+          yield ENTER;
+          await started.promise;
+          yield* ahead;
+          arming.resolve();
+          await framed;
+          yield* after;
+        },
+        () => {
+          started.resolve();
+          return arming.promise.then(() => () => {});
+        },
+      );
+    }
+
+    it("gives the screen back where the run threw with a lens open", async () => {
+      // The one way out of a run a person cannot type their way back from: a
+      // frame still holding the screen is an alternate screen with a hidden
+      // cursor and nothing drawing on it. So the screen goes back whatever
+      // ended the run, and the throw is still the throw.
+
+      const run = driving(async function* (framed) {
+        yield* typed("watch title");
+        yield ENTER;
+        await framed;
+        throw new Error("The keyboard went.");
+      });
+      await expect(run.writes).rejects.toThrow("The keyboard went.");
+      expect(run.drawn.filter((write) => write.kind === "unframe").length)
+        .toBe(1);
+    });
+
+    it("cancels the lens's subscription where the run threw", async () => {
+      // The screen is half of it. The subscription the lens was drawing from
+      // is the other, and a run that ended holds no cancel for it.
+
+      let cancelled = 0;
+      const run = driving(
+        async function* (framed) {
+          yield* typed("watch title");
+          yield ENTER;
+          await framed;
+          throw new Error("The keyboard went.");
+        },
+        () => Promise.resolve(() => cancelled++),
+      );
+      await expect(run.writes).rejects.toThrow("The keyboard went.");
+      // One of the two subscriptions the line took: the lens's. The watch's is
+      // left armed, which is what a watch is for, and the run's own way out is
+      // where that one stops (`run.ts`).
+      expect(cancelled).toBe(1);
+    });
+
+    it("cancels a lens subscription that arrives after the run threw", async () => {
+      // The run can end while a `watch` is still taking the lens's
+      // subscription, which is a read nothing can call off. Two things on the
+      // way out each see to it: the line is stopped, so the subscription comes
+      // back as an interruption and is cancelled; and the lens the line has
+      // already opened is closed, so a subscription it adopts anyway is
+      // cancelled as it is taken. Either is enough here, and the two cases
+      // after this one pin each alone.
+      //
+      // The run's own way out tears the session down after the prompt returns
+      // (`run.ts`), which is done here by hand. The watch's own subscription is
+      // cancelled whichever way the line goes — by the interruption, or by the
+      // torn-down session refusing to hold it — so that cancel is the event
+      // both reach, and the case waits on it rather than on a clock.
+      //
+      // Kills: ending the run with the line neither stopped nor what it opened
+      // closed, which leaves the lens's cancel unrun.
+
+      const shuttle = atPiece();
+      const lensAsked = Promise.withResolvers<void>();
+      const lensArrives = Promise.withResolvers<() => void>();
+      const watchCancelled = Promise.withResolvers<void>();
+      let asked = 0;
+      let lensCancels = 0;
+      const run = driving(
+        async function* () {
+          yield* typed("watch title");
+          yield ENTER;
+          await lensAsked.promise;
+          throw new Error("The keyboard went.");
+        },
+        () => {
+          asked++;
+          if (asked === 1) {
+            return Promise.resolve(() => watchCancelled.resolve());
+          }
+          lensAsked.resolve();
+          return lensArrives.promise;
+        },
+        false,
+        false,
+        shuttle,
+      );
+      await expect(run.writes).rejects.toThrow("The keyboard went.");
+      shuttle.session.disarmAll();
+      lensArrives.resolve(() => lensCancels++);
+      await watchCancelled.promise;
+      expect(lensCancels).toBe(1);
+    });
+
+    it("closes a lens the line produced where the run ended before taking it", async () => {
+      // The line can settle with its lens after the prompt has stopped taking
+      // what lines settle with: a key stream that fails as a `watch` hands its
+      // lens over is seen by the loop first, several awaits lying between a
+      // verb's return and its line's outcome reaching the loop. Nothing the
+      // loop holds is that lens, and stopping the line comes too late for a
+      // subscription it has already adopted. What closes it is the line
+      // closing, on the way out, every lens it opened.
+      //
+      // The key stream fails from inside the session's adoption of the watch,
+      // which is the last thing a `watch` does before it returns its lens.
+      //
+      // Kills: ending the run without closing what the line in flight opened,
+      // which leaves the lens's cancel unrun.
+
+      const shuttle = atPiece();
+      const failing = Promise.withResolvers<IteratorResult<Key>>();
+      const script = [...typed("watch title"), ENTER];
+      const arm = shuttle.session.arm.bind(shuttle.session);
+      shuttle.session.arm = (watch) => {
+        arm(watch);
+        failing.reject(new Error("The keyboard went."));
+      };
+      let asked = 0;
+      let lensCancels = 0;
+      const run = driving(
+        () => ({
+          [Symbol.asyncIterator]: () => ({
+            next: (): Promise<IteratorResult<Key>> =>
+              script.length > 0
+                ? Promise.resolve({ done: false, value: script.shift()! })
+                : failing.promise,
+          }),
+        }),
+        () => {
+          asked++;
+          return Promise.resolve(asked === 1 ? () => {} : () => lensCancels++);
+        },
+        false,
+        false,
+        shuttle,
+      );
+      await expect(run.writes).rejects.toThrow("The keyboard went.");
+      expect(lensCancels).toBe(1);
+    });
+
+    it("takes no further subscription for a line the run ended under", async () => {
+      // The line in flight is stopped on the way out, so a `watch` still
+      // taking its first subscription goes no further once that one arrives,
+      // and asks nothing more of a connection the run is closing. It is also
+      // what makes closing the line's lenses on the way out enough: a lens the
+      // line had not opened yet is one it now never opens.
+      //
+      // The watch's own cancel is the event the case waits on. Stopped, the
+      // line cancels the subscription it was taking; left running, it goes on
+      // to arm the watch, and the torn-down session disarms it.
+      //
+      // Kills: ending the run without stopping the line in flight, which lets
+      // the watch go on to ask for the lens's subscription.
+
+      const shuttle = atPiece();
+      const watchAsked = Promise.withResolvers<void>();
+      const watchArrives = Promise.withResolvers<() => void>();
+      const watchCancelled = Promise.withResolvers<void>();
+      let asked = 0;
+      const run = driving(
+        async function* () {
+          yield* typed("watch title");
+          yield ENTER;
+          await watchAsked.promise;
+          throw new Error("The keyboard went.");
+        },
+        () => {
+          asked++;
+          if (asked === 1) {
+            watchAsked.resolve();
+            return watchArrives.promise;
+          }
+          return Promise.resolve(() => {});
+        },
+        false,
+        false,
+        shuttle,
+      );
+      await expect(run.writes).rejects.toThrow("The keyboard went.");
+      shuttle.session.disarmAll();
+      watchArrives.resolve(() => watchCancelled.resolve());
+      await watchCancelled.promise;
+      expect(asked).toBe(1);
+    });
+
+    it("cancels the lens's subscription where announcing the line threw", async () => {
+      // The lens arrives already holding a subscription, so the loop must be
+      // holding the lens before anything that can throw. Announcing what the
+      // line produced is such a thing — a terminal that will not take the
+      // writing — and a lens the loop has not taken yet is one its way out
+      // cannot close: no frame is ever drawn, so nothing on the screen says it
+      // is there, and its sink runs for the rest of the process.
+      //
+      // Kills: announcing ahead of taking the lens, which leaves `cancelled`
+      // at zero.
+
+      let cancelled = 0;
+      const run = driving(
+        async function* () {
+          yield* typed("watch title");
+          yield ENTER;
+        },
+        () => Promise.resolve(() => cancelled++),
+        true,
+      );
+      await expect(run.writes).rejects.toThrow(
+        "The terminal would not take it.",
+      );
+      expect(cancelled).toBe(1);
+    });
+
+    it("ends the line though giving the screen back is what failed", async () => {
+      // Two things a run owes a terminal on its way out, and they are not one:
+      // the screen goes back, and the line the person was typing is ended.
+      // Sharing a `try` makes the first the gate on the second, so a terminal
+      // that refuses the unframe leaves the run with its last line unfinished
+      // — which is the transcript a reader is left holding.
+      //
+      // Kills: wrapping both calls in one `try`, which records no `finish`.
+
+      const run = driving(
+        opening("watch title", typed("q")),
+        () => Promise.resolve(() => {}),
+        false,
+        true,
+      );
+      // The refusal ends the run, so what it drew on the way out is read off
+      // the array rather than off an answer there is none of.
+      await expect(run.writes).rejects.toThrow("The screen would not go back.");
+      // The last write and not merely one of them: a line ended earlier in the
+      // run writes a `finish` too, so asking whether any was written is the
+      // assertion that passes whether or not the way out wrote its own.
+      expect(run.drawn.at(-1)?.kind).toBe("finish");
+    });
+
+    it("drops what was typed ahead of a `ctrl-c` that closed the lens", async () => {
+      // The rule the loop already states at the prompt: a person who pressed
+      // it to leave the frame did not mean to run what they had queued behind
+      // it.
+
+      const drawn = await typedAhead(
+        "watch title",
+        [...typed("pwd"), ENTER],
+        [control("c")],
+      ).writes;
+      expect(produced(drawn).filter((text) => text.startsWith("position")))
+        .toEqual([]);
+    });
+
+    /**
+     * Helper for the cases below, which is a lens open over the prompt whose
+     * keys carry on once a write the case is waiting for has been made.
+     *
+     * A line typed at a frame settles when the work behind it does, which is
+     * neither when the key was read nor when the next one is typed. So the
+     * keys wait on the write that says it settled — a frame carrying the
+     * answer, or the announcement of it — and the wait is on that write and on
+     * no clock.
+     */
+    function awaiting(
+      after: (
+        wrote: (holds: (write: Write) => boolean) => Promise<void>,
+      ) => AsyncIterable<Key>,
+      deps: VerbDeps = {},
+      sink: () => Promise<() => void> = () => Promise.resolve(() => {}),
+      also: (write: Write) => void = () => {},
+    ): { writes: Promise<Write[]>; drawn: Write[] } {
+      const waiting: {
+        holds: (write: Write) => boolean;
+        settle: () => void;
+      }[] = [];
+      const wrote = (holds: (write: Write) => boolean) => {
+        const reached = Promise.withResolvers<void>();
+        waiting.push({ holds, settle: reached.resolve });
+        return reached.promise;
+      };
+      return driving(
+        async function* (framed) {
+          yield* typed("watch title");
+          yield ENTER;
+          await framed;
+          yield* after(wrote);
+        },
+        sink,
+        false,
+        false,
+        atPiece(),
+        deps,
+        (write) => {
+          for (const held of waiting.filter((one) => one.holds(write))) {
+            held.settle();
+          }
+          also(write);
+        },
+      );
+    }
+
+    /** Helper for the cases below, which is the modeline of `frame`. */
+    function modeline(frame: readonly string[]): string {
+      return (frame[frame.length - 2] ?? "").slice(2, -2).trimEnd();
+    }
+
+    it("runs a line typed at the frame through the dispatch a prompt uses", async () => {
+      // `:` is the general mechanism a view answers with instead of a key per
+      // verb, and what makes it general is that the line goes where a typed
+      // line goes: the same dispatch, against the same place.
+
+      const drawn = await awaiting(async function* (wrote) {
+        yield* typed(":pwd");
+        yield ENTER;
+        await wrote((write) =>
+          write.kind === "announce" && write.text.startsWith("position")
+        );
+        yield* typed("q");
+      }).writes;
+      expect(produced(drawn).filter((text) => text.startsWith("position")))
+        .toEqual([`position  //${SPACE}/${HANDLE}@space\nscope     @space`]);
+    });
+
+    it("stands what the line said in the frame it was typed at", async () => {
+      // The whole of it reaches the transcript the frame is holding back; the
+      // modeline is the acknowledgement, which is what tells a person still
+      // looking at the frame that the line came back at all.
+
+      const drawn = await awaiting(async function* (wrote) {
+        yield* typed(":pwd");
+        yield ENTER;
+        await wrote((write) =>
+          write.kind === "frame" && modeline(write.rows).startsWith("position")
+        );
+        yield* typed("q");
+      }).writes;
+      expect(modeline(frames(drawn).at(-1)!)).toBe(
+        `position  //${SPACE}/${HANDLE}@space`,
+      );
+    });
+
+    it("stops the line rather than closing the frame on `ctrl-c`", async () => {
+      // The third thing a `ctrl-c` at a frame can mean, and the one the frame
+      // cannot decide for itself. The order is the prompt's own — what is
+      // being typed, then the line in flight, then the way out — so a frame
+      // with nothing being typed at it and a line in flight stops the line and
+      // stays up.
+      //
+      // Kills: reading `ctrl-c` as the way out before asking whether a line is
+      // in flight, which gives the screen back with the line still running.
+
+      const read = gated();
+      const run = awaiting(
+        async function* (wrote) {
+          yield* typed(":ls");
+          yield ENTER;
+          await read.started;
+          yield control("c");
+          await wrote((write) =>
+            write.kind === "announce" && write.text === "Interrupted."
+          );
+          yield* typed("q");
+        },
+        { listing: { getCellValue: read.read } },
+      );
+      const drawn = await run.writes;
+      const stopped = drawn.findIndex((write) =>
+        write.kind === "announce" && write.text === "Interrupted."
+      );
+      const gave = drawn.findIndex((write) => write.kind === "unframe");
+      expect(stopped).toBeGreaterThan(-1);
+      expect(gave).toBeGreaterThan(stopped);
+    });
+
+    it("closes the frame on the second `ctrl-c`, and not on the first or the end", async () => {
+      // The first `ctrl-c` stops the line and the frame stays up, which the
+      // case above pins on its own. This one is about the second: it is the way
+      // out, and the frame is gone before the keys run out rather than because
+      // they did.
+      //
+      // Both of those are excluded rather than assumed. A `pwd` typed after it
+      // runs only at a prompt — at a frame its keys are a motion the view does
+      // not take — so the position it wrote is what says the frame had already
+      // gone; and the screen is watched from the moment the first key is sent,
+      // so a frame that went then would be seen going.
+      //
+      // What is still not excluded, said because two reviewers have read this
+      // case as claiming it: the window the fix closes, between a cancel's
+      // signal and the outcome three or four turns of the microtask queue
+      // later. Two keys both landing inside it is not arrangeable from here —
+      // the settle is already in flight when the second key is asked for — so
+      // these assertions hold on the behavior before the fix as well. What
+      // guards the window is that there is no second state to get wrong:
+      // `Running.stopped()` is the abort signal itself.
+
+      const read = gated();
+      let second = false;
+      let wentEarly = false;
+      const run = awaiting(
+        async function* (wrote) {
+          yield* typed(":ls");
+          yield ENTER;
+          await read.started;
+          const interrupted = wrote((write) =>
+            write.kind === "announce" && write.text === "Interrupted."
+          );
+          yield control("c");
+          await interrupted;
+          second = true;
+          yield control("c");
+          const ran = wrote((write) =>
+            write.kind === "announce" && write.text.startsWith("position")
+          );
+          yield* typed("pwd");
+          yield ENTER;
+          await ran;
+        },
+        { listing: { getCellValue: read.read } },
+        () => Promise.resolve(() => {}),
+        (write) => {
+          if (write.kind === "unframe" && !second) wentEarly = true;
+        },
+      );
+      const drawn = await run.writes;
+      expect(wentEarly).toBe(false);
+      expect(drawn.filter((write) => write.kind === "unframe").length).toBe(1);
+      const gave = drawn.findIndex((write) => write.kind === "unframe");
+      const ran = drawn.findIndex((write) =>
+        write.kind === "announce" && write.text.startsWith("position")
+      );
+      expect(ran).toBeGreaterThan(gave);
+    });
+
+    it("abandons the line being typed at the frame before the one in flight", async () => {
+      // Innermost first. A search opened while a line is still running is what
+      // a `ctrl-c` reaches there, and the line goes on to settle: a person
+      // taking back what they were typing did not ask for the work to stop.
+      //
+      // Kills: stopping the line in flight whenever there is one, which
+      // answers this line as interrupted instead of listing what it read.
+
+      const read = gated();
+      const run = awaiting(
+        async function* (wrote) {
+          yield* typed(":ls");
+          yield ENTER;
+          await read.started;
+          yield* typed("/depth");
+          yield control("c");
+          // Registered before the read is answered, so the wait is on the
+          // drawing that answer causes rather than on one already made.
+          const settled = wrote((write) => write.kind === "frame");
+          read.answer({});
+          await settled;
+          yield* typed("q");
+        },
+        { listing: { getCellValue: read.read } },
+      );
+      expect(produced(await run.writes)).not.toContain("Interrupted.");
+    });
+
+    it("opens the cell the frame watches in the editor on `e`", async () => {
+      // `e` composes a line rather than reaching an editor, so what this
+      // drives is the composition: the reference the lens carries has to be
+      // one the line grammar resolves back to the cell the frame is watching.
+      // A lens holding the short form the frame is titled with would compose a
+      // line that refuses, and nothing inside the lens could tell.
+      //
+      // Kills: composing the line out of the label rather than the reference,
+      // which reaches `edit` with a name the grammar does not take.
+
+      const edited: string[] = [];
+      await awaiting(
+        async function* (wrote) {
+          yield* typed("e");
+          await wrote((write) => write.kind === "announce");
+          yield* typed("q");
+        },
+        {
+          getCellValue: () => Promise.resolve("a title"),
+          editText: (text) => {
+            edited.push(text);
+            return Promise.resolve(
+              {
+                kind: "refused",
+                reason: "The editor was closed.",
+              } as const,
+            );
+          },
+        },
+      ).writes;
+      expect(edited).toEqual(['"a title"']);
+    });
+
+    it("turns down a second view and says which line it was", async () => {
+      // One frame at a time. A line typed at a frame can be any line, and one
+      // of them opens a view — so this is the arm where a second arrives. The
+      // line itself ran and is not taken back: the watch it armed is armed.
+      //
+      // Kills: adopting the arriving lens over the open one, which leaves the
+      // first lens's subscription running with no frame drawing it.
+
+      let cancels = 0;
+      const run = awaiting(
+        async function* (wrote) {
+          yield* typed(":watch label");
+          yield ENTER;
+          await wrote((write) =>
+            write.kind === "announce" && write.text.startsWith("One frame")
+          );
+          yield* typed("q");
+        },
+        {},
+        () => Promise.resolve(() => cancels++),
+      );
+      const drawn = await run.writes;
+      expect(produced(drawn)).toContain(
+        "One frame at a time, so this line's view was not opened.",
+      );
+      expect(drawn.filter((write) => write.kind === "unframe").length).toBe(1);
+      // What the second line did land: a second watch, numbered beside the
+      // first, which is the listing that line produced.
+      expect(produced(drawn)).toContain(
+        `%1 ${WATCHED}\n%2 ${HANDLE}/label @space`,
+      );
+      // Two of the four subscriptions the two lines took are cancelled, and
+      // they are the two lenses': the one turned down as it arrived, and the
+      // one the open frame held, on the way out. The two watches' own go on
+      // firing, which is what a watch is for — the run's way out is where
+      // those stop (`run.ts`).
+      expect(cancels).toBe(2);
+    });
+
+    it("places a cursor on the frame only where it is being typed at", async () => {
+      // A frame is read until something is being typed at it, and a cursor on
+      // one that is only read sits wherever the last row's drawing ended and
+      // reads as a place a person could type.
+
+      const drawn = await awaiting(async function* () {
+        yield* typed(":");
+        yield control("c");
+        yield* typed("q");
+      }).writes;
+      const cursors = drawn.filter((write) => write.kind === "frame")
+        .map((write) => write.cursor);
+      expect(cursors[0]).toBeUndefined();
+      // Past the frame's left edge, the space after it, and the `: ` the
+      // command line opens with.
+      expect(cursors[1]).toEqual({ row: 23, column: 5 });
+      expect(cursors.at(-1)).toBeUndefined();
+    });
+
+    it("runs a line typed ahead of the frame once the lens has closed", async () => {
+      // Held keys wait for the prompt rather than reaching the lens: a line
+      // typed while `watch` was still arming is a line, and the frame that
+      // opened over it is not where it runs.
+
+      const drawn = await typedAhead(
+        "watch title",
+        [...typed("pwd"), ENTER],
+        typed("q"),
+      ).writes;
+      expect(produced(drawn).filter((text) => text.startsWith("position")))
+        .toEqual([`position  //${SPACE}/${HANDLE}@space\nscope     @space`]);
+    });
+  });
+
   describe("completing a token", () => {
     // What `tab` does at the prompt. Which candidates a position offers is
     // pinned in `shuttle-completion.test.ts`; these are about the loop the
@@ -991,7 +1826,7 @@ describe("prompt", () => {
         listing(read),
       );
       expect(produced(writes)).toEqual([
-        `position  /@${SPACE}/${HANDLE}@space\nscope     @space`,
+        `position  //${SPACE}/${HANDLE}@space\nscope     @space`,
       ]);
     });
 

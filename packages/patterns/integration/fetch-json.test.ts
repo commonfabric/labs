@@ -84,7 +84,7 @@ describe("fetch json integration test", () => {
 
       // Set new repo URL via direct operation
       await piece.input.set(
-        "https://github.com/commontoolsinc/labs",
+        "https://github.com/commonfabric/labs",
         ["repoUrl"],
       );
 
@@ -104,7 +104,7 @@ describe("fetch json integration test", () => {
 
       // Also verify via direct operations
       const repoUrl = await piece.input.get(["repoUrl"]);
-      assertEquals(repoUrl, "https://github.com/commontoolsinc/labs");
+      assertEquals(repoUrl, "https://github.com/commonfabric/labs");
     },
   });
 });

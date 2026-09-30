@@ -20,25 +20,23 @@
  * says about the reading and nothing about a resolution; the resolution has a
  * block of its own.
  *
- * A refusal's text is pinned whole, and four of them are somebody else's
- * words. Shuttle consumes the reference grammar rather than forking it, so a
- * rooted operand's diagnostics come from that layer and reach the reader
- * unaltered — the space-mismatch sentence and the unknown-suffix sentence from
- * `normalizeLLMFriendlyRef` and `splitArgumentSuffix`, the no-piece-handle
- * sentence from `parseReferenceParts`, and the not-a-slug sentence from
- * `validatePieceSegment`, which every door relays and not the reference alone.
- * Each is marked at its case as relayed.
+ * A refusal's text is pinned whole, and several of them are somebody else's
+ * words. Shuttle consumes the reference grammar rather than forking it, so
+ * that grammar's diagnostics reach the reader unaltered, whichever door read
+ * the operand — the space-mismatch sentence from `normalizeLLMFriendlyRef`;
+ * the invalid-space, unknown-member, scope and duplicate-qualifier sentences
+ * from the shared reader (`packages/runner/src/cell-reference.ts`); and the
+ * not-a-slug sentence from `validatePieceSegment`, which every door relays and
+ * not the reference alone. Each is marked at its case as relayed.
  * When one moves upstream, the fix is to copy the new sentence here, never to
  * match a fragment of it: the whole sentence is what pins that the diagnostic
  * arrives intact, and a substring would let a rewording through that says
  * something else. Other diagnostics from that layer reach a reader without a
- * case here — a bad space segment, a piece segment that is no handle and holds
- * a colon, a bad scope suffix on a reference — and pinning four of them is
- * enough to hold the relay itself, since all of them travel the same path.
+ * case here — a piece segment that is no handle and holds a colon, a `@pin=`
+ * value of the wrong length — and pinning these is enough to hold the relay
+ * itself, since all of them travel the same path.
  *
- * Every other refusal in this file is shuttle's own, and two of those
- * deliberately mirror the canonical wording so the two surfaces read as one
- * — those move by choice rather than by upstream drift.
+ * Every other refusal in this file is shuttle's own.
  */
 
 import { expect } from "@std/expect";
@@ -50,6 +48,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   CurrentPlace,
   FACETS,
+  type HandleMove,
   type Move,
   operandForChild,
   type PendingMove,
@@ -62,6 +61,41 @@ import { landed, moved } from "./shuttle-place-helpers.ts";
 const SPACE = "did:key:z6MkConnectedSpace" as MemorySpace;
 const OTHER_SPACE = "did:key:z6MkOtherSpace" as MemorySpace;
 const HANDLE = "of:fid1:abcdefghijklmnop";
+
+/** A `@pin=` value of the length the reader takes, which no place holds. */
+const PIN = "A".repeat(43);
+
+/** The shared reader's refusal for a qualifier that names no scope. */
+const SCOPE_REFUSAL = "Invalid scope suffix. Expected `@space`, `@user`, " +
+  "`@session`, or `@inherit`; other qualifiers use `@name=value` " +
+  "(registered names: scope, pin). Put `#argument` before qualifiers on the " +
+  "piece segment.";
+
+/** The shared reader's refusal for a member that is not one. */
+const MEMBER_REFUSAL =
+  "Unknown member. Expected `#argument` or `#result` on the piece segment.";
+
+/** Shuttle's refusal for a move that selects the arguments cell. */
+const CD_MEMBER_REFUSAL = "A place is result-rooted, so `cd` selects no " +
+  "`#argument` member. A place rooted at the arguments cell would leave " +
+  "every later relative read ambiguous about which side of the piece it " +
+  "addressed. Reach arguments per operand instead, as in " +
+  "`get .#argument/title` or `get /slugs/board#argument/title`.";
+
+/** Shuttle's refusal for `operand` carrying a `@pin=` qualifier. */
+function pinRefusal(operand: string): string {
+  return `\`${operand}\` carries a \`@pin=\` qualifier, and shuttle reads a ` +
+    "piece as it runs rather than at a pinned version. Write the operand " +
+    "without the qualifier.";
+}
+
+/** Shuttle's refusal for `operand` selecting the member where no piece is. */
+function containerMemberRefusal(operand: string): string {
+  return `\`${operand}\` selects the \`#argument\` member where no piece ` +
+    "stands: a space root and a facet are lists of what stands inside them. " +
+    "Name the piece the member is on, as in " +
+    "`get /slugs/board#argument/title`.";
+}
 
 /** Helper for the cases below, which stands an instance at the space root. */
 function atSpaceRoot(): CurrentPlace {
@@ -117,21 +151,26 @@ describe("place", () => {
   });
 
   describe("operandForChild()", () => {
-    // The readings `cd()` applies, asked in the other direction. A name whose
-    // own characters are not readings is its own operand; one whose characters
-    // are is reached by the reference the child renders as, which reads none of
-    // them; and a child no rendering names back is reached by neither.
+    // The readings `cd()` applies, asked in the other direction. Inside a
+    // piece a key is offered as the shared renderer writes it against the
+    // place — bare, or behind the `.` head where the reference grammar would
+    // read the bare form as a head — and behind the `.` head where one of
+    // shuttle's own readings takes the renderer's form; a child no door admits
+    // is reached by none of them. Above a piece a name is its own operand, and
+    // a piece's complete reference is the fallback.
     //
     // One of the readings is not this module's. A token opening with `-`
     // reaches a verb as an option rather than as an operand, so a name spelled
-    // that way is offered as its reference too, and the case for it turns on
+    // that way is offered behind the `.` head, and the case for it turns on
     // `readsAsOption` (`options.ts`) rather than on any move made here.
     //
     // Two clauses of the comparison behind it have no case, and both are
-    // unreachable from this door rather than untested. Neither spelling tried
-    // moves the scope: the reference is rendered carrying the place's own, and
-    // the one reading that moves a scope takes a piece segment's suffix with
-    // it, which moves the piece too and fails the position clause first. And a
+    // unreachable from this door rather than untested. No spelling tried
+    // moves the scope: inside a piece the renderer writes no qualifier against
+    // the place's own scope, and a key that looks like one sits behind the `.`
+    // head as data; above a piece the reference is rendered carrying the
+    // place's scope, and a qualifier on a piece segment moves the piece too
+    // and fails the position clause first. And a
     // space root's children are a closed set, checked before a candidate is
     // tried, so a candidate that lands on a facet lands on the facet named.
     // The comparison is over the whole place because a place is one, and an
@@ -154,36 +193,64 @@ describe("place", () => {
       expect(operandForChild(inSlugs().place, "board")).toBe("board");
     });
 
-    it("returns a reference for a key called `..`", () => {
-      expect(operandForChild(atReferencedPiece().place, "..")).toBe(
-        `/@${SPACE}/${HANDLE}@space/..`,
-      );
+    it("returns the `.` head in front of a key called `..`", () => {
+      // The renderer's own form: `..` bare would be read as a climb. Kills a
+      // candidate list that offers the bare name first.
+
+      expect(operandForChild(atReferencedPiece().place, "..")).toBe("./..");
     });
 
-    it("returns a reference for a key opening with `-`, which the option grammar reads as an option", () => {
-      expect(operandForChild(atReferencedPiece().place, "-x")).toBe(
-        `/@${SPACE}/${HANDLE}@space/-x`,
-      );
+    it("returns the `.` head and the separator for the empty key", () => {
+      // Kills a walk that drops a final empty key inside a piece, where `./`
+      // would then reach the piece rather than the key.
+
+      expect(operandForChild(atReferencedPiece().place, "")).toBe("./");
     });
 
-    it("returns a reference for a key called `--`, the token that ends the options", () => {
-      expect(operandForChild(atReferencedPiece().place, "--")).toBe(
-        `/@${SPACE}/${HANDLE}@space/--`,
-      );
+    it("returns the `.` head in front of a key opening with `-`, which the option grammar reads as an option", () => {
+      // Kills an `operandForChild` that stops consulting `readsAsOption`.
+
+      expect(operandForChild(atReferencedPiece().place, "-x")).toBe("./-x");
     });
 
-    it("returns a reference escaping a key that holds the separator", () => {
-      expect(operandForChild(atReferencedPiece().place, "a/b")).toBe(
-        `/@${SPACE}/${HANDLE}@space/a~1b`,
-      );
+    it("returns the `.` head in front of a key called `--`, the token that ends the options", () => {
+      expect(operandForChild(atReferencedPiece().place, "--")).toBe("./--");
+    });
+
+    it("returns the `.` head in front of a key called `-`, the previous place's reading", () => {
+      // Kills a candidate list holding the renderer's form alone: `-` bare
+      // returns to the previous place, which the renderer knows nothing of.
+
+      expect(operandForChild(atReferencedPiece().place, "-")).toBe("./-");
+    });
+
+    it("returns the `.` head in front of a key opening with the handle sigil", () => {
+      // Kills the same list for the `%n` head reading.
+
+      expect(operandForChild(atReferencedPiece().place, "%1")).toBe("./%1");
+    });
+
+    it("returns the separator escaped for a key that holds it", () => {
+      // Kills a relative walk that reads `~1` as two characters.
+
+      expect(operandForChild(atReferencedPiece().place, "a/b")).toBe("a~1b");
+    });
+
+    it("returns a key ending in whitespace as itself, the reader keeping the edge", () => {
+      // Kills a door that still refuses a segment ending in whitespace.
+
+      expect(operandForChild(atReferencedPiece().place, "a ")).toBe("a ");
     });
 
     it("returns nothing for a key no rendering names back", () => {
-      expect(operandForChild(atReferencedPiece().place, "a ")).toBeUndefined();
+      expect(operandForChild(atReferencedPiece().place, "a\nb"))
+        .toBeUndefined();
     });
 
-    it("returns nothing for a key whose first character opens a wish target", () => {
-      expect(operandForChild(atReferencedPiece().place, "#b")).toBeUndefined();
+    it("returns the `.` head in front of a key whose first character opens a wish target", () => {
+      // Kills the same list for the `#name` head reading.
+
+      expect(operandForChild(atReferencedPiece().place, "#b")).toBe("./#b");
     });
 
     it("returns nothing for a piece name in neither vocabulary", () => {
@@ -217,13 +284,24 @@ describe("place", () => {
       );
     });
 
-    it("returns a piece and its path as a fully qualified reference", () => {
+    it("returns a piece and its path as a complete reference, the scope written", () => {
       const place = atPiece();
       moved(place, "topics/3");
       moved(place, ".@session");
       expect(place.render()).toBe(
-        "position  /@did:key:z6MkConnectedSpace/board@session/topics/3\n" +
+        "position  //did:key:z6MkConnectedSpace/board@session/topics/3\n" +
           "scope     @session",
+      );
+    });
+
+    it("returns the shared renderer's complete form at the base scope", () => {
+      // The table's row. Kills a rendering that leaves the base scope
+      // unwritten, or writes the space in the `/@<space>/` form.
+
+      const place = atPiece();
+      moved(place, "items/0");
+      expect(printedPosition(place)).toBe(
+        "//did:key:z6MkConnectedSpace/board@space/items/0",
       );
     });
 
@@ -251,19 +329,35 @@ describe("place", () => {
         moved(place, `/${HANDLE}/a~1b`);
         const printed = printedPosition(place);
         expect(printed).toBe(
-          "/@did:key:z6MkConnectedSpace/of:fid1:abcdefghijklmnop@space/a~1b",
+          "//did:key:z6MkConnectedSpace/of:fid1:abcdefghijklmnop@space/a~1b",
         );
         const elsewhere = atSpaceRoot();
         moved(elsewhere, printed);
         expect(elsewhere.place).toEqual(place.place);
       });
 
-      it("returns a rendering `cd` refuses where a key holds a `#`", () => {
+      it("returns a rendering `cd` takes back where a key holds a `#`", () => {
+        // `#` in a path is data to the reader, so the rendering names the key.
+        // Kills a reference door that reads `#` anywhere in the path.
+
         const place = atReferencedPiece();
         moved(place, "a#b");
         const elsewhere = atSpaceRoot();
-        expect(moved(elsewhere, printedPosition(place)).kind).toBe("refused");
-        expect(elsewhere.place).toEqual(placeAtSpaceRoot(SPACE));
+        moved(elsewhere, printedPosition(place));
+        expect(elsewhere.place).toEqual(place.place);
+      });
+
+      it("returns a rendering `cd` takes back for the empty key and a key ending in whitespace", () => {
+        // Kills a reader or a renderer that drops a trailing empty key or a
+        // trailing space, which would name the cell above.
+
+        const place = atReferencedPiece();
+        moved(place, "./");
+        moved(place, "a ");
+        const elsewhere = atSpaceRoot();
+        moved(elsewhere, printedPosition(place));
+        expect(elsewhere.place).toEqual(place.place);
+        expect(elsewhere.place.position).toMatchObject({ path: ["", "a "] });
       });
 
       describe("over a constructed set of awkward parts", () => {
@@ -383,7 +477,7 @@ describe("place", () => {
                   at.settle({
                     kind: "space-by-name",
                     name: "estuary",
-                    operand: `/@estuary/${v}`,
+                    operand: `//estuary/${v}`,
                     piece: v,
                     path: [],
                     scope: at.place.scope,
@@ -395,7 +489,7 @@ describe("place", () => {
                   at.settle({
                     kind: "space-by-name",
                     name: "estuary",
-                    operand: `/@estuary/${HANDLE}/${v}`,
+                    operand: `//estuary/${HANDLE}/${v}`,
                     piece: HANDLE,
                     path: [v],
                     scope: at.place.scope,
@@ -671,7 +765,7 @@ describe("place", () => {
 
         it("returns the place shuttle stood at for a space named by name", () => {
           const place = atSpaceRoot();
-          moved(place, `/@estuary/${HANDLE}`);
+          moved(place, `//estuary/${HANDLE}`);
           expect(place.place).toEqual(placeAtSpaceRoot(SPACE));
         });
       });
@@ -827,30 +921,44 @@ describe("place", () => {
             expect(step(atSpaceRoot(), ".@user").kind).toBe("moved");
           });
 
-          it("lands a walk that descended and climbed back out of the piece", () => {
-            // `board` waits on a read and `..` leaves it behind, so what the
-            // operand reaches is the facet, and a facet is not a thing to
-            // find.
+          it("lands a head that climbs out of the piece, there being no piece left to ask about", () => {
+            // Two climbs through the trail leave `board/topics` for the facet
+            // it was reached through. A walk after a head is literal, so a
+            // head is the one way an operand leaves a piece.
 
-            expect(step(inSlugs(), "board/..").kind).toBe("moved");
+            const place = atPiece();
+            moved(place, "topics");
+            expect(step(place, "../..").kind).toBe("moved");
           });
 
-          it("hands back a walk that climbed back to a level nothing read", () => {
-            // Sticky rather than last-step: the walk climbs out of `3` and
-            // stops at `topics`, which no read has looked at either.
+          it("hands back a walk whose `..` after a key is that key's child, nothing having climbed", () => {
+            // Kills a walk that still reads `..` in a later segment as a climb,
+            // which would land this on the facet.
 
-            expect(step(atReferencedPiece(), "topics/3/..").kind)
-              .toBe("pending");
+            expect(step(inSlugs(), "board/..")).toMatchObject({
+              kind: "pending",
+              place: { position: { piece: "board", path: [".."] } },
+            });
+          });
+
+          it("hands back a head that climbs and then descends to a level nothing read", () => {
+            // The climb reaches `topics`, which was read on the way in, and
+            // the descent to `4` is not, so the whole walk waits.
+
+            const place = atReferencedPiece();
+            moved(place, "topics/3");
+            expect(step(place, "../4").kind).toBe("pending");
           });
 
           it("lands a walk that ends exactly where it started", () => {
-            // Down and back up again reaches the place shuttle was standing
+            // Up and back down again reaches the place shuttle was standing
             // at, and that was settled when shuttle arrived — there is
             // nothing left for a read to check.
 
             const place = atReferencedPiece();
+            moved(place, "topics");
             const before = place.place;
-            expect(step(place, "topics/..")).toEqual({
+            expect(step(place, "../topics")).toEqual({
               kind: "moved",
               place: before,
             });
@@ -924,12 +1032,29 @@ describe("place", () => {
             // refusal names what a person typed rather than what the reading
             // made of it.
 
-            expect(moved(atSpaceRoot(), `/pieces/${HANDLE}/a /b`)).toEqual({
+            expect(moved(atSpaceRoot(), `/pieces/${HANDLE}/a\nb`)).toEqual({
               kind: "refused",
-              reason: `\`/pieces/${HANDLE}/a /b\` has a segment ending in ` +
-                "whitespace, so a rendering of the place would name a " +
+              reason: `\`/pieces/${HANDLE}/a\nb\` has a segment holding a ` +
+                "line break, so a rendering of the place would name a " +
                 "different cell.",
             });
+          });
+
+          it("reads every segment after the separator literally, reaching what the walk from the root reaches", () => {
+            // The table's row. Kills a rooted walk that reads `..` as a climb,
+            // which would leave `a` for the piece and land on `b`.
+
+            const rooted = atSpaceRoot();
+            moved(rooted, "/slugs/first/a/../b");
+            const relative = atSpaceRoot();
+            moved(relative, "slugs/first/a/../b");
+            expect(rooted.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: "first",
+              path: ["a", "..", "b"],
+            });
+            expect(relative.place).toEqual(rooted.place);
           });
 
           it("refuses a walk whose piece ends in whitespace", () => {
@@ -1106,10 +1231,30 @@ describe("place", () => {
           });
 
           it("refuses a qualifier naming no scope", () => {
+            // Relayed: the shared reader's sentence.
+
             expect(moved(atSpaceRoot(), ".@overlay")).toEqual({
               kind: "refused",
-              reason: "`.@overlay` names no scope. The scopes are `.@space`, " +
-                "`.@user`, and `.@session`.",
+              reason: SCOPE_REFUSAL,
+            });
+          });
+
+          it("keeps the place's scope for `.@inherit`", () => {
+            // Kills a head reading that takes `inherit` for a scope of its
+            // own, which no place can hold.
+
+            const place = atPiece();
+            moved(place, ".@session");
+            moved(place, ".@inherit");
+            expect(place.place.scope).toBe("session");
+          });
+
+          it("refuses a `@pin=` qualifier on the head, a place holding no pin", () => {
+            // Kills a head reading that drops the pin without a word.
+
+            expect(moved(atPiece(), `.@pin=${PIN}`)).toEqual({
+              kind: "refused",
+              reason: pinRefusal(`.@pin=${PIN}`),
             });
           });
 
@@ -1145,16 +1290,33 @@ describe("place", () => {
           });
 
           it("refuses a piece holding `@`", () => {
-            // The split reads the last `@` as a scope, so a piece holding
-            // one is read back shortened. No slug or handle carries the
-            // character, so nothing nameable is lost.
+            // Relayed: the shared reader's sentence. Every `@` on a piece
+            // segment introduces a qualifier, so this one names the scope
+            // twice, and no reading leaves an `@` inside the piece. A piece
+            // holding one reaches a door only where no piece segment is read,
+            // which `enter()` pins.
 
             expect(moved(inSlugs(), "board@session@session")).toEqual({
               kind: "refused",
-              reason: "`board@session@session` has a piece holding `@`, " +
-                "so no piece carries that name: a slug is lowercase " +
-                "letters, numbers, and single hyphens between words, and a " +
-                "handle is `of:fid1:` and unpadded base64url.",
+              reason: "Duplicate qualifier `scope`.",
+            });
+          });
+
+          it("keeps the place's scope for `@inherit` on a piece segment", () => {
+            // Kills a piece segment reading that takes `inherit` for a scope.
+
+            const place = atSpaceRoot();
+            moved(place, ".@user");
+            moved(place, "slugs/board@inherit");
+            expect(place.place.scope).toBe("user");
+          });
+
+          it("refuses a `@pin=` qualifier on a piece segment", () => {
+            // Kills a piece segment reading that drops the pin.
+
+            expect(moved(inSlugs(), `board@pin=${PIN}`)).toEqual({
+              kind: "refused",
+              reason: pinRefusal(`board@pin=${PIN}`),
             });
           });
 
@@ -1171,15 +1333,12 @@ describe("place", () => {
           });
 
           it("refuses a qualifier on a piece segment naming no scope", () => {
-            // The same refusal a scope-only operand gets, since it is the
-            // same fault: shuttle owns the scope words, so the wording is
-            // its own rather than the parser's, which speaks of link
-            // handles a reader never typed.
+            // Relayed: the same refusal a scope-only head gets, since it is
+            // the same fault read by the same reader.
 
             expect(moved(inSlugs(), "board@overlay")).toEqual({
               kind: "refused",
-              reason: "`@overlay` names no scope. The scopes are `@space`, " +
-                "`@user`, and `@session`.",
+              reason: SCOPE_REFUSAL,
             });
           });
         });
@@ -1284,62 +1443,111 @@ describe("place", () => {
             });
           });
 
+          it("keeps the place's scope for `@inherit` on a rooted or complete reference", () => {
+            // Kills a rooted door that reads a reference with no scope in its
+            // context, where `@inherit` falls back to the base.
+
+            for (
+              const reference of [
+                `/${HANDLE}@inherit/title`,
+                `//${SPACE}/${HANDLE}@inherit/title`,
+              ]
+            ) {
+              const place = atSpaceRoot();
+              moved(place, ".@session");
+              moved(place, reference);
+              expect(place.place).toEqual({
+                position: {
+                  kind: "piece",
+                  space: SPACE,
+                  piece: HANDLE,
+                  path: ["title"],
+                },
+                scope: "session",
+              });
+            }
+          });
+
+          it("refuses a `@pin=` qualifier on a rooted or complete reference", () => {
+            // Kills a rooted door that drops the pin the reader carries.
+
+            for (
+              const reference of [
+                `/${HANDLE}@pin=${PIN}/title`,
+                `//${SPACE}/${HANDLE}@pin=${PIN}/title`,
+              ]
+            ) {
+              expect(moved(atSpaceRoot(), reference)).toEqual({
+                kind: "refused",
+                reason: pinRefusal(reference),
+              });
+            }
+          });
+
           it("refuses a reference carrying `#argument`", () => {
             expect(moved(atSpaceRoot(), `/${HANDLE}#argument`)).toEqual({
               kind: "refused",
-              reason:
-                "A place is result-rooted, so `cd` takes no `#argument` " +
-                "suffix. A place rooted at the arguments cell would leave " +
-                "every later relative read ambiguous about which side of " +
-                "the piece it addressed. Reach arguments per operand " +
-                "instead, as in `get topics/3#argument`.",
+              reason: CD_MEMBER_REFUSAL,
             });
           });
 
           it("refuses a reference carrying any other fragment", () => {
-            // Relayed: the canonical layer's sentence, not shuttle's
+            // Relayed: the shared reader's sentence, not shuttle's
             // to choose. See the file header.
 
-            const move = moved(atSpaceRoot(), `/${HANDLE}#result`);
+            const move = moved(atSpaceRoot(), `/${HANDLE}#items`);
             expect(move).toEqual({
               kind: "refused",
-              reason: 'Unknown suffix "#result". The one supported suffix ' +
-                'is "#argument", which selects the piece\'s arguments cell ' +
-                'the way "--input" does.',
+              reason: MEMBER_REFUSAL,
             });
           });
 
-          it("refuses a reference holding an empty segment", () => {
-            // A rendering has to name the position it was printed for. The
-            // reference grammar drops a trailing empty segment, so a path
-            // ending in one would print as a reference to the piece above
-            // it — a different cell, with nothing said. The walk already
-            // refuses the spelling; this is the same refusal at the other
-            // door, and it costs the empty key its only spelling.
+          it("reads `#result` on a reference's piece segment as the result, which is no switch", () => {
+            // Kills a reference door that refuses the default member.
 
-            expect(moved(atSpaceRoot(), `/${HANDLE}//`)).toEqual({
-              kind: "refused",
-              reason: `\`/${HANDLE}//\` has an empty segment, ` +
-                `so a rendering of the place would name a different cell.`,
+            const place = atSpaceRoot();
+            moved(place, `/${HANDLE}#result`);
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: [],
             });
           });
 
-          it("refuses a reference holding an empty segment mid-path", () => {
-            expect(moved(atSpaceRoot(), `/${HANDLE}/a//b`)).toEqual({
-              kind: "refused",
-              reason: `\`/${HANDLE}/a//b\` has an empty segment, ` +
-                `so a rendering of the place would name a different cell.`,
+          it("reaches the empty keys a reference's empty segments name", () => {
+            // Kills a door that still refuses an empty segment. The reader
+            // keeps a trailing empty key, so the rendering names it back.
+
+            const place = atSpaceRoot();
+            moved(place, `/${HANDLE}//`);
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: ["", ""],
             });
           });
 
-          it("reads a trailing slash as the piece itself", () => {
+          it("reaches the empty key a reference names mid-path", () => {
+            const place = atSpaceRoot();
+            moved(place, `/${HANDLE}/a//b`);
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: ["a", "", "b"],
+            });
+          });
+
+          it("reads a trailing slash as the empty key under the piece", () => {
             const place = atSpaceRoot();
             moved(place, `/${HANDLE}/`);
             expect(place.place.position).toEqual({
               kind: "piece",
               space: SPACE,
               piece: HANDLE,
-              path: [],
+              path: [""],
             });
           });
 
@@ -1358,18 +1566,21 @@ describe("place", () => {
             );
           });
 
-          it("refuses a reference holding a segment that ends in whitespace", () => {
-            expect(moved(atSpaceRoot(), `/${HANDLE}/a /b`)).toEqual({
-              kind: "refused",
-              reason: `\`/${HANDLE}/a /b\` has a segment ending in ` +
-                `whitespace, so a rendering of the place would name a different cell.`,
+          it("reaches a key a reference writes ending in whitespace", () => {
+            const place = atSpaceRoot();
+            moved(place, `/${HANDLE}/a /b`);
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: ["a ", "b"],
             });
           });
 
           it("moves for a reference holding a segment that starts with one", () => {
-            // The parse trims the whole string, which no leading character
-            // of a segment sits at the end of, so leading whitespace
-            // survives the round trip and is admitted.
+            // The reader trims the leading edge of the whole string, which no
+            // leading character of a later segment sits at, so leading
+            // whitespace survives the round trip and is admitted.
 
             const place = atSpaceRoot();
             moved(place, `/${HANDLE}/ a/b`);
@@ -1382,13 +1593,21 @@ describe("place", () => {
           });
 
           it("refuses a rooted string that names no piece", () => {
-            // Relayed: the canonical layer's sentence, not shuttle's
-            // to choose. See the file header.
+            // Relayed: the shared reader's sentence, not shuttle's to choose.
+            // `//` opens the space slot, and there is no space in it.
 
             expect(moved(atSpaceRoot(), "//")).toEqual({
               kind: "refused",
+              reason: "Invalid space: expected a DID or a name without `/`, " +
+                "`@`, `#`, or `:`.",
+            });
+          });
+
+          it("refuses the retired named-space prefix", () => {
+            expect(moved(atSpaceRoot(), `/@estuary/${HANDLE}/title`)).toEqual({
+              kind: "refused",
               reason:
-                'Target must include a piece handle, e.g. "/of:fid1:abc123/path".',
+                "The named-space prefix `/@estuary/` is retired; use `//estuary/`.",
             });
           });
 
@@ -1397,10 +1616,10 @@ describe("place", () => {
             // connected one is what is not yet known, so there is nothing
             // for a space field to hold that would not be a guess.
 
-            expect(moved(atSpaceRoot(), `/@estuary/${HANDLE}/title`)).toEqual({
+            expect(moved(atSpaceRoot(), `//estuary/${HANDLE}/title`)).toEqual({
               kind: "space-by-name",
               name: "estuary",
-              operand: `/@estuary/${HANDLE}/title`,
+              operand: `//estuary/${HANDLE}/title`,
               piece: HANDLE,
               path: ["title"],
               scope: "space",
@@ -1457,8 +1676,8 @@ describe("place", () => {
           it("hands back `#argument` as a target rather than refusing it", () => {
             // The wish reading is decided on the whole operand, so it does
             // not ask which word follows the `#`. `#argument` earns the
-            // result-rooted refusal as a *suffix* on a reference; standing
-            // alone it is a target name like any other, and the connection
+            // result-rooted refusal as a member on a head or a piece segment;
+            // standing alone it is a target name like any other, and the connection
             // is what discovers there is none. The case below drives the
             // same point through a spelling a reference refuses outright.
 
@@ -1543,7 +1762,7 @@ describe("place", () => {
           });
 
           it("refuses `#argument` in a segment naming a piece for the same reason as a reference", () => {
-            // A place is result-rooted however the suffix was written, so
+            // A place is result-rooted however the member was written, so
             // the two spellings are pinned equal rather than each pinning
             // its own text. That is what keeps a remedy naming the
             // reference form — which `cd` refuses in turn — out of this
@@ -1554,32 +1773,41 @@ describe("place", () => {
             );
           });
 
-          it("refuses any other fragment for carrying no suffix at all", () => {
-            expect(moved(inSlugs(), "board#result")).toEqual({
+          it("refuses any other fragment for carrying no member at all", () => {
+            // Relayed: the shared reader's sentence.
+
+            expect(moved(inSlugs(), "board#items")).toEqual({
               kind: "refused",
-              reason: 'Unknown suffix "#result". The one supported suffix ' +
-                'is "#argument", which selects the piece\'s arguments cell ' +
-                'the way "--input" does.',
+              reason: MEMBER_REFUSAL,
+            });
+          });
+
+          it("reads `#result` on a piece segment as the result, which is no switch", () => {
+            // Kills a piece segment reading that refuses the default member.
+
+            const place = inSlugs();
+            moved(place, "board#result");
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: "board",
+              path: [],
             });
           });
 
           it("gives a bare fragment the wording a reference's gets", () => {
-            // The two are copies: shuttle authors this one so the surfaces
-            // read as one, and the canonical layer authors the other. Only
-            // pinning them equal makes a reword that moves one and not the
-            // other fail here rather than diverge quietly.
+            // One reader reads both, so the two sentences are one. Pinning
+            // them equal is what fails if a door stops relaying that reader.
 
-            expect(moved(inSlugs(), "board#result")).toEqual(
-              moved(atSpaceRoot(), `/${HANDLE}#result`),
+            expect(moved(inSlugs(), "board#items")).toEqual(
+              moved(atSpaceRoot(), `/${HANDLE}#items`),
             );
           });
 
-          it("names the whole fragment, not the part before a second `#`", () => {
+          it("refuses a second `#` on a piece segment rather than reading the member before it", () => {
             expect(moved(inSlugs(), "board#argument#x")).toEqual({
               kind: "refused",
-              reason: 'Unknown suffix "#argument#x". The one supported ' +
-                'suffix is "#argument", which selects the piece\'s ' +
-                'arguments cell the way "--input" does.',
+              reason: MEMBER_REFUSAL,
             });
           });
 
@@ -1654,7 +1882,7 @@ describe("place", () => {
           it("reaches a key named `.` through the head, and by what a listing offers", () => {
             // What the head costs: a key named `.` has no bare spelling, the
             // trade `..`, `-` and `/` already make here. It keeps two
-            // spellings — the head, and the reference a listing prints for it,
+            // spellings — the head, and the operand a listing prints for it,
             // which is what makes every name a listing prints one `cd` takes.
 
             const place = atReferencedPiece();
@@ -1720,23 +1948,20 @@ describe("place", () => {
           });
 
           it("refuses a `.@` head naming no scope, wherever it stands", () => {
+            // Relayed: the shared reader's sentence.
+
             expect(moved(atPiece(), ".@foo")).toEqual({
               kind: "refused",
-              reason: "`.@foo` names no scope. The scopes are `.@space`, " +
-                "`.@user`, and `.@session`.",
+              reason: SCOPE_REFUSAL,
             });
           });
 
-          it("reads `~1` in a segment as two characters of a data key", () => {
-            // A relative operand is not a reference, so the reference
-            // grammar's `~1` escaping does not reach it: `~1` is literal
-            // here where a reference reads it as a literal `/` inside the
-            // key. The case below is the consequence — a key holding a `/`
-            // has no relative spelling, the walk splitting on the separator
-            // it holds — and both are pinned so that teaching the walk to
-            // unescape reds a case rather than arriving unremarked. Such a
-            // key is named by a reference instead, which unescapes `~1`, and
-            // that is the spelling `operandForChild` offers for it.
+          it("reads `~1` in a segment as the separator inside one key", () => {
+            // The table's row. A relative operand is a reference, so its path
+            // is a pointer and `~1` is the escape for `/` inside a key; the
+            // case below is the other half, where an unescaped `/` separates
+            // two keys. Kills a walk that splits the operand itself rather
+            // than reading the pointer, which leaves `~1` as two characters.
 
             const place = atReferencedPiece();
             moved(place, "a~1b");
@@ -1744,7 +1969,7 @@ describe("place", () => {
               kind: "piece",
               space: SPACE,
               piece: HANDLE,
-              path: ["a~1b"],
+              path: ["a/b"],
             });
           });
 
@@ -1869,9 +2094,7 @@ describe("place", () => {
             });
 
             it("reads `..` as a data key through a reference", () => {
-              // `..` is read segment by segment by the walk and by nothing
-              // else, so the reference door carries one as data. That is
-              // the only spelling a key named `..` has.
+              // A rooted reference has no head, so every `..` in it is a key.
 
               const place = atSpaceRoot();
               moved(place, `/${HANDLE}/..`);
@@ -1883,15 +2106,36 @@ describe("place", () => {
               });
             });
 
-            it("reads `..` as a level to leave in a later segment", () => {
+            it("reads `..` as a data key in a later segment", () => {
+              // Kills a walk that reads `..` after the head as a climb.
+
               const place = atReferencedPiece();
               moved(place, "a/..");
               expect(place.place.position).toEqual({
                 kind: "piece",
                 space: SPACE,
                 piece: HANDLE,
-                path: [],
+                path: ["a", ".."],
               });
+            });
+
+            it("reaches the key `..`, the empty key and a key ending in whitespace, each as its own spelling writes it", () => {
+              // The table's row for `./..`, `./` and `"a "`. Kills a head
+              // reading that climbs on `./..`, a walk that drops the empty key
+              // `./` names, and a door that still refuses a key's trailing
+              // edge.
+
+              const spellings = [["./..", ".."], ["./", ""], ["a ", "a "]];
+              for (const [operand, key] of spellings) {
+                const place = atReferencedPiece();
+                moved(place, operand);
+                expect(place.place.position).toEqual({
+                  kind: "piece",
+                  space: SPACE,
+                  piece: HANDLE,
+                  path: [key],
+                });
+              }
             });
           });
 
@@ -1907,6 +2151,11 @@ describe("place", () => {
           });
 
           it("ignores a trailing slash", () => {
+            // The table's row: above a piece there are no keys, so a final
+            // separator where the walk ends at a facet names none. Kills a
+            // walk that reads that empty key as a piece segment, which
+            // refuses it as an empty piece.
+
             const place = atSpaceRoot();
             moved(place, "slugs/");
             expect(place.place.position).toEqual({
@@ -1916,25 +2165,40 @@ describe("place", () => {
             });
           });
 
-          it("refuses an operand with a segment ending in whitespace", () => {
+          it("reads a final separator after a piece as the empty key under it", () => {
+            // The table's row. Kills a walk that drops a final empty key
+            // wherever it sits.
+
+            const place = atSpaceRoot();
+            moved(place, "slugs/first/");
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: "first",
+              path: [""],
+            });
+          });
+
+          it("reaches a key ending in whitespace with a segment after it", () => {
             // A segment with something after it in the operand, where the
             // trailing whitespace is plainly the segment's own. One sitting
-            // at the operand's own edge answers to the same rule, under
+            // at the operand's own edge reads the same, under
             // `whitespace at an operand's edges` below.
 
-            expect(moved(atReferencedPiece(), "a /b")).toEqual({
-              kind: "refused",
-              reason: "`a /b` has a segment ending in whitespace, so a " +
-                "rendering of the place would name a different cell.",
+            const place = atReferencedPiece();
+            moved(place, "a /b");
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: ["a ", "b"],
             });
           });
 
           it("gives a piece-name segment the piece's reason, not a segment's", () => {
-            // The same flaw in the same operand shape, one segment along
-            // from `a /b` above, which gets the segment reason. A piece
-            // ending in whitespace does not name another cell — the scope
-            // suffix stands between it and the trim — so it must not be
-            // told that it does.
+            // The same edge in the same operand shape, one segment along from
+            // `a /b` above, which reaches a key. No slug or handle ends in
+            // whitespace, so a piece that does is refused for naming nothing.
 
             expect(moved(inSlugs(), "board /x")).toEqual({
               kind: "refused",
@@ -1967,34 +2231,41 @@ describe("place", () => {
             // them: the operand's edges are those parts' edges, and at that
             // one position stripping the operand would strip a name.
 
-            it("refuses a key ending in whitespace", () => {
-              expect(moved(atReferencedPiece(), "board ")).toEqual({
-                kind: "refused",
-                reason: "`board ` has a segment ending in whitespace, so a " +
-                  "rendering of the place would name a different cell.",
+            it("reaches a key ending in whitespace", () => {
+              const place = atReferencedPiece();
+              moved(place, "board ");
+              expect(place.place.position).toEqual({
+                kind: "piece",
+                space: SPACE,
+                piece: HANDLE,
+                path: ["board "],
               });
             });
 
-            it("refuses a key ending in a tab", () => {
+            it("refuses a key ending in a tab, a terminal acting on it", () => {
               expect(moved(atReferencedPiece(), "board\t")).toEqual({
                 kind: "refused",
-                reason: "`board\t` has a segment ending in whitespace, so a " +
-                  "rendering of the place would name a different cell.",
+                reason: "`board\t` has a segment holding a control " +
+                  "character, so a terminal would act on it rather than " +
+                  "print it.",
               });
             });
 
-            it("refuses a key padded on both sides", () => {
-              expect(moved(atReferencedPiece(), " board ")).toEqual({
-                kind: "refused",
-                reason: "` board ` has a segment ending in whitespace, so a " +
-                  "rendering of the place would name a different cell.",
+            it("reaches a key padded on both sides", () => {
+              const place = atReferencedPiece();
+              moved(place, " board ");
+              expect(place.place.position).toEqual({
+                kind: "piece",
+                space: SPACE,
+                piece: HANDLE,
+                path: [" board "],
               });
             });
 
             it("reaches a key whose name starts with whitespace", () => {
-              // Leading whitespace survives a rendering and the parse that
+              // Leading whitespace survives a rendering and the reader that
               // reads one back, so it costs a key no name and the walk spells
-              // such a key. The trailing edge is the one a rendering loses.
+              // such a key. The trailing edge survives both as well.
 
               const place = atReferencedPiece();
               moved(place, " board");
@@ -2006,23 +2277,29 @@ describe("place", () => {
               });
             });
 
-            it("refuses a multi-segment operand whose last segment ends in whitespace", () => {
+            it("reaches a multi-segment operand's last key ending in whitespace", () => {
               // The one position where the operand's edge and a part's edge
               // are the same characters, which is the whole of what makes
               // this case different from `a /b` above.
 
-              expect(moved(atReferencedPiece(), "a/b ")).toEqual({
-                kind: "refused",
-                reason: "`a/b ` has a segment ending in whitespace, so a " +
-                  "rendering of the place would name a different cell.",
+              const place = atReferencedPiece();
+              moved(place, "a/b ");
+              expect(place.place.position).toEqual({
+                kind: "piece",
+                space: SPACE,
+                piece: HANDLE,
+                path: ["a", "b "],
               });
             });
 
-            it("refuses an operand that is only whitespace inside a piece", () => {
-              expect(moved(atReferencedPiece(), " ")).toEqual({
-                kind: "refused",
-                reason: "` ` has a segment ending in whitespace, so a " +
-                  "rendering of the place would name a different cell.",
+            it("reaches a key that is only whitespace inside a piece", () => {
+              const place = atReferencedPiece();
+              moved(place, " ");
+              expect(place.place.position).toEqual({
+                kind: "piece",
+                space: SPACE,
+                piece: HANDLE,
+                path: [" "],
               });
             });
 
@@ -2092,6 +2369,100 @@ describe("place", () => {
           });
         });
 
+        describe("a numbered handle", () => {
+          // A handle is a head. What follows it is read as what follows the
+          // `.` head is, and the row it names is the handle table's to say, so
+          // these cases read what comes back for the table and what `reach()`
+          // does with a row.
+
+          it("hands back a handle with the literal keys after it, `..` among them", () => {
+            // Kills a handle reading that climbs on `%1/..`.
+
+            expect(moved(atPiece(), "%1/..")).toEqual({
+              kind: "handle",
+              handle: "%1",
+              path: [".."],
+              operand: "%1/..",
+            });
+          });
+
+          it("tells a handle from the same handle followed by its separator", () => {
+            // Kills a shape that drops the empty key `%1/` names.
+
+            expect(moved(atPiece(), "%1")).toEqual({
+              kind: "handle",
+              handle: "%1",
+              path: [],
+              operand: "%1",
+            });
+            expect(moved(atPiece(), "%1/")).toEqual({
+              kind: "handle",
+              handle: "%1",
+              path: [""],
+              operand: "%1/",
+            });
+          });
+
+          it("reaches the key `..` under the row's own position", () => {
+            // The table's row. Kills a `reach()` that reads the path after the
+            // handle as a climb.
+
+            const place = atReferencedPiece();
+            const move = place.cd("%1/..");
+            if (move.kind !== "handle") throw new Error(`came ${move.kind}`);
+            landed(place, place.reach(move, place.place, "title", "cd"));
+            expect(place.place.position).toEqual({
+              kind: "piece",
+              space: SPACE,
+              piece: HANDLE,
+              path: ["title", ".."],
+            });
+          });
+
+          it("hands back the head's member and scope for the row to be read against", () => {
+            expect(moved(atPiece(), "%1#argument@session/a")).toEqual({
+              kind: "handle",
+              handle: "%1",
+              member: "argument",
+              scope: "session",
+              path: ["a"],
+              operand: "%1#argument@session/a",
+            });
+          });
+
+          it("refuses `@pin=` on a handle's head before the row is looked up", () => {
+            // Kills a handle reading that drops the pin.
+
+            expect(moved(atPiece(), `%1@pin=${PIN}`)).toEqual({
+              kind: "refused",
+              reason: pinRefusal(`%1@pin=${PIN}`),
+            });
+          });
+
+          it("refuses a member that is not one on a handle's head, in the reader's words", () => {
+            // Relayed: the shared reader's sentence, given before the row is
+            // looked up. Kills a handle reading that takes a head it cannot
+            // read for a handle, and hands a malformed member to the table.
+
+            expect(moved(atPiece(), "%1#items")).toEqual({
+              kind: "refused",
+              reason: MEMBER_REFUSAL,
+            });
+          });
+
+          it("refuses a move whose handle selects `#argument`, a place being result-rooted", () => {
+            // Kills a handle walk that carries the selection into a move.
+
+            const place = atReferencedPiece();
+            const move = place.cd("%1#argument");
+            if (move.kind !== "handle") throw new Error(`came ${move.kind}`);
+            expect(place.reach(move, place.place, "title", "cd")).toEqual({
+              kind: "refused",
+              reason: CD_MEMBER_REFUSAL,
+            });
+          });
+        });
+
         describe("`..`", () => {
           it("stays at the space root", () => {
             const place = atSpaceRoot();
@@ -2149,6 +2520,20 @@ describe("place", () => {
             });
           });
 
+          it("climbs twice through the trail a rooted walk left, leaving the piece for its facet", () => {
+            // The table's row. Kills a climb computed from the position rather
+            // than the trail, which would reach the root.
+
+            const place = atSpaceRoot();
+            moved(place, "/slugs/first/a");
+            moved(place, "../..");
+            expect(place.place.position).toEqual({
+              kind: "facet",
+              space: SPACE,
+              facet: "slugs",
+            });
+          });
+
           it("drops a path segment inside a piece a reference named", () => {
             const place = atSpaceRoot();
             moved(place, `/${HANDLE}/topics/3`);
@@ -2182,7 +2567,7 @@ describe("place", () => {
 
       describe("aim()", () => {
         // The read door. It differs from `cd()` in two ways and this block is
-        // both of them: nothing moves, and a trailing `#argument` is read
+        // both of them: nothing moves, and the `#argument` member is read
         // rather than refused. Everything else is `cd()`'s reading, so what is
         // asked here is only that the operand arrives at it — the readings
         // themselves are `cd()`'s block above.
@@ -2214,23 +2599,85 @@ describe("place", () => {
           expect(place.place).toBe(before);
         });
 
-        it("returns no selection of the arguments cell for an operand carrying no suffix", () => {
+        it("returns no selection of the arguments cell for an operand carrying no member", () => {
           expect(atPiece().aim("topics", "get").input).toBe(false);
         });
 
-        it("returns the arguments cell selected for an operand ending in `#argument`", () => {
-          expect(atPiece().aim("topics#argument", "get").input).toBe(true);
+        it("returns the arguments cell selected for an operand whose head selects `#argument`", () => {
+          // Kills a head reading that drops the member.
+
+          expect(atPiece().aim(".#argument/topics", "get").input).toBe(true);
         });
 
-        it("returns the position the operand names with the suffix off it", () => {
-          expect(atPiece().aim("topics/3#argument", "get").move).toEqual(
-            pointsAt(atPiece(), "topics/3"),
-          );
+        it("returns a result key for an operand ending in `#argument`, `#` being data in a path", () => {
+          // Kills a door that still takes a trailing `#argument` off the
+          // operand.
+
+          const aim = atPiece().aim("topics#argument", "get");
+          expect(aim.input).toBe(false);
+          expect(aim.move).toMatchObject({
+            kind: "moved",
+            place: { position: { piece: "board", path: ["topics#argument"] } },
+          });
         });
 
-        it("reads the suffix off a bare piece designation, which `cd` refuses", () => {
+        it("reads the arguments cell's path from its root, whatever path the place stands at", () => {
+          // The table's row, standing at `items`. Kills a member switch that
+          // keeps the position's path, which would read `items/a`.
+
+          const place = atPiece();
+          moved(place, "items");
+          expect(place.aim(".#argument/a", "get")).toEqual({
+            input: true,
+            move: pointsAt(atPiece(), "a"),
+          });
+        });
+
+        it("reads a `#result` head as no switch, the path held", () => {
+          // Kills a head reading that resets the path for the default member.
+
+          const place = atPiece();
+          moved(place, "items");
+          expect(place.aim(".#result/a", "get")).toEqual({
+            input: false,
+            move: pointsAt(atPiece(), "items/a"),
+          });
+        });
+
+        it("refuses a head that climbs and selects `#argument` in one", () => {
+          // The table's row. Kills a head reading that climbs and then
+          // switches, which would read the arguments cell at `a`.
+
+          const place = atPiece();
+          moved(place, "items");
+          expect(place.aim("..#argument/a", "get")).toEqual({
+            input: false,
+            move: {
+              kind: "refused",
+              reason: "`..#argument/a` climbs and selects the `#argument` " +
+                "member in one head. The member reads the path from the " +
+                "arguments cell's root, so there is no level for a climb to " +
+                "leave: `.#argument` is the head that selects it.",
+            },
+          });
+        });
+
+        it("refuses `#argument` on a head standing where no piece stands", () => {
+          // Kills a member switch that does not ask whether a piece stands
+          // there, which would hand a container a selection.
+
+          expect(inSlugs().aim(".#argument", "get")).toEqual({
+            input: false,
+            move: {
+              kind: "refused",
+              reason: containerMemberRefusal(".#argument"),
+            },
+          });
+        });
+
+        it("reads the member off a piece segment, which `cd` refuses", () => {
           // The asymmetry the door exists for, on the one spelling where the
-          // two doors visibly disagree: `cd` turns the suffix down because a
+          // two doors visibly disagree: `cd` turns the member down because a
           // place is result-rooted, and a read is not standing anywhere.
           const place = inSlugs();
           expect(place.aim("board#argument", "get")).toEqual({
@@ -2240,8 +2687,8 @@ describe("place", () => {
           expect(moved(inSlugs(), "board#argument").kind).toBe("refused");
         });
 
-        it("reads the suffix off a rooted reference", () => {
-          expect(atSpaceRoot().aim(`/${HANDLE}/title#argument`, "get")).toEqual(
+        it("reads the member off a rooted reference's piece segment", () => {
+          expect(atSpaceRoot().aim(`/${HANDLE}#argument/title`, "get")).toEqual(
             {
               input: true,
               move: pointsAt(atSpaceRoot(), `/${HANDLE}/title`),
@@ -2249,19 +2696,45 @@ describe("place", () => {
           );
         });
 
-        it("refuses the suffix written with nothing in front of it", () => {
+        it("reads the member off a rooted walk's piece segment, wherever shuttle stands", () => {
+          // The table's row. Kills a rooted walk that reads a piece segment
+          // with no member.
+
+          expect(atPiece().aim("/slugs/first#argument/label", "get")).toEqual({
+            input: true,
+            move: pointsAt(atSpaceRoot(), "/slugs/first/label"),
+          });
+        });
+
+        it("reads a key named `label#argument` where `#argument` follows the path", () => {
+          // The table's row. Kills a rooted walk that takes a trailing
+          // `#argument` off the path.
+
+          const aim = atPiece().aim("/slugs/first/label#argument", "get");
+          expect(aim.input).toBe(false);
+          expect(aim.move).toMatchObject({
+            kind: "moved",
+            place: { position: { piece: "first", path: ["label#argument"] } },
+          });
+        });
+
+        it("refuses the member written as a whole operand, teaching the spellings that take it", () => {
+          // What it teaches is the two spellings that take the member.
+
           expect(atPiece().aim("#argument", "get")).toEqual({
             input: false,
             move: {
               kind: "refused",
-              reason: "`#argument` selects a piece's arguments cell, so it " +
-                "follows the target it selects, as in `get topics#argument`.",
+              reason: "`#argument` on its own names no piece to select the " +
+                "arguments cell of. The member goes on a head or a piece " +
+                "segment, as in `get .#argument/title` or " +
+                "`get /slugs/board#argument/title`.",
             },
           });
         });
 
         it("hands `#argument` followed by whitespace on as a target", () => {
-          // The suffix reading is the operand exactly, so a trailing space
+          // The member refusal reads the operand exactly, so a trailing space
           // leaves the head reading to decide, and the head reading is the
           // wish target.
 
@@ -2279,9 +2752,9 @@ describe("place", () => {
         });
 
         it("takes a `#` inside a piece as a character of a key", () => {
-          // The suffix reading is the one spelling it accepts and nothing
-          // wider, so every other `#` reaches the door that decides it — here
-          // the walk, where `#` is data.
+          // Only a head and a piece segment read a member, so every other `#`
+          // reaches the door that decides it — here the walk, where `#` is
+          // data.
           expect(atPiece().aim("a#b", "get")).toEqual({
             input: false,
             move: pointsAt(atPiece(), "a#b"),
@@ -2289,13 +2762,20 @@ describe("place", () => {
           expect(pointsAt(atPiece(), "a#b").kind).toBe("moved");
         });
 
-        it("refuses a key ending in whitespace inside a piece", () => {
+        it("returns a key ending in whitespace inside a piece", () => {
           expect(atPiece().aim("topics ", "get")).toEqual({
             input: false,
             move: {
-              kind: "refused",
-              reason: "`topics ` has a segment ending in whitespace, so a " +
-                "rendering of the place would name a different cell.",
+              kind: "moved",
+              place: {
+                position: {
+                  kind: "piece",
+                  space: SPACE,
+                  piece: "board",
+                  path: ["topics "],
+                },
+                scope: "space",
+              },
             },
           });
         });
@@ -2331,7 +2811,7 @@ describe("place", () => {
           });
         });
 
-        it("returns two reasons for an empty operand and one that is only whitespace", () => {
+        it("returns two answers for an empty operand and one that is only whitespace", () => {
           // The read door keeps the two apart the way the move door does: one
           // named nothing, and one named a key that is only a space.
 
@@ -2339,36 +2819,36 @@ describe("place", () => {
             kind: "refused",
             reason: "`get` was given an empty operand, which names no place.",
           });
-          expect(atPiece().aim(" ", "get").move).toEqual({
-            kind: "refused",
-            reason: "` ` has a segment ending in whitespace, so a rendering " +
-              "of the place would name a different cell.",
+          expect(atPiece().aim(" ", "get").move).toMatchObject({
+            kind: "moved",
+            place: { position: { piece: "board", path: [" "] } },
           });
         });
 
-        it("refuses a suffix with a walk after it, where `cd` is refused for its place", () => {
-          // One operand, two doors, two sentences. A read never reaches the
-          // place's suffix refusal with the suffix at the end of its operand
-          // — this door takes that one off and reads the arguments cell with
-          // it — so what a read is refused for is where the suffix sits,
-          // which is not what a move is refused for. Both are asserted here
-          // because a sentence that moved to the other door would pass
-          // whichever of the two was pinned alone.
+        it("reads a member with a walk after it, where `cd` is refused for its place", () => {
+          // One operand, two doors. A read takes the member and the path in
+          // the arguments cell after it; a move is refused it, a place being
+          // result-rooted. Both are asserted here because a door that stopped
+          // telling reads from moves would pass whichever was pinned alone.
 
-          expect(inSlugs().aim("board#argument/title", "get").move).toEqual({
-            kind: "refused",
-            reason: "`get` takes `#argument` at the end of an operand and " +
-              "nowhere else: it selects a piece's arguments cell, and a " +
-              "path inside that cell is written in front of it, as in " +
-              "`topics/3/title#argument`.",
+          expect(inSlugs().aim("board#argument/title", "get")).toEqual({
+            input: true,
+            move: pointsAt(inSlugs(), "board/title"),
           });
           expect(moved(inSlugs(), "board#argument/title")).toEqual({
             kind: "refused",
-            reason: "A place is result-rooted, so `cd` takes no `#argument` " +
-              "suffix. A place rooted at the arguments cell would leave " +
-              "every later relative read ambiguous about which side of the " +
-              "piece it addressed. Reach arguments per operand instead, as " +
-              "in `get topics/3#argument`.",
+            reason: CD_MEMBER_REFUSAL,
+          });
+        });
+
+        it("refuses `.#argument` for a move, a place being result-rooted", () => {
+          // The table's row for `cd`; `ls` refuses in its own words
+          // (`shuttle-verbs.serial.test.ts`). Kills a head reading that carries
+          // the selection into a move.
+
+          expect(moved(atPiece(), ".#argument")).toEqual({
+            kind: "refused",
+            reason: CD_MEMBER_REFUSAL,
           });
         });
 
@@ -2382,15 +2862,25 @@ describe("place", () => {
           });
         });
 
-        it("carries the reason a reference gave a fragment that is no suffix", () => {
-          expect(atSpaceRoot().aim(`/${HANDLE}/a#b`, "get")).toEqual({
+        it("carries the reason a reference gave a member that is not one", () => {
+          // Relayed: the shared reader's sentence, for a member that is not
+          // one on the piece segment.
+
+          expect(atSpaceRoot().aim(`/${HANDLE}#b/a`, "get")).toEqual({
             input: false,
-            move: {
-              kind: "refused",
-              reason: 'Unknown suffix "#b". The one supported suffix is ' +
-                '"#argument", which selects the piece\'s arguments cell the ' +
-                'way "--input" does.',
-            },
+            move: { kind: "refused", reason: MEMBER_REFUSAL },
+          });
+        });
+
+        it("returns the key a reference's `#` names after the piece segment", () => {
+          // Kills a reference door that reads `#` anywhere but the piece
+          // segment.
+
+          const aim = atSpaceRoot().aim(`/${HANDLE}/a#b`, "get");
+          expect(aim.input).toBe(false);
+          expect(aim.move).toMatchObject({
+            kind: "moved",
+            place: { position: { piece: HANDLE, path: ["a#b"] } },
           });
         });
       });
@@ -2459,16 +2949,23 @@ describe("place", () => {
           });
         });
 
-        it("refuses a target whose path holds an empty segment", () => {
+        it("moves to a target whose path holds the empty key", () => {
           expect(
             atSpaceRoot().enter(
               { space: SPACE, piece: HANDLE, path: ["a", ""] },
               "#favorites",
             ),
           ).toEqual({
-            kind: "refused",
-            reason: "`#favorites` resolves to a path with an empty " +
-              "segment, so a rendering of the place would name a different cell.",
+            kind: "moved",
+            place: {
+              position: {
+                kind: "piece",
+                space: SPACE,
+                piece: HANDLE,
+                path: ["a", ""],
+              },
+              scope: "space",
+            },
           });
         });
 
@@ -2491,20 +2988,17 @@ describe("place", () => {
           // `isPieceHandle` is a length rule, so a piece long enough to
           // pass for a handle carries either character of
           // `READ_INSIDE_AN_ID` past the vocabulary check — and a `#` then
-          // costs the place its own rendering, which `cd` refuses as an
-          // argument suffix.
+          // costs the place its own rendering, which the reader would read as
+          // a member on the piece segment.
           //
           // One case per character, not one per character per door. The rule
           // is a single loop inside `unnameablePiece` that every door calls,
-          // and each character is driven at a door with no earlier check of
-          // its own — `#` here, `@` through a walk — so dropping either from
-          // the loop reds its case. `#` is driven at this door rather than
-          // at a walk because a walk refuses a `#` before the rule runs,
-          // naming the suffix; dropping `#` from the loop therefore leaves
-          // that door refusing it still, which is why the case for it is
-          // here. That each door calls the rule at all is a separate axis
-          // with cases of its own, and each frames the one `Fault` it gets
-          // back in its own sentence.
+          // and each character is driven at this door, which reads no piece
+          // segment: a walk and a reference read `#` and `@` as a member and a
+          // qualifier before the rule runs, so dropping either from the loop
+          // would leave those doors refusing it still. That each door calls
+          // the rule at all is a separate axis with cases of its own, and each
+          // frames the one `Fault` it gets back in its own sentence.
 
           expect(
             atSpaceRoot().enter(
@@ -2514,6 +3008,23 @@ describe("place", () => {
           ).toEqual({
             kind: "refused",
             reason: "`#favorites` resolves to a piece holding `#`, so no " +
+              "piece carries that name: a slug is lowercase letters, " +
+              "numbers, and single hyphens between words, and a handle is " +
+              "`of:fid1:` and unpadded base64url.",
+          });
+        });
+
+        it("refuses a target whose piece holds `@` though its length passes for a handle", () => {
+          // Kills `@` dropped from `READ_INSIDE_AN_ID`.
+
+          expect(
+            atSpaceRoot().enter(
+              { space: SPACE, piece: "of:fid1:abcdefghij@k", path: [] },
+              "#favorites",
+            ),
+          ).toEqual({
+            kind: "refused",
+            reason: "`#favorites` resolves to a piece holding `@`, so no " +
               "piece carries that name: a slug is lowercase letters, " +
               "numbers, and single hyphens between words, and a handle is " +
               "`of:fid1:` and unpadded base64url.",
@@ -2568,16 +3079,17 @@ describe("place", () => {
           });
         });
 
-        it("refuses a target whose path holds a segment ending in whitespace", () => {
-          expect(
-            atSpaceRoot().enter(
-              { space: SPACE, piece: HANDLE, path: ["a "] },
-              "#favorites",
-            ),
-          ).toEqual({
-            kind: "refused",
-            reason: "`#favorites` resolves to a path with a segment ending " +
-              "in whitespace, so a rendering of the place would name a different cell.",
+        it("moves to a target whose path holds a key ending in whitespace", () => {
+          const place = atSpaceRoot();
+          place.enter(
+            { space: SPACE, piece: HANDLE, path: ["a "] },
+            "#favorites",
+          );
+          expect(place.place.position).toEqual({
+            kind: "piece",
+            space: SPACE,
+            piece: HANDLE,
+            path: ["a "],
           });
         });
 
@@ -2740,7 +3252,7 @@ describe("place", () => {
           confirming(place, "board", BOARD);
           expect(place.label()).toBe("board @space");
           expect(printedPosition(place)).toBe(
-            `/@${SPACE}/${BOARD}@space`,
+            `//${SPACE}/${BOARD}@space`,
           );
         });
 
@@ -2777,7 +3289,7 @@ describe("place", () => {
       describe("settle()", () => {
         it("builds the place from the connected space", () => {
           const place = atSpaceRoot();
-          const move = moved(place, `/@estuary/${HANDLE}/title`);
+          const move = moved(place, `//estuary/${HANDLE}/title`);
           if (move.kind !== "space-by-name") throw new Error("not handed on");
           expect(landed(place, place.settle(move, SPACE))).toEqual({
             kind: "moved",
@@ -2795,7 +3307,7 @@ describe("place", () => {
 
         it("keeps the scope a space-named reference asked for", () => {
           const place = atSpaceRoot();
-          const move = moved(place, `/@estuary/${HANDLE}@user`);
+          const move = moved(place, `//estuary/${HANDLE}@user`);
           if (move.kind !== "space-by-name") throw new Error("not handed on");
           landed(place, place.settle(move, SPACE));
           expect(place.place.scope).toBe("user");
@@ -2808,7 +3320,7 @@ describe("place", () => {
           // the caller's to supply and this module's to check.
 
           const place = atSpaceRoot();
-          const move = moved(place, `/@estuary/${HANDLE}`);
+          const move = moved(place, `//estuary/${HANDLE}`);
           if (move.kind !== "space-by-name") throw new Error("not handed on");
           expect(landed(place, place.settle(move, OTHER_SPACE))).toEqual({
             kind: "refused",
@@ -2832,7 +3344,7 @@ describe("place", () => {
             place.settle({
               kind: "space-by-name",
               name: "estuary",
-              operand: `/@estuary/${HANDLE}`,
+              operand: `//estuary/${HANDLE}`,
               piece: HANDLE,
               path: [3],
               scope: "space",
@@ -2858,7 +3370,7 @@ describe("place", () => {
             place.settle({
               kind: "space-by-name",
               name: "estuary",
-              operand: `/@estuary/${HANDLE}`,
+              operand: `//estuary/${HANDLE}`,
               piece: HANDLE,
               path: [1.5],
               scope: "space",
@@ -2883,15 +3395,16 @@ describe("place", () => {
             place.settle({
               kind: "space-by-name",
               name: "estuary",
-              operand: `/@estuary/${HANDLE}`,
+              operand: `//estuary/${HANDLE}`,
               piece: HANDLE,
-              path: ["a "],
+              path: ["a\nb"],
               scope: "space",
             }, SPACE),
           )).toEqual({
             kind: "refused",
             reason: `The reference naming space \`estuary\` has a segment ` +
-              `ending in whitespace, so a rendering of the place would name a different cell.`,
+              `holding a line break, so a rendering of the place would name ` +
+              `a different cell.`,
           });
           expect(place.place).toEqual(placeAtSpaceRoot(SPACE));
         });
@@ -2908,7 +3421,7 @@ describe("place", () => {
             place.settle({
               kind: "space-by-name",
               name: "estuary",
-              operand: `/@estuary/${HANDLE}`,
+              operand: `//estuary/${HANDLE}`,
               piece: "Board",
               path: [],
               scope: "space",
@@ -2923,7 +3436,7 @@ describe("place", () => {
 
         it("carries no route, so `..` leaves the piece for the root", () => {
           const place = inSlugs();
-          const move = moved(place, `/@estuary/${HANDLE}`);
+          const move = moved(place, `//estuary/${HANDLE}`);
           if (move.kind !== "space-by-name") throw new Error("not handed on");
           landed(place, place.settle(move, SPACE));
           moved(place, "..");
@@ -2944,7 +3457,7 @@ describe("place", () => {
           const move = {
             kind: "handle" as const,
             handle: "%1",
-            rest: "deeper",
+            path: ["deeper"],
             operand: "%1/deeper",
           };
           const reached = place.reach(
@@ -2959,12 +3472,95 @@ describe("place", () => {
         });
       });
 
+      describe("resolveHandle()", () => {
+        // A handle's head is read against the row it names, so which cell it
+        // selects is known here and not at `aim()`.
+
+        /** Helper for the cases below, which is the handle `operand` reads as. */
+        function handle(operand: string): HandleMove {
+          const move = atSpaceRoot().cd(operand);
+          if (move.kind !== "handle") throw new Error(`came ${move.kind}`);
+          return move;
+        }
+
+        it("selects the row's piece's arguments cell, reading the path from its root", () => {
+          // Kills a member on a handle's head that keeps the row's path, which
+          // would read `items/a`.
+
+          expect(
+            atSpaceRoot().resolveHandle(
+              handle("%1#argument/a"),
+              atReferencedPiece().place,
+              "items",
+              "get",
+            ),
+          ).toEqual({
+            input: true,
+            move: atReferencedPiece().aim("a", "get").move,
+          });
+        });
+
+        it("refuses `#argument` on a handle whose row is no piece position", () => {
+          // Kills a member switch that hands a facet row a selection.
+
+          expect(
+            atSpaceRoot().resolveHandle(
+              handle("%1#argument"),
+              placeAtSpaceRoot(SPACE),
+              "slugs",
+              "get",
+            ),
+          ).toEqual({
+            input: false,
+            move: {
+              kind: "refused",
+              reason: containerMemberRefusal("%1#argument"),
+            },
+          });
+        });
+
+        it("selects the arguments cell of a piece row listed at a facet, the row's position deciding", () => {
+          // The listing was read at a facet, and its row stands at a piece,
+          // which is what the member is read against. Kills a member switch
+          // that asks the listing's place rather than the row's position.
+
+          expect(
+            atSpaceRoot().resolveHandle(
+              handle("%1#argument/a"),
+              inSlugs().place,
+              "first",
+              "get",
+            ),
+          ).toEqual({
+            input: true,
+            move: atSpaceRoot().aim("slugs/first/a", "get").move,
+          });
+        });
+
+        it("carries back a member a piece segment selects on the path after a facet row", () => {
+          // Kills a handle walk that drops the selection it found entering a
+          // piece from a facet.
+
+          expect(
+            atSpaceRoot().resolveHandle(
+              handle("%1/board#argument/title"),
+              placeAtSpaceRoot(SPACE),
+              "slugs",
+              "get",
+            ),
+          ).toEqual({
+            input: true,
+            move: atSpaceRoot().aim("slugs/board/title", "get").move,
+          });
+        });
+      });
+
       describe("render()", () => {
         it("returns both halves of the place it stands at", () => {
           const place = atPiece();
           moved(place, "topics/3");
           expect(place.render()).toBe(
-            "position  /@did:key:z6MkConnectedSpace/board@space/topics/3\n" +
+            "position  //did:key:z6MkConnectedSpace/board@space/topics/3\n" +
               "scope     @space",
           );
         });

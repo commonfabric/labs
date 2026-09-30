@@ -10,6 +10,7 @@
 // it owns there with counts — the agent's "show me this user's whole world".
 
 import { openSpace, type SpaceDb } from "./db.ts";
+import { shortDid } from "./did-display.ts";
 import type { DiscoveredSpace } from "./discover.ts";
 import {
   groupDiscoveredSpaces,
@@ -152,9 +153,4 @@ export function describeIdentity(
       scopedEntities: spaces.reduce((n, s) => n + s.scopedEntities, 0),
     },
   };
-}
-
-function shortDid(did: string): string {
-  const tail = did.startsWith("did:key:") ? did.slice("did:key:".length) : did;
-  return tail.length > 12 ? `${tail.slice(0, 6)}…${tail.slice(-4)}` : tail;
 }

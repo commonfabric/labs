@@ -1,0 +1,1 @@
+{"date":"2026-09-15","from":{"k":"unit","s":"data-model","n":"FabricEpochDay > `shallowFabricFromNativeValue()` integration > passes through unchanged even with `freeze=false`"},"to":{"k":"unit","s":"data-model","n":"FabricEpochDay > `shallowFabricFromConvertibleJsValue()` integration > passes through unchanged even with `freeze=false`"}}

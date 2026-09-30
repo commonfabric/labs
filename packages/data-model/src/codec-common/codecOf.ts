@@ -1,4 +1,7 @@
-import type { FabricSpecialObject } from "@/interface.ts";
+import type {
+  FabricSpecialObject,
+  FabricSpecialObjectPlus,
+} from "@/interface.ts";
 import {
   CODEC,
   type CodecForFormat,
@@ -11,9 +14,16 @@ import {
  * `NonterminalCodec` and so usable whatever the caller's wire format. Throws a
  * "shouldn't happen" error if the value's class has no `[CODEC]`.
  *
+ * The result is typed at the value's own `PlusType`, on the contract
+ * `FabricClassWithNonterminalCodec` states -- that a class binds its codec at
+ * the `PlusType` its instances hold. Nothing here checks that: the codec is
+ * read off the class as whatever the class bound.
+ *
  * @param value The value whose class's codec is wanted.
  */
-export function codecOf(value: FabricSpecialObject): NonterminalCodec;
+export function codecOf<PlusType>(
+  value: FabricSpecialObjectPlus<PlusType>,
+): NonterminalCodec<PlusType>;
 
 /**
  * Gets the `[CODEC]` for the given value's class, falling back to the codec
@@ -40,12 +50,12 @@ export function codecOf<Encoded>(
   value: FabricSpecialObject,
   altCodec: symbol,
 ): CodecForFormat<Encoded>;
-export function codecOf<Encoded>(
-  value: FabricSpecialObject,
+export function codecOf<PlusType, Encoded>(
+  value: FabricSpecialObjectPlus<PlusType>,
   altCodec?: symbol,
-): CodecForFormat<Encoded> {
+): NonterminalCodec<PlusType> | CodecForFormat<Encoded> {
   const cls = value.constructor as unknown as
-    & Partial<FabricClassWithNonterminalCodec>
+    & Partial<FabricClassWithNonterminalCodec<PlusType>>
     & Partial<Record<symbol, CodecForFormat<Encoded>>>;
   const codec = cls[CODEC] ??
     ((altCodec === undefined) ? undefined : cls[altCodec]);

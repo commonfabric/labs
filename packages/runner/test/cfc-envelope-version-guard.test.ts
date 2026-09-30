@@ -1,6 +1,7 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -11,9 +12,12 @@ import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
+  cfcMetadataPresent,
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  StoredCfcMetadataError,
   UnknownCfcMetadataVersionError,
+  UnreadableCfcMetadataError,
 } from "../src/cfc/metadata.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { cfcLabelViewForDereference } from "../src/cfc/label-view-state.ts";
@@ -36,7 +40,7 @@ describe("CFC envelope version guard", () => {
     const id = parseLink(runtime.getCell(space, name).getAsLink()).id!;
     const seed = runtime.edit();
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value: { secret: "sealed" },
       cfc: {
         version,
@@ -58,7 +62,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      const id = await seedWithVersion(runtime, "version-guard-throw", 3);
+      const id = await seedWithVersion(runtime, "version-guard-throw", 4);
       const tx = runtime.edit();
       expect(() => readStoredCfcMetadata(tx, { space, id })).toThrow(
         UnknownCfcMetadataVersionError,
@@ -77,7 +81,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      const id = await seedWithVersion(runtime, "version-guard-applies", 3);
+      const id = await seedWithVersion(runtime, "version-guard-applies", 4);
       const tx = runtime.edit();
       expect(
         storedCfcMetadataAppliesToPath(tx, {
@@ -101,7 +105,7 @@ describe("CFC envelope version guard", () => {
       storageManager,
     });
     try {
-      await seedWithVersion(runtime, "version-guard-write", 3);
+      await seedWithVersion(runtime, "version-guard-write", 4);
       const tx = runtime.edit();
       const cell = runtime.getCell(space, "version-guard-write", {
         type: "object",
@@ -139,7 +143,7 @@ describe("CFC envelope version guard", () => {
       ).id!;
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, space);
-      seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+      seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
         value: { secret: "sealed" },
         cfc: {
           version: 1,
@@ -224,7 +228,12 @@ describe("CFC envelope version guard", () => {
         ).id!;
         const seed = runtime.edit();
         writeSeedEnvelopeDoc(seed, space);
-        seed.writeOrThrow({ space, scope: "space", id: sourceId, path: [] }, {
+        seedStoredEnvelope(seed, {
+          space,
+          scope: "space",
+          id: sourceId,
+          path: [],
+        }, {
           value: { secret: "sealed" },
           cfc: envelope,
         });
@@ -269,7 +278,7 @@ describe("CFC envelope version guard", () => {
       // and no maxConfidentiality. The write-side input gate is what resolves
       // a read's stored envelope, and the reason it must resolve every read's
       // rather than only the ones a requirement quantifies over.
-      const sourceId = await seedWithVersion(runtime, "version-guard-src", 3);
+      const sourceId = await seedWithVersion(runtime, "version-guard-src", 4);
       const tx = runtime.edit();
       tx.readOrThrow({
         space,
@@ -311,9 +320,9 @@ describe("CFC envelope version guard", () => {
         runtime.getCell(space, "version-guard-renamed").getAsLink(),
       ).id!;
       const seed = runtime.edit();
-      seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+      seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
         value: { secret: "sealed" },
-        cfc: { version: 3, payload: { labels: [] } },
+        cfc: { version: 4, payload: { labels: [] } },
       });
       expect((await seed.commit()).ok).toBeDefined();
 
@@ -335,21 +344,22 @@ describe("CFC envelope version guard", () => {
     }
   });
 
-  it("refuses an unknown version nested at the fallback metadata position", () => {
-    // The ["cfc"] read can return a record that is not itself metadata but
-    // carries an envelope-shaped member — the fallback position gets the
-    // same version refusal.
+  it("refuses a record that merely carries an envelope-shaped member", () => {
+    // `["cfc"]` is the one metadata position, and what stands there is the
+    // envelope itself. A record holding an envelope-shaped member is not an
+    // envelope this build interprets, so it fails closed rather than
+    // resolving the member as one.
     const tx = {
       readOrThrow: () => ({
         cfc: {
-          version: 3,
-          schemaHash: "future-format",
+          version: 1,
+          schemaHash: "inner-envelope",
           labelMap: { version: 1, entries: [] },
         },
       }),
     } as unknown as Parameters<typeof readStoredCfcMetadata>[0];
     expect(() => readStoredCfcMetadata(tx, { space, id: "of:nested" }))
-      .toThrow(UnknownCfcMetadataVersionError);
+      .toThrow(UnreadableCfcMetadataError);
   });
 
   it("propagates a transaction failure from the applies-to-path probe", () => {
@@ -382,7 +392,7 @@ describe("CFC envelope version guard", () => {
       // under a version this build postdates must never come back as "no
       // stored labels" — that view feeds the flow join deciding what a
       // write may carry.
-      const id = await seedWithVersion(runtime, "version-guard-deref", 3);
+      const id = await seedWithVersion(runtime, "version-guard-deref", 4);
       const tx = runtime.edit();
       expect(() =>
         cfcLabelViewForDereference(
@@ -403,9 +413,12 @@ describe("CFC envelope version guard", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
+      // Legacy link persistence derives the target's labels.
+      cfcFlowLabels: "off",
+      cfcEnforcementMode: "enforce-explicit",
     });
     try {
-      await seedWithVersion(runtime, "version-guard-link-source", 3);
+      await seedWithVersion(runtime, "version-guard-link-source", 4);
       const tx = runtime.edit();
       const source = runtime.getCell(
         space,
@@ -426,6 +439,46 @@ describe("CFC envelope version guard", () => {
       tx.prepareCfc();
       const result = await tx.commit();
       expect(result.error?.message).toContain("not one this build interprets");
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("acquires a known target address without admitting its uninterpretable contents", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    try {
+      await seedWithVersion(runtime, "version-guard-precise-source", 4);
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        space,
+        "version-guard-precise-source",
+        undefined,
+        tx,
+      );
+      const holder = runtime.getCell(
+        space,
+        "version-guard-precise-holder",
+        undefined,
+        tx,
+      );
+      holder.key("ref").set(source.getAsLink() as never);
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+      const read = runtime.edit();
+      try {
+        expect(() => holder.withTx(read).key("ref").get()).toThrow(
+          "not one this build interprets",
+        );
+      } finally {
+        read.abort();
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -468,7 +521,7 @@ describe("CFC envelope version guard", () => {
           path: [],
         }, { value: sah.schema });
       }
-      seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+      seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
         value: { secret: "sealed" },
         cfc: {
           version: 1,
@@ -496,5 +549,268 @@ describe("CFC envelope version guard", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("stored CFC envelope readers", () => {
+    // A stored value at the reserved `["cfc"]` position gets one of three
+    // outcomes, whichever reader reaches it: an envelope, nothing stored at
+    // all, or a fail-closed `StoredCfcMetadataError`. The readers below reach that position for
+    // different consumers — `readStoredCfcMetadata` for the writers and label
+    // views that depend on the envelope, `loadStoredCfcEnvelope` for the commit
+    // boundary, `storedCfcMetadataAppliesToPath` for the relevance probe — so a
+    // value one of them cannot interpret is one none of them may read as an
+    // unlabeled document.
+
+    const entriesHolding = (entries: unknown) => ({
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: { version: 1, entries },
+    });
+
+    const uninterpretable: Record<string, unknown> = {
+      "a version this build does not know": {
+        version: 4,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      },
+      "no version at all": {
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: ["vaulted"] },
+          }],
+        },
+      },
+      "an array where the envelope belongs": [],
+      "no label map": { version: 1, schemaHash: SEED_ENVELOPE_SCHEMA_HASH },
+      "no entries": {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1 },
+      },
+      "an entry with no path": entriesHolding([{ label: {} }]),
+      "an entry with no label": entriesHolding([{ path: ["secret"] }]),
+      "an array where an entry belongs": entriesHolding([[]]),
+      "an array where a label belongs": entriesHolding([{
+        path: ["secret"],
+        label: [],
+      }]),
+      "a path segment that is not a string": entriesHolding([{
+        path: [1],
+        label: { confidentiality: ["vaulted"] },
+      }]),
+      "clauses that are not a list": entriesHolding([{
+        path: ["secret"],
+        label: { confidentiality: "vaulted" },
+      }]),
+      "a label member this build does not know": entriesHolding([{
+        path: ["secret"],
+        label: { confidentiality: ["vaulted"], secrecy: ["vaulted"] },
+      }]),
+      "a label map of a version this build does not know": {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 2,
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: ["vaulted"] },
+          }],
+        },
+      },
+      "no schema hash": {
+        version: 1,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: ["vaulted"] },
+          }],
+        },
+      },
+    };
+
+    for (const [name, cfc] of Object.entries(uninterpretable)) {
+      it(`fails closed in every reader for ${name}`, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        try {
+          const id = parseLink(
+            runtime.getCell(space, `reader-agreement-${name}`).getAsLink(),
+          ).id!;
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, space);
+          seedStoredEnvelope(
+            seed,
+            { space, scope: "space", id, path: [] },
+            { value: { secret: "sealed" }, cfc } as never,
+          );
+          expect((await seed.commit()).ok).toBeDefined();
+
+          const tx = runtime.edit();
+          let thrown: unknown;
+          try {
+            readStoredCfcMetadata(tx, { space, id });
+          } catch (error) {
+            thrown = error;
+          }
+          expect(thrown instanceof StoredCfcMetadataError).toBe(true);
+          expect(loadStoredCfcEnvelope(tx, { space, id }).status).toBe(
+            "unreadable",
+          );
+          expect(
+            storedCfcMetadataAppliesToPath(tx, {
+              space,
+              scope: "space",
+              id,
+              path: ["secret"],
+            }),
+          ).toBe(true);
+          // The erasure guard's account of what presents a label map is the
+          // same classification: a value no reader can interpret is a map
+          // standing there, not a document with none.
+          expect(cfcMetadataPresent(cfc)).toBe(true);
+          tx.abort();
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("reads an envelope carrying members it does not know", async () => {
+      // The version is how the format announces content this build does not
+      // read, so a member beside the ones it defines is not a reason to
+      // refuse: the spec leaves a migrating writer free to keep a legacy
+      // field, and an entry carries view-specific refinements beside its
+      // label. Refusing those would read a labeled document as unreadable
+      // where its labels are right there.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const id = parseLink(
+          runtime.getCell(space, "reader-agreement-extra").getAsLink(),
+        ).id!;
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, space);
+        seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+          value: { secret: "sealed" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            provenance: "a field this build does not define",
+            labelMap: {
+              version: 1,
+              ordering: "declared",
+              entries: [{
+                path: ["secret"],
+                label: { confidentiality: ["vaulted"] },
+                views: { ranges: [] },
+              }],
+            },
+          },
+        } as never);
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        expect(readStoredCfcMetadata(tx, { space, id })?.labelMap.entries[0])
+          .toMatchObject({
+            path: ["secret"],
+            label: { confidentiality: ["vaulted"] },
+          });
+        expect(loadStoredCfcEnvelope(tx, { space, id }).status).toBe("loaded");
+        tx.abort();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws from an unschema'd write to a document carrying one", async () => {
+      // The write gate is what a transaction with no `ifc` schema and no
+      // stored-policy relevance would otherwise skip: it resolves the
+      // document's stored envelope to find the schema the write is
+      // against, so a document no reader can interpret fails the write at
+      // the call site rather than letting it commit ungated.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const id = parseLink(
+          runtime.getCell(space, "reader-agreement-write").getAsLink(),
+        ).id!;
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, space);
+        seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+          value: { secret: "sealed" },
+          cfc: {
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["secret"],
+                label: { confidentiality: ["vaulted"] },
+              }],
+            },
+          },
+        } as never);
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        expect(() =>
+          runtime.getCell(space, "reader-agreement-write", undefined, tx)
+            .set({ secret: "leaked" })
+        ).toThrow(UnreadableCfcMetadataError);
+        tx.abort();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("reads a document storing nothing at the reserved position as unlabeled", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const id = parseLink(
+          runtime.getCell(space, "reader-agreement-absent").getAsLink(),
+        ).id!;
+        const seed = runtime.edit();
+        seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+          value: { secret: "sealed" },
+          cfc: null,
+        });
+        expect((await seed.commit()).ok).toBeDefined();
+
+        const tx = runtime.edit();
+        expect(readStoredCfcMetadata(tx, { space, id })).toBeUndefined();
+        expect(loadStoredCfcEnvelope(tx, { space, id }).status).toBe("none");
+        expect(
+          storedCfcMetadataAppliesToPath(tx, {
+            space,
+            scope: "space",
+            id,
+            path: ["secret"],
+          }),
+        ).toBe(false);
+        tx.abort();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 });

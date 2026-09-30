@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
   getPresentationSession,
@@ -6,7 +7,6 @@ import {
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
-import { toIndentedDebugString } from "@commonfabric/data-model";
 import type { RequestOutcome } from "@commonfabric/runtime-client";
 
 /**
@@ -611,11 +611,9 @@ export async function clickTrustedAction(
     await settleView(page);
   } catch (cause) {
     probe ??= await readTrustedActionProbe(page, action).catch(() => undefined);
-    // Indented for readable test-log output
     throw new Error(
-      `Timed out clicking trusted action "${action}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out clicking trusted action "${action}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -654,7 +652,8 @@ export async function submitViaEnter(
     );
     throw new Error(
       `Timed out waiting for ${inputSelector} to settle before pressing ` +
-        `Enter. Last probe: ${toIndentedDebugString(probe)}`,
+        `Enter. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -690,9 +689,9 @@ export async function clickTrustedActionAndWaitForText(
     );
     textProbe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Failed to click trusted action "${action}" while waiting for "${selector}" to contain "${text}". Last probes: ${
-        toIndentedDebugString({ actionProbe, textProbe })
-      }`,
+      `Failed to click trusted action "${action}" while waiting for ` +
+        `"${selector}" to contain "${text}". ` +
+        debugStr`Last probes: $quote,indent,xlong${{ actionProbe, textProbe }}`,
       { cause },
     );
   }
@@ -709,9 +708,9 @@ export async function clickTrustedActionAndWaitForText(
     );
     textProbe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out clicking trusted action "${action}" until "${selector}" contained "${text}". Last probes: ${
-        toIndentedDebugString({ actionProbe, textProbe })
-      }`,
+      `Timed out clicking trusted action "${action}" until "${selector}" ` +
+        `contained "${text}". ` +
+        debugStr`Last probes: $quote,indent,xlong${{ actionProbe, textProbe }}`,
       { cause },
     );
   }
@@ -729,9 +728,8 @@ export async function waitForText(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -763,9 +761,8 @@ export async function waitForSettledText(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -783,9 +780,8 @@ export async function waitForTextAbsent(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" not to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" not to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -808,9 +804,8 @@ export async function fillCfInput(
   } catch (cause) {
     const probe = await readCfInputProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out filling cf input "${selector}" with "${value}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out filling cf input "${selector}" with "${value}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -844,6 +839,104 @@ export async function readCfInputValue(
   return probe.value;
 }
 
+/**
+ * Fill the native `<textarea>` a `cf-textarea` wraps, and let the blur commit
+ * it.
+ *
+ * Separate from {@link fillCfInput} because that one drives an `<input>`: it
+ * resolves `element.shadowRoot?.querySelector("input")` and gives up on a host
+ * that has none. This drives the field as a person does — focus, set the value,
+ * dispatch `input` and `change`, then blur.
+ *
+ * The blur is what commits the draft, and it is load-bearing rather than
+ * tidiness. `cf-textarea` defaults to the `debounce` timing strategy at 300ms,
+ * and its blur handler reaches `InputTimingController.onBlur` by way of its
+ * cell controller; that method runs the pending callback at once rather than
+ * waiting the timer out. Without the blur the write waits out the debounce
+ * instead, which a caller clicking a submit control on the next line does not
+ * wait for.
+ *
+ * There is no `commit()` to call on this host: `cf-input` declares one and
+ * `cf-textarea` does not.
+ *
+ * Presentation mode does not animate this fill. `typeIntoCfInput`, the
+ * presentation path {@link fillCfInput} routes through, resolves an
+ * `HTMLInputElement` and throws for anything else, so a recorded run shows the
+ * text arriving in the field rather than being typed into it.
+ */
+export async function fillCfTextarea(
+  page: Page,
+  selector: string,
+  value: string,
+) {
+  await waitForRuntimeIdle(page);
+  const field = await page.waitForSelector(selector, {
+    strategy: "pierce",
+  });
+  // Two ways to come back empty-handed, reported apart: a selector that names
+  // no textarea is a different defect from one that names a textarea the fill
+  // did not take, and a single message for both asserts whichever cause it
+  // happens to name.
+  const outcome = await field.evaluate((element: Element, nextValue) => {
+    const textarea = element instanceof HTMLTextAreaElement
+      ? element
+      : element.shadowRoot?.querySelector("textarea");
+    if (!(textarea instanceof HTMLTextAreaElement)) return "no-textarea";
+    textarea.focus();
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    if (setter) setter.call(textarea, nextValue);
+    else textarea.value = nextValue;
+    textarea.dispatchEvent(
+      new Event("input", { bubbles: true, composed: true }),
+    );
+    textarea.dispatchEvent(
+      new Event("change", { bubbles: true, composed: true }),
+    );
+    textarea.blur();
+    return textarea.value === nextValue ? "filled" : "value-mismatch";
+  }, { args: [value] });
+  if (outcome === "no-textarea") {
+    throw new Error(`"${selector}" did not resolve to a textarea`);
+  }
+  if (outcome !== "filled") {
+    throw new Error(
+      `"${selector}" resolved a textarea that did not take the value`,
+    );
+  }
+}
+
+/**
+ * Write the whole of `data` to `stream`, which one `writeSync` may not do.
+ *
+ * `writeSync` is synchronous, not complete: it returns the number of bytes it
+ * took, and a pipe that is full takes fewer than it was offered. A bench file's
+ * diagnostics reach the Benchmarks workflow through exactly such a pipe and
+ * carry whole sample dumps, so a single call can truncate one with nothing to
+ * say it did.
+ *
+ * `@std/io` is not mapped here, so the loop is written out, as
+ * `packages/cli/lib/view/mod.ts` writes it for stdout.
+ *
+ * @throws If the stream takes no bytes, rather than looping forever offering
+ *   them.
+ */
+export function writeAllSync(
+  stream: { writeSync(data: Uint8Array): number },
+  data: Uint8Array,
+): void {
+  let written = 0;
+  while (written < data.length) {
+    const took = stream.writeSync(data.subarray(written));
+    if (took <= 0) {
+      throw new Error(`The stream accepted no bytes of ${data.length}.`);
+    }
+    written += took;
+  }
+}
+
 export async function waitForRuntimeIdle(
   page: Page,
 ) {
@@ -873,9 +966,8 @@ export async function waitForDisabled(
       undefined
     );
     throw new Error(
-      `Timed out waiting for ${selector} disabled=${disabled}. Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for ${selector} disabled=${disabled}. ` +
+        debugStr`Last probe: $quote,long${probe}`,
       { cause },
     );
   }
@@ -912,12 +1004,9 @@ async function settleWithClickTargets(
         readTextProbe(page, selector).catch(() => undefined)
       ),
     );
-    // Indented for readable test-log output
     throw new Error(
-      `Timed out waiting for ${
-        selectors.join(", ")
-      } to be clickable. Last probe: ${
-        toIndentedDebugString({
+      `Timed out waiting for ${selectors.join(", ")} to be clickable. ` +
+        debugStr`Last probe: $quote,indent,long${{
           matches: Object.fromEntries(
             selectors.map((selector, index) => [
               selector,
@@ -925,8 +1014,7 @@ async function settleWithClickTargets(
             ]),
           ),
           bodyText: probes.find((probe) => probe !== undefined)?.bodyText,
-        })
-      }`,
+        }}`,
       { cause },
     );
   }
@@ -1039,9 +1127,8 @@ export async function clickNthCfButton(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Unable to find button #${index} matching "${selector}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Unable to find button #${index} matching "${selector}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -1585,8 +1672,8 @@ export async function clickMarked(
         );
         throw new Error(
           `Marked click target ${markSelector} never presented a stable box. ` +
-            `Aim reached: ${toIndentedDebugString(progress)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            debugStr`Aim reached: $quote,indent,long${progress}\n` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
           { cause },
         );
       }
@@ -1596,10 +1683,10 @@ export async function clickMarked(
         );
         throw new Error(
           `The control marked for click lies outside the page, so there is ` +
-            `no point on it a click can reach. Its box is ` +
-            `${toIndentedDebugString(aim.box)} and the page is ` +
-            `${toIndentedDebugString(aim.page)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            `no point on it a click can reach. ` +
+            debugStr`Its box is $quote,long${aim.box} and the page is ` +
+            debugStr`$quote,long${aim.page}. ` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       if (aim === undefined || "missing" in aim) {
@@ -1610,7 +1697,8 @@ export async function clickMarked(
           `The control marked for click was replaced before the click ` +
             `could be aimed at it${
               aim?.sawTarget ? " while its box was settling" : ""
-            }. Last probe: ${toIndentedDebugString(probe)}`,
+            }. ` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       return aim;
@@ -1665,10 +1753,12 @@ export async function clickMarked(
         );
         throw new Error(
           `${markSelector} is aimed at ${pixel} again, where a trusted click ` +
-            `already failed to reach it (${lostBefore}). Every pixel tried: ${
-              toIndentedDebugString(Object.fromEntries(lost))
-            }. Aim reached: ${toIndentedDebugString(progress)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            `already failed to reach it (${lostBefore}). ` +
+            debugStr`Every pixel tried: $quote,indent,long${
+              Object.fromEntries(lost)
+            }\n` +
+            debugStr`Aim reached: $quote,indent,long${progress}\n` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       lost.set(pixel, reached);
@@ -1704,9 +1794,9 @@ export async function clickCfButtonAndWaitForText(
   } catch (cause) {
     textProbe = await readTextProbe(page, textSelector).catch(() => undefined);
     throw new Error(
-      `Failed to click "${buttonSelector}" while waiting for "${textSelector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(textProbe)
-      }`,
+      `Failed to click "${buttonSelector}" while waiting for ` +
+        `"${textSelector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${textProbe}`,
       { cause },
     );
   }
@@ -1720,9 +1810,9 @@ export async function clickCfButtonAndWaitForText(
   } catch (cause) {
     textProbe = await readTextProbe(page, textSelector).catch(() => undefined);
     throw new Error(
-      `Timed out clicking "${buttonSelector}" until "${textSelector}" contained "${text}". Last probe: ${
-        toIndentedDebugString(textProbe)
-      }`,
+      `Timed out clicking "${buttonSelector}" until "${textSelector}" ` +
+        `contained "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${textProbe}`,
       { cause },
     );
   }
@@ -1946,8 +2036,8 @@ type TimingRow = {
 /**
  * One timing-stats row distilled from a logger's `timeStats` (ms). Used to
  * surface where wall-clock goes under multi-browser contention — chiefly the
- * main-thread `runtime-client` IPC round-trips, which are what time out with
- * "RuntimeClient request timed out" when the worker can't keep up.
+ * main-thread `runtime-client` IPC round-trips, which are what stretch when
+ * the worker can't keep up.
  */
 export interface TimingStatRow {
   key: string;
@@ -2092,19 +2182,46 @@ export interface BrowserLoadSummary {
 }
 
 /**
+ * How long the worker is given to answer the request for its statistics,
+ * unless a caller names its own budget.
+ *
+ * Reading them is itself a request, and a request carries no deadline of its
+ * own, so a worker that has stopped answering would hold a collection open
+ * for as long as the page lived. The cost of the budget is that a worker
+ * which was slow rather than stopped loses the statistics it was about to
+ * return: nothing reported is wrong, but the worker half can be missing from
+ * a summary that could have carried it. A collection that always returns is
+ * worth that, since the summary exists to explain a run that is already in
+ * trouble.
+ *
+ * The size guards against that loss rather than against a long wait. Reading
+ * the counters costs the worker almost nothing, so a slow answer means a busy
+ * worker, and the runs that most need a summary are the loaded ones where a
+ * worker stays busy longest. A budget of seconds would fire on those; this one
+ * is set where only a worker that has stopped reaches it, and a wedged worker
+ * still costs far less than the step it runs in.
+ */
+const WORKER_STATS_BUDGET_MS = 30_000;
+
+/**
  * Collect aggregate timing stats from one browser: main-thread IPC waits
  * (`commonfabric.getTimingStatsBreakdown()`) plus the worker's
  * scheduler/runner/storage timing (`commonfabric.rt.getLoggerCounts()`).
- * Worker collection is skipped after an IPC timeout, or when `includeWorker`
- * is false, so failure diagnostics can be read without another request to a
- * stalled worker. Missing worker statistics are identified by `workerStatus`.
+ * Worker collection is skipped when `includeWorker` is false, and abandoned
+ * when the worker does not answer within `workerBudgetMs`, so failure
+ * diagnostics are readable from a page whose worker is stalled. A worker that
+ * answers later than the budget loses its statistics. Missing worker
+ * statistics are identified by `workerStatus`.
  */
 export async function collectBrowserLoadSummary(
   page: Page,
   label: string,
-  options: { includeWorker?: boolean } = {},
+  options: { includeWorker?: boolean; workerBudgetMs?: number } = {},
 ): Promise<BrowserLoadSummary> {
-  const collected = await page.evaluate(async (includeWorker: boolean) => {
+  const workerBudget = (options.includeWorker ?? true)
+    ? options.workerBudgetMs ?? WORKER_STATS_BUDGET_MS
+    : 0;
+  const collected = await page.evaluate(async (workerBudgetMs: number) => {
     type Stats = {
       count?: number;
       average?: number;
@@ -2178,10 +2295,9 @@ export async function collectBrowserLoadSummary(
           })),
       };
     };
-    const skipWorker = !includeWorker ||
-      collectMain().ipcFailures.some((row) =>
-        row.key.startsWith("ipc-outcome/timeout/")
-      );
+    // A budget of zero is a caller that does not want the worker asked at
+    // all, which is the same as spending no time on it.
+    const skipWorker = workerBudgetMs === 0;
     let workerStatus: "collected" | "skipped" | "unavailable" = skipWorker
       ? "skipped"
       : "unavailable";
@@ -2204,9 +2320,12 @@ export async function collectBrowserLoadSummary(
       overlayCascadeEchoFlickers: 0,
     };
     try {
-      const workerCounts = skipWorker
-        ? undefined
-        : await cf?.rt?.getLoggerCounts?.();
+      const workerCounts = skipWorker ? undefined : await Promise.race([
+        cf?.rt?.getLoggerCounts?.(),
+        new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), workerBudgetMs);
+        }),
+      ]);
       if (workerCounts !== undefined) workerStatus = "collected";
       const workerTiming = workerCounts?.timing ?? {};
       // Prefix-match so sub-loggers are included: storage commit/conflict
@@ -2291,7 +2410,7 @@ export async function collectBrowserLoadSummary(
     }
 
     return { ...collectMain(), workerIpc, worker, churn, workerStatus };
-  }, { args: [options.includeWorker ?? true] });
+  }, { args: [workerBudget] });
   return {
     label,
     ipc: collected.ipc,
@@ -3296,7 +3415,17 @@ async function readAimProgress(
   }), { args: [selector] });
 }
 
-async function readTextProbe(
+/**
+ * What `selector` resolves to on `page`, for a failure report: every match
+ * through shadow roots, each with the text a wait's predicate reads through
+ * `probe.deepText`, its box, whether it is visible, and whether it declines a
+ * click; plus the page's body text where there is no match at all.
+ *
+ * The helpers here build their own failure messages with it. A test building
+ * one of its own reaches for it rather than walking the shadow roots again,
+ * which would report a different traversal from the one its wait was reading.
+ */
+export async function readTextProbe(
   page: Page,
   selector: string,
 ): Promise<TextProbe> {

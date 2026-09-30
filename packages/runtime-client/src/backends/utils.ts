@@ -1,9 +1,9 @@
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
   type FabricValue,
   isValidFabricValue,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import {
   Cell,
@@ -98,9 +98,9 @@ function mapOne(
     // construction: no flag gates it. What keeps it unreachable is the
     // refusal at the other end of the same crossing -- `CellHandle.serialize()`
     // in `../cell-handle.ts` refuses a `FabricInstance` before the value is
-    // sent, so neither caller here can be handed one. The transport itself no
-    // longer helps: the envelope's encoding carries an instance across with
-    // its class, where structured cloning used to strip it to `{}`.
+    // sent, so neither caller here can be handed one. The transport does not
+    // stop an instance: the envelope's encoding carries one across with its
+    // class.
     //
     // The two refusals are a matched pair and move together, along with
     // `convertCellsToLinks()`'s in `@commonfabric/runner`, which is the same
@@ -168,9 +168,7 @@ export function assertFabricLoggerFlags(
 
   throw new Error(
     "Cannot send logger flags on this connection, not being a " +
-      `\`FabricValue\`: ${
-        toCompactDebugString(breakdown, { backtickQuote: true })
-      }`,
+      debugStr`\`FabricValue\`: $quote${breakdown}`,
   );
 }
 
@@ -229,10 +227,10 @@ export function createCellRef(
   if (token !== undefined) cellRef.cfcReferenceToken = token;
   const cfcLabelView = cfcLabelViewForCell(cell);
   if (cfcLabelView !== undefined) {
-    // Ref-attached views are main-thread display copies like the in-value
-    // sigil views: redact Caveat.source before they cross (inv-12 Stage 0).
-    // The worker never re-imports them (see getCell / cellRefToSigilLink),
-    // so the redacted copy cannot round-trip into label state.
+    // A view attached to a ref is a copy for the main thread to display, so
+    // we redact `Caveat.source` from it before it crosses. `getCell()` and
+    // `cellRefToSigilLink()` both drop a view from an inbound ref, so the
+    // redacted copy does not come back through either as label state.
     cellRef.cfcLabelView = redactCaveatSourcesForDisplay(cfcLabelView);
   }
   return cellRef;

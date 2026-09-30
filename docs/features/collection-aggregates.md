@@ -70,6 +70,40 @@ source as an empty collection: predicate count yields `0`, and the By forms
 yield `undefined`. Numeric aggregates require numbers, and score callbacks
 require numeric results.
 
+## Why order and grouping cannot change a result
+
+The tree combines members in identity order and splits them into blocks by
+collection size, so a membership change moves members between blocks and
+regroups the combines above them. A result stays independent of that
+arrangement because every combine is associative and commutative over the
+partial results it receives.
+
+Binary64 addition is commutative but not associative, because each addition
+rounds: `(0.1 + 0.2) + 0.3` is `0.6000000000000001`, while `0.1 + (0.2 + 0.3)`
+is `0.6`. Partial sums rounded at each tree node would make a total depend on
+identity order and collection size.
+
+`sum` rounds only at the root. Every finite binary64 value is an integer
+multiple of `2 ** -1074`, so a partial sum holds its finite total as a `bigint`
+count of that unit, and combining two partial sums adds integers. NaN and the
+two infinities are flags combined with `||`. Integer addition and `||` are
+associative and commutative, so every arrangement of the same members reaches
+the same exact total and rounds it once, the same way. Predicate `count` adds
+integer counts, which binary64 represents exactly below `2 ** 53`.
+
+The extrema involve no arithmetic. Each selects the first candidate in one
+order: a NaN score first, then the smaller score for a minimum or the larger
+for a maximum, then for `min` and `max` the preferred zero sign, then the
+smaller identity key in UTF-8 order. Identity keys include the occurrence
+number, so no two candidates in one aggregate tie under that order. Selecting
+the first element of a totally ordered set is associative and commutative.
+
+[`aggregate-sum.test.ts`](../../packages/runner/test/aggregate-sum.test.ts) and
+[`chooseAggregateCandidate.test.ts`](../../packages/runner/test/builtins/chooseAggregateCandidate.test.ts)
+check both properties over seeded inputs in shuffled orders and random
+groupings. A seeded search finds the counterexamples it draws; it does not show
+that none exists.
+
 ## Choosing a collection computation
 
 Use `computed` for an inline derivation or module-level `lift` to reuse one.

@@ -1,18 +1,14 @@
 /**
  * The allocator under real concurrency: two sessions on one memory server,
- * each running `assignName` over one collection's names map, in transactions
- * that both read the map's keys before either commits.
+ * each running `assignName` or `createNamed` over one collection's names map,
+ * in transactions that both read the map's keys before either commits.
  *
- * The function under test is the one the pattern runtime runs.
+ * The functions under test are the ones the pattern runtime runs.
  * `collection-naming/naming.ts` cannot be imported by plain Deno — it takes
  * `lift`, `Writable` and `equals` from `commonfabric` as values, and those are
  * ambient declarations that bind nothing outside the pattern runtime's module
- * environment — so the test compiles a fixture that re-exports `assignName`
- * through the harness and calls what comes back. That is also why this file
- * sits under `integration/`: the package's plain-Deno lane runs under
- * `test-import-map.json`, whose `commonfabric` is a stub and which maps no
- * runner entry point, while the `integration` task runs under workspace
- * resolution, where the runtime and the harness resolve.
+ * environment — so the test compiles a fixture that re-exports both
+ * allocators through the harness and calls what comes back.
  */
 
 import {
@@ -46,6 +42,9 @@ const ALLOCATOR_FIXTURE = join(
 /** `assignName`, with the signature the module declares for it. */
 type AssignName = typeof naming.assignName;
 
+/** `createNamed`, with the signature the module declares for it. */
+type CreateNamed = typeof naming.createNamed;
+
 /**
  * The names map as a collection declares it: an object whose values are
  * members, held opaque so surveying the keys expands none of them.
@@ -55,14 +54,18 @@ const NAMES_SCHEMA = {
   additionalProperties: {},
 } as const;
 
-/** What a member holds, so one member can be told from another. */
+/**
+ * What a member holds: a title, so one member can be told from another, and
+ * the name a member built by `createNamed` stores.
+ */
 interface Item {
   title: string;
+  name?: string;
 }
 
 const ITEM_SCHEMA = {
   type: "object",
-  properties: { title: { type: "string" } },
+  properties: { title: { type: "string" }, name: { type: "string" } },
 } as const;
 
 /** The name the seeded member holds, so the next name allocated is `2`. */
@@ -72,6 +75,7 @@ describe("collection naming under concurrent creates", () => {
   let compilerStorage: ReturnType<typeof StorageManager.emulate>;
   let compilerRuntime: Runtime;
   let assignName: AssignName;
+  let createNamed: CreateNamed;
 
   let server: ReturnType<typeof newLoopbackServer>;
   let aliceStorage: EmulatedStorageManager;
@@ -93,11 +97,17 @@ describe("collection naming under concurrent creates", () => {
     const { main } = await compilerRuntime.harness.compileAndEvaluateModules(
       program,
     );
-    assignName = (main as { assignName?: AssignName }).assignName!;
-    // The seam is a cast, so a fixture that stopped exporting the allocator
+    const allocators = main as {
+      assignName?: AssignName;
+      createNamed?: CreateNamed;
+    };
+    assignName = allocators.assignName!;
+    createNamed = allocators.createNamed!;
+    // The seam is a cast, so a fixture that stopped exporting an allocator
     // would hand every test below `undefined` and fail somewhere that says
     // nothing about why.
     expect(typeof assignName).toBe("function");
+    expect(typeof createNamed).toBe("function");
   });
 
   afterAll(async () => {
@@ -193,6 +203,26 @@ describe("collection naming under concurrent creates", () => {
       });
     }
 
+    /**
+     * A create through `createNamed`, counting its attempts as `create` does,
+     * that builds its member holding the name: the member's `name` is written
+     * in the transaction that records the member under that name.
+     */
+    function createHolding(
+      attempts: string[],
+      runtime: Runtime,
+      who: string,
+      member: string,
+    ) {
+      return runtime.editWithRetry((tx) => {
+        attempts.push(who);
+        return createNamed(namesOf(runtime).withTx(tx), (name) => {
+          itemOf(runtime, member).withTx(tx).key("name").set(name);
+          return itemOf(runtime, member);
+        }).name;
+      });
+    }
+
     it("gives them distinct consecutive names, at the cost of one re-run", async () => {
       const attempts: string[] = [];
       const aliceCreate = create(attempts, aliceRuntime, "alice", "alice-item");
@@ -219,8 +249,45 @@ describe("collection naming under concurrent creates", () => {
       expect(map.key(bob.ok!).get()).toEqual({ title: "bob-item" });
     });
 
+    it("builds each member holding the name the map records for it, at the cost of one re-run", async () => {
+      // The loser's first attempt built its member holding the name the winner
+      // took. Its re-run has to build the member again with the next name, or
+      // the member stores a name the map gives someone else — which the
+      // distinct consecutive names alone would not show.
+
+      const attempts: string[] = [];
+      const aliceCreate = createHolding(
+        attempts,
+        aliceRuntime,
+        "alice",
+        "alice-item",
+      );
+      const bobCreate = createHolding(attempts, bobRuntime, "bob", "bob-item");
+      const [alice, bob] = await Promise.all([aliceCreate, bobCreate]);
+
+      expect(alice.error).toBeUndefined();
+      expect(bob.error).toBeUndefined();
+      expect([alice.ok, bob.ok].toSorted()).toEqual(["2", "3"]);
+      expect(attempts.length).toBe(3);
+
+      await aliceStorage.synced();
+      await bobStorage.synced();
+      const map = namesOf(aliceRuntime);
+      await map.sync();
+      await map.pull();
+      expect(Object.keys(map.get() ?? {}).toSorted()).toEqual(["1", "2", "3"]);
+      expect(map.key(alice.ok!).get()).toEqual({
+        title: "alice-item",
+        name: alice.ok,
+      });
+      expect(map.key(bob.ok!).get()).toEqual({
+        title: "bob-item",
+        name: bob.ok,
+      });
+    });
+
     it("takes one attempt each when the second create runs after the first", async () => {
-      // The control for the attempt count above. Two names being distinct and
+      // The control for the attempt counts above. Two names being distinct and
       // consecutive says nothing on its own — two creates in a row produce
       // exactly that — so it is the attempt count that separates the two
       // cases, and this is what gives that count a value to differ from.

@@ -1,10 +1,23 @@
 import { join } from "@std/path/join";
 import { serveDir } from "@std/http/file-server";
+import { isRedirectStatus } from "@std/http/status";
 
 const DEV_SOCKET = "DEV_SOCKET.js";
 
+/**
+ * Whether `response` takes the headers this server adds. A redirect from
+ * `serveDir` does not: `Response.redirect()` makes its headers immutable, and
+ * a redirect to the same file with a trailing slash stays true across builds.
+ * Nor does a websocket upgrade, which carries nothing to cache. A 304 does:
+ * `isRedirectStatus()` counts it, but it is not a redirect, and it is what
+ * refreshes the policy of a copy a browser already holds.
+ */
+const takesAddedHeaders = (response: Response): boolean =>
+  response.status === 304 ||
+  (!isRedirectStatus(response.status) && response.status !== 101);
+
 export class DevServer {
-  #server: Deno.HttpServer;
+  #server: Deno.HttpServer<Deno.NetAddr>;
   #outDir: string;
   #sockets: WebSocket[] = [];
   #html: string;
@@ -35,17 +48,27 @@ export class DevServer {
     this.#redirectToIndex = redirectToIndex;
     this.#staticDirs = staticDirs;
     this.#html = this.#getHtml({ useReloadSocket, outDir });
-    this.#socketScript = this.#getSocketScript({ hostname, port });
     this.#server = Deno.serve(
       {
         port,
         hostname,
-        onListen() {
-          console.log(`Dev server listening on http://${hostname}:${port}`);
+        onListen(addr) {
+          console.log(
+            `Dev server listening on http://${addr.hostname}:${addr.port}`,
+          );
         },
       },
       this.#onRequest.bind(this),
     );
+    this.#socketScript = this.#getSocketScript({
+      hostname,
+      port: this.#server.addr.port,
+    });
+  }
+
+  /** The address the server listens on, with the port it bound. */
+  get addr(): Deno.NetAddr {
+    return this.#server.addr;
   }
 
   reload() {
@@ -54,7 +77,27 @@ export class DevServer {
     }
   }
 
-  async #onRequest(req: Request) {
+  /** Closes the reload sockets and stops the server. */
+  async shutdown(): Promise<void> {
+    for (const socket of this.#sockets) {
+      socket.close();
+    }
+    await this.#server.shutdown();
+  }
+
+  async #onRequest(req: Request): Promise<Response> {
+    const response = await this.#respond(req);
+    // A build rewrites the served files in place under the same URLs, so a
+    // browser must check back before reusing a copy, or it runs code the
+    // server no longer serves. The ETag and Last-Modified that `serveDir`
+    // gives each file make that check a 304 when nothing changed.
+    if (takesAddedHeaders(response)) {
+      response.headers.set("Cache-Control", "no-cache");
+    }
+    return response;
+  }
+
+  async #respond(req: Request): Promise<Response> {
     const url = new URL(req.url);
 
     if (req.headers.get("upgrade") === "websocket") {
@@ -104,13 +147,14 @@ export class DevServer {
           quiet: true,
         });
 
-        // Add CORS headers for all responses
-        response.headers.set("Access-Control-Allow-Origin", "*");
-        response.headers.set(
-          "Access-Control-Allow-Methods",
-          "GET, OPTIONS, HEAD",
-        );
-        response.headers.set("Access-Control-Allow-Headers", "*");
+        if (takesAddedHeaders(response)) {
+          response.headers.set("Access-Control-Allow-Origin", "*");
+          response.headers.set(
+            "Access-Control-Allow-Methods",
+            "GET, OPTIONS, HEAD",
+          );
+          response.headers.set("Access-Control-Allow-Headers", "*");
+        }
 
         return response;
       }
@@ -129,7 +173,7 @@ export class DevServer {
     });
     socket.addEventListener("close", () => {
       const index = this.#sockets.findIndex((s) => s === socket);
-      if (index > 0) {
+      if (index >= 0) {
         this.#sockets.splice(index, 1);
       }
     });

@@ -1,0 +1,56 @@
+diff --git a/packages/data-model/src/index.ts b/packages/data-model/src/index.ts
+--- a/packages/data-model/src/index.ts
++++ b/packages/data-model/src/index.ts
+@@ -38,6 +38,11 @@
+   toStructuredDebugValue,
+ } from "./value-debug.ts";
+ 
+-export { hashOf, hashStringOf, taggedHashStringOf } from "./value-hash.ts";
++export {
++  getFrozenObjectHashCacheHits,
++  hashOf,
++  hashStringOf,
++  taggedHashStringOf,
++} from "./value-hash.ts";
+ 
+ export * from "@/types";
+diff --git a/packages/data-model/src/value-hash.ts b/packages/data-model/src/value-hash.ts
+--- a/packages/data-model/src/value-hash.ts
++++ b/packages/data-model/src/value-hash.ts
+@@ -485,6 +485,13 @@
+  */
+ const frozenObjectHashCache = new WeakMap<object, FabricHash>();
+ 
++let frozenObjectHashCacheHits = 0;
++
++/** Returns the number of immutable-object hash lookups served from cache. */
++export function getFrozenObjectHashCacheHits(): number {
++  return frozenObjectHashCacheHits;
++}
++
+ /**
+  * Returns an already computed immutable hash without reading the value.
+  *
+@@ -568,6 +575,7 @@
+       // checks needed on the fast path.
+       const cached = frozenObjectHashCache.get(obj);
+       if (cached !== undefined) {
++        frozenObjectHashCacheHits += 1;
+         return cached;
+       }
+ 
+diff --git a/packages/runner/src/storage/extended-storage-transaction.ts b/packages/runner/src/storage/extended-storage-transaction.ts
+--- a/packages/runner/src/storage/extended-storage-transaction.ts
++++ b/packages/runner/src/storage/extended-storage-transaction.ts
+@@ -651,9 +651,11 @@
+    */
+   get accessForTestingOnly(): {
+     buildPreparedDigestInput(): PreparedDigestInput;
++    preparedDigest(): string;
+   } {
+     return {
+       buildPreparedDigestInput: () => this.#buildPreparedDigestInput(),
++      preparedDigest: () => preparedDigestFor(this.#buildPreparedDigestInput()),
+     };
+   }
+ 

@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -137,9 +138,11 @@ describe("reactive recompute survives a same-replica-race burst", () => {
       expect(h2.key("output").get()).toBe(2);
 
       // Fail rt2's replica commits with a same-replica-race rejection for a burst
-      // LONGER than the reactive retry budget, then let them through. Pre-fix the
-      // recompute exhausts the budget on the burst and gives up; post-fix it
-      // rides the burst out off the budget, exactly as it does for a conflict.
+      // LONGER than the reactive retry budget, then let them through: the burst
+      // ends on its own once every injected rejection has been consumed.
+      // Pre-fix the recompute exhausts the budget on the burst and gives up;
+      // post-fix it rides the burst out off the budget, exactly as it does for
+      // a conflict.
       const injectTotal = MAX_RETRIES_FOR_REACTIVE + 5;
       const replica2 = s2.open(space).replica as unknown as {
         commitNative: (...args: unknown[]) => Promise<unknown>;
@@ -169,20 +172,16 @@ describe("reactive recompute survives a same-replica-race burst", () => {
       await rt1.idle();
       await s1.synced();
 
-      // Settle rt2 across the burst: receive the subscription push and re-run the
-      // recompute. A fixed number of drain rounds — each awaits real completion,
-      // no wall-clock wait.
-      for (let i = 0; i < 12; i++) {
-        await h2.pull();
-        await rt2.idle();
-        await s2.synced();
-      }
-      gate = false;
-      for (let i = 0; i < 8; i++) {
-        await h2.pull();
-        await rt2.idle();
-        await s2.synced();
-      }
+      // rt2 converges on its own: the subscription push, the burst of refused
+      // recomputes, and the commit that lands once the burst is spent are each
+      // paced by the runtime's own timers, so the wait is on the output's
+      // committed changes rather than on a fixed number of drain rounds — a
+      // loop of round trips never lets those timers fire.
+      await waitForCellValue<number>(
+        rt2,
+        h2.key("output"),
+        (value) => value === 14,
+      );
 
       // rt1 (uninjected) always converges.
       expect(h1.key("output").get()).toBe(14);

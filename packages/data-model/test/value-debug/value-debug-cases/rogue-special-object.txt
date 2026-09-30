@@ -1,0 +1,19 @@
+{
+  "no codec": (() => {
+    // A `FabricSpecialObject` with no `[CODEC]` makes `codecOf()` throw. The
+    // renderer is most likely to be reached for a value that is already
+    // malformed, so it renders what it can rather than adding a second failure
+    // on top of the first.
+    class RogueSpecial extends BaseFabricSpecialObject {}
+    return new RogueSpecial();
+  })(),
+}
+
+--
+
+no codec:
+/RogueSpecial(...)
+/RogueSpecial(...)
+{
+  "/RogueSpecial": "/..."
+}

@@ -7,6 +7,8 @@ import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import {
   type Cell,
+  cellWriteSchema,
+  getCarriedCfcLabelView,
   KeepAsCell,
   parseLink,
   type Runtime,
@@ -18,7 +20,6 @@ import {
   type CfcCellLinkRefPayload,
   cfcReferenceBindingMatches,
   clausesEqual,
-  getCarriedCfcLabelView,
   getCfcReferenceProvenance,
   immutableReferenceViewIdentity,
 } from "@commonfabric/runner/cfc";
@@ -87,6 +88,13 @@ export class ReferenceRegistry {
         overwrite: normalized.overwrite,
       }) ||
       !deepEqual(sourceLink.scopeCaps ?? [], provenance.scopeCaps ?? []) ||
+      !deepEqual(
+        sourceProvenance?.selectionWitnesses ?? [],
+        provenance.selectionWitnesses ?? [],
+      ) ||
+      !(provenance.originSpaces ?? []).every((space) =>
+        sourceProvenance?.originSpaces?.includes(space)
+      ) ||
       !provenance.confidentiality.every((clause) =>
         sourceProvenance?.confidentiality.some((candidate) =>
           clausesEqual(candidate, clause)
@@ -98,6 +106,7 @@ export class ReferenceRegistry {
     const key = taggedHashStringOf({
       authority,
       provenance,
+      writeSchema: cellWriteSchema(sourceCell),
       immutableReferences: immutableReferenceViewIdentity(
         getCarriedCfcLabelView(sourceCell),
       ),
@@ -141,7 +150,16 @@ export class ReferenceRegistry {
     }
     let cell = acquired.cell.withTx(undefined);
     for (const part of ref.path.slice(base.path.length)) cell = cell.key(part);
-    if (ref.schema !== undefined) cell = cell.asSchema(ref.schema);
+    // An echoed wire schema retains the issued handle's mutation declaration.
+    // A different client projection is an explicit schema change.
+    if (
+      ref.schema !== undefined && (
+        ref.path.length !== base.path.length ||
+        !deepEqual(ref.schema, base.schema)
+      )
+    ) {
+      cell = cell.asSchema(ref.schema);
+    }
     return cell;
   }
 

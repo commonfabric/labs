@@ -14,7 +14,7 @@ import {
   textContent,
   UI,
   Writable,
-} from "../commonfabric-shim.test.ts";
+} from "../../../tools/test-support/source-coverage-commonfabric.ts";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -26,10 +26,6 @@ function instantiatePattern(factory, input) {
 
 function uiOf(value) {
   return value[UI];
-}
-
-function sendCountOf(value) {
-  return value.sendCount;
 }
 
 function elementsOfType(node, type) {
@@ -98,77 +94,6 @@ if (Deno.env.get("SOURCE_COVERAGE_CHILD") === "1") {
     assert(
       textContent(uiOf(fetchJsonExample)).includes("123"),
       "fetch-json example renders the typed repo star count",
-    );
-
-    const { default: GmailImporter } = await import(
-      "../../../google/core/gmail-importer.tsx"
-    );
-    const gmailImporter = instantiatePattern(GmailImporter, {
-      settings: {
-        gmailFilterQuery: "in:INBOX",
-        limit: 0,
-        debugMode: false,
-        autoFetchOnAuth: true,
-        resolveInlineImages: false,
-      },
-      overrideAuth: new Writable({
-        token: "token",
-        tokenType: "Bearer",
-        scope: [],
-        expiresIn: 3600,
-        expiresAt: 4_000_000_000_000,
-        refreshToken: "",
-        user: { email: "ada@example.com", name: "Ada", picture: "" },
-      }),
-    });
-    assert(
-      sendCountOf(gmailImporter.bgUpdater) === 1,
-      "gmail importer auto-fetch sends the void updater stream",
-    );
-
-    const {
-      defineItemSchema,
-      listTool,
-      listToolHandler,
-    } = await import("../../../google/core/util/agentic-tools.ts");
-    const favoriteSchema = defineItemSchema({
-      name: { type: "string", description: "Favorite name" },
-      notes: { type: "string", description: "Supporting note" },
-    }, ["name"]);
-    const favorites = new Writable([]);
-    const favoriteTool = listTool(favoriteSchema, {
-      items: favorites,
-      dedupe: ["name"],
-      idPrefix: "favorite",
-      timestamp: "savedAt",
-    });
-    assert(
-      favoriteTool.inputSchema.properties.result.asCell[0] === "cell",
-      "list tool exposes a result cell in its input schema",
-    );
-    const toolResult = new Writable({});
-    const reportFavorite = listToolHandler(favoriteTool.state);
-    reportFavorite.send({
-      name: "Tea",
-      notes: "With milk",
-      result: toolResult,
-    });
-    reportFavorite.send({
-      name: "Tea",
-      notes: "Duplicate",
-      result: toolResult,
-    });
-    assert(
-      favorites.get().length === 1,
-      "list tool deduplicates matching entries",
-    );
-    assert(
-      favorites.get()[0].name === "Tea" && !("result" in favorites.get()[0]),
-      "list tool stores data fields without the result cell",
-    );
-    assert(
-      String(toolResult.get().message).includes("already saved"),
-      "list tool reports duplicate entries",
     );
 
     const { default: SharedProfileDemo } = await import(

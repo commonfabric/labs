@@ -11,6 +11,7 @@ import { countHarnessPolicyDecisions } from "./policy-trace.ts";
 import type { PromptSlotBinding } from "./prompt-slot.ts";
 import type { HarnessFabricSessionCfcPosture } from "../run-state.ts";
 import type { HarnessSubagentRunRef } from "./subagent.ts";
+import type { HarnessTaskOutcome } from "./task-outcome.ts";
 import type { HarnessToolEffectClass } from "./tool-descriptor.ts";
 import type { HarnessTranscriptMessage } from "./transcript.ts";
 import type { ToolResultRef } from "./tool-result.ts";
@@ -43,7 +44,12 @@ export type HarnessToolPolicyDecision =
   | "invalid"
   | "withheld";
 
-export type HarnessToolExecutionStatus = "completed" | "failed" | "not-run";
+export type HarnessToolExecutionStatus =
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "not-run";
+export type HarnessToolInvocationOrigin = "model" | "opening-research";
 export type HarnessRunTimelineKind =
   | "run_started"
   | "transcript_message"
@@ -61,6 +67,9 @@ export interface HarnessToolActivity {
   endedAt: string;
   toolCallId: string;
   toolId: string;
+
+  /** Absent for legacy and model-authored calls; set for driver-authored calls. */
+  origin?: HarnessToolInvocationOrigin;
 
   /** Absent when the call named a tool the run offers no descriptor for. */
   effectClass?: HarnessToolEffectClass;
@@ -100,6 +109,7 @@ export interface HarnessRunTimelineEntry {
   toolCallIds?: string[];
   toolCallId?: string;
   toolId?: string;
+  origin?: HarnessToolInvocationOrigin;
   toolActivitySequence?: number;
   policyDecision?: HarnessToolPolicyDecision;
   executionStatus?: HarnessToolExecutionStatus;
@@ -127,6 +137,9 @@ export interface HarnessRunReport {
   /** Requested effort; provider clients reject routes that cannot apply it. */
   reasoningEffort?: string;
 
+  /** Effort requested for the `research` tool's own model calls. */
+  researchReasoningEffort?: string;
+
   promptCacheMode?: "implicit" | "explicit";
   cacheAffinity?: "run" | "custom";
   modelProvider?: HarnessModelProviderId;
@@ -138,7 +151,7 @@ export interface HarnessRunReport {
   /** Usage from model turns executed directly by this run. */
   usage?: HarnessModelUsage;
 
-  /** Direct usage plus usage reported by completed descendant runs. */
+  /** Direct usage plus reported research and descendant calls, even on failure. */
   totalUsage?: HarnessModelUsage;
 
   modelUsage?: HarnessModelTurnUsage[];
@@ -152,6 +165,13 @@ export interface HarnessRunReport {
   endedAt?: string;
   terminalReason?: string;
   finalAssistantText?: string;
+
+  /** Reason supplied by the run's controlling abort signal. */
+  cancelReason?: string;
+
+  /** User-facing disposition of a normally completed model loop. */
+  taskOutcome?: HarnessTaskOutcome;
+
   artifactRoot?: string;
   transcriptPath?: string;
   promptSlotBinding?: PromptSlotBinding;
@@ -183,6 +203,10 @@ export interface CreateHarnessRunReportOptions {
     updatedAt: string;
     endedAt?: string;
     terminalReason?: string;
+
+    /** Reason supplied by the run's controlling abort signal. */
+    cancelReason?: string;
+
     cfcEnforcementMode: CfcEnforcementMode;
     fabricSessionCfc?: HarnessFabricSessionCfcPosture;
     artifactRoot?: string;
@@ -204,10 +228,15 @@ export interface CreateHarnessRunReportOptions {
   };
   model: string;
   reasoningEffort?: string;
+  researchReasoningEffort?: string;
   promptCacheMode?: "implicit" | "explicit";
   cacheAffinity?: "run" | "custom";
   modelTurns: number;
   finalAssistantText?: string;
+
+  /** User-facing disposition of a normally completed model loop. */
+  taskOutcome?: HarnessTaskOutcome;
+
   timeline?: readonly HarnessRunTimelineEntryInput[];
   toolActivity: readonly HarnessToolActivity[];
   modelAttempts?: readonly HarnessModelAttempt[];
@@ -249,6 +278,7 @@ export const createHarnessRunTimeline = (
       toolActivitySequence: activity.sequence,
       toolCallId: activity.toolCallId,
       toolId: activity.toolId,
+      ...(activity.origin !== undefined ? { origin: activity.origin } : {}),
       policyDecision: activity.policyDecision,
       executionStatus: activity.executionStatus,
     });
@@ -335,6 +365,9 @@ export const createHarnessRunReport = (
     ...(options.reasoningEffort !== undefined
       ? { reasoningEffort: options.reasoningEffort }
       : {}),
+    ...(options.researchReasoningEffort !== undefined
+      ? { researchReasoningEffort: options.researchReasoningEffort }
+      : {}),
     ...(options.promptCacheMode !== undefined
       ? { promptCacheMode: options.promptCacheMode }
       : {}),
@@ -374,6 +407,12 @@ export const createHarnessRunReport = (
       : {}),
     ...(options.runState.terminalReason !== undefined
       ? { terminalReason: options.runState.terminalReason }
+      : {}),
+    ...(options.runState.cancelReason !== undefined
+      ? { cancelReason: options.runState.cancelReason }
+      : {}),
+    ...(options.taskOutcome !== undefined
+      ? { taskOutcome: options.taskOutcome }
       : {}),
     ...(options.finalAssistantText !== undefined
       ? { finalAssistantText: options.finalAssistantText }

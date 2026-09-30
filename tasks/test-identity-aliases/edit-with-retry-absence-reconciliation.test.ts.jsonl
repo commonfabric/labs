@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"editWithRetry absence reconciliation > does not reconcile reads excluded from the commit conflict set"},"to":{"k":"unit","s":"runner","n":"editWithRetry absence reconciliation > reconciles excluded reads only when CFC consumes their labels (content=false)"}}

@@ -7,6 +7,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { delegateTaskTool } from "../src/tools/delegate-task.ts";
 
@@ -14,7 +15,7 @@ const objectProperties = (
   schema: JSONSchema,
 ): Readonly<Record<string, JSONSchema>> => {
   if (
-    typeof schema !== "object" || schema === null ||
+    !isObjectOrArray(schema) ||
     schema.type !== "object" || schema.properties === undefined
   ) {
     throw new Error("expected an object schema with properties");
@@ -30,9 +31,7 @@ describe("delegate-task", () => {
 
     expect(patternRefs).toBeDefined();
     expect(
-      typeof patternRefs === "object" && patternRefs !== null
-        ? patternRefs.maxItems
-        : undefined,
+      isObjectOrArray(patternRefs) ? patternRefs.maxItems : undefined,
     ).toBe(8);
   });
 
@@ -41,8 +40,8 @@ describe("delegate-task", () => {
       delegateTaskTool.descriptor.inputSchema,
     ).patternRefs;
     if (
-      typeof patternRefs !== "object" || patternRefs === null ||
-      typeof patternRefs.items !== "object" || patternRefs.items === null
+      !isObjectOrArray(patternRefs) ||
+      !isObjectOrArray(patternRefs.items)
     ) {
       throw new Error("expected `patternRefs` item schema");
     }
@@ -50,7 +49,7 @@ describe("delegate-task", () => {
 
     expect(note).toBeDefined();
     expect(
-      typeof note === "object" && note !== null ? note.maxLength : undefined,
+      isObjectOrArray(note) ? note.maxLength : undefined,
     ).toBe(500);
   });
 });

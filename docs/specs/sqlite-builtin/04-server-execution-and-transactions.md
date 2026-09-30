@@ -23,9 +23,27 @@ and `session.watch.*`.
   the file, never attached to the engine connection (see
   [Read path: a pooled read-only connection](#read-path-a-pooled-read-only-connection)).
 
-Because we ride the same connection, queries inherit the session's existing
-authorization; no new auth surface is added in v1. (CFC will later refine *what*
-within the space a query may touch — Section [06](./06-cfc.md).)
+### Referenced databases and reader authorization
+
+A query opens the storage provider for the resolved database handle's space.
+Forwarding that handle through another piece preserves the source space; a
+matching database ID in the consumer space does not select a different database.
+The query request identity includes that source space. Foreign query results are
+at least user scoped, and retain session scope when requested or required by the
+database.
+
+Ordinary clients use their authenticated source-space session. A served foreign
+query additionally carries the demanding principal and, for session-scoped
+results, its session ID. Missing scoped identity refuses the query before result
+publication. The memory server accepts this carriage only from a configured
+`delegatingDids` principal, checks the carried reader's source-space READ access
+alongside the serving session's current authorization, and repeats both checks
+before returning rows. Scoped cell databases resolve against the carried identity.
+
+The `sqliteQueryReader` protocol capability advertises this authorization contract.
+A client refuses to send carried-reader queries when the server does not advertise
+it. The carriage supplies no additional source-space access. Table and row CFC
+labels continue to apply as described in Section [06](./06-cfc.md).
 
 ## Isolation, namespacing & the statement guard
 
@@ -54,7 +72,8 @@ needs a full SQL parser:
   cannot get SQLite to enumerate accessed objects for us. Instead the guard
   rejects: any **schema-qualified** reference (`other.table`), `ATTACH`/`DETACH`/
   `PRAGMA`, and **multiple statements**; `sqliteQuery` additionally requires a
-  single `SELECT`/read-only CTE. Because we never rewrite identifiers, this is a
+  single `SELECT`/read-only CTE. Function calls such as `replace()` do not make
+  a read-only CTE a write. Because we never rewrite identifiers, this is a
   tokenizer-level check, not full resolution. (A future hardening option: bind
   `sqlite3_set_authorizer` ourselves via Deno FFI against the `unsafeHandle`
   pointer — defense-in-depth, not required for v1.)

@@ -1,8 +1,7 @@
 import { BigIntCodec } from "./BigIntCodec.ts";
 import { SpecialNumberCodec } from "./SpecialNumberCodec.ts";
-import { SymbolCodec } from "@/codec-common/SymbolCodec.ts";
+import { CodecRegistry, SymbolCodec } from "@/codec-common";
 import { UndefinedCodec } from "./UndefinedCodec.ts";
-import { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
 import { JSON_FORMAT, type JsonCodecValue } from "./interface.ts";
 
 /**

@@ -197,12 +197,19 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
         queryPattern.resultSchema,
         tx,
       );
-      runtime.run(tx, queryPattern, {}, resultCell);
+      const result = runtime.run(tx, queryPattern, {}, resultCell);
       tx.commit();
-      // The wire call is the event here, not a result value: the spy above
-      // resolves `issued` when `db.query` reaches the provider, which the
-      // post-commit flush drives without the result being observed.
-      await issued.promise;
+      // The query is a computation, so a reader has to demand it; the wire
+      // call is the event here, not a result value: the spy above resolves
+      // `issued` when `db.query` reaches the provider.
+      const cancel = (result as unknown as {
+        sink: (f: () => void) => () => void;
+      }).sink(() => {});
+      try {
+        await issued.promise;
+      } finally {
+        cancel();
+      }
       return seenScope;
     } finally {
       provider.sqliteQuery = original;
@@ -307,13 +314,35 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
   });
 
   it("attaches row labels to reserved SQLite alias rows", async () => {
+    const rowCount = 2;
+    const schemaWritesByAttempt: Map<string, number>[] = [];
+    const originalEditWithRetry = runtime.editWithRetry.bind(runtime);
+    (runtime as any).editWithRetry = (fn: any, ...args: any[]) =>
+      originalEditWithRetry((writeTx) => {
+        const value = fn(writeTx);
+        const schemaWritesByTarget = new Map<string, number>();
+        const prepared = (writeTx as any).accessForTestingOnly
+          .buildPreparedDigestInput();
+        for (const input of prepared.writePolicyInputs ?? []) {
+          if (input.kind !== "schema" || input.target?.path?.length !== 0) {
+            continue;
+          }
+          const id = String(input.target.id);
+          schemaWritesByTarget.set(id, (schemaWritesByTarget.get(id) ?? 0) + 1);
+        }
+        schemaWritesByAttempt.push(schemaWritesByTarget);
+        return value;
+      }, ...args);
     const provider = runtime.storageManager.open(space) as unknown as {
       sqliteQuery: (...a: unknown[]) => Promise<unknown>;
     };
     const original = provider.sqliteQuery.bind(provider);
     provider.sqliteQuery = () =>
       Promise.resolve({
-        rows: [Object.fromEntries([["constructor", 1]])],
+        rows: Array.from(
+          { length: rowCount },
+          (_, i) => Object.fromEntries([["constructor", i + 1]]),
+        ),
         columns: [{ output: "constructor", table: "items", column: "id" }],
       });
     try {
@@ -357,18 +386,28 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
         await runtime.settled();
         expect(view.get().pending).toBe(false);
         expect(view.get().error).toBeUndefined();
-        expect(view.get().result).toEqual([[["constructor", 1]]]);
-        const rowLabel = cfcLabelViewForCell(
-          result.key("result").key(0).resolveAsCell(),
-        );
-        expect(cfcConfidentialityForObservationNode({
-          labelView: rowLabel,
-          logicalPath: [],
-        })).toContainEqual("secret");
-        expect(cfcConfidentialityForObservationNode({
-          labelView: rowLabel,
-          logicalPath: ["0", "1"],
-        })).toEqual(expect.arrayContaining(["secret", "column-secret"]));
+        expect(view.get().result).toEqual(Array.from(
+          { length: rowCount },
+          (_, i) => [["constructor", i + 1]],
+        ));
+        for (let i = 0; i < rowCount; i++) {
+          const rowCell = result.key("result").key(i).resolveAsCell();
+          const rowLabel = cfcLabelViewForCell(rowCell);
+          expect(cfcConfidentialityForObservationNode({
+            labelView: rowLabel,
+            logicalPath: [],
+          })).toContainEqual("secret");
+          expect(cfcConfidentialityForObservationNode({
+            labelView: rowLabel,
+            logicalPath: ["0", "1"],
+          })).toEqual(expect.arrayContaining(["secret", "column-secret"]));
+          const rowId = rowCell.getAsNormalizedFullLink().id;
+          const rowAttempts = schemaWritesByAttempt
+            .map((attempt) => attempt.get(rowId))
+            .filter((count): count is number => count !== undefined);
+          expect(rowAttempts.length).toBeGreaterThan(0);
+          expect(rowAttempts.every((count) => count === 1)).toBe(true);
+        }
       } finally {
         cancel();
       }
@@ -484,6 +523,49 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
       provider.sqliteQuery = original;
     }
   }
+
+  it("issues a new query when `reactOn` goes from a hole to an element holding `undefined`", async () => {
+    const tick = runtime.getCell<unknown[]>(
+      space,
+      "sqlite-hole-tick",
+      undefined,
+      tx,
+    );
+    tick.setRawUntyped(new Array(1));
+    const pattern = cf.pattern<{ tick: unknown[] }>(({ tick }) => {
+      const db = cf.sqliteDatabase({
+        tables: {
+          notes: cf.table({ id: "integer primary key", body: "text" }),
+        },
+      });
+      return cf.sqliteQuery({
+        db,
+        sql: "SELECT body FROM notes",
+        reactOn: tick,
+      });
+    });
+    const result = runtime.run(
+      tx,
+      pattern,
+      { tick },
+      runtime.getCell(space, "sqlite-hole-result", pattern.resultSchema, tx),
+    );
+    expect((await tx.commit()).error).toBeUndefined();
+    const cancel = result.key("pending").sink(() => {});
+    try {
+      await runtime.settled();
+      const first = result.key("requestHash").get();
+      expect(typeof first).toBe("string");
+
+      const next = runtime.edit();
+      tick.withTx(next).setRawUntyped([undefined]);
+      expect((await next.commit()).error).toBeUndefined();
+      await runtime.settled();
+      expect(result.key("requestHash").get()).not.toBe(first);
+    } finally {
+      cancel();
+    }
+  });
 
   it("a superseded query's successful flush does not overwrite the newer request", async () => {
     const { q, secondHash } = await runStaleFlush("resolve", "sqlite-stale-ok");

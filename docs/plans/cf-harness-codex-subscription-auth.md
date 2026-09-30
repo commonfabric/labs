@@ -307,7 +307,7 @@ Tests to extend first:
   for the local CLI, not the Loom credential backend.
 - [x] Define a Loom credential-store adapter contract that keeps refresh tokens
   in Loom's approved encrypted secret store and indexes them by the authenticated
-  Common Tools principal plus provider. Do not place tokens in Cells, Spaces,
+  Common Fabric principal plus provider. Do not place tokens in Cells, Spaces,
   run manifests, session databases, or run artifacts.
 - [x] Serialize read/modify/write so concurrent prompt loops cannot refresh the
   same rotating token independently. Re-check expiry inside the serialized
@@ -497,7 +497,7 @@ Expected files:
 - [x] Stdio and other shared processes must receive an explicit owner-bound
   resolver from their host; they must not inherit the local operator's
   filesystem credential implicitly.
-- [x] Keep the Common Tools gateway available as the fallback chosen by the
+- [x] Keep the Common Fabric gateway available as the fallback chosen by the
   user or workspace policy, never as an automatic fallback after subscription
   auth fails.
 

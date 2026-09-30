@@ -1,3 +1,4 @@
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,
@@ -127,7 +128,7 @@ export const extractOpenAICodexAccountId = (
     if (!token) continue;
     const payload = decodeJwtPayload(token);
     const nested = payload?.[ACCOUNT_CLAIM];
-    const accountId = typeof nested === "object" && nested !== null
+    const accountId = isObjectOrArray(nested)
       ? (nested as Record<string, unknown>).chatgpt_account_id
       : undefined;
     if (typeof accountId === "string" && accountId.length > 0) return accountId;
@@ -154,7 +155,7 @@ const readTokenResponse = async (
       const body = await response.json() as Record<string, unknown>;
       const error = body.error;
       if (typeof error === "string") code = error;
-      else if (typeof error === "object" && error !== null) {
+      else if (isObjectOrArray(error)) {
         const record = error as Record<string, unknown>;
         code = typeof record.code === "string"
           ? record.code
@@ -541,7 +542,7 @@ export const completeOpenAICodexDeviceAuthorization = async (options: {
     try {
       const parsed = JSON.parse(body) as Record<string, unknown>;
       const error = parsed.error;
-      errorCode = typeof error === "object" && error !== null
+      errorCode = isObjectOrArray(error)
         ? (error as Record<string, unknown>).code
         : error;
     } catch {

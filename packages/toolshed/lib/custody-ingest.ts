@@ -1,4 +1,8 @@
-import type { Cell, IExtendedStorageTransaction } from "@commonfabric/runner";
+import {
+  type Cell,
+  cellRuntime,
+  type IExtendedStorageTransaction,
+} from "@commonfabric/runner";
 import { stampExternalIngest } from "@commonfabric/runner/cfc";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
@@ -91,7 +95,7 @@ const durableEdit = async <T, W>(
   // Operator wall-clock, captured BEFORE the write: retries must not re-stamp
   // the time, and it must never come from the payload.
   const receivedAt = new Date().toISOString();
-  const { ok, error } = await cell.runtime.editWithRetry(
+  const { ok, error } = await cellRuntime(cell).editWithRetry(
     (tx: IExtendedStorageTransaction): W => {
       const written = mutate(cell.withTx(tx));
       if (channel !== undefined) {

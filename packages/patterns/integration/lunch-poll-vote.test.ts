@@ -100,6 +100,25 @@ const voteSwatchVoters = (page: Page): Promise<string[]> =>
     return [...names];
   });
 
+// Every swatch node the "All options" summary rendered, named or not.
+// `voteSwatchVoters` above drops a swatch whose name is empty, so the two
+// counts together separate a summary still holding the pre-vote subtree, which
+// has no swatch node at all, from one whose swatches carry no name, which is a
+// roster the tally could not match a vote's voter against.
+const voteSwatchCount = (page: Page): Promise<number> =>
+  page.evaluate(() => {
+    let count = 0;
+    const walk = (root: Document | ShadowRoot) => {
+      count += root.querySelectorAll("[data-vote-swatch-name]").length;
+      for (const el of root.querySelectorAll("*")) {
+        const sr = (el as HTMLElement).shadowRoot;
+        if (sr) walk(sr);
+      }
+    };
+    walk(document);
+    return count;
+  });
+
 // The participant chips currently rendered in the board's participants strip
 // (`data-participant-guest` — typed-name joins are guests; profile-backed
 // participants render `data-participant-badge`), descending through shadow
@@ -128,6 +147,28 @@ const participantChipNames = (page: Page): Promise<string[]> =>
     walk(document);
     return names;
   });
+
+// What one browser can say about the tally, for the message the swatch wait
+// below throws when it fails. A bare `waitFor` timeout names neither the
+// browser that is behind nor what it is rendering instead, and this step's
+// failures are a minority of runs, so the run that fails is the only chance to
+// see it. A page that cannot answer reports that instead: the wait fails for
+// that reason too, and a report that threw would take the failure it is
+// describing down with it.
+const swatchReport = async (page: Page, label: string): Promise<string> => {
+  try {
+    const [voters, swatches, chips] = await Promise.all([
+      voteSwatchVoters(page),
+      voteSwatchCount(page),
+      participantChipNames(page),
+    ]);
+    return `${label} holds ${swatches} swatch node(s) naming [${
+      voters.join(", ")
+    }], with participants [${chips.join(", ")}]`;
+  } catch (error) {
+    return `${label} could not be read (${error})`;
+  }
+};
 
 describe("lunch poll: two users vote on a shared option", () => {
   const hostShell = new ShellIntegration({
@@ -383,15 +424,28 @@ describe("lunch poll: two users vote on a shared option", () => {
       // resolved tally so a remote voter's keyed entity is rendered.
       await timer.run(
         "both voters' swatches visible on both browsers",
-        () =>
-          waitFor(async () => {
-            const [hostVoters, guestVoters] = await Promise.all([
-              voteSwatchVoters(hostPage),
-              voteSwatchVoters(guestPage),
+        async () => {
+          try {
+            await waitFor(async () => {
+              const [hostVoters, guestVoters] = await Promise.all([
+                voteSwatchVoters(hostPage),
+                voteSwatchVoters(guestPage),
+              ]);
+              return hostVoters.includes(HOST) &&
+                hostVoters.includes(GUEST) &&
+                guestVoters.includes(HOST) && guestVoters.includes(GUEST);
+            }, { timeout: PROPAGATION_TIMEOUT, delay: 500 });
+          } catch (cause) {
+            const [host, guest] = await Promise.all([
+              swatchReport(hostPage, HOST),
+              swatchReport(guestPage, GUEST),
             ]);
-            return hostVoters.includes(HOST) && hostVoters.includes(GUEST) &&
-              guestVoters.includes(HOST) && guestVoters.includes(GUEST);
-          }, { timeout: PROPAGATION_TIMEOUT, delay: 500 }),
+            throw new Error(
+              `The wait for both voters' swatches failed. ${host}. ${guest}.`,
+              { cause },
+            );
+          }
+        },
       );
 
       // A second option tallies independently: host adds it, guest vetoes it,

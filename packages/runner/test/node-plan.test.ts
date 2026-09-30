@@ -106,13 +106,20 @@ describe("Runner node plans", () => {
       isObjectOrArray(plan.inputs) && "$event" in plan.inputs;
     const lift = byKind("javascript").find((plan) => !isHandler(plan))!;
     const bump = byKind("javascript").find(isHandler)!;
-    expect(lift.reads.map((link) => link.path)).toEqual([["seed"]]);
+    const liftInput = parseLink(lift.inputs, resultCell);
+    const handlerInputs = bump.inputs as {
+      $ctx: { count: unknown };
+      $event: unknown;
+    };
+    const countInput = parseLink(handlerInputs.$ctx.count, resultCell);
+    const eventInput = parseLink(handlerInputs.$event, resultCell);
+    expect(liftInput?.path).toEqual(["seed"]);
     expect(lift.writes.length).toBe(1);
-    expect(bump.reads.map((link) => link.path)).toEqual([["count"], []]);
+    expect(countInput?.path).toEqual(["count"]);
+    expect(eventInput?.path).toEqual([]);
     expect(bump.writes).toEqual([]);
-    for (const link of [...lift.reads, ...bump.reads]) {
-      if (link.path.length > 0) expect(link.schema).toBeDefined();
-    }
+    expect(liftInput?.schema).toBeDefined();
+    expect(countInput?.schema).toBeDefined();
 
     // The raw node is the list coordinator, with the immutable inputs
     // document the builtin reads from and the output spot it is keyed on.

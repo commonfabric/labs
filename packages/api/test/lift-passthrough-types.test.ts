@@ -6,17 +6,17 @@ import type {
   LiftFunction,
   ReadonlyCell,
 } from "@commonfabric/api";
+import type { Same } from "@commonfabric/utils/types";
 
 // `lift` is ambient in this package — the callable lives in the runner's
 // builder — so every probe below sits inside a function that is never called.
 // The assertions are the type checker's, and `deno check` is what runs them.
+// They are value-position guards rather than `MustBeTrue<...>` type aliases: a
+// failed `Same` evaluates to `false`, and assigning `false` to a `true`-typed
+// const is the error that makes an assertion bite. `MustBeTrue<T extends true>`
+// accepts a failing assertion whose result is `never`, and so can pass
+// vacuously.
 declare const lift: LiftFunction;
-
-// Value-position guards rather than `MustBeTrue<...>` type aliases: a failed
-// `Same` evaluates to `false`, and assigning `false` to a `true`-typed const is
-// the error that makes an assertion bite. `MustBeTrue<T extends true>` accepts a
-// failing assertion whose result is `never`, and so can pass vacuously.
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 interface Summary {
   title: string;

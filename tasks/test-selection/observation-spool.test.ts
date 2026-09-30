@@ -12,7 +12,6 @@ function observation(name: string, startedAt: string): Observation {
   return {
     test: { k: "unit", s: "example", n: name },
     outcome: "pass",
-    durationMs: 1,
     day: startedAt.slice(0, 10),
     startedAt,
     commit: name,

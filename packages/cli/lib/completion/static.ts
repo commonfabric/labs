@@ -8,6 +8,7 @@
 
 import type { Option } from "@cliffy/command";
 
+import { AGENT_RUN_STATES } from "@commonfabric/runner/agent-run";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { languageNames } from "../view/languages/language.ts";
 import type { AnyCommand, CompletionLine, PreParseGlobal } from "./line.ts";
@@ -33,10 +34,14 @@ export interface Candidate {
  * `--from` are settled.
  */
 const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
+  "state": [...AGENT_RUN_STATES],
+  "access": ["READ", "WRITE", "OWNER"],
   "log-level": ["debug", "info", "warn", "error", "silent"],
   "color": ["auto", "always", "never"],
   "language": languageNames(),
   "cfc-mode": [...CFC_ENFORCEMENT_MODES],
+  "cfc-enforcement-mode": [...CFC_ENFORCEMENT_MODES],
+  "cfc-flow-labels": ["off", "derive", "observe", "persist"],
   // `cf piece map --format`.
   "format": ["ascii", "dot"],
   // `cf piece survey --side`: which document holds the collection.

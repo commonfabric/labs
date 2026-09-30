@@ -1,4 +1,5 @@
 import { dirname } from "@std/path";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 // The compiled-module-byte cache, in full. The runtime defines only the
 // `ModuleByteCache` interface it consults during a compile; this test-side
@@ -220,7 +221,7 @@ export class ProcessModuleByteCache implements ModuleByteCache {
    */
   restore(entries: readonly unknown[]): void {
     for (const entry of entries) {
-      if (entry === null || typeof entry !== "object") continue;
+      if (!isObjectOrArray(entry)) continue;
       const e = entry as Partial<SerializedModuleBytes>;
       if (typeof e.key !== "string" || typeof e.js !== "string") continue;
       const patternCoverageSpans = normalizePatternCoverageSpans(
@@ -306,7 +307,7 @@ function normalizePatternCoverageSpans(
 function isPatternCoverageSpan(
   span: unknown,
 ): span is CachedPatternCoverageSpan {
-  if (span === null || typeof span !== "object") return false;
+  if (!isObjectOrArray(span)) return false;
   const s = span as Partial<CachedPatternCoverageSpan>;
   return typeof s.fileName === "string" &&
     typeof s.id === "number" &&
@@ -335,19 +336,18 @@ function normalizeBuilderSourceSites(
   value: unknown,
 ): CachedBuilderSourceSitesV1 | undefined {
   if (value === undefined) return undefined;
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return undefined;
   }
   const sidecar = value as Partial<CachedBuilderSourceSitesV1>;
   if (
-    sidecar.formatVersion !== 1 || sidecar.sites === null ||
-    typeof sidecar.sites !== "object" || Array.isArray(sidecar.sites)
+    sidecar.formatVersion !== 1 || !isObjectNotArray(sidecar.sites)
   ) {
     return undefined;
   }
   const sites = Object.create(null) as CachedBuilderSourceSitesV1["sites"];
   for (const [symbol, value] of Object.entries(sidecar.sites)) {
-    if (symbol.length === 0 || value === null || typeof value !== "object") {
+    if (symbol.length === 0 || !isObjectOrArray(value)) {
       return undefined;
     }
     const site = value as {

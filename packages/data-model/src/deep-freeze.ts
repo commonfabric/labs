@@ -12,6 +12,7 @@
  * shared across that boundary instead of restarting inside it.
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { FabricValue } from "./interface.ts";
 import {
   BaseFabricInstance,
@@ -19,7 +20,7 @@ import {
   IS_DEEP_FROZEN,
 } from "./fabric-bases/BaseFabricInstance.ts";
 import { BaseFabricPrimitive } from "./fabric-bases/BaseFabricPrimitive.ts";
-import { isValidFabricValue } from "./validity-check.ts";
+import { isValidFabricValue } from "@/types/validation.ts";
 
 /** Cache of confirmed deep-frozen objects. */
 const deepFrozenCache = new WeakSet<object>();
@@ -273,7 +274,7 @@ export function isValidDeepFrozenFabricValue(
   value: unknown,
 ): value is FabricValue {
   if (
-    typeof value === "object" && value !== null &&
+    isObjectOrArray(value) &&
     deepFrozenFabricValueCache.has(value)
   ) {
     return true;
@@ -289,7 +290,7 @@ export function isValidDeepFrozenFabricValue(
   // subtree.
   const result = isDeepFrozen(value) && isValidFabricValue(value);
 
-  if (result && typeof value === "object" && value !== null) {
+  if (result && isObjectOrArray(value)) {
     deepFrozenFabricValueCache.add(value);
   }
 

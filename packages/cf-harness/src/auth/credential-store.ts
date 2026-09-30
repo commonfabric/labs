@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type {
   HarnessCredential,
   HarnessCredentialHealth,
@@ -240,7 +241,7 @@ const setOwn = <T extends object>(
 };
 
 const isCredential = (value: unknown): value is HarnessCredential => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const input = value as Record<string, unknown>;
@@ -252,7 +253,7 @@ const isCredential = (value: unknown): value is HarnessCredential => {
 };
 
 const isHealth = (value: unknown): value is HarnessCredentialHealth => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const input = value as Record<string, unknown>;
@@ -270,23 +271,19 @@ const parseDocument = (text: string): CredentialDocument => {
     // file can be the stored token.
     throw new Error("credential store is not valid JSON");
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isObjectNotArray(parsed)) {
     throw new Error("credential store must contain a JSON object");
   }
   const input = parsed as Record<string, unknown>;
   if (
     (input.version !== 1 && input.version !== 2) ||
-    typeof input.owners !== "object" ||
-    input.owners === null || Array.isArray(input.owners)
+    !isObjectNotArray(input.owners)
   ) {
     throw new Error("unsupported credential store format");
   }
   const owners: CredentialDocument["owners"] = Object.create(null);
   for (const [owner, rawProviders] of Object.entries(input.owners)) {
-    if (
-      typeof rawProviders !== "object" || rawProviders === null ||
-      Array.isArray(rawProviders)
-    ) {
+    if (!isObjectNotArray(rawProviders)) {
       throw new Error("invalid credential owner entry");
     }
     const raw = rawProviders as Record<string, unknown>;
@@ -302,17 +299,11 @@ const parseDocument = (text: string): CredentialDocument => {
   }
   const health: CredentialDocument["health"] = Object.create(null);
   if (input.version === 2) {
-    if (
-      typeof input.health !== "object" || input.health === null ||
-      Array.isArray(input.health)
-    ) {
+    if (!isObjectNotArray(input.health)) {
       throw new Error("invalid credential health entries");
     }
     for (const [owner, rawProviders] of Object.entries(input.health)) {
-      if (
-        typeof rawProviders !== "object" || rawProviders === null ||
-        Array.isArray(rawProviders)
-      ) {
+      if (!isObjectNotArray(rawProviders)) {
         throw new Error("invalid credential health owner entry");
       }
       const raw = rawProviders as Record<string, unknown>;

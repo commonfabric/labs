@@ -12,6 +12,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
@@ -46,10 +47,10 @@ describe("list-coordinator-plan", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -64,6 +65,7 @@ describe("list-coordinator-plan", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [selection] },
     }]);
     const acquisition = runtime.edit();
@@ -101,6 +103,7 @@ describe("list-coordinator-plan", () => {
       path: ["0"],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [selection] },
     }]);
     const planning = runtime.edit();

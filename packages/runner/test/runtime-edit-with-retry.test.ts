@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { setCell } from "../src/cell.ts";
 import { DEFAULT_MAX_RETRIES, Runtime } from "../src/runtime.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
@@ -258,7 +259,7 @@ describe("Runtime.editWithRetry", () => {
         t.abort("force retry");
         return false;
       }
-      cell.withTx(t).set(1, (committedTx) => {
+      setCell(cell.withTx(t), 1, (committedTx) => {
         statuses.push(committedTx.status().status);
       });
       return true;

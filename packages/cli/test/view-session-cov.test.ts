@@ -2572,7 +2572,7 @@ Deno.test("filepickercov: paging through a long listing scrolls the picker", () 
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   assert(entryText(s).length > 10, "a long listing");
-  press(s, "pagedown"); // jump down ten
+  press(s, "pagedown");
   assert(s.view().overlay!.scroll >= 0);
   press(s, "down", "ctrl-n"); // arrow and Emacs down
   press(s, "up", "ctrl-p"); // arrow and Emacs up

@@ -97,6 +97,7 @@ describe("the CFC posture record", () => {
       cfcDeclaredMonotonicity: "on",
       cfcTriggerReadGating: "true",
       cfcDecomposedEnvelopes: 1,
+      cfcContentAddressedLabels: 1,
     };
 
     for (const [dial, value] of Object.entries(offLadder)) {
@@ -225,9 +226,9 @@ describe("the CFC posture record", () => {
     });
 
     it("stamps a resolved parent's record the same way", async () => {
-      // What CT-2195 lands on: the parent's record becomes an attestation,
-      // and the inheriting host carries the attested values without this
-      // code changing.
+      // A resolved parent's record is an attestation, and the inheriting
+      // host carries the attested values across the way it carries projected
+      // ones.
       const options = runtimePresets.remoteClient({
         apiUrl: new URL(import.meta.url),
         storageManager: StorageManager.emulate({ as: signer }),
@@ -290,6 +291,38 @@ describe("the CFC posture record", () => {
           what.includes("`llm`") || what.includes("`llmDialog`")
         ),
       ).toEqual([]);
+    });
+  });
+
+  describe("the write floor beside the flow dial", () => {
+    // The floor credits the flow meet only where labels persist, so a
+    // deployment holding an enforcing floor below that rung turns away
+    // writes the join would have endorsed (ordering constraint 3,
+    // docs/specs/cfc-enforcement-matrix.md §2).
+
+    it("holds the floor at `enforce` where the flow dial is left alone", () => {
+      expect(presetCfcOptions({}).cfcWriteFloor).toBe("enforce");
+      expect(presetCfcOptions({ cfcFlowLabels: "persist" }).cfcWriteFloor).toBe(
+        "enforce",
+      );
+    });
+
+    it("drops the floor to `observe` where a caller puts flow labels below persist", () => {
+      expect(presetCfcOptions({ cfcFlowLabels: "observe" }).cfcWriteFloor).toBe(
+        "observe",
+      );
+      expect(presetCfcOptions({ cfcFlowLabels: "off" }).cfcWriteFloor).toBe(
+        "observe",
+      );
+    });
+
+    it("drops the floor under the max-enforcement bundle too, which pins it", () => {
+      expect(
+        presetCfcOptions({
+          cfcPosture: "max-enforcement",
+          cfcFlowLabels: "off",
+        }).cfcWriteFloor,
+      ).toBe("observe");
     });
   });
 

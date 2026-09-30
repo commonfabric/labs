@@ -99,9 +99,9 @@ describe("stream event payloads carrying a FabricPrimitive", () => {
     });
 
     it("converts a native payload to a primitive rather than flattening it", () => {
-      // `shallowFabricFromNativeValue()` mints the primitive just before the
-      // container dispatch, so a native arrives as the converted form and must
-      // survive the same way an already-built one does.
+      // `shallowFabricFromConvertibleJsValue()` mints the primitive just before
+      // the container dispatch, so a native arrives as the converted form and
+      // must survive the same way an already-built one does.
       const out = convertCellsToLinks({ payload: new Uint8Array([4, 5, 6]) });
       const payload = (out as { payload: unknown }).payload;
       expect(payload).toBeInstanceOf(FabricBytes);

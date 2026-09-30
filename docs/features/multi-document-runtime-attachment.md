@@ -78,6 +78,24 @@ one at a time, because the two contexts are built in different documents and
 one of them crossed an encoding: a posture carried as an absent property in one
 and as an explicit `undefined` in the other is the same posture.
 
+Each context is built the way it is compared. The runtime's own is read off the
+payload it was initialized from; an attaching client's is read off that
+client's options. Both are written out field by field, and each literal is held
+to a record keyed by the context's type, so a field the type declares and a
+literal drops is a type error as well. That matters most where both ends drop
+the same field: the comparison then finds two absences and agrees, and two
+documents run under one runtime each believing its own answer.
+
+Being complete is not the same as being normalized, and the two fields that
+are normalized are the two named above. The backend and the host map are put
+into one spelling on both sides, so two ways of writing one origin are one
+posture. The render declassification policy and the render confidentiality
+ceiling are not: each is recorded as the payload spelled it while the runtime
+applies a normalized form, so two documents holding one render posture and
+spelling it differently refuse each other. The refusal is the fail-closed
+direction — an attach is never accepted on a render posture the runtime does
+not hold — which is what makes the spelling a wart rather than a hole.
+
 The assertion is a check against misconfiguration, not the authorization. The
 port **is** the capability: a document can only attach because the page that
 owns the worker handed it a duplex.

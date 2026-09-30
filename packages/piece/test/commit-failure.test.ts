@@ -61,6 +61,23 @@ describe("commitFailure", () => {
     expect(result.message.length).toBeGreaterThan(0);
   });
 
+  it("keeps a CFC refusal's message when its reason is only a marker", () => {
+    // The refusal names what refused in its message; its `reason` classifies
+    // the refusal and says nothing an operator can act on.
+    const marker = new Error("cfc-refusal-not-a-verdict");
+    const refusal = {
+      name: "StorageTransactionAborted",
+      message: "CFC enforcement rejected commit: relevant transaction was " +
+        "not prepared: a policy check refused the write",
+      reason: marker,
+    };
+    const result = commitFailure(refusal);
+    expect(result).not.toBe(marker);
+    expect(result.name).toBe("StorageTransactionAborted");
+    expect(result.message).toBe(refusal.message);
+    expect(result.cause).toBe(refusal);
+  });
+
   it("ignores a non-Error reason and still produces an Error", () => {
     const result = commitFailure({
       name: "ConflictError",

@@ -6,6 +6,11 @@ import type {
 } from "@commonfabric/agents-connector/types";
 import type { Runtime } from "@commonfabric/runner";
 import {
+  bindCommandProducers,
+  type BoundCommandProducer,
+} from "./command-producers.ts";
+import type { CommandProducerConfig } from "./config.ts";
+import {
   deployAgentSessionsDebugView,
   describeAgentFabricTarget,
 } from "./debug-view.ts";
@@ -34,6 +39,7 @@ export interface StartAgentsHostOptions {
   space: string;
   sources: AgentSourceConfig[];
   checkoutRoots?: string[];
+  commandProducers?: CommandProducerConfig[];
   targetLockPath?: string;
   debugView?: boolean;
   acceptCommands?: boolean;
@@ -51,6 +57,7 @@ export interface StartAgentsHostDependencies {
   acquireProcessLock: (path: string) => Promise<HostProcessLock>;
   ledgerPath: typeof defaultTargetLedgerPath;
   deployDebugView: typeof deployAgentSessionsDebugView;
+  bindCommandProducers: typeof bindCommandProducers;
   openLedger: typeof CommandLedger.open;
   describeTarget: typeof describeAgentFabricTarget;
   createHost: (
@@ -64,6 +71,7 @@ const defaultDependencies: StartAgentsHostDependencies = {
   acquireProcessLock: AgentsHostProcessLock.acquire,
   ledgerPath: defaultTargetLedgerPath,
   deployDebugView: deployAgentSessionsDebugView,
+  bindCommandProducers,
   openLedger: CommandLedger.open,
   describeTarget: describeAgentFabricTarget,
   createHost: (options) => new AgentsHost(options),
@@ -72,8 +80,10 @@ const defaultDependencies: StartAgentsHostDependencies = {
 export class RunningAgentsHost {
   readonly host: AgentsHost;
   readonly runtime: Runtime;
+  readonly #graphRuntime?: Runtime;
   readonly spaceDid: string;
   readonly debugPieceId?: string;
+  readonly commandProducers: readonly BoundCommandProducer[];
   readonly initialSessionCount: number;
   readonly ledgerPath: string;
   readonly #processLocks: HostProcessLock[];
@@ -83,14 +93,17 @@ export class RunningAgentsHost {
     host: AgentsHost;
     fabric: AgentFabricRuntime;
     debugPieceId?: string;
+    commandProducers?: readonly BoundCommandProducer[];
     initialSessionCount: number;
     ledgerPath: string;
     processLocks: HostProcessLock[];
   }) {
     this.host = options.host;
     this.runtime = options.fabric.runtime;
+    this.#graphRuntime = options.fabric.graphRuntime;
     this.spaceDid = options.fabric.spaceDid;
     this.debugPieceId = options.debugPieceId;
+    this.commandProducers = [...(options.commandProducers ?? [])];
     this.initialSessionCount = options.initialSessionCount;
     this.ledgerPath = options.ledgerPath;
     this.#processLocks = [...options.processLocks];
@@ -108,6 +121,7 @@ export class RunningAgentsHost {
     await this.runtime.storageManager.synced().catch((error) =>
       failures.push(error)
     );
+    await this.#graphRuntime?.dispose().catch((error) => failures.push(error));
     await this.runtime.dispose().catch((error) => failures.push(error));
     for (const lock of [...this.#processLocks].reverse()) {
       await lock.release().catch((error) => failures.push(error));
@@ -182,6 +196,17 @@ export async function startAgentsHost(
         ),
       );
     options.signal?.throwIfAborted();
+    const commandProducers = options.commandProducers?.length
+      ? await waitForStartup(
+        dependencies.bindCommandProducers(
+          fabric.manager,
+          fabric.target,
+          options.commandProducers,
+          options.signal,
+        ),
+      )
+      : [];
+    options.signal?.throwIfAborted();
     const ledger = await waitForStartup(
       dependencies.openLedger(ledgerPath),
     );
@@ -194,6 +219,7 @@ export async function startAgentsHost(
         fabric.target,
         fabric.spaceDid,
         debugPieceId,
+        commandProducers,
       ),
       ledger,
       createDriver: options.createDriver ?? createAgentDriver,
@@ -201,7 +227,7 @@ export async function startAgentsHost(
     const hostStartTask = trackStartup(host.start({
       signal: options.signal,
       acceptCommands: options.acceptCommands !== false &&
-        debugPieceId !== undefined && fabric.target.commandsAreBound(),
+        fabric.target.commandsAreBound(),
       deferHealthUntilReady: true,
       onHealthOwnership: () => {
         healthOwnership = true;
@@ -227,6 +253,7 @@ export async function startAgentsHost(
       host,
       fabric,
       debugPieceId,
+      commandProducers,
       initialSessionCount,
       ledgerPath,
       processLocks,
@@ -260,6 +287,9 @@ export async function startAgentsHost(
       await fabric?.runtime.settled(Infinity).catch((settledError) => {
         cleanupFailures.push(settledError);
       });
+      await fabric?.graphRuntime?.dispose().catch((disposeError) => {
+        cleanupFailures.push(disposeError);
+      });
       await fabric?.runtime.dispose().catch((disposeError) => {
         cleanupFailures.push(disposeError);
       });
@@ -272,6 +302,9 @@ export async function startAgentsHost(
       });
       await fabric?.runtime.settled(Infinity).catch((settledError) => {
         cleanupFailures.push(settledError);
+      });
+      await fabric?.graphRuntime?.dispose().catch((disposeError) => {
+        cleanupFailures.push(disposeError);
       });
       await fabric?.runtime.dispose().catch((disposeError) => {
         cleanupFailures.push(disposeError);

@@ -10,7 +10,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { initializeScopedArgumentSlots } from "../src/data-updating.ts";
-import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("scoped input initialization");
@@ -109,7 +109,7 @@ describe("scoped-input-initialization", () => {
       const tx = runtime.edit();
       const input = raw.key("count").getAsNormalizedFullLink();
       raw.withTx(tx).set({
-        count: createSigilLinkFromParsedLink({ ...input, scope: "user" }),
+        count: runtime.getCellFromLink({ ...input, scope: "user" }).getAsLink(),
       });
       user.withTx(tx).set({ count: value === "link" ? target : value });
       const before = user.withTx(tx).key("count").getRaw({ lastNode: "top" });
@@ -134,10 +134,9 @@ describe("scoped-input-initialization", () => {
         await Promise.all([raw.sync(), target.sync()]);
         const tx = runtime.edit();
         if (present) target.withTx(tx).set(9);
-        const link = createSigilLinkFromParsedLink({
-          ...target.getAsNormalizedFullLink(),
-          overwrite,
-        });
+        const link = overwrite === "redirect"
+          ? target.getAsWriteRedirectLink()
+          : target.getAsLink();
         raw.withTx(tx).set({ count: link });
         const before = raw.withTx(tx).key("count").getRaw({ lastNode: "top" });
         initializeScopedArgumentSlots(

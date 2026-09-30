@@ -1,20 +1,28 @@
 /**
  * Test-identity aliases: the parsing, validation, and resolution shared by
- * the alias gate and every reader of the record store. The alias file —
- * tasks/test-identity-aliases.jsonl at the repository root — is append-only
- * history; each line maps an old identity, or a whole scope for package
- * renames, to its replacement, with the date of the rename. A reader
- * resolves aliases transitively and applies one only to records from days
- * strictly before its date, so the pre-rename history of a test joins its
- * post-rename history under today's name.
+ * the alias gate and every reader of the record store. The alias directory —
+ * tasks/test-identity-aliases at the repository root — is append-only
+ * history, held as one JSON-lines file per test file: an alias line goes in
+ * the file named after the test file holding the renamed test, so that two
+ * changes renaming tests in different test files append to different files.
+ * The division is for the sake of merges alone; every reader takes the
+ * directory as one set of aliases. Each line maps an old identity, or a whole
+ * scope for package renames, to its replacement, with the date of the rename.
+ * A reader resolves aliases transitively and applies one only to records from
+ * days strictly before its date, so the pre-rename history of a test joins
+ * its post-rename history under today's name.
  */
 
 import { join } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { TestIdentity } from "./schema.ts";
 import { repositoryRoot } from "./paths.ts";
 
-/** Repository-root-relative path of the alias file. */
-export const ALIAS_FILE = "tasks/test-identity-aliases.jsonl";
+/** Repository-root-relative path of the alias directory. */
+export const ALIAS_DIRECTORY = "tasks/test-identity-aliases";
+
+/** Suffix of every alias file in the alias directory. */
+export const ALIAS_FILE_SUFFIX = ".jsonl";
 
 /** One alias line: a full-identity mapping or a whole-scope mapping. */
 export interface AliasLine {
@@ -26,7 +34,7 @@ export interface AliasLine {
 }
 
 function isIdentityPart(value: unknown, wholeScope: boolean): boolean {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isObjectOrArray(value)) return false;
   const part = value as Record<string, unknown>;
   const expectedKeys = wholeScope ? ["k", "s"] : ["k", "n", "s"];
   if (Object.keys(part).sort().join(",") !== expectedKeys.join(",")) {
@@ -82,8 +90,57 @@ export function aliasKeyOf(part: { k: string; s: string; n?: string }): string {
   return JSON.stringify([part.k, part.s, part.n ?? null]);
 }
 
+/** One file of an alias directory. */
+export type AliasFile = {
+  /** File name within the directory. */
+  name: string;
+
+  /** The file's whole text. */
+  text: string;
+};
+
+/** What an alias directory holds. */
+export type AliasDirectory = {
+  /** The alias files directly inside the directory, in order of name. */
+  files: AliasFile[];
+
+  /**
+   * Names of the directory's other entries, in order. No reader loads
+   * these.
+   */
+  unread: string[];
+};
+
 /**
- * Structural problems across the whole file: a second mapping from one
+ * Reads an alias directory: every `.jsonl` file directly inside it, and the
+ * names of whatever else is there. A missing directory holds nothing.
+ */
+export async function readAliasDirectory(
+  directory: string,
+): Promise<AliasDirectory> {
+  const names: string[] = [];
+  const unread: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(directory)) {
+      const isAliasFile = entry.isFile &&
+        entry.name.endsWith(ALIAS_FILE_SUFFIX);
+      (isAliasFile ? names : unread).push(entry.name);
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return { files: [], unread: [] };
+    throw error;
+  }
+  names.sort();
+  unread.sort();
+  const files = await Promise.all(names.map(async (name) => ({
+    name,
+    text: await Deno.readTextFile(join(directory, name)),
+  })));
+  return { files, unread };
+}
+
+/**
+ * Structural problems across the whole set: a second mapping from one
  * identity, and cycles under transitive resolution.
  */
 export function aliasGraphProblems(aliases: readonly AliasLine[]): string[] {
@@ -184,27 +241,24 @@ export class AliasResolver {
 }
 
 /**
- * Loads the alias file into a resolver. With no path given, the file is
- * found at its fixed place under the enclosing repository's root; a missing
- * file, or a run outside any repository, resolves every identity to itself.
- * Unparsable lines are skipped — the check-test-aliases gate is where they
- * fail, not every reader.
+ * Loads an alias directory into a resolver. With no path given, the
+ * directory is found at its fixed place under the enclosing repository's
+ * root; a missing directory, or a run outside any repository, resolves every
+ * identity to itself. Unparsable lines are skipped — the check-test-aliases
+ * gate is where they fail, not every reader.
  */
 export async function loadAliasResolver(path?: string): Promise<AliasResolver> {
-  const file = path ??
+  const directory = path ??
     (() => {
       const root = repositoryRoot();
-      return root === undefined ? undefined : join(root, ALIAS_FILE);
+      return root === undefined ? undefined : join(root, ALIAS_DIRECTORY);
     })();
   const aliases: AliasLine[] = [];
-  if (file !== undefined) {
-    let text: string | undefined;
-    try {
-      text = await Deno.readTextFile(file);
-    } catch {
-      text = undefined;
-    }
-    for (const line of text?.split("\n") ?? []) {
+  const files = directory === undefined
+    ? []
+    : (await readAliasDirectory(directory)).files;
+  for (const { text } of files) {
+    for (const line of text.split("\n")) {
       if (line.length === 0) continue;
       const parsed = parseAliasLine(line);
       if (typeof parsed !== "string") aliases.push(parsed);

@@ -82,6 +82,9 @@ export const renderCfcPostureReport = (
     dialLine("declared monotonicity", record.declaredMonotonicity),
     `    ${"trigger read gating".padEnd(24)}${record.triggerReadGating}`,
     `    ${"decomposed envelopes".padEnd(24)}${record.decomposedEnvelopes}`,
+    `    ${
+      "content-addressed labels".padEnd(24)
+    }${record.contentAddressedLabels}`,
     `    ${"policy digest".padEnd(24)}${record.policyDigest ?? "(none)"}`,
   ];
   for (const sink of record.sinks) {

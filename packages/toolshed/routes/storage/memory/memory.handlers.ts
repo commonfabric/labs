@@ -1,3 +1,4 @@
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -266,7 +267,7 @@ export const attachMemorySocketPipeline = (
     if (!debugMemWrites) return;
     try {
       const parsed = MemoryServer.parseClientMessage(payload) as unknown as {
-        commit?: { operations?: Array<Record<string, unknown>> };
+        commit?: { operations?: Array<Record<string, FabricValue>> };
       };
       for (const op of parsed?.commit?.operations ?? []) {
         console.error(

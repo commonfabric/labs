@@ -26,6 +26,7 @@ import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
@@ -53,6 +54,7 @@ async function fixture(
 ) {
   const identity = await Identity.fromPassphrase("served compile unit");
   const storage = StorageManager.emulate({ as: identity });
+  const created: Cell<unknown>[] = [];
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager: storage,
@@ -60,6 +62,7 @@ async function fixture(
     servingPosture,
     cfcFlowLabels,
     cfcEnforcementMode,
+    pieceCreatedCallback: (piece) => created.push(piece),
   });
   const space = identity.did();
   const inputs = runtime.getCell<BuiltInCompileAndRunParams<any>>(
@@ -123,6 +126,7 @@ async function fixture(
     memo,
     publication,
     action,
+    created,
     get outputs() {
       return outputs;
     },
@@ -148,6 +152,11 @@ async function fixture(
 const PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [{ name: "/main.tsx", contents: "export default 1;" }],
+};
+
+const SECOND_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{ name: "/main.tsx", contents: "export default 2;" }],
 };
 
 /**
@@ -225,6 +234,57 @@ describe("compile-and-run-served", () => {
         expect(f.memo.get()).toBeUndefined();
       }
       expect(launches).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports a resolved child to the creation hook once per request", async () => {
+    // A client compiles nothing: it reads the outcome the server committed.
+    // The seeds below stand in for that commit — the memo naming a request
+    // resolved, and the child's own result hidden by the body that ran it.
+
+    const f = await fixture(false);
+    try {
+      expect(await f.run(PROGRAM)).toBe(false);
+
+      const seed = f.runtime.edit();
+      f.outputs.result.withTx(seed).set({});
+      f.memo.withTx(seed).set({
+        requestHash: hashOf(PROGRAM).toString(),
+        phase: "resolved",
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      // Hiding the result is the child body's last act, so a result that is
+      // there and not yet hidden is a child still starting up.
+      expect(await f.run(PROGRAM)).toBe(false);
+      expect(f.created).toEqual([]);
+
+      const hide = f.runtime.edit();
+      f.outputs.result.withTx(hide).key("isHidden").set(true);
+      expect((await hide.commit()).error).toBeUndefined();
+
+      expect(await f.run(PROGRAM)).toBe(false);
+      expect(f.created).toHaveLength(1);
+      expect(f.created[0].get()).toEqual({ isHidden: true });
+
+      // The same request resolves on every later run, and the child was
+      // created once.
+      expect(await f.run(PROGRAM)).toBe(false);
+      expect(f.created).toHaveLength(1);
+
+      // A different program is a different request, and its child is
+      // reported in its turn.
+      const replacement = f.runtime.edit();
+      f.memo.withTx(replacement).set({
+        requestHash: hashOf(SECOND_PROGRAM).toString(),
+        phase: "resolved",
+      });
+      expect((await replacement.commit()).error).toBeUndefined();
+
+      expect(await f.run(SECOND_PROGRAM)).toBe(false);
+      expect(f.created).toHaveLength(2);
     } finally {
       await f.close();
     }
@@ -760,7 +820,7 @@ describe("compile-and-run-served", () => {
     const writeSourceLabels = async (atoms: string[]) => {
       const tx = f.runtime.edit();
       writeSeedEnvelopeDoc(tx, f.inputs.space);
-      tx.writeOrThrow({
+      seedStoredEnvelope(tx, {
         space: f.inputs.space,
         scope: "space",
         id: f.inputs.getAsNormalizedFullLink().id,

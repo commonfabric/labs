@@ -10,8 +10,10 @@ import type { TerminalCodec } from "./interface.ts";
  * identity is the point: `CodecRegistry` reads it to know that a state coming
  * out of here is the answer rather than more work.
  *
- * `State` is as {@link BaseFabricCodec} describes it, passed straight through:
- * this codec's own states, within the one format it serves.
+ * `State` is as {@link FabricCodec} describes it, passed straight through:
+ * this codec's own states, within the one format it serves. The value side is
+ * at `never`, as {@link TerminalCodec} says: nothing beyond a `FabricValue` has
+ * a wire form.
  *
  * `Encoded` must be a wire format's own value type, and never `FabricValue`.
  * Nothing enforces that. `TerminalCodec<FabricValue>` and `NonterminalCodec`
@@ -23,6 +25,7 @@ import type { TerminalCodec } from "./interface.ts";
 export abstract class BaseTerminalCodec<
   Encoded,
   State extends Encoded = Encoded,
-> extends BaseFabricCodec<Encoded, State> implements TerminalCodec<Encoded> {
+> extends BaseFabricCodec<never, Encoded, State>
+  implements TerminalCodec<Encoded, State> {
   // This space intentionally left blank.
 }

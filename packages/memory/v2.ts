@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   type EntityRef,
@@ -8,9 +12,11 @@ import { NullLiveEnvironment } from "@commonfabric/data-model/codec-common";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
-import { isObjectNotArray, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
@@ -684,7 +690,9 @@ export type SessionEffectsDocValue = {
  * intent arrives with (result-as-pattern children converge by
  * cause-derived identity, speculation.md §2; the instance id is that
  * convergence). One event × one navigateTo instance ⇒ one nonce, so a
- * re-run of either side is idempotent by presence check.
+ * re-run of either side is idempotent by presence check, in either
+ * order: the side that enacts second finds the nonce recorded and
+ * stands down.
  */
 export const effectIntentNonce = (
   eventId: string,
@@ -1057,7 +1065,16 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
+/** A generic root reserved atomically with a fresh space's ACL. */
+export type GenesisRoot = {
+  source: string;
+  sourceRoots?: string[];
+  cause: string;
+  argument?: Record<string, FabricValue>;
+};
+
 export type ClientCommit = {
+  genesisRoot?: GenesisRoot;
   localSeq: number;
   reads: {
     confirmed: ConfirmedRead[];
@@ -1093,6 +1110,7 @@ export type SessionOpenResult = {
 };
 
 export type MemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep: boolean;
 
   /**
@@ -1137,6 +1155,9 @@ export type MemoryProtocolFlags = {
    * (not configuration), so a server of this version always advertises it.
    */
   sqliteCommitRowLabelEval: boolean;
+
+  /** SQLite queries authorize the carried reader and select its scoped database. */
+  sqliteQueryReader?: boolean;
 
   /**
    * Server capability (CT-1872 1c): pending reads may carry an ARRAY
@@ -1194,12 +1215,34 @@ export type MemoryProtocolFlags = {
 
   /** Server-selected view delivery with independent execution demand. */
   viewScopedReplicationV1?: boolean;
+
+  /**
+   * Server capability: a `session.open` descriptor's `readCeiling` is
+   * recorded on the session and served runs as that session read under it.
+   * Build-inherent, so a server of this version always advertises it. A
+   * client carrying a ceiling REQUIRES it: an older server would accept the
+   * descriptor and serve every query unbounded, so absent parses to false
+   * and the client refuses to open the session.
+   */
+  sessionReadCeiling?: boolean;
+
+  /**
+   * Server capability: the server relays ephemeral presence rooms under a
+   * space over this connection — `presence.join`, `presence.publish`,
+   * `presence.leave`, and the `presence/upsert` and `presence/remove`
+   * pushes (04-protocol.md §4.13). Build-inherent, so a server of this
+   * version always advertises it. Absent (an older server) parses to
+   * false, and a client then reports presence as unavailable rather than
+   * sending a message the server would refuse.
+   */
+  presenceV1?: boolean;
 };
 
 /**
  * Wire-format flags object.
  */
 export type WireMemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -1213,6 +1256,7 @@ export type WireMemoryProtocolFlags = {
   sqliteCommitRowLabelEval?: boolean;
   readValidation?: boolean;
   eventContext?: boolean;
+  sqliteQueryReader?: boolean;
   pendingReadStacks?: boolean;
   verdictCatchUpMarkers?: boolean;
   entityIdListing?: boolean;
@@ -1220,6 +1264,8 @@ export type WireMemoryProtocolFlags = {
   entityIdLookup?: boolean;
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
+  sessionReadCeiling?: boolean;
+  presenceV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1246,9 +1292,26 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Assert the immutable custom-root reservation when mounting or resuming. */
+  genesisRoot?: GenesisRoot;
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
+
+  /**
+   * The read ceiling every `db.query` served for this session reads under
+   * (`docs/specs/sqlite-builtin/06-cfc.md`, "Runtime read ceiling";
+   * server-side execution `protocol.md` §1). A client runtime under server
+   * execution executes no query of its own — the space server's runtime
+   * serves them — so the ceiling it is configured with travels here, once,
+   * with the session, and the serving runtime stamps it onto every run it
+   * serves AS this session. Signed into the session.open invocation with the
+   * rest of this descriptor. Fresh per open, never inherited by a resume: a
+   * client that resumes re-declares it. Admitted only by a server
+   * advertising `sessionReadCeiling`; a client with one refuses a server
+   * without it rather than opening a session whose reads nothing bounds.
+   */
+  readonly readCeiling?: SessionReadCeiling;
 
   /**
    * The session-level delegated READ binding (OW31, READ side RULED
@@ -1299,7 +1362,7 @@ export type SessionOpenRequest = {
   requestId: string;
   space: string;
   session: SessionDescriptor;
-  invocation?: Record<string, unknown>;
+  invocation?: FabricPlainObject;
   authorization?: FabricValue;
 
   /**
@@ -1622,6 +1685,9 @@ export function isSqliteDbRef(value: unknown): value is SqliteDbRef {
     typeof (value as SqliteDbRef).id === "string";
 }
 
+/** A reader carried by a trusted serving principal for a SQLite query. */
+export type SqliteQueryReader = ScopeKeyIdentity & { principal: string };
+
 export type SqliteQueryRequest = {
   type: "sqlite.query";
   requestId: string;
@@ -1631,6 +1697,7 @@ export type SqliteQueryRequest = {
   sql: string;
   params?: SqliteParamsWire;
   namedParams?: SqliteNamedParamsWire;
+  reader?: SqliteQueryReader;
 };
 
 /** A result column's output name plus its TRUE source `(table, column)` origin
@@ -1833,6 +1900,87 @@ export type EventAttentionResolveResult = {
   resolution: EventAttentionResolution;
 };
 
+/**
+ * Per-kind presence state, keyed by facet name. The relay bounds the map and
+ * treats each value as an opaque plain object; a consumer decodes the facets
+ * it knows and ignores the rest (04-protocol.md §4.13).
+ */
+export type PresenceFacets = Record<string, FabricPlainObject>;
+
+/** What a participant publishes: the envelope fields it owns. */
+export type PresencePublication = {
+  /** Plain-text display name, bounded; never rendered as HTML. */
+  name: string;
+
+  facets: PresenceFacets;
+};
+
+/** Latest published state of one room participant, as the relay holds it. */
+export type PresenceRecord = PresencePublication & {
+  /** Relay-assigned id for the membership; unpredictable and never reused. */
+  participantId: string;
+
+  /**
+   * DID the publishing session was opened as, stamped by the relay from its
+   * session registry. Absent when the session has no bound principal.
+   */
+  principal?: string;
+
+  /** Strictly increasing within one membership. */
+  revision: number;
+};
+
+export type PresenceJoinRequest = {
+  type: "presence.join";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** The `ok` of a `presence.join` response. */
+export type PresenceJoinResult = {
+  participantId: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+export type PresencePublishRequest = PresencePublication & {
+  type: "presence.publish";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  revision: number;
+};
+
+export type PresenceLeaveRequest = {
+  type: "presence.leave";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  room: string;
+};
+
+/** A room member's record replaced, pushed to the room's other members. */
+export type PresenceUpsertMessage = {
+  type: "presence/upsert";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participant: PresenceRecord;
+};
+
+/** A room member gone, pushed to the room's other members. */
+export type PresenceRemoveMessage = {
+  type: "presence/remove";
+  space: string;
+  sessionId: SessionId;
+  room: string;
+  participantId: string;
+};
+
 export type ResponseMessage<Result> = {
   type: "response";
   requestId: string;
@@ -1903,15 +2051,19 @@ export type ClientMessage =
   | WatchSetRequest
   | WatchAddRequest
   | SessionAckRequest
-  | EventAttentionResolveRequest;
+  | EventAttentionResolveRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest;
 export type ServerMessage =
   | HelloOkMessage
   | ResponseMessage<FabricValue>
   | SessionEffectMessage
-  | SessionRevokedMessage;
+  | SessionRevokedMessage
+  | PresenceUpsertMessage
+  | PresenceRemoveMessage;
 
 const memoryLiveEnvironment = new NullLiveEnvironment(
-  true,
   "no cell decoding at the memory boundary",
 );
 
@@ -1926,6 +2078,15 @@ let ownWriteEchoEnabled = true;
 export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
+export {
+  parseSessionReadCeiling,
+  type ReadCeilingClause,
+  type ReadCeilingLabels,
+  type ReadCeilingOnExceed,
+  readCeilingShapeError,
+  SESSION_READ_CEILING_LABELS,
+  type SessionReadCeiling,
+} from "./v2/read-ceiling.ts";
 
 // The ambient flag's inputs, resolved by getServerExecutionConfig():
 // - the live ENABLER count (below), which forces the flag on — every
@@ -2080,6 +2241,7 @@ export function resetOwnWriteEchoConfig(): void {
 }
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
+  genesisRoot: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
@@ -2093,6 +2255,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // advertises the fact. Peers that see it absent (an older server) keep their
   // write gate failing closed.
   sqliteCommitRowLabelEval: true,
+  sqliteQueryReader: true,
   // Likewise build-inherent: this build's engine resolves array-localSeq
   // pending reads (resolvePendingReads), so it always advertises it. Clients
   // that see it absent scalarize to top-of-stack before sending.
@@ -2110,6 +2273,11 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // as the delivery diff base wherever they are sent.
   sessionHoldings: true,
   viewScopedReplicationV1: getServerExecutionConfig(),
+  // Build-inherent: this build's server records a session's declared read
+  // ceiling and its serving runtime stamps it onto the runs it serves.
+  sessionReadCeiling: true,
+  // Build-inherent: this build's server relays presence rooms.
+  presenceV1: true,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2129,10 +2297,14 @@ export const compatibleMemoryProtocolFlags = (
 export const parseMemoryProtocolFlags = (
   value: unknown,
 ): MemoryProtocolFlags | null => {
-  if (!isObjectNotArray(value)) {
+  if (!isPlainObject(value)) {
     return null;
   }
 
+  const genesisRoot = value.genesisRoot;
+  if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
+    return null;
+  }
   const stableExpressionResultIds = value.stableExpressionResultIds;
   if (
     stableExpressionResultIds !== undefined &&
@@ -2171,6 +2343,13 @@ export const parseMemoryProtocolFlags = (
       operationCodecs.some((codec) =>
         typeof codec !== "string" || !/@[1-9][0-9]*$/.test(codec)
       ) || new Set(operationCodecs).size !== operationCodecs.length)
+  ) {
+    return null;
+  }
+
+  const sqliteQueryReader = value.sqliteQueryReader;
+  if (
+    sqliteQueryReader !== undefined && typeof sqliteQueryReader !== "boolean"
   ) {
     return null;
   }
@@ -2255,6 +2434,14 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionReadCeiling = value.sessionReadCeiling;
+  if (
+    sessionReadCeiling !== undefined &&
+    typeof sessionReadCeiling !== "boolean"
+  ) {
+    return null;
+  }
+
   const sessionHoldings = value.sessionHoldings;
   if (
     sessionHoldings !== undefined &&
@@ -2263,8 +2450,14 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const presenceV1 = value.presenceV1;
+  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
+    genesisRoot: value.genesisRoot === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     readValidation: readValidation === true,
@@ -2278,6 +2471,7 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older peer) parses to false: the capability must be
     // POSITIVELY advertised for the runner to relax its write gate.
     sqliteCommitRowLabelEval: sqliteCommitRowLabelEval === true,
+    sqliteQueryReader: sqliteQueryReader === true,
     // Absent (an older server) parses to false: clients scalarize pending
     // reads to top-of-stack unless the array capability is advertised.
     pendingReadStacks: pendingReadStacks === true,
@@ -2293,6 +2487,13 @@ export const parseMemoryProtocolFlags = (
     // provider-bearing one terminates at restore (see the flag's doc).
     sessionHoldings: sessionHoldings === true,
     viewScopedReplicationV1: viewScopedReplicationV1 === true,
+    // Absent (an older server) parses to false: a client carrying a read
+    // ceiling refuses such a server rather than reading unbounded.
+    sessionReadCeiling: sessionReadCeiling === true,
+    // Absent (an older server) parses to false: a client then refuses to
+    // join a presence room rather than send a message the server would
+    // refuse.
+    presenceV1: presenceV1 === true,
   };
 };
 
@@ -2302,6 +2503,7 @@ export const parseMemoryProtocolFlags = (
 export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
+  genesisRoot: flags.genesisRoot,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,
@@ -2314,6 +2516,7 @@ export const wireMemoryProtocolFlags = (
   syncSchemaTableV2: flags.syncSchemaTableV2,
   messageCompressionV1: flags.messageCompressionV1,
   sqliteCommitRowLabelEval: flags.sqliteCommitRowLabelEval,
+  sqliteQueryReader: flags.sqliteQueryReader,
   pendingReadStacks: flags.pendingReadStacks,
   verdictCatchUpMarkers: flags.verdictCatchUpMarkers,
   entityIdListing: flags.entityIdListing,
@@ -2321,6 +2524,8 @@ export const wireMemoryProtocolFlags = (
   entityIdLookup: flags.entityIdLookup,
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
+  sessionReadCeiling: flags.sessionReadCeiling,
+  presenceV1: flags.presenceV1,
 });
 
 /**
@@ -2334,6 +2539,13 @@ export const wireMemoryProtocolFlags = (
  * engine's commit/stored-row probes (v2/engine.ts). A pinning test in
  * test/v2-sync-schema-table.test.ts fails loudly if verbatim embedding ever
  * stops holding.
+ *
+ * The engine's document-cache weigh (`encodedGrowth()` in v2/engine.ts)
+ * depends on a second property, and moves with the codec too: a plain record
+ * with no `/`-prefixed key, and an array with no hole, encode as their members
+ * encode alone, joined by one comma each. Tests in
+ * test/v2-document-cache.test.ts hold the weight it carries to a full encode,
+ * over every patch op and over generated patches.
  */
 export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
@@ -2341,16 +2553,45 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
 export const commitPreconditionValueHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
+/**
+ * The most slots one memory message from an untrusted sender may stand for:
+ * the places its values fill or leave absent, an array counting as its length
+ * with holes included and a record as its number of members. It bounds the
+ * work that decoding, applying, and re-encoding one message can cost the
+ * server, whatever the message's size on the wire.
+ */
+export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
+
+const untrustedMemoryCodec = newDefaultJsonCodecEngine({
+  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
+});
+
+/**
+ * Decodes wire text from an untrusted sender. Text standing for more than
+ * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
+ * before any of it is walked.
+ *
+ * This is the decoder for anything a client sent. Text the memory system wrote
+ * itself -- a stored row, a frame the server sent -- goes through
+ * {@link decodeTrustedMemoryBoundary} instead, which applies no limit.
+ */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
-): Value & FabricValue => {
-  const decoded = fabricFromJsonValue(
-    source,
-    memoryLiveEnvironment,
-  );
+): Value & FabricValue =>
+  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
 
-  return decoded as Value;
-};
+/**
+ * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for
+ * text the memory system wrote itself, such as a stored row or a frame the
+ * server sent. A stored document may stand for more slots than one message
+ * may, and refusing to read it would break every reader of that document.
+ */
+export const decodeTrustedMemoryBoundary = <
+  Value extends FabricValue = FabricValue,
+>(
+  source: string,
+): Value & FabricValue =>
+  fabricFromJsonValue(source, memoryLiveEnvironment) as Value;
 
 export const toDocumentPath = (path: readonly string[]): DocumentPath =>
   path as DocumentPath;
@@ -2373,7 +2614,7 @@ export const toDocumentSelector = (
 
 export const isEntityDocument = (
   value: unknown,
-): value is EntityDocument => isObjectNotArray(value);
+): value is EntityDocument => isPlainObject(value);
 
 /**
  * Read a stored document payload: decode it, and refuse a root that is not a
@@ -2381,20 +2622,21 @@ export const isEntityDocument = (
  *
  * `decode` is the caller's, because the readers disagree on which payloads they
  * accept and only on that: the engine reads what it wrote, through
- * {@link decodeMemoryBoundary}, while an offline reader over a durable file may
- * also meet untagged plain-JSON rows and route accordingly. Everything else is
- * one rule shared here, since a reader that tests the payload for truthiness
- * instead takes an empty string for an absent one and rebuilds a document the
- * engine would have rejected.
+ * {@link decodeTrustedMemoryBoundary}, while an offline reader over a durable
+ * file may also meet untagged plain-JSON rows and route accordingly.
+ * Everything else is one rule shared here, since a reader that tests the
+ * payload for truthiness instead takes an empty string for an absent one and
+ * rebuilds a document the engine would have rejected.
  *
  * An absent payload never reaches the decoder. Handing one a placeholder string
- * makes the rule depend on which decoder was passed — `decodeMemoryBoundary`
- * refuses any untagged payload, a plain-JSON decoder accepts one — and two
- * readers that disagree about an absent payload do not share a rule at all. An
- * absent document is `null`, which the root check below refuses on its own.
+ * makes the rule depend on which decoder was passed —
+ * `decodeTrustedMemoryBoundary` refuses any untagged payload, a plain-JSON
+ * decoder accepts one — and two readers that disagree about an absent payload
+ * do not share a rule at all. An absent document is `null`, which the root
+ * check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): EntityDocument => {
   const parsed = data === null ? null : decode(data);
@@ -2418,7 +2660,7 @@ export const decodeStoredDocumentPayload = (
  * no-op would leave the document reading current.
  */
 export const decodeStoredPatchListPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): PatchOp[] => {
   if (data === null) {

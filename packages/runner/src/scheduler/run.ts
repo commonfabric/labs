@@ -2,11 +2,13 @@ import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
+import { waveSettlementOf } from "../executor/wave.ts";
 import { createDuplicateWorkTransaction } from "../storage/extended-storage-transaction.ts";
 import type {
   ChangeGroup,
@@ -61,6 +63,7 @@ import {
   pruneFanOutInstances,
 } from "./fan-out.ts";
 import {
+  addInvalidCause,
   type MarkInvalidOptions,
   restoreInvalidCauses,
   takeInvalidCauses,
@@ -191,6 +194,12 @@ export function startReactiveActionCommit(state: {
 }
 
 export function watchReactiveActionCommit(state: {
+  /** Whether this run may retry or wake consumers of its registration. */
+  readonly canRetry: () => boolean;
+
+  /** Waits for catch-up and scoped conflict pulls before requeueing. */
+  readonly awaitRetryReadiness: (error: unknown) => Promise<void>;
+
   readonly action: Action;
   readonly tx: IExtendedStorageTransaction;
   readonly log: ReactivityLog;
@@ -208,18 +217,26 @@ export function watchReactiveActionCommit(state: {
   readonly getActionId: (action: Action) => string;
   readonly reportTerminalRejection?: (error: Error) => void;
   readonly handleUnavailable?: () => boolean;
+
+  /** Whether a live demander will wake this action when its gates expire. */
+  readonly isLiveAction?: () => boolean;
+  /** Whether this node or fan-out instance already has an accepted result. */
+  readonly hasCommittedResult?: () => boolean;
+
+  /** Wakes consumers after a successful commit of a still-active registration. */
   readonly onSuccess?: () => void;
 }): Promise<void> {
   const handleResult = async (error: unknown): Promise<void> => {
+    if (error && state.handleUnavailable?.()) return;
     if (!error) {
-      // Clear retries after successful commit.
+      // Retry counts belong to the action across registrations. A successful
+      // commit ends the sequence even if its registration has been retired,
+      // but only a live run may wake that registration's consumers.
       state.retries.delete(state.action);
       state.offBudgetRetries.delete(state.action);
-      state.onSuccess?.();
+      if (state.canRetry()) state.onSuccess?.();
       return;
     }
-
-    if (state.handleUnavailable?.()) return;
 
     logger.info(
       "schedule-run-error",
@@ -227,12 +244,36 @@ export function watchReactiveActionCommit(state: {
       error,
     );
 
+    // Permanent (precondition) and terminal (deterministic commit-rule refusal)
+    // rejections end the retry sequence even when its registration is retired.
+    // A later input-triggered run gets a fresh budget for transient failures.
+    // A terminal refusal is a verdict on the action's output and reaches the
+    // error channel (§7.6); a permanent lost idempotency race stays quiet.
+    if (isPermanentRejection(error) || isTerminalRejection(error)) {
+      state.retries.delete(state.action);
+      state.offBudgetRetries.delete(state.action);
+      if (isTerminalRejection(error)) {
+        state.reportTerminalRejection?.(
+          toTerminalRejectionError(error, state.action),
+        );
+      }
+      abandonAction(state, error);
+      return;
+    }
+
+    // Retry preparation refreshes the subscription, so check its lifetime
+    // before restoring dependencies as well as after asynchronous recovery.
+    if (!state.canRetry()) {
+      abandonAction(state, error);
+      return;
+    }
+
     // A reactive compute is not a transactional retrier. A stale-basis rejection
     // means the value the action read is no longer current, so re-running against
     // fresh state and committing again converges. Two rejections are stale-basis.
     // A CONFLICT is an upstream stale read: the authoritative version is ahead of
     // this replica, and the action's read set is stale until the replica catches
-    // up (the conflict's `readyToRetry` gates exactly that catch-up). A
+    // up and the runtime pulls every scoped instance the conflict names. A
     // STORAGE-TRANSACTION-INCONSISTENT is the local analog: a value the
     // transaction read changed on this replica between the read and the commit,
     // which re-running against the settled replica resolves. It carries no
@@ -257,14 +298,10 @@ export function watchReactiveActionCommit(state: {
     // coalesce). Restore the consumed trigger reads (§8.9.2) so the re-run's
     // transaction still carries their flow labels.
     if (isConflictRejection(error) || isStorageTransactionInconsistent(error)) {
-      // This retry rides off the bounded budget on the assumption that the
-      // subscription eventually delivers the awaited value — true for
-      // pattern-created reactive functions, which go through the cell machinery.
-      // A bug that never closes the loop (historically a serialization
-      // round-trip that dropped a value) would re-queue forever, so surface a
-      // non-fatal diagnostic every OFF_BUDGET_RETRY_WARN_INTERVAL re-queues
-      // rather than spinning silently. The count clears on the next successful,
-      // permanent, or terminal commit.
+      // Scoped recovery pulls and live subscriptions supply the fresh basis.
+      // Repeated rejection without convergence warrants a diagnostic without
+      // charging the bounded budget used for other failure classes. The count
+      // clears on the next successful, permanent, or terminal commit.
       const offBudgetRetries = (state.offBudgetRetries.get(state.action) ?? 0) +
         1;
       state.offBudgetRetries.set(state.action, offBudgetRetries);
@@ -283,23 +320,25 @@ export function watchReactiveActionCommit(state: {
       // reader-dirty can re-trigger the action while we wait for the catch-up.
       state.restoreInvalidCauses();
       state.resubscribe(state.action, state.log);
-      const readyToRetry =
-        (error as { readyToRetry?: () => unknown }).readyToRetry;
-      const waitedForCatchUp = typeof readyToRetry === "function";
+      const waitedForCatchUp = isConflictRejection(error);
       if (waitedForCatchUp) {
-        // The readiness gate rejects by design when the session is closed,
-        // revoked, or replaced while we wait — an expected control-flow signal,
-        // not an error. Swallow it and re-queue anyway: the action stays live
-        // and re-runs on the next input change or pull. A `readyToRetry` that
-        // throws synchronously is handled the same way.
+        // The catch-up marker covers the watched view. Scoped pulls also load
+        // validation dependencies that the action ignores for scheduling.
         try {
-          await readyToRetry();
+          await state.awaitRetryReadiness(error);
         } catch (readyError) {
           logger.debug(
             "conflict-retry-readiness-aborted",
-            "conflict catch-up readiness aborted; re-queuing action anyway",
+            "conflict recovery aborted; checking whether the action may retry",
             readyError,
           );
+        }
+        // Removal, replacement, or write teardown can retire this run while
+        // recovery is pending. Its completion must not revive that lifetime.
+        if (state.handleUnavailable?.()) return;
+        if (!state.canRetry()) {
+          abandonAction(state, error);
+          return;
         }
       }
       // A re-run that waited on the catch-up gate is the scheduler's own,
@@ -311,40 +350,23 @@ export function watchReactiveActionCommit(state: {
       // be a deferred re-run of an "already-ran" computation, which is not
       // idle work and gets its expiry wake only from a live demander; a
       // one-shot `pull()` has none once it resolves, so the refused first
-      // output would stand in for the answer. A local inconsistency waited
-      // on nothing, so its re-run
+      // output would stand in for the answer. An empty reactive commit also
+      // releases those gates if it has no accepted result yet or no live
+      // demander to wake it. A live node with a prior result keeps its gates.
+      // Other local inconsistencies waited on nothing, so their re-run
       // keeps the debounce: that is the spacing between it and the local
       // writer it raced (an interval `#now` tick's own write, for one).
-      state.markInvalid(state.action, { retry: waitedForCatchUp });
+      const emptyReactiveCommit = isStorageTransactionInconsistent(error) &&
+        isObjectOrArray(error) &&
+        "emptyReactiveCommit" in error && error.emptyReactiveCommit === true;
+      state.markInvalid(state.action, {
+        retry: waitedForCatchUp ||
+          (emptyReactiveCommit &&
+            (state.hasCommittedResult?.() !== true ||
+              state.isLiveAction?.() !== true)),
+      });
       state.pending.add(state.action);
       state.queueExecution();
-      return;
-    }
-
-    // Permanent (precondition) and terminal (deterministic commit-rule refusal —
-    // `isTerminalRejection`) rejections are never retried: re-running recomputes
-    // the identical refused write, and the doomed re-runs would starve
-    // concurrent siblings. This definitively ENDS the current retry sequence, so
-    // clear the counter — exactly like the success path above — before returning:
-    // a later re-run triggered by changed inputs is a fresh sequence that must
-    // keep its full bounded budget for a genuinely transient failure, not inherit
-    // a count accumulated by earlier transient attempts or the terminal one.
-    // Resubscribe still happens (finalizeReactiveActionCommit), so a real input
-    // change re-triggers.
-    //
-    // A terminal rejection additionally SURFACES (spec scheduler-v2 §7.6):
-    // it is a verdict on the action's own output, so it reaches the
-    // scheduler's error channel with the refusal carried along, where a
-    // permanent rejection — a benign lost idempotency race — stays quiet.
-    if (isPermanentRejection(error) || isTerminalRejection(error)) {
-      state.retries.delete(state.action);
-      state.offBudgetRetries.delete(state.action);
-      if (isTerminalRejection(error)) {
-        state.reportTerminalRejection?.(
-          toTerminalRejectionError(error, state.action),
-        );
-      }
-      abandonAction(state, error);
       return;
     }
 
@@ -504,6 +526,7 @@ export interface SchedulerActionRunState {
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
+  readonly isLiveAction: (action: Action) => boolean;
   readonly isDisposed?: () => boolean;
   readonly parkLocalRead?: (action: Action, log: ReactivityLog) => void;
   readonly queueExecution: () => void;
@@ -534,8 +557,18 @@ export async function runSchedulerAction(
 
   const record = state.nodes.get(action);
   const registrationToken = record?.registrationToken;
+  // A direct fan-out run registers after its first instance. All instances
+  // share that subscription's lifetime; a registered run keeps its lifetime.
+  const retryRegistration = {
+    token: state.nodes.isEffect(action) || state.nodes.isComputation(action)
+      ? registrationToken
+      : undefined,
+  };
   const invalidCauses = record ? takeInvalidCauses(record) : undefined;
   if (record) {
+    // Consumes the owed retry at entry; a completion during this run can
+    // establish a new retry that must survive this run's finalization.
+    delete record.gate.retryOwed;
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     state.nodes.setStatus(action, "clean");
@@ -619,6 +652,7 @@ export async function runSchedulerAction(
     }
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
+    tx.tx.validateReactiveReads = true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven
@@ -676,6 +710,8 @@ export async function runSchedulerAction(
         finalizeSchedulerAction(state, {
           action,
           actionId,
+          registrationToken,
+          retryRegistration,
           tx,
           actionStartTime,
           actionEndTime,
@@ -809,6 +845,7 @@ export async function runSchedulerAction(
       logger.timeStart("scheduler", "run", "resubscribe");
       try {
         state.resubscribe(action, fanOutUnionLog(fanOut));
+        retryRegistration.token ??= state.nodes.get(action)?.registrationToken;
       } finally {
         logger.timeEnd("scheduler", "run", "resubscribe");
       }
@@ -844,9 +881,8 @@ function causesForInstance(
 
 /** One run of a fanned-out node (stage B): the node's fan-out record, the
  * instance this run served, its dirtiness generation at start, and the
- * sink for its committed log. The loop resubscribes once to the union of
- * the instance logs after its last run, instead of this run resubscribing
- * (which would replace the previous instances' reads). */
+ * sink for its committed log. Each run subscribes to the union of the
+ * instance logs so its reads stay watched while later instances run. */
 interface FanOutRunArgs {
   readonly state: FanOutNodeState;
   readonly instance: FanOutInstance;
@@ -910,6 +946,8 @@ function finalizeSchedulerAction(
   args: {
     readonly action: Action;
     readonly actionId: string;
+    readonly registrationToken: object | undefined;
+    readonly retryRegistration: { token: object | undefined };
     readonly tx: IExtendedStorageTransaction;
     readonly actionStartTime: number;
     readonly actionEndTime: number;
@@ -1107,6 +1145,8 @@ function finalizeReactiveActionCommit(
   args: {
     readonly action: Action;
     readonly actionId: string;
+    readonly registrationToken: object | undefined;
+    readonly retryRegistration: { token: object | undefined };
     readonly registrationIsCurrent: () => boolean;
     readonly tx: IExtendedStorageTransaction;
     readonly invalidCauses: readonly IMemorySpaceAddress[] | undefined;
@@ -1187,7 +1227,22 @@ function finalizeReactiveActionCommit(
     args.error,
   );
   const fanOutRun = args.fanOutRun;
-  const handled = watchReactiveActionCommit({
+  const commitState: Parameters<typeof watchReactiveActionCommit>[0] = {
+    isLiveAction: () => state.isLiveAction(args.action),
+    hasCommittedResult: () => owner?.hasCommittedResult === true,
+    canRetry: () =>
+      !state.runtime.writeTeardownSignal.aborted &&
+      state.isDisposed?.() !== true &&
+      (args.retryRegistration.token === undefined ||
+        (state.nodes.get(args.action)?.registrationToken ===
+            args.retryRegistration.token &&
+          (state.nodes.isEffect(args.action) ||
+            state.nodes.isComputation(args.action)))),
+    awaitRetryReadiness: (error) =>
+      state.runtime.awaitCommitRetryReadiness(
+        error,
+        state.runtime.writeTeardownSignal,
+      ),
     action: args.action,
     tx: args.tx,
     log: committedLog,
@@ -1195,7 +1250,12 @@ function finalizeReactiveActionCommit(
     offBudgetRetries: state.offBudgetRetries,
     pending: state.pending,
     commitPromise,
-    onSuccess: () => state.runtime.scheduler.noteViewActionCurrent(args.action),
+    onSuccess: () => {
+      if (args.succeeded && owner !== undefined) {
+        owner.hasCommittedResult = true;
+      }
+      state.runtime.scheduler.noteViewActionCurrent(args.action);
+    },
     // A fanned-out instance's retry paths (a conflict, a refused seal —
     // the early-emit guard's fail-closed refusal among them) re-arm THAT
     // instance: its key is dirtied, its siblings stay current, and the
@@ -1203,9 +1263,14 @@ function finalizeReactiveActionCommit(
     // run's log is already recorded on the node) — never this one run's
     // log alone, which would replace the siblings' reads (F9's shape on
     // the retry paths, closed with B7).
-    resubscribe: fanOutRun === undefined
-      ? state.resubscribe
-      : (target) => state.resubscribe(target, fanOutUnionLog(fanOutRun.state)),
+    resubscribe: (target, log) => {
+      state.resubscribe(
+        target,
+        fanOutRun === undefined ? log : fanOutUnionLog(fanOutRun.state),
+      );
+      args.retryRegistration.token ??= state.nodes.get(target)
+        ?.registrationToken;
+    },
     markInvalid: fanOutRun === undefined
       ? state.markInvalid
       : (target, options) => {
@@ -1230,7 +1295,8 @@ function finalizeReactiveActionCommit(
     },
     handleUnavailable: () => parkUnavailableRun(state, args),
     reportTerminalRejection: (error) => state.handleError(error, args.action),
-  });
+  };
+  const handled = watchReactiveActionCommit(commitState);
   // The barrier entry commit() registered settles with the commit promise,
   // but the disposition above — a conflict's catch-up-then-requeue in
   // particular — runs afterwards. Register the handled chain too, so
@@ -1249,17 +1315,83 @@ function finalizeReactiveActionCommit(
   recordOptionalActionRunDiagnostics(state, args, committedLog, elapsed);
 
   if (args.fanOutRun !== undefined) {
-    // One run of a fanned-out node: the loop resubscribes once to the
-    // union after its last instance (see runSchedulerAction).
     args.fanOutRun.collectLog(committedLog);
-  } else {
+  }
+  {
     logger.timeStart("scheduler", "run", "resubscribe");
     try {
-      state.resubscribe(args.action, committedLog);
+      // Each instance's commit and subscription share this synchronous turn;
+      // later instances can await while these dependencies remain watched.
+      state.resubscribe(
+        args.action,
+        fanOutRun === undefined
+          ? committedLog
+          : fanOutUnionLog(fanOutRun.state),
+      );
+      args.retryRegistration.token ??= state.nodes.get(args.action)
+        ?.registrationToken;
     } finally {
       logger.timeEnd("scheduler", "run", "resubscribe");
     }
   }
+  const node = state.nodes.get(args.action);
+  const instanceRecord = fanOutRun === undefined
+    ? undefined
+    : fanOutRun.state.instances.get(
+      keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+        fanOutRun.instance.key,
+    );
+  const owner = fanOutRun === undefined ? node : instanceRecord;
+  const registrationToken = args.registrationToken;
+  // Sealing is not durable acceptance. A withdrawn contribution can have read
+  // an unchanged field through another contribution's pending document; rolling
+  // that document back produces no value change at the field to wake its reader.
+  // Observe the rollback separately from the pending-commit barrier: the serving
+  // loop must finish that barrier before it can commit the wave being observed.
+  void commitPromise.then(async ({ error }) => {
+    if (
+      error !== undefined || owner === undefined || node === undefined ||
+      node.registrationToken !== registrationToken
+    ) return;
+    const settlement = waveSettlementOf(args.tx);
+    if (settlement === undefined) return;
+    // A run with no contribution has no new publication. Only another sealed
+    // contribution can supersede this run's recovery obligation, even if a
+    // no-op refreshed reads.
+    const token = {};
+    owner.pendingWaveRun = token;
+    const outcome = await settlement;
+    if (owner.pendingWaveRun !== token) return;
+    delete owner.pendingWaveRun;
+    if (
+      node.registrationToken !== registrationToken ||
+      outcome.error?.readDependencyWithdrawn !== true ||
+      outcome.error?.waveWithdrawalCause !== "contribution-dropped" ||
+      (!state.nodes.isEffect(args.action) &&
+        !state.nodes.isComputation(args.action))
+    ) return;
+    const record = state.nodes.get(args.action);
+    const current = fanOutRun === undefined
+      ? record === node
+      : record?.fanOut === fanOutRun.state &&
+        fanOutRun.state.instances.get(
+            keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+              fanOutRun.instance.key,
+          ) === instanceRecord;
+    if (!current || record === undefined) return;
+    for (const cause of args.invalidCauses ?? []) {
+      addInvalidCause(record, cause);
+    }
+    commitState.markInvalid(args.action, { retry: true });
+    state.pending.add(args.action);
+    state.queueExecution();
+  }).catch((error) => {
+    logger.error(
+      "wave-withdrawal-rearm-failed",
+      "Could not re-arm a withdrawn reactive run",
+      error,
+    );
+  });
   args.resolve(args.result);
 }
 

@@ -11,7 +11,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { CellHandle } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
-import { buildProcessor } from "./backends/build-processor.ts";
+import { acquireCellRef, buildProcessor } from "./backends/build-processor.ts";
 
 const operationRuntime = (
   capability: Record<string, unknown>,
@@ -807,7 +807,10 @@ describe("RuntimeClient operation collaboration", () => {
 
       const processor = buildProcessor({ runtime });
       const field = await processor.handleOperationQuery({
-        cell: alias.getAsNormalizedFullLink() as unknown as CellRef,
+        cell: acquireCellRef(
+          processor,
+          alias.getAsNormalizedFullLink() as CellRef,
+        ),
       } as never);
 
       expect(field.field.id).toBe(targetId);

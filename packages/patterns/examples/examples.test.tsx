@@ -36,7 +36,6 @@ import CfRenderSubpath from "./cf-render-subpath.tsx";
 import CfRender from "./cf-render.tsx";
 import CfTags from "./cf-tags.tsx";
 import DragDropDemo from "./drag-drop-demo.tsx";
-import EmailList from "./email-list.tsx";
 import MultiOptionSelection from "./multi-option-selection.tsx";
 import NestedCounter from "./nested-counter.tsx";
 import NestedMentionables from "./nested-mentionables.tsx";
@@ -90,7 +89,6 @@ export default pattern(() => {
   const outputSchema = OutputSchema({ value: 7 });
   const uiVariants = UiVariantsDemo({ title: "UI Variants Demo" });
   const uiVariantsHost = UiVariantsHost({});
-  const emailList = EmailList({});
   const nestedMentionables = NestedMentionables({});
   const profileAwareWriter = ProfileAwareWriter({});
   const arbitraryWish = ArbitraryWishExample({});
@@ -179,16 +177,14 @@ export default pattern(() => {
   );
 
   // The rest are read for the tree they build, which is what running their
-  // derived expressions takes. The email list and the wish note start with
-  // nothing to show and no text of their own, so each is checked for a tree
-  // rather than for text.
+  // derived expressions takes. The wish note starts with nothing to show and no
+  // text of its own, so it is checked for a tree rather than for text.
   const assert_remaining_examples_build = assert(() =>
     textContent(codeEditorCell[UI]).length > 0 &&
     textContent(chartDemo[UI]).length > 0 &&
     textContent(outputSchema[UI]).length > 0 &&
     textContent(uiVariants[UI]).length > 0 &&
     textContent(uiVariantsHost[UI]).length > 0 &&
-    emailList[UI] != null &&
     textContent(nestedMentionables[UI]).length > 0 &&
     textContent(profileAwareWriter[UI]).length > 0 &&
     textContent(arbitraryWish[UI]).length > 0 &&

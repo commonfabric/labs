@@ -6,34 +6,43 @@
  * drawing the tiles chart their history with.
  */
 
-import type { Status } from "./types.ts";
-import { PROD_SERVICE } from "./config.ts";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+import type { Run, Status } from "./types.ts";
+import { PROD_SERVICE, REPO } from "./config.ts";
 import {
   type GitHubPrimaryRateLimit,
   performanceGitHubRateLimit,
 } from "./github-rate-limit.ts";
 import {
+  ciDurationSub,
   compactSpan,
   daysLabel,
   DURATION_LABEL_HEIGHT,
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 } from "./tile-render-values.ts";
 
 export {
+  ciDurationSub,
   compactSpan,
   daysLabel,
   DURATION_LABEL_HEIGHT,
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 };
 
 // The service.name to scope a SigNoz query to. The name lands inside a query
@@ -143,7 +152,7 @@ function githubErrorBody(body: string): string | undefined {
   try {
     const value: unknown = JSON.parse(body);
     if (
-      value !== null && typeof value === "object" && "message" in value &&
+      isObjectOrArray(value) && "message" in value &&
       typeof value.message === "string"
     ) {
       detail = value.message;
@@ -487,6 +496,38 @@ async function githubDownloadResponse(
   }
 }
 
+/** The GitHub JSON call a collection makes, so a test can supply its own. */
+export interface GitHubJson {
+  json<T>(path: string, token: string): Promise<T>;
+}
+
+/**
+ * The id of the newest unexpired artifact of `runId` named `name`, or
+ * `undefined` where the run has none.
+ *
+ * The listing filters on the name, so the answer holds the artifacts of that
+ * name alone rather than the hundred and more a run of the test workflow
+ * uploads in total. Artifact ids are monotonic, so the newest of them is the
+ * highest: re-running one job uploads a second artifact under the name that
+ * job uploads, beside the original attempt's.
+ */
+export async function runArtifactId(options: {
+  github: GitHubJson;
+  runId: number;
+  name: string;
+  token: string;
+}): Promise<number | undefined> {
+  const { github, runId, name, token } = options;
+  const params = new URLSearchParams({ name, per_page: "100" });
+  const listed = await github.json<{
+    artifacts?: { id: number; name: string; expired: boolean }[];
+  }>(`repos/${REPO}/actions/runs/${runId}/artifacts?${params}`, token);
+  const ids = (listed.artifacts ?? [])
+    .filter((artifact) => artifact.name === name && !artifact.expired)
+    .map((artifact) => artifact.id);
+  return ids.length === 0 ? undefined : Math.max(...ids);
+}
+
 // Cache an async result for ttlMs; a rejection is not cached (so it retries).
 export function memo<T>(ttlMs: number, fn: () => Promise<T>): () => Promise<T> {
   let at = 0;
@@ -518,9 +559,72 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
   return Math.max(lo, Math.min(hi, Math.floor(n)));
 }
 
+/**
+ * The error a run list is refused with when it is behind the workflow's newest
+ * runs: its newest run is older than one already collected, or none of a run
+ * source's reads reaches the runs on the workflow's newest page.
+ */
+export const STALE_RUNS_ERROR = "run list behind the workflow's newest runs";
+
+/** A workflow run as far as telling which of two runs was created last. */
+export interface DatedRun {
+  id: number;
+  created_at: string;
+}
+
+/**
+ * Whether `fetched`, a run list read from `source`, has a newest run older than
+ * the newest run of `held`, the list already collected from it. A workflow's
+ * newest run only ever moves forward, so only a stale view of the workflow can
+ * list that. A stale list is logged with how many runs each list holds and
+ * their newest runs, which tells an empty reply from a lagging one.
+ */
+export function isStaleRunList(
+  source: string,
+  fetched: readonly DatedRun[],
+  held: readonly DatedRun[] | undefined,
+): boolean {
+  if (createdAt(newestRun(fetched)) >= createdAt(newestRun(held))) return false;
+  console.error(
+    `run source ${source} stale, ${STALE_RUNS_ERROR}. Fetched ` +
+      `${describeRuns(fetched)}; held ${describeRuns(held)}.`,
+  );
+  return true;
+}
+
+/**
+ * The run in `runs` created last, or `undefined` when none has a readable
+ * creation time.
+ */
+function newestRun(runs: readonly DatedRun[] | undefined): DatedRun | undefined {
+  let newest: DatedRun | undefined;
+  for (const run of runs ?? []) {
+    if (createdAt(run) > createdAt(newest)) newest = run;
+  }
+  return newest;
+}
+
+/**
+ * When `run` was created, or `-Infinity` for no run or an unreadable time, so
+ * a list without a dated run is older than any list with one.
+ */
+function createdAt(run: DatedRun | undefined): number {
+  const at = run ? Date.parse(run.created_at) : NaN;
+  return Number.isFinite(at) ? at : -Infinity;
+}
+
+/** Names the size of `runs` and its newest run. */
+function describeRuns(runs: readonly DatedRun[] | undefined): string {
+  const run = newestRun(runs);
+  const count = `${runs?.length ?? 0} run${runs?.length === 1 ? "" : "s"}`;
+  return `${count}, ${run ? `newest run ${run.id} created ${run.created_at}` : "none dated"}`;
+}
+
 // Turn a raw collector error into a short, calm tile message. The full error is
-// still logged; the wall shows a human phrase, not a stack trace or API path.
+// still logged; the dashboard shows a human phrase, not a stack trace or API
+// path.
 export function friendlyError(msg: string): string {
+  if (msg === STALE_RUNS_ERROR) return "run list out of date";
   const m = msg.toLowerCase();
   if (/connect|sending request|network|dns|refused|unreachable|timed ?out|timeout|econn/.test(m)) {
     return "source unreachable";
@@ -552,6 +656,20 @@ export function usd(n: number): string {
   if (cents === 0) return "$0";
   if (Math.abs(cents) < 100) return `${cents}¢`;
   return `$${Math.round(n)}`;
+}
+
+/**
+ * How long a completed run ran, in milliseconds, or nothing at all when it is
+ * still running or its two timestamps do not describe a span.
+ */
+export function runDurationMs(run: Run): number | undefined {
+  if (run.status !== "completed") return undefined;
+  const start = Date.parse(run.run_started_at);
+  const end = Date.parse(run.updated_at);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return undefined;
+  }
+  return end - start;
 }
 
 // A completed run's dot color: only genuine failures are red.

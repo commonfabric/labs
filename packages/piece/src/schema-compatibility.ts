@@ -12,8 +12,13 @@ import {
   validateSchemaDefinition,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
-import { isFabricPrimitiveSchemaType } from "@commonfabric/api";
-import { isPlainObject } from "@commonfabric/utils/types";
+import type { FabricPrimitiveSchemaType } from "@commonfabric/api";
+import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+  isPlainObject,
+} from "@commonfabric/utils/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   DEFS_KEYS,
@@ -21,12 +26,17 @@ import {
   SINGLE_SUBSCHEMA_KEYS,
   UNUSED_RECORD_SUBSCHEMA_KEYS,
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
-} from "@commonfabric/runner/schema-walk";
+} from "@commonfabric/data-model-schema/schema-walk";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
+import {
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  fabricPrimitiveClassOfSchemaType,
+  isFabricPrimitiveSchemaType,
+} from "@commonfabric/data-model/fabric-primitives";
 
 type SchemaObject = Exclude<JSONSchema, boolean>;
 type SchemaRole = "argument" | "result";
@@ -39,6 +49,9 @@ interface CompatibilityContext {
   targetRoot: JSONSchema;
   role: SchemaRole;
   activePairs: ActivePairsByRoot;
+
+  /** Depth of supplementary nested-union splits along this proof path. */
+  sourceUnionSplitDepth: number;
 
   /**
    * Piece evolution deliberately permits a small set of non-subset changes
@@ -84,9 +97,11 @@ type ActivePairsByRoot = WeakMap<
 >;
 
 /**
- * The annotations that describe a schema to a reader or to a listing and take
- * no part in any comparison this module makes. Two schemas that differ only in
- * these say the same thing, and {@link schemaSubtreesEqual} reads past them.
+ * The annotations omitted by keyword and equality comparisons. Two schemas
+ * that differ only in these compare equally through {@link schemaSubtreesEqual}.
+ * Nested-union splitting keeps `$comment` wrappers opaque because the runner
+ * reserves some comment values for traversal markers;
+ * {@link sourceAlternativeAcceptedBy} says why that covers every comment.
  *
  * {@link ANNOTATION_KEYS} extends this set with four keywords the subset proof
  * likewise treats as annotations but the equality walk still compares:
@@ -183,7 +198,7 @@ const SEMANTIC_EXTENSION_KEYS = [
  * {@link SUBSCHEMA_LIST_KEYS} and {@link SUBSCHEMA_MAP_KEYS} these are the
  * edges a walk follows to reach every schema written inside another one.
  *
- * The vocabulary comes from `@commonfabric/runner/schema-walk`, which is where
+ * The vocabulary comes from `@commonfabric/data-model-schema/schema-walk`, which is where
  * this repository keeps it. Both walks here need it complete rather than
  * limited to what the generator emits: a schema reaching this gate may have
  * been written into a space by anything, and `validateSchemaDefinition` accepts
@@ -313,11 +328,11 @@ const WRITER_IDENTITY_VOLATILE_KEYS: ReadonlySet<string> = new Set([
  * the authoring module reads as a contract change in none of them.
  */
 const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
-  if (typeof claim !== "object" || claim === null || Array.isArray(claim)) {
+  if (!isObjectNotArray(claim)) {
     return claim;
   }
   const identity = (claim as Record<string, unknown>).__ctWriterIdentityOf;
-  if (typeof identity !== "object" || identity === null) return claim;
+  if (!isObjectOrArray(identity)) return claim;
   const strippedIdentity: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(identity)) {
     if (WRITER_IDENTITY_VOLATILE_KEYS.has(key)) continue;
@@ -346,9 +361,15 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * authorization evidence, which `comparableIfc` keeps.
  *
  * `writerIdentity` is the write authorization, compared except for the parts of
- * its claim that move without the authorization moving.
+ * its claim that move without the authorization moving. `writerAlternatives`
+ * is a list of such authorizations, each with the contract beside it, and each
+ * claim in it is compared the same way.
  */
-type IfcKeyRole = "declared" | "derived" | "writerIdentity";
+type IfcKeyRole =
+  | "declared"
+  | "derived"
+  | "writerIdentity"
+  | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -369,6 +390,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "writerIdentity",
+  writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
   // `AuthoredByCurrentUser` spellings that expand to it. It names atoms the
@@ -437,7 +459,7 @@ const keep = (
  */
 const representsPrincipalAtoms = (value: unknown): readonly unknown[] => {
   if (Array.isArray(value)) return value.flatMap(representsPrincipalAtoms);
-  if (typeof value !== "object" || value === null) return [];
+  if (!isObjectOrArray(value)) return [];
   const record = value as Record<string, unknown>;
   if (record.kind === "represents-principal") return [value];
   return Object.values(record).flatMap(representsPrincipalAtoms);
@@ -461,7 +483,7 @@ const representsPrincipalAtoms = (value: unknown): readonly unknown[] => {
  * reduction exists to allow.
  */
 const comparableIfc = (ifc: unknown): unknown => {
-  if (typeof ifc !== "object" || ifc === null || Array.isArray(ifc)) return ifc;
+  if (!isObjectNotArray(ifc)) return ifc;
   const source = ifc as Record<string, unknown>;
   // Beside an `ownerPrincipal`, part of the mint is not a derived label at all.
   // `currentPrincipalIntegrityReason` (runner `cfc/prepare.ts`) reads the
@@ -481,7 +503,10 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (role === "derived" || role === "writerIdentity") {
+    if (
+      role === "derived" || role === "writerIdentity" ||
+      role === "writerAlternatives"
+    ) {
       handled = true;
       break;
     }
@@ -512,6 +537,22 @@ const comparableIfc = (ifc: unknown): unknown => {
       keep(kept, key, normalized);
       continue;
     }
+    if (role === "writerAlternatives" && Array.isArray(value)) {
+      const normalized = value.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const writer = writerClaimWithoutVolatileIdentity(
+          policy.writeAuthorizedBy,
+        );
+        return writer === policy.writeAuthorizedBy
+          ? policy
+          : { ...policy, writeAuthorizedBy: writer };
+      });
+      if (normalized.some((policy, index) => policy !== value[index])) {
+        changed = true;
+      }
+      keep(kept, key, normalized);
+      continue;
+    }
     keep(kept, key, value);
   }
   if (!changed) return ifc;
@@ -529,7 +570,10 @@ const comparableIfc = (ifc: unknown): unknown => {
  * leaves a writer's value unread, where a dropped result field breaks a reader,
  * so only the result side preserves its named fields outright. A candidate that
  * cannot hold a dropped field's value is still refused, by the ordinary
- * named-property proof against its additionalProperties contract. What keeps
+ * named-property proof against its additionalProperties contract. A newly
+ * required field is admitted on a valid default, which a `FabricPrimitive`
+ * stored where that field's object belongs never receives: the value is frozen,
+ * so the runtime's `required` check on it still fails. What keeps
  * those allowances sound is a second check at update time rather than anything
  * provable here: pattern setup re-stages the piece's stored argument
  * against the incoming schema and validates it inside the setup transaction, so
@@ -562,12 +606,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a
- * `writeAuthorizedBy` writer claim's volatile identity is normalized out before
- * the `ifc` comparison. That identity is the content-addressed module hash
- * (`moduleIdentity`, and the legacy `bundleId`), which rehashes on any edit to
- * the authoring module, together with the source-file spelling (`file`), which
- * changes with the resolver that compiled the module. The runtime authorizes a
+ * `writeOnly`) are compared for exact equality, with one exception: a writer
+ * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
+ * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * identity is the content-addressed module hash (`moduleIdentity`, and the
+ * legacy `bundleId`), which rehashes on any edit to the authoring module,
+ * together with the source-file spelling (`file`), which changes with the
+ * resolver that compiled the module. The runtime authorizes a
  * write on `moduleIdentity` plus the binding `path` and never on `file`, and it
  * re-verifies the live writer's `moduleIdentity` against the claim at write
  * time, so holding those fields fixed here would reject a recompile or a
@@ -639,6 +684,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: candidate.argumentSchema,
       role: "argument",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -656,6 +702,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: previousResultSchema,
       role: "result",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -677,6 +724,11 @@ export function assertPatternSchemasBackwardCompatible(
  * Conservatively prove that every value described by `source` is accepted by
  * `target`. This is used for durable links: validating only their current
  * materialization is insufficient because the linked cell can change later.
+ *
+ * Materialization fills a valid target default before validation, so a
+ * default admits a field the target newly requires, provided every
+ * `FabricPrimitive` class the source admits already has that field: a
+ * `FabricPrimitive` is frozen and never receives the default.
  *
  * The `ifc` reduction {@link comparableIfc} performs reaches this proof as
  * well, where the two claims come from two separate pieces and a differing
@@ -717,6 +769,7 @@ export function assertSchemaSubset(
     // object fields. Link materialization may also fill valid target defaults.
     role: "argument",
     activePairs: new WeakMap(),
+    sourceUnionSplitDepth: 0,
     allowEvolutionPolicy: false,
     allowEvolutionDefaults: true,
     allowTargetDefaults: true,
@@ -854,18 +907,17 @@ function schemaSubsetIssue(
       source.anyOf || target.anyOf ||
       Array.isArray(source.type) || Array.isArray(target.type)
     ) {
-      const sources = schemaAlternatives(source);
-      const targets = schemaAlternatives(target);
+      const sources = schemaAlternatives(source, "source", context);
+      const targets = schemaAlternatives(target, "target", context);
       for (const sourceAlternative of sources) {
-        const accepted = targets.some((targetAlternative) =>
-          schemaConjunctionSubsetIssue(
+        if (
+          !sourceAlternativeAcceptedBy(
             sourceAlternative,
-            targetAlternative,
+            targets,
             path,
             context,
-          ) === undefined
-        );
-        if (!accepted) {
+          )
+        ) {
           return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
         }
       }
@@ -925,6 +977,9 @@ function schemaSubsetIssue(
         return `${path}: ${key} changed in a way compatibility checking cannot prove safe`;
       }
     }
+
+    const primitiveIssue = fabricPrimitiveRequiredIssue(source, target, path);
+    if (primitiveIssue) return primitiveIssue;
 
     if (
       schemaMayProduceType(source, ["object"]) &&
@@ -987,19 +1042,23 @@ function schemaIsStableUnderDescendantDefaults(
   schema: JSONSchema,
   root: JSONSchema,
 ): boolean {
-  if (typeof schema !== "object" || schema === null) return true;
+  if (!isObjectOrArray(schema)) return true;
   return Object.keys(schema).every((key) => {
     if (DEFAULT_STABLE_SCHEMA_KEYS.has(key)) return true;
     return (key === "anyOf" || key === "oneOf") &&
-      alternativesDeclareDisjointTypes(schema[key]!, root);
+      alternativesAreStableUnderDescendantDefaults(schema[key]!, root);
   });
 }
 
 /**
- * Whether composition branches can never change membership after descendant
- * defaults are inserted because their accepted top-level types do not overlap.
+ * Whether composition branches keep their membership after descendant
+ * defaults are inserted. Their accepted top-level types must not overlap, so
+ * no value can move to another branch, and every branch a default can be
+ * inserted into — one admitting objects or arrays — must keep its own
+ * constraints true under the insertion, as any node is asked to. A branch
+ * admitting only scalars receives no default, whatever else it constrains.
  */
-function alternativesDeclareDisjointTypes(
+function alternativesAreStableUnderDescendantDefaults(
   alternatives: readonly JSONSchema[],
   root: JSONSchema,
 ): boolean {
@@ -1031,7 +1090,27 @@ function alternativesDeclareDisjointTypes(
       }
     }
   }
-  return true;
+  return alternatives.every((alternative, index) =>
+    declared[index]!.every(isScalarSchemaType) ||
+    schemaIsStableUnderDescendantDefaults(
+      resolveSchema(alternative, root).schema ?? false,
+      root,
+    )
+  );
+}
+
+const SCALAR_SCHEMA_TYPES: ReadonlySet<string> = new Set([
+  "boolean",
+  "integer",
+  "null",
+  "number",
+  "string",
+  "undefined",
+]);
+
+/** Whether a `type` name admits no value a default can be inserted into. */
+function isScalarSchemaType(type: string): boolean {
+  return SCALAR_SCHEMA_TYPES.has(type);
 }
 
 function objectSubsetIssue(
@@ -1078,16 +1157,30 @@ function objectSubsetIssue(
   const allowEvolutionDefaults = allowEvolutionPolicy &&
     context.allowEvolutionDefaults;
   if (context.role === "argument") {
+    let admittedPrimitiveTypes: FabricPrimitiveSchemaType[] | undefined;
     for (const property of targetRequired) {
+      if (sourceRequired.has(property)) continue;
       if (
-        !sourceRequired.has(property) &&
-        (!(context.allowTargetDefaults || allowEvolutionDefaults) ||
-          !schemaProvidesValidDefault(
-            targetProperties[property],
-            context.targetRoot,
-          ))
+        !(context.allowTargetDefaults || allowEvolutionDefaults) ||
+        !schemaProvidesValidDefault(
+          targetProperties[property],
+          context.targetRoot,
+        )
       ) {
         return `${path}.${property}: newly required argument field has no default`;
+      }
+      // Link materialization inserts the default into a record, but a
+      // `FabricPrimitive` is frozen, so one the source admits without the
+      // field keeps failing the runtime's `required` check. A pattern update
+      // keeps the default, backed by the update-time check that
+      // `assertPatternSchemasBackwardCompatible()` describes.
+      if (context.defaultComparison !== "target") continue;
+      admittedPrimitiveTypes ??= fabricPrimitiveTypesAdmittedBy(source);
+      const unfilled = admittedPrimitiveTypes.find((type) =>
+        !fabricPrimitiveHasRequiredKey(type, property)
+      );
+      if (unfilled !== undefined) {
+        return `${path}.${property}: newly required field is not a member of \`${unfilled}\`, which takes no default`;
       }
     }
 
@@ -1291,6 +1384,92 @@ function objectSubsetIssue(
   return additionalPropertiesSubsetIssue(source, target, path, context);
 }
 
+/**
+ * Helper for {@link schemaSubsetIssue}, which proves that a value of each
+ * `FabricPrimitive` class the source names by `type` carries every key the
+ * target's `required` checks on it. The runtime checks those keys on a
+ * `FabricPrimitive` with `in` whenever the target declares no `type` or its
+ * type list includes `object`, and excuses `FABRIC_SPECIAL_OBJECT_BRAND`. A
+ * target typed only by `FabricPrimitive` names is not checked, and the object
+ * keywords besides `required` never reach a primitive.
+ * {@link objectSubsetIssue} does not run for a source typed this way, so this
+ * is the whole object proof for such a source.
+ *
+ * Membership is decided by {@link fabricPrimitiveHasRequiredKey}. A target
+ * default does not supply a missing key, since nothing can be written onto a
+ * frozen value.
+ */
+function fabricPrimitiveRequiredIssue(
+  source: SchemaObject,
+  target: SchemaObject,
+  path: string,
+): string | undefined {
+  const targetTypes = typeof target.type === "string"
+    ? [target.type]
+    : target.type;
+  if (
+    target.required === undefined || targetTypes?.includes("object") === false
+  ) {
+    return undefined;
+  }
+  for (const type of schemaTypes(source) ?? []) {
+    if (!isFabricPrimitiveSchemaType(type)) continue;
+    for (const key of target.required) {
+      if (fabricPrimitiveHasRequiredKey(type, key)) continue;
+      return `${path}.${key}: required field is not a member of \`${type}\``;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether the runtime's `required` check finds `key` on every value of the
+ * `FabricPrimitive` class `type` names. That check is `in`, and excuses
+ * `FABRIC_SPECIAL_OBJECT_BRAND`.
+ *
+ * Membership is read off the class's prototype. `BaseFabricPrimitive` freezes
+ * each instance at construction, which leaves a subclass no own field to add,
+ * so every key `in` finds on a value is on that prototype chain; a key found
+ * only on an instance would be reported missing here.
+ */
+function fabricPrimitiveHasRequiredKey(
+  type: FabricPrimitiveSchemaType,
+  key: string,
+): boolean {
+  return key === FABRIC_SPECIAL_OBJECT_BRAND ||
+    key in fabricPrimitiveClassOfSchemaType(type).prototype;
+}
+
+/**
+ * Helper for {@link objectSubsetIssue}, which returns the `FabricPrimitive`
+ * type names whose values `schema` admits by its `type` and `required`. A name
+ * among the schema's types is admitted, and so is every name when those types
+ * are unbounded or include `object` or `unknown`. The runtime checks `required`
+ * on a `FabricPrimitive` only when the schema declares no `type` or its type
+ * list includes `object`, and there a class missing one of those keys is not
+ * admitted.
+ *
+ * No other keyword is read, so a schema whose other constraints refuse every
+ * `FabricPrimitive` still admits them here.
+ */
+function fabricPrimitiveTypesAdmittedBy(
+  schema: SchemaObject,
+): FabricPrimitiveSchemaType[] {
+  const types = schemaTypes(schema);
+  const declared = typeof schema.type === "string"
+    ? [schema.type]
+    : schema.type;
+  const checksRequired = declared === undefined || declared.includes("object");
+  return FABRIC_PRIMITIVE_SCHEMA_TYPES.filter((type) =>
+    (types === undefined ||
+      types.some((admitted) => schemaTypeAdmits(admitted, type))) &&
+    (!checksRequired ||
+      (schema.required ?? []).every((key) =>
+        fabricPrimitiveHasRequiredKey(type, key)
+      ))
+  );
+}
+
 function matchingPatternPropertySchemas(
   patternProperties: Record<string, JSONSchema> | undefined,
   property: string,
@@ -1305,7 +1484,7 @@ function matchingPatternPropertySchemas(
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
-  if (typeof schema !== "object" || schema === null) return false;
+  if (!isObjectOrArray(schema)) return false;
   const asCell = (schema as SchemaObject).asCell;
   return Array.isArray(asCell) && asCell.includes("stream");
 }
@@ -1355,12 +1534,20 @@ function arraySubsetIssue(
   return schemaSubsetIssue(sourceItems, targetItems, `${path}[]`, context);
 }
 
+/**
+ * Checks target literal restrictions against explicit source literals or the
+ * finite value set of a boolean or null source type.
+ */
 function literalSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
 ): string | undefined {
-  const sourceValues = allowedLiteralValues(source);
+  let sourceValues = allowedLiteralValues(source);
+  if (sourceValues === undefined) {
+    if (source.type === "boolean") sourceValues = [false, true];
+    else if (source.type === "null") sourceValues = [null];
+  }
   const targetValues = allowedLiteralValues(target);
   if (!targetValues) return undefined;
   if (!sourceValues) {
@@ -1378,16 +1565,30 @@ function literalSubsetIssue(
   return undefined;
 }
 
+/**
+ * Helper for literal and type proofs, which intersects `const`, `enum`, and
+ * the declared `type`. Values outside {@link valueSchemaType}'s vocabulary
+ * stay listed so their constraints still reach the ordinary object proof.
+ */
 function allowedLiteralValues(
   schema: SchemaObject,
 ): readonly unknown[] | undefined {
+  let values: readonly unknown[] | undefined = schema.enum;
   if (Object.hasOwn(schema, "const")) {
-    return schema.enum === undefined ||
+    values = schema.enum === undefined ||
         schema.enum.some((value) => fabricAwareEqual(value, schema.const))
       ? [schema.const]
       : [];
   }
-  return schema.enum;
+  if (values === undefined || schema.type === undefined) return values;
+  const declared = typeof schema.type === "string"
+    ? [schema.type]
+    : schema.type;
+  return values.filter((value) => {
+    const type = valueSchemaType(value);
+    return type === undefined ||
+      declared.some((admitted) => schemaTypeAdmits(admitted, type));
+  });
 }
 
 function typeSubsetIssue(
@@ -1559,17 +1760,134 @@ function schemaMayProduceType(
  * checks the node's own keywords ({@link NODE_LEVEL_KEYWORDS}). Fragments omit
  * the parent node's default and extensions, including for a single-type node.
  * Branch and descendant schemas retain their own defaults and extensions.
+ *
+ * Source enums expand by type through {@link ownEnumPartitions} and
+ * {@link sourceEnumAlternatives}, including beside a `type` list or inside
+ * `anyOf`. A `type` list expands through {@link ownTypePartitions}, at this
+ * node and inside a source branch alike, so a union written as a list proves
+ * like the same union written as branches; that helper and
+ * {@link sourceEnumAlternatives} name the nodes whose list stays whole.
+ * Branch partitions stay beside their base in the conjunction, so
+ * their node-level keywords are compared at the branch boundary. Target enums
+ * stay whole so an alternative listing values of several types can fit the
+ * whole enum. Transparent nested source unions can split further through
+ * {@link sourceAlternativeAcceptedBy}.
  */
-function schemaAlternatives(schema: SchemaObject): JSONSchema[][] {
-  const fragment = withoutNodeLevelKeywords(schema);
-  if (fragment.anyOf) {
-    const { anyOf, ...base } = fragment;
-    return anyOf.map((alternative) => [base, alternative]);
+function schemaAlternatives(
+  schema: SchemaObject,
+  side: "source" | "target",
+  context: CompatibilityContext,
+): JSONSchema[][] {
+  const whole = withoutNodeLevelKeywords(schema);
+  const fragments = side === "source" ? ownEnumPartitions(whole) : [whole];
+  return fragments.flatMap((fragment): JSONSchema[][] => {
+    if (fragment.anyOf) {
+      const { anyOf, ...base } = fragment;
+      const branches = side === "source"
+        ? anyOf.flatMap((branch) => sourceEnumAlternatives(branch, context))
+        : anyOf;
+      return branches.map((alternative) => [base, alternative]);
+    }
+    return ownTypePartitions(fragment).map((partition) => [partition]);
+  });
+}
+
+/**
+ * Helper for {@link schemaAlternatives}, which partitions source enums by
+ * their admitted literal types and source `type` lists by their named types,
+ * retaining sibling constraints and branch-level defaults and extensions. A
+ * branch that also carries an `anyOf` keeps its list whole for the proof at
+ * that branch, as a node does. Distributes partitions inside `anyOf` through
+ * its enclosing nodes. Enums containing an unclassified value stay whole, and
+ * references remain for the scoped proof to resolve. During evolution, a branch
+ * stays whole if any partition changes the effective default it supplies. Link
+ * proofs compare target defaults only, so source defaults do not limit splitting.
+ */
+function sourceEnumAlternatives(
+  schema: JSONSchema,
+  context: CompatibilityContext,
+): JSONSchema[] {
+  if (typeof schema === "boolean") return [schema];
+  let narrowed: JSONSchema[] | undefined;
+  if (schema.anyOf !== undefined) {
+    const branches = schema.anyOf.flatMap((branch) =>
+      sourceEnumAlternatives(branch, context)
+    );
+    if (branches.length > schema.anyOf.length) {
+      narrowed = branches.map((branch) => ({ ...schema, anyOf: [branch] }));
+    }
   }
-  if (Array.isArray(fragment.type)) {
-    return fragment.type.map((type) => [{ ...fragment, type }]);
+  // A branch carrying both a list and an `anyOf` keeps its list whole, as a
+  // node carrying both does: the list stays beside the base of that branch's
+  // own alternatives and is compared at its boundary.
+  narrowed ??= schema.anyOf === undefined
+    ? ownEnumPartitions(schema).flatMap(ownTypePartitions)
+    : ownEnumPartitions(schema);
+  if (
+    context.defaultComparison === "evolution" &&
+    narrowed.length > 1 &&
+    narrowed.some((fragment) =>
+      !schemaDefaultsResolveEqually(schema, fragment, {
+        sourceRoot: context.sourceRoot,
+        targetRoot: context.sourceRoot,
+      })
+    )
+  ) {
+    return [schema];
   }
-  return [[fragment]];
+  return narrowed;
+}
+
+/**
+ * Helper for source alternative expansion, which partitions this node's enum
+ * by admitted literal type while keeping its other keywords intact. An enum
+ * containing an unclassified value stays whole for the ordinary object proof.
+ */
+function ownEnumPartitions(schema: SchemaObject): SchemaObject[] {
+  const listed = schema.enum;
+  const values = allowedLiteralValues(schema);
+  if (listed !== undefined && values !== undefined) {
+    const types = values.map(valueSchemaType);
+    const distinct = [...new Set(types)];
+    if (!distinct.includes(undefined) && distinct.length > 1) {
+      return distinct.map((type) => ({
+        ...schema,
+        enum: listed.filter((value) => valueSchemaType(value) === type),
+      }));
+    }
+  }
+  return [schema];
+}
+
+/**
+ * Partitions a node's `type` list into one branch per named type, keeping its
+ * other keywords intact. A node naming a single type, or none, stays whole.
+ * The partitions cover every value the list admitted, so proving each of them
+ * proves the list. {@link schemaAlternatives} applies this at the node for
+ * either side; {@link sourceEnumAlternatives} applies it inside a source
+ * branch, where a target's list instead stays whole with its branch.
+ *
+ * A node still carrying a `$ref` stays whole too. The reference resolves with
+ * this node's keywords laid over the referenced schema, so this node's list
+ * overrides a referenced `type`. The untyped partition below drops `type`,
+ * which would let the referenced one return and cover fewer values than the
+ * list admitted.
+ */
+function ownTypePartitions(schema: SchemaObject): SchemaObject[] {
+  const types = schema.type;
+  if (!Array.isArray(types) || schema.$ref !== undefined) return [schema];
+  if (!types.includes("object")) {
+    return types.map((type) => ({ ...schema, type }));
+  }
+  // The runtime checks `required` on a `FabricPrimitive` when the type list
+  // includes `object`, and would not check it under a branch typed by a
+  // `FabricPrimitive` name or by `unknown` alone. `object` admits every
+  // `FabricPrimitive` already, so those names add no branch of their own,
+  // and `unknown` becomes the untyped branch, which admits every value and
+  // is checked.
+  const { type: _types, ...untyped } = schema;
+  return types.filter((type) => !isFabricPrimitiveSchemaType(type))
+    .map((type) => type === "unknown" ? untyped : { ...untyped, type });
 }
 
 /**
@@ -1599,6 +1917,94 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
     }
   }
   return fragment as SchemaObject;
+}
+
+/**
+ * The supplementary union proof retries whole branches after each split.
+ * Bounding its depth limits repeated work on long union spines; the ordinary
+ * whole-branch proof remains available at every depth.
+ */
+const MAX_SOURCE_UNION_SPLIT_DEPTH = 8;
+
+/**
+ * Proves a source conjunction against the target alternatives. A transparent
+ * nested `anyOf` can send each child to a different target alternative while
+ * retaining the source's other conjuncts. Wrappers carrying constraints or
+ * semantic metadata stay at their own proof boundary. During evolution, each
+ * child must also preserve the wrapper's effective default in its owning root.
+ */
+function sourceAlternativeAcceptedBy(
+  sourceAlternative: readonly JSONSchema[],
+  targets: readonly (readonly JSONSchema[])[],
+  path: string,
+  context: CompatibilityContext,
+): boolean {
+  // Keep whole-branch proofs first, including comparisons of matching nested
+  // contracts whose defaults or metadata require the existing boundaries.
+  if (
+    targets.some((target) =>
+      schemaConjunctionSubsetIssue(sourceAlternative, target, path, context) ===
+        undefined
+    )
+  ) return true;
+
+  // Splitting only adds a proof when children can choose different targets.
+  // A single target is already checked recursively by the whole-branch proof;
+  // retrying it at each wrapper would repeat the same work exponentially.
+  if (
+    targets.length < 2 ||
+    context.sourceUnionSplitDepth >= MAX_SOURCE_UNION_SPLIT_DEPTH
+  ) return false;
+
+  return sourceAlternative.some((fragment, index) => {
+    if (
+      typeof fragment === "boolean" || fragment.anyOf === undefined ||
+      Object.keys(fragment).some((key) =>
+        key !== "anyOf" &&
+        // `$comment` is descriptive to this module but not to the runner,
+        // which reads a few reserved values (`emptyProperties`,
+        // `missingProperty`, `rejectedProperty`) as traversal markers. It
+        // recognizes them by the string alone, on any node, including a
+        // hand-written property schema that carries other keywords beside
+        // the marker, and treats such a node as a marker rather than as a
+        // schema to validate against. Splitting that wrapper would prove its
+        // branches while the runtime never checks them.
+        //
+        // Every `$comment` stays opaque, not only the reserved values. The
+        // runner keeps no shared list of them: `schema-view.ts` and
+        // `traverse.ts` each test their own, and the two do not test the
+        // same values, so a value check here would be a third private copy
+        // to drift. Narrowing this should wait for a runner-owned
+        // classifier. The cost is that an ordinary descriptive comment also
+        // stops this split; whole-branch and equality proofs are unaffected.
+        (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+      )
+    ) return false;
+    if (
+      context.defaultComparison === "evolution" &&
+      fragment.anyOf.some((branch) =>
+        !schemaDefaultsResolveEqually(fragment, branch, {
+          sourceRoot: context.sourceRoot,
+          targetRoot: context.sourceRoot,
+        })
+      )
+    ) return false;
+    return fragment.anyOf.every((branch) =>
+      sourceAlternativeAcceptedBy(
+        [
+          ...sourceAlternative.slice(0, index),
+          branch,
+          ...sourceAlternative.slice(index + 1),
+        ],
+        targets,
+        path,
+        {
+          ...context,
+          sourceUnionSplitDepth: context.sourceUnionSplitDepth + 1,
+        },
+      )
+    );
+  });
 }
 
 /**
@@ -1637,9 +2043,63 @@ function hasComplexSameInstanceConstraints(schema: SchemaObject): boolean {
   return COMPLEX_CONSTRAINT_KEYS.some((key) => schema[key] !== undefined);
 }
 
+/**
+ * The `type` names a schema admits, or `undefined` when it leaves them
+ * unbounded. A schema that lists every value it accepts in `enum` or `const`
+ * admits exactly the types those values carry, narrowed by any `type` it
+ * declares beside them: `{enum: ["open", "closed"]}` — the spelling a literal
+ * union compiles to — is a `string` schema to every type comparison here, and
+ * `{type: "number", enum: [1, 2]}` an `integer` one. A listed value whose
+ * type {@link valueSchemaType} cannot name leaves the declared `type` to
+ * bound the schema, or nothing to.
+ */
 function schemaTypes(schema: SchemaObject): readonly string[] | undefined {
-  if (schema.type === undefined) return undefined;
-  return typeof schema.type === "string" ? [schema.type] : schema.type;
+  const declared = schema.type === undefined
+    ? undefined
+    : typeof schema.type === "string"
+    ? [schema.type]
+    : schema.type;
+  const values = allowedLiteralValues(schema);
+  if (values === undefined) return declared;
+  const types: string[] = [];
+  for (const value of values) {
+    const type = valueSchemaType(value);
+    if (type === undefined) return declared;
+    if (!types.includes(type)) types.push(type);
+  }
+  return types;
+}
+
+/**
+ * Whether a schema `type` name admits a value of the given type name: the
+ * same name, `unknown`, an `integer` under `number`, or a `FabricPrimitive`
+ * class under `object` (mirrors `schemaTypeMatchesValueType` in the runner's
+ * traverse).
+ */
+function schemaTypeAdmits(schemaType: string, valueType: string): boolean {
+  return schemaType === valueType || schemaType === "unknown" ||
+    (schemaType === "number" && valueType === "integer") ||
+    (schemaType === "object" && isFabricPrimitiveSchemaType(valueType));
+}
+
+/**
+ * The `type` name a literal value satisfies, in the JSON vocabulary the
+ * runtime validates against, with an integral number an `integer`. A value
+ * outside that vocabulary gets no name. That includes a `FabricPrimitive`,
+ * on purpose: the runtime checks an object schema's `required` keys on one
+ * whenever the schema declares no `type` or admits `object`, so the class
+ * name alone does not say which object keywords reach the value, and a
+ * schema listing one has to stay unbounded for the object proof to run.
+ */
+function valueSchemaType(value: unknown): string | undefined {
+  if (value === null) return "null";
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? "integer" : "number";
+  }
+  if (typeof value === "boolean") return "boolean";
+  if (Array.isArray(value)) return "array";
+  return isPlainObject(value) ? "object" : undefined;
 }
 
 /**
@@ -1754,10 +2214,14 @@ function schemasResolveEqually(
   return true;
 }
 
+/**
+ * Helper for evolution proofs, which compares the defaults two schemas supply
+ * in their own reference scopes.
+ */
 function schemaDefaultsResolveEqually(
   source: JSONSchema,
   target: JSONSchema,
-  context: CompatibilityContext,
+  context: Pick<CompatibilityContext, "sourceRoot" | "targetRoot">,
 ): boolean {
   const sourceHasDefault = schemaHasDefaultValue(source, context.sourceRoot);
   const targetHasDefault = schemaHasDefaultValue(target, context.targetRoot);
@@ -1841,12 +2305,9 @@ function schemaHasUnsafeMaterializedDefault(
 ): boolean {
   const resolution = resolveSchema(input, root);
   const schema = resolution.schema;
-  if (typeof schema !== "object" || schema === null) return false;
+  if (!isObjectOrArray(schema)) return false;
 
-  const rootKey = typeof resolution.root === "object" &&
-      resolution.root !== null
-    ? resolution.root
-    : schema;
+  const rootKey = isObjectOrArray(resolution.root) ? resolution.root : schema;
   let active = activeByRoot.get(rootKey);
   if (active === undefined) {
     active = { stable: new WeakSet(), unstable: new WeakSet() };
@@ -1890,7 +2351,7 @@ function collectSchemaReferences(
   refs: Set<string>,
   seen: WeakSet<object>,
 ): void {
-  if (value === null || typeof value !== "object" || seen.has(value)) return;
+  if (!isObjectOrArray(value) || seen.has(value)) return;
   seen.add(value);
   const record = value as Record<string, unknown>;
   if (typeof record.$ref === "string") refs.add(record.$ref);
@@ -1926,7 +2387,7 @@ function resolveSchema(
   root: JSONSchema,
 ): { schema: JSONSchema | undefined; root: JSONSchema } {
   const schemaRoot = root;
-  const hasRef = typeof schema === "object" && schema !== null &&
+  const hasRef = isObjectOrArray(schema) &&
     typeof schema.$ref === "string";
   const owningRoot = hasRef
     ? resolveCfcSchemaRefRoot(schema, schemaRoot)
@@ -1993,7 +2454,7 @@ function compatibilityRootKey(
   root: JSONSchema,
   fallback: object,
 ): object {
-  return typeof root === "object" && root !== null ? root : fallback;
+  return isObjectOrArray(root) ? root : fallback;
 }
 
 function unknownKeywordIssue(

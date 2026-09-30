@@ -13,13 +13,13 @@ import { Runtime } from "../src/runtime.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import type { NormalizedLink } from "../src/link-types.ts";
-import {
-  collectExternalSchemaRefHashes,
-  parseExternalSchemaRef,
-} from "../src/schema-decompose.ts";
 import { resetContentAddressedSchemasConfig } from "../src/schema-doc-config.ts";
 import { lookupSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  collectExternalSchemaRefHashes,
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import {
   getSyncSchemaTableConfig,
   resetSyncSchemaTableConfig,

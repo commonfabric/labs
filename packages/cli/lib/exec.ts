@@ -6,6 +6,7 @@ import {
   PiecesController,
 } from "@commonfabric/piece/ops";
 import type { Cell } from "@commonfabric/runner";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
   type MountedCallablePath,
@@ -77,6 +78,9 @@ export interface ExecDependencies {
    * `CallableExecutionDeps` carry. */
   deriveSelectedValue?: CallableExecutionDeps["deriveSelectedValue"];
 
+  /** @internal Seam for tests, the same one `CallableExecutionDeps` carries. */
+  sendEvent?: CallableExecutionDeps["sendEvent"];
+
   /**
    * Each phase the dispatch below reaches, in order. A caller announcing the
    * invocation identity hangs it here: the identity is what a failed call is
@@ -141,7 +145,7 @@ async function readMountedPieceMeta(
     throw new Error(`Mounted piece metadata not found for ${absFilePath}`);
   }
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isObjectNotArray(parsed)) {
     throw new Error(`Mounted piece metadata is invalid for ${absFilePath}`);
   }
 
@@ -151,12 +155,10 @@ async function readMountedPieceMeta(
   }
 
   const rawPatternRef = meta.patternRef;
-  const rawPatternSource = typeof rawPatternRef === "object" &&
-      rawPatternRef !== null && !Array.isArray(rawPatternRef)
+  const rawPatternSource = isObjectNotArray(rawPatternRef)
     ? (rawPatternRef as Record<string, unknown>).source
     : undefined;
-  const patternSource = typeof rawPatternSource === "object" &&
-      rawPatternSource !== null && !Array.isArray(rawPatternSource) &&
+  const patternSource = isObjectNotArray(rawPatternSource) &&
       typeof (rawPatternSource as Record<string, unknown>).ref === "string"
     ? {
       ref: (rawPatternSource as Record<string, unknown>).ref as string,
@@ -182,8 +184,7 @@ async function readMountedPieceMeta(
         : {}),
     }
     : undefined;
-  const patternRef = typeof rawPatternRef === "object" &&
-      rawPatternRef !== null && !Array.isArray(rawPatternRef) &&
+  const patternRef = isObjectNotArray(rawPatternRef) &&
       typeof (rawPatternRef as Record<string, unknown>).identity === "string" &&
       typeof (rawPatternRef as Record<string, unknown>).symbol === "string" &&
       patternSource !== undefined

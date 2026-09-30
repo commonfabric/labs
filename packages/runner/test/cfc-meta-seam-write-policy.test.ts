@@ -9,6 +9,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -54,7 +55,7 @@ describe("cfc-meta-seam-write-policy", () => {
       .getAsNormalizedFullLink().id as URI;
     const seed = runtime.edit();
     writeSeedEnvelopeDoc(seed, signer.did());
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space: signer.did(),
       scope: "space",
       id,
@@ -151,7 +152,7 @@ describe("cfc-meta-seam-write-policy", () => {
         .getAsNormalizedFullLink().id as URI;
       const seedSecret = runtime.edit();
       writeSeedEnvelopeDoc(seedSecret, signer.did());
-      seedSecret.writeOrThrow({
+      seedStoredEnvelope(seedSecret, {
         space: signer.did(),
         scope: "space",
         id: secretId,

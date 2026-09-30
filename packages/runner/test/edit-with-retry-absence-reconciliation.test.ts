@@ -15,7 +15,10 @@ import type {
   IStorageTransaction,
 } from "../src/storage/interface.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
-import { excludeReadFromConflict } from "../src/storage/reactivity-log.ts";
+import {
+  excludeReadFromConflict,
+  internalVerifierRead,
+} from "../src/storage/reactivity-log.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
@@ -192,70 +195,76 @@ describe("editWithRetry absence reconciliation", () => {
     }
   });
 
-  it("does not reconcile reads excluded from the commit conflict set", async () => {
-    const server = newSharedServer();
-    const writerStorage = EmulatedStorageManager.connectTo(server, {
-      as: signer,
-    });
-    const writerRuntime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: writerStorage,
-    });
-    let readerStorage: EmulatedStorageManager | undefined;
-    let readerRuntime: Runtime | undefined;
-    try {
-      const excludedAddress = {
-        space,
-        id: "of:excluded-cold-read-doc" as const,
-        type: "application/json" as const,
-        scope: "space" as const,
-        path: [] as string[],
-      };
-      const seed = writerRuntime.edit();
-      seed.writeValueOrThrow(excludedAddress, { value: 17 });
-      expect((await seed.commit()).error).toBeUndefined();
-      await writerStorage.synced();
-
-      readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
-      readerRuntime = new Runtime({
+  for (const contentRead of [false, true]) {
+    it(`reconciles excluded reads only when CFC consumes their labels (content=${contentRead})`, async () => {
+      const server = newSharedServer();
+      const writerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const writerRuntime = new Runtime({
         apiUrl: new URL(import.meta.url),
-        storageManager: readerStorage,
+        storageManager: writerStorage,
       });
-      let runs = 0;
-      const result = await readerRuntime.editWithRetry((tx) => {
-        runs++;
-        tx.read(
-          excludedAddress,
-          {
-            meta: excludeReadFromConflict,
-            nonRecursive: true,
-            trackReadWithoutLoad: true,
-          },
-        );
-        readerRuntime!.getCell(
+      let readerStorage: EmulatedStorageManager | undefined;
+      let readerRuntime: Runtime | undefined;
+      try {
+        const excludedAddress = {
           space,
-          "excluded-cold-read-output",
-          valueSchema,
-          tx,
-        ).set({ value: runs });
-      });
+          id: "of:excluded-cold-read-doc" as const,
+          type: "application/json" as const,
+          scope: "space" as const,
+          path: [] as string[],
+        };
+        const seed = writerRuntime.edit();
+        seed.writeValueOrThrow(excludedAddress, { value: 17 });
+        expect((await seed.commit()).error).toBeUndefined();
+        await writerStorage.synced();
 
-      expect(result.error).toBeUndefined();
-      expect(runs).toBe(1);
-      expect(
-        readerStorage.open(space).replica.getDocument(
+        readerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        readerRuntime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: readerStorage,
+        });
+        let runs = 0;
+        const result = await readerRuntime.editWithRetry((tx) => {
+          runs++;
+          tx.read(
+            excludedAddress,
+            {
+              meta: contentRead
+                ? excludeReadFromConflict
+                : { ...excludeReadFromConflict, ...internalVerifierRead },
+              nonRecursive: true,
+              trackReadWithoutLoad: true,
+            },
+          );
+          readerRuntime!.getCell(
+            space,
+            "excluded-cold-read-output",
+            valueSchema,
+            tx,
+          ).set({ value: runs });
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(runs).toBe(contentRead ? 2 : 1);
+        const loaded = readerStorage.open(space).replica.getDocument(
           excludedAddress.id,
           excludedAddress.scope,
-        ),
-      ).toBeUndefined();
-    } finally {
-      await readerRuntime?.dispose();
-      await writerRuntime.dispose();
-      await readerStorage?.close();
-      await writerStorage.close();
-      await server.close();
-    }
-  });
+        );
+        if (contentRead) expect(loaded).toBeDefined();
+        else expect(loaded).toBeUndefined();
+      } finally {
+        await readerRuntime?.dispose();
+        await writerRuntime.dispose();
+        await readerStorage?.close();
+        await writerStorage.close();
+        await server.close();
+      }
+    });
+  }
 
   it("falls back to the commit verdict when the provider or the awaited loads fail", async () => {
     const server = newSharedServer();

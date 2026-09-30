@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   entityRefToString,
+  linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -35,6 +36,8 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
   assertWritablePiecePath,
@@ -459,7 +462,7 @@ async function withInputRootPullSpy<T>(
   piece: Cell<unknown>,
   action: (rootPulls: () => number) => Promise<T>,
 ): Promise<T> {
-  const inputRoot = pieces.getArgument(piece);
+  const inputRoot = patchableCell(pieces.getArgument(piece));
   const originalGetArgument = pieces.getArgument.bind(pieces);
   const originalPull = inputRoot.pull.bind(inputRoot);
   let pullCount = 0;
@@ -1390,9 +1393,12 @@ describe("piece pull materialization", () => {
     // Layer 2: commit the forgery raw (as an unvalidated write path would),
     // making it identical to committed state — the preserve branch's own
     // wrapper check still refuses the non-durable envelope.
-    await runtime.editWithRetry((tx) => {
-      base.withTx(tx).key("v").setRawUntyped(forged);
+    const { error } = await runtime.editWithRetry((tx) => {
+      const address = base.getAsNormalizedFullLink();
+      const stored = tx.readOrThrow(address) as Record<string, FabricValue>;
+      seedStoredEnvelope(tx, address, { ...stored, value: { v: forged } });
     });
+    expect(error).toBeUndefined();
     expect(supplyForged).toThrow(/non-durable Cell wrapper/);
   });
 
@@ -1777,11 +1783,13 @@ describe("piece pull materialization", () => {
       compiledMultiplierProgram("bounded-pattern-load", 2),
       { space: pieces.getSpace() },
     );
-    const piece = await pieces.runPersistent(
-      pattern,
-      { input: 5 },
-      undefined,
-      { start: false },
+    const piece = patchableCell(
+      await pieces.runPersistent(
+        pattern,
+        { input: 5 },
+        undefined,
+        { start: false },
+      ),
     );
     const schemas: unknown[] = [];
     const originalAsSchema = piece.asSchema.bind(piece);
@@ -2669,7 +2677,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2723,7 +2731,7 @@ describe("piece pull materialization", () => {
       };
       const piece = await pieces.runPersistent(
         trustPattern(runtime, pattern),
-        { event: { $stream: true } },
+        {},
         undefined,
         { start: true },
       );
@@ -2776,7 +2784,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2827,7 +2835,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2889,7 +2897,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2968,7 +2976,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { slot: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3623,7 +3631,7 @@ describe("piece pull materialization", () => {
         result: { event: { $alias: { cell: "argument", path: ["event"] } } },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3648,7 +3656,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3805,7 +3813,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true }, other: 1, spare: 2 },
+      { other: 1, spare: 2 },
       undefined,
       { start: true },
     );
@@ -3828,11 +3836,7 @@ describe("piece pull materialization", () => {
       expect(events).toEqual([7]);
       // The premise the skip rests on: sending stores nothing, so the producer
       // document the root pass would have judged is the one it already was.
-      expect(argument.getRawUntyped()).toEqual({
-        event: { $stream: true },
-        other: 1,
-        spare: "bad",
-      });
+      expect(argument.getRawUntyped()).toEqual({ other: 1, spare: "bad" });
 
       // Bypassing the root pass does not excuse a payload the producer's own
       // event contract refuses: nothing further reaches the stream.
@@ -3895,7 +3899,7 @@ describe("piece pull materialization", () => {
         result: {},
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -4811,7 +4815,13 @@ describe("piece pull materialization", () => {
             Event: { type: "number", asCell: ["stream"] },
           },
         },
-        result: { events: { $stream: true } },
+        derivedInternalCells: [
+          {
+            partialCause: "events",
+            schema: { type: "number", asCell: ["stream"] },
+          },
+        ],
+        result: { events: { $alias: { partialCause: "events", path: [] } } },
         nodes: [],
       }),
       {},
@@ -4926,14 +4936,14 @@ describe("piece pull materialization", () => {
     );
     const scalarController = new PieceController(pieces, scalarTarget);
     const scalarInput = await scalarController.input.getCell();
-    const forged = sourcePiece.key("value").getAsLink({
+    const genuine = sourcePiece.key("value").getAsLink({
       base: scalarInput.key("slot"),
       includeSchema: true,
     });
-    (linkRefPayload(forged) as { schema?: JSONSchema }).schema = {
-      type: "number",
-      asCell: ["cell"],
-    };
+    const forged = linkRefFrom({
+      ...linkRefPayload(genuine),
+      schema: { type: "number", asCell: ["cell"] } as JSONSchema,
+    });
     await expect(
       scalarController.input.set(forged, ["slot"]),
     ).rejects.toThrow(/link carries a non-durable Cell wrapper/);
@@ -5937,7 +5947,7 @@ describe("piece pull materialization", () => {
   });
 
   it("stores repository metadata when preparing without starting", async () => {
-    const repository = "https://github.com/commontoolsinc/labs";
+    const repository = "https://github.com/commonfabric/labs";
     const piece = await pieces.runPersistent(
       trustPattern(runtime, doublePattern()),
       { input: 5 },
@@ -6024,7 +6034,7 @@ describe("piece pull materialization", () => {
   });
 
   it("persists setPattern replacement by identity for fresh runtime reloads", async () => {
-    const repository = "https://github.com/commontoolsinc/labs";
+    const repository = "https://github.com/commonfabric/labs";
     const firstPattern = await runtime.patternManager.compilePattern(
       compiledMultiplierProgram("v1", 2),
       { space: pieces.getSpace() },
@@ -6104,8 +6114,8 @@ describe("piece pull materialization", () => {
   });
 
   it("preserves a repository until a source update explicitly replaces it", async () => {
-    const originalRepository = "https://github.com/commontoolsinc/labs";
-    const replacementRepository = "https://github.com/commontoolsinc/patterns";
+    const originalRepository = "https://github.com/commonfabric/labs";
+    const replacementRepository = "https://github.com/commonfabric/patterns";
     const firstPattern = await runtime.patternManager.compilePattern(
       compiledMultiplierProgram("v1", 2),
       { space: pieces.getSpace() },
@@ -6602,7 +6612,7 @@ describe("piece pull materialization", () => {
   });
 
   it("preserves conflicting defined values while merging object defaults", async () => {
-    const originalRepository = "https://github.com/commontoolsinc/labs";
+    const originalRepository = "https://github.com/commonfabric/labs";
     const firstPattern = await runtime.patternManager.compilePattern(
       compiledDefaultedOptionsProgram(1),
       { space: pieces.getSpace() },
@@ -6625,7 +6635,7 @@ describe("piece pull materialization", () => {
 
     await expect(
       controller.setPattern(compiledDefaultedOptionsProgram(2), {
-        repository: "https://github.com/commontoolsinc/other",
+        repository: "https://github.com/commonfabric/other",
       }),
     ).rejects.toThrow(/updated arguments do not match the candidate schema/);
 
@@ -6762,7 +6772,6 @@ describe("piece pull materialization", () => {
       { type: "number", asCell: ["stream"] },
     );
     await runtime.editWithRetry((tx) => {
-      stream.withTx(tx).setRawUntyped({ $stream: true });
       inputCell.withTx(tx).key("mode").setRawUntyped(
         stream.getAsLink({
           base: inputCell,

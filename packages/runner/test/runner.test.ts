@@ -1525,70 +1525,10 @@ describe("setup/start", () => {
     );
   });
 
-  it("reports a missing stream marker when a handler's $event reads undefined", async () => {
-    const pattern: Pattern = {
-      argumentSchema: { type: "object", properties: {} },
-      resultSchema: {},
-      result: {},
-      nodes: [
-        {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: {
-            $event: { $alias: { cell: "argument", path: ["missingStream"] } },
-          },
-          outputs: {},
-        },
-      ],
-    };
+  it("refuses an action node whose inputs bind `$event`", async () => {
+    // A handler lowered where a lift belongs has this shape: no handler
+    // wrapper on the module, and a `$event` among the inputs.
 
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event reads undefined",
-    );
-    setupTrusted(runtime, undefined, pattern, {}, resultCell);
-
-    // The node is authored as a handler but its stream marker location was
-    // never written (e.g. state persisted in an older format). The error must
-    // say the marker is missing, not that it was overwritten.
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
-    );
-    expect(error?.message).toContain("was never written");
-    // This piece's internal meta is the modern manifest (an array), so the
-    // pre-manifest hint must not fire on it.
-    expect(error?.message).not.toContain("pre-manifest");
-  });
-
-  it("reports an overwritten stream marker when $event resolves to data", async () => {
-    const pattern: Pattern = {
-      argumentSchema: {
-        type: "object",
-        properties: { ev: { type: "number" } },
-      },
-      resultSchema: {},
-      result: {},
-      nodes: [
-        {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: { $event: { $alias: { cell: "argument", path: ["ev"] } } },
-          outputs: {},
-        },
-      ],
-    };
-
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event resolves to data",
-    );
-    setupTrusted(runtime, undefined, pattern, { ev: 7 }, resultCell);
-
-    await expect(runtime.start(resultCell)).rejects.toThrow(
-      "was overwritten (found: 7)",
-    );
-  });
-
-  it("reports a non-link $event input on a handler node", async () => {
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
@@ -1602,107 +1542,110 @@ describe("setup/start", () => {
       ],
     };
 
-    const resultCell = runtime.getCell(space, "handler $event is not a link");
+    const resultCell = runtime.getCell(space, "action node binds $event");
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "is not a stream reference",
+      "binds a `$event` input",
     );
   });
 
-  it("hints at the pre-manifest format when internal meta is a single-cell link", async () => {
+  it("refuses a handler node with no `$event` input", async () => {
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
       result: {},
       nodes: [
         {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: {
-            $event: { $alias: { cell: "argument", path: ["missingStream"] } },
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: () => undefined,
           },
+          inputs: { $ctx: {} },
           outputs: {},
         },
       ],
     };
 
-    const resultCell = runtime.getCell(
-      space,
-      "pre-manifest internal meta hint",
-    );
+    const resultCell = runtime.getCell(space, "handler node without $event");
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
-    // Simulate a piece persisted before the internal-cell manifest format
-    // (#3911): its `internal` meta is a single cell link rather than the
-    // manifest array the modern setup path writes.
-    const legacyInternalCell = runtime.getCell(
-      space,
-      "pre-manifest single internal cell",
+    await expect(runtime.start(resultCell)).rejects.toThrow(
+      "has no `$event` input",
     );
-    const metaTx = runtime.edit();
-    resultCell.withTx(metaTx).setMetaRaw(
-      "internal",
-      legacyInternalCell.getAsWriteRedirectLink({ base: resultCell }),
-      rawMetaWriteAuthorization,
-    );
-    await metaTx.commit();
-
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
-    );
-    expect(error?.message).toContain("was never written");
-    // The non-array internal meta is the discriminator for the pre-manifest
-    // format; the hint and its remedy must both surface.
-    expect(error?.message).toContain("pre-manifest format");
-    expect(error?.message).toContain("recreate the piece");
   });
 
-  it("truncates long values in the overwritten-marker diagnostic", async () => {
+  it("refuses a handler node whose `$event` input is not a link", async () => {
     const pattern: Pattern = {
-      argumentSchema: {
-        type: "object",
-        properties: { ev: { type: "string" } },
-      },
+      argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
       result: {},
       nodes: [
         {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: { $event: { $alias: { cell: "argument", path: ["ev"] } } },
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: () => undefined,
+          },
+          inputs: { $event: 42 },
           outputs: {},
         },
       ],
     };
 
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event resolves to a long value",
-    );
-    setupTrusted(
-      runtime,
-      undefined,
-      pattern,
-      { ev: "x".repeat(200) },
-      resultCell,
-    );
+    const resultCell = runtime.getCell(space, "handler $event is not a link");
+    setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
-    // The diagnostic prints the offending value but must stay bounded:
-    // toCompactDebugString caps it at 80 characters with an ellipsis, so an
-    // error message never dumps a large payload.
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
+    await expect(runtime.start(resultCell)).rejects.toThrow(
+      "is not a link (got: `42`)",
     );
-    expect(error?.message).toContain("was overwritten (found: ");
-    expect(error?.message).toContain("...");
-    expect(error?.message).not.toContain("x".repeat(100));
+  });
+
+  it("registers a handler on a stream whose document holds no value", async () => {
+    // Nothing is read at the stream's target to decide the node is a handler:
+    // the module's wrapper says so, and `$event` names the stream.
+
+    let received: unknown;
+    const pattern: Pattern = {
+      argumentSchema: { type: "object", properties: {} },
+      resultSchema: {},
+      derivedInternalCells: [
+        { partialCause: "events", schema: { asCell: ["stream"] } },
+      ],
+      result: {},
+      nodes: [
+        {
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: (event: unknown) => {
+              received = event;
+            },
+          },
+          inputs: { $event: { $alias: { partialCause: "events", path: [] } } },
+          outputs: {},
+        },
+      ],
+    };
+
+    const resultCell = runtime.getCell(space, "handler on a valueless stream");
+    setupTrusted(runtime, undefined, pattern, {}, resultCell);
+    expect(await runtime.start(resultCell)).toBe(true);
+
+    const events = getDerivedInternalCell(resultCell, {
+      partialCause: "events",
+      schema: { asCell: ["stream"] },
+    });
+    expect(events.getRaw()).toBeUndefined();
+    runtime.scheduler.queueEvent(events.getAsNormalizedFullLink(), { n: 1 });
+    await runtime.idle();
+    expect(received).toEqual({ n: 1 });
   });
 
   it("start() leaves no running registration when instantiation throws", async () => {
-    // A handler node whose $event input does not resolve to a stream marker
-    // (e.g. persisted state in an older format) makes node instantiation
-    // throw "Handler used as lift".
+    // An action node binding a `$event` input makes node instantiation
+    // throw.
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
@@ -1723,15 +1666,13 @@ describe("setup/start", () => {
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "Handler used as lift",
+      "binds a `$event` input",
     );
 
-    // Regression: the failed start used to leave the piece registered as
-    // running, so a second start() reported success for a piece that had no
-    // nodes or event handlers — events sent to it were silently dropped. It
-    // must fail the same way as the first attempt instead.
+    // A zombie registration would make the second start() short-circuit to
+    // "already running" and return without error. It must throw identically.
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "Handler used as lift",
+      "binds a `$event` input",
     );
   });
 
@@ -1758,12 +1699,12 @@ describe("setup/start", () => {
     );
 
     expect(() => runTrusted(runtime, undefined, pattern, {}, resultCell))
-      .toThrow("Handler used as lift");
+      .toThrow("binds a `$event` input");
 
     // A zombie registration would make the second run() short-circuit to
     // "already running" and return without error. It must throw identically.
     expect(() => runTrusted(runtime, undefined, pattern, {}, resultCell))
-      .toThrow("Handler used as lift");
+      .toThrow("binds a `$event` input");
   });
 
   it("setup ignores exhausted retry errors and still resolves", async () => {
@@ -1796,7 +1737,7 @@ describe("setup/start", () => {
     }
   });
 
-  it("runSynced rethrows retry exhaustion when identity is required", async () => {
+  it("runSynced rethrows retry exhaustion as the same `Error` when identity is required", async () => {
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
@@ -1822,7 +1763,7 @@ describe("setup/start", () => {
             symbol: "default",
           },
         },
-      )).rejects.toThrow("precondition retry exhausted");
+      )).rejects.toBe(failure);
     } finally {
       runtime.editWithRetry = originalEditWithRetry;
     }
@@ -1915,6 +1856,77 @@ describe("setup/start", () => {
       );
     } finally {
       manager.loadPatternByIdentity = originalLoad;
+    }
+  });
+
+  it("start() yields to a pointer that moved again while the swapped-in pattern's dependencies synced", async () => {
+    // The watcher follows the durable pointer to a pattern the runtime does
+    // not hold by loading it and naming what it reads before the swap. A
+    // pointer that moves again during that naming has its own swap on the
+    // way, so the earlier chain swaps nothing: the piece ends up on the
+    // pattern the pointer names, not on the one whose sync finished last.
+
+    const resultCell = runtime.getCell(
+      space,
+      "watcher yields to a later pointer move",
+    );
+    const first = await compileReceiptPattern(runtime, "yield-first");
+    const second = await compileReceiptPattern(runtime, "yield-second");
+    const third = await compileReceiptPattern(runtime, "yield-third");
+    const manager = runtime.patternManager;
+    const secondRef = manager.getArtifactEntryRef(second);
+    const thirdRef = manager.getArtifactEntryRef(third);
+    if (secondRef === undefined || thirdRef === undefined) {
+      throw new Error("a compiled pattern has no entry ref");
+    }
+    await runtime.runSynced(resultCell, first, {});
+    const movePointer = async (ref: { identity: string; symbol: string }) => {
+      const { error } = await runtime.editWithRetry((tx) => {
+        resultCell.withTx(tx).setMetaRaw(
+          "patternIdentity",
+          ref,
+          rawMetaWriteAuthorization,
+        );
+      });
+      if (error !== undefined) throw error;
+    };
+    // The second pattern is compiled here, so the runtime holds it. Hiding
+    // it from the in-memory lookup sends the watcher down the load path,
+    // whose swap names what the loaded pattern reads before it happens.
+    const originalLookup = manager.artifactFromIdentitySync.bind(manager);
+    manager.artifactFromIdentitySync = (identity, symbol) =>
+      identity === secondRef.identity
+        ? undefined
+        : originalLookup(identity, symbol);
+    let movedDuringSync = false;
+    runtime.runner.accessForTestingOnly.dependencySyncer = async (
+      cell,
+      pattern,
+      inputs,
+      sync,
+    ) => {
+      if (
+        !movedDuringSync &&
+        manager.getArtifactEntryRef(pattern)?.identity === secondRef.identity
+      ) {
+        movedDuringSync = true;
+        await movePointer(thirdRef);
+      }
+      return await sync(cell, pattern, inputs);
+    };
+
+    try {
+      await movePointer(secondRef);
+      await runtime.runner.idlePointerMaintenance();
+      await runtime.idle();
+
+      expect(movedDuringSync).toBe(true);
+      expect(getPatternIdentityRef(resultCell)).toEqual(thirdRef);
+      expect((resultCell.getAsQueryResult() as { marker: string }).marker)
+        .toBe("yield-third");
+    } finally {
+      manager.artifactFromIdentitySync = originalLookup;
+      runtime.runner.accessForTestingOnly.dependencySyncer = undefined;
     }
   });
 
@@ -2052,6 +2064,51 @@ describe("setup/start", () => {
       );
     } finally {
       ExtendedStorageTransaction.prototype.committedSeq = committedSeq;
+    }
+  });
+
+  it("runSyncedWithCommit throws a refused setup commit as an `Error` that keeps the refusal's fields", async () => {
+    // Storage reports a refusal as a `Result` error, a plain object rather
+    // than an `Error`. Thrown as it stands it fails `instanceof Error`, has
+    // no stack, and renders as `[object Object]`, so the message, the one
+    // line an operator can act on, never reaches them. The refusal below has
+    // the shape the CFC boundary produces when not every reason is a
+    // verdict.
+
+    const resultCell = runtime.getCell(space, "runSynced refused setup commit");
+    const initialPattern = await compileReceiptPattern(runtime, "v1");
+    const nextPattern = await compileReceiptPattern(runtime, "v2");
+    await runtime.runSynced(resultCell, initialPattern, {});
+    const previous = receiptSourceSnapshot(runtime, resultCell).pattern;
+    const pieceSourceTransition = await receiptSourceTransition(
+      runtime,
+      resultCell,
+    );
+    const refusal = {
+      name: "StorageTransactionAborted" as const,
+      message: "CFC enforcement rejected commit: relevant transaction was " +
+        "not prepared: a policy check refused the write",
+      reason: new Error("cfc-refusal-not-a-verdict"),
+    };
+    const originalEditWithRetry = runtime.editWithRetry.bind(runtime);
+    runtime.editWithRetry =
+      (() =>
+        Promise.resolve({ error: refusal })) as typeof runtime.editWithRetry;
+
+    try {
+      const thrown = await runtime.runSyncedWithCommit(
+        resultCell,
+        nextPattern,
+        {},
+        { expectedPatternIdentity: previous, pieceSourceTransition },
+      ).then(() => undefined, (error: unknown) => error);
+      expect(thrown).toBeInstanceOf(Error);
+      const error = thrown as Error & { reason?: unknown };
+      expect(error.message).toBe(refusal.message);
+      expect(error.name).toBe("StorageTransactionAborted");
+      expect(error.reason).toBe(refusal.reason);
+    } finally {
+      runtime.editWithRetry = originalEditWithRetry;
     }
   });
 
@@ -2234,22 +2291,32 @@ describe("setup/start", () => {
     // Installed from the synchronization the call performs before it opens
     // its transaction, which is the window the entry check cannot see.
     const sealed: IExtendedStorageTransaction[] = [];
-    const mutableCell = resultCell as unknown as {
-      sync: typeof resultCell.sync;
-    };
-    const originalSync = resultCell.sync.bind(resultCell);
-    mutableCell.sync = (async (...args: Parameters<typeof resultCell.sync>) => {
-      const synced = await originalSync(...args);
-      if (!serving.sealDestinationInstalled) {
-        serving.installSealDestination({
-          seal: (tx: IExtendedStorageTransaction) => {
-            sealed.push(tx);
-            return tx.commit();
-          },
-        });
-      }
-      return synced;
-    }) as typeof resultCell.sync;
+    const resultId = resultCell.getAsNormalizedFullLink().id;
+    const storageManager = serving.storageManager;
+    const originalSyncCell = storageManager.syncCell;
+    using _sync = stub(
+      storageManager,
+      "syncCell",
+      async function <T>(cell: Cell<T>, ...rest: unknown[]) {
+        const synced: Cell<T> = await Reflect.apply(
+          originalSyncCell,
+          storageManager,
+          [cell, ...rest],
+        );
+        if (
+          cell.getAsNormalizedFullLink().id === resultId &&
+          !serving.sealDestinationInstalled
+        ) {
+          serving.installSealDestination({
+            seal: (tx: IExtendedStorageTransaction) => {
+              sealed.push(tx);
+              return tx.commit();
+            },
+          });
+        }
+        return synced;
+      },
+    );
 
     try {
       await expect(serving.runSyncedWithCommit(
@@ -2263,7 +2330,6 @@ describe("setup/start", () => {
       )).rejects.toThrow(SEALING_RECEIPT_REFUSAL);
       expect(sealed).toEqual([]);
     } finally {
-      mutableCell.sync = originalSync;
       serving.clearSealDestination();
       await serving.dispose();
       await servingStorage.close();
@@ -4176,7 +4242,7 @@ describe("runner utils", () => {
           partialCause: { stream: "increment" },
           path: [],
           scope: "space",
-          schema: true,
+          schema: { asCell: ["stream"] },
         },
       };
       const pattern: Pattern = {
@@ -4200,7 +4266,7 @@ describe("runner utils", () => {
         derivedInternalCells: [
           {
             partialCause: { stream: "increment" },
-            schema: { default: { $stream: true } },
+            schema: { asCell: ["stream"] },
             scope: "space",
           },
         ],

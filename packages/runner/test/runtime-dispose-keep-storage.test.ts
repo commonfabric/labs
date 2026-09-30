@@ -28,7 +28,13 @@ import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import type { IStorageSubscription } from "../src/storage/interface.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
+import type { Action } from "../src/scheduler.ts";
+import type {
+  IStorageProvider,
+  IStorageSubscription,
+  StorageNotification,
+} from "../src/storage/interface.ts";
 import {
   type Options,
   type SessionFactory,
@@ -41,7 +47,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { Runtime } from "../src/runtime.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -125,6 +131,56 @@ class FailingCloseStorageManager extends CountingStorageManager {
   }
 }
 
+/** Replays a captured change after providers close and records later opens. */
+class CloseNotifyingStorageManager extends CountingStorageManager {
+  opensAfterClose = 0;
+
+  /** Constructs a manager over `server` with close notification tracing. */
+  static notifying(
+    server: MemoryV2Server.Server,
+  ): CloseNotifyingStorageManager {
+    return new CloseNotifyingStorageManager(
+      { as: signer, memoryHost: new URL("memory://") } as Options,
+      new LoopbackSessionFactory(server),
+    );
+  }
+
+  #closed = false;
+  #notificationAtClose: StorageNotification | undefined;
+
+  /** @inheritDoc */
+  override async close(): Promise<void> {
+    await super.close();
+    this.#closed = true;
+    if (this.#notificationAtClose !== undefined) {
+      for (const subscription of [...this.live]) {
+        subscription.next(this.#notificationAtClose);
+      }
+    }
+  }
+
+  /** @inheritDoc */
+  override open(space: MemorySpace): IStorageProvider {
+    if (this.#closed) this.opensAfterClose++;
+    return super.open(space);
+  }
+
+  /** Captures the next real notification and replays it during close. */
+  captureNextNotification(): Promise<void> {
+    return new Promise((resolve) => {
+      const capture: IStorageSubscription = {
+        next: (notification) => {
+          this.#notificationAtClose = notification;
+          this.unsubscribe(capture);
+          resolve();
+          return { done: true };
+        },
+      };
+      this.subscribe(capture);
+    });
+  }
+}
+
 describe("runtime.dispose({ closeStorage })", () => {
   let server: MemoryV2Server.Server;
 
@@ -155,14 +211,7 @@ describe("runtime.dispose({ closeStorage })", () => {
   };
 
   beforeEach(() => {
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     held = CountingStorageManager.over(server);
     witness = CountingStorageManager.over(server);
     witnessRuntime = new Runtime({
@@ -222,6 +271,51 @@ describe("runtime.dispose({ closeStorage })", () => {
     expect(held.closeCount).toBe(1);
     // What was already durable survives — closing is not a rollback.
     expect(await witnessed("dispose-closes")).toEqual({ value: 7 });
+  });
+
+  it("retires reactive storage readers before closing their providers", async () => {
+    await held.close();
+    const notifying = CloseNotifyingStorageManager.notifying(server);
+    held = notifying;
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: held,
+    });
+    let disposed = false;
+    try {
+      await write(runtime, "dispose-close-notification", 7);
+      const cell = runtime.getCell<{ value: number }>(
+        space,
+        "dispose-close-notification",
+        SCHEMA,
+      );
+      const observed: number[] = [];
+      const read: Action = (tx) => {
+        const value = cell.withTx(tx).get();
+        if (value !== undefined) observed.push(value.value);
+      };
+      runtime.scheduler.subscribe(read, {
+        reads: [toMemorySpaceAddress(cell.getAsNormalizedFullLink())],
+        shallowReads: [],
+        writes: [],
+      }, { isEffect: true });
+      await runtime.idle();
+      expect(observed).toEqual([7]);
+
+      // Capture a real change to this read dependency. Its live delivery is the
+      // positive control for the identical notification replayed during close.
+      const captured = notifying.captureNextNotification();
+      await write(runtime, "dispose-close-notification", 8);
+      await captured;
+      expect(observed).toEqual([7, 8]);
+
+      await runtime.dispose();
+      disposed = true;
+
+      expect(notifying.opensAfterClose).toBe(0);
+    } finally {
+      if (!disposed) await runtime.dispose();
+    }
   });
 
   it("drains in-flight async builtin work before tearing down", async () => {

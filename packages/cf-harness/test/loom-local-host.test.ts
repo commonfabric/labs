@@ -527,6 +527,7 @@ Deno.test("local Loom interactive host uses the same fixed Codex binding", async
     env: {
       CF_HARNESS_GATEWAY_BASE_URL: "https://must-not-be-used.invalid/",
       CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+      CF_HARNESS_CHAT_ARTIFACT_ROOT: home + "/private-runs",
     },
     credentialStore: credentials,
     providerSettingsStore: configured("openai-codex"),
@@ -537,6 +538,11 @@ Deno.test("local Loom interactive host uses the same fixed Codex binding", async
   });
 
   await host.runInteractive([]);
+  assertEquals(observed?.basePromptLoopOptions?.finalizeOnTurnLimit, true);
+  assertEquals(
+    observed?.basePromptLoopOptions?.artifactRoot,
+    home + "/private-runs",
+  );
   assertEquals(observed?.basePromptLoopOptions?.modelProvider, "openai-codex");
   assertEquals(
     observed?.basePromptLoopOptions?.modelAuthSource,
@@ -1236,7 +1242,7 @@ Deno.test("local Loom host classifies invalid, internal, and unavailable failure
     ]),
     1,
   );
-  assertEquals(unavailableRequests, 1, unavailableIo.stderr.join(""));
+  assertEquals(unavailableRequests, 2, unavailableIo.stderr.join(""));
   const unavailableFailure = JSON.parse(unavailableIo.stderr.join(""));
   assertEquals(unavailableFailure.error.code, "provider-unavailable");
   assertEquals(JSON.stringify(unavailableFailure).includes("secret"), false);

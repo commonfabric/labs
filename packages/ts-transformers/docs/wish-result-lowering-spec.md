@@ -136,10 +136,10 @@ be extended or path B (in-place `.key(...)` lowering) could be added alongside.
 
 ### Pre-existing type errors in production patterns
 
-`chat-note.tsx` and `email-task-engine.tsx` had pre-existing typecheck failures
-on `main` (unrelated to this work) that PR #3578 cleared. The common shape was
-`const { x } = wish(...).result` — destructuring directly off `T | undefined`
-from the wish result type. The fix is `.result!` to assert non-null.
+`chat-note.tsx` had a pre-existing typecheck failure on `main` (unrelated to
+this work) that PR #3578 cleared. The shape was `const { x } = wish(...).result`
+— destructuring directly off `T | undefined` from the wish result type. The fix
+is `.result!` to assert non-null.
 
 ## Files of interest
 

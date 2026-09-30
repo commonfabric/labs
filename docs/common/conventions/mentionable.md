@@ -68,20 +68,27 @@ redirects every mention of that entry. How consumers resolve rows is in
 
 ### The member name, `shortName`
 
-One further key carries a collection's name for a member — `42` for a board
-that numbers its members — and it is read at both ends of a mention. It is an
-optional plain string.
+One further key carries a collection's name for a member — `42` for a board that
+numbers its members. It is an optional plain string, and the copy a ROW carries
+is the one the editor reads.
 
-On a ROW it is the collection's copy. `cf-code-editor` matches a `#42`
-completion against it, and the copy is what lets that query run without reading
-a member. A producer whose collection names nothing leaves it out, and a row
-without it is one no such query reaches.
+`cf-code-editor` reads a row's copy at both ends of a mention. A `#42`
+completion matches against it, which lets that query run without reading a
+member. A mention's pill shows it beside the label where the mention's
+destination is the piece the row stands for, found by identity, so a mention
+already written gains the number once the universe lists its destination under
+one, and loses it when the universe stops. A producer whose collection names
+nothing leaves the key out, and a row without it is one no such query reaches
+and no pill takes a name from. A collection that names its members and shows
+none of the names is in the same position: it publishes no name on a member, so
+a row's copy is the empty string, which both ends read as no name.
 
-On a PIECE it is what the piece publishes for itself, read live off the
-destination. A mention's pill renders it beside the label, so a mention already
-written gains the number as soon as its destination starts publishing one, and
-loses it again when the destination stops. A member pattern publishes it; a
-universe row has no need to.
+A PIECE may publish a `shortName` for itself too — the name the collection that
+created it gave it — and a producer building rows may copy it from there. The
+editor never reads it off a destination: that name means something only to a
+reader reading through the collection that assigned it, while a row's copy is
+what the universe being read calls the member. A destination no row stands for
+shows no name, whatever it publishes.
 
 The name is never written into any document. A citation's spelling is computed
 where it is read, which is the rule

@@ -7,6 +7,7 @@
  */
 
 import { AsCellType } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { JSONSchema } from "commonfabric";
 
 import { ContextualFlowControl } from "./cfc.ts";
@@ -170,7 +171,7 @@ function conjunctionSources(
   const followed = new Set<string>();
   const visit = (entry: unknown, depth: number): void => {
     if (depth > MAX_CONJUNCTION_DEPTH) return;
-    if (typeof entry !== "object" || entry === null) return;
+    if (!isObjectOrArray(entry)) return;
     let current = entry as Record<string, unknown>;
     // A chain, not a hop: a definition is allowed to be an alias for another,
     // and stopping after one would collect the alias — which states no field —
@@ -201,7 +202,7 @@ function schemaToTypeStringInner(
   const { defs = {}, depth = 0, maxDepth = 4, indent = 0 } = options;
   const nextOpts = { defs, depth: depth + 1, maxDepth, indent };
 
-  if (typeof schema !== "object" || schema === null) {
+  if (!isObjectOrArray(schema)) {
     return "unknown";
   }
 
@@ -402,8 +403,7 @@ function schemaToTypeStringInner(
     const props = conjoined;
     // An index signature (object-valued additionalProperties) carries a value
     // schema worth showing; a bare `additionalProperties: true` does not
-    const indexValueSchema = typeof s.additionalProperties === "object" &&
-        s.additionalProperties !== null
+    const indexValueSchema = isObjectOrArray(s.additionalProperties)
       ? s.additionalProperties as JSONSchema
       : undefined;
     if (!props || Object.keys(props).length === 0) {

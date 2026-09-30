@@ -4,7 +4,6 @@ import type { JSONSchemaObj, JSONSchemaTypes } from "@commonfabric/api";
 
 import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "./schema-intern.ts";
-import { schemaTypeOfFabricPrimitive } from "./schemaTypeOfFabricPrimitive.ts";
 
 /**
  * Map from `JSONSchema` type names (and special names) to corresponding
@@ -57,7 +56,7 @@ export function schemaForValueType(
         // A `FabricPrimitive` gets its specific type name (e.g.
         // "FabricBytes") rather than "object": it is an opaque leaf, so
         // "object" would invite structural keywords that cannot apply.
-        return getBasicSchema(schemaTypeOfFabricPrimitive(value));
+        return getBasicSchema(value.schemaType);
       }
       break;
     }

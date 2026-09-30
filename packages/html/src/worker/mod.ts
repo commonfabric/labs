@@ -15,6 +15,7 @@ export type {
   ReconcileContext,
   RenderConfidentialityCeiling,
   RenderDeclassificationPolicy,
+  SpaceAccessProvider,
   WorkerJSXElement,
   WorkerProps,
   WorkerReconcilerOptions,

@@ -13,6 +13,7 @@ import {
 } from "commonfabric";
 import ProfileHome, {
   type BackwardsCompatibleProfile,
+  type SetProfileNameEvent,
 } from "./profile-home.tsx";
 
 /** The named reference surface used by profile rosters and pickers. */
@@ -71,6 +72,65 @@ export type CreateProfileEvent = {
   target?: { value?: string };
 };
 
+export type SeedProfileNameEvent = { name?: string; index?: number };
+
+// What the seed step needs of each profile in the list: the stored name (to
+// write only where none is stored yet) and the stream it writes through.
+// `setName` stays optional here so a stored profile of a vintage without it
+// can never keep this handler from running for the profiles created after.
+type SeedProfileTarget = {
+  name: string;
+  setName?: Stream<SetProfileNameEvent>;
+};
+
+// Stores the creation name in the new profile's `name` cell, through
+// `setName` — the cell's owner-protected writer — so every `#profile` reader
+// (Topics, `cf profile show`, the loom lobby), which reads the stored `name`
+// and runs nothing, finds the name from the moment of creation. The cell is
+// initialized statically in profile-home.tsx so it keeps its identity across
+// releases; a default derived from `initialName` would not (see the `name`
+// initializer there), so the value is written once, here, by the creator.
+//
+// A second step rather than a send in `submitProfileCreation`: the child a
+// handler instantiates is materialized after the handler body returns (the
+// runner runs the frame's reactives as a result pattern), so inside the body
+// its streams do not exist yet and a send there reaches nothing. This event
+// is queued behind the create in the same runtime and runs once the create
+// has committed. The profile is addressed by position: the create handler
+// reads the list's length before its push and sends it here as `index`.
+// Position rather than the profile's display name, because the profile's
+// lifts may not have run in this runtime by the time this step does (CI's
+// slower lanes reached it first and a name match failed silently), and the
+// argument is not on the result (re-exporting it changes the stored-profile
+// schema every embedder carries, which the pattern-update gate refuses). The
+// read of the list in the create handler keeps the append in the conflict
+// set, so another device's create landing first conflicts and re-runs the
+// create — re-deriving the index — instead of merging under it.
+//
+// The list is bound as a VALUE, not a link: the runner resolves a handler's
+// argument against this schema before the body runs, and a profile whose
+// docs the replica has not loaded yet reads as undefined — the runner then
+// withdraws the dispatch and runs it again once the loads land (scheduler
+// events.ts, the cold-argument arm). Reading the new profile in the body
+// instead — through its link, right after the cross-space commit — raced
+// that load: the send found no stream and reached nothing. Only a profile
+// whose stored `name` is still empty is written: a re-delivery of this
+// event, or the same profile seeded elsewhere, is left alone.
+export const seedProfileName = handler<
+  SeedProfileNameEvent,
+  {
+    profiles: SeedProfileTarget[];
+  }
+>((event, { profiles }) => {
+  const name = (event.name ?? "").trim();
+  const index = event.index;
+  if (!name || typeof index !== "number") return;
+  const target = profiles[index];
+  if (target === undefined || target.setName === undefined) return;
+  if ((target.name ?? "") !== "") return;
+  target.setName.send({ name });
+});
+
 // Appends a freshly-created profile (its own `inSpace` space) to the home
 // `profiles` list. The cross-space `inSpace` child materializes during the push;
 // the `.inSpace(...)` call opts the transaction into a multi-space commit (see
@@ -82,7 +142,10 @@ export type CreateProfileEvent = {
 // `fromPassphrase("common user").derive(name)` (createSession spaceName path),
 // i.e. the display NAME alone, so two different users picking the same profile
 // name — or one user creating two same-named profiles — collide into a single
-// shared space. The anonymous case instead derives the DID from this handler's
+// shared space. That named path supports the legacy space names used during
+// development and nothing else, and is removed once those development-only
+// spaces have been migrated (docs/plans/random-space-identities.md).
+// The anonymous case instead derives the DID from this handler's
 // frame cause, which carries the creating user's per-home-space input links plus
 // the durable per-event id (runner.ts `createPatternFrame` cause): unique per
 // user AND per creation event, stable across the cross-space-commit retry. The
@@ -92,8 +155,9 @@ export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
     profiles: ProfileRoster;
+    seedName: Stream<SeedProfileNameEvent>;
   }
->((event, { profiles }) => {
+>((event, { profiles, seedName }) => {
   // The submitted name rides the event: the create surface is a
   // `cf-submit-input`, whose submit-button click carries the typed text as
   // `event.target.value` (and the trusted surface's UI integrity). The handler
@@ -108,11 +172,27 @@ export const submitProfileCreation = handler<
   const name = (event.name ?? event.detail?.message ?? event.target?.value ??
     "").trim();
   if (name) {
+    // Where the push lands; the seed step below addresses the profile by it.
+    // Read as link cells (see `profileLinkListSchema`): a deep read collapses
+    // to undefined when any entry lives in a space this runtime has not
+    // loaded, which every freshly created profile's does; the link read does
+    // not. NOT bound as a value the runner would resolve first: a home whose
+    // list doc this replica has not loaded reads as undefined there, and the
+    // create then never runs ("did not run in 10 dispatches", measured in the
+    // shell for a fresh user). The bound: a list doc that is unloaded here
+    // reads as empty, the index is 0, and the seed step — which writes only
+    // where no name is stored — skips rather than miswrites; the profile then
+    // shows `initialName` until a name is saved.
+    const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
+      []).length as number;
     profiles.push(
       ProfileHome.inSpace()({
         initialName: name,
       }),
     );
+    // Queued behind this create; stores the name once the profile is live
+    // (see `seedProfileName`).
+    seedName.send({ name, index });
   }
 });
 
@@ -256,8 +336,10 @@ export type ProfileCreateOutput = {
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
   ({ profiles, inputId, defaultName }) => {
+    const seedName = seedProfileName({ profiles: profiles as any });
     const createProfile = submitProfileCreation({
       profiles: profiles as any,
+      seedName,
     });
     return {
       [NAME]: "Create Profile",

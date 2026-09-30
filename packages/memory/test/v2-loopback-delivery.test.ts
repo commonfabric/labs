@@ -5,7 +5,8 @@
 // a fake-clock harness accounts for, and a `setImmediate`, which is the same
 // turn for a fraction of the cost. These tests pin all four properties: the
 // two the delivery model is for, and the two that keep it from costing a
-// timer wake-up per frame.
+// timer wake-up per frame. They also pin `delivered()`, which lets a caller
+// wait for the frames queued at its call to be handed over.
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -190,6 +191,55 @@ describe("client", () => {
       await h.delivered(1);
       expect(h.received.length).toBe(1);
       await h.transport.close();
+    });
+
+    it("resolves delivered() once every queued frame has reached the receiver", async () => {
+      // The serving loop's settle leans on this: a frame the server has sent
+      // may sit behind others for several turns, and the settle must not
+      // declare quiescence until it has been handed over.
+      let settled = false;
+      const settledAtFrame: boolean[] = [];
+      const h = harness(() => settledAtFrame.push(settled));
+      h.emit(3);
+      await h.transport.delivered!().then(() => {
+        settled = true;
+      });
+
+      expect(settledAtFrame).toEqual([false, false, false]);
+      expect(h.received.length).toBe(3);
+      await h.transport.close();
+    });
+
+    it("resolves delivered() without waiting for frames queued after the call", async () => {
+      // A server that keeps sending must not hold the wait open. Each of the
+      // first frames handed over queues another, so the queue stays non-empty
+      // long past the two frames the wait covers.
+      const refills = 20;
+      const h = harness((index) => {
+        if (index < refills) h.emit(1);
+      });
+      h.emit(2);
+      await h.transport.delivered!();
+
+      expect(h.received.length).toBe(2);
+      await h.delivered(2 + refills);
+      await h.transport.close();
+    });
+
+    it("resolves delivered() at once when no frame is queued", async () => {
+      const h = harness();
+      await h.transport.delivered!();
+      expect(h.received.length).toBe(0);
+      await h.transport.close();
+    });
+
+    it("resolves delivered() when the transport closes with frames queued", async () => {
+      const h = harness();
+      h.emit(2);
+      const delivered = h.transport.delivered!();
+      await h.transport.close();
+      await delivered;
+      expect(h.received.length).toBe(0);
     });
 
     it("drops frames staged at close", async () => {

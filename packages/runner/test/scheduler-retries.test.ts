@@ -108,6 +108,10 @@ describe("reactive retries", () => {
     errorName: string | undefined,
     initialRetries: number,
     options: {
+      canRetry?: () => boolean;
+      initialOffBudgetRetries?: number;
+      awaitRetryReadiness?: (error: unknown) => Promise<void>;
+      handleUnavailable?: () => boolean;
       rejectPromise?: boolean;
       restoreInvalidCauses?: () => void;
       shared?: {
@@ -123,8 +127,13 @@ describe("reactive retries", () => {
     if (initialRetries > 0) retries.set(action, initialRetries);
     const offBudgetRetries = shared?.offBudgetRetries ??
       new WeakMap<Action, number>();
+    if (options.initialOffBudgetRetries !== undefined) {
+      offBudgetRetries.set(action, options.initialOffBudgetRetries);
+    }
     let queued = 0;
     let resubscribed = 0;
+    let succeeded = 0;
+    const abandoned: unknown[] = [];
     const reported: Error[] = [];
     const error = options.error ??
       (errorName === undefined
@@ -137,8 +146,14 @@ describe("reactive retries", () => {
           IExtendedStorageTransaction["commit"]
         >;
     await watchReactiveActionCommit({
+      canRetry: options.canRetry ?? (() => true),
+      awaitRetryReadiness: options.awaitRetryReadiness ??
+        (() => Promise.resolve()),
+      handleUnavailable: options.handleUnavailable,
       action,
-      tx: {} as IExtendedStorageTransaction,
+      tx: {
+        abandonStagedWork: (error: unknown) => abandoned.push(error),
+      } as unknown as IExtendedStorageTransaction,
       log: {} as ReactivityLog,
       retries,
       offBudgetRetries,
@@ -156,6 +171,9 @@ describe("reactive retries", () => {
       reportTerminalRejection: (terminalError) => {
         reported.push(terminalError);
       },
+      onSuccess: () => {
+        succeeded++;
+      },
     });
     return {
       queued,
@@ -164,8 +182,70 @@ describe("reactive retries", () => {
       offBudgetRetries,
       action,
       reported,
+      succeeded,
+      abandoned,
     };
   };
+
+  for (const active of [true, false]) {
+    for (
+      const outcome of [
+        undefined,
+        "PreconditionFailedError",
+        "RowLabelCommitError",
+      ]
+    ) {
+      it(`settles ${outcome ?? "success"} bookkeeping for an ${active ? "active" : "inactive"} registration`, async () => {
+        const r = await runWatcher(outcome, 3, {
+          canRetry: () => active,
+          initialOffBudgetRetries: 5,
+        });
+        expect(r.retries.has(r.action)).toBe(false);
+        expect(r.offBudgetRetries.has(r.action)).toBe(false);
+        expect(r.reported.map((error) => error.name)).toEqual(
+          outcome === "RowLabelCommitError" ? [outcome] : [],
+        );
+        expect(r.succeeded).toBe(outcome === undefined && active ? 1 : 0);
+        expect(r.abandoned.length).toBe(outcome === undefined ? 0 : 1);
+        expect(r.resubscribed).toBe(0);
+        expect(r.queued).toBe(0);
+      });
+    }
+  }
+
+  for (
+    const outcome of [
+      "ConflictError",
+      "StorageTransactionInconsistent",
+      "TransactionError",
+    ]
+  ) {
+    it(`abandons an inactive registration's ${outcome} without retry work`, async () => {
+      let restored = 0;
+      let repaired = 0;
+      const error = { name: outcome, message: "retired run" };
+      const r = await runWatcher(outcome, 3, {
+        error,
+        canRetry: () => false,
+        initialOffBudgetRetries: 5,
+        restoreInvalidCauses: () => {
+          restored++;
+        },
+        awaitRetryReadiness: () => {
+          repaired++;
+          return Promise.resolve();
+        },
+      });
+      expect(r.retries.get(r.action)).toBe(3);
+      expect(r.offBudgetRetries.get(r.action)).toBe(5);
+      expect(r.abandoned).toEqual([error]);
+      expect(r.reported).toEqual([]);
+      expect(restored).toBe(0);
+      expect(repaired).toBe(0);
+      expect(r.resubscribed).toBe(0);
+      expect(r.queued).toBe(0);
+    });
+  }
 
   it(
     "does not retry a terminal reactive rejection and clears the retry budget",
@@ -292,6 +372,72 @@ describe("reactive retries", () => {
     expect(r.queued).toBe(1);
     expect(r.resubscribed).toBe(1);
     expect(r.retries.get(r.action)).toBe(1);
+  });
+
+  it("requeues a live conflict after recovery rejects", async () => {
+    const r = await runWatcher("ConflictError", 0, {
+      awaitRetryReadiness: () => Promise.reject(new Error("session replaced")),
+    });
+    expect(r.queued).toBe(1);
+    expect(r.retries.has(r.action)).toBe(false);
+  });
+
+  it("handles unavailability during recovery before abandoning a retired run", async () => {
+    const recovering = Promise.withResolvers<void>();
+    const repaired = Promise.withResolvers<void>();
+    let retired = false;
+    const availabilityChecks: boolean[] = [];
+    const watched = runWatcher("ConflictError", 3, {
+      canRetry: () => !retired,
+      awaitRetryReadiness: () => {
+        recovering.resolve();
+        return repaired.promise;
+      },
+      handleUnavailable: () => {
+        availabilityChecks.push(retired);
+        return retired;
+      },
+    });
+    try {
+      await recovering.promise;
+      retired = true;
+      repaired.resolve();
+      const r = await watched;
+      expect(availabilityChecks).toEqual([false, true]);
+      expect(r.resubscribed).toBe(1);
+      expect(r.queued).toBe(0);
+      expect(r.abandoned).toEqual([]);
+      expect(r.retries.get(r.action)).toBe(3);
+    } finally {
+      repaired.resolve();
+      await watched;
+    }
+  });
+
+  it("repairs a conflict even when it carries no catch-up callback", async () => {
+    let recovered: unknown;
+    const error = { name: "ConflictError", message: "scoped dependency" };
+    const r = await runWatcher("ConflictError", 0, {
+      error,
+      awaitRetryReadiness: (rejection) => {
+        recovered = rejection;
+        return Promise.resolve();
+      },
+    });
+    expect(recovered).toBe(error);
+    expect(r.queued).toBe(1);
+  });
+
+  it("requeues local inconsistency without remote conflict repair", async () => {
+    let repairs = 0;
+    const r = await runWatcher("StorageTransactionInconsistent", 0, {
+      awaitRetryReadiness: () => {
+        repairs++;
+        return Promise.resolve();
+      },
+    });
+    expect(repairs).toBe(0);
+    expect(r.queued).toBe(1);
   });
 
   it("settles when reactive retry handling throws", async () => {

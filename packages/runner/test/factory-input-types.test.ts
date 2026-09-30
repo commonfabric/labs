@@ -8,6 +8,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { Default, Writable } from "@commonfabric/api";
+import type { MustBeTrue } from "@commonfabric/utils/types";
 
 import type {
   FactoryInput,
@@ -15,8 +16,6 @@ import type {
   PatternFactory,
   StripCell,
 } from "../src/builder/types.ts";
-
-type MustBeTrue<T extends true> = T;
 type AssertAssignable<T, U> = [T] extends [U] ? true : never;
 type AssertNotAssignable<T, U> = [T] extends [U] ? never : true;
 

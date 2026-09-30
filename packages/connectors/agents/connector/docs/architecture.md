@@ -54,10 +54,18 @@ view for indexes and user interfaces.
 
 ### Collection and preparation
 
-`collectSource()` walks every inventory page from one driver. It then reads each
-listed session. A provider or session read error is returned in the collection
-result instead of discarding successfully read sessions. An optional owner
-signal stops work at provider call boundaries.
+`streamSource()` walks one inventory page at a time and reads one listed session
+at a time. The Fabric target consumes that session before collection advances.
+This prevents one collection from retaining all provider snapshots. A provider
+or session read error is recorded in the stream outcome instead of discarding
+successfully read sessions. An optional owner signal stops work at provider call
+boundaries. `collectSource()` remains available for callers that need a
+materialized collection.
+
+A host can supply a predicate that judges, from an inventory summary alone,
+whether a session's published copy is current. An accepted session is retained
+without being read. Repeated session IDs are recorded as inventory errors; the
+first listing determines whether the session is read or retained.
 
 `prepareSession()` derives the stable session key, divides native events into
 chunks, computes content hashes, and computes a snapshot hash. The snapshot hash
@@ -73,13 +81,29 @@ The next publication creates a fresh scope.
 ### Fabric target
 
 `AgentFabricTarget` maps collected sources to deterministic cells in one Common
-Fabric space. It stores native event chunks before the session manifest. It then
-publishes the recent and complete indexes after all changed session graphs have
-committed.
+Fabric space. It stores content-addressed native event chunks and a
+content-addressed manifest for each session before moving to the next session.
+It publishes the recent and complete indexes after all changed session graphs
+have committed. A failed publication leaves the prior indexes pointing to their
+matching manifest versions.
+
+The command-line host uses a separate Fabric runtime for session graphs. It
+closes that runtime's storage session after each published provider session, so
+the storage document cache releases the transcript and chunk cells before the
+next provider session is read. The main runtime retains only the shallow index,
+health, command, and receipt working sets needed by the running host.
 
 The target compares snapshot hashes with the previous index. It does not rewrite
 an unchanged session graph. It still refreshes source capabilities, recent
-message previews, and synchronization status in the indexes.
+message previews, and synchronization status in the indexes. A retained session
+keeps its graph and its message previews; its row takes the refreshed source
+capabilities and the checkout's current Git context, observed the way a read
+session's is, and stays complete. The manifest inside the graph keeps the Git
+context of its last read. Retention rests on a complete published copy being
+there: a retention nothing complete backs makes the source's inventory
+incomplete, so a session absent from that inventory is not deleted on its word,
+and marks the retained session's row, where there is one, partial as a failed
+read does.
 
 A complete source inventory marks previously known missing sessions as deleted.
 An incomplete inventory preserves prior sessions and marks affected sessions
@@ -96,6 +120,11 @@ absent from the older inventory. An older complete collection cannot restore a
 session absent from a newer complete inventory.
 
 ### Command worker and ledger
+
+Commands arrive on one or more owner-protected queues: the debug view's, and one
+per producer pattern the host is configured to accept commands from. Each queue
+admits writes from one verified handler, so a pattern can send commands only
+through the queue bound to it.
 
 `CommandWorker` validates command values and deduplicates command IDs. It
 persists and publishes an in-flight receipt before it invokes a provider. This

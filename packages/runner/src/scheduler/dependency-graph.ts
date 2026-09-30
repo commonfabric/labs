@@ -346,57 +346,37 @@ export function groupReadsByEntity(
   return readsByEntity;
 }
 
-/** Returns whether `to` is reachable from `from`, including itself. */
-export function hasDependentPath(
-  dependentsByAction: WeakMap<Action, Set<Action>>,
-  from: Action,
-  to: Action,
+/**
+ * True when an invalid/never-ran node is transitively upstream of `action`.
+ *
+ * Walks `action`'s upstream cone through the writer edge, iteratively so a
+ * deep graph costs no stack, and stops at the first invalid node it reaches.
+ * `action` itself is excluded: a resubscribe records a run that just
+ * completed, so callers use this to decide whether newly-live upstream work
+ * needs a wake.
+ */
+export function hasInvalidUpstream(
+  state: Pick<DependencyGraphState, "reverseDependencies" | "nodes">,
+  action: Action,
 ): boolean {
-  return reachesDependent(dependentsByAction, [from], to);
-}
+  const invalid = state.nodes.getInvalidNodes();
+  if (invalid.size === 0) return false;
 
-/** Traverses the union of the seed nodes' downstream edges once per query. */
-function reachesDependent(
-  dependentsByAction: WeakMap<Action, Set<Action>>,
-  pending: Action[],
-  to: Action,
-): boolean {
-  const visited = new Set(pending);
-
+  const visited = new Set<Action>([action]);
+  const pending: Action[] = [action];
   while (pending.length > 0) {
-    const current = pending.pop()!;
-    if (current === to) return true;
-
-    const dependents = dependentsByAction.get(current);
-    if (!dependents) continue;
-    for (const dependent of dependents) {
-      if (visited.has(dependent)) continue;
-      visited.add(dependent);
-      pending.push(dependent);
+    const reader = pending.pop()!;
+    const writers = state.reverseDependencies.get(reader);
+    if (!writers) continue;
+    for (const writer of writers) {
+      if (visited.has(writer)) continue;
+      if (invalid.has(writer)) return true;
+      visited.add(writer);
+      pending.push(writer);
     }
   }
 
   return false;
-}
-
-/**
- * True when an invalid/never-ran node is transitively upstream of `action`.
- *
- * Seed from the maintained invalid-node set rather than walking `action`'s
- * whole upstream cone. Shared downstream paths are visited once per query,
- * including when several invalid nodes feed the same reader.
- * `action` itself is excluded: a resubscribe records a run that just completed,
- * so callers use this to decide whether newly-live upstream work needs a wake.
- */
-export function hasInvalidUpstream(
-  state: Pick<DependencyGraphState, "dependents" | "nodes">,
-  action: Action,
-): boolean {
-  const pending: Action[] = [];
-  for (const candidate of state.nodes.getInvalidNodes()) {
-    if (candidate !== action) pending.push(candidate);
-  }
-  return reachesDependent(state.dependents, pending, action);
 }
 
 export function collectDirectWritersForLog(state: {

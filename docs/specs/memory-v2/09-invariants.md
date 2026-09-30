@@ -143,8 +143,9 @@ is sound only because the runner never emits indexed-array structural ops —
 guarded by `assertNoIndexedArrayStructuralOps`).
 
 Layer: `patchOverlapsRead`, `patchOverlapsNonRecursiveRead`,
-`touchedLeafPathsForPatch`, `touchedPathsForPatch` (engine); read tagging and
-exclusion at the client boundary (`reactivity-log.ts`,
+`touchedLeafPathsForPatch`, `touchedPathsForPatch` (engine), and the
+`TouchedPathIndex` from which `findConflictSeq` decides the first two;
+read tagging and exclusion at the client boundary (`reactivity-log.ts`,
 `SpaceReplica.#buildReads()`).
 
 Soundness direction: toward precision only from above; never below exact.
@@ -152,7 +153,26 @@ Soundness direction: toward precision only from above; never below exact.
 Checked by: the differential harness (engine-accept must imply
 naive-accept, where the naive validator implements exact overlap); the
 generator test asserting the runner's array-op discipline
-(`packages/runner/test/memory-v2-native-commit.test.ts`).
+(`packages/runner/test/memory-v2-native-commit.test.ts`); the tests holding
+`TouchedPathIndex` to `isPrefixPath` and `pathsOverlap`, and the engine's
+check to `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`
+(`packages/memory/test/v2/TouchedPathIndex.test.ts` and
+`packages/memory/test/v2/engine-conflicts.test.ts` respectively).
+
+Known deviations: **Topic 544** on the team's Topics board
+(`of:fid1:mccA4KBv8PYXLwRiqvDu51Bcm1CP57iy9z0Aosa7Y64`), a shallow read that
+misses a key re-created by a writer with an older base. Whether a patch changes
+a container's key set is recorded by its writer, from the writer's base (`add`
+rather than `replace`, `createsKey` on a mergeable op), and the shallow matcher
+injects the container's path only for a patch recorded that way. A writer whose
+base still holds a key since removed durably, and that does not read the key,
+writes it back as a `replace` or an unflagged mergeable op; the engine creates
+the key, and a shallow read of the container taken after the removal is
+accepted (`08-conflict-granularity.md` §2). The engine test "accepts a shallow
+read of a container whose key a writer with an older base re-created" in
+`packages/memory/test/v2/engine-conflicts.test.ts` records the accept. The
+deviation retires when the engine records, at apply time, whether an op created
+a key.
 
 ### INV-3 — Dependency completeness and staleness-basis selection
 
@@ -436,6 +456,15 @@ a whole-document, space-scoped replacement on the default branch and must
 retain at least one concrete OWNER") restated as a checkable entry, because it
 is the invariant a client is most likely to violate without knowing the rule
 exists.
+
+The generic invitation service commits its private admission records and unique
+redemption receipts in the same engine transaction as an ACL-only system commit.
+That internal operation reads current authority under the SQLite write lock and
+publishes cache and watch changes only after durable commit. Its only public
+document operation remains the whole-document ACL `set` described here. Private
+invitation metadata is not part of `ClientCommit` and cannot be submitted through
+`session.transact`. See the
+[invitation service contract](../../../packages/toolshed/README.md#space-invitations).
 
 The clauses are checked in this order, each rejecting with a `ProtocolError`
 carrying a distinct message (so a message identifies the clause):

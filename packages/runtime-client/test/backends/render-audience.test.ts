@@ -6,7 +6,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { VDomOp } from "@commonfabric/html/vdom-ops";
 import {
   WorkerReconciler,
@@ -19,9 +19,11 @@ import {
   runtimePresets,
   RuntimeTelemetry,
 } from "@commonfabric/runner";
+import { buildCfcPolicyArtifactManifest } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
 
@@ -29,6 +31,7 @@ import {
   browserWorkerParamsFromInitializationData,
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
+  renderModulePolicySourceFor,
 } from "@/backends/runtime-processor.ts";
 
 /** Builds the worker's effective runtime from host options over local storage. */
@@ -48,6 +51,41 @@ function createWorkerRuntime(
   );
   return new Runtime(runtimePresets.browserWorker(params));
 }
+
+/**
+ * The manifest `packages/patterns/cfc-exchange-rules/direct-release.tsx`
+ * compiles for `directReleaseRules`: a holder of `HasRole(reader)` on the
+ * policy's subject space gains `User(reader)`.
+ */
+const directReleaseManifest = buildCfcPolicyArtifactManifest({
+  formatVersion: 1,
+  moduleIdentity: "UsUHkONMerVZwnUOIBrbzrUlhEfaV0SByvpFqW28WLg",
+  symbol: "directReleaseRules",
+  template: {
+    templateVersion: 1,
+    exchangeRules: [{
+      name: "releaseToSpaceReader",
+      preCondition: {
+        confidentiality: [{ thisPolicy: true }],
+        integrity: [{
+          type: CFC_ATOM_TYPE.HasRole,
+          principal: { var: "reader" },
+          space: { thisPolicyField: "subject" },
+          role: "reader",
+        }],
+      },
+      postCondition: {
+        confidentiality: [{
+          type: CFC_ATOM_TYPE.User,
+          subject: { var: "reader" },
+        }],
+        integrity: [],
+      },
+    }],
+    dependencies: { authorityOnly: [], dataBearing: [] },
+    integrityRequirements: {},
+  },
+});
 
 /** Text sent to the host, including updates to an existing text node. */
 function emittedText(ops: readonly VDomOp[]): string[] {
@@ -156,7 +194,7 @@ describe("render-audience", () => {
             undefined,
             seed,
           );
-          seed.writeOrThrow({
+          seedStoredEnvelope(seed, {
             space: session.space,
             id: cell.getAsNormalizedFullLink().id!,
             type: "application/json",
@@ -208,6 +246,7 @@ describe("render-audience", () => {
           ceiling,
           options.spaceDid,
           membership,
+          undefined,
         );
         const ops: VDomOp[] = [];
         const allText: string[] = [];
@@ -267,5 +306,494 @@ describe("render-audience", () => {
         }
       });
     }
+  });
+
+  describe("PolicyOf rendering", () => {
+    /**
+     * A shell-configured worker rendering one note labeled with the
+     * direct-release policy on the session space, as `acting` sees it.
+     */
+    async function renderPolicyNote(acting?: Identity) {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const viewer = acting ?? identity;
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+        trustSnapshot: {
+          id: `principal:${viewer.did()}`,
+          actingPrincipal: viewer.did(),
+        },
+      });
+      const runtime = createWorkerRuntime(options);
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, session.space);
+      const note = runtime.getCell<WorkerRenderNode>(
+        session.space,
+        "Policy note",
+        undefined,
+        seed,
+      );
+      seedStoredEnvelope(seed, {
+        space: session.space,
+        id: note.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Policy note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  directReleaseManifest.manifest.moduleIdentity,
+                  directReleaseManifest.manifest.symbol,
+                  directReleaseManifest.policyDigest,
+                  session.space,
+                )],
+              },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const manifests = renderModulePolicySourceFor(runtime, ceiling);
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          manifests,
+        ),
+        membershipProvider: membership,
+        modulePolicySource: manifests,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [note],
+      });
+      return {
+        runtime,
+        session,
+        identity,
+        /** Text emitted since the last call. */
+        async settle(): Promise<string[]> {
+          await runtime.storageManager.synced();
+          await runtime.idle();
+          reconciler.flush();
+          const text = emittedText(ops);
+          ops.length = 0;
+          return text;
+        },
+        /** Installs the manifest the way a labeling commit leaves it. */
+        async installManifest(): Promise<void> {
+          const tx = runtime.storageManager.edit();
+          tx.write({
+            space: session.space,
+            id: `of:cfc-policy-manifest:${directReleaseManifest.policyDigest}`,
+            type: "application/json",
+            path: ["value"],
+          }, directReleaseManifest as never);
+          expect((await tx.commit()).error).toBeUndefined();
+        },
+        /** Grants or withdraws `acting`'s READ on the session space. */
+        async setRead(granted: boolean): Promise<void> {
+          const tx = runtime.edit();
+          tx.writeOrThrow({
+            space: session.space,
+            id: `of:${session.space}`,
+            type: "application/json",
+            path: [],
+          }, {
+            value: {
+              [identity.did()]: "OWNER",
+              ...(granted ? { [viewer.did()]: "READ" } : {}),
+            },
+          });
+          expect((await tx.commit()).error).toBeUndefined();
+        },
+        async [Symbol.asyncDispose]() {
+          cancel();
+          await runtime[Symbol.asyncDispose]();
+        },
+      };
+    }
+
+    it("shows the owner a PolicyOf note once its manifest arrives", async () => {
+      await using view = await renderPolicyNote();
+      const before = await view.settle();
+      expect(before).toContain("Content hidden by policy");
+      expect(before).not.toContain("Policy note");
+      await view.installManifest();
+      expect(await view.settle()).toContain("Policy note");
+    });
+
+    it("shows a delegate the PolicyOf note only while the space's ACL grants it READ", async () => {
+      const delegate = await Identity.generate({ implementation: "noble" });
+      await using view = await renderPolicyNote(delegate);
+      await view.installManifest();
+      await view.setRead(false);
+      const before = await view.settle();
+      expect(before).not.toContain("Policy note");
+      await view.setRead(true);
+      expect(await view.settle()).toContain("Policy note");
+      await view.setRead(false);
+      expect(await view.settle()).toContain("Content hidden by policy");
+    });
+
+    it("reads the manifest from the linked space the note's label lives in", async () => {
+      // The rendered cell is a link, in the session space, to a note stored
+      // in another space; the label is read from that space's document, so
+      // that is where the manifest has to be, not the session space.
+      const identity = await Identity.generate({ implementation: "noble" });
+      const other = (await Identity.generate({ implementation: "noble" }))
+        .did();
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+      });
+      await using runtime = createWorkerRuntime(options);
+
+      const seedNote = runtime.edit();
+      writeSeedEnvelopeDoc(seedNote, other);
+      const note = runtime.getCell<WorkerRenderNode>(
+        other,
+        "Linked note",
+        undefined,
+        seedNote,
+      );
+      seedStoredEnvelope(seedNote, {
+        space: other,
+        id: note.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Linked note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  directReleaseManifest.manifest.moduleIdentity,
+                  directReleaseManifest.manifest.symbol,
+                  directReleaseManifest.policyDigest,
+                  other,
+                )],
+              },
+            }],
+          },
+        },
+      });
+      expect((await seedNote.commit()).error).toBeUndefined();
+      const acl = runtime.edit();
+      acl.writeOrThrow({
+        space: other,
+        id: `of:${other}`,
+        type: "application/json",
+        path: [],
+      }, { value: { [other]: "OWNER", [identity.did()]: "READ" } });
+      expect((await acl.commit()).error).toBeUndefined();
+      const seedHolder = runtime.edit();
+      const holder = runtime.getCell<{ note: unknown }>(
+        session.space,
+        "Linked note holder",
+        undefined,
+        seedHolder,
+      );
+      // Stored raw: a runtime write would carry the note's label into the
+      // holder and have the commit install the manifest beside it.
+      writeSeedEnvelopeDoc(seedHolder, session.space);
+      seedStoredEnvelope(seedHolder, {
+        space: session.space,
+        id: holder.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { note: note.getAsLink() },
+        cfc: {
+          version: 3,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["note"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: {},
+            }],
+          },
+        },
+      } as never);
+      expect((await seedHolder.commit()).error).toBeUndefined();
+      const installIn = async (space: string) => {
+        const tx = runtime.storageManager.edit();
+        tx.write({
+          space: space as typeof other,
+          id: `of:cfc-policy-manifest:${directReleaseManifest.policyDigest}`,
+          type: "application/json",
+          path: ["value"],
+        }, directReleaseManifest as never);
+        expect((await tx.commit()).error).toBeUndefined();
+      };
+
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const manifests = renderModulePolicySourceFor(runtime, ceiling);
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          manifests,
+        ),
+        membershipProvider: membership,
+        modulePolicySource: manifests,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [holder.key("note") as never],
+      });
+      const settle = async () => {
+        await runtime.storageManager.synced();
+        await runtime.idle();
+        reconciler.flush();
+        const text = emittedText(ops);
+        ops.length = 0;
+        return text;
+      };
+      try {
+        const before = await settle();
+        expect(before).toContain("Content hidden by policy");
+        expect(before).not.toContain("Linked note");
+        // Installed only where the rendered cell lives: still sealed.
+        await installIn(session.space);
+        expect(await settle()).not.toContain("Linked note");
+        // Installed beside the label: released, and re-rendered on arrival.
+        await installIn(other);
+        expect(await settle()).toContain("Linked note");
+      } finally {
+        cancel();
+      }
+    });
+
+    /**
+     * A shell-configured worker rendering a note whose PolicyOf label reaches
+     * the renderer only as a view carried on the rendered cell. The note is
+     * stored unlabeled in another space; a holder document in the session
+     * space links to it and labels that link, which is where a labeling
+     * commit installs the manifest. Resolving the holder's link carries the
+     * holder's label onto the cell, as `Cell.resolveAsCell` does in
+     * production. The manifest is installed in `manifestSpace` alone.
+     */
+    async function renderCarriedPolicyNote(
+      { acting, manifestSpace }: {
+        acting?: Identity;
+        manifestSpace: "holder" | "value";
+      },
+    ): Promise<readonly string[]> {
+      const identity = await Identity.generate({ implementation: "noble" });
+      const valueSpace = (await Identity.generate({ implementation: "noble" }))
+        .did();
+      const session = await createSession({
+        identity,
+        spaceDid: identity.did(),
+      });
+      const viewer = acting ?? identity;
+      const options = createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://localhost/"),
+        cfcRenderCeiling: true,
+        trustSnapshot: {
+          id: `principal:${viewer.did()}`,
+          actingPrincipal: viewer.did(),
+        },
+      });
+      await using runtime = createWorkerRuntime(options);
+      const seedValue = runtime.edit();
+      writeSeedEnvelopeDoc(seedValue, valueSpace);
+      const stored = runtime.getCell<WorkerRenderNode>(
+        valueSpace,
+        "Carried note",
+        undefined,
+        seedValue,
+      );
+      seedStoredEnvelope(seedValue, {
+        space: valueSpace,
+        id: stored.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: "Carried note",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [] },
+        },
+      } as never);
+      expect((await seedValue.commit()).error).toBeUndefined();
+      const seedHolder = runtime.edit();
+      writeSeedEnvelopeDoc(seedHolder, session.space);
+      const holder = runtime.getCell<{ note: unknown }>(
+        session.space,
+        "Carried note holder",
+        undefined,
+        seedHolder,
+      );
+      seedStoredEnvelope(seedHolder, {
+        space: session.space,
+        id: holder.getAsNormalizedFullLink().id!,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { note: stored.getAsLink() },
+        cfc: {
+          version: 3,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["note"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: {},
+            }, {
+              path: ["note"],
+              label: {
+                confidentiality: [cfcAtom.modulePolicyRef(
+                  directReleaseManifest.manifest.moduleIdentity,
+                  directReleaseManifest.manifest.symbol,
+                  directReleaseManifest.policyDigest,
+                  session.space,
+                )],
+              },
+            }],
+          },
+        },
+      } as never);
+      expect((await seedHolder.commit()).error).toBeUndefined();
+      const install = runtime.storageManager.edit();
+      install.write({
+        space: (manifestSpace === "holder"
+          ? session.space
+          : valueSpace) as typeof session.space,
+        id: `of:cfc-policy-manifest:${directReleaseManifest.policyDigest}`,
+        type: "application/json",
+        path: ["value"],
+      }, directReleaseManifest as never);
+      expect((await install.commit()).error).toBeUndefined();
+      await runtime.storageManager.synced();
+
+      const note = holder.key("note").resolveAsCell();
+      // The carried view is what gates it: the note's own document is
+      // unlabeled, and it lives in neither the viewer's space nor the
+      // holder's.
+      expect(note.getAsNormalizedFullLink().space).toEqual(valueSpace);
+
+      const ceiling = options.renderConfidentialityCeiling;
+      const membership = renderMembershipProviderFor(
+        runtime,
+        identity,
+        ceiling,
+      );
+      const manifests = renderModulePolicySourceFor(runtime, ceiling);
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => ops.push(...batch),
+        renderDeclassificationPolicy: options.renderDeclassificationPolicy,
+        renderConfidentialityCeiling: ceiling,
+        resolveRenderConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          identity,
+          ceiling,
+          options.spaceDid,
+          membership,
+          manifests,
+        ),
+        membershipProvider: membership,
+        modulePolicySource: manifests,
+      });
+      const cancel = reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [note as never],
+      });
+      try {
+        await runtime.storageManager.synced();
+        await runtime.idle();
+        reconciler.flush();
+        return emittedText(ops);
+      } finally {
+        cancel();
+      }
+    }
+
+    it("shows the owner a PolicyOf note whose label is carried", async () => {
+      const text = await renderCarriedPolicyNote({ manifestSpace: "holder" });
+      expect(text).toContain("Carried note");
+    });
+
+    it("keeps a carried PolicyOf note sealed from a non-reader", async () => {
+      const text = await renderCarriedPolicyNote({
+        acting: await Identity.generate({ implementation: "noble" }),
+        manifestSpace: "holder",
+      });
+      expect(text).toContain("Content hidden by policy");
+      expect(text).not.toContain("Carried note");
+    });
+
+    it("keeps a carried PolicyOf note sealed with its manifest only beside the value", async () => {
+      // The value's space is where the note lives, not where the label that
+      // selects the policy was stored.
+      const text = await renderCarriedPolicyNote({ manifestSpace: "value" });
+      expect(text).toContain("Content hidden by policy");
+      expect(text).not.toContain("Carried note");
+    });
   });
 });

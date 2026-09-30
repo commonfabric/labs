@@ -1,8 +1,8 @@
-import { isFabricPrimitiveSchemaType } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/api";
 import {
   CFC_ATOM_TYPE,
   CFC_COMPILED_BY_ATOM_PREFIX,
+  CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
 } from "@commonfabric/api/cfc";
@@ -10,8 +10,20 @@ import {
   emptySchemaObject,
   internSchema,
   internSchemaAsTaggedHashString,
-  schemaTypeOfFabricPrimitive,
 } from "@commonfabric/data-model-schema";
+import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
+import {
+  anySchema,
+  forEachSubschema,
+  mapSubschemas,
+} from "@commonfabric/data-model-schema/schema-walk";
+import { isWellFormedDID } from "@commonfabric/identity/did";
+import {
+  containsExternalSchemaRef,
+  formatExternalSchemaRef,
+  parseExternalSchemaRef,
+  SCHEMA_META_MEMBER,
+} from "@commonfabric/data-model-schema/schema-refs";
 import {
   cloneForMutation,
   type CloneForMutationResult,
@@ -24,47 +36,57 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
+import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
+import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { STREAM_ENTRIES_DOC_PREFIX } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
+import { getLogger } from "@commonfabric/utils/logger";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
+import {
+  droppedStoredClaim,
+  type ForeignPositions,
+} from "./claim-preservation.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import {
-  containsExternalSchemaRef,
   decomposeSchema,
-  formatExternalSchemaRef,
-  parseExternalSchemaRef,
   recomposeSchema,
   recomposeSchemaRefs,
-  SCHEMA_META_MEMBER,
   SchemaNotDecomposableError,
 } from "../schema-decompose.ts";
 import {
   lookupSchemaDocument,
   registerSchemaDocument,
 } from "../schema-registry.ts";
+import { storedLabelMapEntries } from "./label-documents.ts";
+import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
 import {
-  isCfcMetadata,
-  UnknownCfcMetadataVersionError,
-  UnreadableCfcMetadataError,
-} from "./metadata.ts";
+  assertStoredPrincipalConfidentialityBound,
+  bindCurrentPrincipalConfidentiality,
+  bindCurrentPrincipalToStoredClauses,
+  isCurrentPrincipalUserClause,
+} from "./current-principal-confidentiality.ts";
 import {
+  areLinksSame,
   isPrimitiveCellLink,
   isWriteRedirectLink,
   parseLink,
 } from "../link-utils.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
-import { ignoreReadForScheduling } from "../scheduler.ts";
+import { isReservedSibling } from "../reserved-sibling-seam.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
-import { mapSubschemas } from "../schema-walk.ts";
+import { validateAgainstSchema } from "./schema-sanitization.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   MediaType,
 } from "../storage/interface.ts";
 import {
@@ -75,14 +97,31 @@ import {
   isMachineryRead,
   isReadMarkedAsAttemptedWrite,
   isSchedulerDependencyRead,
+  isWriteDestinationRead,
+  stableInternalVerifierRead,
 } from "../storage/reactivity-log.ts";
 import {
   cfcReferenceBinding,
   cfcReferenceBindingMatches,
+  cfcReferenceObservationOriginSpaces,
+  cfcReferenceObservationSelectionWitnesses,
 } from "./reference-provenance.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+  getTransactionWrittenSpaces,
+} from "../storage/transaction-inspection.ts";
+import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
+  PRINCIPAL_CLAIM_KINDS,
+  principalClaimSpelling,
+  representsPrincipalSubject,
+  subjectResemblesPrincipal,
+} from "./represents-principal.ts";
+import {
   canonicalizeCfcMetadata,
+  canonicalizeDocumentPath,
   canonicalizeLogicalPath,
 } from "./canonical.ts";
 import {
@@ -92,6 +131,7 @@ import {
   isOrClause,
   normalizeClause,
 } from "./clause.ts";
+import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
 import {
   type CfcGrantConsumptionContext,
@@ -112,12 +152,12 @@ import {
   containsCfcFieldCommitment,
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
+import { mergeCfcLabelViews, rebaseCfcLabelView } from "./label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import {
   CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON,
   CfcSchemaMigrationError,
 } from "./migration-reason.ts";
-import { isPrefix } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
   type CfcRefusalDetail,
@@ -132,6 +172,11 @@ import {
   readObservationShapes,
 } from "./observation-classes.ts";
 import {
+  meetInputWitnesses,
+  mintTransformedBy,
+  retainedInputWitnesses,
+} from "./input-witness.ts";
+import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcFloorTrustContext,
@@ -143,38 +188,50 @@ import {
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
+import { sinkClassOf } from "./sink-inventory.ts";
+import {
+  type CfcSchemaMergeIssue,
+  cfcSchemaMergeIssue,
+  cfcSchemaPoliciesEqual,
+  type MergeCfcSchemaEnvelopeOptions,
+  mergeCfcSchemaEnvelopes,
+  withoutUndefinedMembers,
+} from "./schema-merge.ts";
 import {
   cfcSchemaResolvedRoot,
   cfcSchemaWithInheritedDefs,
   hoistCfcSchemaDefs,
   resolveCfcSchemaRefRoot,
 } from "./schema-refs.ts";
-import { mergeCfcSchemaEnvelopes } from "./schema-merge.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
+  CFC_ENFORCING_STRICTNESS,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
+  type CfcLabelView,
   type CfcMetadata,
   type IFCLabel,
   type ImplementationIdentity,
+  isCompleteCfcReferenceEntry,
   type LabelMapEntry,
   type LabelObservationClass,
   runtimeWritePolicyAuthorization,
+  type StoredCfcMetadata,
   type WritePolicyInput,
 } from "./types.ts";
 import {
   pathPatternMatches,
   recordedTrustedEventProvenanceMatchesUiContract,
+  type UiContract,
+  uiContractFromSchema,
   uiContractsFromSchema,
 } from "./ui-contract.ts";
 import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
 
 const INTERNAL_VERIFIER_META = {
+  ...stableInternalVerifierRead,
   ...authorizationRead,
-  ...ignoreReadForScheduling,
-  ...internalVerifierRead,
 };
 
 // The link-source schema read, which reactivity SEES. Prepare's other reads
@@ -191,14 +248,6 @@ const LINK_SOURCE_SCHEMA_META = {
   ...internalVerifierRead,
 };
 
-const labelAtPath = (
-  metadata: CfcMetadata | undefined,
-  path: readonly string[],
-): IFCLabel | undefined =>
-  metadata === undefined
-    ? undefined
-    : labelForEntriesAtPath(metadata.labelMap.entries, path);
-
 // A runtime-minted `*`-path class template (template-population §3.1): the
 // membership/slot twins minted beside the container-anchored structure
 // stamps (and any future derived-origin population entries of the same
@@ -210,6 +259,53 @@ const isRuntimeMintedTemplate = (
 ): boolean =>
   (entry.origin === "structure" || entry.origin === "derived") &&
   entry.path.includes("*");
+
+// The path whose writers a stamp's `TransformedBy` atom must agree with: the
+// stamp's own, or for a `*` template, its container's, since a write to any
+// slot changes what the template labels.
+const transformedByProbePath = (
+  entry: Pick<LabelMapEntry, "path" | "origin">,
+): readonly string[] =>
+  isRuntimeMintedTemplate(entry) && entry.path[entry.path.length - 1] === "*"
+    ? entry.path.slice(0, -1)
+    : entry.path;
+
+/**
+ * Returns whether `entry` applies to a read at exactly its own path and not
+ * to a read below it: a concrete `structure` entry, which labels a container
+ * node's shape, and an `enumerate` entry, which labels a container's
+ * membership. A recursive read of an ancestor still consumes either, since it
+ * materializes the container. `template` says whether the entry is a
+ * runtime-minted `*` template, which is consumed at the children it matches.
+ */
+const appliesAtItsPathOnly = (
+  entry: Pick<LabelMapEntry, "origin" | "observes">,
+  template: boolean,
+): boolean =>
+  entry.observes === "enumerate" ||
+  (entry.origin === "structure" && !template);
+
+/**
+ * Returns the raw path of the array whose native `length` a read at
+ * `rawPath` observes, or `undefined` when the read is not of an array's
+ * `length`. The journal records such a read beneath the array, so it is
+ * measured as a shape read of the array as well, which is what consumes the
+ * array's membership. A verifier probe of the parent tells an array from an
+ * object with a field named `length`, without consuming the parent's
+ * payload, as `assertCfcReadCeiling` does.
+ */
+const nativeLengthParent = (
+  tx: IExtendedStorageTransaction,
+  read: Pick<IMemorySpaceAddress, "space" | "id" | "type" | "scope" | "path">,
+): readonly string[] | undefined => {
+  if (read.path.at(-1) !== "length") return undefined;
+  const parentPath = read.path.slice(0, -1);
+  const parent = tx.read({ ...read, path: parentPath }, {
+    meta: internalVerifierRead,
+    nonRecursive: true,
+  }).ok?.value;
+  return Array.isArray(parent) ? parentPath : undefined;
+};
 
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
@@ -223,7 +319,7 @@ const labelForEntriesAtPath = (
   // single-map resolution for pre-component metadata.
   const matches = new Map<
     string,
-    { path: readonly string[]; label: IFCLabel }
+    { depth: number; labels: IFCLabel[] }
   >();
   for (const entry of entries) {
     if (!isPrefix(entry.path, path)) {
@@ -238,8 +334,11 @@ const labelForEntriesAtPath = (
     // preserve. `*`-path templates are the opposite by construction
     // (template-population §3.2): their whole point is consumption at
     // matching child paths, so the exact-path rule does not apply to them.
+    // An `enumerate` entry, whatever its origin, takes the same rule: it
+    // labels the container's membership, order and count, which a read of
+    // one addressed child does not observe.
     if (
-      entry.origin === "structure" && !template &&
+      appliesAtItsPathOnly(entry, template) &&
       entry.path.length !== path.length
     ) {
       continue;
@@ -258,24 +357,25 @@ const labelForEntriesAtPath = (
       ? `${component}\u0000shape-template`
       : component;
     const match = matches.get(bucket);
-    if (match === undefined || match.path.length < entry.path.length) {
-      matches.set(bucket, entry);
-    } else if (match.path.length === entry.path.length) {
+    if (match === undefined || match.depth < entry.path.length) {
+      matches.set(bucket, { depth: entry.path.length, labels: [entry.label] });
+    } else if (match.depth === entry.path.length) {
       // Two equally specific prefixes of one queried path are the same
       // path — or, with wildcard segments, a concrete entry and a `*`
       // template covering the same slot; duplicate (path, origin) entries
       // shouldn't survive coalescing, but join defensively (fail-toward-
       // taint) rather than drop one.
-      matches.set(bucket, {
-        path: match.path,
-        label: mergeLabels(match.label, entry.label),
-      });
+      match.labels.push(entry.label);
     }
   }
   if (matches.size === 0) {
     return undefined;
   }
-  const labels = Array.from(matches.values(), (match) => match.label);
+  const labels = Array.from(
+    matches.values(),
+    (match) =>
+      match.labels.length === 1 ? match.labels[0] : joinLabels(match.labels),
+  );
   return labels.length === 1 ? labels[0] : joinLabels(labels);
 };
 
@@ -548,32 +648,224 @@ const effectiveReadLabel = (
      */
     excludeEntry?: (entry: LabelMapEntry) => boolean;
   },
+  index?: ConsumedLabelIndex,
 ): IFCLabel | undefined => {
-  const view = (read.consumes === "all" && read.excludeEntry === undefined) ||
-      metadata === undefined
-    ? metadata
-    : {
-      ...metadata,
-      labelMap: {
-        ...metadata.labelMap,
-        entries: metadata.labelMap.entries.filter((entry) =>
-          (read.consumes === "all" ||
-            readConsumesEntry(read.consumes, entry)) &&
-          read.excludeEntry?.(entry) !== true
-        ),
-      },
-    };
-  const base = labelAtPath(view, path);
-  if (read.nonRecursive === true || view === undefined) {
-    return base;
-  }
+  if (metadata === undefined) return undefined;
+  return labelForConsumedEntries(
+    consumedEntriesForRead(metadata, path, read, index),
+    path,
+    read.nonRecursive,
+  );
+};
+
+/**
+ * The label-map entries a read at `path` consumes: `effectiveReadLabel`'s
+ * candidate set, before it is resolved into one label.
+ */
+const consumedEntriesForRead = (
+  metadata: CfcMetadata,
+  path: readonly string[],
+  read: {
+    nonRecursive: boolean | undefined;
+    consumes: ReadClassSelection;
+    excludeEntry?: (entry: LabelMapEntry) => boolean;
+  },
+  index?: ConsumedLabelIndex,
+): readonly LabelMapEntry[] => {
+  const candidates = index === undefined
+    ? metadata.labelMap.entries
+    : index.overlapping(path, read.nonRecursive !== true).map(({ entry }) =>
+      entry
+    );
+  return read.consumes === "all" && read.excludeEntry === undefined
+    ? candidates
+    : candidates.filter((entry) =>
+      readConsumesEntry(read.consumes, entry) &&
+      read.excludeEntry?.(entry) !== true
+    );
+};
+
+/**
+ * One label for everything a read at `path` consumed: the resolution at the
+ * read's own path, joined, for a recursive read, with every entry below it.
+ * The join is a union on both axes, so its integrity is evidence found
+ * SOMEWHERE in the value read; `observationInputWitnesses` is the form that
+ * holds of all of it.
+ */
+const labelForConsumedEntries = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+): IFCLabel | undefined => {
+  const base = labelForEntriesAtPath(entries, path);
+  if (nonRecursive === true) return base;
   const parts: (IFCLabel | undefined)[] = [base];
-  for (const entry of view.labelMap.entries) {
+  for (const entry of entries) {
     if (entry.path.length <= path.length) continue;
     if (!isPrefix(path, entry.path)) continue;
     parts.push(entry.label);
   }
   return parts.length === 1 ? base : joinLabels(parts);
+};
+
+/**
+ * The label-map entries of one read, arranged by path segment so the entries
+ * that resolve at a location are found by walking that location's segments
+ * rather than by scanning every entry. Each entry keeps its position in the
+ * read's entry list, so a resolution sees its entries in their original order.
+ */
+type WitnessTrieNode = {
+  /** The next segment of each entry path, `*` included as a segment. */
+  children: Map<string, WitnessTrieNode>;
+
+  /** Entries whose path ends at this node, with their list positions. */
+  entries: { entry: LabelMapEntry; ordinal: number }[];
+};
+
+const witnessTrieNode = (): WitnessTrieNode => ({
+  children: new Map(),
+  entries: [],
+});
+
+/**
+ * The entries of `root` that resolve at `location` when the input witnesses
+ * of a read are computed, in their original order. An entry's `*` segment
+ * stands for every concrete child, so it applies at any location beneath it;
+ * a location's `*` stands for the children that carry no entry of their own,
+ * so a concrete sibling's entry does not apply there. `isPrefix` matches `*`
+ * on either side, which would let one witnessed child vouch for an unwitnessed
+ * one.
+ */
+const entriesResolvingAtLocation = (
+  root: WitnessTrieNode,
+  location: readonly string[],
+): LabelMapEntry[] => {
+  const found = [...root.entries];
+  let frontier = [root];
+  for (const segment of location) {
+    const next: WitnessTrieNode[] = [];
+    for (const node of frontier) {
+      const exact = node.children.get(segment);
+      if (exact !== undefined) next.push(exact);
+      const wildcard = segment === "*" ? undefined : node.children.get("*");
+      if (wildcard !== undefined) next.push(wildcard);
+    }
+    if (next.length === 0) break;
+    for (const node of next) found.push(...node.entries);
+    frontier = next;
+  }
+  return found.sort((a, b) => a.ordinal - b.ordinal).map(({ entry }) => entry);
+};
+
+/** `entries` arranged as a {@link WitnessTrieNode} trie. */
+const witnessTrie = (entries: readonly LabelMapEntry[]): WitnessTrieNode => {
+  const root = witnessTrieNode();
+  for (const [ordinal, entry] of entries.entries()) {
+    let node = root;
+    for (const segment of entry.path) {
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = witnessTrieNode();
+        node.children.set(segment, child);
+      }
+      node = child;
+    }
+    node.entries.push({ entry, ordinal });
+  }
+  return root;
+};
+
+/**
+ * Whether an entry counts as witness evidence where it resolves: every entry
+ * but the runtime's concrete existence stamps. An existence stamp is minted
+ * once, when its path is first stamped, and carried through every later
+ * overwrite; it never carries integrity. Left in, one would shadow the value
+ * stamp of whatever later wrote over its path whole, and refuse a location
+ * that writer's stamp covers. Leaving it out cannot expose a stale
+ * `TransformedBy`: a stamp naming a writer keeps it only while nothing else
+ * writes at, above, or below its path (`carriedStampLabel`).
+ */
+const isWitnessEvidence = (entry: LabelMapEntry): boolean =>
+  !(
+    (entry.origin === "derived" || entry.origin === "structure") &&
+    entry.observes === "shape" && !isRuntimeMintedTemplate(entry)
+  );
+
+/** An entry as witness evidence: a `*` template's integrity witnesses nothing. */
+const asWitnessEvidence = (entry: LabelMapEntry): LabelMapEntry =>
+  isRuntimeMintedTemplate(entry)
+    ? { ...entry, label: { confidentiality: entry.label.confidentiality } }
+    : entry;
+
+/**
+ * The input witnesses one observation holds: the retained atoms common to
+ * every confidential location it consumed (`input-witness.ts`), or
+ * `undefined` when it consumed nothing confidential.
+ *
+ * `entries` are the ones the observation consumed. They decide which
+ * locations are confidential, as they decide the confidentiality the
+ * observation contributes to the join. `evidence`, when given, is what a
+ * location's integrity is resolved over instead. A shallow read of a node
+ * observes a function of the value stored there — its presence and type,
+ * and for a container its keys or length — and the value-class stamp is the
+ * record of who wrote that value, while the shape class a shallow read
+ * consumes holds only existence stamps, which never carry integrity. The
+ * schema traversal through which compiled code reads its arguments makes one
+ * shallow read per node it visits, scalar leaves included, so without this
+ * no location of such a read would carry a witness.
+ */
+const observationInputWitnesses = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+  evidence?: readonly LabelMapEntry[],
+): CfcAtom[] | undefined => {
+  // A location's confidentiality comes only from these entries, so a read
+  // none of them makes confidential has no confidential location.
+  if (
+    !entries.some((entry) => (entry.label.confidentiality?.length ?? 0) > 0)
+  ) {
+    return undefined;
+  }
+  const locations = new Map<string, readonly string[]>([
+    [pathKey(path), path],
+  ]);
+  if (nonRecursive !== true) {
+    for (const entry of entries) {
+      if (entry.path.length <= path.length) continue;
+      if (!isPrefix(path, entry.path)) continue;
+      locations.set(pathKey(entry.path), entry.path);
+    }
+  }
+  const consumed = witnessTrie(entries);
+  const held = evidence === undefined ? undefined : witnessTrie(evidence);
+  let witnesses: CfcAtom[] | undefined;
+  for (const location of locations.values()) {
+    const resolved = entriesResolvingAtLocation(consumed, location);
+    const label = labelForEntriesAtPath(resolved, location);
+    if ((label?.confidentiality?.length ?? 0) === 0) continue;
+    // The consumed label is the evidence too unless something it resolved
+    // is not evidence as it stands, which is the uncommon case.
+    const evidenceAt = held === undefined
+      ? resolved
+      : entriesResolvingAtLocation(held, location);
+    const integrity = held === undefined &&
+        evidenceAt.every((entry) =>
+          isWitnessEvidence(entry) && !isRuntimeMintedTemplate(entry)
+        )
+      ? label?.integrity
+      : labelForEntriesAtPath(
+        evidenceAt.filter(isWitnessEvidence).map(asWitnessEvidence),
+        location,
+      )?.integrity;
+    const retained = retainedInputWitnesses(integrity);
+    witnesses = witnesses === undefined
+      ? retained
+      : meetInputWitnesses(witnesses, retained);
+    // Nothing survives a meet with the empty set.
+    if (witnesses.length === 0) return witnesses;
+  }
+  return witnesses;
 };
 
 // Read-like shape (space/id/scope/path + a recursive read profile) for the
@@ -620,8 +912,10 @@ const joinLabelValues = (
   // Every source is collected before the dedup runs, so a join over any number
   // of sources deduplicates once.
   const atoms: unknown[] = [];
+  const seen = new Set<readonly unknown[]>();
   for (const source of sources) {
-    if (source !== undefined) {
+    if (source !== undefined && !seen.has(source)) {
+      seen.add(source);
       for (const atom of source) {
         atoms.push(atom);
       }
@@ -640,10 +934,6 @@ const hasLabelValues = (label: IFCLabel): boolean =>
   (label.integrity?.length ?? 0) > 0;
 
 const CURRENT_PRINCIPAL_PLACEHOLDER_KEY = "__ctCurrentPrincipal";
-const CURRENT_PRINCIPAL_CLAIM_KINDS = new Set([
-  "authored-by",
-  "represents-principal",
-]);
 
 const isCurrentPrincipalPlaceholder = (value: unknown): boolean =>
   isObjectOrArray(value) && value[CURRENT_PRINCIPAL_PLACEHOLDER_KEY] === true;
@@ -714,86 +1004,189 @@ const isCurrentPrincipalClaimAtom = (value: unknown): value is {
 } =>
   isObjectOrArray(value) &&
   typeof value.kind === "string" &&
-  CURRENT_PRINCIPAL_CLAIM_KINDS.has(value.kind);
+  PRINCIPAL_CLAIM_KINDS.has(value.kind);
 
-const hasLiteralDidCurrentPrincipalClaim = (value: unknown): boolean => {
-  if (Array.isArray(value)) {
-    return value.some(hasLiteralDidCurrentPrincipalClaim);
-  }
-  if (isCurrentPrincipalClaimAtom(value)) {
-    return typeof value.subject === "string" &&
-      value.subject.startsWith("did:");
-  }
-  if (isObjectOrArray(value)) {
-    return Object.values(value).some(hasLiteralDidCurrentPrincipalClaim);
-  }
-  return false;
-};
-
-const literalDidSubjectsForPrincipalClaim = (
+/**
+ * Why `value`, a schema's authored integrity, holds a principal claim a pattern
+ * may not write, or `undefined` when it holds none. Every spelling
+ * `principalClaimSpelling` recognizes, at any depth, must be the canonical
+ * object of exactly `kind` and `subject`, and its subject must be the runtime
+ * placeholder, `owner` when the schema declares one, or, without an owner, a
+ * literal that does not resemble a principal. So no reader of the canonical
+ * form, and no reader that normalizes some other spelling into it, resolves a
+ * pattern-written claim to a principal the runtime did not put there.
+ */
+const forgedPrincipalClaimReason = (
   value: unknown,
-  kind: string,
-  subjects: string[] = [],
-): string[] => {
+  owner: string | undefined,
+  path: readonly string[],
+): string | undefined => {
   if (Array.isArray(value)) {
     for (const entry of value) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
+      const reason = forgedPrincipalClaimReason(entry, owner, path);
+      if (reason !== undefined) return reason;
     }
-    return subjects;
+    return undefined;
   }
-  if (isCurrentPrincipalClaimAtom(value) && value.kind === kind) {
-    if (typeof value.subject === "string" && value.subject.startsWith("did:")) {
-      subjects.push(value.subject);
+  const spelling = principalClaimSpelling(value);
+  if (spelling === "string") {
+    return `current-principal integrity must be an object of kind and subject at /${
+      path.join("/")
+    }`;
+  }
+  if (spelling === "object") {
+    const claim = value as Record<string, unknown>;
+    if (Object.keys(claim).some((key) => key !== "kind" && key !== "subject")) {
+      return `current-principal integrity must carry only kind and subject at /${
+        path.join("/")
+      }`;
     }
-    return subjects;
+    const subject = claim.subject;
+    if (
+      isCurrentPrincipalPlaceholder(subject) ||
+      (owner !== undefined && subject === owner) ||
+      (owner === undefined && !subjectResemblesPrincipal(subject))
+    ) {
+      return undefined;
+    }
+    return `current-principal integrity subject must be runtime resolved at /${
+      path.join("/")
+    }`;
   }
   if (isObjectOrArray(value)) {
-    for (const entry of Object.values(value)) {
-      literalDidSubjectsForPrincipalClaim(entry, kind, subjects);
-    }
+    return forgedPrincipalClaimReason(Object.values(value), owner, path);
   }
-  return subjects;
-};
-
-const metadataAppliesToPath = (
-  metadata: CfcMetadata,
-  path: readonly string[],
-): boolean => {
-  const logicalPath = canonicalizeLogicalPath(path);
-  // A labelMap entry is persisted whenever the source schema had label values
-  // OR a policy claim (writeAuthorizedBy / uiContract / exactCopyOf /
-  // projection — see the entry-construction site). The mere presence of the
-  // entry signals "policy
-  // applies on this path"; do NOT filter on `hasLabelValues` here, or
-  // claim-only entries get silently bypassed.
-  //
-  // Flow entries and their metadata templates are the exception: they record
-  // taint, not authored policy. A plain value write replacing a
-  // flow-labeled path is an ordinary overwrite (the flow components are
-  // replaced/cleared by the flow stage), so it must not demand a schema
-  // write-policy input.
-  return metadata.labelMap.entries.some((entry) =>
-    entry.origin !== "derived" && entry.origin !== "structure" &&
-    !isLabelMetadataTemplateEntry(entry) &&
-    !(metadata.version === 2 && entry.origin === "link" &&
-      entry.observes === "followRef") &&
-    (isPrefix(entry.path, logicalPath) || isPrefix(logicalPath, entry.path))
-  );
+  return undefined;
 };
 
 const metadataAppliesToAnyPath = (
   metadata: CfcMetadata,
   paths: readonly (readonly string[])[],
-): boolean => paths.some((path) => metadataAppliesToPath(metadata, path));
+): boolean => {
+  const logicalPaths = paths.map(canonicalizeLogicalPath);
+  const written = new PathPrefixIndex();
+  for (const path of logicalPaths) written.add(path);
+  const policies = new PathPrefixIndex();
+  for (const entry of metadata.labelMap.entries) {
+    // Claim-only entries are authored policy even without label values.
+    // Derived and structure entries record flow taint instead.
+    if (
+      entry.origin === "derived" || entry.origin === "structure" ||
+      isLabelMetadataTemplateEntry(entry) ||
+      isCompleteCfcReferenceEntry(metadata.version, entry)
+    ) continue;
+    if (written.hasPrefixOf(entry.path)) return true;
+    policies.add(entry.path);
+  }
+  return logicalPaths.some((path) => policies.hasPrefixOf(path));
+};
 
+// A claim that binds every later writer of the path keeps an entry for it even
+// where the path carries no label, so the path stays policy-carrying for a
+// writer whose own schema restates nothing. A `requiredIntegrity` floor is
+// one: on a write target it is store policy (spec §8.12.4.1).
 const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
   if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
     return false;
   }
-  return schema.ifc.writeAuthorizedBy !== undefined ||
+  return schema.ifc.requiredIntegrity !== undefined ||
+    schema.ifc.writeAuthorizedBy !== undefined ||
+    schema.ifc.writePolicyAnyOf !== undefined ||
     schema.ifc.uiContract !== undefined ||
     schema.ifc.exactCopyOf !== undefined ||
     schema.ifc.projection !== undefined;
+};
+
+/**
+ * The logical positions of `root` at which a writer claim holds whatever
+ * value the position takes: a position whose schema declares
+ * `writeAuthorizedBy` or `writePolicyAnyOf`, or an `anyOf`/`oneOf` every
+ * branch of which does, so no value written there escapes a claim (the group
+ * chat's admin flag is a union of a `true` and a `false` branch, both the
+ * toggle handler's). A union with an unclaimed branch is not such a position
+ * — which branch a value takes is the value's to decide — and the positions
+ * inside a union's branches are not visited: a claim there holds for that
+ * branch's values only. `allOf` holds where any of its parts does.
+ *
+ * Paths spell array items and record entries as `*` and tuple slots by
+ * index, as `cfcSchemaEntries` does; references resolve against `root`, and
+ * a schema already on the walk's stack ends it, as there.
+ */
+const writerClaimedPositions = (
+  root: JSONSchema,
+): (readonly string[])[] => {
+  const positions: (readonly string[])[] = [];
+  const resolve = (schema: JSONSchema): JSONSchema =>
+    isObjectOrArray(schema) && typeof schema.$ref === "string"
+      ? ContextualFlowControl.resolveSchemaRefs(schema, root) ?? schema
+      : schema;
+  // The cycle check compares the schema as written — the `$ref` site — as
+  // `cfcSchemaEntries` does, so a recursive definition is walked to the same
+  // horizon and marks the same positions: comparing the resolved schema
+  // would stop one hop earlier, and a position the entries walk reaches
+  // would go unmarked.
+  const claimed = (
+    schema: JSONSchema,
+    active: readonly JSONSchema[],
+  ): boolean => {
+    if (!isObjectOrArray(schema) || active.includes(schema)) return false;
+    const resolved = resolve(schema);
+    if (!isObjectOrArray(resolved)) return false;
+    if (
+      isObjectOrArray(resolved.ifc) &&
+      (resolved.ifc.writeAuthorizedBy !== undefined ||
+        resolved.ifc.writePolicyAnyOf !== undefined)
+    ) return true;
+    const next = [...active, schema];
+    const unions = [resolved.anyOf, resolved.oneOf].filter(Array.isArray);
+    if (
+      unions.length > 0 &&
+      unions.every((branches) =>
+        branches.length > 0 &&
+        branches.every((branch) => claimed(branch as JSONSchema, next))
+      )
+    ) return true;
+    return Array.isArray(resolved.allOf) &&
+      resolved.allOf.some((part) => claimed(part as JSONSchema, next));
+  };
+  const visit = (
+    schema: JSONSchema,
+    path: readonly string[],
+    active: readonly JSONSchema[],
+  ): void => {
+    if (!isObjectOrArray(schema) || active.includes(schema)) return;
+    const resolved = resolve(schema);
+    if (!isObjectOrArray(resolved)) return;
+    if (claimed(schema, active)) positions.push(path);
+    const next = [...active, schema];
+    const recordOnly = resolved.properties === undefined ||
+      (isObjectOrArray(resolved.properties) &&
+        Object.keys(resolved.properties).length === 0);
+    forEachSubschema(resolved, (child, keyword, key, index) => {
+      switch (keyword) {
+        case "properties":
+          visit(child, [...path, key!], next);
+          break;
+        case "allOf":
+          visit(child, path, next);
+          break;
+        case "items":
+          visit(child, [...path, "*"], next);
+          break;
+        case "prefixItems":
+          visit(child, [...path, String(index!)], next);
+          break;
+        case "additionalProperties":
+          if (recordOnly) visit(child, [...path, "*"], next);
+          break;
+        default:
+          // A union's branches hold for their own values only.
+          break;
+      }
+    });
+  };
+  visit(root, [], []);
+  return positions;
 };
 
 const claimPathToLogicalPath = (
@@ -894,6 +1287,100 @@ const writeAuthorizedByReason = (
   return undefined;
 };
 
+/** One alternative of a `writePolicyAnyOf`: a writer, and its gesture. */
+type WritePolicyAlternative = {
+  /**
+   * The alternative's writer claim, as a schema `writeAuthorizedByReason()`
+   * reads.
+   */
+  readonly writer: JSONSchema;
+
+  /** Whether the alternative names a reviewed gesture. */
+  readonly namesGesture: boolean;
+
+  /**
+   * The gesture's contract, where it names one that parses. One that does
+   * not parse is matched by no event.
+   */
+  readonly contract?: UiContract;
+};
+
+/**
+ * The alternatives of the `writePolicyAnyOf` that `ifc` declares, or
+ * `undefined` when it declares none.
+ */
+const writePolicyAlternatives = (
+  ifc: unknown,
+): readonly WritePolicyAlternative[] | undefined => {
+  if (!isObjectOrArray(ifc) || !Array.isArray(ifc.writePolicyAnyOf)) {
+    return undefined;
+  }
+  return ifc.writePolicyAnyOf.map((policy) => {
+    const writeAuthorizedBy = isObjectNotArray(policy)
+      ? policy.writeAuthorizedBy
+      : undefined;
+    const writer = { ifc: { writeAuthorizedBy } } as JSONSchema;
+    if (!isObjectNotArray(policy) || policy.uiContract === undefined) {
+      return { writer, namesGesture: false };
+    }
+    const contract = uiContractFromSchema({ ifc: policy } as JSONSchema);
+    return { writer, namesGesture: true, contract };
+  });
+};
+
+/**
+ * Why no alternative of a `writePolicyAnyOf` at `path` admits the write, or
+ * `undefined` when one admits it for every identity that wrote there. An
+ * alternative admits a write when its gesture is satisfied — it names none,
+ * a matching trusted event was recorded for the path, or `waived.gesture` —
+ * and its writer is the identity that wrote, or `waived.writer`. Both halves
+ * are of one alternative, so one writer's gesture never admits another
+ * writer. A writer refusal where some alternative's gesture was satisfied is
+ * offered to `deferWriterRefusal`, as a lone claim's is.
+ *
+ * Each claim is read as the schema holds it, as a lone claim is. A stamped
+ * claim admits the module it was stamped with, and a stored claim with no
+ * stamp admits no writer, since nothing ties it to a module. A compile that
+ * knows module identities stamps every member where it lowers the list.
+ */
+const writePolicyAnyOfReason = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+  alternatives: readonly WritePolicyAlternative[],
+  identities: readonly (ImplementationIdentity | undefined)[],
+  waived: { readonly writer: boolean; readonly gesture: boolean },
+  deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
+): string | undefined => {
+  const gestured = alternatives.filter((alternative) =>
+    !alternative.namesGesture || waived.gesture ||
+    (alternative.contract !== undefined &&
+      trustedEventMatchesContract(tx, target, path, alternative.contract))
+  );
+  const reason = `writePolicyAnyOf failed at /${path.join("/")}`;
+  if (gestured.length === 0) return reason;
+  if (waived.writer) return undefined;
+  for (const identity of identities) {
+    const refusals = gestured.map((alternative) =>
+      writeAuthorizedByReason(
+        tx,
+        alternative.writer,
+        path,
+        target.space,
+        identity,
+      )
+    );
+    if (refusals.includes(undefined)) continue;
+    if (deferWriterRefusal?.(reason, path) === true) continue;
+    return reason;
+  }
+  return undefined;
+};
+
 const parseWriteAuthorizedByBindingIdentity = (
   claim: unknown,
 ): {
@@ -953,6 +1440,7 @@ const structuralProvenanceForPath = (
     input,
   ): input is StructuralProvenanceInput =>
     input.kind === "structural-provenance" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.claim === claim &&
     input.target.space === target.space &&
     input.target.id === target.id &&
@@ -979,7 +1467,12 @@ const setupProjectionSourceMatchesValue = (
   if (projection === undefined) {
     return false;
   }
-  const targetValue = writeValueForTarget(tx, { ...target, path });
+  // The marker names the redirect this setup projects; the value the
+  // transaction leaves at the path is what says the projection is really
+  // there. A replayed setup re-stages the redirect the document already
+  // holds, which writes nothing, so reading only this transaction's writes
+  // would deny a projection it did establish.
+  const targetValue = effectiveValueForTarget(tx, { ...target, path });
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
@@ -992,39 +1485,6 @@ const setupProjectionSourceMatchesValue = (
     (projected.space === undefined || projected.space === source.space) &&
     (projected.id === undefined || projected.id === source.id) &&
     arraysEqual(projectedPath, source.path)
-  );
-};
-
-// CFC §8.15.4 permits trusted initialization before §8.15.10's modification
-// gate applies. A runtime-authorized seed marker names the new constructor cell
-// and, for a root action result, its new reference. Each must create its value
-// root; adding metadata to an existing document is insufficient. Ownership,
-// integrity, and confidentiality checks remain independent of this exemption.
-const writeIsSeedMaterialization = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-): boolean => {
-  const marked = tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "structural-provenance" &&
-    tx.isRuntimeWritePolicyInput(input) &&
-    input.claim === CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION &&
-    input.sources.some((source) =>
-      source.space === target.space && source.id === target.id &&
-      normalizeCellScope(source.scope) === target.scope
-    )
-  );
-  if (!marked) {
-    return false;
-  }
-  return [...(tx.getWriteDetails?.(target.space) ?? [])].some((detail) =>
-    detail.address.id === target.id &&
-    normalizeCellScope(detail.address.scope) === target.scope &&
-    canonicalizeLogicalPath(detail.address.path).length === 0 &&
-    detail.previousValue === undefined
   );
 };
 
@@ -1093,6 +1553,7 @@ const writeIsPatternSetupInitialization = (
   const logicalPath = canonicalizeLogicalPath(path);
   return tx.getCfcState().writePolicyInputs.some((input) =>
     input.kind === "structural-provenance" &&
+    tx.isRuntimeWritePolicyInput(input) &&
     input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
     input.sources.some((source) => {
       if (
@@ -1115,65 +1576,778 @@ const writeIsPatternSetupInitialization = (
   );
 };
 
-// What reading a label needs of a stored envelope beyond its being one:
-// entries it can iterate, each carrying the path a resolution matches
-// against and the label a consumer reads clauses out of. `isCfcMetadata`
-// settles the envelope, this settles its entries. Records, not arrays: an
-// array carries neither clause field, so one standing where an entry or a
-// label belongs reads as an entry that labels nothing rather than as the
-// unreadable envelope it is. Both clause arrays are optional, and an entry
-// that omits one carries none of that kind; one that holds something other
-// than an array is an entry no consumer can read.
-const isWalkableLabelMap = (metadata: CfcMetadata): boolean =>
-  metadata.labelMap.entries.every((entry) =>
-    isObjectNotArray(entry) && Array.isArray(entry.path) &&
-    isObjectNotArray(entry.label) &&
-    (entry.label.confidentiality === undefined ||
-      Array.isArray(entry.label.confidentiality)) &&
-    (entry.label.integrity === undefined ||
-      Array.isArray(entry.label.integrity))
+/**
+ * A runtime initialization covers one absent slot and its exact final value;
+ * a reference initialization also covers a slot that holds that link already
+ * and receives no write. `waived` names the declaration the calling gate
+ * would waive for it: one the stored envelope already makes on the slot keeps
+ * its requirement, so the initialization waives only a declaration the
+ * candidate schema introduces. A stored `writePolicyAnyOf` makes both
+ * declarations, since each of its alternatives names a writer and may name a
+ * gesture.
+ */
+const writeIsRuntimeInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+  waived: "writeAuthorizedBy" | "uiContract",
+): boolean => {
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "initialization" && input.mode !== "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(path, input.target.path)
+  );
+  if (input?.kind !== "initialization") return false;
+  // A reference initialization covers a link to a cell and nothing the cell
+  // holds, so a recorded value that is anything else receives no permission.
+  if (
+    input.mode === "reference" &&
+    (!isPrimitiveCellLink(input.value) || isWriteRedirectLink(input.value))
+  ) return false;
+  const addressPath = ["value", ...input.target.path];
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
+  const covering = [...details].filter((detail) =>
+    detail.address.id === target.id &&
+    normalizeCellScope(detail.address.scope) === target.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
+  const finalValueIsRecorded = () =>
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    );
+  // A reference staged over the link the slot holds already lands no write
+  // there: the slot keeps its link, so nothing is repointed and no policy
+  // stored on it is disturbed.
+  if (input.mode === "reference" && covering.length === 0) {
+    return finalValueIsRecorded();
+  }
+  // A declaration the stored envelope already makes on the slot keeps its own
+  // requirement, whatever the candidate schema introduces beside it.
+  const stored = loadStoredCfcEnvelope(tx, target);
+  if (stored.status === "unreadable") return false;
+  if (
+    stored.status === "loaded" &&
+    cfcSchemaEntries(stored.schema).some((entry) =>
+      pathPatternsOverlap(entry.path, path) &&
+      isObjectOrArray(entry.schema) &&
+      (entry.schema.ifc?.[waived] !== undefined ||
+        entry.schema.ifc?.writePolicyAnyOf !== undefined)
+    )
+  ) return false;
+  // Overlapping write paths can capture different intermediate states. Every
+  // covering snapshot must agree on absence; the deepest alone is insufficient.
+  const absent = covering.length > 0 && covering.every((detail) => {
+    if (detail.previousPresent === undefined) return false;
+    if (!detail.previousPresent) return true;
+    let previous = detail.previousValue;
+    const remaining = addressPath.slice(detail.address.path.length);
+    for (const segment of remaining) {
+      if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
+        return false;
+      }
+      if (!Object.hasOwn(previous, segment)) return true;
+      previous = (previous as Record<string, FabricValue>)[segment];
+    }
+    return false;
+  });
+  return absent && finalValueIsRecorded();
+};
+
+/**
+ * Whether `path` lies at or under a reference the runtime staged in this
+ * transaction, with the slot still holding it. Staging writes nothing the
+ * referenced value holds, so the integrity the receiving slot's schema would
+ * add describes content the stager did not write and is not minted for it.
+ */
+const pathHoldsStagedReference = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "reference" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) ===
+      normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, input.target.path) &&
+    valueEqual(
+      tx.readValueOrThrow({
+        space: target.space,
+        id: target.id as URI,
+        scope: target.scope,
+        path: [...input.target.path],
+      }, { meta: INTERNAL_VERIFIER_META }),
+      input.value,
+    )
+  );
+};
+
+const sameDocument = (
+  address: {
+    space: MemorySpace;
+    id: string;
+    scope?: ReturnType<typeof normalizeCellScope>;
+  },
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean =>
+  address.space === target.space && address.id === target.id &&
+  normalizeCellScope(address.scope) === target.scope;
+
+/**
+ * Whether the transaction attempted nothing on `target`'s document but the
+ * reads a schema application marks as attempted writes, one at each of
+ * `paths`. A write that changes nothing leaves no write attempt, but does
+ * leave an attempted-write read of its own.
+ */
+const attemptsOnlyApplicationsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  paths: readonly (readonly string[])[],
+): boolean => {
+  const writes = getTransactionWriteAttempts(tx);
+  if (
+    writes === undefined || writes.some((write) => sameDocument(write, target))
+  ) {
+    return false;
+  }
+  const unmatched = [...paths];
+  for (const read of getTransactionReadActivities(tx)) {
+    if (!sameDocument(read, target)) continue;
+    if (!isReadMarkedAsAttemptedWrite(read.meta)) continue;
+    const path = canonicalizeDocumentPath(read.path.map(String));
+    const index = unmatched.findIndex((candidate) =>
+      arraysEqual(candidate, path)
+    );
+    if (index === -1) return false;
+    unmatched.splice(index, 1);
+  }
+  return unmatched.length === 0;
+};
+
+/**
+ * Whether `path` lies at or under a value the runtime initialized on nobody's
+ * behalf, so that a claim its schema would add about the current principal —
+ * that the value represents or was authored by them — describes nothing the
+ * acting principal did.
+ *
+ * A value initialized in this transaction — a constructed cell's seed, the
+ * reference that exposes it, a new field's default, a cell a pattern's setup
+ * projects a result field to — is the pattern's default; the principal whose
+ * runtime constructed the cell chose nothing of it. The transaction of a
+ * handler run is the exception (`CfcTxState.attributedInitialization`): the
+ * principal invoked the handler, and what it initializes is theirs as any
+ * write of theirs is.
+ *
+ * A preserved runtime output and a replayed argument slot leave their path as
+ * it stands, in any transaction, and are nobody's act: the claim a stored
+ * label makes there is carried forward (`persistedLabelEntries`). A path the
+ * transaction does change at, a handler's write over a replayed slot among
+ * them, is no replay and is attributed as the transaction is.
+ */
+const pathHoldsUnattributedInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const logicalPath = canonicalizeLogicalPath(path);
+  const covers = (address: {
+    space: MemorySpace;
+    id: string;
+    scope?: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  }): boolean =>
+    address.space === target.space && address.id === target.id &&
+    normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
+    concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
+  const inputs = tx.getCfcState().writePolicyInputs;
+  if (
+    !tx.getCfcState().attributedInitialization &&
+    inputs.some((input) => {
+      if (input.kind === "structural-provenance") {
+        // A setup projection names the result field it projects and the
+        // internal cell holding the field's value; both are the pattern's own
+        // initialization (`writeIsPatternSetupInitialization`).
+        return tx.isRuntimeWritePolicyInput(input) &&
+          input.claim === CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION &&
+          [input.target, ...input.sources].some(covers);
+      }
+      return input.kind === "initialization" &&
+        (input.mode === "seed" || input.mode === "projection" ||
+          input.mode === "default") &&
+        tx.isRuntimeWritePolicyInput(input) && covers(input.target) &&
+        valueEqual(
+          tx.readValueOrThrow({
+            space: target.space,
+            id: target.id as URI,
+            scope: target.scope,
+            path: [...input.target.path],
+          }, { meta: INTERNAL_VERIFIER_META }),
+          input.value,
+        );
+    })
+  ) {
+    return true;
+  }
+  const unchangedTarget = { ...target, id: target.id as URI };
+  return inputs.some((input) =>
+    tx.isRuntimeWritePolicyInput(input) &&
+    ((input.kind === "preserved-output" && covers(input.target) &&
+      writePreservesRuntimeOutput(tx, unchangedTarget)) ||
+      (input.kind === "output-reissue" && covers(input.target) &&
+        writeIsUnchangedOutput(tx, unchangedTarget, path)) ||
+      (input.kind === "initialization" && input.mode === "replay" &&
+        covers(input.target) &&
+        writeLeavesPathUnchanged(tx, unchangedTarget, path)))
+  );
+};
+
+/**
+ * What a label derived from a schema mints for the acting principal.
+ * `mintSchemaIntegrity` false leaves out every integrity atom the schema adds;
+ * `attributeCurrentPrincipal` false leaves out only the atoms that name the
+ * current principal — the `represents-principal` and `authored-by` claims —
+ * and keeps the rest.
+ */
+type LabelMintOptions = {
+  mintSchemaIntegrity?: boolean;
+  attributeCurrentPrincipal?: boolean;
+};
+
+/**
+ * The mint options for the label persisted at `path`: no schema integrity
+ * over a reference the runtime staged, and no claim about the current
+ * principal over a value the runtime initialized on nobody's behalf.
+ */
+const labelMintOptionsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): LabelMintOptions => ({
+  mintSchemaIntegrity: !pathHoldsStagedReference(tx, target, path),
+  attributeCurrentPrincipal: !pathHoldsUnattributedInitialization(
+    tx,
+    target,
+    path,
+  ),
+});
+
+/** A single runtime output attempt may preserve an existing root reference. */
+const writePreservesRuntimeOutput = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean => {
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "preserved-output" && tx.isRuntimeWritePolicyInput(input) &&
+    sameDocument(input.target, target) && input.target.path.length === 0
+  );
+  if (input?.kind !== "preserved-output") return false;
+  return attemptsOnlyApplicationsAt(tx, target, [[]]) &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    );
+};
+
+/** Whether the schemas recorded on `target` sit one at each of `paths`. */
+const schemasRecordedOnlyAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  paths: readonly (readonly string[])[],
+): boolean => {
+  const unmatched = [...paths];
+  for (const input of tx.getCfcState().writePolicyInputs) {
+    if (input.kind !== "schema" || !sameDocument(input.target, target)) {
+      continue;
+    }
+    const path = canonicalizeLogicalPath(input.target.path);
+    const index = unmatched.findIndex((candidate) =>
+      arraysEqual(candidate, path)
+    );
+    if (index === -1) return false;
+    unmatched.splice(index, 1);
+  }
+  return true;
+};
+
+/**
+ * Whether the transaction's only business with `target` is a host's policy
+ * application (`applyCfcPolicyToExistingValue`): the runtime marked it, a
+ * builtin authored it, and nothing was written or recorded on the document
+ * beside it. Such a transaction leaves the document's writer and click claims to the writers
+ * they name, since it makes no write for them to govern.
+ */
+const writeIsPolicyApplication = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  identityForPath: (
+    path: readonly string[],
+  ) => ImplementationIdentity | undefined,
+): boolean => {
+  const applications = tx.getCfcState().writePolicyInputs.filter((
+    input,
+  ): input is Extract<WritePolicyInput, { kind: "policy-application" }> =>
+    input.kind === "policy-application" &&
+    tx.isRuntimeWritePolicyInput(input) && sameDocument(input.target, target)
+  );
+  return applications.length > 0 &&
+    applications.every((input) =>
+      identityForPath(input.target.path)?.kind === "builtin"
+    ) &&
+    attemptsOnlyApplicationsAt(
+      tx,
+      target,
+      applications.map((input) => input.target.path),
+    ) &&
+    // Rewriting the bytes a document holds attempts no write but records its
+    // schema, so the schemas recorded on the document must be the
+    // applications' own: one at each application's path.
+    schemasRecordedOnlyAt(
+      tx,
+      target,
+      applications.map((input) => input.target.path),
+    );
+};
+
+/**
+ * Whether the runtime recorded `path`, or a slot above it, as an argument slot
+ * a setup replay carries over from the stored document. Only that replay's
+ * re-staging is a candidate for leaving a protected path as it is: any other
+ * write attempt at a writer-policied path, even one that changes no byte,
+ * needs the path's writer.
+ */
+const writeReplaysArgumentSlot = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "initialization" && input.mode === "replay" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(
+      canonicalizeLogicalPath(path),
+      canonicalizeLogicalPath(input.target.path),
+    )
   );
 
+/**
+ * Whether this transaction leaves the value at `path` exactly as it found it:
+ * no write it recorded changed anything at the path, above it where the
+ * difference reaches the path, or below it. A staged write carrying the value
+ * the document already holds records no write detail, so a path that only
+ * such attempts cover is unchanged. That is what a runtime replaying a
+ * piece's setup in another session does to an input it did not create: it
+ * re-stages the argument, and every byte stays where the first session left
+ * it. A path holding a wildcard is compared from its concrete prefix down,
+ * which is the conservative reading.
+ *
+ * Unchanged bytes are half of "modified nothing". The caller defers the
+ * writer refusal to the persist loop, which discards it only when the
+ * document's envelope is canonically unchanged too.
+ */
+const writeLeavesPathUnchanged = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  // Everything before the first wildcard (the whole path when it has none).
+  const protectedPath = [
+    "value",
+    ...path.slice(0, [...path, "*"].indexOf("*")),
+  ];
+  // An authoritative transaction commits each document it wrote whole, over
+  // whatever the store holds by then, so bytes it found unchanged in its own
+  // view are no evidence about what it leaves behind.
+  // A transaction that cannot list its writes proves nothing either.
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space);
+  if (tx.isAuthoritativeWrites?.() === true || details === undefined) {
+    return false;
+  }
+  for (const detail of details) {
+    // A space-wide listing holds other documents' writes too.
+    const sameDocument = detail.address.id === target.id &&
+      normalizeCellScope(detail.address.scope) === target.scope;
+    const detailPath = detail.address.path.map(String);
+    if (sameDocument && concretePathHasPrefix(detailPath, protectedPath)) {
+      // The value layer keeps a member holding `undefined`, so two `undefined`
+      // ends can still be a member removed or added. A write that changed
+      // nothing records no detail at all, so a recorded one with both ends
+      // `undefined` is read as a change.
+      if (
+        (detail.value === undefined && detail.previousValue === undefined) ||
+        !fabricAwareEqual(detail.value, detail.previousValue)
+      ) return false;
+    } else if (
+      sameDocument && concretePathHasPrefix(protectedPath, detailPath)
+    ) {
+      const relative = protectedPath.slice(detailPath.length);
+      if (
+        hasValueAtPath(detail.value, relative) !==
+          hasValueAtPath(detail.previousValue, relative) ||
+        !fabricAwareEqual(
+          getValueAtPath(detail.value, relative),
+          getValueAtPath(detail.previousValue, relative),
+        )
+      ) return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * Whether `value` holds a member at `path`, one holding `undefined` included.
+ */
+const hasValueAtPath = (value: unknown, path: readonly string[]): boolean => {
+  let current = value;
+  for (const key of path) {
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, key)) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return true;
+};
+
+/** An owner adoption accepts only the unchanged bytes at its exact target. */
+const writeIsOwnerAdoption = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+    input.owner === tx.getCfcState().trustSnapshot?.actingPrincipal &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    arraysEqual(input.target.path, path) &&
+    loadStoredCfcEnvelope(tx, target).status === "none" &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [...path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    )
+  );
+};
+
+// The prepare pass's reader of a stored envelope. `cfc/metadata.ts` owns
+// what an envelope is and how its labels resolve; this settles only how the
+// reads are marked.
+//
+// The metadata read is required authorization evidence at its own path.
+// It is marked as a runtime-internal verifier read and carries
+// `ignoreReadForScheduling` besides, so reactivity skips it like every other
+// read this pass makes. A writer that depends on the envelope reads it
+// through `readStoredCfcMetadata`'s own policy, which omits that marker.
+//
+// An envelope this build cannot interpret throws a `StoredCfcMetadataError`.
+// Callers on the commit path turn that into an unreadable envelope (rejected
+// in enforcing modes) or abort loudly; none of them reads the document as an
+// unlabeled one.
 const storedMetadataFor = (
   tx: IExtendedStorageTransaction,
   space: MemorySpace,
   id: URI,
   scope: ReturnType<typeof normalizeCellScope>,
   type: MediaType,
-): CfcMetadata | undefined => {
-  // The metadata is an authorization dependency at its own path. A payload
-  // edit outside that path does not invalidate the decision, while a changed
-  // policy or label does, even when the handler never observed the metadata.
-  const metadata = tx.readOrThrow({
-    space,
-    id,
-    scope,
-    type,
-    path: ["cfc"],
-  }, {
+): CfcMetadata | undefined =>
+  readStoredCfcMetadata(tx, { space, id, scope, type }, {
     meta: INTERNAL_VERIFIER_META,
   });
-  if (!isObjectOrArray(metadata)) {
-    return undefined;
-  }
-  const version = (metadata as { version?: unknown }).version;
-  if (version !== undefined && version !== 1 && version !== 2) {
-    // Fail closed on a format this build postdates: reading the envelope
-    // as version 1 would walk a schema it cannot interpret and silently
-    // under-label. Callers on the commit path turn this into an
-    // unreadable envelope (rejected in enforcing modes) or abort loudly.
-    throw new UnknownCfcMetadataVersionError(version);
-  }
-  if (!isCfcMetadata(metadata) || !isWalkableLabelMap(metadata)) {
-    // A record at the reserved position naming a version this build
-    // interprets, carrying a label map it cannot walk. Every resolution
-    // reads `labelMap.entries` and matches each entry's `path`, so the
-    // refusal belongs where the value is read rather than wherever a walk
-    // first reaches the part that is missing.
-    throw new UnreadableCfcMetadataError(id);
-  }
-  return metadata;
+
+/** A source's projected view and the principal claims its root owns. */
+type LinkSourceProjection = {
+  view?: CfcLabelView;
+  principalClaims: CfcAtom[];
 };
+
+/**
+ * Resolves input envelopes during one boundary preparation.
+ *
+ * Target verification shares successful reads, including absent envelopes.
+ * The transaction's applied-write log invalidates every document changed since
+ * the previous target, including whole-document writes inside schema helpers.
+ * Each preparation owns a fresh resolver. Without write inspection, reuse is
+ * limited to one target's input collection.
+ */
+class VerifierMetadataResolver {
+  #tx: IExtendedStorageTransaction;
+  #envelopes = new Map<
+    MemorySpace,
+    Map<
+      ReturnType<typeof normalizeCellScope>,
+      Map<URI, Map<MediaType, CfcMetadata | undefined>>
+    >
+  >();
+  #seenWrites = 0;
+  #viewIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
+  #views = new WeakMap<CfcMetadata, Map<string, LinkSourceProjection>>();
+  #labelIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
+  #labels = new WeakMap<CfcMetadata, Map<string, IFCLabel | undefined>>();
+  #coverIndexes = new WeakMap<CfcLabelView, ConsumedLabelIndex>();
+  #covers = new WeakMap<
+    CfcLabelView,
+    Map<string, { depth: number; label: IFCLabel } | undefined>
+  >();
+
+  /** Binds metadata reads and write inspection to the same transaction. */
+  constructor(tx: IExtendedStorageTransaction) {
+    this.#tx = tx;
+  }
+
+  /** Returns the current envelope, propagating unreadable-envelope errors. */
+  read(
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+    type: MediaType,
+  ): CfcMetadata | undefined {
+    let scopes = this.#envelopes.get(space);
+    if (scopes === undefined) {
+      scopes = new Map();
+      this.#envelopes.set(space, scopes);
+    }
+    let documents = scopes.get(scope);
+    if (documents === undefined) {
+      documents = new Map();
+      scopes.set(scope, documents);
+    }
+    let types = documents.get(id);
+    if (types === undefined) {
+      types = new Map();
+      documents.set(id, types);
+    }
+    if (!types.has(type)) {
+      types.set(type, storedMetadataFor(this.#tx, space, id, scope, type));
+    }
+    return types.get(type);
+  }
+
+  /** Resolves a source label using the validated envelope's path index. */
+  label(metadata: CfcMetadata, path: readonly string[]): IFCLabel | undefined {
+    let labels = this.#labels.get(metadata);
+    if (labels === undefined) {
+      labels = new Map();
+      this.#labels.set(metadata, labels);
+    }
+    const key = encodePointer(path);
+    if (labels.has(key)) return labels.get(key);
+    let index = this.#labelIndexes.get(metadata);
+    if (index === undefined) {
+      index = new ConsumedLabelIndex(metadata.labelMap.entries, {
+        onQuery: (wildcard) =>
+          this.#tx.noteCfcPreparationWork?.(
+            wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
+          ),
+      });
+      this.#labelIndexes.set(metadata, index);
+    }
+    const label = labelForEntriesAtPath(
+      index.overlapping(path, false).map(({ entry }) => entry),
+      path,
+    );
+    labels.set(key, label);
+    return label;
+  }
+
+  /** Reuses projections while their validated source envelope is unchanged. */
+  projection(
+    metadata: CfcMetadata | undefined,
+    path: readonly string[],
+  ): LinkSourceProjection | undefined {
+    if (metadata === undefined) return undefined;
+    let views = this.#views.get(metadata);
+    if (views === undefined) {
+      views = new Map();
+      this.#views.set(metadata, views);
+    }
+    const key = pathKey(path);
+    if (!views.has(key)) {
+      let index = this.#viewIndexes.get(metadata);
+      if (index === undefined) {
+        index = new ConsumedLabelIndex(metadata.labelMap.entries, {
+          onQuery: (wildcard) =>
+            this.#tx.noteCfcPreparationWork?.(
+              wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
+            ),
+        });
+        this.#viewIndexes.set(metadata, index);
+      }
+      const logicalPath = canonicalizeLogicalPath(path);
+      const projected = withoutShadowedPrincipalClaims(
+        index.overlapping(logicalPath).map(({ entry }) => entry),
+        logicalPath,
+      );
+      views.set(key, {
+        view: cfcLabelViewFromMetadata({
+          ...metadata,
+          labelMap: { ...metadata.labelMap, entries: projected },
+        }, path),
+        principalClaims: (labelForEntriesAtPath(projected, logicalPath)
+          ?.integrity ?? []).filter((atom) =>
+            principalClaimSpelling(atom) !== undefined
+          ),
+      });
+    }
+    return views.get(key);
+  }
+
+  /** Resolves the view's longest cover, then layers the link-specific root. */
+  cover(
+    view: CfcLabelView | undefined,
+    path: readonly string[],
+    root: IFCLabel | undefined,
+  ): IFCLabel | undefined {
+    if (view === undefined) return root;
+    let covers = this.#covers.get(view);
+    if (covers === undefined) {
+      covers = new Map();
+      this.#covers.set(view, covers);
+    }
+    const key = encodePointer(path);
+    if (!covers.has(key)) {
+      let index = this.#coverIndexes.get(view);
+      if (index === undefined) {
+        index = new ConsumedLabelIndex(
+          view.entries.map((entry) => ({
+            path: canonicalizeLogicalPath(entry.path),
+            label: entry.label,
+          })),
+          {
+            onQuery: (wildcard) =>
+              this.#tx.noteCfcPreparationWork?.(
+                wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
+              ),
+          },
+        );
+        this.#coverIndexes.set(view, index);
+      }
+      let depth = -1;
+      let labels: IFCLabel[] = [];
+      for (const { entry } of index.overlapping(path, false)) {
+        if (entry.path.length > depth) {
+          depth = entry.path.length;
+          labels = [entry.label];
+        } else if (entry.path.length === depth) labels.push(entry.label);
+      }
+      covers.set(
+        key,
+        labels.length === 0 ? undefined : {
+          depth,
+          label: labels.length === 1 ? labels[0] : joinLabels(labels),
+        },
+      );
+    }
+    const covered = covers.get(key);
+    if (covered === undefined) return root;
+    return covered.depth === 0 && root !== undefined
+      ? mergeLabels(root, covered.label)
+      : covered.label;
+  }
+
+  /**
+   * Invalidates changed documents before a target collects its input labels.
+   * Applied writes form an append-only log during preparation, so only its
+   * new suffix needs inspection.
+   */
+  refresh(): void {
+    // The raw transaction distinguishes unavailable inspection from an empty
+    // log; the extended prefix-gating API returns an empty log for both.
+    const writes = getTransactionWriteAttempts(this.#tx.tx);
+    if (writes === undefined) {
+      this.#envelopes.clear();
+      this.#viewIndexes = new WeakMap();
+      this.#views = new WeakMap();
+      this.#labelIndexes = new WeakMap();
+      this.#labels = new WeakMap();
+      this.#coverIndexes = new WeakMap();
+      this.#covers = new WeakMap();
+      this.#seenWrites = 0;
+      return;
+    }
+    for (let index = this.#seenWrites; index < writes.length; index++) {
+      const write = writes[index];
+      const documents = this.#envelopes.get(write.space)?.get(
+        normalizeCellScope(write.scope),
+      );
+      const types = documents?.get(write.id);
+      for (const metadata of types?.values() ?? []) {
+        if (metadata === undefined) continue;
+        for (const { view } of this.#views.get(metadata)?.values() ?? []) {
+          if (view === undefined) continue;
+          this.#coverIndexes.delete(view);
+          this.#covers.delete(view);
+        }
+        this.#views.delete(metadata);
+        this.#viewIndexes.delete(metadata);
+        this.#labelIndexes.delete(metadata);
+        this.#labels.delete(metadata);
+      }
+      documents?.delete(write.id);
+    }
+    this.#seenWrites = writes.length;
+  }
+}
 
 // Whether this transaction's view of the document has a root value.
 //
@@ -1203,13 +2377,12 @@ const documentRootIsReadable = (
     meta: INTERNAL_VERIFIER_META,
   }).ok !== undefined;
 
-/**
- * This returns a map whose values are always interned schemas.
- */
+/** Collects each target's distinct generated paths in input order. */
 const generatedOutputPathsByTarget = (
   inputs: readonly WritePolicyInput[],
 ): Map<string, readonly (readonly string[])[]> => {
-  const result = new Map<string, readonly (readonly string[])[]>();
+  const result = new Map<string, (readonly string[])[]>();
+  const seenByTarget = new Map<string, Set<string>>();
   for (const input of inputs) {
     if (
       input.kind !== "schema" || input.schema === undefined ||
@@ -1219,13 +2392,64 @@ const generatedOutputPathsByTarget = (
     }
     const key = targetKey(input.target);
     const path = canonicalizeLogicalPath(input.target.path);
-    const existing = result.get(key) ?? [];
-    if (!existing.some((candidate) => arraysEqual(candidate, path))) {
-      result.set(key, [...existing, path]);
+    let seen = seenByTarget.get(key);
+    if (seen === undefined) {
+      seen = new Set();
+      seenByTarget.set(key, seen);
+      result.set(key, []);
+    }
+    const encoded = encodePointer(path);
+    if (!seen.has(encoded)) {
+      seen.add(encoded);
+      result.get(key)!.push(path);
     }
   }
   return result;
 };
+
+/** The distinct paths each target's schema write-policy inputs wrote through. */
+const schemaInputPathsByTarget = (
+  inputs: readonly WritePolicyInput[],
+): Map<string, (readonly string[])[]> => {
+  const result = new Map<string, (readonly string[])[]>();
+  const seenByTarget = new Map<string, Set<string>>();
+  for (const input of inputs) {
+    if (input.kind !== "schema" || input.schema === undefined) continue;
+    const key = targetKey(input.target);
+    const path = canonicalizeLogicalPath(input.target.path);
+    let seen = seenByTarget.get(key);
+    if (seen === undefined) {
+      seenByTarget.set(key, seen = new Set());
+      result.set(key, []);
+    }
+    const encoded = encodePointer(path);
+    if (!seen.has(encoded)) {
+      seen.add(encoded);
+      result.get(key)!.push(path);
+    }
+  }
+  return result;
+};
+
+/**
+ * The stored envelope as seen from each path a write went through below the
+ * root, wrapped back to its place in the document. Enumerating a
+ * recursive definition from the root stops where it meets itself, so a write
+ * deeper than that meets its claims only through the envelope taken at its
+ * own path, which is the policy a writer declaring nothing there is handed.
+ */
+const storedEnvelopesAtWrittenPaths = (
+  stored: JSONSchema,
+  paths: readonly (readonly string[])[],
+): JSONSchema[] =>
+  [...new Map(paths.map((path) => [encodePointer(path), path])).values()]
+    .flatMap((path) => {
+      if (path.length === 0) return [];
+      const atPath = ContextualFlowControl.getSchemaAtPath(stored, [...path]);
+      return atPath === undefined || atPath === true
+        ? []
+        : [schemaEnvelopeForTargetPath(atPath, path)];
+    });
 
 const candidateSchemasByTarget = (
   inputs: readonly WritePolicyInput[],
@@ -1267,7 +2491,7 @@ const candidateSchemasByTarget = (
 };
 
 /**
- * Maps each write target cell to the list of its write-authority-bearing inputs
+ * Maps each write target cell to its first write-authority-bearing input per path
  * (path + the implementation identity that authored each, captured when the
  * input was recorded). `writeAuthorizedBy` is verified per field, so we keep
  * each input's identity separately rather than collapsing a cell to a single
@@ -1284,32 +2508,73 @@ const writePolicyIdentitiesByTarget = (
   identityForInput: (input: WritePolicyInput) =>
     | ImplementationIdentity
     | undefined,
-): Map<
-  string,
-  Array<
-    { path: readonly string[]; identity: ImplementationIdentity | undefined }
-  >
-> => {
+): Map<string, Map<string, ImplementationIdentity | undefined>> => {
   const result = new Map<
     string,
-    Array<
-      { path: readonly string[]; identity: ImplementationIdentity | undefined }
-    >
+    Map<string, ImplementationIdentity | undefined>
   >();
   for (const input of inputs) {
     if (input.kind !== "schema" && input.kind !== "link-write") {
       continue;
     }
     const key = targetKey(input.target);
-    const list = result.get(key) ?? [];
-    list.push({
-      path: canonicalizeLogicalPath(input.target.path),
-      identity: identityForInput(input),
-    });
-    result.set(key, list);
+    let paths = result.get(key);
+    if (paths === undefined) result.set(key, paths = new Map());
+    const path = encodePointer(input.target.path);
+    if (!paths.has(path)) paths.set(path, identityForInput(input));
   }
   return result;
 };
+
+/**
+ * The authoring identities a claim at a field path answers to: that of the
+ * input {@link identityForSchemaPath} finds, that of every input beneath the
+ * path, and, for every value write that overlaps the path, that of the input
+ * at or above the write, since a write beneath a claimed path changes the
+ * value the claim governs. A write with no input at or above it answers as
+ * `undefined`, which no claim accepts, and so does a claim with nothing at
+ * all around it.
+ */
+const identitiesForClaimPath = (
+  entries: Map<string, ImplementationIdentity | undefined> | undefined,
+  path: readonly string[],
+  writtenPaths: readonly (readonly string[])[],
+): readonly (ImplementationIdentity | undefined)[] => {
+  const nearest = (at: readonly string[]) => {
+    for (let depth = at.length; depth >= 0; depth--) {
+      const key = encodePointer(at.slice(0, depth));
+      if (entries?.has(key)) return { found: true, identity: entries.get(key) };
+    }
+    return { found: false, identity: undefined };
+  };
+  const identities: (ImplementationIdentity | undefined)[] = [];
+  const own = nearest(path);
+  if (own.found) identities.push(own.identity);
+  const beneath = `${encodePointer(path)}/`;
+  for (const [key, identity] of entries ?? []) {
+    if (key.startsWith(beneath)) identities.push(identity);
+  }
+  for (const writtenPath of writtenPaths) {
+    if (pathsOverlap(path, writtenPath)) {
+      identities.push(nearest(writtenPath).identity);
+    }
+  }
+  return identities.length > 0 ? identities : [undefined];
+};
+
+/** The value paths the transaction attempted to write on `target`. */
+const valueWritePathsOf = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): readonly (readonly string[])[] =>
+  (getTransactionWriteAttempts(tx) ?? []).filter((write) =>
+    sameDocument(write, target) &&
+    (write.path.length === 0 || write.path[0] === "value")
+  ).map((write) => canonicalizeDocumentPath(write.path.map(String)));
 
 /**
  * The authoring identity for a field path: the schema input on this cell whose
@@ -1318,27 +2583,16 @@ const writePolicyIdentitiesByTarget = (
  * is the one `writeAuthorizedBy` must be verified against.
  */
 const identityForSchemaPath = (
-  entries:
-    | Array<
-      { path: readonly string[]; identity: ImplementationIdentity | undefined }
-    >
-    | undefined,
+  entries: Map<string, ImplementationIdentity | undefined> | undefined,
   path: readonly string[],
 ): ImplementationIdentity | undefined => {
-  if (entries === undefined) {
-    return undefined;
+  if (entries === undefined) return undefined;
+  for (let depth = path.length; depth >= 0; depth--) {
+    const key = encodePointer(path.slice(0, depth));
+    // A deeper unattributed input shadows any attributed ancestor.
+    if (entries.has(key)) return entries.get(key);
   }
-  let bestLength = -1;
-  let bestIdentity: ImplementationIdentity | undefined;
-  for (const entry of entries) {
-    if (
-      concretePathHasPrefix(path, entry.path) && entry.path.length > bestLength
-    ) {
-      bestLength = entry.path.length;
-      bestIdentity = entry.identity;
-    }
-  }
-  return bestIdentity;
+  return undefined;
 };
 
 const targetKey = (target: {
@@ -1377,8 +2631,7 @@ const linkWritesByTarget = (
   return result;
 };
 
-const pathKey = (path: readonly string[]): string =>
-  encodePointer(canonicalizeLogicalPath(path));
+const pathKey = (path: readonly string[]): string => encodePointer(path);
 
 const pathPatternsOverlap = (
   prefix: readonly string[],
@@ -1564,8 +2817,7 @@ export const storedSchemaCoversCandidateEnvelope = (
         return false;
       }
     }
-    return typeof stored.additionalProperties === "object" &&
-      stored.additionalProperties !== null &&
+    return isObjectOrArray(stored.additionalProperties) &&
       storedSchemaCoversCandidateEnvelope(
         stored.additionalProperties,
         candidateRest,
@@ -1603,8 +2855,8 @@ export const storedSchemaCoversCandidateEnvelope = (
   }
 
   if (
-    typeof candidate.items === "object" && candidate.items !== null &&
-    typeof stored.items === "object" && stored.items !== null
+    isObjectOrArray(candidate.items) &&
+    isObjectOrArray(stored.items)
   ) {
     return storedSchemaCoversCandidateEnvelope(stored.items, candidate.items);
   }
@@ -1675,63 +2927,103 @@ const rebindWriteAuthorizedByClaimsInner = (
     next[key] = rebound;
   }
 
-  if (
-    isObjectOrArray(value.ifc) && isObjectOrArray(value.ifc.writeAuthorizedBy)
-  ) {
-    const claim = value.ifc.writeAuthorizedBy;
-    // Stamp an unstamped claim with the content-addressed moduleIdentity —
-    // the only verification arm (the legacy bundleId arm retired with the
-    // legacy read path, identity E5). A claim carrying a legacy bundleId
-    // stamp is NOT unstamped: it is recognized as stamped — and unservable —
-    // so it fails closed at verification instead of being silently re-bound
-    // to whichever verified writer touches it next.
-    const bindingFile = isObjectOrArray(claim.__ctWriterIdentityOf) &&
-        typeof claim.__ctWriterIdentityOf.file === "string"
-      ? normalizeIdentitySource(claim.__ctWriterIdentityOf.file)
-      : undefined;
-    const bindingPath = isObjectOrArray(claim.__ctWriterIdentityOf) &&
-        Array.isArray(claim.__ctWriterIdentityOf.path)
-      ? claim.__ctWriterIdentityOf.path as readonly string[]
-      : undefined;
-    // The writer must BE the function named by the binding (see the binding
-    // match rationale in rebindWriteAuthorizedByClaims). When we can identify
-    // both bindings, require they match; a mismatch means a foreign writer is
-    // initializing the field, so we leave the claim unstamped.
-    // Minting the FIRST stamp requires exact (slash-normalized) file
-    // equality, not the tolerant spelling correspondence: a claim being
-    // stamped here rides a schema emitted by the SAME compile as the live
-    // writer, so their spellings agree whenever the writer genuinely is the
-    // named binding. Cross-spelling healing of stored claims deliberately
-    // does NOT happen here — the current compile's claim gets stamped
-    // exactly, and reconcileWriterClaimStamp adopts that stamp onto the
-    // stored spelling (schema-merge.ts). Keeping the mint exact means the
-    // tolerance never widens who can create authority, only how an
-    // already-minted stamp meets an aged spelling.
-    const writerOwnsBinding = ids.writerFile !== undefined &&
-      ids.writerPath !== undefined && bindingFile !== undefined &&
-      bindingPath !== undefined &&
-      ids.writerFile === bindingFile &&
-      arraysEqual(ids.writerPath, bindingPath);
-    if (
-      isObjectOrArray(claim.__ctWriterIdentityOf) &&
-      claim.__ctWriterIdentityOf.bundleId === undefined &&
-      claim.__ctWriterIdentityOf.moduleIdentity === undefined &&
-      writerOwnsBinding
-    ) {
-      const nextIfc = { ...value.ifc };
-      nextIfc.writeAuthorizedBy = {
-        ...claim,
-        __ctWriterIdentityOf: {
-          ...claim.__ctWriterIdentityOf,
-          ...(ids.moduleIdentity ? { moduleIdentity: ids.moduleIdentity } : {}),
-        },
-      };
+  if (isObjectOrArray(value.ifc)) {
+    const ifc = value.ifc;
+    const nextIfc: Record<string, unknown> = { ...ifc };
+    let ifcChanged = false;
+    const stamped = stampWriterClaim(ifc.writeAuthorizedBy, ids);
+    if (stamped !== undefined) {
+      nextIfc.writeAuthorizedBy = stamped;
+      ifcChanged = true;
+    }
+    // Each alternative's writer is stamped by that writer alone, exactly as a
+    // lone claim is.
+    if (Array.isArray(ifc.writePolicyAnyOf)) {
+      let alternativesChanged = false;
+      const alternatives = ifc.writePolicyAnyOf.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const stampedPolicy = stampWriterClaim(policy.writeAuthorizedBy, ids);
+        if (stampedPolicy === undefined) return policy;
+        alternativesChanged = true;
+        return { ...policy, writeAuthorizedBy: stampedPolicy };
+      });
+      if (alternativesChanged) {
+        nextIfc.writePolicyAnyOf = alternatives;
+        ifcChanged = true;
+      }
+    }
+    if (ifcChanged) {
       next.ifc = nextIfc;
       changed = true;
     }
   }
 
   return changed ? next : value;
+};
+
+/**
+ * Helper for `rebindWriteAuthorizedByClaimsInner()`, which returns `claim`
+ * stamped with the writer's content-addressed module identity when it is an
+ * unstamped claim naming exactly the writer `ids` describes, or `undefined`
+ * when it is anything else and stays as it is.
+ */
+const stampWriterClaim = (
+  claim: unknown,
+  ids: {
+    moduleIdentity?: string;
+    writerFile?: string;
+    writerPath?: readonly string[];
+  },
+): unknown => {
+  if (!isObjectOrArray(claim)) return undefined;
+  // Stamp an unstamped claim with the content-addressed moduleIdentity —
+  // the only verification arm (the legacy bundleId arm retired with the
+  // legacy read path, identity E5). A claim carrying a legacy bundleId
+  // stamp is NOT unstamped: it is recognized as stamped — and unservable —
+  // so it fails closed at verification instead of being silently re-bound
+  // to whichever verified writer touches it next.
+  const bindingFile = isObjectOrArray(claim.__ctWriterIdentityOf) &&
+      typeof claim.__ctWriterIdentityOf.file === "string"
+    ? normalizeIdentitySource(claim.__ctWriterIdentityOf.file)
+    : undefined;
+  const bindingPath = isObjectOrArray(claim.__ctWriterIdentityOf) &&
+      Array.isArray(claim.__ctWriterIdentityOf.path)
+    ? claim.__ctWriterIdentityOf.path as readonly string[]
+    : undefined;
+  // The writer must BE the function named by the binding (see the binding
+  // match rationale in rebindWriteAuthorizedByClaims). When we can identify
+  // both bindings, require they match; a mismatch means a foreign writer is
+  // initializing the field, so we leave the claim unstamped.
+  // Minting the FIRST stamp requires exact (slash-normalized) file
+  // equality, not the tolerant spelling correspondence: a claim being
+  // stamped here rides a schema emitted by the SAME compile as the live
+  // writer, so their spellings agree whenever the writer genuinely is the
+  // named binding. Cross-spelling healing of stored claims deliberately
+  // does NOT happen here — the current compile's claim gets stamped
+  // exactly, and reconcileWriterClaimStamp adopts that stamp onto the
+  // stored spelling (schema-merge.ts). Keeping the mint exact means the
+  // tolerance never widens who can create authority, only how an
+  // already-minted stamp meets an aged spelling.
+  const writerOwnsBinding = ids.writerFile !== undefined &&
+    ids.writerPath !== undefined && bindingFile !== undefined &&
+    bindingPath !== undefined &&
+    ids.writerFile === bindingFile &&
+    arraysEqual(ids.writerPath, bindingPath);
+  if (
+    !isObjectOrArray(claim.__ctWriterIdentityOf) ||
+    claim.__ctWriterIdentityOf.bundleId !== undefined ||
+    claim.__ctWriterIdentityOf.moduleIdentity !== undefined ||
+    !writerOwnsBinding
+  ) {
+    return undefined;
+  }
+  return {
+    ...claim,
+    __ctWriterIdentityOf: {
+      ...claim.__ctWriterIdentityOf,
+      ...(ids.moduleIdentity ? { moduleIdentity: ids.moduleIdentity } : {}),
+    },
+  };
 };
 
 // The schema placed below the path segments is a document of its own, so its
@@ -1834,37 +3126,41 @@ const valueWriteTargets = (
       metaOnlyByPath: Map<string, boolean>;
     }
   >();
-  const log = tx.getReactivityLog?.();
-  const forgedSystemWrites = tx.getCfcState().unprivilegedSystemWrites ?? [];
-  const seenWriteSpaces = new Set<MemorySpace>(
-    [...(log?.writes ?? []), ...(log?.attemptedWrites ?? [])].map((write) =>
-      write.space
-    ),
-  );
-  for (const space of seenWriteSpaces) {
+  const forgedSystemDocuments = new Set<string>();
+  for (const recorded of tx.getCfcState().unprivilegedSystemWrites ?? []) {
+    // Document ids can contain slashes; each separator is a possible boundary.
+    for (
+      let offset = recorded.indexOf("/");
+      offset !== -1;
+      offset = recorded.indexOf("/", offset + 1)
+    ) {
+      forgedSystemDocuments.add(recorded.slice(0, offset));
+    }
+  }
+  for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       const rawPath = write.address.path;
-      const writePath = canonicalizeLogicalPath(rawPath);
-      // The `cfc`/`source` surface exclusions key on the RAW storage path:
-      // the runtime-internal surfaces are document-root siblings of `value`
+      const writePath = canonicalizeDocumentPath(rawPath);
+      // The reserved-sibling exclusion keys on the RAW storage path: the
+      // runtime-internal surfaces are document-root siblings of `value`
       // (raw `["cfc", ...]`/`["source", ...]`), while user fields of the
       // same names live under `["value", ...]` and canonicalize to identical
       // logical paths. Keying on the canonical path would let a user write
       // to `value.source` dodge schema write policy and flow-label
-      // attachment (#4011 review). The link-valued `internal` exclusion
-      // stays canonical on purpose: it covers the runtime's link plumbing
-      // both at the root surface and inside process-doc values; link writes
-      // carry their labels via the link-write machinery, not here.
+      // attachment (#4011 review). The write chokepoint records every
+      // unauthorized write that reaches one of those siblings, so the writes
+      // excluded here are the runtime's own.
+      // The link-valued `internal` exclusion stays canonical on purpose: it
+      // covers the runtime's link plumbing both at the root surface and
+      // inside process-doc values; link writes carry their labels via the
+      // link-write machinery, not here.
       if (
         write.address.id.startsWith("cid:") ||
         (
           isReservedCfcDocumentId(write.address.id) &&
-          !forgedSystemWrites.some((recorded) =>
-            recorded.startsWith(`${write.address.id}/`)
-          )
+          !forgedSystemDocuments.has(write.address.id)
         ) ||
-        rawPath[0] === "cfc" ||
-        rawPath[0] === "source" ||
+        isReservedSibling(rawPath[0]) ||
         (
           writePath[0] === "internal" &&
           isPrimitiveCellLink(write.value)
@@ -1974,6 +3270,86 @@ const isMetaSeamPath = (
   path: readonly string[],
 ): boolean => metaOnlyByPath?.get(pathKey(path)) === true;
 
+/** What one of {@link valueWriteTargets}' documents records of its writes. */
+type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
+  Map<string, infer Target> ? Target : never;
+
+/**
+ * What stands at `rel` below `value`: the first link met on the way down,
+ * which the path then continues inside of and which is therefore what the
+ * path resolves through, else the value at `rel`, else nothing.
+ */
+const pointerAlongPath = (
+  value: unknown,
+  rel: readonly string[],
+): { link: unknown } | { value: unknown } | undefined => {
+  let current = value;
+  for (let depth = 0;; depth++) {
+    if (isPrimitiveCellLink(current)) return { link: current };
+    if (depth === rel.length) return { value: current };
+    if (!isObjectOrArray(current) || !Object.hasOwn(current, rel[depth])) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[rel[depth]];
+  }
+};
+
+/**
+ * Whether the transaction replaced the pointer a link-origin entry at
+ * `entryPath` labels: whether some payload write at or above that path left
+ * something other than the pointer that stood there when it began. The
+ * pointer is the first link on the way down to the entry's path, or the
+ * value there when no link is on the way.
+ *
+ * Matching is by exact segment, never `PathPrefixIndex`'s wildcard: a
+ * link-origin entry names a concrete path, and a payload key spelled `*` is
+ * a key like any other, not every sibling of it.
+ *
+ * Comparing the values is what keeps a write that stores the same pointer
+ * again, as a raw write that records no link write does, from clearing the
+ * labels nothing then re-mints. A meta-seam write replaces no payload
+ * pointer and is not consulted.
+ */
+const linkEntryPointerReplaced = (
+  tx: IExtendedStorageTransaction,
+  target: ValueWriteTarget,
+  entryPath: readonly string[],
+): boolean =>
+  target.paths.some((written) => {
+    if (
+      isMetaSeamPath(target.metaOnlyByPath, written) ||
+      written.length > entryPath.length ||
+      !written.every((segment, index) => segment === entryPath[index])
+    ) {
+      return false;
+    }
+    const rel = entryPath.slice(written.length);
+    const writtenKey = pathKey(written);
+    const before = target.previousPresentByPath.get(writtenKey) === false
+      ? undefined
+      : pointerAlongPath(target.previousValuesByPath.get(writtenKey), rel);
+    const after = pointerAlongPath(
+      writeDetailValueForTarget(tx, { ...target, path: written }, "value") ??
+        target.valuesByPath.get(writtenKey),
+      rel,
+    );
+    if (before === undefined || after === undefined) {
+      return before !== after;
+    }
+    const base = {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      type: target.type,
+      path: [],
+    };
+    if ("link" in before && "link" in after) {
+      return !areLinksSame(before.link, after.link, base);
+    }
+    return "link" in before || "link" in after ||
+      !deepEqual(before.value, after.value);
+  });
+
 /**
  * Whether `id` names a document of one of the two id classes no schema can
  * declare a store policy on.
@@ -2056,10 +3432,7 @@ const isDeclarablePolicyPath = (
 export const flowReadExcluded = (
   id: string,
   rawPath: readonly string[],
-): boolean =>
-  id.startsWith("cid:") ||
-  rawPath[0] === "cfc" ||
-  rawPath[0] === "source";
+): boolean => id.startsWith("cid:") || isReservedSibling(rawPath[0]);
 
 // A written value made entirely of references (links at every leaf, or
 // empty structure) carries no readable content of its own: the per-slot
@@ -2072,10 +3445,12 @@ export const flowReadExcluded = (
 // `derived` ones — see `pureLinkContainerPaths`.
 // A `FabricPrimitive` is a content leaf like any other: its state is private,
 // so enumerating it finds no members and would classify a byte blob as
-// pure structure. A `FabricInstance` is refused rather than classified.
+// pure structure. An opaque instance is conservatively content as well: its
+// private state cannot establish that it is an empty or reference-only shell.
 const isPureLinkStructure = (value: unknown): boolean => {
   if (value === undefined) return true;
   if (isPrimitiveCellLink(value)) return true;
+  if (value instanceof FabricInstance) return false;
   if (Array.isArray(value)) {
     return value.every((member) => isPureLinkStructure(member));
   }
@@ -2083,6 +3458,206 @@ const isPureLinkStructure = (value: unknown): boolean => {
     return Object.values(value).every((member) => isPureLinkStructure(member));
   }
   return false;
+};
+
+/**
+ * The whole-value roots recorded in `target` by the identity the
+ * transaction's flow join names: a root another identity wrote in the same
+ * transaction is not this writer's to claim.
+ */
+const writersRecordedRoots = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+) => {
+  const key = targetKey(target);
+  const { writeIdentity } = tx.getCfcState();
+  return tx.getCfcState().assertedValueRoots.filter(({ address, identity }) =>
+    targetKey(address) === key && !writeIdentity.multiple &&
+    identity !== undefined && deepEqual(identity, writeIdentity.identity)
+  );
+};
+
+/**
+ * The references the runtime stored in `target` for the writer the flow join
+ * names (`CfcAssertedValueRoot.reference`), by the path of the slot holding
+ * each.
+ */
+const recordedReferences = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): Map<string, CfcAddress> => {
+  const references = new Map<string, CfcAddress>();
+  for (const { address, reference } of writersRecordedRoots(tx, target)) {
+    if (reference === undefined) continue;
+    references.set(pathKey(address.path), reference);
+  }
+  return references;
+};
+
+/**
+ * Whether every primitive cell link in `value`, `value` included, is a
+ * reference the runtime recorded at its path: the one `references` maps that
+ * path to, spelled as a plain reference to that document's root. `path` is
+ * where `value` sits in `target`.
+ */
+const holdsOnlySuppliedReferences = (
+  value: unknown,
+  path: readonly string[],
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  references: ReadonlyMap<string, CfcAddress>,
+): boolean => {
+  if (isPrimitiveCellLink(value)) {
+    const reference = references.get(pathKey(path));
+    if (reference === undefined || isWriteRedirectLink(value)) return false;
+    const link = parseLink(value, { ...target, path: [] });
+    return link !== undefined && link.id === reference.id &&
+      link.space === reference.space &&
+      normalizeCellScope(link.scope) === normalizeCellScope(reference.scope) &&
+      canonicalizeLogicalPath(link.path).length === 0 &&
+      canonicalizeLogicalPath(reference.path).length === 0;
+  }
+  if (value instanceof FabricInstance) return false;
+  if (Array.isArray(value)) {
+    return value.every((member, index) =>
+      holdsOnlySuppliedReferences(
+        member,
+        [...path, String(index)],
+        target,
+        references,
+      )
+    );
+  }
+  if (isWalkableObjectOrArray(value)) {
+    return Object.entries(value).every(([key, member]) =>
+      holdsOnlySuppliedReferences(member, [...path, key], target, references)
+    );
+  }
+  return true;
+};
+
+/**
+ * The destinations of this transaction's whole-value writes in one document
+ * that its flow stamp covers as if it had written them whole.
+ *
+ * `Cell.set` hands the diff a whole value, and the diff writes only the paths
+ * whose stored value differs. Where the destination already held a container
+ * — a `Default` the runtime's setup wrote, say — the stamp then lands on the
+ * changed members alone, and the container nodes keep whatever labeled them
+ * before, which records nobody as their writer. An input witness asks who
+ * wrote every confidential location a transformation read, container nodes
+ * included, so the endorsed writer's output would never carry its witness.
+ * After the write every position under the destination holds the value the
+ * writer supplied, so stamping the destination states what a whole write
+ * would.
+ *
+ * That holds only for plain data. A position holding a reference holds the
+ * pointer, and a pointer the diff found in place — a write redirect, which
+ * the diff writes through rather than over — is not one the writer supplied,
+ * so a destination with a reference beneath it is left to the per-path
+ * stamps, unless the reference is one the runtime recorded storing at that
+ * path for this writer (`CfcAssertedValueRoot.reference`). A destination is
+ * also taken only where
+ * - the transaction wrote beneath it, so a no-op write stamps nothing;
+ * - the join names the writer (`TransformedBy`), which is the one thing the
+ *   stamp adds over the per-path stamps; and
+ * - the join fits every ceiling declared at or beneath it, so the wider stamp
+ *   never measures a misfit the per-path stamps did not; and
+ * - the destination is one this transaction created, or the transaction
+ *   read no content at or beneath it, nor recursively above it. A writer that read its destination can carry what it found into what
+ *   it sets, and the diff leaves such a value where it is; stamping the
+ *   destination whole would then name the writer as the author of a value
+ *   another writer put there. The diff's own reads of its destination
+ *   (`writeDestinationRead`) do not count, and nor does a reference probe,
+ *   which resolving the destination makes and which observes no content.
+ * Recording is the runtime's alone (`recordCfcAssertedValueRoot`).
+ */
+const assertedValueRootPaths = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  writtenPaths: readonly (readonly string[])[],
+  fitsCeilingsFrom: (root: readonly string[]) => boolean,
+  previousPresence: ReadonlyMap<string, boolean> | undefined,
+): (readonly string[])[] => {
+  const key = targetKey(target);
+  const roots: (readonly string[])[] = [];
+  const seen = new Set<string>();
+  let observed:
+    | { path: readonly string[]; recursive: boolean }[]
+    | undefined;
+  const observedWithin = (root: readonly string[]): boolean => {
+    if (observed === undefined) {
+      const found: { path: readonly string[]; recursive: boolean }[] = [];
+      forEachFlowObservation(
+        tx,
+        (space, id, scope, _type, logicalPath, observation) => {
+          if (
+            !observation.writeDestination &&
+            observation.shape !== "followRef" &&
+            targetKey({ space, id, scope }) === key
+          ) {
+            found.push({
+              path: logicalPath,
+              recursive: observation.shape === "value" &&
+                observation.nonRecursive !== true,
+            });
+          }
+          return false;
+        },
+      );
+      observed = found;
+    }
+    return observed.some(({ path, recursive }) =>
+      isPrefix(root, path) || (recursive && isPrefix(path, root))
+    );
+  };
+  const recorded = writersRecordedRoots(tx, target);
+  const references = recordedReferences(tx, target);
+  for (const { address } of recorded) {
+    const root = canonicalizeLogicalPath(address.path);
+    const rootKey = pathKey(root);
+    if (seen.has(rootKey)) continue;
+    seen.add(rootKey);
+    if (!writtenPaths.some((written) => isPrefix(root, written))) continue;
+    const value = tx.readValueOrThrow({ ...target, path: root }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+    if (
+      value === undefined ||
+      !holdsOnlySuppliedReferences(value, root, target, references)
+    ) continue;
+    if (!fitsCeilingsFrom(root)) continue;
+    // A destination this transaction created holds nothing it did not
+    // write, whatever it read on the way.
+    // An exact recorded reference asserts the selected pointer, whose final
+    // binding was verified above. Reading that pointer for equality does not
+    // turn this into an assertion about any of its target's contents.
+    const assertedReference = references.has(rootKey) &&
+      isPrimitiveCellLink(value);
+    if (
+      !assertedReference && previousPresence?.get(rootKey) !== false &&
+      observedWithin(root)
+    ) {
+      continue;
+    }
+    roots.push(root);
+  }
+  return roots;
 };
 
 // Container nodes (arrays/records — including empty ones) inside a
@@ -2120,6 +3695,20 @@ const pureLinkContainerPaths = (
   }
 };
 
+/**
+ * The slot a link-resolution probe asked about: its path without the sub-path
+ * at which a link exposes its recognizable form (`linkProbeSubPath`, the
+ * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
+ */
+const probedSlotPath = (path: readonly string[]): readonly string[] => {
+  const sigil = linkProbeSubPath();
+  const slotLength = path.length - sigil.length;
+  if (sigil.length === 0 || slotLength < 0) return path;
+  return sigil.every((segment, index) => path[slotLength + index] === segment)
+    ? path.slice(0, slotLength)
+    : path;
+};
+
 const forEachFlowObservation = (
   tx: IExtendedStorageTransaction,
   consume: (
@@ -2131,6 +3720,14 @@ const forEachFlowObservation = (
     observation: {
       shape: ReadObservationShape;
       nonRecursive: boolean | undefined;
+      // True when a same-tx dereference-trace source covers this read
+      // at-or-above (the C0 §6.1 row-4 machinery predicate). Probe reads
+      // never arrive covered: the probe of a followed slot arrives as the
+      // pointer observation it is, and the rest are skipped outright. A
+      // covered PLAIN read is the resolution machinery's ordinary journal
+      // shape at a followed slot, and is excluded from `*`-template
+      // consumption in `deriveFlowJoin`.
+      coveredByTrace: boolean;
       // True when the read carries the op-instantiation/wiring machinery
       // marker (`machineryRead`): the runtime setting up operations reads
       // plumbing containers' child paths (slot scalars, `length`, alias
@@ -2140,9 +3737,73 @@ const forEachFlowObservation = (
       // machinery-read boundary that lets the generic pure-link mint route
       // ship (SC-8 remainder; template-population §6).
       machinery: boolean;
+      // True when the read carries `writeDestinationRead`. `deriveFlowJoin`
+      // drops these (§18.6.2); every other consumer of this walk keeps
+      // them, which is what leaves `flowLabelWorkExists` — and with it
+      // whether the flow stage runs at all — exactly as it was.
+      writeDestination: boolean;
+      // True for the probe of a slot this transaction went on to follow: a
+      // `followRef` observation made by a dereference rather than standing
+      // alone.
+      followedSlot: boolean;
     },
   ) => boolean,
 ): boolean => {
+  // Probe reads issued while FOLLOWING a reference belong to the dereference
+  // (C0 §4's dereference row): the follow is journaled as a dereference
+  // trace, and the taint of what was actually read arrives via the ordinary
+  // reads of the target document. Recognize them by the recorded trace
+  // sources: a probe at-or-below a followed slot's path in the same document
+  // belongs to that dereference. One of them is an observation all the same:
+  // the probe of the followed slot itself, which found the reference the
+  // dereference went on to follow (`probesFollowedSlot`).
+  let traceSourcesByDoc:
+    | Map<string, { covering: PathPrefixIndex; followed: Set<string> }>
+    | undefined;
+  const traceSources = (
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+  ) => {
+    if (traceSourcesByDoc === undefined) {
+      traceSourcesByDoc = new Map();
+      for (const trace of tx.getCfcState().dereferenceTraces) {
+        const key = targetKey({
+          space: trace.source.space,
+          id: trace.source.id as URI,
+          scope: normalizeCellScope(trace.source.scope),
+        });
+        let sources = traceSourcesByDoc.get(key);
+        if (sources === undefined) {
+          sources = { covering: new PathPrefixIndex(), followed: new Set() };
+          traceSourcesByDoc.set(key, sources);
+        }
+        const source = canonicalizeLogicalPath(trace.source.path);
+        sources.covering.add(source);
+        sources.followed.add(pathKey(source));
+      }
+    }
+    return traceSourcesByDoc.get(targetKey({ space, id, scope }));
+  };
+  const probeBelongsToDereference = (
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+    logicalPath: readonly string[],
+  ): boolean =>
+    traceSources(space, id, scope)?.covering.hasPrefixOf(logicalPath) === true;
+  // Whether `logicalPath` is the probe of a slot this transaction followed:
+  // the one read of a dereference that observes which reference sits at the
+  // slot, where the probes beneath it only walk the path that remains.
+  const probesFollowedSlot = (
+    space: MemorySpace,
+    id: URI,
+    scope: ReturnType<typeof normalizeCellScope>,
+    logicalPath: readonly string[],
+  ): boolean =>
+    traceSources(space, id, scope)?.followed.has(
+      pathKey(probedSlotPath(logicalPath)),
+    ) === true;
   for (const read of tx.getReadActivities?.() ?? []) {
     if (isInternalVerifierRead(read.meta)) {
       continue;
@@ -2159,18 +3820,74 @@ const forEachFlowObservation = (
     if (flowReadExcluded(read.id, read.path)) {
       continue;
     }
-    // Probes observe reference identity; the full stored-link read records
-    // the applicable slot policy as well. Both remain dependencies even when
-    // the same attempt subsequently follows the reference (§8.2.4).
-    const logicalPath = canonicalizeLogicalPath(read.path);
+    // Read classification (C1, C0 §4): a link-resolution probe that is NOT
+    // part of a dereference this transaction performed observed WHICH
+    // reference sits at the slot without following it — a followRef
+    // observation. These used to be skipped outright, which was the SC-8
+    // residual: the fact-of-which-element went unlabeled. They now consume
+    // followRef-class entries (the pointer's own link-origin label) — and
+    // only those; the target's content taint still arrives only via an
+    // ordinary read of the target document. `nonRecursive` reads (key-add,
+    // length, count) observe shape and membership; everything else is a
+    // recursive value read.
+    //
+    // A probe the RUNTIME issued as its own plumbing is not an observation
+    // at all, and is skipped with the trace-covered ones. §4.6.3 puts the
+    // link-carried label on a STANDALONE reference-identity read — something
+    // the computation did with the answer — and the machinery marker names
+    // the reads no computation asked for: op instantiation, result plumbing,
+    // and the list coordinators' scaffolding, which probe prior slots to
+    // compare identities. What such a probe does with the reference it finds
+    // is write that same reference somewhere else, and the link write
+    // carries the source's label to the slot it lands in
+    // (`derivePersistedLinkLabel` below), so the pointer's protection
+    // arrives pointwise at the destination. Joining it into the flow stamp
+    // as well smears it over everything else the wiring transaction wrote —
+    // in a piece's case over the whole result projection, which is what took
+    // a nested piece's entire `$UI` away under the §8.10.6 display ceiling.
+    // A coordinator's genuine dependencies stay outside the marked scope:
+    // `filter` reads every predicate result there, and `flatMap` every child
+    // result. `map` reads no element value anywhere — it republishes
+    // references — so the link-origin entry the link write mints at each
+    // output slot is the whole of an element's protection in its output, and
+    // `cfc-template-population.test.ts` measures that over a labeled element.
+    const logicalPath = canonicalizeDocumentPath(read.path);
     const space = read.space;
     const id = read.id as URI;
     const scope = normalizeCellScope(read.scope);
-    const shape: ReadObservationShape = isLinkResolutionProbe(read.meta)
-      ? "followRef"
-      : read.nonRecursive === true
-      ? "shape"
-      : "value";
+    // Computed on demand rather than for every read: `flowLabelWorkExists`
+    // consumes observations without ever reading `coveredByTrace`, and it is
+    // the caller that runs on every reactive action commit. Only a
+    // link-resolution probe needs the answer here, and only `deriveFlowJoin`
+    // asks for it afterwards. Memoized so the two cannot disagree.
+    let coveredByTraceMemo: boolean | undefined;
+    const coveredByTrace = (): boolean =>
+      coveredByTraceMemo ??= probeBelongsToDereference(
+        space,
+        id,
+        scope,
+        logicalPath,
+      );
+    let shape: ReadObservationShape;
+    let followsSlot = false;
+    if (isLinkResolutionProbe(read.meta)) {
+      if (isMachineryRead(read.meta)) {
+        continue;
+      }
+      if (coveredByTrace()) {
+        // A dereference retains the restrictions of the reference it follows
+        // (§4.6.3, §8.2.4): the probe of the followed slot is a pointer
+        // observation like a standalone one. The other probes a dereference
+        // covers found no reference to follow.
+        if (!probesFollowedSlot(space, id, scope, logicalPath)) {
+          continue;
+        }
+        followsSlot = true;
+      }
+      shape = "followRef";
+    } else {
+      shape = read.nonRecursive === true ? "shape" : "value";
+    }
     if (
       consume(
         space,
@@ -2181,15 +3898,54 @@ const forEachFlowObservation = (
         {
           shape,
           nonRecursive: read.nonRecursive,
+          get coveredByTrace() {
+            return !followsSlot && coveredByTrace();
+          },
           machinery: isMachineryRead(read.meta),
+          writeDestination: isWriteDestinationRead(read.meta),
+          followedSlot: followsSlot,
+        },
+      )
+    ) {
+      return true;
+    }
+    // A machinery read keeps exactly the consumption it has unmarked, which
+    // for a `length` read is the entries at `length`.
+    const lengthOf = shape === "followRef" || isMachineryRead(read.meta)
+      ? undefined
+      : nativeLengthParent(tx, read);
+    if (
+      lengthOf !== undefined &&
+      consume(
+        space,
+        id,
+        scope,
+        (read.type ?? "application/json") as MediaType,
+        canonicalizeDocumentPath(lengthOf),
+        {
+          shape: "shape",
+          nonRecursive: true,
+          get coveredByTrace() {
+            return coveredByTrace();
+          },
+          machinery: false,
+          writeDestination: isWriteDestinationRead(read.meta),
+          followedSlot: false,
         },
       )
     ) {
       return true;
     }
   }
-  // Each dereference's source is consumed by its stored-link read. Trace
-  // targets contribute only through the observations actually made there.
+  // Dereference trace TARGETS deliberately do NOT contribute: following a
+  // reference is an observation of the link (the probe of the followed slot,
+  // above), not a read of the target's content. When a transaction actually reads a
+  // value through a link, the target read appears in the journal as an
+  // ordinary read activity and is covered above; counting trace ends too
+  // would taint identity-only link handling (e.g. the list builtins'
+  // coordinators resolving element links they never read) with the target's
+  // full label — exactly the blind-passing idiom flow labels must keep
+  // cheap (design D4, SC-8).
   // Trigger reads (§8.9.2): the addresses whose invalidating writes
   // scheduled this run. The decision to run now was influenced by their
   // values even when this run's branch never re-reads them — without this,
@@ -2218,6 +3974,9 @@ const forEachFlowObservation = (
           shape: "value",
           nonRecursive: false,
           machinery: false,
+          writeDestination: false,
+          coveredByTrace: false,
+          followedSlot: false,
         },
       )
     ) {
@@ -2227,12 +3986,174 @@ const forEachFlowObservation = (
   return false;
 };
 
-// Exported for tests: the trigger-read cid: guard above defends
-// construction paths that bypass the addCfcTriggerReads ingest filter, and
-// with the tx state sealed (getCfcState() is a read-only view) the only way
-// to exercise it is to hand deriveFlowJoin a state carrying a smuggled
-// entry directly.
-export const deriveFlowJoin = (
+// The containers whose membership stamps THIS transaction re-derives this
+// attempt — the §8.12.8 replace-from-criteria readback exclusion set
+// (template-population §3.1). Two re-stamp routes, mirroring the persist
+// region: containers a list coordinator DECLARED this reconcile
+// (`recordCfcStructureContainer`), and container nodes of pure-link-structure
+// value writes. A reconciling coordinator reads its own previous output as
+// diff/identity scaffolding; with the `*`-child class templates persisted,
+// those readback reads would resolve the very entries this attempt drops and
+// re-mints — joining J_prev into J on every reconcile and turning the
+// normative replace-from-criteria into the accumulate-forever §8.12.8
+// rejects. So the writer's own flow join skips exactly the REPLACED entries
+// (the enumerate stamp and the `*`-child templates of its own re-stamped
+// containers); the frozen existence entry is not replaced and not excluded.
+// Foreign readers — and this transaction's reads of every OTHER container —
+// consume templates in full, which is what closes the SC-4/SC-8 residuals.
+const ownRestampContainerPaths = (
+  tx: IExtendedStorageTransaction,
+): Map<string, Set<string>> => {
+  const result = new Map<string, Set<string>>();
+  const add = (key: string, containerPath: readonly string[]) => {
+    let paths = result.get(key);
+    if (paths === undefined) {
+      paths = new Set();
+      result.set(key, paths);
+    }
+    paths.add(pathKey(containerPath));
+  };
+  for (const addr of tx.getCfcState().structureContainers) {
+    add(
+      targetKey({
+        space: addr.space,
+        id: addr.id as URI,
+        scope: normalizeCellScope(addr.scope),
+      }),
+      canonicalizeLogicalPath(addr.path),
+    );
+  }
+  for (const [key, target] of valueWriteTargets(tx)) {
+    for (const path of target.paths) {
+      const written = target.valuesByPath.get(pathKey(path));
+      if (written === undefined || !isPureLinkStructure(written)) {
+        continue;
+      }
+      const containers: (readonly string[])[] = [];
+      pureLinkContainerPaths(written, path, containers);
+      for (const container of containers) {
+        add(key, container);
+      }
+    }
+  }
+  return result;
+};
+
+// Whether `entry` is one of the membership entries a re-stamp of the given
+// container paths replaces: the container-anchored enumerate stamp, or a
+// `*`-child class template of one of the containers.
+const isReplacedMembershipEntry = (
+  entry: LabelMapEntry,
+  containers: ReadonlySet<string>,
+): boolean => {
+  if (entry.origin !== "structure") {
+    return false;
+  }
+  const entryPath = canonicalizeLogicalPath(entry.path);
+  if (entry.observes === "enumerate") {
+    return containers.has(pathKey(entryPath));
+  }
+  return entryPath.length > 0 &&
+    entryPath[entryPath.length - 1] === "*" &&
+    containers.has(pathKey(entryPath.slice(0, -1)));
+};
+
+/**
+ * Whether `entry` is a runtime-minted `*`-child template strictly beneath
+ * `slot`: one labeling which reference sits at a child of the slot, or deeper.
+ * `*` matches on either side, as it does wherever an entry is resolved.
+ */
+const isRuntimeTemplateBeneath = (
+  entry: LabelMapEntry,
+  slot: readonly string[],
+): boolean => {
+  const path = canonicalizeLogicalPath(entry.path);
+  return path.length > slot.length &&
+    isRuntimeMintedTemplate({ origin: entry.origin, path }) &&
+    isPrefix(slot, path);
+};
+
+/**
+ * Whether a stamp names the reference `target` names: whether its
+ * `LinkReference` names the document `target` is in, at a path at or above
+ * `target`'s.
+ */
+const stampNamesReference = (
+  entry: LabelMapEntry,
+  target: CfcAddress,
+): boolean =>
+  (entry.label.integrity ?? []).some((atom) => {
+    if (
+      !isObjectNotArray(atom) ||
+      (atom as { type?: unknown }).type !== CFC_ATOM_TYPE.LinkReference
+    ) return false;
+    const source = (atom as {
+      source?: { space?: unknown; id?: unknown; path?: unknown };
+    }).source;
+    return source !== undefined && source.space === target.space &&
+      source.id === target.id && Array.isArray(source.path) &&
+      isPrefix(
+        canonicalizeLogicalPath(source.path as string[]),
+        canonicalizeLogicalPath(target.path),
+      );
+  });
+
+/**
+ * Whether a stamp at exactly `slot` names its writer but describes a
+ * reference other than `target`, the one the slot holds, or none. A slot a writer
+ * stored a reference at is stamped with that reference named beside the
+ * writer (`assertedValueRootPaths`), so the stamp describes one pointer. An
+ * append lands at the list's live tail, while the label envelope its
+ * transaction wrote describes the list it read, so under concurrent appends a
+ * slot's stamp can sit beside another writer's reference.
+ */
+const slotStampDescribesAnother = (
+  metadata: CfcMetadata,
+  slot: readonly string[],
+  target: CfcAddress,
+): boolean => {
+  const key = pathKey(slot);
+  // Every entry a value read of the slot takes as witness evidence counts,
+  // an untagged one written before entries carried an origin or an
+  // observation class included: a stamp that names a writer at the slot but
+  // no reference, or another one, cannot vouch for the pointer there.
+  return metadata.labelMap.entries.some((entry) =>
+    isWitnessEvidence(entry) &&
+    (entry.observes === undefined || entry.observes === "value") &&
+    pathKey(entry.path) === key &&
+    (entry.label.integrity ?? []).some(isTransformedByAtom) &&
+    !stampNamesReference(entry, target)
+  );
+};
+
+/**
+ * The input witnesses a followed reference holds at its slot: the retained
+ * atoms of the value stamps that resolve there, and none when a stamp at the
+ * slot describes another reference. Which reference sits at a slot decides
+ * which document a reader reads, so a reader that follows one to
+ * confidential content consumed the choice as an input, whatever the slot's
+ * own label says. A reference link writes put in place carries no
+ * value stamp of its own, so it retains nothing unless its writer's stamp
+ * covers the slot (`assertedValueRootPaths`).
+ */
+export const followedReferenceWitnesses = (
+  metadata: CfcMetadata | undefined,
+  slot: readonly string[],
+  target: CfcAddress,
+): CfcAtom[] => {
+  if (metadata === undefined) return [];
+  if (slotStampDescribesAnother(metadata, slot, target)) return [];
+  const evidence = consumedEntriesForRead(metadata, slot, {
+    nonRecursive: true,
+    consumes: "value",
+  }).filter(isWitnessEvidence).map(asWitnessEvidence);
+  return retainedInputWitnesses(
+    labelForEntriesAtPath(evidence, slot)?.integrity,
+  );
+};
+
+/** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
+const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
   options?: {
     /**
@@ -2258,34 +4179,277 @@ export const deriveFlowJoin = (
   // so the meet is usually empty until inputs are universally certified —
   // staged conformance per SC-9, never over-claiming.)
   let hereditaryMeet: CfcAtom[] | undefined;
+  // The implementation identity the join is attributed to (see the
+  // `TransformedBy` mint below), and the input witnesses retained for it:
+  // the meet, over every confidential observation, of what that observation
+  // carried at all of its confidential locations (`input-witness.ts`).
+  // `undefined` until a confidential observation arrives, and never computed
+  // when there is no identity to attribute the join to.
+  const writeIdentity = tx.getCfcState().writeIdentity;
+  const identity = writeIdentity.multiple ? undefined : writeIdentity.identity;
+  let inputWitnesses: CfcAtom[] | undefined;
+  const noteInputWitnesses = (held: readonly CfcAtom[] | undefined): void => {
+    if (held === undefined) return;
+    inputWitnesses = inputWitnesses === undefined
+      ? [...held]
+      : meetInputWitnesses(inputWitnesses, held);
+  };
   const labeledSpaces = options?.collectLabeledSpaces === true
     ? new Set<MemorySpace>()
     : undefined;
-  const metadataByDoc = new Map<string, CfcMetadata | undefined>();
+  // Each pass owns its snapshots: prepare can run again after metadata writes.
+  const metadataByDoc = new Map<string, {
+    metadata: CfcMetadata | undefined;
+    indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
+    labels: Map<string, IFCLabel | undefined>;
+    witnesses: Map<string, CfcAtom[] | undefined>;
+  }>();
+  // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
+  const ownRestamps = ownRestampContainerPaths(tx);
+  // Where each document was read with confidential content, and each
+  // location a content read observed, for the references followed into it
+  // (`followedReferenceWitnesses`).
+  const confidentialReads = new Map<
+    string,
+    { path: readonly string[]; recursive: boolean }[]
+  >();
+  const observedLocations = new Map<string, {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+    recursive: boolean;
+  }>();
+  // The followed slots whose own label is confidential, by document and
+  // path: references that count as followed whatever their target carries.
+  const confidentialFollowedSlots = new Set<string>();
   forEachFlowObservation(
     tx,
     (space, id, scope, type, logicalPath, observation) => {
-      const key = targetKey({ space, id, scope });
-      if (!metadataByDoc.has(key)) {
-        metadataByDoc.set(key, storedMetadataFor(tx, space, id, scope, type));
+      // The write path reading its own destination to decide which
+      // sub-paths differ (§18.6.2,
+      // `docs/specs/cfc-write-destination-reads.md`). No program asked for
+      // it, and what it returns decides which writes are emitted, never a
+      // written value. Where what is stored there sends the write
+      // elsewhere, the diff reads the slot again without the marker, so
+      // that read arrives here and joins.
+      if (observation.writeDestination) {
+        return false;
       }
-      const label = effectiveReadLabel(
-        metadataByDoc.get(key),
-        logicalPath,
-        {
-          nonRecursive: observation.nonRecursive,
-          consumes: observation.shape,
-          ...(observation.machinery
-            ? {
-              excludeEntry: (entry: LabelMapEntry) =>
-                entry.origin === "link" || isRuntimeMintedTemplate({
+      const key = targetKey({ space, id, scope });
+      if (identity !== undefined && observation.shape !== "followRef") {
+        const recursive = observation.shape === "value" &&
+          observation.nonRecursive !== true;
+        const locationKey = stringTupleKey([key, pathKey(logicalPath)]);
+        if (!observedLocations.get(locationKey)?.recursive) {
+          observedLocations.set(locationKey, {
+            space,
+            id,
+            scope,
+            path: logicalPath,
+            recursive,
+          });
+        }
+      }
+      let document = metadataByDoc.get(key);
+      if (document === undefined) {
+        document = {
+          metadata: storedMetadataFor(tx, space, id, scope, type),
+          indexes: new Map(),
+          labels: new Map(),
+          witnesses: new Map(),
+        };
+        metadataByDoc.set(key, document);
+      }
+      const indexFor = (
+        shape: ReadObservationShape,
+      ): ConsumedLabelIndex | undefined => {
+        let index = document.indexes.get(shape);
+        if (index === undefined && document.metadata !== undefined) {
+          index = new ConsumedLabelIndex(
+            document.metadata.labelMap.entries.filter((entry) =>
+              readConsumesEntry(shape, entry)
+            ),
+            {
+              onQuery: (wildcard) =>
+                tx.noteCfcPreparationWork?.(
+                  wildcard
+                    ? "overlapWildcardQueries"
+                    : "overlapConcreteQueries",
+                ),
+            },
+          );
+          document.indexes.set(shape, index);
+        }
+        return index;
+      };
+      const index = indexFor(observation.shape);
+      const ownedContainers = ownRestamps.get(key);
+      // `*`-template consumption keeps the C0 §6.1 row-3/row-4 boundary the
+      // probe channel already has, extended to PLAIN reads: resolution
+      // machinery journals ordinary reads at followed slots (the slot
+      // scalar, the sigil interior) on its way to the target, and those
+      // must not consume the slot templates — the follow's taint arrives
+      // via the target's own reads (row 4) and via the probe of the followed
+      // slot, which consumes the slot's `followRef` template once, while
+      // STANDALONE slot observations (no covering trace) consume in full
+      // (row 3, the SC-8 closures). Without this, every traversal hop through a stamped
+      // container smears the container's J onto whatever the transaction
+      // writes — re-importing the pointwise smear the S16 substrate
+      // removed (measured: the phase-B pointwise map suite). The
+      // `machinery` arm is the same boundary for the wiring reads no trace
+      // covers: op instantiation, dependency seeding, result plumbing and
+      // coordinator scaffolding read plumbing containers' child paths
+      // (slot scalars, `length`, alias shells) as scaffolding, and letting
+      // those standalone-shaped reads consume templates smeared one
+      // reconcile's J into the next op's action chain — what kept the
+      // generic mint route off in Stage A (the SC-8 remainder). Marked
+      // reads keep every OTHER consumption (link entries, concrete
+      // structure/derived) — byte-identical to their pre-template
+      // behavior, so the exclusion cannot under-taint relative to main.
+      //
+      // The `probedSlot` arm is of another kind: it says what a pointer
+      // observation is about. A probe keeps the templates at its slot and
+      // drops the runtime-minted ones beneath it. It asks which reference
+      // sits at ONE slot, and a template beneath labels which reference sits
+      // at a child. Read at the sigil's path, a probe of a container matches
+      // the container's own child template through the sigil key, as though
+      // "/" were a child, and in the atomic layout, where the probe reads the
+      // slot itself, recursion reaches it too. `Cell.set` probes the root of
+      // the store it writes, so without this arm a writer of a store created
+      // under a label carries that label onto every document it writes.
+      //
+      // The arm takes nothing from a reader of the children. Following a
+      // child's slot consumes the template there through the probe of that
+      // slot, reading a child's content or existence consumes the
+      // `value`/`shape` twins, and a probe of a child's own slot consumes the
+      // template there. Declared entries are the schema's policy and stay
+      // consumed: a declared `observes:"followRef"` entry has no twin, and
+      // this probe is what reaches it when a reader takes a whole
+      // container's references.
+      const probedSlot = observation.shape === "followRef"
+        ? probedSlotPath(logicalPath)
+        : undefined;
+      const excludesTemplates = observation.coveredByTrace ||
+        observation.machinery ||
+        ownedContainers !== undefined || probedSlot !== undefined;
+      const labelKey = stringTupleKey([
+        observation.shape,
+        String(observation.nonRecursive === true),
+        String(observation.coveredByTrace || observation.machinery),
+        encodePointer(logicalPath),
+      ]);
+      let label = document.labels.get(labelKey);
+      if (!document.labels.has(labelKey)) {
+        const exclusion = excludesTemplates
+          ? {
+            excludeEntry: (entry: LabelMapEntry) =>
+              ((observation.coveredByTrace || observation.machinery) &&
+                isRuntimeMintedTemplate({
                   origin: entry.origin,
                   path: canonicalizeLogicalPath(entry.path),
-                }),
-            }
-            : {}),
-        },
-      );
+                })) ||
+              (ownedContainers !== undefined &&
+                isReplacedMembershipEntry(entry, ownedContainers)) ||
+              (probedSlot !== undefined &&
+                isRuntimeTemplateBeneath(entry, probedSlot)),
+          }
+          : {};
+        const entries = document.metadata === undefined
+          ? undefined
+          : consumedEntriesForRead(
+            document.metadata,
+            logicalPath,
+            {
+              nonRecursive: observation.nonRecursive,
+              consumes: observation.shape,
+              ...exclusion,
+            },
+            index,
+          );
+        label = entries === undefined ? undefined : labelForConsumedEntries(
+          entries,
+          logicalPath,
+          observation.nonRecursive,
+        );
+        document.labels.set(labelKey, label);
+        // Skipped once the meet is empty, which no later observation can
+        // refill; the `undefined` cached then is never read into a nonempty
+        // meet.
+        document.witnesses.set(
+          labelKey,
+          entries === undefined || identity === undefined ||
+            inputWitnesses?.length === 0
+            ? undefined
+            : observationInputWitnesses(
+              entries,
+              logicalPath,
+              observation.nonRecursive,
+              // A shallow content read's locations are resolved over what a
+              // value read of them would consume; see
+              // `observationInputWitnesses`. A `followRef` observation keeps
+              // its own entries: the pointer at a slot is labeled by the
+              // link write that put it there, which carries no
+              // `TransformedBy`, so a reference still retains no witness.
+              observation.shape === "shape"
+                ? consumedEntriesForRead(
+                  document.metadata!,
+                  logicalPath,
+                  { nonRecursive: true, consumes: "value", ...exclusion },
+                  indexFor("value"),
+                )
+                : undefined,
+            ),
+        );
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was, so a list other code truncated would otherwise keep
+        // every surviving member's witness. Its value stamps are a location
+        // of the read. A record's key named `length` is read the same way,
+        // which can only withhold a witness.
+        document.witnesses.set(
+          `${labelKey}#length`,
+          document.metadata === undefined ||
+            observation.nonRecursive !== true ||
+            observation.shape === "followRef" || identity === undefined ||
+            inputWitnesses?.length === 0
+            ? undefined
+            : (() => {
+              const lengthPath = [...logicalPath, "length"];
+              const lengthEntries = consumedEntriesForRead(
+                document.metadata!,
+                lengthPath,
+                { nonRecursive: true, consumes: "value", ...exclusion },
+                indexFor("value"),
+              ).filter((entry) =>
+                pathKey(entry.path) ===
+                  pathKey(lengthPath)
+              );
+              return lengthEntries.length === 0
+                ? undefined
+                : observationInputWitnesses(lengthEntries, lengthPath, true);
+            })(),
+        );
+      }
+      // Every observation counts toward the input witnesses, `followRef`
+      // included: which reference sits at a slot is information the
+      // transformation consumed, and a pointer the endorsed writer did not
+      // write must not pass as its input.
+      //
+      // The probe of a followed slot is the exception, because the reference
+      // is counted where it is followed: what a followed reference witnesses
+      // is read off the value stamps at its slot, below
+      // (`followedReferenceWitnesses`). A followed slot whose own label is
+      // confidential is counted there even when its target is public.
+      if (!observation.followedSlot) {
+        noteInputWitnesses(document.witnesses.get(labelKey));
+        noteInputWitnesses(document.witnesses.get(`${labelKey}#length`));
+      } else if (label?.confidentiality?.length) {
+        confidentialFollowedSlots.add(
+          stringTupleKey([key, pathKey(probedSlotPath(logicalPath))]),
+        );
+      }
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its
@@ -2300,6 +4464,16 @@ export const deriveFlowJoin = (
       }
       if (label?.confidentiality?.length) {
         atoms.push(...label.confidentiality);
+        let reads = confidentialReads.get(key);
+        if (reads === undefined) {
+          reads = [];
+          confidentialReads.set(key, reads);
+        }
+        reads.push({
+          path: logicalPath,
+          recursive: observation.shape !== "shape" &&
+            observation.nonRecursive !== true,
+        });
       }
       // followRef observations contribute confidentiality only. The
       // hereditary meet quantifies over the transformation's CONTENT inputs
@@ -2336,13 +4510,186 @@ export const deriveFlowJoin = (
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
+    // The input-witness meet is not the hereditary one: it quantifies over
+    // every confidential input, so a confidential input that carries no
+    // evidence, as label metadata does not, empties it
+    // (docs/specs/cfc-transformed-by-input-witnesses.md).
+    noteInputWitnesses([]);
+  }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    if (
+      labeledSpaces !== undefined &&
+      ((observation.flow.confidentiality?.length ?? 0) > 0 ||
+        (observation.flow.integrity?.length ?? 0) > 0)
+    ) {
+      for (const space of observation.labeledSpaces) labeledSpaces.add(space);
+    }
+    atoms.push(...(observation.flow.confidentiality ?? []));
+    // `observation.flow` is itself a flow join, whose integrity is a meet
+    // over what the content consumed, so it overstates no input.
+    if ((observation.flow.confidentiality?.length ?? 0) > 0) {
+      noteInputWitnesses(retainedInputWitnesses(observation.flow.integrity));
+    }
+    const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
+      atomPropagationClass(atom) === "hereditary"
+    );
+    hereditaryMeet = hereditaryMeet === undefined
+      ? [...hereditary]
+      : hereditaryMeet.filter((kept) =>
+        hereditary.some((atom) => deepEqual(atom, kept))
+      );
+  }
+  // A reference a transformation observed and followed to confidential
+  // content is an input location of its own: the slot holding it decided
+  // what was read. It counts whether or not the slot is itself labeled, and
+  // so does a reference whose target is such a slot. A write redirect counts
+  // like any other reference: pattern code can store one as data, and a
+  // read follows it as it follows any other. Nothing here applies to a
+  // transformation that read nothing confidential.
+  if (
+    identity !== undefined && inputWitnesses?.length !== 0 &&
+    confidentialReads.size > 0
+  ) {
+    const docKey = (address: Omit<CfcAddress, "path">) =>
+      targetKey({
+        space: address.space,
+        id: address.id as URI,
+        scope: normalizeCellScope(address.scope),
+      });
+    type ObservedLocation = typeof observedLocations extends
+      Map<string, infer V> ? V : never;
+    const references: { slot: ObservedLocation; target: CfcAddress }[] = [];
+    // A shallow read observed the value at its path; a recursive one, every
+    // value beneath it, each reference among them included.
+    const collect = (
+      location: ObservedLocation,
+      value: unknown,
+      path: readonly string[],
+    ): void => {
+      if (isPrimitiveCellLink(value)) {
+        const link = parseLink(value, { ...location, path: [] });
+        if (link === undefined) return;
+        references.push({
+          slot: { ...location, path },
+          target: {
+            space: link.space,
+            id: link.id,
+            scope: normalizeCellScope(link.scope),
+            path: canonicalizeLogicalPath(link.path),
+          },
+        });
+        return;
+      }
+      if (!location.recursive) return;
+      if (Array.isArray(value)) {
+        value.forEach((member, index) =>
+          collect(location, member, [...path, String(index)])
+        );
+      } else if (isWalkableObjectOrArray(value)) {
+        for (const [member, nested] of Object.entries(value)) {
+          collect(location, nested, [...path, member]);
+        }
+      }
+    };
+    for (const location of observedLocations.values()) {
+      collect(
+        location,
+        tx.readValueOrThrow(location, { meta: INTERNAL_VERIFIER_META }),
+        location.path,
+      );
+    }
+    const metadataOf = (location: ObservedLocation) => {
+      const key = docKey(location);
+      return metadataByDoc.has(key)
+        ? metadataByDoc.get(key)!.metadata
+        : storedMetadataFor(
+          tx,
+          location.space,
+          location.id,
+          location.scope,
+          "application/json",
+        );
+    };
+    // A slot whose stamp describes another reference than the one it holds
+    // witnesses nothing, whether its reference is followed or only observed.
+    for (const { slot, target } of references) {
+      const metadata = metadataOf(slot);
+      if (
+        metadata !== undefined &&
+        slotStampDescribesAnother(metadata, slot.path, target)
+      ) {
+        noteInputWitnesses([]);
+        break;
+      }
+    }
+    const readsConfidentially = (target: CfcAddress): boolean =>
+      (confidentialReads.get(docKey(target)) ?? []).some((read) =>
+        isPrefix(target.path, read.path) ||
+        (read.recursive && isPrefix(read.path, target.path))
+      );
+    // A worklist over the references by the document each names, so a
+    // chain of references is walked once rather than once per link.
+    type Reference = (typeof references)[number];
+    const byTargetDoc = new Map<string, Reference[]>();
+    for (const reference of references) {
+      const key = docKey(reference.target);
+      const named = byTargetDoc.get(key);
+      if (named === undefined) byTargetDoc.set(key, [reference]);
+      else named.push(reference);
+    }
+    const followed = new Set<Reference>();
+    const pending: Reference[] = [];
+    const unaccounted = new Set(confidentialFollowedSlots);
+    for (const reference of references) {
+      const slotKey = stringTupleKey([
+        docKey(reference.slot),
+        pathKey(reference.slot.path),
+      ]);
+      const confidentialSlot = confidentialFollowedSlots.has(slotKey);
+      unaccounted.delete(slotKey);
+      if (confidentialSlot || readsConfidentially(reference.target)) {
+        followed.add(reference);
+        pending.push(reference);
+      }
+    }
+    // A confidential followed slot no content read observed has no value
+    // stamp to be read off, so it witnesses nothing.
+    if (unaccounted.size > 0) noteInputWitnesses([]);
+    while (pending.length > 0) {
+      const next = pending.pop()!;
+      for (const reference of byTargetDoc.get(docKey(next.slot)) ?? []) {
+        if (
+          !followed.has(reference) &&
+          isPrefix(reference.target.path, next.slot.path)
+        ) {
+          followed.add(reference);
+          pending.push(reference);
+        }
+      }
+    }
+    for (const { slot, target } of followed) {
+      const metadata = metadataOf(slot);
+      noteInputWitnesses(
+        followedReferenceWitnesses(metadata, slot.path, target),
+      );
+      if (inputWitnesses?.length === 0) break;
+    }
   }
   for (const observation of tx.getCfcState().referenceObservations) {
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
+    for (
+      const space of cfcReferenceObservationOriginSpaces(observation) ?? []
+    ) {
+      labeledSpaces?.add(space as MemorySpace);
+    }
     atoms.push(...observation.confidentiality);
-    // A reference's identity evidence does not certify computed contents.
+    // Selection evidence describes only the historical pointer choice. It
+    // participates in the input meet without certifying target contents.
     hereditaryMeet = [];
+    noteInputWitnesses(cfcReferenceObservationSelectionWitnesses(observation));
   }
   // Forwarding a trusted carrier exposes its binding even if it arrived as a
   // sigil object whose identity getter ran in an earlier transaction.
@@ -2351,27 +4698,35 @@ export const deriveFlowJoin = (
     if (input.reference.confidentiality.length === 0) continue;
     atoms.push(...input.reference.confidentiality);
     labeledSpaces?.add(input.reference.binding.space);
+    if (tx.isRuntimeWritePolicyInput(input)) {
+      for (const space of input.reference.originSpaces ?? []) {
+        labeledSpaces?.add(space as MemorySpace);
+      }
+    }
     hereditaryMeet = [];
+    noteInputWitnesses(
+      tx.isRuntimeWritePolicyInput(input)
+        ? input.reference.selectionWitnesses ?? []
+        : [],
+    );
   }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
-  // Derivation provenance (§8.9.3 TransformedBy, staged: identity binding
-  // only — no per-input refs/witnesses yet). The flow join is one per-tx
-  // label stamped on every written doc, so the identity must hold for the
-  // whole tx: minted only when every non-privileged write was authored
-  // under the same defined identity, captured at write time (see
-  // `CfcTxState.writeIdentity`) — not whichever identity is current at
-  // prepare, which a later run in the same tx may have changed and which
-  // an unattributed write must not borrow. Ambiguity omits the atom
-  // (fail-safe under-claim). Minted only alongside an entry that exists
-  // anyway; runtime-minted (schema-forgery gated).
-  const writeIdentity = tx.getCfcState().writeIdentity;
-  const identity = writeIdentity.multiple ? undefined : writeIdentity.identity;
+  // Derivation provenance (§8.9.3 TransformedBy): the identity that wrote,
+  // and the input witnesses retained beside it (`input-witness.ts`). The
+  // flow join is one per-tx label stamped on every written doc, so the
+  // identity must hold for the whole tx: minted only when every
+  // non-privileged write was authored under the same defined identity,
+  // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
+  // identity is current at prepare, which a later run in the same tx may
+  // have changed and which an unattributed write must not borrow. Ambiguity
+  // omits the atoms (fail-safe under-claim). Minted only alongside an entry
+  // that exists anyway; runtime-minted (schema-forgery gated).
   if (
     identity !== undefined &&
     (confidentiality.length > 0 || integrity.length > 0)
   ) {
-    integrity.push({ type: CFC_ATOM_TYPE.TransformedBy, identity });
+    integrity.push(...mintTransformedBy(identity, inputWitnesses));
   }
   return {
     confidentiality,
@@ -2396,20 +4751,20 @@ export const flowLabelWorkExists = (
   // idiom. The raw-write surface itself is the S18 chokepoint seam, not a
   // relevance question.
   const selfMintedDocs = new Set<string>();
-  const log = tx.getReactivityLog?.();
-  const writeSpaces = new Set<MemorySpace>(
-    [...(log?.writes ?? []), ...(log?.attemptedWrites ?? [])].map((write) =>
-      write.space
-    ),
-  );
-  for (const space of writeSpaces) {
+  for (const space of getTransactionWrittenSpaces(tx)) {
     for (const write of tx.getWriteDetails?.(space) ?? []) {
       // Either a direct `["cfc"]` write or a whole-envelope root write whose
-      // value embeds a `cfc` record (the raw-seed idiom).
+      // value embeds a `cfc` record (the raw-seed idiom). A write whose final
+      // value equals its value before the transaction minted nothing, so the
+      // metadata it touched is still the pre-existing kind. That includes one
+      // that changed only whether an `undefined` slot is present: such a slot
+      // holds no label, and counting the document self-minted would only hide
+      // the entries it already had.
       if (
-        write.address.path[0] === "cfc" ||
-        (write.address.path.length === 0 && isObjectOrArray(write.value) &&
-          isObjectOrArray((write.value as { cfc?: unknown }).cfc))
+        (write.address.path[0] === "cfc" ||
+          (write.address.path.length === 0 && isObjectOrArray(write.value) &&
+            isObjectOrArray((write.value as { cfc?: unknown }).cfc))) &&
+        !fabricAwareEqual(write.value, write.previousValue)
       ) {
         selfMintedDocs.add(targetKey({
           space: write.address.space,
@@ -2421,24 +4776,28 @@ export const flowLabelWorkExists = (
   }
   const entriesByDoc = new Map<
     string,
-    { any: boolean; entries: readonly LabelMapEntry[] }
+    {
+      any: boolean;
+      entries: readonly LabelMapEntry[];
+      consumed: Map<ReadObservationShape, boolean>;
+    }
   >();
   const docEntries = (
     space: MemorySpace,
     id: URI,
     scope: ReturnType<typeof normalizeCellScope>,
     type: MediaType,
-  ): { any: boolean; entries: readonly LabelMapEntry[] } => {
+  ) => {
     const key = targetKey({ space, id, scope });
     let known = entriesByDoc.get(key);
     if (known === undefined) {
       if (selfMintedDocs.has(key)) {
-        known = { any: false, entries: [] };
+        known = { any: false, entries: [], consumed: new Map() };
       } else {
         const entries =
           storedMetadataFor(tx, space, id, scope, type)?.labelMap.entries ??
             [];
-        known = { any: entries.length > 0, entries };
+        known = { any: entries.length > 0, entries, consumed: new Map() };
       }
       entriesByDoc.set(key, known);
     }
@@ -2452,10 +4811,17 @@ export const flowLabelWorkExists = (
   if (
     forEachFlowObservation(
       tx,
-      (space, id, scope, type, _logicalPath, observation) =>
-        docEntries(space, id, scope, type).entries.some((entry) =>
-          readConsumesEntry(observation.shape, entry)
-        ),
+      (space, id, scope, type, _logicalPath, observation) => {
+        const document = docEntries(space, id, scope, type);
+        let consumed = document.consumed.get(observation.shape);
+        if (consumed === undefined) {
+          consumed = document.entries.some((entry) =>
+            readConsumesEntry(observation.shape, entry)
+          );
+          document.consumed.set(observation.shape, consumed);
+        }
+        return consumed;
+      },
     )
   ) {
     return true;
@@ -2547,13 +4913,12 @@ const storedSchemaClaimsForLinkWrites = (
     conditions.set(node, result);
     return result;
   };
-  const targetPaths = inputs.map((input) =>
-    canonicalizeLogicalPath(input.target.path)
-  );
+  const targetPaths = new PathPrefixIndex();
+  for (const input of inputs) {
+    targetPaths.add(canonicalizeLogicalPath(input.target.path));
+  }
   for (const entry of cfcSchemaEntries(schema)) {
-    if (
-      !targetPaths.some((targetPath) => pathsOverlap(targetPath, entry.path))
-    ) {
+    if (!targetPaths.overlaps(entry.path)) {
       continue;
     }
     const policySchema = linkWritePolicyOnlySchema(entry.schema, entry.path);
@@ -2568,10 +4933,14 @@ const storedSchemaClaimsForLinkWrites = (
         isObjectOrArray(entry.root) ? entry.root.$defs : undefined,
       ),
     );
-    claims.push(schemaEnvelopeForTargetPath({
+    const claim = {
       ...(isObjectOrArray(condition) ? condition : {}),
       ...policySchema,
-    }, entry.path));
+    };
+    claims.push(schemaEnvelopeForTargetPath(
+      entry.conditional === true ? { anyOf: [claim] } : claim,
+      entry.path,
+    ));
   }
   // Verification intersects independently conditioned claims. Merging their
   // IFC fields would turn disjoint union branches into an unconditional gate.
@@ -2620,7 +4989,34 @@ const unsupportedTrustSensitiveReason = (
       return `unsupported trust-sensitive claim ${key} at /${path.join("/")}`;
     }
   }
+  if (
+    ifc.writePolicyAnyOf !== undefined &&
+    !isWellFormedWritePolicyAnyOf(ifc)
+  ) {
+    return `malformed writePolicyAnyOf at /${path.join("/")}`;
+  }
   return undefined;
+};
+
+/**
+ * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
+ * enforces: a nonempty list of alternatives, each a writer claim with at most a
+ * UI contract that parses beside it, and no writer or contract of the
+ * position's own beside the list, which would leave unclear which of the two
+ * governs.
+ */
+const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
+  const alternatives = ifc.writePolicyAnyOf;
+  return Array.isArray(alternatives) && alternatives.length > 0 &&
+    ifc.writeAuthorizedBy === undefined && ifc.uiContract === undefined &&
+    alternatives.every((policy) =>
+      isObjectNotArray(policy) && policy.writeAuthorizedBy !== undefined &&
+      Object.keys(policy).every((key) =>
+        key === "writeAuthorizedBy" || key === "uiContract"
+      ) &&
+      (policy.uiContract === undefined ||
+        uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined)
+    );
 };
 
 // FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES (the §3.1.8 principal-like
@@ -2799,8 +5195,56 @@ const projectedSourceLabel = (
   };
 };
 
+/**
+ * The principals the stored envelope's declared label at `path`, or at the
+ * nearest declared path above it, names in `represents-principal` claims: the
+ * owners a field has, as the store records them. `undefined` for an envelope
+ * that cannot be read, which names no owner and rules none out.
+ */
+const storedRepresentedPrincipalsAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): string[] | undefined => {
+  const stored = loadStoredCfcEnvelope(tx, {
+    space: target.space,
+    id: target.id as URI,
+    scope: target.scope,
+  });
+  if (stored.status === "unreadable") return undefined;
+  if (stored.status !== "loaded") return [];
+  const logicalPath = canonicalizeLogicalPath(path);
+  let nearest: LabelMapEntry | undefined;
+  for (const entry of stored.metadata.labelMap.entries) {
+    if (
+      (entry.origin === "declared" || entry.origin === undefined) &&
+      isPrefix(entry.path, logicalPath) &&
+      (nearest === undefined || nearest.path.length < entry.path.length)
+    ) {
+      nearest = entry;
+    }
+  }
+  return [
+    ...new Set(
+      (nearest?.label.integrity ?? []).flatMap((atom) => {
+        const subject = representsPrincipalSubject(atom);
+        return subject === undefined ? [] : [subject];
+      }),
+    ),
+  ];
+};
+
 const currentPrincipalIntegrityReason = (
   tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
   schema: JSONSchema,
   path: readonly string[],
 ): string | undefined => {
@@ -2831,21 +5275,27 @@ const currentPrincipalIntegrityReason = (
     const ownerPrincipal = isCurrentPrincipalPlaceholder(ownerPrincipalSpec)
       ? trustSnapshot.actingPrincipal
       : ownerPrincipalSpec;
-    if (
-      typeof ownerPrincipal !== "string" ||
-      !ownerPrincipal.startsWith("did:")
-    ) {
+    if (!isWellFormedDID(ownerPrincipal)) {
       return `ownerPrincipal must be a DID at /${path.join("/")}`;
+    }
+    const forgedOwnerClaim = forgedPrincipalClaimReason(
+      currentPrincipalValues,
+      ownerPrincipal,
+      path,
+    );
+    if (forgedOwnerClaim !== undefined) {
+      return forgedOwnerClaim;
     }
     const resolvedCurrentPrincipalValues = resolveCurrentPrincipalLabelValues(
       currentPrincipalValues,
       trustSnapshot.actingPrincipal,
     ) ?? currentPrincipalValues;
-    const representedOwners = literalDidSubjectsForPrincipalClaim(
-      resolvedCurrentPrincipalValues,
-      "represents-principal",
+    // Only an atom the label holds directly counts, since that is all a
+    // reader reads.
+    const representsOwner = resolvedCurrentPrincipalValues.some((atom) =>
+      representsPrincipalSubject(atom) === ownerPrincipal
     );
-    if (!representedOwners.some((subject) => subject === ownerPrincipal)) {
+    if (!representsOwner) {
       return `ownerPrincipal requires matching represents-principal integrity at /${
         path.join("/")
       }`;
@@ -2856,15 +5306,42 @@ const currentPrincipalIntegrityReason = (
     if (ifc.writeAuthorizedBy === undefined) {
       return `ownerPrincipal requires writeAuthorizedBy at /${path.join("/")}`;
     }
+    // A placeholder owner names the principal the stored label represents,
+    // once a write has recorded one: the field is theirs, and a write by
+    // anyone else through its writer is refused. Until a write records an
+    // owner, the acting principal's write binds them. An initialization on
+    // nobody's behalf claims nothing and leaves the stored owner as it is.
+    if (
+      isCurrentPrincipalPlaceholder(ownerPrincipalSpec) &&
+      !pathHoldsUnattributedInitialization(tx, target, path)
+    ) {
+      const owners = storedRepresentedPrincipalsAt(tx, target, path);
+      if (owners === undefined) {
+        return `ownerPrincipal requires a readable stored envelope at /${
+          path.join("/")
+        }`;
+      }
+      if (owners.length > 1) {
+        return `ownerPrincipal requires a single stored owner at /${
+          path.join("/")
+        }`;
+      }
+      if (owners.length === 1 && owners[0] !== trustSnapshot.actingPrincipal) {
+        return `ownerPrincipal mismatch at /${path.join("/")}`;
+      }
+    }
     return undefined;
   }
   if (currentPrincipalValues.length === 0) {
     return undefined;
   }
-  if (hasLiteralDidCurrentPrincipalClaim(currentPrincipalValues)) {
-    return `current-principal integrity subject must be runtime resolved at /${
-      path.join("/")
-    }`;
+  const forgedClaim = forgedPrincipalClaimReason(
+    currentPrincipalValues,
+    undefined,
+    path,
+  );
+  if (forgedClaim !== undefined) {
+    return forgedClaim;
   }
   if (!currentPrincipalValues.some(hasCurrentPrincipalPlaceholder)) {
     return undefined;
@@ -2885,6 +5362,15 @@ const currentPrincipalIntegrityReason = (
     return `current-principal integrity requires an acting principal at /${
       path.join("/")
     }`;
+  }
+  // Every write the position admits has to carry a reviewed gesture: a lone
+  // writer with a contract beside it, or alternatives that each name one.
+  const alternatives = writePolicyAlternatives(ifc);
+  if (alternatives !== undefined) {
+    return alternatives.every((alternative) => alternative.namesGesture)
+      ? undefined
+      : `current-principal integrity requires uiContract on every ` +
+        `writePolicyAnyOf alternative at /${path.join("/")}`;
   }
   if (ifc.writeAuthorizedBy === undefined) {
     return `current-principal integrity requires writeAuthorizedBy at /${
@@ -2911,7 +5397,8 @@ export const writeDetailValueForTarget = (
   },
   key: "value" | "previousValue",
 ): FabricValue => {
-  const writeDetails = [...(tx.getWriteDetails?.(target.space) ?? [])];
+  const writeDetails = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
   const targetPath = target.path.map((entry) => String(entry));
   let matchingWrite:
     | {
@@ -3051,6 +5538,43 @@ const previousWriteValueForTarget = (
   },
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
+/**
+ * The value this transaction leaves at `target`: its own write where it made
+ * one, and what it reads there otherwise.
+ *
+ * A staged write carrying the value the document already holds records no
+ * write detail, so the write log alone answers `undefined` at a path the
+ * transaction did touch — the reactivity log's attempted writes carry that
+ * path, but not a value to go with it. A gate asking what a path ends the
+ * transaction holding reads past that gap; one asking whether the transaction
+ * wrote at all reads the write log directly.
+ *
+ * The fallback reads THROUGH the transaction, which is what lets a gate rest
+ * a decision on the answer: a write that changed the path, removed it, or put
+ * something else there is the value that comes back, so the fallback reaches
+ * only a path the transaction leaves as it found it. It is a runtime-internal
+ * verifier read besides, so it stays out of the commit's conflict set and out
+ * of reactivity (spec §18.6.2, §8.9.4). An absent path returns `undefined`,
+ * as does one that descends through a value with no keys; the read decides
+ * both. Any other read failure propagates, so a gate never treats a path it
+ * could not read as one holding nothing.
+ */
+const effectiveValueForTarget = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  },
+): FabricValue => {
+  const written = writeValueForTarget(tx, target);
+  if (written !== undefined) {
+    return written;
+  }
+  return tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META });
+};
+
 const writeInstallsInitialSchemaDefault = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -3061,7 +5585,14 @@ const writeInstallsInitialSchemaDefault = (
   path: readonly string[],
   schema: JSONSchema | undefined,
 ): boolean => {
-  if (!isObjectOrArray(schema) || !("default" in schema)) {
+  // A wildcard path names no single value to compare with the default, and a
+  // merged schema node can carry `default` as an own key holding `undefined`,
+  // which declares no default. Either would let the comparison below hold
+  // vacuously.
+  if (
+    !isObjectOrArray(schema) || schema.default === undefined ||
+    path.includes("*")
+  ) {
     return false;
   }
   const pathTarget = { ...target, path };
@@ -3229,7 +5760,7 @@ const schemaTypeMatchesValue = (
           isFabricPrimitiveSchemaType(candidate)
         ) {
           return value instanceof FabricPrimitive &&
-            schemaTypeOfFabricPrimitive(value) === candidate;
+            value.schemaType === candidate;
         }
         return true;
     }
@@ -3238,8 +5769,8 @@ const schemaTypeMatchesValue = (
 
 // Thrown when a policy `$ref` cannot be resolved against its own document, so
 // the value condition cannot be evaluated. It propagates past the matcher's
-// boolean combinators (notably `oneOf`'s exactly-one count, where neither
-// `true` nor `false` reliably biases toward "applies") and is caught at the
+// boolean combinators, so no `allOf` branch can turn it into "does not
+// apply", and is caught at the
 // `wildcardPolicyMatchesValue` boundary, which fails closed by treating the
 // ifc entry as applying — mirroring the unresolvable-LINK branch (audit S17).
 class UnevaluablePolicyRefError extends Error {}
@@ -3253,11 +5784,28 @@ const policySchemaMatchesValue = (
   // unresolvable against its own document fails closed.
   root: JSONSchema = schema,
 ): boolean => {
-  // Keep this narrow matcher aligned with resolveSchemaForValue() in
-  // schema.ts. This copy is intentionally local because CFC policy checks must
-  // fail closed on unresolved refs and partial wildcard writes.
+  // This narrow matcher follows resolveSchemaForValue() in schema.ts except
+  // where applying the policy is the safe answer. It is kept local because
+  // CFC policy checks must fail closed: on unresolved refs, partial wildcard
+  // writes, links below the policy's path (which match any condition), and
+  // `oneOf` (which applies when any branch matches, where value resolution
+  // selects a branch only when exactly one matches).
   if (typeof schema === "boolean") {
     return schema;
+  }
+  // A link says nothing about the value it leads to, so it may match any
+  // condition, and the entry applies: the same rule `canBranchMatch()` in
+  // traverse.ts follows. `wildcardPolicyMatchesValue` follows the one link
+  // that stands at the policy's own path; a link below it, such as a
+  // pattern result's redirect link to the cell holding a field, is not
+  // followed. Checking a link's shape against a `type` or `const` refused
+  // the entry for every such value, which dropped the declared label and
+  // skipped the entry's write requirements (`writeAuthorizedBy`,
+  // `ownerPrincipal`). Following it instead would read every linked
+  // document into the commit, and the document a link leads to can change
+  // after the commit, so the condition would hold only for that moment.
+  if (isPrimitiveCellLink(value)) {
+    return true;
   }
   const schemaRoot = root;
   if (typeof schema.$ref === "string") {
@@ -3304,28 +5852,27 @@ const policySchemaMatchesValue = (
       policySchemaMatchesValue(branch, value, schemaRoot)
     );
   }
+  // `oneOf` applies when any branch matches, as `anyOf` does. Requiring
+  // exactly one would let a value that matches two branches, such as one
+  // holding a link that matches every branch, exclude the entry.
   if (Array.isArray(schema.oneOf)) {
-    return schema.oneOf.filter((branch) =>
+    return schema.oneOf.some((branch) =>
       policySchemaMatchesValue(branch, value, schemaRoot)
-    ).length === 1;
+    );
   }
   if (Array.isArray(schema.allOf)) {
     return schema.allOf.every((branch) =>
       policySchemaMatchesValue(branch, value, schemaRoot)
     );
   }
-  // A link matches by what it is, not by what a `properties` condition would
-  // read off the record a legacy one is written as. `isPrimitiveCellLink()`
-  // recognizes whichever form the active regime uses, so it takes a
-  // `FabricLink` out of the walk question's way as well; a modern argument
-  // link arriving here is what makes that load-bearing rather than tidy.
+  // A link never reaches this arm: it matched above, in whichever form
+  // `isPrimitiveCellLink()` recognizes, a `FabricLink` included, rather than
+  // having a `properties` condition read off the record a legacy one is
+  // written as.
   //
   // A `FabricPrimitive` carries no property for a `properties` condition to
   // read, so it falls past this arm.
-  if (
-    !isPrimitiveCellLink(value) && isWalkableObjectOrArray(value) &&
-    isObjectOrArray(schema.properties)
-  ) {
+  if (isWalkableObjectOrArray(value) && isObjectOrArray(schema.properties)) {
     return Object.entries(schema.properties).every(([key, childSchema]) =>
       value[key] === undefined ||
       policySchemaMatchesValue(childSchema, value[key], schemaRoot)
@@ -3420,15 +5967,33 @@ const ifcEntryAppliesToAttemptedWrite = (
   // `cfcSchemaEntries()` entries, whose
   // captured ifc node lacks the document's `$defs`.
   root?: JSONSchema,
+  // Whether the entry sits inside an `anyOf` or `oneOf` branch. Only then does
+  // the written value decide whether it applies: the value's shape selects
+  // the branch. Any other entry governs its path whatever shape the new value
+  // takes, so a value of another type written over it is a change to it.
+  conditional = false,
 ): boolean => {
+  const matchesValue = (value: unknown): boolean =>
+    !conditional ||
+    wildcardPolicyMatchesValue(tx, target, schema, value, root);
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
-    const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
-    let touched = false;
+    const writes = tx.getWriteDetailsForTarget?.(target) ??
+      tx.getWriteDetails?.(target.space) ?? [];
+    // Owner adoption changes policy while retaining the stored bytes. It is
+    // still a policy attempt and must pass every ordinary requirement gate.
+    let touched = tx.getCfcState().writePolicyInputs.some((input) =>
+      input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+      input.target.space === target.space && input.target.id === target.id &&
+      normalizeCellScope(input.target.scope) === target.scope &&
+      arraysEqual(input.target.path, path)
+    );
+    let detailedTarget = false;
     for (const write of writes) {
       if (write.address.id !== target.id) continue;
       if (normalizeCellScope(write.address.scope) !== target.scope) continue;
       if (write.address.path[0] !== "value") continue;
+      detailedTarget = true;
       const writePath = write.address.path.slice(1).map((entry) =>
         String(entry)
       );
@@ -3441,70 +6006,75 @@ const ifcEntryAppliesToAttemptedWrite = (
       }
     }
     if (!touched) {
-      const reactiveWrites = [
-        ...(tx.getReactivityLog?.().writes ?? []),
-        ...(tx.getReactivityLog?.().attemptedWrites ?? []),
-      ];
-      touched = reactiveWrites.some((write) => {
+      // The reactivity log's `writes` are derived from the same changes as
+      // the write details, and list every ancestor whose shallow structure a
+      // change altered, so that shallow readers of it re-run: adding one key
+      // lists the object holding it. Such an ancestor was not written, and
+      // does not touch the paths beneath it. Where the details describe this
+      // target, a write to an ancestor is already among them, so an ancestor
+      // found only here is one of those. Where they do not, the log is all
+      // there is, and an ancestor in it touches. Attempted writes, elided
+      // no-op writes among them, are attempts wherever they sit, and touch in
+      // both directions.
+      const log = tx.getReactivityLog?.();
+      const reaches = (
+        write: IMemorySpaceAddress,
+        ancestorTouches: boolean,
+      ): boolean => {
         if (write.space !== target.space) return false;
         if (write.id !== target.id) return false;
         if (normalizeCellScope(write.scope) !== target.scope) return false;
-        const writePath = canonicalizeLogicalPath(write.path);
-        return concretePathHasPrefix(path, writePath) ||
-          concretePathHasPrefix(writePath, path);
-      });
+        if (write.path.length > 0 && write.path[0] !== "value") return false;
+        const writePath = canonicalizeDocumentPath(write.path);
+        return concretePathHasPrefix(writePath, path) ||
+          (ancestorTouches && concretePathHasPrefix(path, writePath));
+      };
+      touched = (log?.writes ?? []).some((write) =>
+        reaches(write, !detailedTarget)
+      ) || (log?.attemptedWrites ?? []).some((write) => reaches(write, true));
     }
     if (!touched) {
       return false;
     }
     const pathTarget = { ...target, path };
-    const written = writeValueForTarget(tx, pathTarget);
-    const value = written !== undefined ? written : (() => {
-      try {
-        return tx.readValueOrThrow(pathTarget, {
-          meta: INTERNAL_VERIFIER_META,
-        });
-      } catch {
-        return undefined;
-      }
-    })();
+    const value = effectiveValueForTarget(tx, pathTarget);
     if (path.length === 0) {
       return value === undefined ||
-        wildcardPolicyMatchesValue(tx, target, schema, value, root);
+        matchesValue(value);
     }
     if (value === undefined) {
       return previousWriteValueForTarget(tx, pathTarget) !== undefined;
     }
     return value !== undefined &&
-      wildcardPolicyMatchesValue(tx, target, schema, value, root);
+      matchesValue(value);
   }
 
+  // Only value-surface entries name a path of the value, and a whole-envelope
+  // write, which replaces the value too. A write to a metadata field such as
+  // `result` canonicalizes to a one-segment path that a wildcard would
+  // otherwise take for an item.
   const exactAttemptedPaths = [
     ...(tx.getReactivityLog?.().writes ?? []),
     ...(tx.getReactivityLog?.().attemptedWrites ?? []),
-  ].map((write) => ({
-    write,
-    path: canonicalizeLogicalPath(write.path),
-  })).filter(({ write, path: writePath }) =>
-    write.space === target.space &&
-    write.id === target.id &&
-    normalizeCellScope(write.scope) === target.scope &&
-    pathPatternMatches(path, writePath) &&
-    !writePath.includes("*")
-  ).map(({ path }) => path);
+  ].filter((write) => write.path.length === 0 || write.path[0] === "value")
+    .map((write) => ({
+      write,
+      path: canonicalizeDocumentPath(write.path),
+    })).filter(({ write, path: writePath }) =>
+      write.space === target.space &&
+      write.id === target.id &&
+      normalizeCellScope(write.scope) === target.scope &&
+      pathPatternMatches(path, writePath) &&
+      !writePath.includes("*")
+    ).map(({ path }) => path);
   if (exactAttemptedPaths.length > 0) {
     return exactAttemptedPaths.some((writePath) =>
-      wildcardPolicyMatchesValue(
-        tx,
-        target,
-        schema,
-        writeValueForTarget(tx, { ...target, path: writePath }),
-        root,
-      )
+      matchesValue(effectiveValueForTarget(tx, { ...target, path: writePath }))
     );
   }
 
-  const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
+  const writes = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
   let sawTargetWrite = false;
   const prefix = path.slice(0, wildcardIndex);
   for (const write of writes) {
@@ -3515,7 +6085,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     const writePath = write.address.path.slice(1).map((entry) => String(entry));
     if (pathPatternMatches(path, writePath)) {
       return !fabricAwareEqual(write.value, write.previousValue) &&
-        wildcardPolicyMatchesValue(tx, target, schema, write.value, root);
+        matchesValue(write.value);
     }
     if (concretePathHasPrefix(prefix, writePath)) {
       const relativePrefix = prefix.slice(writePath.length);
@@ -3529,9 +6099,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         path.slice(wildcardIndex),
       );
       if (
-        matches.some((match) =>
-          wildcardPolicyMatchesValue(tx, target, schema, match, root)
-        )
+        matches.some((match) => matchesValue(match))
       ) {
         return true;
       }
@@ -3547,9 +6115,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     return false;
   }
   const matches = valuesAtPatternPath(value, path.slice(wildcardIndex));
-  return matches.some((match) =>
-    wildcardPolicyMatchesValue(tx, target, schema, match, root)
-  );
+  return matches.some((match) => matchesValue(match));
 };
 
 // Epic D4 — per-write read-prefix provenance
@@ -3629,7 +6195,7 @@ const buildWritePrefixBounds = (
         byTarget.set(key, list);
       }
       list.push({
-        path: canonicalizeLogicalPath(raw),
+        path: canonicalizeDocumentPath(raw),
         journalIndex: attempt.journalIndex,
       });
     }
@@ -3838,18 +6404,20 @@ const verifyInputRequirements = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-  // Resolves the implementation identity that authored the schema write-policy
-  // input covering a given field path (the longest-prefix schema input on this
-  // cell). `writeAuthorizedBy` is verified per field against its authoring
-  // identity, so two protected fields on the same cell written under different
-  // identities are each checked against the correct one.
-  identityForPath: (
+  // Resolves the implementation identities that authored the schema
+  // write-policy inputs a claim at a field path governs: the longest-prefix
+  // input on this cell, and every input beneath the path. `writeAuthorizedBy`
+  // is verified per field against each of them, so two protected fields on the
+  // same cell written under different identities are each checked against the
+  // correct one, and a write beneath a claimed path answers to the claim.
+  identitiesForPath: (
     path: readonly string[],
-  ) => ImplementationIdentity | undefined,
+  ) => readonly (ImplementationIdentity | undefined)[],
   // D4 write-prefix provenance (docs/specs/cfc-write-prefix-provenance.md):
   // the per-path last-overlapping-write bounds each entry's input checks
   // quantify under.
   prefixBounds: WritePrefixBounds,
+  metadataResolver: VerifierMetadataResolver,
   // Persisted attempt confidentiality protects any requirement verdict over
   // observations broader than the semantic flow join, including link probes.
   confidentiality: readonly CfcConfClause[] | undefined,
@@ -3858,6 +6426,14 @@ const verifyInputRequirements = (
   // accumulated across the boundary pass. undefined — the default, whenever
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
+  // A write that changes nothing defers only its writer refusal: a preserved
+  // runtime output, or an argument slot a setup replay carries over and
+  // leaves as it found it. The persist loop must prove the final envelope unchanged before
+  // discarding this reason.
+  deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
+  // A host's policy application writes nothing, so no writer claim governs it
+  // (see `writeIsPolicyApplication`).
+  policyApplication = false,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -3884,37 +6460,29 @@ const verifyInputRequirements = (
   // interpret, by version or by shape, and a transaction that consumed such
   // a document fails closed whether or not anything asks what its label
   // says. That refusal must not depend on what a target declares, nor on
-  // whether the measurement dial is on. One resolution serves every read
-  // that landed in the same document: nothing writes between here and the
-  // end of this map, so a later read sees the envelope the first one saw.
-  const envelopes = new Map<string, CfcMetadata | undefined>();
-  const envelopeFor = (
-    space: MemorySpace,
-    id: URI,
-    scope: ReturnType<typeof normalizeCellScope>,
-    type: MediaType,
-  ): CfcMetadata | undefined => {
-    const key = `${targetKey({ space, id, scope })}\u0000${type}`;
-    if (!envelopes.has(key)) {
-      envelopes.set(key, storedMetadataFor(tx, space, id, scope, type));
-    }
-    return envelopes.get(key);
-  };
+  // whether the measurement dial is on. Resolutions remain valid until the
+  // transaction writes the document. The activity list stays live so newly
+  // recorded reads remain visible to later targets.
   let clockLessReads = 0;
-  const readSources = [
-    ...[...(tx.getReadActivities?.() ?? [])].filter((read) =>
-      !isInternalVerifierRead(read.meta)
-    ).map((read) => {
-      if (provenance !== undefined && read.journalIndex === undefined) {
-        clockLessReads += 1;
-      }
-      return {
-        ...read,
-        // A read without a clock position (journal-less backend) is treated
-        // as preceding every write: it joins every prefix — conservative.
-        journalIndex: read.journalIndex ?? -Infinity,
-      };
-    }),
+  // Read activities carry document-rooted paths; trigger reads arrive with
+  // logical ones. The set tells the two apart when a path is canonicalized.
+  const activityReads = [
+    ...(tx.getPotentiallyExternalReadActivities?.() ??
+      tx.getReadActivities?.() ?? []),
+  ].filter((read) => !isInternalVerifierRead(read.meta)).map((read) => {
+    if (provenance !== undefined && read.journalIndex === undefined) {
+      clockLessReads += 1;
+    }
+    return {
+      ...read,
+      // A read without a clock position (journal-less backend) is treated
+      // as preceding every write: it joins every prefix — conservative.
+      journalIndex: read.journalIndex ?? -Infinity,
+    };
+  });
+  const documentReads = new Set<object>(activityReads);
+  const currentReads = [
+    ...activityReads,
     // §8.9.2 / SC-3 (H5): the trigger reads join the gate when enabled — a
     // handler scheduled by a labeled write must satisfy requiredIntegrity even
     // if its branch never re-reads that write. Empty when the flag is off.
@@ -3927,16 +6495,33 @@ const verifyInputRequirements = (
       ...read,
       journalIndex: -Infinity,
     })),
-  ].map((read) => ({
-    ...read,
-    path: canonicalizeLogicalPath(read.path),
-    metadata: envelopeFor(
+  ];
+  // Candidate-read inspection is an extension seam and may expose writes made
+  // while producing the current view. Refresh after that inspection so every
+  // envelope resolution observes those writes.
+  metadataResolver.refresh();
+  const schemaEntries = cfcSchemaEntries(schema);
+  const needsReadLabels = provenance !== undefined ||
+    schemaEntries.some(({ schema: entrySchema }) => {
+      const ifc = isObjectOrArray(entrySchema) ? entrySchema.ifc : undefined;
+      return (ifc?.requiredIntegrity?.length ?? 0) > 0 ||
+        ifc?.maxConfidentiality !== undefined;
+    });
+  const sourceMetadata = currentReads.map((read) => {
+    // Gate paths are captured before resolving an envelope: backend reads may
+    // mutate a caller-owned path array. Ungated targets only need the address.
+    if (needsReadLabels) {
+      read.path = documentReads.has(read)
+        ? canonicalizeDocumentPath(read.path)
+        : canonicalizeLogicalPath(read.path);
+    }
+    return metadataResolver.read(
       read.space,
       read.id,
       normalizeCellScope(read.scope),
       read.type ?? "application/json",
-    ),
-  }));
+    );
+  });
   if (provenance !== undefined) {
     provenance.clockLessReads = clockLessReads;
   }
@@ -3947,10 +6532,10 @@ const verifyInputRequirements = (
   // declaring `requiredIntegrity` or `maxConfidentiality` reads the result,
   // so the set is assembled on first ask and kept for the rest of the call.
   const buildGatedReads = () => {
-    const gatedReads = readSources.map(({ metadata, ...read }) => ({
+    const gatedReads = currentReads.map((read, index) => ({
       ...read,
       label: effectiveReadLabel(
-        metadata,
+        sourceMetadata[index],
         read.path,
         { nonRecursive: read.nonRecursive, consumes: "all" },
       ),
@@ -3993,6 +6578,24 @@ const verifyInputRequirements = (
         label: { confidentiality: [...observation.confidentiality] },
       });
     }
+    for (
+      const observation of tx.getCfcState().externalContentObservations ?? []
+    ) {
+      const gateLabel: IFCLabel = {
+        confidentiality: observation.flow.confidentiality,
+        integrity: observation.consumed.integrity,
+      };
+      if (!hasLabelValues(gateLabel)) continue;
+      gatedReads.push({
+        ...observation.source,
+        id: observation.source.id as URI,
+        path: canonicalizeLogicalPath(observation.source.path),
+        type: "application/json",
+        meta: {},
+        journalIndex: -Infinity,
+        label: gateLabel,
+      });
+    }
     return gatedReads;
   };
   let gatedReadsMemo: ReturnType<typeof buildGatedReads> | undefined;
@@ -4001,27 +6604,27 @@ const verifyInputRequirements = (
   // Stage-0 measurement: the pre-D4 comparison baseline. Before D4 the gate
   // quantified over every labeled read with the S7 provenance-only exemption
   // applied transaction-globally — so the baseline is the label filter
-  // without the prefix condition. The gate-visible read set is the same on
-  // every call within one prepare, hence assignment (not accumulation) for
-  // the per-prepare clock-less count. The counter describes the whole set,
-  // which the dial therefore resolves.
+  // without the prefix condition. The clock-less count describes the read
+  // set visible to the latest target, including any reads recorded earlier in
+  // preparation. The dial therefore resolves the whole set.
   const txGlobalGatedReads = provenance === undefined ? 0 : gatedReadsOf()
     .filter((read) => !isProvenanceOnlyConsumedLabel(read.label!))
     .length;
 
   const attemptedPaths = [
-    ...[...(tx.getWriteDetails?.(target.space) ?? [])].map((write) =>
-      write.address
-    ),
+    ...[
+      ...(tx.getWriteDetailsForTarget?.(target) ??
+        tx.getWriteDetails?.(target.space) ?? []),
+    ].map((write) => write.address),
     ...(tx.getReactivityLog?.().writes ?? []),
     ...(tx.getReactivityLog?.().attemptedWrites ?? []),
   ].filter((write) =>
     write.space === target.space && write.id === target.id &&
     normalizeCellScope(write.scope) === target.scope &&
     (write.path.length === 0 || write.path[0] === "value")
-  ).map((write) => canonicalizeLogicalPath(write.path));
+  ).map((write) => canonicalizeDocumentPath(write.path));
 
-  for (const entry of cfcSchemaEntries(schema)) {
+  for (const entry of schemaEntries) {
     const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
     const requiredIntegrity = ifc?.requiredIntegrity ?? [];
     const maxConfidentiality = ifc?.maxConfidentiality;
@@ -4037,17 +6640,25 @@ const verifyInputRequirements = (
     );
     const currentPrincipalFailure = currentPrincipalIntegrityReason(
       tx,
+      target,
       entry.schema,
       entry.path,
     );
     const assertionEntry = protectedEntry ||
-      ifc?.writeAuthorizedBy !== undefined || ifc?.uiContract !== undefined ||
+      ifc?.writeAuthorizedBy !== undefined ||
+      ifc?.writePolicyAnyOf !== undefined || ifc?.uiContract !== undefined ||
       unsupportedTrustSensitive !== undefined ||
       disallowedClause !== undefined ||
       currentPrincipalFailure !== undefined;
     // Passive label declarations have no input predicate to evaluate. Their
     // persistence must not inspect linked contents merely to match a type.
     if (!assertionEntry) continue;
+    // A handle schema projects future target reads. Writer/UI authorization
+    // constrains the reference binding itself, even under a containing union.
+    // Content screens retain their independent applicability protection.
+    const conditionalContent = entry.conditional === true &&
+      (protectedEntry ||
+        ContextualFlowControl.getAsCellValues(entry.schema).length === 0);
     // D4 bounds each input screen to reads preceding its last overlapping
     // write. Structural overlap also identifies possible policy applicability
     // before a value, union arm, wildcard population, or absence is inspected.
@@ -4062,25 +6673,25 @@ const verifyInputRequirements = (
       attemptedPaths.some((path) =>
         isPrefix(entry.path, path) || isPrefix(path, entry.path)
       );
-    // Resolve the policy's linked subjects explicitly: a caller can carry a
-    // reference without consuming its contents or leaving discovery probes in
-    // the read log. Both eligibility and the ensuing input predicate reveal
-    // those subjects, so their restrictions must be covered before either.
+    // A conditional content predicate can distinguish a linked subject even
+    // when the writer only carried its reference. Cover those restrictions
+    // before deciding applicability or screening the linked input.
     if (
       assertionEntry && structurallyTouched && confidentiality !== undefined &&
-      (!overlappingLinks.every((input) =>
-        linkedAssertionApplicabilityIsCovered(
-          tx,
-          input,
-          entry.path.slice(input.target.path.length),
-          confidentiality,
-        )
-      ) ||
+      (((conditionalContent || protectedEntry) &&
+        !overlappingLinks.every((input) =>
+          linkedAssertionApplicabilityIsCovered(
+            tx,
+            input,
+            entry.path.slice(input.target.path.length),
+            confidentiality,
+          )
+        )) ||
         (protectedEntry &&
-          readSources.some((read) =>
+          currentReads.some((read, index) =>
             read.journalIndex < bound &&
             !assertionMetadataIsCovered(
-              read.metadata,
+              sourceMetadata[index],
               read.path,
               confidentiality,
               read.nonRecursive,
@@ -4099,6 +6710,7 @@ const verifyInputRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        conditionalContent,
       )
     ) {
       continue;
@@ -4112,21 +6724,57 @@ const verifyInputRequirements = (
     if (currentPrincipalFailure !== undefined) {
       return { reason: currentPrincipalFailure, verdict: true };
     }
-    const writeAuthorizedByFailure = writeAuthorizedByReason(
+    let writeAuthorizedByFailure: string | undefined;
+    for (const identity of identitiesForPath(entry.path)) {
+      writeAuthorizedByFailure = writeAuthorizedByReason(
+        tx,
+        entry.schema,
+        entry.path,
+        target.space,
+        identity,
+      );
+      if (writeAuthorizedByFailure !== undefined) break;
+    }
+    const setupProjection = setupProjectionSourceMatchesValue(
       tx,
-      entry.schema,
+      target,
       entry.path,
-      target.space,
-      identityForPath(entry.path),
-    );
-    if (
-      writeAuthorizedByFailure !== undefined &&
-      !setupProjectionSourceMatchesValue(tx, target, entry.path) &&
-      !writeIsPatternSetupInitialization(tx, target, entry.path) &&
-      !writeIsSeedMaterialization(tx, target) &&
-      !writeIsUnchangedOutput(tx, target, entry.path)
-    ) {
-      return { reason: writeAuthorizedByFailure, verdict: true };
+    ) || writeIsPatternSetupInitialization(tx, target, entry.path) ||
+      writeIsRuntimeInitialization(
+        tx,
+        target,
+        entry.path,
+        "writeAuthorizedBy",
+      ) ||
+      writeIsOwnerAdoption(tx, target, entry.path) || policyApplication;
+    if (writeAuthorizedByFailure !== undefined && !setupProjection) {
+      if (deferWriterRefusal?.(writeAuthorizedByFailure, entry.path) !== true) {
+        return { reason: writeAuthorizedByFailure, verdict: true };
+      }
+    }
+    const alternatives = writePolicyAlternatives(ifc);
+    if (alternatives !== undefined) {
+      const failure = writePolicyAnyOfReason(
+        tx,
+        target,
+        entry.path,
+        alternatives,
+        identitiesForPath(entry.path),
+        {
+          writer: setupProjection,
+          gesture: policyApplication ||
+            setupProjectionSourceMatchesValue(tx, target, entry.path) ||
+            writeInstallsInitialSchemaDefault(
+              tx,
+              target,
+              entry.path,
+              entry.schema,
+            ) ||
+            writeIsRuntimeInitialization(tx, target, entry.path, "uiContract"),
+        },
+        deferWriterRefusal,
+      );
+      if (failure !== undefined) return { reason: failure, verdict: true };
     }
     // Provenance-only reads (link/origin/current-principal, no
     // confidentiality) are structural plumbing, not endorsable inputs —
@@ -4168,10 +6816,7 @@ const verifyInputRequirements = (
           id: target.id,
           // RFC 6901 escaping, so a consumer can round-trip the pointer to
           // the exact schema-entry segments even when a property name
-          // contains "/" or "~" (parsePointer is the inverse). Deliberately
-          // NOT logicalPathToPointer: entry.path is already value-relative,
-          // and its canonicalization would strip a root property literally
-          // named "value".
+          // contains "/" or "~" (parsePointer is the inverse).
           path: encodePointer(entry.path),
           boundSource,
           prefixGatedReads: gating.length,
@@ -4343,6 +6988,7 @@ const verifyTrustedEventRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -4355,18 +7001,12 @@ const verifyTrustedEventRequirements = (
     ) {
       continue;
     }
-    const matched = tx.getCfcState().writePolicyInputs.some((input) =>
-      input.kind === "trusted-event" &&
-      input.target.space === target.space &&
-      input.target.id === target.id &&
-      input.target.scope === target.scope &&
-      pathPatternMatches(entry.path, input.target.path) &&
-      recordedTrustedEventProvenanceMatchesUiContract(
-        input.provenance,
-        entry.contract,
-      )
-    );
-    if (!matched) {
+    // A UI contract gates who may write the value, as `writeAuthorizedBy`
+    // does, so a runtime initialization satisfies it on the same terms.
+    if (writeIsRuntimeInitialization(tx, target, entry.path, "uiContract")) {
+      continue;
+    }
+    if (!trustedEventMatchesContract(tx, target, entry.path, entry.contract)) {
       return `missing trusted-event policy input for ${target.id} at /${
         entry.path.join("/")
       }`;
@@ -4382,6 +7022,7 @@ const copyClaimAppliesToWrite = (
   path: readonly string[],
   schema: JSONSchema,
   root: JSONSchema,
+  conditional = false,
 ): boolean => {
   const coveredByLink = tx.getCfcState().writePolicyInputs.some((input) =>
     input.kind === "link-write" && input.target.space === target.space &&
@@ -4389,7 +7030,14 @@ const copyClaimAppliesToWrite = (
     isPrefix(input.target.path, path)
   );
   return coveredByLink ||
-    ifcEntryAppliesToAttemptedWrite(tx, target, path, schema, root);
+    ifcEntryAppliesToAttemptedWrite(
+      tx,
+      target,
+      path,
+      schema,
+      root,
+      conditional,
+    );
 };
 
 /** Whether this attempt supplies the whole subject without a stored read. */
@@ -4466,8 +7114,7 @@ const assertionOutcomeIsCovered = (
       );
     } catch (error) {
       if (
-        error instanceof UnknownCfcMetadataVersionError ||
-        error instanceof UnreadableCfcMetadataError
+        error instanceof StoredCfcMetadataError
       ) return false;
       throw error;
     }
@@ -4532,6 +7179,29 @@ const copyClaimValuesMatch = (
   return fabricAwareEqual(source.value, destination.value);
 };
 
+/**
+ * Whether the transaction recorded a trusted event for a write to `path` of
+ * `target` whose provenance matches `contract`.
+ */
+const trustedEventMatchesContract = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+  contract: UiContract,
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "trusted-event" &&
+    input.target.space === target.space &&
+    input.target.id === target.id &&
+    input.target.scope === target.scope &&
+    pathPatternMatches(path, input.target.path) &&
+    recordedTrustedEventProvenanceMatchesUiContract(input.provenance, contract)
+  );
+
 /** Checks exact reference bindings or inline values claimed as copies. */
 const verifyExactCopyRequirements = (
   tx: IExtendedStorageTransaction,
@@ -4557,6 +7227,7 @@ const verifyExactCopyRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -4602,6 +7273,7 @@ const verifyProjectionRequirements = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -4637,9 +7309,16 @@ const derivePersistedLabel = (
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
+  options: LabelMintOptions = {},
 ): IFCLabel => {
+  const mintSchemaIntegrity = options.mintSchemaIntegrity ?? true;
   const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
-  const actingPrincipal = tx.getCfcState().trustSnapshot?.actingPrincipal;
+  // A claim the schema makes about the current principal resolves to the
+  // acting principal, or, where the value is one they are not attributed
+  // (`attributeCurrentPrincipal: false`), to nobody and is left out.
+  const actingPrincipal = options.attributeCurrentPrincipal === false
+    ? undefined
+    : tx.getCfcState().trustSnapshot?.actingPrincipal;
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
     ? sourceEntryLabels.get(pathKey(exactCopySourcePath(schema)!))
     : undefined;
@@ -4674,18 +7353,23 @@ const derivePersistedLabel = (
         | readonly CfcConfClause[]
         | undefined)?.map(normalizeClause),
     ),
-    integrity: mergeLabelValues(
-      resolveCurrentPrincipalLabelValues(
-        schemaLabel.integrity,
-        actingPrincipal,
+    integrity: mintSchemaIntegrity
+      ? mergeLabelValues(
+        resolveCurrentPrincipalLabelValues(
+          schemaLabel.integrity,
+          actingPrincipal,
+        ),
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
+        resolveCurrentPrincipalLabelValues(
+          Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
+          actingPrincipal,
+        ),
+      )
+      : mergeLabelValues(
+        copiedInputLabel?.integrity,
+        projectedInputLabel?.integrity,
       ),
-      copiedInputLabel?.integrity,
-      projectedInputLabel?.integrity,
-      resolveCurrentPrincipalLabelValues(
-        Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
-        actingPrincipal,
-      ),
-    ),
   };
 };
 
@@ -4878,6 +7562,13 @@ const RUNTIME_MINTED_INTEGRITY_ATOM_TYPES = new Set<string>([
   CFC_ATOM_TYPE.Concept,
 ]);
 
+const SYSTEM_STRING_ATOMS: ReadonlySet<string> = new Set(
+  CFC_SYSTEM_STRING_ATOMS,
+);
+
+const isTransformedByAtom = (atom: unknown): boolean =>
+  isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.TransformedBy;
+
 const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
   (isObjectOrArray(atom) && typeof atom.type === "string" &&
     RUNTIME_MINTED_INTEGRITY_ATOM_TYPES.has(atom.type)) ||
@@ -4885,7 +7576,10 @@ const isRuntimeMintedIntegrityAtom = (atom: unknown): boolean =>
   // marks a stored doc as system-compiler output, which the cache loader
   // then evaluates as trusted bodies — forging it from a pattern-authored
   // schema would be cross-user code injection.
-  (typeof atom === "string" && atom.startsWith(CFC_COMPILED_BY_ATOM_PREFIX));
+  (typeof atom === "string" && atom.startsWith(CFC_COMPILED_BY_ATOM_PREFIX)) ||
+  // System string atoms (see CFC_SYSTEM_STRING_ATOMS): facts only a trusted
+  // system writer asserts, such as Loom's verified external identities.
+  (typeof atom === "string" && SYSTEM_STRING_ATOMS.has(atom));
 
 /**
  * Drops runtime-minted evidence atoms from a persisted label's integrity unless
@@ -4927,8 +7621,11 @@ const runtimeEvidencePaths = (
   },
   schema: JSONSchema,
   root: JSONSchema,
-): readonly (readonly string[])[] => {
-  const candidates = new Map<string, readonly string[]>();
+): readonly { path: readonly string[]; value: unknown }[] => {
+  const candidates = new Map<
+    string,
+    { path: readonly string[]; value: unknown }
+  >();
   const visitedPrefixes = new Set<string>();
   const visit = (
     value: unknown,
@@ -4940,7 +7637,7 @@ const runtimeEvidencePaths = (
         value !== undefined && !isPrimitiveCellLink(value) &&
         policySchemaMatchesValue(schema, value, root)
       ) {
-        candidates.set(pathKey(path), path);
+        candidates.set(pathKey(path), { path, value });
       }
       return;
     }
@@ -4972,37 +7669,54 @@ const runtimeEvidencePaths = (
   return [...candidates.values()];
 };
 
+/** Derives the covering schema labels a source projection persists. */
 const persistedLabelFromSchemaAtPath = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
   path: readonly string[],
-  owningSpace: MemorySpace,
+  source: LinkWritePolicyInput["source"],
+  checkedSchema: JSONSchema | undefined,
 ): IFCLabel | undefined => {
   const logicalPath = canonicalizeLogicalPath(path);
   const entries = cfcSchemaEntries(schema);
-  let match:
-    | { path: readonly string[]; label: IFCLabel; schema: JSONSchema }
-    | undefined;
-  for (const entry of entries) {
-    if (!isPrefix(entry.path, logicalPath)) {
-      continue;
-    }
-    if (match === undefined || match.path.length < entry.path.length) {
-      match = entry;
-    }
-  }
-  if (match === undefined) {
-    return undefined;
-  }
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
-  return derivePersistedLabel(
-    tx,
-    match.schema,
-    match.label,
-    entryLabels,
-    owningSpace,
+  const labels: CfcLabelView["entries"] = [];
+  const reference = pathHoldsStagedReference(tx, source, logicalPath);
+  for (const entry of entries) {
+    if (!isPrefix(entry.path, logicalPath)) continue;
+    const declarationPath = entry.path.map((segment, index) =>
+      segment === "*" ? logicalPath[index] : segment
+    );
+    // Each declaration contributes what its own value earns. Authorship of a
+    // container does not author the content of a reference staged inside it.
+    const label = withCheckedPrincipalClaims(
+      derivePersistedLabel(
+        tx,
+        entry.schema,
+        entry.label,
+        entryLabels,
+        source.space,
+        labelMintOptionsAt(tx, source, declarationPath),
+      ),
+      reference || checkedSchema === undefined
+        ? []
+        : checkedSchemaPrincipalClaims(
+          tx,
+          checkedSchema,
+          linkDocument(source),
+          entry.path,
+        ),
+    );
+    if (hasLabelValues(label) || hasPersistedPolicyClaim(entry.schema)) {
+      labels.push({ path: entry.path, label });
+    }
+  }
+  return labels.length === 0 ? undefined : joinLabels(
+    withoutShadowedPrincipalClaims(labels, logicalPath).map(({ label }) =>
+      label
+    ),
   );
 };
 
@@ -5027,7 +7741,8 @@ export const pendingReferenceSlotConfidentiality = (
         tx,
         input.schema,
         sourcePath.slice(receiverPath.length),
-        source.space,
+        input.target,
+        undefined,
       )?.confidentiality,
     ];
   });
@@ -5068,6 +7783,7 @@ const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
   owningSpace: MemorySpace,
+  options: LabelMintOptions = {},
 ): IFCLabel => {
   if (schema === undefined) {
     return {};
@@ -5075,9 +7791,14 @@ const rootLabelFromSchema = (
   const root = cfcSchemaEntries(schema).find((entry) =>
     entry.path.length === 0
   );
-  return root === undefined
-    ? {}
-    : derivePersistedLabel(tx, root.schema, root.label, undefined, owningSpace);
+  return root === undefined ? {} : derivePersistedLabel(
+    tx,
+    root.schema,
+    root.label,
+    undefined,
+    owningSpace,
+    options,
+  );
 };
 
 /**
@@ -5127,30 +7848,206 @@ const setupResultSchemaFor = (
   });
 };
 
-// `sourceMetadata` is returned alongside the derived label so the persist
-// loop can re-derive the source's sub-path entries from the same stored
-// state without a second store read (inv-12 Stage 0, see the loop).
+/** Resolves carried reader placeholders against the authoritative link source. */
+function bindLinkCurrentPrincipalClauses<Clause>(
+  candidate: readonly Clause[],
+  stored: readonly Clause[],
+): readonly Clause[] | undefined {
+  const bound = bindCurrentPrincipalToStoredClauses(candidate, stored);
+  if (bound.some(isCurrentPrincipalUserClause)) {
+    return undefined;
+  }
+  return bound;
+}
+
+/**
+ * `label` with every principal claim removed from its integrity. A link write
+ * applies this to what the link value itself carries, its schema and its label
+ * view, because pattern code chooses both and the write check
+ * `currentPrincipalIntegrityReason` never sees either. A link takes principal
+ * claims only from its source's stored label and, for a source this
+ * transaction writes, from the schema entries those writes reach
+ * (`checkedSchemaPrincipalClaims`).
+ */
+const withoutPrincipalClaims = (label: IFCLabel): IFCLabel => {
+  const integrity = label.integrity;
+  if (integrity === undefined) return label;
+  const kept = integrity.filter((atom) =>
+    principalClaimSpelling(atom) === undefined
+  );
+  if (kept.length === integrity.length) return label;
+  return { ...label, integrity: kept.length > 0 ? kept : undefined };
+};
+
+/** Keeps principal claims only on the most specific cover of a source path. */
+const withoutShadowedPrincipalClaims = <
+  Entry extends { path: readonly string[]; label: IFCLabel },
+>(entries: Entry[], path: readonly string[]): Entry[] => {
+  if (path.length === 0) return entries;
+  let depth = -1;
+  for (const entry of entries) {
+    if (isPrefix(entry.path, path)) {
+      depth = Math.max(depth, entry.path.length);
+    }
+  }
+  if (depth <= 0) return entries;
+  return entries.map((entry) =>
+    entry.path.length < depth && isPrefix(entry.path, path)
+      ? { ...entry, label: withoutPrincipalClaims(entry.label) }
+      : entry
+  );
+};
+
+/** The document a link write's source or target address names. */
+const linkDocument = (address: LinkWritePolicyInput["source"]) => ({
+  space: address.space,
+  id: address.id as URI,
+  scope: normalizeCellScope(address.scope),
+});
+
+/**
+ * The principal claims a link may take from `schema`, a schema this
+ * transaction holds for a document it has not persisted yet: the claims the
+ * deepest schema entry covering `path` declares itself, resolved against the
+ * acting principal, when a write in this transaction reaches that entry, and
+ * none otherwise. `currentPrincipalIntegrityReason` checks an entry only when a
+ * write reaches it, so an entry no write reaches holds claims nothing checked.
+ * A claim another entry contributes, through a copy or projection, is not
+ * taken either.
+ *
+ * Reaching the entry means the check ran, not that it passed. Only an
+ * enforcing mode aborts the commit when a check fails; under `observe` or
+ * `disabled` a failed check only keeps the source's own declared label from
+ * persisting, so there this returns none. It cannot ask whether the source's
+ * check passed instead: link labels are derived while the documents of the
+ * transaction are verified one at a time, and the source may not have been
+ * verified yet.
+ */
+const checkedSchemaPrincipalClaims = (
+  tx: IExtendedStorageTransaction,
+  schema: JSONSchema,
+  document: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly CfcAtom[] => {
+  if (
+    cfcEnforcementStrictness(tx.getCfcState().enforcementMode) <
+      CFC_ENFORCING_STRICTNESS
+  ) {
+    return [];
+  }
+  const logicalPath = canonicalizeLogicalPath(path);
+  let match: ReturnType<typeof cfcSchemaEntries>[number] | undefined;
+  for (const entry of cfcSchemaEntries(schema)) {
+    if (
+      isPrefix(entry.path, logicalPath) &&
+      (match === undefined || match.path.length < entry.path.length)
+    ) {
+      match = entry;
+    }
+  }
+  if (
+    match === undefined || !isObjectOrArray(match.schema) ||
+    !isObjectOrArray(match.schema.ifc) ||
+    !ifcEntryAppliesToAttemptedWrite(
+      tx,
+      document,
+      match.path,
+      match.schema,
+      match.root,
+    )
+  ) {
+    return [];
+  }
+  const ifc = match.schema.ifc;
+  const declared = [
+    ...(Array.isArray(ifc.integrity) ? ifc.integrity : []),
+    ...(Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : []),
+  ];
+  return (resolveCurrentPrincipalLabelValues(
+    declared,
+    tx.getCfcState().trustSnapshot?.actingPrincipal,
+  ) ?? []).filter((atom) => principalClaimSpelling(atom) !== undefined);
+};
+
+/**
+ * `label`, derived from a schema this transaction holds for a link's source,
+ * with only the principal claims `checkedSchemaPrincipalClaims` allows.
+ */
+const withCheckedPrincipalClaims = (
+  label: IFCLabel,
+  checked: readonly CfcAtom[],
+): IFCLabel => {
+  const stripped = withoutPrincipalClaims(label);
+  const kept = (label.integrity ?? []).filter((atom) =>
+    principalClaimSpelling(atom) !== undefined &&
+    checked.some((claim) => deepEqual(claim, atom))
+  );
+  return kept.length === 0 ? stripped : {
+    ...stripped,
+    integrity: [...(stripped.integrity ?? []), ...kept],
+  };
+};
+
+/** Derives the link's root label and its authoritative source view. */
 const derivePersistedLinkLabel = (
   tx: IExtendedStorageTransaction,
   input: LinkWritePolicyInput,
   candidateSchemas: ReadonlyMap<string, JSONSchema>,
   authoringIdentity: ImplementationIdentity | undefined,
-): { label?: IFCLabel; reason?: string; sourceMetadata?: CfcMetadata } => {
-  const sourceMetadata = storedMetadataFor(
-    tx,
+  metadataResolver: VerifierMetadataResolver,
+  pendingSourceView?: CfcLabelView,
+): { label?: IFCLabel; reason?: string; sourceView?: CfcLabelView } => {
+  metadataResolver.refresh();
+  const sourceMetadata = metadataResolver.read(
     input.source.space,
     input.source.id as URI,
     input.source.scope,
     "application/json",
   );
+  if (sourceMetadata !== undefined) {
+    try {
+      assertStoredPrincipalConfidentialityBound(
+        loadEnvelopeSchema(tx, input.source.space, sourceMetadata),
+        sourceMetadata.labelMap.entries.map((entry) => entry.label),
+      );
+    } catch (error) {
+      return {
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   let pendingSourceSchema = candidateSchemas.get(targetKey(input.source)) ??
     setupResultSchemaFor(tx, input.source);
+  if (
+    pendingSourceSchema !== undefined &&
+    cfcSchemaEntries(pendingSourceSchema).some((entry) =>
+      entry.label.confidentiality?.some(isCurrentPrincipalUserClause)
+    )
+  ) {
+    pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+      sourceMetadata === undefined
+        ? pendingSourceSchema
+        : mergeCfcSchemaEnvelopes(
+          loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
+          pendingSourceSchema,
+        ),
+      tx.getCfcState().trustSnapshot?.actingPrincipal,
+    );
+  }
+  // Only a schema this transaction's writes to the source are checked
+  // against can vouch for a principal claim; a setup result schema is not.
+  const sourceCandidate = candidateSchemas.get(targetKey(input.source));
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
       pendingSourceSchema,
       input.source.path,
-      input.source.space,
+      input.source,
+      sourceCandidate,
     )
     : undefined;
   if (pendingSourceSchema === undefined && sourceMetadata === undefined) {
@@ -5173,27 +8070,41 @@ const derivePersistedLinkLabel = (
     if (sourceCreatedInThisTx) {
       const targetCandidate = candidateSchemas.get(targetKey(input.target));
       if (targetCandidate !== undefined) {
-        pendingSourceSchema = targetCandidate;
+        pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+          targetCandidate,
+          tx.getCfcState().trustSnapshot?.actingPrincipal,
+        );
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
-          targetCandidate,
+          pendingSourceSchema,
           input.target.path,
-          input.target.space,
+          input.target,
+          targetCandidate,
         );
       }
     }
   }
-  const linkSchemaLabel = rootLabelFromSchema(
+  const linkSchemaLabel = withoutPrincipalClaims(rootLabelFromSchema(
     tx,
     input.linkSchema,
     input.source.space,
-  );
+    labelMintOptionsAt(
+      tx,
+      input.target,
+      input.target.path,
+    ),
+  ));
+  // Counted without the principal claims `persistedLinkEntries` strips from
+  // the view, so a view carrying only those does not stand in for the
+  // source's labels.
   const hasCarriedLabel =
-    input.cfcLabelView?.entries.some((entry) => hasLabelValues(entry.label)) ??
-      false;
+    input.cfcLabelView?.entries.some((entry) =>
+      hasLabelValues(withoutPrincipalClaims(entry.label))
+    ) ?? false;
   if (
     sourceMetadata === undefined && pendingSourceSchema === undefined &&
-    !hasLabelValues(linkSchemaLabel) && !hasCarriedLabel
+    !hasLabelValues(linkSchemaLabel) && !hasCarriedLabel &&
+    pendingSourceView === undefined
   ) {
     // Name the SOURCE document, which is the one carrying no metadata, and
     // the target location the link was being written into.
@@ -5227,18 +8138,30 @@ const derivePersistedLinkLabel = (
   }
   if (
     sourceMetadata === undefined && pendingSourceSchema === undefined &&
-    !hasLabelValues(linkSchemaLabel) && hasCarriedLabel
+    !hasLabelValues(linkSchemaLabel) && hasCarriedLabel &&
+    pendingSourceView === undefined
   ) {
     return {};
   }
-  const withMetadata = sourceMetadata === undefined ? {} : { sourceMetadata };
-  const sourceLabel = mergeLabels(
-    sourceMetadata === undefined ? undefined : labelAtPath(
-      sourceMetadata,
-      canonicalizeLogicalPath(input.source.path),
-    ) ?? {},
-    pendingSourceLabel,
+  const storedSource = metadataResolver.projection(
+    sourceMetadata,
+    input.source.path,
   );
+  const storedSourceView = storedSource?.view;
+  const sourceView = pendingSourceView === undefined
+    ? storedSourceView
+    : mergeCfcLabelViews([storedSourceView, pendingSourceView]);
+  const sourceLabel = joinLabels([
+    sourceMetadata === undefined ? undefined : withoutPrincipalClaims(
+      metadataResolver.label(
+        sourceMetadata,
+        canonicalizeLogicalPath(input.source.path),
+      ) ?? {},
+    ),
+    { integrity: storedSource?.principalClaims },
+    pendingSourceLabel,
+    metadataResolver.cover(pendingSourceView, [], undefined),
+  ]);
   // The source/link-schema integrity is author-influenceable (a link value can
   // carry a forged link schema or label view). Gate runtime-minted evidence
   // atoms out of it unless a trusted builtin authored the link write, THEN add
@@ -5253,17 +8176,486 @@ const derivePersistedLinkLabel = (
     },
     authoringIdentity,
   ).integrity;
+  const boundLinkConfidentiality = bindLinkCurrentPrincipalClauses(
+    linkSchemaLabel.confidentiality ?? [],
+    sourceLabel.confidentiality ?? [],
+  );
+  if (boundLinkConfidentiality === undefined) {
+    return {
+      reason: verdictReason(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      ),
+    };
+  }
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
-      linkSchemaLabel.confidentiality,
+      boundLinkConfidentiality,
     ),
     integrity: mergeLabelValues(
       gatedIntegrity,
       [linkReferenceIntegrity(input)],
     ),
   };
-  return { label, ...withMetadata };
+  return { label, sourceView };
+};
+
+/**
+ * Collects the labels a link write persists, relative to its receiving slot.
+ * Every hop gates evidence and joins carried views with authoritative labels.
+ */
+const persistedLinkEntries = (
+  tx: IExtendedStorageTransaction,
+  input: LinkWritePolicyInput,
+  result: ReturnType<typeof derivePersistedLinkLabel>,
+  linkIdentity: ImplementationIdentity | undefined,
+  metadataResolver: VerifierMetadataResolver,
+): { entries: CfcLabelView["entries"]; reasons: string[] } => {
+  const entries: CfcLabelView["entries"] = [];
+  const reasons: string[] = [];
+  if (result.label !== undefined && hasLabelValues(result.label)) {
+    entries.push({
+      path: [],
+      label: result.label,
+    });
+  }
+  const pushGatedLinkEntry = (entry: {
+    path: readonly string[];
+    label: IFCLabel;
+  }) => {
+    const gated = gateRuntimeMintedIntegrity(
+      cloneLabel(entry.label),
+      linkIdentity,
+    );
+    if (!hasLabelValues(gated)) {
+      return;
+    }
+    entries.push({
+      path: canonicalizeLogicalPath(entry.path),
+      label: gated,
+    });
+  };
+  const rederivedView = result.sourceView;
+  for (const entry of rederivedView?.entries ?? []) {
+    pushGatedLinkEntry(entry);
+  }
+  // A carried child view must include its authoritative cover: a more
+  // specific entry shadows its ancestor during longest-prefix reads.
+  const authoritativeCoverFor = (
+    entryPath: readonly string[],
+  ): IFCLabel | undefined => {
+    tx.noteCfcPreparationWork?.("authoritativeCoverCalls");
+    return metadataResolver.cover(
+      rederivedView,
+      entryPath,
+      result.label !== undefined && hasLabelValues(result.label)
+        ? result.label
+        : undefined,
+    );
+  };
+  for (const entry of input.cfcLabelView?.entries ?? []) {
+    const gated = withoutPrincipalClaims(gateRuntimeMintedIntegrity(
+      cloneLabel(entry.label),
+      linkIdentity,
+    ));
+    if (!hasLabelValues(gated)) {
+      continue;
+    }
+    const entryPath = canonicalizeLogicalPath(entry.path);
+    const cover = authoritativeCoverFor(entryPath);
+    const bound = bindLinkCurrentPrincipalClauses(
+      gated.confidentiality ?? [],
+      cover?.confidentiality ?? [],
+    );
+    if (bound === undefined) {
+      reasons.push(verdictReason(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      ));
+      continue;
+    }
+    gated.confidentiality = [...bound];
+    entries.push({
+      path: entryPath,
+      label: cover !== undefined ? mergeLabels(cover, gated) : gated,
+    });
+  }
+  return { entries, reasons };
+};
+
+/** Result of resolving a link write through its pending reference sources. */
+type DerivedLink = {
+  /** Integrity and confidentiality at the receiving slot. */
+  label?: IFCLabel;
+
+  /** Labels relative to the receiving slot, including descendant paths. */
+  entries: CfcLabelView["entries"];
+
+  /** Refusals from any hop in the reference chain. */
+  reasons: string[];
+};
+
+/** Resolves recorded links through the references staged into their sources. */
+type LinkLabelDeriver = {
+  /** Derives the labels a recorded link persists at its receiving slot. */
+  persisted: (input: LinkWritePolicyInput) => Generator<void, DerivedLink>;
+
+  /**
+   * Derives the label a recorded link carries at `relativePath` below its
+   * receiving slot, or `undefined` when the link itself, or its source's label
+   * at that path, cannot be derived.
+   */
+  labelAt: (
+    input: LinkWritePolicyInput,
+    relativePath: readonly string[],
+  ) => Generator<void, IFCLabel | undefined>;
+};
+
+/** Whether repeated pending sources form a document graph without cycles. */
+const hasSharedAcyclicLinkSources = (
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+): boolean => {
+  if (linkWrites.size < 2) return false;
+  const sources = new Set<string>();
+  let shared = false;
+  for (const inputs of linkWrites.values()) {
+    for (const input of inputs) {
+      const source = targetKey(input.source);
+      if (!linkWrites.has(source)) continue;
+      if (sources.has(source)) shared = true;
+      sources.add(source);
+    }
+  }
+  if (!shared) return false;
+
+  // A document cycle can make a result depend on the caller's expansion path.
+  // Removing every source-free document proves that no such dependency exists.
+  const dependents = new Map<string, string[]>();
+  const pending = new Map<string, number>();
+  for (const [target, inputs] of linkWrites) {
+    let count = 0;
+    for (const input of inputs) {
+      const source = targetKey(input.source);
+      if (!linkWrites.has(source)) continue;
+      const downstream = dependents.get(source) ?? [];
+      downstream.push(target);
+      dependents.set(source, downstream);
+      count++;
+    }
+    pending.set(target, count);
+  }
+  const ready = [...pending].filter(([, count]) => count === 0)
+    .map(([key]) => key);
+  for (let index = 0; index < ready.length; index++) {
+    for (const dependent of dependents.get(ready[index]) ?? []) {
+      const remaining = pending.get(dependent)! - 1;
+      pending.set(dependent, remaining);
+      if (remaining === 0) ready.push(dependent);
+    }
+  }
+  return ready.length === pending.size;
+};
+
+/**
+ * Resolves staged source references from transaction evidence, independently of
+ * which document's metadata has been persisted by preparation. A reference at
+ * or above a link's source path supplies the label there; one below it supplies
+ * the labels beneath it. Object back-references have a finite label view;
+ * pointer chains that never reach an object or scalar refuse derivation.
+ * Suspension points separate recursive calls and label-map construction;
+ * the preparation driver decides when to yield to the event loop.
+ */
+const createLinkLabelDeriver = (
+  tx: IExtendedStorageTransaction,
+  candidates: ReadonlyMap<string, JSONSchema>,
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+  identityForInput: (
+    input: WritePolicyInput,
+  ) => ImplementationIdentity | undefined,
+  metadataResolver: VerifierMetadataResolver,
+): LinkLabelDeriver => {
+  /** A finite projection and the source values waiting for it to resolve. */
+  type RequestedPath = {
+    /** Remaining path below the current source. */
+    path: readonly string[];
+
+    /** Links whose own source resolution depends on this projection. */
+    sources: ReadonlySet<LinkWritePolicyInput>;
+  };
+
+  const requestPath = (
+    path: readonly string[],
+    sources: ReadonlySet<LinkWritePolicyInput> = new Set(),
+  ): RequestedPath => ({ path, sources });
+
+  /** The pointer chain and object expansion for one source-label walk. */
+  type Walk = {
+    /** References since the last descent into a concrete object. */
+    aliases: ReadonlySet<LinkWritePolicyInput>;
+
+    /** References whose held children this branch has already expanded. */
+    expanded: ReadonlySet<LinkWritePolicyInput>;
+
+    /** Finite paths needed by a source projection, floor, or carried view. */
+    requested: readonly RequestedPath[];
+
+    /** Results shared by sibling branches within this metadata snapshot. */
+    memo?: Map<LinkWritePolicyInput, DerivedLink>;
+  };
+
+  let shareDerivations: boolean | undefined;
+  const emptyWalk = (): Walk => {
+    shareDerivations ??= hasSharedAcyclicLinkSources(linkWrites);
+    return {
+      aliases: new Set(),
+      expanded: new Set(),
+      requested: [],
+      // Preparation writes source metadata between public derivation calls.
+      // Each call therefore owns its cache, even within one transaction.
+      ...(shareDerivations ? { memo: new Map() } : {}),
+    };
+  };
+
+  // The labels the references staged into the source document bring to the
+  // source path, or the refusals of the first one that cannot be derived.
+  const pendingSourceView = function* (
+    input: LinkWritePolicyInput,
+    walk: Walk,
+  ): Generator<void, { view?: CfcLabelView; reasons: string[] }> {
+    const views: (CfcLabelView | undefined)[] = [];
+    const sourcePath = canonicalizeLogicalPath(input.source.path);
+    for (const upstream of linkWrites.get(targetKey(input.source)) ?? []) {
+      const upstreamPath = canonicalizeLogicalPath(upstream.target.path);
+      const covers = concretePathHasPrefix(sourcePath, upstreamPath);
+      if (
+        (!covers && !concretePathHasPrefix(upstreamPath, sourcePath)) ||
+        !pathHoldsStagedReference(tx, upstream.target, upstreamPath)
+      ) continue;
+      const final = parseLink(
+        tx.readValueOrThrow({
+          ...upstream.target,
+          id: upstream.target.id as URI,
+          path: [...upstreamPath],
+        }, { meta: INTERNAL_VERIFIER_META }),
+        {
+          ...upstream.target,
+          id: upstream.target.id as URI,
+          path: [...upstreamPath],
+        },
+      );
+      if (
+        final === undefined ||
+        targetKey(final) !== targetKey(upstream.source) ||
+        !arraysEqual(final.path, upstream.source.path)
+      ) continue;
+      const relative = sourcePath.slice(upstreamPath.length);
+      const prefix = upstreamPath.slice(sourcePath.length);
+      const requested = covers
+        ? [
+          requestPath(relative, walk.aliases),
+          ...walk.requested.map((request) => ({
+            ...request,
+            path: [...relative, ...request.path],
+          })),
+        ]
+        : walk.requested.filter(({ path }) => pathPatternsOverlap(prefix, path))
+          .map((request) => ({
+            ...request,
+            path: request.path.slice(prefix.length),
+          }));
+      // Held references may lead back to an object already expanded. Follow
+      // that edge only as far as an explicitly requested path needs it; an
+      // actual read crosses the stored pointer and consumes its own labels.
+      if (!covers && walk.expanded.has(upstream) && requested.length === 0) {
+        continue;
+      }
+      const resolved = yield* derive(upstream, {
+        aliases: covers ? walk.aliases : new Set(),
+        expanded: walk.expanded,
+        requested,
+        memo: walk.memo,
+      });
+      if (resolved.reasons.length > 0) return { reasons: resolved.reasons };
+      yield;
+      // A downstream hop sees the representation the upstream hop persists,
+      // including protected fields when it crosses a space boundary.
+      const entries =
+        tx.getCfcState().labelMetadataProtectionMode === "enforce" &&
+          upstream.source.space !== upstream.target.space
+          ? resolved.entries.map((entry) => ({
+            ...entry,
+            label: transformCfcLabelForCrossSpacePersist(entry.label),
+          }))
+          : resolved.entries;
+      // Pending entries persist as `origin: "link"`, which stored link
+      // metadata exposes with the `followRef` observation class.
+      const linked: CfcLabelView["entries"] = entries.map((entry) => ({
+        ...entry,
+        observes: "followRef",
+      }));
+      if (!covers) {
+        // A reference below the source path lands beneath it, and leaves the
+        // label at the source path itself alone.
+        views.push({
+          version: 1,
+          entries: linked.map((entry) => ({
+            ...entry,
+            path: [...prefix, ...entry.path],
+          })),
+        });
+        continue;
+      }
+      // A reference covering the source path supplies its root by longest
+      // prefix, and its entries below the source path rebased onto it.
+      const label = metadataResolver.cover(
+        { version: 1, entries },
+        relative,
+        undefined,
+      );
+      views.push(rebaseCfcLabelView({
+        version: 1,
+        entries: withoutShadowedPrincipalClaims(linked, relative),
+      }, relative));
+      if (label !== undefined) {
+        views.push({ version: 1, entries: [{ path: [], label }] });
+      }
+    }
+    yield;
+    return { view: mergeCfcLabelViews(views), reasons: [] };
+  };
+
+  const derive = function* (
+    input: LinkWritePolicyInput,
+    walk: Walk,
+  ): Generator<void, DerivedLink> {
+    const requested = [
+      ...walk.requested,
+      ...(walk.expanded.has(input)
+        ? []
+        : input.cfcLabelView?.entries.map((entry) =>
+          requestPath(canonicalizeLogicalPath(entry.path))
+        ) ?? []),
+    ];
+    // Resolving a source through an ancestor link may require a projection
+    // back into that same source. It is a pointer loop if the source is still
+    // waiting for that projection, even when its path grows on each hop.
+    if (
+      walk.aliases.has(input) ||
+      requested.some(({ sources }) => sources.has(input))
+    ) {
+      return {
+        entries: [],
+        reasons: [
+          verdictReason("cyclic staged reference in link label derivation"),
+        ],
+      };
+    }
+    // Projection requests carry dependencies on the caller's source values.
+    // Only an unprojected result can be shared by distinct sibling branches.
+    const memo = requested.length === 0 ? walk.memo : undefined;
+    const cached = memo?.get(input);
+    if (cached !== undefined) {
+      tx.noteCfcPreparationWork?.("stagedReferenceCacheHits");
+      return cached;
+    }
+    tx.noteCfcPreparationWork?.("stagedReferenceDerivations");
+    yield;
+    const pending = yield* pendingSourceView(input, {
+      aliases: new Set([...walk.aliases, input]),
+      expanded: new Set([...walk.expanded, input]),
+      requested,
+      memo: walk.memo,
+    });
+    if (pending.reasons.length > 0) {
+      return { entries: [], reasons: pending.reasons };
+    }
+    yield;
+    const identity = identityForInput(input);
+    const result = derivePersistedLinkLabel(
+      tx,
+      input,
+      candidates,
+      identity,
+      metadataResolver,
+      pending.view,
+    );
+    if (result.reason !== undefined) {
+      return { entries: [], reasons: [result.reason] };
+    }
+    yield;
+    // A back-edge supplies only the finite projection its caller requested.
+    // Its complete carried view is checked at the first occurrence of this
+    // link, where all of that view's authoritative paths are expanded.
+    const carriedInput = walk.expanded.has(input) && input.cfcLabelView
+      ? {
+        ...input,
+        cfcLabelView: {
+          ...input.cfcLabelView,
+          entries: input.cfcLabelView.entries.filter((entry) =>
+            walk.requested.some(({ path }) =>
+              pathPatternsOverlap(canonicalizeLogicalPath(entry.path), path)
+            )
+          ),
+        },
+      }
+      : input;
+    const derived = persistedLinkEntries(
+      tx,
+      carriedInput,
+      result,
+      identity,
+      metadataResolver,
+    );
+    const resolved = {
+      ...derived,
+      label: derived.reasons.length === 0 ? result.label : undefined,
+    };
+    memo?.set(input, resolved);
+    return resolved;
+  };
+
+  const persisted = (
+    input: LinkWritePolicyInput,
+  ): Generator<void, DerivedLink> => derive(input, emptyWalk());
+
+  // The label below the receiving slot is the source's own label at the
+  // matching path, credited only when the link itself derives. The carried
+  // view is relative to the receiving slot, so `persisted` checks it against
+  // the source path it was written for, never against the nested one.
+  const labelAt = function* (
+    input: LinkWritePolicyInput,
+    relativePath: readonly string[],
+  ): Generator<void, IFCLabel | undefined> {
+    if (
+      (yield* derive(input, {
+        ...emptyWalk(),
+        requested: [requestPath(relativePath)],
+      }))
+        .reasons.length > 0
+    ) return undefined;
+    const nested: LinkWritePolicyInput = {
+      ...input,
+      source: {
+        ...input.source,
+        path: [...canonicalizeLogicalPath(input.source.path), ...relativePath],
+      },
+      target: {
+        ...input.target,
+        path: [...canonicalizeLogicalPath(input.target.path), ...relativePath],
+      },
+    };
+    const pending = yield* pendingSourceView(nested, emptyWalk());
+    if (pending.reasons.length > 0) return undefined;
+    return derivePersistedLinkLabel(
+      tx,
+      nested,
+      candidates,
+      identityForInput(input),
+      metadataResolver,
+      pending.view,
+    ).label;
+  };
+
+  return { persisted, labelAt };
 };
 
 /**
@@ -5370,7 +8762,8 @@ const resolveLinkedContentEvidence = (
         tx,
         pendingSchema,
         address.path,
-        address.space,
+        address,
+        candidateSchemas.get(targetKey(address)),
       ) ?? {},
       undefined,
     );
@@ -5437,21 +8830,28 @@ const coalesceLabelEntries = (
   // so each keeps its own consumers — merging a `value` and a `shape` entry
   // into one covering entry would both widen consumption and destroy the
   // SC-4 grow-vs-replace split (C2).
-  const byKey = new Map<string, LabelMapEntry>();
+  const byKey = new Map<string, { entry: LabelMapEntry; labels: IFCLabel[] }>();
   for (const entry of entries) {
-    const path = [...entry.path];
     const key = `${entry.origin ?? ""}\u0000${entry.observes ?? ""}\u0000${
-      pathKey(path)
-    }`;
+      entry.referenceAcquisition ?? ""
+    }\u0000${pathKey(entry.path)}`;
     const existing = byKey.get(key);
-    byKey.set(key, {
-      path,
-      label: mergeLabels(existing?.label, cloneLabel(entry.label)),
-      ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
-      ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
-    });
+    if (existing === undefined) {
+      byKey.set(key, { entry, labels: [entry.label] });
+    } else {
+      existing.entry = entry;
+      existing.labels.push(entry.label);
+    }
   }
-  return [...byKey.values()].sort((left, right) => {
+  return [...byKey.values()].map(({ entry, labels }) => ({
+    path: [...entry.path],
+    label: joinLabels(labels),
+    ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+    ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+    ...(entry.referenceAcquisition !== undefined
+      ? { referenceAcquisition: entry.referenceAcquisition }
+      : {}),
+  })).sort((left, right) => {
     const leftKey = pathKey(left.path);
     const rightKey = pathKey(right.path);
     if (leftKey !== rightKey) {
@@ -5468,7 +8868,8 @@ const coalesceLabelEntries = (
       ? -1
       : leftObserves > rightObserves
       ? 1
-      : 0;
+      : Number(left.referenceAcquisition !== undefined) -
+        Number(right.referenceAcquisition !== undefined);
   });
 };
 
@@ -5502,6 +8903,372 @@ export const decomposeToSameRoot = (
     throw error;
   }
 };
+
+/**
+ * Whether a write under `candidate` leaves a document's stored envelope as it
+ * is, so that no merge runs: the two are equal but for writer stamps, they
+ * decompose to the same root document, or the stored envelope covers the
+ * candidate's.
+ */
+const storedEnvelopeUnchangedByCandidate = (
+  stored: JSONSchema,
+  candidate: JSONSchema,
+): boolean =>
+  schemasEqualIgnoringWriterStamp(stored, candidate) ||
+  decomposeToSameRoot(stored, candidate) ||
+  storedSchemaCoversCandidateEnvelope(stored, candidate);
+
+/**
+ * What the document held at a logical path before this transaction, and at
+ * every position a `*` segment matches, or `undefined` where that can't be
+ * told.
+ *
+ * A write detail's `previousValue` is what the path held when that write was
+ * first made, so the shallowest write at or above the path saw the document
+ * as it was only if nothing overlapping the path beneath it was attempted
+ * first, which the attempt log orders.
+ * Elsewhere the transaction left the path as it was, and a read finds it.
+ * The answer only ever relaxes a check (see `storedForeignPositions`), so
+ * whatever it can't tell is unknown rather than guessed.
+ */
+const storedValuesAt = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): (path: readonly string[]) => readonly FabricValue[] | undefined => {
+  const details = [
+    ...(tx.getWriteDetailsForTarget?.(target) ??
+      tx.getWriteDetails?.(target.space) ?? []),
+  ].filter((write) => sameDocument(write.address, target));
+  // A whole-envelope write replaces the value without a value path.
+  const envelopeWritten = details.some((write) =>
+    write.address.path.length === 0
+  );
+  const writes = details.filter((write) => write.address.path[0] === "value")
+    .map((write) => ({
+      path: write.address.path.slice(1).map(String),
+      previousValue: write.previousValue,
+    }));
+  const attempts = (getTransactionWriteAttempts(tx) ?? []).filter((attempt) =>
+    sameDocument(attempt, target) && attempt.path[0] === "value"
+  ).map((attempt) => ({
+    path: canonicalizeDocumentPath(attempt.path.map(String)),
+    journalIndex: attempt.journalIndex,
+  }));
+  const UNKNOWN = Symbol("unknown");
+  const valueAt = (
+    path: readonly string[],
+  ): FabricValue | undefined | typeof UNKNOWN => {
+    if (envelopeWritten) return UNKNOWN;
+    let index = -1;
+    for (const [candidate, write] of writes.entries()) {
+      if (
+        concretePathHasPrefix(path, write.path) &&
+        (index === -1 || write.path.length < writes[index].path.length)
+      ) {
+        index = candidate;
+      }
+    }
+    if (index !== -1) {
+      const covering = writes[index];
+      // The write details keep one entry per path, so the attempt log is
+      // what orders them.
+      const firstAt = (at: (write: readonly string[]) => boolean) =>
+        Math.min(
+          ...attempts.filter(({ path: attempted }) => at(attempted)).map((
+            { journalIndex },
+          ) => journalIndex),
+        );
+      const coveringAt = firstAt((attempted) =>
+        arraysEqual(attempted, covering.path)
+      );
+      const beneathAt = firstAt((attempted) =>
+        attempted.length > covering.path.length &&
+        concretePathHasPrefix(attempted, covering.path) &&
+        (concretePathHasPrefix(attempted, path) ||
+          concretePathHasPrefix(path, attempted))
+      );
+      if (!Number.isFinite(coveringAt) || beneathAt < coveringAt) {
+        return UNKNOWN;
+      }
+      return getValueAtPath(
+        covering.previousValue,
+        path.slice(covering.path.length),
+      ) as FabricValue | undefined;
+    }
+    // Any failure but absence propagates, as `effectiveValueForTarget`'s does.
+    return tx.readValueOrThrow({ ...target, path }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+  };
+  const expand = (
+    prefix: readonly string[],
+    rest: readonly string[],
+  ): FabricValue[] | undefined => {
+    if (rest.length === 0) {
+      const value = valueAt(prefix);
+      if (value === UNKNOWN) return undefined;
+      return value === undefined ? [] : [value];
+    }
+    const [head, ...tail] = rest;
+    if (head !== "*") return expand([...prefix, head], tail);
+    const container = valueAt(prefix);
+    if (container === UNKNOWN) return undefined;
+    if (
+      !isWalkableObjectOrArray(container) || isPrimitiveCellLink(container)
+    ) {
+      return [];
+    }
+    const values: FabricValue[] = [];
+    for (const key of Object.keys(container)) {
+      const found = expand([...prefix, key], tail);
+      if (found === undefined) return undefined;
+      values.push(...found);
+    }
+    return values;
+  };
+  // What is unknown at a path is unknown beneath it as well, so the answer
+  // never turns known again deeper down a recursive definition.
+  const cache = new Map<string, readonly FabricValue[] | undefined>();
+  const valuesAt = (
+    path: readonly string[],
+  ): readonly FabricValue[] | undefined => {
+    const key = JSON.stringify(path);
+    if (!cache.has(key)) {
+      cache.set(
+        key,
+        path.length > 0 && valuesAt(path.slice(0, -1)) === undefined
+          ? undefined
+          : expand([], path),
+      );
+    }
+    return cache.get(key);
+  };
+  return valuesAt;
+};
+
+/**
+ * Whether this transaction is a release of the piece whose store `target`
+ * is: one in which the runtime, under its own authorization, records the
+ * release marker for the whole document, which it does only in the
+ * transaction that sets a piece up, swaps its pattern or repairs its start
+ * (`markPieceOwnedStores`). Pattern code can record the same marker, but not
+ * the authorization.
+ */
+const transactionReleasesStore = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "release-program" && tx.isRuntimeWritePolicyInput(input) &&
+    sameDocument(input.target, target) &&
+    canonicalizeLogicalPath(input.target.path).length === 0
+  );
+
+/**
+ * The positions of a stored document whose claims beneath belong to another
+ * document: those where it holds links and nothing else, and those where it
+ * holds nothing but the stored schema puts a writer claim (`writeAuthorizedBy`,
+ * `writePolicyAnyOf`, or `uiContract`) at the position itself, which then
+ * decides what may come to be held there.
+ */
+const storedForeignPositions = (
+  valuesAt: (path: readonly string[]) => readonly FabricValue[] | undefined,
+  storedSchema: JSONSchema | undefined,
+): ForeignPositions => {
+  const guarded = storedSchema === undefined ? [] : cfcSchemaEntries(
+    storedSchema,
+  ).filter((entry) =>
+    isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+    (entry.schema.ifc.writeAuthorizedBy !== undefined ||
+      entry.schema.ifc.writePolicyAnyOf !== undefined ||
+      entry.schema.ifc.uiContract !== undefined)
+  ).map((entry) => entry.path);
+  return {
+    holdsForeign: (path) => {
+      const values = valuesAt(path);
+      if (values === undefined) return false;
+      return values.length > 0
+        ? values.every(isPrimitiveCellLink)
+        : guarded.some((entry) => arraysEqual(entry, path));
+    },
+    variesBelow: (path) => {
+      const values = valuesAt(path);
+      // Where they are unknown, nothing at or beneath is foreign.
+      if (values === undefined) return false;
+      return values.length > 0 ||
+        guarded.some((entry) =>
+          entry.length >= path.length &&
+          path.every((segment, index) => segment === entry[index])
+        );
+    },
+  };
+};
+
+/**
+ * The merge options of a release of the piece whose store `target` is: what
+ * the commit merges a release's candidate with, and what the `setsrc`
+ * preflight, which gates the release, has to merge it with too.
+ */
+export const releaseMergeOptions = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  storedSchema: JSONSchema,
+  // The modules of the program the release installs (see
+  // `PatternManager.programModuleIdentities`).
+  programModules: Iterable<string>,
+): Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp"
+> => {
+  const modules = new Set(programModules);
+  return {
+    beneathStoredLink: beneathForeignPosition(
+      storedForeignPositions(storedValuesAt(tx, target), storedSchema),
+    ),
+    adoptsStamp: (claim) => {
+      const stamp = writerClaimStamp(claim);
+      return stamp !== undefined && modules.has(stamp.moduleIdentity);
+    },
+  };
+};
+
+/** A stamped writer claim's module identity and file, if it is one. */
+const writerClaimStamp = (
+  claim: unknown,
+):
+  | { moduleIdentity: string; file: string | undefined; path: string[] }
+  | undefined => {
+  const binding = isObjectNotArray(claim) &&
+      isObjectNotArray(claim.__ctWriterIdentityOf)
+    ? claim.__ctWriterIdentityOf
+    : {};
+  const { moduleIdentity, file, path } = binding;
+  return typeof moduleIdentity === "string"
+    ? {
+      moduleIdentity,
+      file: typeof file === "string" ? file : undefined,
+      path: Array.isArray(path) ? path.map(String) : [],
+    }
+    : undefined;
+};
+
+/**
+ * Whether one of `identities` is the writer a stamp names: a verified identity
+ * whose module, source file and export (§8.15.1: hash and symbol) are the
+ * stamp's own. Such a writer may bring
+ * its stamp over an unstamped claim naming it, in any transaction.
+ */
+const stampIsWriters = (
+  identities: Iterable<ImplementationIdentity | undefined>,
+) =>
+(claim: unknown): boolean => {
+  const stamp = writerClaimStamp(claim);
+  for (const identity of identities) {
+    if (
+      stamp !== undefined && identity?.kind === "verified" &&
+      identity.moduleIdentity === stamp.moduleIdentity &&
+      arraysEqual(identity.bindingPath ?? [], stamp.path) &&
+      normalizeIdentitySource(identity.sourceFile) !== undefined &&
+      normalizeIdentitySource(identity.sourceFile) ===
+        normalizeIdentitySource(stamp.file)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * A release's merge options, with the writers' own stamps adoptable besides:
+ * outside a release, the writer a stamp names is the only one that may.
+ */
+const mergeOptionsForWriters = (
+  release: Pick<
+    MergeCfcSchemaEnvelopeOptions,
+    "beneathStoredLink" | "adoptsStamp"
+  >,
+  writersOwnStamp: (claim: unknown) => boolean,
+): Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp"
+> => ({
+  ...release,
+  adoptsStamp: (claim) =>
+    release.adoptsStamp?.(claim) === true || writersOwnStamp(claim),
+});
+
+/** The program modules the runtime named for `target` in this release. */
+const releaseProgramModules = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): readonly string[] =>
+  tx.getCfcState().writePolicyInputs.flatMap((input) =>
+    input.kind === "release-program" && tx.isRuntimeWritePolicyInput(input) &&
+      sameDocument(input.target, target) &&
+      canonicalizeLogicalPath(input.target.path).length === 0
+      ? input.modules
+      : []
+  );
+
+/** Whether a logical path lies strictly beneath a foreign position. */
+const beneathForeignPosition =
+  (foreign: ForeignPositions) => (path: readonly string[]): boolean => {
+    for (let depth = 0; depth < path.length; depth++) {
+      if (foreign.holdsForeign(path.slice(0, depth))) return true;
+    }
+    return false;
+  };
+
+/**
+ * The envelope a document stores after a write under `candidate`: the stored
+ * envelope where the write leaves it unchanged, and the two merged otherwise.
+ * Throws what {@link mergeCfcSchemaEnvelopes} throws.
+ */
+const mergeStoredCfcEnvelope = (
+  stored: JSONSchema,
+  candidate: JSONSchema,
+  options: MergeCfcSchemaEnvelopeOptions,
+): JSONSchema =>
+  storedEnvelopeUnchangedByCandidate(stored, candidate)
+    ? stored
+    : mergeCfcSchemaEnvelopes(stored, candidate, options);
+
+/**
+ * Would a write under `candidate` commit over this stored envelope?
+ * `undefined` means yes.
+ *
+ * This is {@link mergeStoredCfcEnvelope} in dry run — the fast paths the
+ * persist loop takes before it merges, then the merge itself through
+ * `cfcSchemaMergeIssue` — and it is what `cf piece setsrc --check` drives, so
+ * the preflight and the commit cannot part on whether a candidate merges: a
+ * fast path the preflight skipped would manufacture a rejection the commit
+ * never makes, and one it took alone would hide a rejection the commit does
+ * make. Pure: no transaction, no writes.
+ */
+export const storedCfcEnvelopeMergeIssue = (
+  stored: JSONSchema,
+  candidate: JSONSchema,
+  options: MergeCfcSchemaEnvelopeOptions = {},
+): CfcSchemaMergeIssue | undefined =>
+  storedEnvelopeUnchangedByCandidate(stored, candidate)
+    ? undefined
+    : cfcSchemaMergeIssue(stored, candidate, options);
 
 /**
  * The decomposed spelling of an envelope schema: its root document, ready
@@ -5617,17 +9384,42 @@ export const loadSchemaDocument = (
 };
 
 /**
+ * Whether a stored envelope root declares a definition map anywhere — at the
+ * root or as a nested scope below it. A decomposed root never does: the
+ * decomposition strips the root's `$defs` into documents of their own and
+ * refuses a nested one. A root that does is therefore the inline spelling of
+ * a merged envelope, whose `cid:` references are ones the confidential merge
+ * minted to keep a reference bound to the definition map of the document it
+ * came from (`resolveConfidentialSchema` in `./schema-merge.ts`).
+ */
+const declaresDefinitionScope = (root: JSONSchema): boolean =>
+  anySchema(
+    root,
+    (node) => isObjectNotArray(node.schema) && node.schema.$defs !== undefined,
+    { includeDefs: true, includeUnused: true },
+  );
+
+/**
  * The envelope schema in the INLINE form every consumer walks. A
  * self-contained root is returned as stored, spelling untouched. A root
- * carrying `$ref: cid:` members — a decomposed write, or the root a
- * reference-form declared schema left behind — is recomposed: one read
- * policy, every member resolved or the envelope is unreadable (fail
+ * carrying `$ref: cid:` members is resolved by one read policy: every
+ * referenced document is loaded or the envelope is unreadable (fail
  * closed). Members resolve through `loadSchemaDocument`: space-FIRST
  * with content verification, the registry supplying only what the space
  * does not hold — a registered copy was itself hash-verified at
  * registration, so content addressing makes it the stored document.
  * Each verified member is then registered, so in-session resolvers (the
  * decompose-root equality below among them) can supply the closure.
+ *
+ * What is returned depends on which spelling the root is. A decomposed
+ * write, or the root a reference-form declared schema left behind, is
+ * recomposed. A root that declares a definition map of its own is already
+ * the inline spelling the writer merged and stored: it is returned as
+ * stored, its references resolving through the registry exactly as they did
+ * for the writer. Recomposing it would be wrong twice over — recomposition
+ * reads a document's `$defs` as a cyclic group's members, and it moves every
+ * referenced definition into the root's map, where a reference inside a
+ * nested definition scope would no longer find it.
  */
 const loadEnvelopeSchema = (
   tx: IExtendedStorageTransaction,
@@ -5636,16 +9428,25 @@ const loadEnvelopeSchema = (
 ): JSONSchema => {
   const root = loadSchemaDocument(tx, space, metadata.schemaHash);
   if (!containsExternalSchemaRef(root)) return root;
-  return internSchema(recomposeSchema(
-    formatExternalSchemaRef(metadata.schemaHash),
-    (hash) => {
-      const document = hash === metadata.schemaHash
-        ? root
-        : loadSchemaDocument(tx, space, hash);
-      registerSchemaDocument(hash, document);
-      return document;
-    },
-  ));
+  const load = (hash: string): JSONSchema => {
+    const document = hash === metadata.schemaHash
+      ? root
+      : loadSchemaDocument(tx, space, hash);
+    registerSchemaDocument(hash, document);
+    return document;
+  };
+  if (declaresDefinitionScope(root)) {
+    // `load` throws on a document it cannot produce, so the walk either
+    // reaches the whole closure or fails closed; it reports no misses.
+    walkSchemaDocumentClosure({
+      roots: [metadata.schemaHash],
+      load: (hash) => ({ kind: "verified", schema: load(hash) }),
+    });
+    return root;
+  }
+  return internSchema(
+    recomposeSchema(formatExternalSchemaRef(metadata.schemaHash), load),
+  );
 };
 
 /**
@@ -5663,8 +9464,9 @@ const loadEnvelopeSchema = (
  * - `loaded` — the metadata's `schemaHash` resolved to a content-verified
  *   schema document; `metadata` rides along for callers (the commit path) that
  *   also need the stored label map.
- * - `unreadable` — metadata EXISTS but its envelope cannot be loaded (missing
- *   cid document, content-hash mismatch). The commit path records `reason` and
+ * - `unreadable` — metadata EXISTS but its envelope cannot be loaded or carries
+ *   an unresolved stored creator (missing cid document, content-hash mismatch,
+ *   or persisted CurrentPrincipal confidentiality). The commit path records `reason` and
  *   rejects the write in enforcing modes, so a preflight must report it as a
  *   blocker and never as "nothing stored" — treating it as absent is exactly
  *   how a check green-lights an update the real commit then refuses.
@@ -5704,19 +9506,21 @@ export const loadStoredCfcEnvelope = (
     // An envelope this build cannot interpret is a property of the DOCUMENT,
     // not of the caller's transaction, so it lands in the unreadable arm of
     // the taxonomy; a transaction read failure keeps propagating.
-    if (
-      error instanceof UnknownCfcMetadataVersionError ||
-      error instanceof UnreadableCfcMetadataError
-    ) {
+    if (error instanceof StoredCfcMetadataError) {
       return { status: "unreadable", reason: error.message };
     }
     throw error;
   }
   if (metadata === undefined) return { status: "none" };
   try {
+    const schema = loadEnvelopeSchema(tx, target.space, metadata);
+    assertStoredPrincipalConfidentialityBound(
+      schema,
+      metadata.labelMap.entries.map((entry) => entry.label),
+    );
     return {
       status: "loaded",
-      schema: loadEnvelopeSchema(tx, target.space, metadata),
+      schema,
       metadata,
     };
   } catch (error) {
@@ -5732,14 +9536,13 @@ export const loadStoredCfcEnvelope = (
   }
 };
 
-// Union of confidentiality (and integrity) atoms across every non-internal labeled read in the
-// transaction, resolved from stored labels the same way verifyInputRequirements
-// resolves them. Transaction-global by design — deliberately NOT scoped to a
-// D4 read prefix: a sink request is built from whatever the handler read, and
-// the sink-request input does not record its own read provenance, so the whole
-// consumed set is the sound over-approximation for the egress ceiling
-// (docs/specs/cfc-write-prefix-provenance.md §7.4).
-const collectConsumedLabel = (
+/**
+ * Join confidentiality and integrity across the transaction's non-internal
+ * labeled reads, retaining each source in first-seen order for refusal details.
+ * A sink request can depend on any handler read, so the consumed set is
+ * transaction-global (docs/specs/cfc-write-prefix-provenance.md §7.4).
+ */
+const collectConsumedLabelImpl = (
   tx: IExtendedStorageTransaction,
 ): {
   confidentiality: readonly CfcConfClause[];
@@ -5756,29 +9559,41 @@ const collectConsumedLabel = (
    */
   sources: readonly ConsumedAtomSource[];
 } => {
+  tx.noteCfcConsumedLabelWalk?.();
   const atoms: unknown[] = [];
   const modulePolicySpaces = new Map<string, Set<MemorySpace>>();
   const sources: ConsumedAtomSource[] = [];
+  const sourceBuckets = new Map<string, ConsumedAtomSource[]>();
+  // Collection is synchronous and read-only. Share one validated metadata
+  // snapshot per document here; another collection observes its current view.
+  const labelIndexes = new Map<string, ConsumedLabelIndex | undefined>();
   const noteSource = (
-    atom: unknown,
+    atom: CfcConfClause,
     read: CfcAddress,
     labelPath: readonly string[],
   ): void => {
     // Deduplicated on the same terms a consumer matches on: one entry per
     // (clause, address, label path). Two label-map entries of one document
     // carrying the same clause to the same read are one source.
-    if (
-      sources.some((seen) =>
-        seen.read.id === read.id && seen.read.space === read.space &&
-        seen.read.scope === read.scope &&
-        pathKey(seen.read.path) === pathKey(read.path) &&
-        pathKey(seen.labelPath) === pathKey(labelPath) &&
-        deepEqual(seen.atom, atom)
-      )
-    ) {
+    // The tuple keeps address fields and pointer boundaries unambiguous,
+    // including paths containing separators. Only atoms sharing that identity
+    // need structural comparison; `sources` retains global first-seen order.
+    const key = stringTupleKey([
+      read.id,
+      read.space,
+      read.scope,
+      pathKey(read.path),
+      pathKey(labelPath),
+      deepEqualKey(atom),
+    ]);
+    const bucket = sourceBuckets.get(key);
+    if (bucket?.some((seen) => deepEqual(seen.atom, atom))) {
       return;
     }
-    sources.push({ atom, read, labelPath });
+    const source = { atom, read, labelPath };
+    sources.push(source);
+    if (bucket === undefined) sourceBuckets.set(key, [source]);
+    else bucket.push(source);
   };
   // Integrity evidence riding the same consumed entries: the guard pool the
   // exchange evaluator matches rule preconditions against (Epic B5). Same
@@ -5786,73 +9601,104 @@ const collectConsumedLabel = (
   // rules bind kind/source structurally, so evidence still has to match the
   // clause it discharges.
   const integrityAtoms: CfcAtom[] = [];
+  // Read activities carry document-rooted paths; trigger reads arrive with
+  // logical ones, and the set marks them when a path is canonicalized.
+  const triggerReadList = triggerReadSources(tx);
+  const triggerReads = new Set<object>(triggerReadList);
   for (
     const read of [
       ...(tx.getReadActivities?.() ?? []),
       // §8.9.2 / SC-3 (H5): a handler scheduled by a confidential write must not
       // egress past a sink ceiling just because its branch never re-read that
       // write. Empty when the trigger-read gate is off.
-      ...triggerReadSources(tx),
+      ...triggerReadList,
     ]
   ) {
     if (isInternalVerifierRead(read.meta)) continue;
-    const metadata = storedMetadataFor(
-      tx,
-      read.space,
-      read.id,
-      normalizeCellScope(read.scope),
-      read.type ?? "application/json",
-    );
-    if (metadata === undefined) continue;
-    const path = canonicalizeLogicalPath(read.path);
-    // A recursive read at `path` observes the value at `path` and everything
-    // below it, so its confidentiality is the union of every labelMap entry
-    // that is an ancestor-or-equal of `path` (a label that applies to it) OR a
-    // DESCENDANT of `path` (a label on a field inside the value just read).
-    // labelAtPath alone would only see the ancestor — so reading a whole object
-    // and sending one confidential field would slip the ceiling (review on
-    // #3993). A nonRecursive read sees ONLY the value at `path`, so it counts
-    // ancestor-or-equal entries but NOT descendants — counting those would
-    // false-reject valid commits (review round 2 on #3993).
-    for (const entry of metadata.labelMap.entries) {
-      const entryPath = canonicalizeLogicalPath(entry.path);
-      // CONCRETE structure entries label only the container node's shape:
-      // an ancestor structure entry does not apply to a read strictly
-      // below it (same exact-path rule as `labelAtPath`); as a descendant
-      // of a recursive read it does apply (the read materializes the
-      // shape). `*`-path templates (template-population §3.2) exist to be
-      // consumed at matching child paths, so they take the generic
-      // ancestor-or-equal arm — this collector stays additive; templates
-      // just participate.
-      const overlapsRead = entry.origin === "structure" &&
-          !isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath })
-        ? (entryPath.length === path.length
-          ? isPrefix(entryPath, path)
-          : read.nonRecursive !== true && isPrefix(path, entryPath))
-        : (isPrefix(entryPath, path) ||
-          (read.nonRecursive !== true && isPrefix(path, entryPath)));
-      if (!overlapsRead) continue;
-      const contributed = entry.label.confidentiality ?? [];
-      atoms.push(...contributed);
-      for (const atom of contributed) {
-        noteSource(atom, {
-          space: read.space,
-          id: read.id,
-          scope: normalizeCellScope(read.scope),
-          path,
-        } as CfcAddress, entryPath);
+    const scope = normalizeCellScope(read.scope);
+    const type = read.type ?? "application/json";
+    const metadataKey = stringTupleKey([read.space, read.id, scope, type]);
+    if (!labelIndexes.has(metadataKey)) {
+      const metadata = storedMetadataFor(tx, read.space, read.id, scope, type);
+      labelIndexes.set(
+        metadataKey,
+        metadata === undefined
+          ? undefined
+          : new ConsumedLabelIndex(metadata.labelMap.entries, {
+            onQuery: (wildcard) =>
+              tx.noteCfcPreparationWork?.(
+                wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
+              ),
+          }),
+      );
+    }
+    const labels = labelIndexes.get(metadataKey);
+    if (labels === undefined) continue;
+    const collectAt = (
+      path: readonly string[],
+      nonRecursive: boolean | undefined,
+    ): void => {
+      // A recursive read at `path` observes the value at `path` and everything
+      // below it, so its confidentiality is the union of every labelMap entry
+      // that is an ancestor-or-equal of `path` (a label that applies to it) OR a
+      // DESCENDANT of `path` (a label on a field inside the value just read).
+      // labelAtPath alone would only see the ancestor — so reading a whole object
+      // and sending one confidential field would slip the ceiling (review on
+      // #3993). A nonRecursive read sees ONLY the value at `path`, so it counts
+      // ancestor-or-equal entries but NOT descendants — counting those would
+      // false-reject valid commits (review round 2 on #3993).
+      for (const { entry, path: entryPath } of labels.overlapping(path)) {
+        // CONCRETE structure entries label only the container node's shape:
+        // an ancestor structure entry does not apply to a read strictly
+        // below it (same exact-path rule as `labelAtPath`); as a descendant
+        // of a recursive read it does apply (the read materializes the
+        // shape). `*`-path templates (template-population §3.2) exist to be
+        // consumed at matching child paths, so they take the generic
+        // ancestor-or-equal arm — this collector stays additive; templates
+        // just participate. An `enumerate` entry takes the exact-path rule
+        // too, as it does in `labelAtPath`.
+        const overlapsRead = appliesAtItsPathOnly(
+            entry,
+            isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath }),
+          )
+          ? (entryPath.length === path.length
+            ? isPrefix(entryPath, path)
+            : nonRecursive !== true && isPrefix(path, entryPath))
+          : (isPrefix(entryPath, path) ||
+            (nonRecursive !== true && isPrefix(path, entryPath)));
+        if (!overlapsRead) continue;
+        const contributed = entry.label.confidentiality ?? [];
+        atoms.push(...contributed);
+        for (const atom of contributed) {
+          noteSource(atom, {
+            space: read.space,
+            id: read.id,
+            scope: normalizeCellScope(read.scope),
+            path,
+          } as CfcAddress, entryPath);
+        }
+        for (
+          const reference of modulePolicyReferencesIn(
+            entry.label.confidentiality,
+          )
+        ) {
+          const key = modulePolicyArtifactKey(reference);
+          const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+          spaces.add(read.space);
+          modulePolicySpaces.set(key, spaces);
+        }
+        integrityAtoms.push(...(entry.label.integrity ?? []));
       }
-      for (
-        const reference of modulePolicyReferencesIn(
-          entry.label.confidentiality,
-        )
-      ) {
-        const key = modulePolicyArtifactKey(reference);
-        const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
-        spaces.add(read.space);
-        modulePolicySpaces.set(key, spaces);
-      }
-      integrityAtoms.push(...(entry.label.integrity ?? []));
+    };
+    const toLogical = triggerReads.has(read)
+      ? canonicalizeLogicalPath
+      : canonicalizeDocumentPath;
+    collectAt(toLogical(read.path), read.nonRecursive);
+    const lengthOf = isLinkResolutionProbe(read.meta)
+      ? undefined
+      : nativeLengthParent(tx, read);
+    if (lengthOf !== undefined) {
+      collectAt(toLogical(lengthOf), true);
     }
   }
   // Label-metadata observations (inv-12 Stage 2): the introspection
@@ -5872,6 +9718,34 @@ const collectConsumedLabel = (
     atoms.push(...observation.confidentiality);
     for (const atom of observation.confidentiality) {
       noteSource(atom, observation.target, observation.target.path);
+    }
+    for (
+      const reference of modulePolicyReferencesIn(observation.confidentiality)
+    ) {
+      const key = modulePolicyArtifactKey(reference);
+      const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+      spaces.add(observation.target.space);
+      for (
+        const space of cfcReferenceObservationOriginSpaces(observation) ?? []
+      ) {
+        spaces.add(space as MemorySpace);
+      }
+      modulePolicySpaces.set(key, spaces);
+    }
+  }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    atoms.push(...(observation.consumed.confidentiality ?? []));
+    integrityAtoms.push(...(observation.consumed.integrity ?? []));
+    for (const source of observation.sources) {
+      noteSource(source.atom, source.read, source.labelPath);
+      for (const reference of modulePolicyReferencesIn(source.atom)) {
+        const key = modulePolicyArtifactKey(reference);
+        const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+        spaces.add(source.read.space);
+        modulePolicySpaces.set(key, spaces);
+      }
     }
   }
   // Structural dedup (deep-equal) — the same dedup the rest of CFC uses.
@@ -6108,12 +9982,11 @@ const verifySinkRequestCeilings = (
     let verdict = true;
     if (mode !== "off") {
       // Boundary context for this release site (spec §8.10.5 / §15.4): the
-      // sink name plus its class. Every sink in the initial inventory is a
-      // NETWORK egress (fetch*/stream/llm*/generate*); the display class
-      // arrives with H3b's render-ceiling work.
+      // sink name plus its class, read off the sink inventory so a rule
+      // scoped to one class fires at that class's sinks and no other.
       const boundary = [
         cfcAtom.boundaryContext("sink", sink),
-        cfcAtom.boundaryContext("sinkClass", "network"),
+        cfcAtom.boundaryContext("sinkClass", sinkClassOf(sink)),
       ];
       // The sink egress gate is a consuming site for single-use grants
       // (design §2.2) under the enforce dial — the rewritten label decides
@@ -6240,10 +10113,12 @@ const attemptedWritePathsUnder = (
 
 /**
  * Checks written contents against each applicable integrity floor. Linked
- * subjects use current target evidence; inline values use their authorized
- * declarations and flow integrity. Every concrete wildcard slot is checked.
+ * subjects in the precise profile use current target evidence; the legacy
+ * profile uses its transitive link-label derivation. Inline values use their
+ * authorized declarations and flow integrity. Every concrete wildcard slot
+ * is checked.
  */
-const verifyWriteFloor = (
+const verifyWriteFloor = function* (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
   target: {
@@ -6255,15 +10130,13 @@ const verifyWriteFloor = (
     identityForPath: (
       path: readonly string[],
     ) => ImplementationIdentity | undefined;
-    identityForInput: (
-      input: WritePolicyInput,
-    ) => ImplementationIdentity | undefined;
     linkWriteInputs: readonly LinkWritePolicyInput[];
+    linkLabels: LinkLabelDeriver;
     candidateSchemas: ReadonlyMap<string, JSONSchema>;
     flowIntegrity: readonly CfcAtom[];
     flowConfidentiality: readonly CfcConfClause[];
   },
-): string[] => {
+): Generator<void, string[]> {
   const failures: string[] = [];
   // Built once per verify (not per entry/contribution): the closure and acting
   // principal are tx-wide. Concept floors on the written value resolve through
@@ -6316,6 +10189,7 @@ const verifyWriteFloor = (
     return concrete.map((path) => ({ ...entry, path }));
   });
   for (const entry of concreteEntries) {
+    yield;
     const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
     const floor = Array.isArray(ifc?.requiredIntegrity)
       ? ifc.requiredIntegrity
@@ -6355,6 +10229,7 @@ const verifyWriteFloor = (
         entry.path,
         entry.schema,
         entry.root,
+        entry.conditional === true,
       )
     ) {
       continue;
@@ -6371,6 +10246,11 @@ const verifyWriteFloor = (
         entry.label,
         entryLabels,
         target.space,
+        labelMintOptionsAt(
+          tx,
+          target,
+          entry.path,
+        ),
       ),
       tx.getCfcValueWriteAuthor({ ...target, path: entry.path })?.identity
           ?.kind === "builtin"
@@ -6383,6 +10263,11 @@ const verifyWriteFloor = (
     // when plain data was written (crediting the flow meet when available).
     const contributions: (readonly CfcAtom[])[] = [];
     for (const input of linksHere) {
+      if (tx.getCfcState().flowLabelsMode !== "persist") {
+        const derived = yield* ctx.linkLabels.persisted(input);
+        contributions.push(derived.label?.integrity ?? []);
+        continue;
+      }
       const evidence = resolveLinkedContentEvidence(
         tx,
         input,
@@ -6395,6 +10280,12 @@ const verifyWriteFloor = (
     for (const input of ancestorLinks) {
       const linkPath = canonicalizeLogicalPath(input.target.path);
       const relative = entry.path.slice(linkPath.length);
+      if (tx.getCfcState().flowLabelsMode !== "persist") {
+        contributions.push(
+          (yield* ctx.linkLabels.labelAt(input, relative))?.integrity ?? [],
+        );
+        continue;
+      }
       const evidence = resolveLinkedContentEvidence(
         tx,
         {
@@ -6461,10 +10352,22 @@ const verifyWriteFloor = (
   return failures;
 };
 
+/** Runs every boundary check synchronously. */
 export const prepareBoundaryCommit = (
   tx: IExtendedStorageTransaction,
   instrumentation?: CfcPrepareInstrumentation,
 ): string[] => {
+  const steps = prepareBoundaryCommitSteps(tx, instrumentation);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+};
+
+/** Runs boundary checks with suspension points between targets and link steps. */
+export function* prepareBoundaryCommitSteps(
+  tx: IExtendedStorageTransaction,
+  instrumentation?: CfcPrepareInstrumentation,
+): Generator<void, string[]> {
   // WATCH(cfc-verdict): every reason recorded here decides whether the commit
   // is retried. A reason that says policy REFUSED this data — deterministic,
   // so an identical re-run refuses identically — must be wrapped in
@@ -6487,14 +10390,18 @@ export const prepareBoundaryCommit = (
   const prefixProvenance = instrumentation?.onPrefixProvenance !== undefined
     ? createPrefixProvenanceSummary()
     : undefined;
-  // A write to a document's ["cfc"] label-map path made outside the runtime's
-  // privileged persistence scope forges the metadata that drives CFC derivation
-  // for other writes (audit S18). Each was recorded at the extended-tx write
-  // chokepoint; surface one fail-closed reason apiece so it rejects in enforce
-  // mode and diagnoses in observe, uniformly with every other reason here.
+  // A write that reaches a document's reserved siblings of `value` from
+  // outside the runtime's privileged persistence scope forges the ["cfc"]
+  // metadata that drives CFC derivation for other writes (audit S18), or moves
+  // data through a surface this pass excludes from its own accounting. Each was recorded at the extended-tx
+  // write chokepoint; surface one fail-closed reason apiece so it rejects in
+  // enforce mode and diagnoses in observe, uniformly with every other reason
+  // here.
   for (const target of state.unprivilegedSystemWrites ?? []) {
     reasons.push(
-      verdictReason(`unprivileged write to protected cfc path ${target}`),
+      verdictReason(
+        `unprivileged write to protected runtime surface ${target}`,
+      ),
     );
   }
   const identityForInput = (
@@ -6515,6 +10422,7 @@ export const prepareBoundaryCommit = (
     identityForInput,
     generatedOutputPaths,
   );
+  const schemaInputPaths = schemaInputPathsByTarget(state.writePolicyInputs);
   const writeAuthorIdentities = writePolicyIdentitiesByTarget(
     state.writePolicyInputs,
     identityForInput,
@@ -6532,8 +10440,8 @@ export const prepareBoundaryCommit = (
   // its cross-space eligibility, and the writer-fit measurement reads it to
   // decide whether a computed target's exemption applies.
   const labelProtectionMode = state.labelMetadataProtectionMode;
-  const writtenTargets = valueWriteTargets(tx);
-  const flowTargets = flowMode === "off" ? undefined : writtenTargets;
+  const valueTargets = valueWriteTargets(tx);
+  const flowTargets = flowMode === "off" ? undefined : valueTargets;
   const flowJoin = flowMode === "off"
     ? { confidentiality: [], integrity: [] }
     : deriveFlowJoin(tx, { collectLabeledSpaces: true });
@@ -6541,24 +10449,34 @@ export const prepareBoundaryCommit = (
   // Read provenance for a refusal's remedy channel, computed only if a gate
   // below actually refuses. `collectConsumedLabel` walks every read against
   // every label-map entry of the document it resolved to, which is work no
-  // committing transaction should do just in case; a misfit is rare and pays
-  // for it then. The set is transaction-global — wider than the per-write
-  // prefix the writer-fit decision itself runs on — so a named input is a
+  // committing transaction should do just in case. Strict writer-fit refusals
+  // pay for it; persist-and-flag diagnostics need only the atoms. The set is
+  // transaction-global — wider than the per-write prefix the writer-fit
+  // decision itself runs on — so a named input is a
   // read that genuinely carried the atom, while `attribution` stays the
   // honest statement of whether the named ones account for all of them.
   let memoizedRefusalSources: readonly ConsumedAtomSource[] | undefined;
   const refusalSources = (): readonly ConsumedAtomSource[] =>
     memoizedRefusalSources ??= collectConsumedLabel(tx).sources;
   const flowIntegrity = flowJoin.integrity;
+  // The join's derivation provenance alone, for the membership stamps below.
+  // `deriveFlowJoin` mints it only when every write of this transaction was
+  // authored under one identity, so each stamp carrying it names the one
+  // function that computed what it labels.
+  const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
-  // A held reference can have been selected in another space. Its target
-  // address alone cannot establish that its label-field identities are local.
-  const hasHeldReferenceHistory =
+  // Only authenticated origin sets establish locality for held histories.
+  // A target address or caller-supplied origin cannot stand in for the space
+  // where the reference's label-field identities were observed.
+  const hasUnknownReferenceOrigins =
     state.referenceObservations.some((entry) =>
-      entry.confidentiality.length > 0
+      entry.confidentiality.length > 0 &&
+      (cfcReferenceObservationOriginSpaces(entry)?.length ?? 0) === 0
     ) || state.writePolicyInputs.some((input) =>
       input.kind === "link-write" &&
-      (input.reference?.confidentiality.length ?? 0) > 0
+      (input.reference?.confidentiality.length ?? 0) > 0 &&
+      (!tx.isRuntimeWritePolicyInput(input) ||
+        (input.reference?.originSpaces?.length ?? 0) === 0)
     );
   const flowHasLabels = flowConfidentiality.length > 0 ||
     flowIntegrity.length > 0;
@@ -6580,7 +10498,7 @@ export const prepareBoundaryCommit = (
         `${flowTargets.size} written doc(s)`,
     );
   }
-  for (const [key, target] of writtenTargets) {
+  for (const [key, target] of valueTargets) {
     if (candidates.has(key)) {
       continue;
     }
@@ -6690,11 +10608,24 @@ export const prepareBoundaryCommit = (
         target.type,
       );
       const existingEntries = existingMeta?.labelMap.entries ?? [];
+      const writtenPrefixes = new PathPrefixIndex();
+      for (const written of target.paths) writtenPrefixes.add(written);
       if (
         existingEntries.some((entry) =>
           (entry.origin === "derived" || entry.origin === "link" ||
             entry.origin === "structure") &&
-          target.paths.some((written) => isPrefix(written, entry.path))
+          writtenPrefixes.hasPrefixOf(entry.path)
+        ) ||
+        // A stamp naming the function that computed what it labels stops
+        // naming it once anything else writes at, above, or below its path
+        // (`carriedStampLabel`), so a write BELOW such a stamp admits the
+        // document too, even from a transaction that read nothing: without
+        // this a writer with an empty join could add content under another
+        // function's `TransformedBy`.
+        existingEntries.some((entry) =>
+          (entry.origin === "derived" || entry.origin === "structure") &&
+          entry.label.integrity?.some(isTransformedByAtom) === true &&
+          writtenPrefixes.overlaps(transformedByProbePath(entry))
         ) ||
         // Stage B healing, the template-ONLY arm (cubic P2 on the Stage B
         // PR): an envelope whose entries are ALL label-metadata templates
@@ -6711,7 +10642,41 @@ export const prepareBoundaryCommit = (
       }
     }
   }
+  // A link-origin entry labels the pointer that stood at its path when the
+  // entry was minted, so a payload write that replaced that pointer leaves it
+  // describing one the document no longer holds. Such a document enters the
+  // persist loop whatever the flow-label mode and whatever the flow join, and
+  // the loop drops the entry there (`linkCleared`).
+  for (const [key, target] of valueTargets) {
+    if (targetKeys.has(key)) {
+      continue;
+    }
+    const existingEntries = storedMetadataFor(
+      tx,
+      target.space,
+      target.id,
+      target.scope,
+      target.type,
+    )?.labelMap.entries ?? [];
+    if (
+      existingEntries.some((entry) =>
+        entry.origin === "link" &&
+        linkEntryPointerReplaced(tx, target, entry.path)
+      )
+    ) {
+      targetKeys.add(key);
+    }
+  }
+  const metadataResolver = new VerifierMetadataResolver(tx);
+  const linkLabels = createLinkLabelDeriver(
+    tx,
+    candidates,
+    linkWrites,
+    identityForInput,
+    metadataResolver,
+  );
   for (const key of targetKeys) {
+    yield;
     const candidateSchema = candidates.get(key);
     const schema = candidateSchema ?? emptySchemaObject();
     const undefinedCandidate = candidateSchema === undefined;
@@ -6748,7 +10713,7 @@ export const prepareBoundaryCommit = (
     const crossSpaceEligible = labelProtectionMode !== "off"
       ? new Set<LabelMapEntry>()
       : undefined;
-    const flowJoinIsCrossSpace = hasHeldReferenceHistory ||
+    const flowJoinIsCrossSpace = hasUnknownReferenceOrigins ||
       (flowLabeledSpaces !== undefined &&
         [...flowLabeledSpaces].some((labeled) => labeled !== space));
     // Every document that contributed a clause to the join belongs to this
@@ -6772,6 +10737,14 @@ export const prepareBoundaryCommit = (
       continue;
     }
     const existing = stored.status === "loaded" ? stored.metadata : undefined;
+    // Only a release of the piece relaxes claim preservation beneath its
+    // links; every other writer keeps each stored claim everywhere.
+    const foreignPositions = transactionReleasesStore(tx, { space, id, scope })
+      ? storedForeignPositions(
+        storedValuesAt(tx, { space, id, scope }),
+        stored.status === "loaded" ? stored.schema : undefined,
+      )
+      : undefined;
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
     if (stored.status === "loaded" && undefinedCandidate) {
@@ -6780,13 +10753,20 @@ export const prepareBoundaryCommit = (
     } else if (stored.status === "loaded") {
       storedSchema = stored.schema;
       try {
-        mergedSchema = schemasEqualIgnoringWriterStamp(storedSchema, schema) ||
-            decomposeToSameRoot(storedSchema, schema) ||
-            storedSchemaCoversCandidateEnvelope(storedSchema, schema)
-          ? storedSchema
-          : mergeCfcSchemaEnvelopes(storedSchema, schema, {
-            generatedOutputPaths: generatedOutputPaths.get(key),
-          });
+        mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
+          generatedOutputPaths: generatedOutputPaths.get(key),
+          ...mergeOptionsForWriters(
+            foreignPositions !== undefined
+              ? releaseMergeOptions(
+                tx,
+                { space, id, scope },
+                storedSchema,
+                releaseProgramModules(tx, { space, id, scope }),
+              )
+              : {},
+            stampIsWriters(writeAuthorIdentities.get(key)?.values() ?? []),
+          ),
+        });
       } catch (error) {
         // Tag the additive-required migration incompatibility with a stable
         // token so the default-root runnability backstop can key on THIS class
@@ -6806,7 +10786,35 @@ export const prepareBoundaryCommit = (
       }
     }
 
+    try {
+      mergedSchema = bindCurrentPrincipalConfidentiality(
+        mergedSchema,
+        state.trustSnapshot?.actingPrincipal,
+      );
+    } catch (error) {
+      reasons.push(verdictReason(
+        error instanceof Error ? error.message : String(error),
+      ));
+      continue;
+    }
+    // The merged envelope is what this commit persists, so a stored claim it
+    // lost would stop binding every later writer. Refuse the write instead.
+    if (storedSchema !== undefined && mergedSchema !== storedSchema) {
+      const dropped = droppedStoredClaim(
+        storedSchema,
+        mergedSchema,
+        foreignPositions,
+      );
+      if (dropped !== undefined) {
+        reasons.push(verdictReason(dropped));
+        continue;
+      }
+    }
+
     const linkWriteInputs = linkWrites.get(key) ?? [];
+    // The full stored-to-candidate merge validates migrations above. Its
+    // affected claims overlay the candidate for input verification; the
+    // policy-only fragment does not carry a document's required-field shape.
     const verificationSchema = storedSchema !== undefined &&
         linkWriteInputs.length > 0
       ? undefinedCandidate
@@ -6816,16 +10824,88 @@ export const prepareBoundaryCommit = (
           storedSchemaClaimsForLinkWrites(storedSchema, linkWriteInputs),
         ])
       : schema;
+    // A value write's candidate is the writer's own schema whenever that
+    // schema declares a label, so it can omit a requirement the document
+    // stores: a `writeAuthorizedBy`, a `uiContract`, a floor, a copy claim.
+    // The write therefore answers to the stored envelope as well as to the
+    // candidate, entry by entry wherever it touches one: the whole envelope,
+    // and the envelope taken at each path the write went through. The stored
+    // envelope is read as stored rather than through the merge, so no defect
+    // in how the two combine can remove a stored requirement from the check.
+    // Each schema can add requirements; none removes another's.
+    const verificationSchemas: readonly JSONSchema[] =
+      storedSchema !== undefined && !undefinedCandidate
+        ? [
+          verificationSchema,
+          storedSchema,
+          ...storedEnvelopesAtWrittenPaths(
+            storedSchema,
+            schemaInputPaths.get(key) ?? [],
+          ),
+        ]
+        : [verificationSchema];
+    const firstFailure = <T>(
+      verify: (schema: JSONSchema, index: number) => T | undefined,
+    ): T | undefined => {
+      for (const [index, schema] of verificationSchemas.entries()) {
+        const failure = verify(schema, index);
+        if (failure !== undefined) return failure;
+      }
+      return undefined;
+    };
 
-    const requirementFailure = verifyInputRequirements(
+    let deferredWriterRefusal: string | undefined;
+    const deferredWriterPaths: (readonly string[])[] = [];
+    // A preserved runtime output's deferral is discarded only by SC-11's
+    // proof that the whole envelope is unchanged, never by the replay waiver
+    // below, which keeps the stored schema over a candidate spelled another
+    // way.
+    let deferredPreservedOutput = false;
+    const writtenValuePaths = valueWritePathsOf(tx, target);
+    const policyApplication = writeIsPolicyApplication(
       tx,
-      verificationSchema,
       target,
       (path) => identityForSchemaPath(writeAuthorIdentities.get(key), path),
-      prefixBounds,
-      flowPersist ? flowConfidentiality : undefined,
-      linkWriteInputs,
-      prefixProvenance,
+    );
+    const requirementFailure = firstFailure((schema, index) =>
+      verifyInputRequirements(
+        tx,
+        schema,
+        target,
+        (path) =>
+          identitiesForClaimPath(
+            writeAuthorIdentities.get(key),
+            path,
+            writtenValuePaths,
+          ),
+        prefixBounds,
+        metadataResolver,
+        flowPersist ? flowConfidentiality : undefined,
+        linkWriteInputs,
+        // The precision counters measure each protected write once.
+        index === 0 ? prefixProvenance : undefined,
+        stored.status === "loaded"
+          ? (reason, path) => {
+            if (
+              writeReplaysArgumentSlot(tx, target, path) &&
+              writeLeavesPathUnchanged(tx, target, path)
+            ) {
+              deferredWriterPaths.push(path);
+            } else if (
+              path.length === 0 &&
+              (writePreservesRuntimeOutput(tx, target) ||
+                writeIsUnchangedOutput(tx, target, path))
+            ) {
+              deferredPreservedOutput = true;
+            } else {
+              return false;
+            }
+            deferredWriterRefusal ??= reason;
+            return true;
+          }
+          : undefined,
+        policyApplication,
+      )
     );
     // A verification failure records a reason (which rejects the whole commit
     // in enforcing modes) and skips persisting this target's declared label.
@@ -6848,11 +10928,11 @@ export const prepareBoundaryCommit = (
       if (!isIngestTarget) continue;
       ingestVerificationFailed = true;
     }
-    const trustedEventFailure = verifyTrustedEventRequirements(
-      tx,
-      target,
-      verificationSchema,
-    );
+    const trustedEventFailure = policyApplication
+      ? undefined
+      : firstFailure((schema) =>
+        verifyTrustedEventRequirements(tx, target, schema)
+      );
     if (trustedEventFailure) {
       reasons.push(verdictReason(trustedEventFailure));
       if (!isIngestTarget) continue;
@@ -6862,16 +10942,19 @@ export const prepareBoundaryCommit = (
     // Copy-claim verification: exactCopyOf and its §8.3 sub-path
     // generalization share one failure branch — both are "the written value
     // must equal a claimed source value" checks.
-    const exactCopyFailure = verifyExactCopyRequirements(
-      tx,
-      target,
-      verificationSchema,
-      flowPersist ? flowConfidentiality : [],
-    ) ?? verifyProjectionRequirements(
-      tx,
-      target,
-      verificationSchema,
-      flowPersist ? flowConfidentiality : [],
+    const exactCopyFailure = firstFailure((schema) =>
+      verifyExactCopyRequirements(
+        tx,
+        target,
+        schema,
+        flowPersist ? flowConfidentiality : [],
+      ) ??
+        verifyProjectionRequirements(
+          tx,
+          target,
+          schema,
+          flowPersist ? flowConfidentiality : [],
+        )
     );
     if (exactCopyFailure) {
       reasons.push(verdictReason(exactCopyFailure));
@@ -6884,20 +10967,27 @@ export const prepareBoundaryCommit = (
     // `observe` diagnoses; `enforce` records a reason (rejecting the commit
     // under the enforcing enforcement modes, mirroring requirementFailure).
     if (state.writeFloorMode !== "off") {
-      const floorFailures = verifyWriteFloor(tx, verificationSchema, target, {
-        identityForPath: (path) =>
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
-        identityForInput,
-        linkWriteInputs,
-        candidateSchemas: candidates,
-        // Only PERSISTED flow integrity may credit the floor: `observe` mode
-        // computes the join for diagnostics but stores nothing on the value, so
-        // crediting it would let a plain write pass a floor with integrity that
-        // never lands (codex/cubic review). Only `persist` writes the derived
-        // component.
-        flowIntegrity: flowPersist ? flowIntegrity : [],
-        flowConfidentiality: flowPersist ? flowConfidentiality : [],
-      });
+      let floorFailures: string[] = [];
+      for (const schema of verificationSchemas) {
+        const failures = yield* verifyWriteFloor(tx, schema, target, {
+          identityForPath: (path) =>
+            identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          linkWriteInputs,
+          linkLabels,
+          candidateSchemas: candidates,
+          flowConfidentiality: flowPersist ? flowConfidentiality : [],
+          // Only PERSISTED flow integrity may credit the floor: `observe` mode
+          // computes the join for diagnostics but stores nothing on the value,
+          // so crediting it would let a plain write pass a floor with
+          // integrity that never lands (codex/cubic review). Only `persist`
+          // writes the derived component.
+          flowIntegrity: flowPersist ? flowIntegrity : [],
+        });
+        if (failures.length > 0) {
+          floorFailures = failures;
+          break;
+        }
+      }
       if (floorFailures.length > 0) {
         if (state.writeFloorMode === "enforce") {
           reasons.push(...floorFailures);
@@ -6927,7 +11017,10 @@ export const prepareBoundaryCommit = (
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
     const flowWrittenPaths = flowTarget?.paths ?? [];
+    const flowWrittenPrefixes = new PathPrefixIndex();
+    for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
     const flowWrittenValues = flowTarget?.valuesByPath;
+    const valueTarget = valueTargets.get(key);
     // Pre-transaction snapshots (and slot presence at each recorded path)
     // per written path, for the §8.12.8 re-mint-on-recreation probe below.
     // Gated on flowPersist like the written paths: with nothing
@@ -6951,6 +11044,24 @@ export const prepareBoundaryCommit = (
     // When an ingest target failed verification we keep the runtime's mark
     // (appended below) but drop the payload's declared policy label — a
     // non-rejecting commit must not store claims that didn't verify.
+    // A value initialized on nobody's behalf (`labelMintOptionsAt`) leaves
+    // the claim the stored label makes at its path about a principal: the
+    // claim is carried forward as it stands, so a replayed setup or a
+    // preserved output changes no attribution, and a source update by another
+    // principal strips none.
+    const existingPrincipalClaims = new Map<string, readonly CfcAtom[]>();
+    for (const e of existing?.labelMap.entries ?? []) {
+      if (e.origin !== "declared" && e.origin !== undefined) continue;
+      const claims = (e.label.integrity ?? []).filter((atom) =>
+        isCurrentPrincipalClaimAtom(atom) && typeof atom.subject === "string"
+      );
+      if (claims.length > 0) {
+        existingPrincipalClaims.set(
+          pathKey(e.path),
+          claims as readonly CfcAtom[],
+        );
+      }
+    }
     const remintedDeclaredPaths = new Map<string, readonly string[]>();
     const runtimeStampEntries: LabelMapEntry[] = [];
     const persistedLabelEntries: LabelMapEntry[] = ingestVerificationFailed
@@ -6973,6 +11084,7 @@ export const prepareBoundaryCommit = (
               entry.path,
               entry.schema,
               entry.root,
+              entry.conditional === true,
             )
           ) {
             return [];
@@ -6983,17 +11095,19 @@ export const prepareBoundaryCommit = (
               : undefined;
           if (
             ifc !== undefined &&
-            (Object.hasOwn(ifc, "confidentiality") ||
-              Object.hasOwn(ifc, "integrity"))
+            (ifc.confidentiality !== undefined ||
+              ifc.integrity !== undefined)
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }
+          const mint = labelMintOptionsAt(tx, target, entry.path);
           const proposed = derivePersistedLabel(
             tx,
             entry.schema,
             entry.label,
             mergedSchemaEntryLabels,
             target.space,
+            mint,
           );
           // Runtime evidence certifies an authored value, not every future
           // member of the schema's wildcard. Ordinary declared policy retains
@@ -7001,10 +11115,10 @@ export const prepareBoundaryCommit = (
           const derived = gateRuntimeMintedIntegrity(proposed, undefined);
           const runtimeAtoms =
             proposed.integrity?.filter(isRuntimeMintedIntegrityAtom) ?? [];
-          const writes = writtenTargets.get(key);
+          const writes = valueTargets.get(key);
           if (runtimeAtoms.length > 0 && writes !== undefined) {
             for (
-              const path of runtimeEvidencePaths(
+              const { path, value } of runtimeEvidencePaths(
                 tx,
                 target,
                 entry.path,
@@ -7020,14 +11134,29 @@ export const prepareBoundaryCommit = (
                 identityForSchemaPath(writeAuthorIdentities.get(key), path)
                     ?.kind !== "builtin"
               ) continue;
+              // A policy matcher conservatively includes uncertain branches.
+              // Injection safety instead needs a positive proof for these
+              // bytes, including the sanitizer's closed-object discipline.
+              const integrity = runtimeAtoms.filter((atom) =>
+                !isObjectOrArray(atom) ||
+                atom.type !== CFC_ATOM_TYPE.InjectionSafe ||
+                validateAgainstSchema(entry.schema, value, entry.root) ===
+                  undefined
+              );
+              if (integrity.length === 0) continue;
               runtimeStampEntries.push({
                 path,
-                label: { integrity: runtimeAtoms },
+                label: { integrity },
                 origin: "derived",
                 observes: "value",
               });
             }
           }
+          const carriedClaims = mint.attributeCurrentPrincipal === false
+            ? existingPrincipalClaims.get(
+              pathKey(entry.path),
+            )
+            : undefined;
           // Store confidentiality is grow-only (§8.12.1): a re-write of a path must
           // not drop confidentiality the labelMap already carried beyond the schema
           // (e.g. link-derived or carried-view atoms). Reads use longest-prefix
@@ -7038,12 +11167,22 @@ export const prepareBoundaryCommit = (
           const prior = existingConfidentiality
             .filter((e) => isPrefix(e.path, entry.path))
             .flatMap((e) => e.confidentiality);
-          const label = prior.length > 0
-            ? {
-              ...derived,
-              confidentiality: mergeLabelValues(derived.confidentiality, prior),
-            }
-            : derived;
+          const label = {
+            ...derived,
+            ...(prior.length > 0
+              ? {
+                confidentiality: mergeLabelValues(
+                  derived.confidentiality,
+                  prior,
+                ),
+              }
+              : {}),
+            ...(carriedClaims !== undefined
+              ? {
+                integrity: mergeLabelValues(derived.integrity, carriedClaims),
+              }
+              : {}),
+          };
           // C5: an authored `ifc.observes` classes the declared entry (the
           // sqlite null-origin merge declares `observes:"value"` this way).
           // Anything but the four class values — including the absent
@@ -7121,9 +11260,75 @@ export const prepareBoundaryCommit = (
     const currentLinkWritePaths = new Set(
       linkWriteInputs.map((input) => pathKey(input.target.path)),
     );
+    // Whole-value write destinations stamped as written
+    // (`assertedValueRootPaths`). They join the written prefixes here, so the
+    // per-value entries beneath them are replaced and the attribution of any
+    // stamp overlapping them is withdrawn, as for a write of the whole value.
+    // They are not written paths for the re-creation probe: the diff's own
+    // writes beneath them are, with the before-values that probe needs.
+    let rootCeilings:
+      | { paths: (readonly string[])[]; index: PathIndex }
+      | undefined;
+    // Reissuing an unchanged pointer replaces its acquisition history even
+    // when the payload diff has no write. An explicit runtime assertion may
+    // attribute that selection after the same final-value and ceiling checks.
+    const assertedWritePaths = [
+      ...flowWrittenPaths,
+      ...linkWriteInputs.filter((input) => tx.isRuntimeWritePolicyInput(input))
+        .map((input) => input.target.path),
+    ];
+    const assertedRoots = flowPersist && flowTransformedBy.length > 0 &&
+        assertedWritePaths.length > 0
+      ? assertedValueRootPaths(
+        tx,
+        { space, id, scope },
+        assertedWritePaths,
+        (root) => {
+          if (flowConfidentiality.length === 0) return true;
+          // The declared entries this write re-mints and those the document
+          // already stores: a ceiling beneath the root need not apply to any
+          // path this transaction wrote. Indexed once per document, so each
+          // measured path resolves by walking its own segments.
+          rootCeilings ??= (() => {
+            const entries = [
+              ...persistedLabelEntries,
+              ...(existing?.labelMap.entries ?? []),
+            ].filter((entry) =>
+              (entry.origin === undefined || entry.origin === "declared") &&
+              readConsumesEntry("value", entry)
+            );
+            return {
+              paths: entries.map((entry) =>
+                canonicalizeLogicalPath(entry.path)
+              ),
+              index: pathIndexOf(entries),
+            };
+          })();
+          const { paths, index } = rootCeilings;
+          const measured = new Map<string, readonly string[]>([
+            [pathKey(root), root],
+          ]);
+          for (const path of paths) {
+            if (path.length > root.length && isPrefix(root, path)) {
+              measured.set(pathKey(path), path);
+            }
+          }
+          return [...measured.values()].every((path) =>
+            atomsOutsideCeiling(flowConfidentiality, [
+              ...(labelForEntriesAtPath(indexedEntriesAt(index, path), path)
+                ?.confidentiality ?? []) as readonly CfcConfClause[],
+              cfcAtom.space(space),
+            ]).length === 0
+          );
+        },
+        flowPreviousPresence,
+      )
+      : [];
+    for (const root of assertedRoots) flowWrittenPrefixes.add(root);
     let flowCleared = false;
     let remintCleared = false;
     let runtimeEvidenceCleared = false;
+    let linkCleared = false;
     // Stage B: stored label-metadata templates this persist drops (they are
     // re-derived from the FINAL payload entry set below). Tracked so a
     // TEMPLATE-ONLY stale envelope — a mixed-version writer cleared the
@@ -7223,9 +11428,67 @@ export const prepareBoundaryCommit = (
         }
         return presentAtPath(flowWrittenValues?.get(writtenKey), rel);
       });
+    // A `TransformedBy` atom on a flow stamp names the function that computed
+    // what the stamp labels, and holds only while nothing else writes there.
+    // A write at, above, or below a carried stamp's path (for a `*` template,
+    // its container's) changes what the stamp labels, so the carried stamp
+    // keeps only the `TransformedBy` atoms this transaction's join carries as
+    // well: attribution meets across the writers of a path. Membership stamps
+    // survive a slot write that adds a key, which is what makes this
+    // necessary rather than merely tidy.
+    const carriedStampLabel = (
+      entry: LabelMapEntry,
+      entryPath: readonly string[],
+    ): IFCLabel => {
+      const integrity = entry.label.integrity;
+      if (
+        !flowPersist ||
+        (entry.origin !== "derived" && entry.origin !== "structure") ||
+        integrity === undefined || !integrity.some(isTransformedByAtom)
+      ) {
+        return entry.label;
+      }
+      if (
+        !flowWrittenPrefixes.overlaps(
+          transformedByProbePath({ origin: entry.origin, path: entryPath }),
+        )
+      ) {
+        return entry.label;
+      }
+      const kept = integrity.filter((atom) =>
+        !isTransformedByAtom(atom) ||
+        flowTransformedBy.some((minted) => deepEqual(minted, atom))
+      );
+      const { integrity: _dropped, ...rest } = entry.label;
+      return kept.length > 0 ? { ...rest, integrity: kept } : rest;
+    };
     for (let entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
+      // A protected replay carries its stored value evidence verbatim while
+      // the byte check proves it changed nothing at this path. The deferred
+      // writer gate still requires identical policy and overlapping labels,
+      // including rebuilt reference acquisition entries, before admitting it.
+      if (
+        entry.origin === "derived" && entry.observes === "value" &&
+        deferredWriterPaths.some((path) => isPrefix(path, entryPath)) &&
+        writeReplaysArgumentSlot(tx, target, entryPath) &&
+        writeLeavesPathUnchanged(tx, target, entryPath) &&
+        linkWriteInputs.filter((input) =>
+          pathsOverlap(input.target.path, entryPath)
+        )
+          .every((input) =>
+            tx.isRuntimeWritePolicyInput(input) &&
+            retainedInputWitnesses(entry.label.integrity).every((witness) =>
+              input.reference?.selectionWitnesses?.some((held) =>
+                deepEqual(held, witness)
+              ) === true
+            )
+          )
+      ) {
+        persistedLabelEntries.push(entry);
+        continue;
+      }
       // Runtime attestations expire when any part of their value changes,
       // including with flow labeling disabled. An old wildcard attestation
       // cannot establish which concrete values its author actually certified.
@@ -7242,9 +11505,20 @@ export const prepareBoundaryCommit = (
             undefined)
       ) {
         runtimeEvidenceCleared = true;
+        // Derived value provenance follows the meet over writers: a partial
+        // write by the same transformation preserves its attribution to the
+        // surrounding value. Other runtime evidence certifies the old bytes.
+        const integrity = entry.label.integrity?.filter((atom) =>
+          !isRuntimeMintedIntegrityAtom(atom) ||
+          (runtimeValueEntry && flowPersist && isTransformedByAtom(atom) &&
+            flowTransformedBy.some((minted) =>
+              deepEqual(minted, atom)
+            ))
+        ) ?? [];
+        const { integrity: _expired, ...label } = entry.label;
         entry = {
           ...entry,
-          label: gateRuntimeMintedIntegrity(entry.label, undefined),
+          label: integrity.length > 0 ? { ...label, integrity } : label,
         };
       }
       // Label-metadata population templates (template-population Stage B,
@@ -7289,16 +11563,18 @@ export const prepareBoundaryCommit = (
         } else {
           persistedLabelEntries.push({
             path: entryPath,
-            label: cloneLabel(entry.label),
+            label: cloneLabel(carriedStampLabel(entry, entryPath)),
             ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
             observes: "shape",
           });
           continue;
         }
       }
+      // A declared-policy remint does not reacquire the pointer in its slot.
+      // Its acquisition survives until the pointer is rewritten or replaced.
       if (
-        persistedLabelEntryKeys.has(key) || remintedDeclaredPaths.has(key) ||
-        currentLinkWritePaths.has(key)
+        ((persistedLabelEntryKeys.has(key) || remintedDeclaredPaths.has(key)) &&
+          entry.origin !== "link") || currentLinkWritePaths.has(key)
       ) {
         if (
           remintedDeclaredPaths.has(key) &&
@@ -7331,11 +11607,26 @@ export const prepareBoundaryCommit = (
       if (isIngestTarget && entry.origin === "external-ingest") {
         continue;
       }
+      // A link-origin entry labels the pointer its slot held: a label of the
+      // element there rather than of the position. A payload write that
+      // replaced that pointer takes the entry with it whatever the flow-label
+      // mode (`linkEntryPointerReplaced`), so a rewritten list keeps no
+      // position carrying the labels of an element that has left it. The
+      // link write storing the element now at the position mints that
+      // element's own entries below, so an element keeps its labels at every
+      // position it moves to.
+      if (
+        entry.origin === "link" && valueTarget !== undefined &&
+        linkEntryPointerReplaced(tx, valueTarget, entryPath)
+      ) {
+        linkCleared = true;
+        continue;
+      }
       // Per-value components track the current value: a write at-or-above
-      // them replaced that value, so stale derived/link/structure entries
-      // under any written path are dropped (fresh ones for this tx are
-      // appended below / by the link machinery). Declared and legacy
-      // entries are never cleared here.
+      // them replaced that value, so stale derived/structure entries under
+      // any written path are dropped (fresh ones for this tx are appended
+      // below). Declared and legacy entries are never cleared here, and
+      // link-origin entries are cleared above.
       //
       // `*`-path templates clear only under a write that covers their
       // CONTAINER (template-population §3.1 "cleared on covering writes"):
@@ -7354,9 +11645,8 @@ export const prepareBoundaryCommit = (
         : entryPath;
       if (
         flowPersist &&
-        (entry.origin === "derived" || entry.origin === "link" ||
-          entry.origin === "structure") &&
-        flowWrittenPaths.some((written) => isPrefix(written, clearProbePath))
+        (entry.origin === "derived" || entry.origin === "structure") &&
+        flowWrittenPrefixes.hasPrefixOf(clearProbePath)
       ) {
         flowCleared = true;
         if (
@@ -7371,8 +11661,11 @@ export const prepareBoundaryCommit = (
         continue;
       }
       const schemaEntry = mergedSchemaEntrySchemas.get(key);
+      const carriedLabel = carriedStampLabel(entry, entryPath);
       if (
-        hasLabelValues(entry.label) ||
+        hasLabelValues(carriedLabel) ||
+        (existing !== undefined &&
+          isCompleteCfcReferenceEntry(existing.version, entry)) ||
         (schemaEntry !== undefined && hasPersistedPolicyClaim(schemaEntry))
       ) {
         // Carry-forward of an untouched path preserves the entry's
@@ -7380,19 +11673,23 @@ export const prepareBoundaryCommit = (
         // covering entries stay covering).
         persistedLabelEntries.push({
           path: entryPath,
-          label: cloneLabel(entry.label),
+          label: cloneLabel(carriedLabel),
           ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
           ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
+          ...(entry.referenceAcquisition !== undefined
+            ? { referenceAcquisition: entry.referenceAcquisition }
+            : {}),
         });
       }
     }
     persistedLabelEntries.push(...runtimeStampEntries);
     for (const input of linkWriteInputs) {
-      const linkIdentity = identityForInput(input);
       // Inv-12 Stage 1: link-origin entries are cross-space when the link
       // SOURCE lives in another space (see the predicate comment above).
       const markLinkEntry = (entry: LabelMapEntry): LabelMapEntry => {
-        if (input.source.space !== space) crossSpaceEligible?.add(entry);
+        if (
+          input.source.space !== space || (flowPersist && flowJoinIsCrossSpace)
+        ) crossSpaceEligible?.add(entry);
         return entry;
       };
       if (flowPersist) {
@@ -7412,6 +11709,7 @@ export const prepareBoundaryCommit = (
             path: canonicalizeLogicalPath(input.target.path),
             origin: "link",
             observes: "followRef",
+            referenceAcquisition: "complete",
             label: { confidentiality: [CFC_LABEL_READ_FAILED_ATOM] },
           });
           continue;
@@ -7420,143 +11718,27 @@ export const prepareBoundaryCommit = (
           path: canonicalizeLogicalPath(input.target.path),
           origin: "link",
           observes: "followRef",
+          referenceAcquisition: "complete",
           label: {
             confidentiality: mergeLabelValues(
-              input.reference.confidentiality,
-              flowConfidentiality,
+              input.reference.confidentiality.map(normalizeClause),
+              flowConfidentiality.map(normalizeClause),
             ),
             integrity: [linkReferenceIntegrity(input)],
           },
         })));
         continue;
       }
-      const result = derivePersistedLinkLabel(
-        tx,
-        input,
-        candidates,
-        linkIdentity,
-      );
-      if (result.reason !== undefined) {
-        reasons.push(result.reason);
-        continue;
-      }
-      if (result.label !== undefined && hasLabelValues(result.label)) {
-        persistedLabelEntries.push(markLinkEntry({
-          path: canonicalizeLogicalPath(input.target.path),
-          label: result.label,
-          origin: "link",
-        }));
-      }
-      const targetPath = canonicalizeLogicalPath(input.target.path);
-      // Inv-12 Stage 0 (SC-25 prerequisite): persist link-origin labels from
-      // the worker-authoritative source — the source doc's STORED label map,
-      // re-derived under the link source path — independent of the carried
-      // view. The carried `cfcLabelView` round-trips through the main thread
-      // (CellHandle refs) and is author-influenceable, so a tampered /
-      // redacted / incomplete view must not be able to WEAKEN what the
-      // stored metadata provides: entries re-derived here persist outright;
-      // the view loop below can only add. (`derivePersistedLinkLabel` above
-      // covers the label AT the source path; this covers the source's
-      // sub-path entries, which previously rode only the view.) Same
-      // evidence-mint gate as the carried entries (audit S4): a link write
-      // may not re-mint runtime evidence at the target without builtin
-      // authorship.
-      // The emptiness check runs on the GATED label (cubic review on this
-      // PR): the mint gate can strip an integrity-only entry down to
-      // nothing, and pushing an empty origin:"link" entry at a more-specific
-      // path would SHADOW an ancestor link entry's confidentiality under the
-      // per-component longest-prefix read resolution — an under-labeling.
-      const pushGatedLinkEntry = (entry: {
-        path: readonly string[];
-        label: IFCLabel;
-      }) => {
-        const gated = gateRuntimeMintedIntegrity(
-          cloneLabel(entry.label),
-          linkIdentity,
-        );
-        if (!hasLabelValues(gated)) {
-          return;
-        }
-        persistedLabelEntries.push(markLinkEntry({
-          path: [
-            ...targetPath,
-            ...canonicalizeLogicalPath(entry.path),
-          ],
-          label: gated,
-          origin: "link",
-        }));
-      };
-      const rederivedView = cfcLabelViewFromMetadata(
-        result.sourceMetadata,
-        input.source.path,
-      );
-      for (const entry of rederivedView?.entries ?? []) {
-        pushGatedLinkEntry(entry);
-      }
-      // The carried label view is author-influenceable; gate runtime-minted
-      // evidence atoms unless a builtin authored the link write (audit S4
-      // review).
-      //
-      // "Can only add" must hold under LONGEST-PREFIX shadowing too (cubic
-      // P1 on the Stage 1 PR): within the link component a more-specific
-      // entry REPLACES its ancestor for reads at/below it, so a crafted
-      // carried entry at a sub-path the authoritative state does not cover
-      // would swap the ancestor's confidentiality for the view's — a
-      // weakening through the very loop meant to be additive. Each carried
-      // entry therefore JOINS the label of the most-specific AUTHORITATIVE
-      // entry covering its path (the source-path label from
-      // `derivePersistedLinkLabel`, or the nearest re-derived-view
-      // ancestor-or-equal), so what it shadows rides along and the entry is
-      // at least as restrictive as the resolution it displaces. Both halves
-      // join: confidentiality is the leak the shadow would open; integrity
-      // at the covered path (e.g. the LinkReference provenance) would
-      // otherwise silently drop out of sub-path reads.
-      const authoritativeEntries: Array<{
-        path: readonly string[];
-        label: IFCLabel;
-      }> = [
-        ...(result.label !== undefined && hasLabelValues(result.label)
-          ? [{ path: [] as readonly string[], label: result.label }]
-          : []),
-        ...(rederivedView?.entries ?? []).map((entry) => ({
-          path: canonicalizeLogicalPath(entry.path),
+      const result = yield* linkLabels.persisted(input);
+      reasons.push(...result.reasons);
+      for (const entry of result.entries) {
+        const persisted: LabelMapEntry = {
+          path: [...canonicalizeLogicalPath(input.target.path), ...entry.path],
           label: entry.label,
-        })),
-      ];
-      const authoritativeCoverFor = (
-        entryPath: readonly string[],
-      ): IFCLabel | undefined => {
-        let best: { path: readonly string[]; label: IFCLabel } | undefined;
-        for (const auth of authoritativeEntries) {
-          if (!isPrefix(auth.path, entryPath)) continue;
-          if (best === undefined || auth.path.length > best.path.length) {
-            best = auth;
-          } else if (auth.path.length === best.path.length) {
-            // Source-path label and a re-derived root entry share path [];
-            // join defensively rather than pick one.
-            best = {
-              path: best.path,
-              label: mergeLabels(best.label, auth.label),
-            };
-          }
-        }
-        return best?.label;
-      };
-      for (const entry of input.cfcLabelView?.entries ?? []) {
-        const gated = gateRuntimeMintedIntegrity(
-          cloneLabel(entry.label),
-          linkIdentity,
-        );
-        if (!hasLabelValues(gated)) {
-          continue;
-        }
-        const entryPath = canonicalizeLogicalPath(entry.path);
-        const cover = authoritativeCoverFor(entryPath);
-        persistedLabelEntries.push(markLinkEntry({
-          path: [...targetPath, ...entryPath],
-          label: cover !== undefined ? mergeLabels(cover, gated) : gated,
           origin: "link",
-        }));
+        };
+        if (input.source.space !== space) crossSpaceEligible?.add(persisted);
+        persistedLabelEntries.push(persisted);
       }
     }
 
@@ -7624,9 +11806,8 @@ export const prepareBoundaryCommit = (
       // The route ACTS on the runtime's claim rather than measuring it, which
       // is why the transaction answers only for markers that arrived carrying
       // the runtime's authorization. `recordCfcWritePolicyInput` is on the
-      // public transaction interface and pattern-authored code reaches the
-      // transaction its cells are bound to, so an input's own fields say only
-      // what its recorder wrote. The two sibling markers in this file
+      // public transaction interface, so an input's own fields say only what
+      // its recorder wrote. The two sibling markers in this file
       // corroborate against transaction state instead, which suits a claim
       // about a write that has already happened; this one is a claim about
       // whose write it is.
@@ -7707,17 +11888,19 @@ export const prepareBoundaryCommit = (
           ...structureContainerPath,
           "*",
         ]);
-        for (let i = persistedLabelEntries.length - 1; i >= 0; i--) {
-          const candidateEntry = persistedLabelEntries[i];
+        let kept = 0;
+        for (const candidateEntry of persistedLabelEntries) {
           if (
             candidateEntry.origin === "structure" &&
             ((candidateEntry.observes === "enumerate" &&
               pathKey(candidateEntry.path) === containerPathKey) ||
               pathKey(candidateEntry.path) === containerTemplateKey)
           ) {
-            persistedLabelEntries.splice(i, 1);
+            continue;
           }
+          persistedLabelEntries[kept++] = candidateEntry;
         }
+        persistedLabelEntries.length = kept;
         if (
           !structureStampPaths.some((p) => pathKey(p) === containerPathKey)
         ) {
@@ -7768,15 +11951,15 @@ export const prepareBoundaryCommit = (
               path,
             )
           );
+        const measuredPrefixes = new PathPrefixIndex();
+        for (const path of measuredPaths) measuredPrefixes.add(path);
         for (const path of measuredPaths) {
           // Deeper paths are covered by the write at a measured ancestor;
           // collapse against measured paths only, so an exempt meta path
           // never shadows a value write below it (a payload field named
           // `schema` shares the meta root's logical path).
           if (
-            measuredPaths.some((other) =>
-              other.length < path.length && isPrefix(other, path)
-            )
+            path.length > 0 && measuredPrefixes.hasPrefixOf(path.slice(0, -1))
           ) {
             continue;
           }
@@ -7911,19 +12094,19 @@ export const prepareBoundaryCommit = (
                 path.join("/")
               } (canWrite, §8.12.4): ` +
               offendingAtoms.join(", ");
-            tx.recordCfcRefusalDetail?.({
-              gate: "writer-fit",
-              target: {
-                space: target.space,
-                id,
-                scope: target.scope,
-                path: [...path],
-              } as CfcAddress,
-              offendingAtoms,
-              ...describeRefusalInputs(offending, refusalSources()),
-              reason: misfit,
-            });
             if (writerFitRejects) {
+              tx.recordCfcRefusalDetail?.({
+                gate: "writer-fit",
+                target: {
+                  space: target.space,
+                  id,
+                  scope: target.scope,
+                  path: [...path],
+                } as CfcAddress,
+                offendingAtoms,
+                ...describeRefusalInputs(offending, refusalSources()),
+                reason: misfit,
+              });
               reasons.push(verdictReason(misfit));
             } else {
               tx.noteCfcDiagnostic(`writer-fit(persist-and-flag): ${misfit}`);
@@ -7931,13 +12114,36 @@ export const prepareBoundaryCommit = (
           }
         }
       }
+      // Whole-value destinations stamp after the writer-fit measurement,
+      // which `assertedValueRootPaths` already answered for them.
+      // A destination the diff wrote empty first was classified by that
+      // write as pure link structure; its whole value is not, so it stamps
+      // here all the same, and the membership stamps beneath it give way.
+      const derivedStampKeys = new Set(derivedStampPaths.map(pathKey));
+      // A root that is itself a slot holding a reference anchoring stored
+      // names that reference beside its writer, so the stamp describes one
+      // pointer (`slotStampDescribesAnother`).
+      const rootReferences = assertedRoots.length === 0
+        ? new Map<string, CfcAddress>()
+        : recordedReferences(tx, { space, id, scope });
+      for (const root of assertedRoots) {
+        if (derivedStampKeys.has(pathKey(root))) continue;
+        derivedStampKeys.add(pathKey(root));
+        derivedStampPaths.push(root);
+      }
+      const derivedPrefixes = new PathPrefixIndex();
+      for (const path of derivedStampPaths) derivedPrefixes.add(path);
+      const frozenShapePaths = new Set(
+        persistedLabelEntries.filter((entry) =>
+          (entry.origin === "derived" || entry.origin === "structure") &&
+          entry.observes === "shape"
+        ).map((entry) => pathKey(entry.path)),
+      );
       for (const path of derivedStampPaths) {
         // Deeper stamped paths are redundant with a stamped ancestor; only
         // collapse against paths that actually receive a covering entry.
         if (
-          derivedStampPaths.some((other) =>
-            other.length < path.length && isPrefix(other, path)
-          )
+          path.length > 0 && derivedPrefixes.hasPrefixOf(path.slice(0, -1))
         ) {
           continue;
         }
@@ -7952,15 +12158,26 @@ export const prepareBoundaryCommit = (
         // reader consuming both as covering entries sees today's label or
         // a wider one — additively safe, no dial (C0 §9).
         if (flowHasLabels) {
+          const reference = rootReferences.get(pathKey(path));
+          const integrity = reference === undefined ? flowIntegrity : [
+            ...flowIntegrity,
+            {
+              type: CFC_ATOM_TYPE.LinkReference,
+              source: {
+                space: reference.space,
+                id: reference.id,
+                path: canonicalizeLogicalPath(reference.path),
+              },
+              target: { space, id, path: [...path] },
+            },
+          ];
           persistedLabelEntries.push(markFlowStampEntry({
             path,
             label: {
               ...(flowConfidentiality.length > 0
                 ? { confidentiality: [...flowConfidentiality] }
                 : {}),
-              ...(flowIntegrity.length > 0
-                ? { integrity: [...flowIntegrity] }
-                : {}),
+              ...(integrity.length > 0 ? { integrity: [...integrity] } : {}),
             },
             origin: "derived",
             observes: "value",
@@ -7977,13 +12194,11 @@ export const prepareBoundaryCommit = (
         // DECLARED observes:"shape" entry is store policy for the shape
         // channel, not a record that creation happened — both coexist as
         // separate components (review on this PR).
-        const hasShapeEntry = persistedLabelEntries.some((entry) =>
-          (entry.origin === "derived" || entry.origin === "structure") &&
-          entry.observes === "shape" && pathKey(entry.path) === pathKey(path)
-        );
+        const hasShapeEntry = frozenShapePaths.has(pathKey(path));
         if (!hasShapeEntry) {
           const shapeConfidentiality = frozenConfidentialityFor(path);
           if (shapeConfidentiality.length > 0) {
+            frozenShapePaths.add(pathKey(path));
             persistedLabelEntries.push(markFlowStampEntry({
               path,
               label: { confidentiality: shapeConfidentiality },
@@ -7998,9 +12213,7 @@ export const prepareBoundaryCommit = (
         // structure stamps don't cover each other (exact-path semantics),
         // so they only collapse against derived ancestors-or-equal.
         if (
-          derivedStampPaths.some((other) =>
-            other.length <= path.length && isPrefix(other, path)
-          )
+          derivedPrefixes.hasPrefixOf(path)
         ) {
           continue;
         }
@@ -8013,11 +12226,20 @@ export const prepareBoundaryCommit = (
         // normative for it, so it carries the current J only, never the
         // pool. Labs-axis mapping note: the `observes` axis is read-op
         // shaped, so "enumerate" here approximates the spec's container-
-        // level `iterate.{order,count}` classes.
+        // level `iterate.{order,count}` classes. It carries J's
+        // confidentiality and, when the flow stage minted one, J's
+        // `TransformedBy`, so a reader of the node has the derivation
+        // evidence an exchange rule matches (`carriedStampLabel` withdraws
+        // it once another writer touches the container).
         if (flowHasLabels && flowConfidentiality.length > 0) {
           persistedLabelEntries.push(markFlowStampEntry({
             path,
-            label: { confidentiality: [...flowConfidentiality] },
+            label: {
+              confidentiality: [...flowConfidentiality],
+              ...(flowTransformedBy.length > 0
+                ? { integrity: [...flowTransformedBy] }
+                : {}),
+            },
             origin: "structure",
             observes: "enumerate",
           }));
@@ -8035,8 +12257,11 @@ export const prepareBoundaryCommit = (
         //    was decided by it (inv-9) — while `shape`/`value` templates
         //    stay out of probes (readConsumesEntry), keeping blind
         //    pass-through clean of content taint. All three carry ONLY
-        //    the membership J (confidentiality-only, like every
-        //    structure stamp), never the container's content label.
+        //    the membership J's confidentiality, plus J's `TransformedBy`
+        //    when the flow stage minted one (like the enumerate stamp),
+        //    never the container's content label. They are minted only
+        //    when J has confidentiality: an integrity-only join has
+        //    nothing to release, so it leaves the container unstamped.
         // Same replace-from-criteria discipline as the enumerate stamp:
         // dropped + re-minted from the current J each reconcile, cleared
         // (never pooled — `poolsExistence` requires a class-less entry)
@@ -8062,10 +12287,18 @@ export const prepareBoundaryCommit = (
         if (
           flowHasLabels && flowConfidentiality.length > 0
         ) {
+          frozenShapePaths.add(pathKey([...path, "*"]));
+          tx.noteCfcPreparationWork?.("flowTemplateContainers");
+          tx.noteCfcPreparationWork?.("flowTemplateEntriesMinted", 3);
           for (const observes of ["shape", "value", "followRef"] as const) {
             persistedLabelEntries.push(markFlowStampEntry({
               path: [...path, "*"],
-              label: { confidentiality: [...flowConfidentiality] },
+              label: {
+                confidentiality: [...flowConfidentiality],
+                ...(flowTransformedBy.length > 0
+                  ? { integrity: [...flowTransformedBy] }
+                  : {}),
+              },
               origin: "structure",
               observes,
             }));
@@ -8080,13 +12313,11 @@ export const prepareBoundaryCommit = (
         // re-creation after deletion (a fresh creation event — the carry
         // refuses the stale entry and the replacement above re-mints at
         // this attempt's join); a carried entry above wins.
-        const hasFrozenExistence = persistedLabelEntries.some((entry) =>
-          (entry.origin === "derived" || entry.origin === "structure") &&
-          entry.observes === "shape" && pathKey(entry.path) === pathKey(path)
-        );
+        const hasFrozenExistence = frozenShapePaths.has(pathKey(path));
         if (!hasFrozenExistence) {
           const frozen = frozenConfidentialityFor(path);
           if (frozen.length > 0) {
+            frozenShapePaths.add(pathKey(path));
             persistedLabelEntries.push(markFlowStampEntry({
               path,
               label: { confidentiality: frozen },
@@ -8196,6 +12427,83 @@ export const prepareBoundaryCommit = (
       }
     }
 
+    // A writer claim binds every later writer of its position from the
+    // moment the envelope declaring it persists, whether or not the position
+    // holds a value yet: write authority is a property of the schema, not
+    // the value (normative CFC §8.15.3). The schema walk above mints an
+    // entry only where the attempted write reaches a value
+    // (`ifcEntryAppliesToAttemptedWrite`), so a claimed position still
+    // absent — a pattern input declared `WriteAuthorizedBy` with no default,
+    // or one a sibling's default was written beside — got none. A writer
+    // through a schema declaring nothing then found the path policy-free
+    // (`storedCfcMetadataAppliesToPath` reads the label map, not the schema)
+    // and never reached the claim; and a document whose only policy is such
+    // a claim persisted no envelope at all, since nothing below writes an
+    // empty label map. Every position of the schema this commit persists at
+    // which a writer claim holds whatever value is written there
+    // (`writerClaimedPositions`) is therefore marked in the final payload
+    // set, by a declared entry with an empty label, wherever no declared
+    // entry at the position or above it already routes a write there.
+    //
+    // Only a writer claim (`writeAuthorizedBy`, `writePolicyAnyOf`) is marked.
+    // A copy claim (`exactCopyOf`, `projection`) is verified when its target
+    // is written, and an unwritten target keeps no entry
+    // (cfc-projection.test.ts); an input floor and a UI contract gate what a
+    // write brings, which §8.15 does not make a property of an absent
+    // position. A claim on one branch of a union is not marked either: which
+    // branch a position takes is decided by the value written there, so a
+    // position holding nothing is on no branch — and an envelope persisted
+    // for it ahead of a value would meet every later writer of another branch
+    // with the merge's refusal of divergent branch ifc. A union every branch
+    // of which carries the claim is marked: no value written there escapes it.
+    //
+    // The marker is what routes a writer's later write, so what already
+    // routes one decides where it goes: a declared entry (or a legacy one,
+    // origin-less) at the position or at an ancestor, since
+    // `storedCfcMetadataAppliesToPath` reads prefixes both ways. That test
+    // is literal, so this one is too (`concretePathHasPrefix`): a declared
+    // `*` entry routes no concrete write, and does not stand in for a marker
+    // at a tuple slot beneath it. A derived, structure or link entry does
+    // not count: a link write discounts the link-origin entries at its slot,
+    // and flow stamps are cleared by later writes. Under an ancestor's
+    // declared entry no marker is minted: the ancestor routes the write, and
+    // the marker would only add a more specific entry to the declared
+    // component's longest-prefix resolution.
+    //
+    // A claim on the items of a container (`list/*`) is marked at the
+    // container, which routes a write of the container and of any item; the
+    // claim itself is then verified through the stored schema, as for any
+    // routed write. A claim INSIDE each item (`items/*/claim`) is not marked
+    // at the container: it is a position of the item, which has its own
+    // document when items are anchored or linked and its own entries when
+    // written inline, and a container marked for it would make every link
+    // of an item into the list a policy write demanding the item's metadata
+    // (the list builtin's link of a new sub-piece was refused so). A payload
+    // whose policy did not verify keeps no declared entry either.
+    if (!ingestVerificationFailed) {
+      const declaredPaths = persistedLabelEntries
+        .filter((entry) =>
+          entry.origin === "declared" || entry.origin === undefined
+        )
+        .map((entry) => canonicalizeLogicalPath(entry.path));
+      const declaredAtOrAbove = (path: readonly string[]): boolean =>
+        declaredPaths.some((declared) => concretePathHasPrefix(path, declared));
+      for (const claimedPath of writerClaimedPositions(schemaAndHash.schema)) {
+        const wildcard = claimedPath.indexOf("*");
+        if (wildcard !== -1 && wildcard !== claimedPath.length - 1) continue;
+        const path = canonicalizeLogicalPath(
+          wildcard === -1 ? claimedPath : claimedPath.slice(0, wildcard),
+        );
+        if (declaredAtOrAbove(path)) continue;
+        declaredPaths.push(path);
+        persistedLabelEntries.push({
+          path,
+          label: {},
+          origin: "declared",
+        });
+      }
+    }
+
     // The §4.6.4 redundant-entry collapse, ahead of the template derivation
     // so a dropped entry takes its label-metadata templates with it. It runs
     // on the final payload set, so it reaches carried-forward entries as well
@@ -8219,8 +12527,10 @@ export const prepareBoundaryCommit = (
     // the per-path §4.6.4.1 metadata addressing requires. No new dial: the
     // templates describe whatever payload entries the existing dials
     // persisted.
-    const metadataVersion = existing?.version === 2 ||
+    const metadataVersion = existing?.version === 3 ||
         (flowPersist && linkWriteInputs.length > 0)
+      ? 3
+      : state.contentAddressedLabels || existing?.version === 2
       ? 2
       : 1;
     collapsedLabelEntries.push(
@@ -8244,9 +12554,11 @@ export const prepareBoundaryCommit = (
 
     if (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
-      !runtimeEvidenceCleared &&
-      !droppedLabelMetadataTemplates
+      !runtimeEvidenceCleared && !linkCleared && !droppedLabelMetadataTemplates
     ) {
+      if (deferredWriterRefusal !== undefined) {
+        reasons.push(verdictReason(deferredWriterRefusal));
+      }
       continue;
     }
 
@@ -8257,7 +12569,7 @@ export const prepareBoundaryCommit = (
     const envelopeRoot = state.decomposedEnvelopes
       ? decomposeEnvelopeRoot(schemaAndHash.schema)
       : undefined;
-    const metadata: CfcMetadata = {
+    let metadata: CfcMetadata = {
       version: metadataVersion,
       schemaHash: envelopeRoot?.rootHash ?? schemaAndHash.taggedHashString,
       labelMap: {
@@ -8285,8 +12597,24 @@ export const prepareBoundaryCommit = (
     // existing.schemaHash, and that schema document was already loaded (and
     // content-verified) via loadSchemaDocument above — it exists, so there is
     // nothing to ensure.
+    //
+    // One exception to the skip, in one direction: a version-1 envelope
+    // whose labels are unchanged is rewritten in version 2 when the flag
+    // selects it, which is how a store migrates — each document at most
+    // once, on its next persist. A stored version 2 is left alone by a
+    // writer selecting version 1, so writers on either setting sharing a
+    // document do not rewrite it at each other (SC-11).
+    const migrates = existing !== undefined &&
+      existing.version < metadata.version;
+    // A preserved runtime output does not carry the migration: its waiver
+    // holds only while nothing about the envelope changes, and a version-1
+    // envelope spells the same labels as its version-2 rewrite. Refusing
+    // here instead would refuse every re-run of the initializer, since a
+    // refused commit never migrates the envelope; the document migrates on
+    // its next authorized write.
     if (
       existing !== undefined &&
+      (!migrates || deferredWriterRefusal !== undefined) &&
       deepEqual(
         canonicalizeCfcMetadata(existing),
         canonicalizeCfcMetadata(metadata),
@@ -8295,13 +12623,85 @@ export const prepareBoundaryCommit = (
       continue;
     }
 
-    // Changed metadata describes this transaction's concrete slot layout.
-    // Replaying a relative array edit over a peer's newer array would expose
-    // slots with missing or mismatched labels before admission rejects it.
-    // The ordinary array diff keeps the authored layout in the pending view.
+    // A write whose writer refusal was deferred changed no bytes at the
+    // protected paths. It modifies nothing there, and is admitted, when the
+    // envelope it would store leaves those paths as they were too: every
+    // label at, above or below each one unchanged, and the same policy
+    // claims throughout, the schema around them perhaps spelled another way
+    // — as a runtime replaying a piece's setup spells what the creating
+    // runtime spelled inline. The stored schema is kept: writing another
+    // spelling of it is the writer's to do. Labels elsewhere in the document
+    // are not the writer policy's to guard, and persist as for any write.
+    let keepsStoredSchema = false;
+    if (
+      deferredWriterRefusal !== undefined && !deferredPreservedOutput &&
+      existing !== undefined && storedSchema !== undefined &&
+      cfcSchemaPoliciesEqual(storedSchema, schemaAndHash.schema)
+    ) {
+      const storedEntries = canonicalizeCfcMetadata(existing).labelMap.entries;
+      const derivedEntries = canonicalizeCfcMetadata(metadata).labelMap.entries;
+      const entriesAt = (
+        entries: readonly LabelMapEntry[],
+        path: readonly string[],
+      ) => entries.filter((entry) => pathsOverlap(entry.path, path));
+      // The stored schema is the one kept, so the labels derived here must
+      // be the ones it declares. Equal claims can lay out differently — a
+      // rest claim is a label position only beside no named property — so
+      // the positions both schemas declare are compared whole, not at the
+      // deferred paths alone.
+      const declaredPositions = (schema: JSONSchema) =>
+        cfcSchemaEntries(schema).map((entry) => ({
+          path: encodePointer(entry.path),
+          ifc: withoutUndefinedMembers(
+            isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
+          ),
+        })).sort((left, right) => utf8Compare(left.path, right.path));
+      if (
+        deepEqual(
+          declaredPositions(storedSchema),
+          declaredPositions(schemaAndHash.schema),
+        ) &&
+        deferredWriterPaths.every((path) =>
+          deepEqual(
+            entriesAt(storedEntries, path),
+            entriesAt(derivedEntries, path),
+          )
+        )
+      ) {
+        deferredWriterRefusal = undefined;
+        keepsStoredSchema = true;
+        // Keep the stored schema and legacy label encoding. A newly acquired
+        // reference outside the protected paths still requires version 3;
+        // its per-slot marker leaves every untouched legacy slot incomplete.
+        metadata = {
+          ...metadata,
+          version: metadata.version === 3 ? 3 : existing.version,
+          schemaHash: existing.schemaHash,
+        };
+        if (
+          deepEqual(
+            canonicalizeCfcMetadata(existing),
+            canonicalizeCfcMetadata(metadata),
+          )
+        ) continue;
+      }
+    }
+
+    // A repeated initializer may reuse its reference only when SC-11 proved
+    // the entire envelope unchanged. Changed schemas or labels require the
+    // ordinary writer authority, even when no value bytes changed.
+    if (deferredWriterRefusal !== undefined) {
+      reasons.push(verdictReason(deferredWriterRefusal));
+      continue;
+    }
+
+    // Metadata names concrete slots, so a relative replay cannot relocate its labels.
     tx.poisonMergeableOp?.({ space, id, scope, path: [] });
 
-    if (envelopeRoot === undefined) {
+    if (keepsStoredSchema) {
+      // The stored schema document is already in place: it was loaded,
+      // content-verified, above.
+    } else if (envelopeRoot === undefined) {
       ensureSchemaDocument(
         tx,
         space,
@@ -8316,6 +12716,30 @@ export const prepareBoundaryCommit = (
         envelopeRoot.rootDocument,
       );
     }
+    // When content-addressed labels are enabled, a version-2 or version-3
+    // envelope stages a label document for every label above
+    // the inline limit into THIS transaction, so the commit carries what
+    // the envelope references (the write-side obligation the commit
+    // boundary enforces); the staging dedupes per transaction and elides
+    // documents the space's server already holds.
+    const storedEnvelope: StoredCfcMetadata =
+      metadata.version !== 1 && state.contentAddressedLabels
+        ? {
+          version: metadata.version,
+          schemaHash: metadata.schemaHash,
+          labelMap: {
+            version: 1,
+            entries: storedLabelMapEntries(
+              metadata.labelMap.entries,
+              (content) =>
+                tx.stageContentAddressedDocument(
+                  space,
+                  content as unknown as FabricValue,
+                ),
+            ),
+          },
+        }
+        : metadata;
     tx.writeOrThrow({
       space,
       id,
@@ -8325,15 +12749,15 @@ export const prepareBoundaryCommit = (
       // System-owned embedded metadata write. Boundary evaluation is driven by
       // user-surface reads/writes plus explicit policy inputs, not by recursive
       // attempted-target tracking of this internal metadata update.
-    }, metadata);
+    }, storedEnvelope);
   }
   reasons.push(...verifySinkRequestCeilings(tx));
   // Single-use grant consumption (design §2.2): stage every claim the
   // consuming gates above registered — the receipt write plus its
-  // create-only mark — into THIS transaction, inside the privileged scope
-  // prepareCfc wraps this whole pass in (the receipt is reserved-namespace
-  // policy state; the unprivileged arm is the S18 gate). After every gate so
-  // all resolutions are registered; before the return so a claim that cannot
+  // create-only mark — into THIS transaction, inside this step's privileged
+  // scope (the receipt is reserved-namespace policy state; the unprivileged
+  // arm is the S18 gate). After every gate so all resolutions are registered;
+  // before the return so a claim that cannot
   // stage fails closed as a prepare reason. The staged write rides the
   // releasing commit: consumption is atomic with the release, a failed
   // commit consumes nothing (spec §6.5.2 no-consume-on-failure), and the
@@ -8346,4 +12770,32 @@ export const prepareBoundaryCommit = (
     instrumentation!.onPrefixProvenance!(prefixProvenance);
   }
   return reasons;
+}
+
+const cfcLogger = getLogger("cfc", { enabled: false });
+
+/**
+ * Derives the transaction flow join and records its preparation span.
+ *
+ * Exported so tests can supply transaction state containing a `cid:` trigger
+ * read that bypassed `addCfcTriggerReads` and verify its exclusion. A live
+ * transaction exposes sealed state through the read-only `getCfcState()` view.
+ */
+export const deriveFlowJoin: typeof deriveFlowJoinImpl = (tx, options) => {
+  const started = performance.now();
+  try {
+    return deriveFlowJoinImpl(tx, options);
+  } finally {
+    cfcLogger.time(started, "deriveFlowJoin");
+  }
+};
+
+/** Collects consumed labels and records its preparation span. */
+export const collectConsumedLabel: typeof collectConsumedLabelImpl = (tx) => {
+  const started = performance.now();
+  try {
+    return collectConsumedLabelImpl(tx);
+  } finally {
+    cfcLogger.time(started, "collectConsumedLabel");
+  }
 };

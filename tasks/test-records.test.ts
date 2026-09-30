@@ -32,7 +32,7 @@ const CONTEXT: RunContext = {
   schema: RECORD_SCHEMA_VERSION,
   line: "context",
   reportId: "01SHIPTEST00000000000000",
-  repo: "commontoolsinc/labs",
+  repo: "commonfabric/labs",
   commit: "d".repeat(40),
   dirty: false,
   branch: "main",
@@ -66,7 +66,7 @@ describe("test-records", () => {
   describe("buildLocalContext()", () => {
     it("returns this repository's commit, branch, and machine facts", async () => {
       const context = await buildLocalContext(Deno.cwd(), () => undefined);
-      expect(context.repo).toBe("commontoolsinc/labs");
+      expect(context.repo).toBe("commonfabric/labs");
       expect(context.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(context.env).toBe("local");
       expect(context.denoVersion).toBe(Deno.version.deno);
@@ -105,6 +105,39 @@ describe("test-records", () => {
 
         const context = await buildLocalContext(repo, () => undefined);
         expect(context.branch).toBe("probe-branch");
+      } finally {
+        await Deno.remove(repo, { recursive: true });
+      }
+    });
+
+    it("stamps the seed of the commit it read, or the one the environment names", async () => {
+      const repo = await Deno.makeTempDir({ prefix: "test-records-seed-" });
+      try {
+        const git = async (...args: string[]) => {
+          const result = await new Deno.Command("git", {
+            args: ["-C", repo, ...args],
+            // Late on the 21st in the Pacific zone and early on the 22nd
+            // in UTC, so reading the wrong zone reads the wrong day.
+            env: { GIT_COMMITTER_DATE: "2026-09-21T23:30:00-07:00" },
+            stdout: "null",
+            stderr: "null",
+          }).output();
+          expect(result.success).toBe(true);
+        };
+        await git("init");
+        await git("config", "user.name", "Probe");
+        await git("config", "user.email", "probe@example.invalid");
+        await Deno.writeTextFile(`${repo}/probe.txt`, "probe\n");
+        await git("add", "probe.txt");
+        await git("commit", "-m", "probe");
+
+        const fromCommit = await buildLocalContext(repo, () => undefined);
+        expect(fromCommit.shuffleSeed).toBe(20260921);
+        const overridden = await buildLocalContext(
+          repo,
+          (name) => name === "CF_TEST_SHUFFLE_SEED" ? "7" : undefined,
+        );
+        expect(overridden.shuffleSeed).toBe(7);
       } finally {
         await Deno.remove(repo, { recursive: true });
       }

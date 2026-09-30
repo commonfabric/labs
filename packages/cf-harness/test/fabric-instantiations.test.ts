@@ -71,11 +71,12 @@ const record = (
   identity,
   symbol: "default",
   cell: comparableEntityHash(entity)!,
+  link: instantiation(identity, entity).cell,
 });
 
 describe("fabric-instantiations", () => {
   describe("createFabricInstantiationRecorder()", () => {
-    it("records the identity, symbol and entity of each instantiation it observes", () => {
+    it("records the identity, symbol, entity and link of each instantiation it observes", () => {
       const recorder = createFabricInstantiationRecorder();
       recorder.observe(instantiation("keyless:abc", PIECE_ENTITY));
 
@@ -84,6 +85,7 @@ describe("fabric-instantiations", () => {
         identity: "keyless:abc",
         symbol: "default",
         cell: comparableEntityHash(PIECE_ENTITY)!,
+        link: instantiation("keyless:abc", PIECE_ENTITY).cell,
       }]);
     });
 

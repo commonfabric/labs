@@ -1,7 +1,8 @@
 /**
  * Combines binary64 sums without intermediate rounding. Finite values are
  * represented in units of the smallest positive subnormal, so tree shape and
- * edit history cannot change the rounded result.
+ * edit history cannot change the rounded result;
+ * `docs/features/collection-aggregates.md` explains why.
  */
 
 /** Exact finite total and non-finite contributions of an aggregate subtree. */

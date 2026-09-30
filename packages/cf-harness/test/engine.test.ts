@@ -129,6 +129,194 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apart", async () => {
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: "", stderr: "", exitCode: 0 },
+  ]);
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-contexts-at-once",
+  });
+
+  await Promise.all([
+    engine.invokeBuiltinTool("bash", { command: "printf one" }),
+    engine.invokeBuiltinTool("bash", { command: "printf two" }),
+  ]);
+
+  assertEquals(
+    engine.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ).toSorted(),
+    [1, 2],
+  );
+});
+
+Deno.test("CfHarnessEngine records no CFC invocation context for a bash call refused over its session", async () => {
+  // The fake runtime has no sessions, as the Docker runtime has none.
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "", stderr: "", exitCode: 0 },
+  ]);
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-refused-session",
+  });
+
+  const refused = await engine.invokeBuiltinTool("bash", {
+    command: "printf one",
+    session: "build",
+  });
+
+  assertEquals(refused.output.exitCode, 125);
+  // The command never ran, so the run holds no record that it was prepared.
+  assertEquals(engine.getRunState().cfcInvocationContexts ?? [], []);
+
+  // The next call that does run is the run's first invocation.
+  await engine.invokeBuiltinTool("bash", { command: "printf two" });
+  assertEquals(
+    engine.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ),
+    [1],
+  );
+});
+
+Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
+  const first = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+  });
+  await first.invokeBuiltinTool("bash", { command: "printf one" });
+  await first.invokeBuiltinTool("bash", { command: "printf two" });
+  // A number reserved for a context that was never recorded leaves a gap:
+  // the run resumes holding only the context numbered 2.
+  const recorded = first.getRunState();
+  const resumed = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+    runState: {
+      ...recorded,
+      cfcInvocationContexts: recorded.cfcInvocationContexts?.slice(1),
+    },
+  });
+
+  await resumed.invokeBuiltinTool("bash", { command: "printf three" });
+
+  assertEquals(
+    resumed.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ),
+    [2, 3],
+  );
+});
+
+Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-mints-at-once",
+  });
+
+  const tokens = await Promise.all([
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "first row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "second row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+  ]);
+
+  assertEquals(
+    engine.handleTable?.referents?.map((referent) => referent.token)
+      .toSorted(),
+    tokens.toSorted(),
+  );
+});
+
+Deno.test("CfHarnessEngine refuses to record a table where two addresses drew one token", async () => {
+  const constant = () => Promise.resolve(new Uint8Array(32));
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-token-collision",
+  });
+  const base = createHarnessHandleTable("run-token-collision");
+  const first = await mintAddressHandle(base, `of:fid1:${"A".repeat(43)}`, {
+    hasher: constant,
+  });
+  const second = await mintAddressHandle(base, `of:fid1:${"B".repeat(43)}`, {
+    hasher: constant,
+  });
+  await engine.recordHandleTable(first.table);
+
+  await assertRejects(
+    () => engine.recordHandleTable(second.table),
+    Error,
+    "two different addresses",
+  );
+  assertEquals(engine.handleTable?.entries.length, 1);
+});
+
+Deno.test("CfHarnessEngine lands the newest run state last when two writes overlap", async () => {
+  // The first write is held until the second has been asked for, so the
+  // store would finish the second first; the state it is left holding must
+  // still be the newer one.
+  const completed: HarnessRunState[] = [];
+  let hold: PromiseWithResolvers<void> | undefined;
+  const runRoot = "/tmp/cf-harness-artifacts/run-write-order";
+  const artifactStore: HarnessArtifactStore = {
+    artifactRoot: "/tmp/cf-harness-artifacts",
+    runRoot,
+    async persistRunState(state) {
+      const snapshot = structuredClone(state);
+      const held = hold;
+      hold = undefined;
+      await held?.promise;
+      completed.push(snapshot);
+      return `${runRoot}/run-state.json`;
+    },
+    persistTranscript: () => Promise.resolve(`${runRoot}/transcript.json`),
+    persistCapabilitySnapshot: () =>
+      Promise.resolve(`${runRoot}/capabilities.json`),
+    persistCfcPolicySnapshot: () =>
+      Promise.resolve(`${runRoot}/policy-snapshot.json`),
+    persistPolicyTrace: () => Promise.resolve(`${runRoot}/policy-trace.json`),
+    persistRunReport: () => Promise.resolve(`${runRoot}/run-report.json`),
+    persistToolOutput: () => Promise.resolve(`${runRoot}/tool-output.json`),
+  };
+  const engine = new CfHarnessEngine({
+    artifactStore,
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-write-order",
+  });
+
+  const released = Promise.withResolvers<void>();
+  hold = released;
+  const first = engine.persistRunState();
+  const second = engine.recordPolicyEvent({
+    severity: "warning",
+    mode: "observe",
+    toolId: "bash",
+    detail: "the newer state",
+  });
+  released.resolve();
+  await Promise.all([first, second]);
+
+  assertEquals(
+    completed.at(-1)?.policyEvents.map((event) => event.detail),
+    ["the newer state"],
+  );
+});
+
 Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",
@@ -806,6 +994,9 @@ Deno.test("CfHarnessEngine mints operator input cells once and replays the recor
               spaceReads += 1;
               return cellSpace;
             },
+            // This double names no space: the cells here are plain
+            // references, which resolve without one.
+            getSpaceName: () => undefined,
           },
           // deno-lint-ignore no-explicit-any
         } as any,
@@ -859,6 +1050,7 @@ Deno.test("CfHarnessEngine refuses an operator input cell into another space, re
           pieces: {
             getSpace: () =>
               "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            getSpaceName: () => undefined,
           },
           // deno-lint-ignore no-explicit-any
         } as any,
@@ -871,6 +1063,73 @@ Deno.test("CfHarnessEngine refuses an operator input cell into another space, re
   );
   assertEquals(engine.getRunState().inputCells, undefined);
   assertEquals(engine.handleTable, undefined);
+});
+
+Deno.test("CfHarnessEngine resolves a named piece address through the session's own space", async () => {
+  // The engine hands the mint the LIVE session's space name and the live
+  // session's resolver. Both are read here: a slug is resolved against
+  // this session and nothing else, so the resolution the engine wires up
+  // is the one whose space the name was checked against.
+  const asked: string[] = [];
+  const engine = new CfHarnessEngine({
+    workspaceHostPath: "/host/project",
+    inputCells: [{ name: "pattern_1", ref: "pattern:demo-space/reading-list" }],
+    fabricSessionFactory: () =>
+      Promise.resolve(
+        {
+          pieces: {
+            getSpace: () =>
+              "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            getSpaceName: () => "demo-space",
+            // What `resolvePieceAddress` reaches for first. A runtime this
+            // double does not have is a slug this space cannot resolve,
+            // which is the failure the run has to report as its own.
+            get runtime(): never {
+              asked.push("reading-list");
+              throw new Error("no runtime in this session");
+            },
+          },
+          // deno-lint-ignore no-explicit-any
+        } as any,
+      ),
+  });
+  await assertRejects(
+    () => engine.establishInputCells(),
+    Error,
+    "names the piece `reading-list`, which this space does not hold",
+  );
+  // The resolver the engine wired was the session's own, and it was asked
+  // for the slug rather than for the address the caller wrote.
+  assertEquals(asked, ["reading-list"]);
+  assertEquals(engine.getRunState().inputCells, undefined);
+  assertEquals(engine.handleTable, undefined);
+});
+
+Deno.test("CfHarnessEngine refuses a piece address naming a space that is not the session's", async () => {
+  const engine = new CfHarnessEngine({
+    workspaceHostPath: "/host/project",
+    inputCells: [{
+      name: "pattern_1",
+      ref: "pattern:other-space/reading-list",
+    }],
+    fabricSessionFactory: () =>
+      Promise.resolve(
+        {
+          pieces: {
+            getSpace: () =>
+              "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            getSpaceName: () => "demo-space",
+          },
+          // deno-lint-ignore no-explicit-any
+        } as any,
+      ),
+  });
+  await assertRejects(
+    () => engine.establishInputCells(),
+    Error,
+    "this session runs in `demo-space`",
+  );
+  assertEquals(engine.getRunState().inputCells, undefined);
 });
 
 Deno.test("CfHarnessEngine rejects only cross-model Codex resume", () => {
@@ -982,8 +1241,13 @@ Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child 
       parentRunId: lineage.parentRunId,
       parentToolCallId: lineage.parentToolCallId,
     },
+    structuredResult: {
+      path: "/tmp/result.json",
+      schema: { type: "object" },
+    },
   });
   assertEquals(resumedChild.getRunState().runId, resumedState.runId);
+  assertEquals(resumedChild.structuredResultAvailable, false);
 
   const newChild = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
@@ -1351,37 +1615,40 @@ Deno.test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox
   assertEquals(
     engine.getRunState().cfcInvocationContexts?.map((context) => ({
       toolId: context.toolId,
-      labels: context.cfcInputLabels,
+      inputLabels: context.cfcInputLabels,
+      influenceLabels: context.promptSlotInfluenceLabels,
     })),
     [
       {
         toolId: "bash",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["command"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["cwd"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },
       },
       {
         toolId: "write_file",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["args"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["stdin"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },

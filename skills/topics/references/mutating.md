@@ -30,9 +30,10 @@ the whole created topic with it — a rendered view included, two orders of
 magnitude more payload — which is what the projection exists to avoid.
 
 When the result is present, carry `TOPIC` into the next command. `NAME` is the
-member name the board allocated — read it here rather than from the Topic's own
-`shortName`, which is a derivation that may not have produced a value when the
-call returns. Use JSON encoding or schema-derived flags for multiline Markdown;
+member name the board allocated and passed into the Topic — read it here rather
+than from the Topic's own `shortName`, because the row IS the created Topic, so
+reading a property off a piece filed a moment ago waits for that piece to
+materialize. Use JSON encoding or schema-derived flags for multiline Markdown;
 do not interpolate unescaped content into JSON.
 
 Current Estuary calls have a known observation asymmetry. `addTopic` has
@@ -54,6 +55,42 @@ becomes two.
 deno task cf cell get "$TOPICS_BOARD" index --step --select @,title
 deno task cf cell get --cell "$TOPIC" title --input
 ```
+
+## Warm the topic you just filed
+
+A Topic's scalars divide in two, and a headless filing only writes one half.
+`title`, `body` and `createdAt` are durable inputs, written by `addTopic`.
+`lastActivityAt` and `commentCount` are DERIVED, and a derivation materializes
+only once the piece has RUN. Creating a topic does not run it, so until
+something does, the board reads those fields as their declared defaults —
+`lastActivityAt` 0, `commentCount` 0. Opening a topic in the shell runs it,
+which is why a topic filed through the UI never shows this and one filed here
+always does.
+
+Ordering does not depend on this: `activityOrderOf` falls back to `createdAt`,
+so a topic that has never run still sorts by when it was filed. Stepping is what
+makes its derived fields true, not what puts the card in the right place.
+
+So finish a filing by stepping the new topic, which is the headless equivalent
+of opening it:
+
+```bash
+deno task cf piece step --cell "$TOPIC"
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,lastActivityAt,commentCount
+```
+
+`shortName` is left out of that projection because it is not a derived scalar
+and stepping does not settle it: a topic running this checkout's pattern
+publishes the number its durable input holds, so it reads the same before and
+after a step. Select it when the number is what you want — but the deployed
+board does not yet carry the publication, so read a number there from
+`namesTable`, or one Topic's from its own input (`references/naming.md`).
+
+`piece step` runs one scheduling step — start, idle, synced, stop. It authors no
+new content, so it is safe to repeat and safe to run over a topic somebody else
+filed — but it is not inert: running a topic whose stored state predates a
+version bump performs that migration, and the migration is a durable write. A
+bulk filing is worth a pass over every topic it created.
 
 Use one invocation session per agent run and an explicit invocation id per
 logical mutation. Retry an uncertain mutation only with that same session/id

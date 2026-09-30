@@ -1,3 +1,4 @@
+import { isObjectNotArray } from "@commonfabric/utils/types";
 type ProtocolResponse = {
   id: number;
   result?: unknown;
@@ -16,11 +17,7 @@ type ProtocolEvent = {
 function isProtocolMessage(
   message: unknown,
 ): message is ProtocolResponse | ProtocolEvent {
-  if (
-    typeof message !== "object" ||
-    message === null ||
-    Array.isArray(message)
-  ) {
+  if (!isObjectNotArray(message)) {
     return false;
   }
 

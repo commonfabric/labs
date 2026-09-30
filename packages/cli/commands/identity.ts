@@ -43,8 +43,9 @@ export const identity = new Command()
     "Read the passphrase from stdin (pipe it in, or type it and press Ctrl-D).",
   )
   .example(
-    cliText('cf id derive "common user" > ./my.key'),
-    'Create a keyfile derived from the inline string "common user". Note: an ' +
+    cliText('cf id derive "example passphrase" > ./my.key'),
+    'Create a keyfile derived from the inline string "example passphrase". ' +
+      "Note: an " +
       "argument passed this way is visible in shell history and to other " +
       "processes via `ps`; prefer a file or stdin for secrets.",
   )

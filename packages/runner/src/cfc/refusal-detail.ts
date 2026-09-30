@@ -36,8 +36,9 @@
 // carries no implicit index signature, so it does not satisfy
 // `FabricPlainObject`, and the whole marker union stops being serializable.
 
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 
+import type { CfcConfClause } from "./clause.ts";
 import type { CfcAddress } from "./types.ts";
 
 /**
@@ -51,7 +52,7 @@ import type { CfcAddress } from "./types.ts";
  * wrong, in both directions.
  */
 export type ConsumedAtomSource = {
-  readonly atom: unknown;
+  readonly atom: CfcConfClause;
   readonly read: CfcAddress;
   readonly labelPath: readonly string[];
 };
@@ -153,13 +154,26 @@ export const describeRefusalInputs = (
 } => {
   const byRead = new Map<
     string,
-    { read: CfcAddress; labelPath: readonly string[]; atoms: string[] }
+    {
+      read: CfcAddress;
+      labelPath: readonly string[];
+      atoms: string[];
+      rendered: Set<string>;
+    }
   >();
+  // Equal clauses share a key; collisions still use structural equality.
+  const sourcesByClause = new Map<string, ConsumedAtomSource[]>();
+  for (const source of sources) {
+    const key = deepEqualKey(source.atom);
+    const bucket = sourcesByClause.get(key);
+    if (bucket === undefined) sourcesByClause.set(key, [source]);
+    else bucket.push(source);
+  }
   let unattributed = 0;
   for (const clause of offending) {
     const rendered = renderCfcAtom(clause);
     let matched = false;
-    for (const source of sources) {
+    for (const source of sourcesByClause.get(deepEqualKey(clause)) ?? []) {
       if (!deepEqual(source.atom, clause)) continue;
       matched = true;
       const key = JSON.stringify([
@@ -175,8 +189,10 @@ export const describeRefusalInputs = (
           read: source.read,
           labelPath: source.labelPath,
           atoms: [rendered],
+          rendered: new Set([rendered]),
         });
-      } else if (!existing.atoms.includes(rendered)) {
+      } else if (!existing.rendered.has(rendered)) {
+        existing.rendered.add(rendered);
         existing.atoms.push(rendered);
       }
     }

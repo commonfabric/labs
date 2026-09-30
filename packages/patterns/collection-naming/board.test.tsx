@@ -4,9 +4,10 @@
  * backfill, its idempotence, a backfilled name following its member when the
  * list shifts under it and only a member taking a name, index rows that
  * are the members and the absence an unnamed member's `shortName` reads as,
- * the mention universe and the name each of its rows carries, the item reading
- * its own name out of the board's table, the declaration, the bound on what a
- * read of the namespace or the universe expands, and the rejections. Every
+ * the mention universe and the name each of its rows carries, the item showing
+ * the name it stores, a backfilled member named in the namespace and showing
+ * no name of its own, the declaration, the bound on what a read of the
+ * namespace or the universe expands, and the rejections. Every
  * rejection here is a thrown verb, so the runtime errors are required, and the
  * count is exact: a guard quietly reverting to a silent return fails the
  * suite.
@@ -194,9 +195,11 @@ export default pattern(() => {
       !serialized.includes("vnode");
   });
 
-  // An item wired to the board's table reads its own name out of it by
-  // identity, and renders it as a badge; an item wired to nothing has no
-  // name, renders no badge, and does not fail.
+  // An item shows the name its input stores, and renders it as a badge; an
+  // item given no name has none, renders no badge, and does not fail. The
+  // board records this item under the name it stores, as a create would, but
+  // the table is not where the item's name comes from: the item reads nothing
+  // of the board.
   const wiredBody = new Writable("");
   // A mention map with something in it, so a save that erased would be seen
   // to erase both halves rather than only the prose. The destination is a
@@ -209,7 +212,7 @@ export default pattern(() => {
     title: "Wired item",
     body: wiredBody,
     references: wiredRefs,
-    boardNames: board.namesTable,
+    shortName: "12",
   });
   const action_name_the_wired_item = action(() => {
     names.key("12").set(wired);
@@ -342,23 +345,17 @@ export default pattern(() => {
 
   // The backfill, on a board that held items before it numbered anything.
   // The items are pushed straight into the list, past `addItem`, which is
-  // how a board from before the namespace holds its members. These two carry
-  // the board's table because a name reaches a row only through the member's
-  // own wiring: they stand for members an operator has link-bound, the step
-  // the README pairs with a backfill, done here at construction because a
-  // pattern cannot reach a member's argument.
+  // how a board from before the namespace holds its members, and they store
+  // no name. A backfill names them in the namespace and writes nothing onto
+  // the members, so each one goes on showing no name of its own.
   const legacyItems = new Writable<ItemDemand[] | Default<[]>>([]);
   const legacyNames = new Writable<NamesMap>({});
   const legacy = Board({ items: legacyItems, names: legacyNames });
   const assigned = new Writable<string[]>([]);
 
   const action_file_two_unnamed = action(() => {
-    legacyItems.push(
-      Item({ title: "Older one", createdAt: 1, boardNames: legacy.namesTable }),
-    );
-    legacyItems.push(
-      Item({ title: "Older two", createdAt: 2, boardNames: legacy.namesTable }),
-    );
+    legacyItems.push(Item({ title: "Older one", createdAt: 1 }));
+    legacyItems.push(Item({ title: "Older two", createdAt: 2 }));
   });
   // An unnamed member's row carries no name at all, and the row beside it
   // still reads its title, which is the property the optional spelling is
@@ -383,14 +380,15 @@ export default pattern(() => {
     legacy.mentionable?.[1]?.shortName === ""
   );
   // The library call itself, so its return is observable: the names it
-  // wrote, in filing order.
+  // wrote, in filing order. The table holds both names, and `nameOf` returns
+  // each for its member.
   const action_backfill_directly = action(() => {
     assigned.set(backfillNames(legacyItems, legacyNames));
   });
   const assert_backfill_named_in_filing_order = assert(() =>
     assigned.get().join(",") === "1,2" &&
-    legacy.index?.[0]?.shortName === "1" &&
-    legacy.index?.[1]?.shortName === "2" &&
+    nameOf(legacyItems.key(0), legacy.namesTable ?? []) === "1" &&
+    nameOf(legacyItems.key(1), legacy.namesTable ?? []) === "2" &&
     equals(
       ((legacy.names ?? {}) as NamesMap)["1"] as object,
       legacy.items?.[0] as object,
@@ -400,11 +398,16 @@ export default pattern(() => {
       legacy.items?.[1] as object,
     )
   );
-  // The universe follows the namespace: a member named by the backfill
-  // carries its name in the row an editor completes over.
-  const assert_backfill_reaches_the_universe = assert(() =>
-    legacy.mentionable?.[0]?.shortName === "1" &&
-    legacy.mentionable?.[1]?.shortName === "2"
+  // What a backfill does not do: it writes the namespace and nothing else, and
+  // a member's name reaches its row and its universe entry only through what
+  // the member stores. A backfilled member therefore shows no name in either
+  // place, however the namespace names it.
+  const assert_backfilled_members_show_no_name = assert(() =>
+    legacy.index?.[0]?.shortName === undefined &&
+    legacy.index?.[1]?.shortName === undefined &&
+    legacy.index?.[1]?.title === "Older two" &&
+    legacy.mentionable?.[0]?.shortName === "" &&
+    legacy.mentionable?.[1]?.shortName === ""
   );
   // Idempotent: the second run returns no names — it writes exactly the
   // names it returns — and the map holds what the first run left.
@@ -428,9 +431,9 @@ export default pattern(() => {
   const action_create_a_named_item = action(() => {
     legacy.addItem.send({ title: "Named by create", agentName: "Sol" });
   });
-  // And one that stands for a member the link-bind never reached. Its row
-  // carries no name however the map names it — the cost the README states —
-  // while the name itself is real, and `namesTable` is where it is.
+  // And one more filed past the create. Its row carries no name however the
+  // map names it — the cost the README states — while the name itself is
+  // real, and `namesTable` is where it is.
   const action_file_a_late_unnamed = action(() => {
     legacyItems.push(Item({ title: "Older three", createdAt: 3 }));
   });
@@ -446,14 +449,14 @@ export default pattern(() => {
     nameOf(legacyItems.key(3), legacy.namesTable ?? []) === "4" &&
     Object.keys((legacy.names ?? {}) as NamesMap).join(",") === "1,2,3,4"
   );
-  // The universe reads an unwired member as unnamed the way its index row
-  // does, however the namespace names it: both take the member's own
-  // `shortName`, so one derivation gives one answer, and a caller that needs
-  // to tell a missing bind from a missing name reads the namespace for both.
-  // The two spell "unnamed" differently — the empty string in a coalesced
-  // universe copy, an absent property in a row that is the member — and no
-  // consumer separates them.
-  const assert_universe_follows_the_wiring = assert(() =>
+  // The universe reads a member that stores no name as unnamed the way its
+  // index row does, however the namespace names it: both take the member's
+  // own `shortName`, so one derivation gives one answer, and a caller that
+  // needs to tell a member the board has named from one it has not reads the
+  // namespace for both. The two represent "unnamed" differently — the empty
+  // string in a coalesced universe copy, an absent property in a row that is
+  // the member — and no consumer separates them.
+  const assert_universe_follows_what_the_member_stores = assert(() =>
     legacy.mentionable?.[2]?.shortName === "3" &&
     legacy.mentionable?.[3]?.[NAME] === "Older three" &&
     legacy.mentionable?.[3]?.shortName === "" &&
@@ -467,11 +470,7 @@ export default pattern(() => {
   const twinNames = new Writable<NamesMap>({});
   const twinBoard = Board({ items: twinItems, names: twinNames });
   const action_list_one_item_twice = action(() => {
-    const twin = Item({
-      title: "Twin",
-      createdAt: 1,
-      boardNames: twinBoard.namesTable,
-    });
+    const twin = Item({ title: "Twin", createdAt: 1 });
     twinItems.push(twin);
     twinItems.push(twin);
   });
@@ -484,8 +483,8 @@ export default pattern(() => {
     assigned.get().join(",") === "1" &&
     Object.keys((twinBoard.names ?? {}) as NamesMap).join(",") === "1" &&
     (twinBoard.namesTable ?? []).length === 1 &&
-    twinBoard.index?.[0]?.shortName === "1" &&
-    twinBoard.index?.[1]?.shortName === "1"
+    nameOf(twinItems.key(0), twinBoard.namesTable ?? []) === "1" &&
+    nameOf(twinItems.key(1), twinBoard.namesTable ?? []) === "1"
   );
 
   // A backfilled name records the member, not the place it sat. Removing the
@@ -501,28 +500,18 @@ export default pattern(() => {
   // and read back as one, so the handle expands no member.
   const departed = new Writable<NamesMap>({});
   const action_file_two_that_shift = action(() => {
-    const first = Item({
-      title: "Shifting one",
-      createdAt: 1,
-      boardNames: shiftBoard.namesTable,
-    });
+    const first = Item({ title: "Shifting one", createdAt: 1 });
     departed.key("first").set(first);
     shiftItems.push(first);
-    shiftItems.push(
-      Item({
-        title: "Shifting two",
-        createdAt: 2,
-        boardNames: shiftBoard.namesTable,
-      }),
-    );
+    shiftItems.push(Item({ title: "Shifting two", createdAt: 2 }));
   });
   const action_backfill_the_shifting_pair = action(() => {
     assigned.set(backfillNames(shiftItems, shiftNames));
   });
   const assert_the_shifting_pair_is_named = assert(() =>
     assigned.get().join(",") === "1,2" &&
-    shiftBoard.index?.[0]?.shortName === "1" &&
-    shiftBoard.index?.[1]?.shortName === "2"
+    nameOf(shiftItems.key(0), shiftBoard.namesTable ?? []) === "1" &&
+    nameOf(shiftItems.key(1), shiftBoard.namesTable ?? []) === "2"
   );
   const action_remove_the_first_that_shifts = action(() => {
     shiftItems.removeByValue(shiftItems.key(0));
@@ -700,14 +689,14 @@ export default pattern(() => {
       { assertion: assert_unnamed_universe_rows_have_no_name },
       { action: action_backfill_directly },
       { assertion: assert_backfill_named_in_filing_order },
-      { assertion: assert_backfill_reaches_the_universe },
+      { assertion: assert_backfilled_members_show_no_name },
       { action: action_backfill_again },
       { assertion: assert_second_backfill_writes_nothing },
       { action: action_create_a_named_item },
       { action: action_file_a_late_unnamed },
       { action: action_backfill_verb },
       { assertion: assert_backfill_skips_the_named },
-      { assertion: assert_universe_follows_the_wiring },
+      { assertion: assert_universe_follows_what_the_member_stores },
       { action: action_list_one_item_twice },
       { action: action_backfill_the_twins },
       { assertion: assert_twin_is_named_once },

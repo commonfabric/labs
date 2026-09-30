@@ -66,6 +66,7 @@ import {
   type SigilLink,
 } from "@commonfabric/runner";
 import { type CfcLabelView, linkCfcLabelView } from "@commonfabric/runner/cfc";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { CellHandle } from "@/cell-handle.ts";
 import { $conn, type RuntimeClient } from "@/runtime-client.ts";
@@ -222,7 +223,7 @@ for (const { name, value, labeled } of SUBJECTS) {
     throw new Error(`Fixture is not what it claims: ${name}`);
   }
   const caveat = attached?.entries[0].label.confidentiality?.[0];
-  if (typeof caveat === "object" && caveat !== null && "source" in caveat) {
+  if (isObjectOrArray(caveat) && "source" in caveat) {
     throw new Error(`Fixture carries an unredacted view: ${name}`);
   }
 

@@ -8,28 +8,56 @@ the same library. The design is
 directory is its first customer. Member names here are decimal strings, dense
 from `1`, so a member is cited as `<collection>/42`.
 
-## The library: `naming.ts`
+## The library: `naming.ts` and `allocator.ts`
 
 The namespace is one map cell on the collection, `names: { "42": <member> }`,
 holding each member as an unread reference. The library owns everything a
 collection does with it:
 
-- **Allocation.** `assignName(names, member)` computes the next name — `1` when
-  the map holds none, otherwise one more than the largest present — and records
-  the member under it, in the transaction of the verb that calls it. A keyset
-  read of the map conflicts with a concurrent key write to it, so of two verbs
-  that read the same keys the second to commit is rejected, re-runs against the
-  first one's write, and takes the name after it. `nextNameAmong()` is the rule
-  on its own, over any list of keys.
+- **Allocation.** `createNamed(names, create)` computes the next name — `1` when
+  the map holds none, otherwise one more than the largest present — calls
+  `create` with it, and records what `create` returns under it, all in the
+  transaction of the verb that calls it; it returns the name and the member. A
+  keyset read of the map conflicts with a concurrent key write to it, so of two
+  verbs that read the same keys the second to commit is rejected and re-runs
+  against the first one's write, and the re-run calls `create` with the name
+  after it. A member built holding its name therefore holds the name the map
+  records for it. `assignName(names, member)` is the same allocation for a
+  member that already exists, and returns the name. `nextNameAmong()` is the
+  rule on its own, over any list of keys.
 - **The names table.** `namesTable` derives one row per named member,
-  `{ member, name }`, each row addressed by the member it describes. A
-  collection derives it once and hands it to every member it creates.
+  `{ member, name }`, each row addressed by the member it describes.
 - **Reverse lookup.** `nameOf(member, table)` returns the name the table gives a
   member, matched by identity, or `undefined`. `ownName` is the same lookup as a
-  lift, for a member reading its own row out of its collection's table.
-- **The backfill.** `backfillNames(members, names)` names every unnamed member
-  of a list in filing order, skips those already named, and returns exactly the
-  names it wrote — `[]` on a second run, which writes nothing.
+  lift, for a member reading its own row out of a table its collection wired to
+  it.
+- **The two backfills.** `backfillNames(members, names)` names every unnamed
+  member of a list in filing order, skips those already named, and returns
+  exactly the names it wrote — `[]` on a second run, which writes nothing. It
+  writes the namespace and nothing else, so a member it names stores no name of
+  its own. `recordNames(members, names)` walks the same list and additionally
+  asks each listed member to store the name the namespace holds for it, by
+  sending that name to the member's own `recordName` verb; it returns
+  `assigned`, the names it wrote, `named`, the members already reporting theirs,
+  and `pending`, the members it asked. A send's effect is invisible to the
+  transaction that makes it, so `pending` is a list of requests rather than of
+  outcomes: a later run reports whichever landed under `named` and asks for the
+  rest again. Which of the two a collection calls turns on whether its member
+  pattern declares `recordName({ name })`. A member whose pattern does not
+  stores the payload as ordinary data at that name in its result, because a send
+  to a path holding no stream is an ordinary write — `Cell.send` in
+  `packages/runner/src/cell.ts` delegates to `set`.
+
+  The two differ on one shape, and which of them is right about it is settled by
+  the names table. `backfillNames` counts a member present at ANY key of the
+  namespace as named, so a member a foreign writer left under a key outside the
+  grammar is skipped and never gets a name. `recordNames` asks the question the
+  table asks — is the member held under a key `isMemberName` admits — so it
+  names such a member like any other unnamed one and leaves the foreign entry
+  alone. `namesTable` publishes a row only for a grammar-admitted key, so a
+  member skipped the first way has no name by every lookup a reader has. The
+  exemplar's item declares none and calls `backfillNames`; Topics' topic
+  declares one and its board calls `recordNames`.
 - **The declaration.** `NamingDeclaration` is what a collection publishes so a
   consumer learns the policy rather than assuming one: whether a name is unique
   across history or only among current members, whether it is permanent, whether
@@ -40,7 +68,17 @@ collection does with it:
   the exemplar: the stage that binds the board's namespace as a slug fills it,
   and that binding is what a resolver can then check the declaration against.
 
-Nothing in `naming.ts` knows what kind of piece a member is. A member is a cell,
+The library is two modules, and which one a declaration sits in turns on what it
+needs at runtime. `allocator.ts` holds the allocation rule — `nextNameAmong`,
+`createNamed`, `assignName`, and the `NamesMap` and `NamesMapCell` shapes — and
+takes no value from `commonfabric`, so a plain `deno test` can import it and run
+the allocator with no pattern runtime behind it. `naming.ts` holds what does
+take one — the names table, the reverse lookup, the two backfills — and
+re-exports the whole of `allocator.ts`, so a collection reaches the library
+through `naming.ts` alone.
+
+Nothing in `naming.ts` knows what kind of piece a member is beyond the one verb
+`recordNames` sends to and the one property it reads. A member is a cell,
 compared by identity and never read through, which is what keeps every read
 there — the allocator surveying keys, the table over the map, a member finding
 its row — from expanding a member document.
@@ -93,31 +131,32 @@ copy would carry that whole board into its own program.
 The board is a collection of items that owns a member namespace, and the demos
 in the plan run on it. Its verbs:
 
-- `addItem({ title, body?, agentName })` allocates the next name and appends the
-  item in one write, so the created item is reachable at `names[<n>]` the moment
-  it exists. It returns the item, declared through the index's row schema, with
-  the allocated `name` beside it: the item's own `shortName` is a derivation
-  that may not have run when the call returns, and a caller must not have to
-  wait for it to learn the name it just allocated.
+- `addItem({ title, body?, agentName })` allocates the next name through
+  `createNamed`, creates the item with that name as its `shortName` input, and
+  appends it, in one write: the created item is reachable at `names[<n>]` and
+  stores its own name the moment it exists. It returns the item, declared
+  through the index's row schema, with the allocated `name` beside it, so a
+  caller learns the name from the allocation itself rather than from anything
+  the item publishes.
 - `backfillNames({ agentName })` names every unnamed member in filing order and
   returns the names it wrote. Idempotent. It writes the namespace and nothing
-  else, and on a board whose members were filed past `addItem` that is not the
-  whole job: a name reaches an index row through the member's own `boardNames`
-  wiring, so the backfill has to be paired with a one-time link-bind of the
-  board's `namesTable` onto each member it named. Until that bind the member is
-  named — `names` and `namesTable` carry it, and `nameOf` returns it — and its
-  row carries no name.
+  else. A member it names is named — `names` and `namesTable` carry it, and
+  `nameOf` returns it — and shows no name of its own: its row, its universe
+  entry, and its own header read only what the member stores, and a board writes
+  a member's result, never its argument, so no verb of the board can write the
+  name onto it. Writing a stored name onto such a member is not built.
 
 It publishes `index` — the items themselves, declared through a row schema of
 `title`, `createdAt`, and `shortName`, so a row IS its item and a row's own
-address is the item's address; `shortName` is absent for a member whose lookup
-has produced no value, so a board holding members it has not named still reads
-whole — and `names`, `namesTable`, `naming`, `mentionable`, `itemCount`, and a
-card list showing each item with its name.
+address is the item's address; `shortName` is absent for a member that stores no
+name, so a board holding such members still reads whole — and `names`,
+`namesTable`, `naming`, `mentionable`, `itemCount`, and a card list showing each
+item with its name.
 
 `shortName` is written `shortName?: string` at every point the exemplar names it
-— the row schema, the item's own publication, and the demand an item makes of a
-mention-universe entry — which is the spelling the Topics board and Topic ship.
+— the row schema, the item's stored input and its own publication, and the
+demand an item makes of a mention-universe entry. Apart from the stored input,
+which Topic does not have, that is the spelling the Topics board and Topic ship.
 Optional rather than defaulted, and the two are not interchangeable: a defaulted
 property moves a demand's defaults below an array constraint the compatibility
 proof cannot show stable under default insertion, and dropping the default
@@ -137,9 +176,10 @@ members of an existing collection therefore takes more than a compatible
 spelling.
 
 An absent `shortName` covers two cases a survey cannot tell apart: a member
-nothing has named, and a member the board has named whose `boardNames` was never
-wired. A caller that needs to know which reads the namespace, where the answer
-is: `nameOf` over `namesTable` returns the name for either, and returns
+nothing has named, and a member the board has named that stores no name — one
+filed before the board passed a name in at create, or one a backfill named. A
+caller that needs to know which reads the namespace, where the answer is:
+`nameOf` over `namesTable` returns the name for the second, and returns
 `undefined` only for the first.
 
 `mentionable` is the board's mention universe, derived through
@@ -151,34 +191,41 @@ own — the same property a member publishes for itself, and the one `index` sho
 is what lets offering the list expand no member; what a picked completion stores
 is the member itself.
 
-A member whose `boardNames` never arrived carries no name in either place, so
-the link-bind the backfill has to be paired with governs both. The two read
-differently, because a universe row is a copy and an index row is the member:
-`mentionableRowsOf` coalesces a member with no name to the empty string, while
-the member's index row simply has no `shortName`.
+A member that stores no name carries no name in either place, so what a backfill
+leaves unwritten reaches both. The two read differently, because a universe row
+is a copy and an index row is the member: `mentionableRowsOf` coalesces a member
+with no name to the empty string, while the member's index row simply has no
+`shortName`.
 
-An item takes the universe as a READABLE binding, as it takes `boardNames`, and
-the difference is not cosmetic: a writable binding puts the board's whole
-published row inside the retained link's proof, which runs both directions, and
-a member demand narrower than that row fails the write-back leg — leaving a
-member that cannot be re-sourced with any source, its own bytes included. So
-every board-wired input an exemplar member declares is readable unless it has a
-write to make.
+An item takes the universe as a READABLE binding, and the difference is not
+cosmetic: a writable binding puts the board's whole published row inside the
+retained link's proof, which runs both directions, and a member demand narrower
+than that row fails the write-back leg — leaving a member that cannot be
+re-sourced with any source, its own bytes included. So every board-wired input
+an exemplar member declares is readable unless it has a write to make.
 
-The item is the member: a title, a body, a filing time, and the board's names
-table wired in at creation as `boardNames`. Its body is drafted per session and
-written with its mention map by one save, and the three streams that drive that
-— `startEditBody`, `saveBody`, `cancelEditBody` — are the whole editing surface.
-The drafts are seeded by the open and by nothing else, so the save refuses when
-no edit is open and a second open leaves one in progress alone: either would
-otherwise write an empty or stale draft over the stored body. It reads its own
-row out of that table by identity and publishes the result as `shortName`,
+The item is the member: a title, a body, a filing time, and the name its board
+calls it by, stored as its `shortName` input by the create that allocated it. A
+name is permanent and never reused, so that stored copy is the name the
+namespace holds for the item, and the item reads nothing of its board to show
+it. Its body is drafted per session and written with its mention map by one
+save, and the three streams that drive that — `startEditBody`, `saveBody`,
+`cancelEditBody` — are the whole editing surface. The drafts are seeded by the
+open and by nothing else, so the save refuses when no edit is open and a second
+open leaves one in progress alone: either would otherwise write an empty or
+stale draft over the stored body. It publishes its stored name as `shortName`,
 rendering it as a badge beside the title when it has one; a mention of the item
 elsewhere reads that same `shortName` to show the number on its pill. The body
 is edited through `cf-code-editor`, which mints reference-form mentions into the
 item's own `references` map — saved with the prose in one transaction, so the
-tokens and the destinations they name land together. An item wired to no board
-shows no name and needs nothing else.
+tokens and the destinations they name land together.
+
+An item whose input holds no name — one filed before the board passed a name in
+at create, one filed past `addItem`, including every member a backfill names,
+and one composed with no board — shows no name and does not fail. Writing a
+stored name onto such an item is not built: a board writes a member's result and
+never its argument, so nothing the board can do reaches that input once the item
+exists, and a backfill writes the name into the namespace and nowhere else.
 
 Headless, against a deployed board:
 
@@ -193,31 +240,70 @@ cf piece call --cell /of:<board> backfillNames --json '{"agentName":"Sol"}'
 
 ## Tests
 
+- `allocator.test.ts` — a plain Deno unit test, run by `deno test` with no
+  pattern runtime: the name grammar, the length-then-lexicographic comparison
+  that keeps names distinct past `2^53`, the carry over a trailing run of nines,
+  and `createNamed` and `assignName` driven over a stand-in namespace cell.
+  Importing `allocator.ts` is half of what it checks. `commonfabric` declares
+  `lift`, `equals` and `Writable` with `export declare const`, which binds
+  nothing at runtime, so a module taking one of them as a value fails to link
+  here — this test is what holds the allocator to needing none of them.
 - `naming.test.tsx` — the sequence rule, the allocator re-run against a stale
   read (a first allocation, a concurrent writer's key landing, and a re-run over
   the map as the winner left it, which takes the next distinct name), the
-  reverse lookup, and the declaration.
+  agreement between the name `createNamed` hands `create` and the name it
+  records the member under, the reverse lookup, and the declaration. Two
+  transactions overlapping is what the concurrency test below has and a sequence
+  of test steps does not.
 - `board.test.tsx` — the exemplar end to end: allocation on create, one more
   than the largest name present, a name kept through a rename and through
   leaving the list, the backfill and its idempotence, index rows that are the
   members and the absence an unnamed member's `shortName` reads as, the mention
-  universe and the name each of its rows carries, the item reading its own name,
-  the bound on what a read of the namespace or the universe expands, a board
-  given no namespace at all, and the rejections.
+  universe and the name each of its rows carries, the item showing the name it
+  stores, a backfilled member named in the namespace and showing no name of its
+  own, the bound on what a read of the namespace or the universe expands, a
+  board given no namespace at all, and the rejections.
 - `topics-shape.test.tsx` — a test-only board whose members are the real `Topic`
   pattern, wired through the library the way the exemplar is. It holds the
-  library to a member pattern it does not own — allocation on create, the
-  backfill, the names table, and the reverse lookup, all over topics, through a
-  board that is not the Topics board.
+  library to a member pattern it does not own — allocation on create,
+  `backfillNames`, the names table, and the reverse lookup, all over topics,
+  through a board that is not the Topics board. `recordNames` is covered where
+  its member contract is declared, in `../topics/naming.test.tsx`.
+
+Two tests of this directory's code live under `../integration/`, because each
+needs more than one runtime:
+
+- `collection-naming-concurrency.test.ts` — two sessions on one memory server
+  whose creates both read the map's keys before either commits, through
+  `assignName` and through `createNamed`: distinct consecutive names at the cost
+  of one re-run, and each member built by `createNamed` holding the name the map
+  records for it.
+- `collection-naming-member-name.test.ts` — a member filed through `addItem` in
+  one replica, read in a second replica that never runs the board, shows its
+  name. With server execution off a derived value is recomputed only where its
+  owning piece runs and something pulls it, so this is the read that tells a
+  stored name from one looked up in the board's names table; a single-runtime
+  pattern test shows the name either way.
+
+One more lives in the shell package, because it needs a browser as well:
+
+- `../../shell/integration/collection-member.test.ts` — the shell opening
+  `/<space>/<collection>/<member>` over an exemplar board filed by `cf`. What it
+  proves is the whole chain standing up at once: a slug bound inside a piece, a
+  worker resolving the reference through it, and a rendered page that is the
+  member rather than the board.
 
 ## Topics
 
 The Topics board (`../topics/`) is the collection this library exists for, and
-it calls it: `addTopic` allocates in the same transaction as its append,
-`backfillNames` names what the board held before, each topic reads its own name
-out of `boardNames` and publishes it as `shortName`, and both boards derive
-their mention universe through `mentionable.ts`. What is still to come is in
-[the plan](../../../docs/plans/collection-naming-topics.md): the production
-backfill, which needs the one-time link-bind of `namesTable` onto every topic
-filed before the namespace, and the slug that binds the board's `names` cell as
-`top`.
+it calls it: `addTopic` allocates in the same transaction as its append and
+passes the name into the topic it creates, its `backfillNames` verb runs
+`recordNames` over what the board held before, each topic stores its own name
+and publishes it as `shortName`, and both boards derive their mention universe
+through `mentionable.ts`. Every place a number shows on either board reads that
+one property: the header, the cards, the survey rows, and the universe rows the
+derivation copies from each member. The deployed Topics board carries the
+namespace — every topic numbered, the `names` map dense with no gaps, and the
+`top` slug bound — so what is still to come there is the operator source push
+that makes those topics publish what they store, which
+[the plan](../../../docs/plans/collection-naming-topics.md) tracks.

@@ -10,13 +10,26 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,
   type ExtendedStorageTransaction,
+  TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  TransactionWriteDetail,
+} from "../src/storage/interface.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+import { isAuthorizationRead } from "../src/storage/reactivity-log.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
@@ -54,6 +67,89 @@ describe("extended-storage-transaction", () => {
     tx.markLazyMaterialize(true);
     return { tx, cell: runtime.getCell(space, cause, SCHEMA, tx) };
   };
+
+  describe("verifier read scope", () => {
+    const source = () =>
+      runtime.getCell(
+        space,
+        "user-verifier-source",
+        undefined,
+        undefined,
+        "user",
+      ).getAsNormalizedFullLink();
+
+    const seedSource = async (confidentiality: string[]) => {
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, { ...source(), path: [] }, {
+        value: "private payload",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality } }],
+          },
+        },
+      });
+      expect((await tx.commit()).ok).toBeDefined();
+    };
+
+    it("keeps verifier metadata outside input scope while payload reads narrow it", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      expect(
+        readStoredCfcMetadata(tx, source())?.labelMap.entries[0].label
+          .confidentiality,
+      )
+        .toEqual(["secret"]);
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(tx.readValueOrThrow({ ...source(), path: [] })).toBe(
+        "private payload",
+      );
+      expect(tx.getNarrowestReadScope()).toBe("user");
+      tx.abort();
+    });
+
+    it("retains a user metadata read as a commit authorization dependency", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      readStoredCfcMetadata(tx, source());
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(
+        [...(tx.getReadActivities?.() ?? [])].some((read) =>
+          read.id === source().id && read.scope === "user" &&
+          read.path.length === 1 && read.path[0] === "cfc" &&
+          isAuthorizationRead(read.meta)
+        ),
+      ).toBe(true);
+      runtime.getCell(space, "verifier-scope-output", undefined, tx).set(
+        "output",
+      );
+      tx.prepareCfc();
+      await seedSource(["secret", "added"]);
+      const result = await tx.commit();
+      expect(result.error).toMatchObject({
+        name: "StorageTransactionInconsistent",
+        address: { id: source().id, scope: "user" },
+      });
+      expect(result.error?.message).toContain("hash changed");
+    });
+
+    it("retains user trigger confidentiality without counting verifier replay as an input read", async () => {
+      await seedSource(["secret"]);
+      const tx = runtime.edit();
+      tx.setCfcTriggerReadGating(true);
+      tx.addCfcTriggerReads([{
+        ...source(),
+        path: ["value"],
+        type: "application/json",
+      }]);
+      expect(deriveFlowJoin(tx).confidentiality).toEqual(["secret"]);
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      tx.abort();
+    });
+  });
 
   for (const method of ["write", "writeOrThrow"] as const) {
     it(`${method} does not attribute deletion of an absent payload slot`, async () => {
@@ -279,6 +375,37 @@ describe("extended-storage-transaction", () => {
   });
 
   describe("a wrapped transaction", () => {
+    it("preserves document-narrowed write lookup and its compatibility fallback", () => {
+      const target = {
+        space,
+        id: "of:fid1:wrapped-write-target" as URI,
+        path: [] as const,
+      };
+      const details = [{
+        address: { ...target, path: ["value"] },
+        value: { title: "bounded" },
+      }] as unknown as TransactionWriteDetail[];
+
+      const narrowed = new TransactionWrapper({
+        getWriteDetailsForTarget: (requested: typeof target) => {
+          expect(requested).toEqual(target);
+          return details;
+        },
+        getWriteDetails: () => {
+          throw new Error("must preserve the narrowed lookup");
+        },
+      } as unknown as IExtendedStorageTransaction);
+      expect([...narrowed.getWriteDetailsForTarget(target)]).toEqual(details);
+
+      const compatible = new TransactionWrapper({
+        getWriteDetails: (requestedSpace: MemorySpace) => {
+          expect(requestedSpace).toBe(space);
+          return details;
+        },
+      } as unknown as IExtendedStorageTransaction);
+      expect([...compatible.getWriteDetailsForTarget(target)]).toEqual(details);
+    });
+
     it("answers for the instant as the transaction it wraps does", async () => {
       const { tx, cell } = await seeded("wrapped-instant");
       const wrapper = createNonReactiveTransaction(tx);

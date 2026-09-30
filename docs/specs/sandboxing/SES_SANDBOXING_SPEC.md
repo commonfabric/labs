@@ -6,7 +6,7 @@
 - AI-assisted specification
 
 ## Last Updated
-2026-07-17
+2026-09-28
 
 This document is the sole authoritative SES sandboxing specification for the
 current reimplementation effort. It supersedes prior divergence notes and
@@ -459,7 +459,7 @@ const helper = (() => (x: number) => x * 2)();
 const data = fetchJson();
 
 // ❌ Await expressions (implies side effects)
-const response = await fetch(url);
+const response = await loadSomething();
 
 // ❌ Hidden mutability survives even behind const
 const state = { count: 0 };
@@ -958,15 +958,15 @@ write only canonical NaNs, but a typed-array element store is not a method and
 nothing can intercept it, so endowing the constructors would reopen the channel
 the repair closes.
 
-That channel is SES's threat model rather than this one: while the `fetch` shim
-above hands every compartment the open network, a pattern that wants to move
-bits out has a far shorter path than a NaN mantissa. The constructors stay out
-because doing so matches the upstream default, is reversible, and costs
-nothing — no pattern uses them — not because it denies an attacker anything
-today. What the roll does change is honesty: the compiler stops offering
-constructors the sandbox will not supply. Modules compiled before the roll
-still carry `Float32Array` and throw at runtime regardless of what the type
-libraries say; stripping the declarations only fixes what compiles from here.
+That channel is SES's threat model rather than this one: a NaN mantissa moves
+bits between two views of one buffer inside a single compartment, which is not a
+boundary this specification defends. The constructors stay out because doing so
+matches the upstream default, is reversible, and costs nothing — no pattern uses
+them — not because it denies an attacker anything today. What the roll does
+change is honesty: the compiler stops offering constructors the sandbox will not
+supply. Modules compiled before the roll still carry `Float32Array` and throw at
+runtime regardless of what the type libraries say; stripping the declarations
+only fixes what compiles from here.
 
 When host constructors or functions from that compatibility surface are
 forwarded into a Compartment, the runtime MUST freeze the actual forwarded
@@ -976,12 +976,13 @@ observe them. This explicit host-realm hardening is part of the prototype
 pollution defense for forwarded web APIs; it is not provided by SES
 automatically.
 
-The current implementation still forwards ambient `fetch` and its adjacent web
-request globals as a migration shim. That shim is transitional and should be
-removed once importer/auth flows are fully routed through runtime-managed
-capabilities. While the shim exists, direct `fetch()` may still run during
-authored module assembly or `__cfHelpers.__cf_data(...)` snapshotting, in addition to
-deferred callback execution.
+A compartment forwards no ambient `fetch` and none of the adjacent web request
+globals (`Headers`, `Request`, `Response`). Network access is a runtime-managed
+capability: the graph constructors `fetchJson()`, `fetchText()`,
+`fetchBinary()`, `fetchJsonUnchecked()`, and `fetchProgram()` issue the request
+on the pattern's behalf, which is what lets the runtime record it as a CFC sink
+request for a deployment's ceiling to gate, and sign it when it targets a
+first-party route.
 
 #### 5.3.2 Trusted Runtime Modules
 
@@ -1033,6 +1034,57 @@ record simply copies the already-frozen namespace onto its module exports.
 Mutable state may only be introduced through explicit runtime-managed
 authorities returned later, not by mutating the shared runtime-module export
 graph itself.
+
+#### 5.3.3 Runtime Cells
+
+Pattern code holds live runtime cells. A handler or lift argument holds one
+wherever its schema says `asCell`, a builder function returns them, and a cell
+method that returns a cell returns another. A cell is therefore an authority
+surface, and the runtime treats it as a capability: holding a cell grants the
+operations of the public cell interface and nothing else. Each of those reads
+and writes through the transaction the cell is bound to, under that
+transaction's CFC and ACL checks. The runtime, its storage manager, and every
+transaction stay out of reach, which is what lets the CFC read ceiling, the
+transaction's journal, and the write-policy inputs the runtime records be
+trusted.
+
+The rules that keep this true:
+
+- A cell keeps its runtime, its transaction, the frame it was built under, and
+  the label view it carries in ECMAScript-private fields that no member hands
+  out. Host code reaches them through functions of the runner that pattern code
+  cannot import: `cellRuntime()`, `cellTx()`, `exportCell()`, and
+  `getCarriedCfcLabelView()`. Host code that passes a settle callback, which
+  receives the transaction, or stream-send options, which name the durable
+  event id, does so through `setCell()` and `sendEvent()`; a cell's own `set()`
+  and `send()` take only the value.
+- Those functions and `isCell()` recognize a cell by a private brand. An object
+  built on the cell prototype, or shaped like a cell, does not carry it, so the
+  host never takes such an object's word for its runtime, its transaction, or
+  its labels. A `Reactive` proxy over a whole cell stands for that cell.
+- A cell's constructor, which pattern code reaches through any cell it holds,
+  throws unless it is given a runtime and a transaction the runtime created.
+  `withTx()` and `getAsQueryResult()` refuse any other transaction as well.
+- The cell class, its prototype, and each cell are frozen, so pattern code
+  cannot change what a cell's members do for the host code that later reads
+  them.
+- What a handler or lift consumed is what its transaction read, and the run's
+  labels and checks are computed from that transaction's journal (CFC
+  specification sections 8.10.1 and 18.6). So while a run's code runs, a cell
+  bound to the run's transaction keeps to it: `withTx()` with no transaction
+  returns a cell still bound to it, `getArgumentCell()` binds the cell it
+  returns to it, and `sink()` and `pull()`, which read through transactions of
+  their own, throw. Two routes are not yet held to this, because the runtime
+  tells a run's code from its own only by the run's frame: a promise
+  continuation the run queued that runs after the run's function returns but
+  before its transaction commits, when the frame is gone, and `sinkMeta()`,
+  which the runtime's own code calls on a run's cells within the frame.
+
+`packages/runner/test/cell-authority.test.ts` runs these attacks from a pattern
+in the real sandbox. It also walks everything a cell, a stream, a `Reactive`
+proxy, and a query result reach, calling each method with callbacks and with a
+forged transaction in each argument position, and fails on reaching a runtime
+service or a transaction, or on host code using the forged one.
 
 ### 5.4 Smaller-Compartment String Rehydration
 
@@ -2533,10 +2585,11 @@ await runner.start(resultCell);
 | Global pollution | Frozen intrinsics, controlled globals |
 | Internal runtime-global exposure | Only approved globals are installed; implementation hooks like `RUNTIME_ENGINE_CONSOLE_HOOK` stay hidden |
 | Prototype pollution | SES-frozen intrinsics plus explicit freezing of forwarded host constructor/prototype pairs before installation |
+| Host authority through runtime cells | Cells keep their runtime and transaction private, are frozen, and are recognized by a private brand ([§5.3.3](#533-runtime-cells)) |
 | Closure-based data leakage | No surviving mutable module bindings; direct-function-only top-level forms plus function hardening |
 | State leakage via modules | Verified immutable top-level bindings, hardened shared runtime-module exports, write-once module exports, and dynamic imports rejected in v1 |
 | Resource exhaustion | Future: Add CPU/memory limits (not in this spec) |
-| Ambient network/time/random authority at module load | Narrow Compartment globals; temporary compatibility web-fetch shim only, no `Temporal`, `secureRandom`, or `randomUUID` |
+| Ambient network/time/random authority at module load | Narrow Compartment globals: no `fetch` or adjacent web request globals, no `Temporal`, `secureRandom`, or `randomUUID` |
 
 ### 11.2 Known Limitations
 
@@ -2562,13 +2615,14 @@ module surface in v1. Reintroducing them requires separate scoped work.
    future exposure of `Temporal`, `secureRandom()`, or `randomUUID()` to
    authored code requires explicit call-site restrictions.
 
-2. **Direct `fetch()`**: A temporary compatibility shim currently exposes
-   ambient `fetch()` and the adjacent web request globals it depends on inside
-   SES compartments because existing importer/auth flows still rely on them.
-   This currently applies to authored module assembly, `__cfHelpers.__cf_data(...)`
-   snapshotting, and lazy callback rehydration. It should be deprecated in
-   favor of runtime-managed graph constructors such as `fetchJson()` plus an
-   explicit egress policy.
+2. **Direct `fetch()`**: Ambient `fetch()` and the adjacent web request globals
+   (`Headers`, `Request`, `Response`) are excluded from SES compartments and
+   withheld from the type libraries, so authored code reaching for one fails to
+   compile. Network access is served by the runtime-managed graph constructors
+   `fetchJson()` and its siblings. Reintroducing an imperative form means giving
+   the runtime the same view of the request it has of a graph constructor's —
+   the sink record, the confidentiality ceiling, and the first-party signature —
+   which is scoped work of its own.
 
 ### 11.4 Escape Hatch Analysis
 
@@ -2581,7 +2635,7 @@ Potential escape routes and their status:
 | `import()` | Rejected in v1 | Dynamic imports are deferred and verifier-rejected |
 | authored `require` | Confined | Bound to `compartment.importNow`; declared specifiers resolve through the record's verifier-checked `resolutions` map and anything else falls through to the `importNowHook`, which serves only records in the validated graph — so it reaches already-verified modules of the same load and policy-admitted runtime records, never an unverified module or an ungranted host capability. A declared runtime specifier cannot be rewired to an authored sibling |
 | Prototype access | Blocked | SES freezes intrinsics, and the runtime explicitly freezes forwarded host constructors and `.prototype` objects before installation |
-| ambient web-fetch globals | Temporarily allowed | Compatibility shim in authored SES compartments; planned deprecation |
+| ambient web-fetch globals | Rejected | `fetch`, `Headers`, `Request`, and `Response` are absent from authored SES compartments and undeclared by the type libraries, so reaching for one fails to compile; egress goes through the runtime's fetch graph constructors |
 | `globalThis` | Controlled | Custom minimal Compartment globals; runtime freezes the compartment global object after installing bindings and does not expose internal console-hook globals |
 
 ### 11.5 Residual Observability and Fingerprinting Channels
@@ -2598,7 +2652,7 @@ in review or incident work should be added here with a class and a status.
 | Untamed non-locale `Date` surface: `toString()`/`toTimeString()` (zone name in words), `getTimezoneOffset()`, local getters | Host timezone outright; the exact IANA zone via historical-offset probing (zones differ in DST history) → coarse user location | user-level | Accepted for now — patterns legitimately build local-day logic on the getters. Closure path: introduce viewer timezone as an explicit data input (CT-1881), then pin the ambient surface to UTC |
 | tzdata / ICU version probing: which zone names validate (newer-tzdata-only zones), formatting quirks (e.g. ICU 72's U+202F separators) | Engine / ICU / tzdata version | environment-level | Accepted; inherent to exposing real ICU formatting |
 | Supported-locale-set probing through the sanitized `toLocale*` methods | Full-ICU vs small-ICU build; available locale data | environment-level | Accepted |
-| Ambient web-fetch shim | User IP (→ geolocation, typically more precise than timezone) to any contacted server; general exfiltration and latency probing | user-level | Temporarily allowed; see 11.3 and the escape-hatch table; planned deprecation behind runtime-managed egress |
+| Egress to an arbitrary host | User IP (→ geolocation, typically more precise than timezone) to any contacted server; general exfiltration and latency probing | user-level | Open, but named. The ambient route is gone — `fetch`, `Headers`, `Request`, and `Response` are withheld from compartments and from the type libraries — so egress goes through the fetch graph constructors, which record each request as a CFC sink request and take either an absolute URL or a relative one resolved against the executing space's host. What a deployment's sink ceilings do not gate still reaches the host the pattern names |
 | Host default locale via `toLocale*` defaults or the ECMA-402 unsupported-tag fallback | User language/region | user-level | **Closed** by `locale-taming.ts`: omitted locales and the resolution fallback both pin to `"en-US"` |
 | Host timezone via `toLocale*` `timeZone` defaults | User timezone | user-level | **Closed** by `locale-taming.ts`: omitted `timeZone` pins to `"UTC"`; invalid values throw (ECMA-402 has no fallback-to-host-zone path) |
 

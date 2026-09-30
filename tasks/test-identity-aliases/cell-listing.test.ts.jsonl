@@ -1,0 +1,1 @@
+{"date": "2026-08-31", "from": {"k": "unit", "s": "cli", "n": "shaping: containers yield keys, leaves yield nothing"}, "to": {"k": "unit", "s": "cli", "n": "cell-listing > keysOf() > returns the keys of a container and nothing for a leaf"}}

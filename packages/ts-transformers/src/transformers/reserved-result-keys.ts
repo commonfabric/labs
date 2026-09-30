@@ -1,4 +1,5 @@
 import { FRAMEWORK_RESULT_KEYS } from "@commonfabric/utils/framework-result-keys";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type ts from "typescript";
 
 import type { TransformationContext } from "../core/mod.ts";
@@ -33,11 +34,9 @@ function resolveRootSchema(
       return undefined;
     }
     const defs = schema.$defs;
-    if (typeof defs !== "object" || defs === null) return undefined;
+    if (!isObjectOrArray(defs)) return undefined;
     const target = (defs as Record<string, unknown>)[path[2]!];
-    if (
-      typeof target !== "object" || target === null || Array.isArray(target)
-    ) {
+    if (!isObjectNotArray(target)) {
       return undefined;
     }
     current = target as Record<string, unknown>;
@@ -47,8 +46,7 @@ function resolveRootSchema(
 
 /** Whether a property schema leaves the value it describes unmaterialized. */
 function isOpaque(schema: unknown): boolean {
-  return typeof schema === "object" && schema !== null &&
-    !Array.isArray(schema) &&
+  return isObjectNotArray(schema) &&
     (schema as Record<string, unknown>).type === "unknown";
 }
 
@@ -74,12 +72,12 @@ export function reportOpaqueReservedResultKeys(
   schema: unknown,
   anchor: ts.Node,
 ): void {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+  if (!isObjectNotArray(schema)) {
     return;
   }
   const root = resolveRootSchema(schema as Record<string, unknown>);
   const properties = root?.properties;
-  if (typeof properties !== "object" || properties === null) return;
+  if (!isObjectOrArray(properties)) return;
   const offenders = FRAMEWORK_RESULT_KEYS.filter((key) =>
     isOpaque((properties as Record<string, unknown>)[key])
   );

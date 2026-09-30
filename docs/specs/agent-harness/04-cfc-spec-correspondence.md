@@ -4,7 +4,7 @@ Status: draft 0.1
 
 The `AH-CFC-*` clauses in [02-cfc-integration.md](02-cfc-integration.md) are a
 derivation. The authority they derive from is the Common Fabric Contextual Flow
-Control specification, `commontoolsinc/specs`, and in particular
+Control specification, `commonfabric/specs`, and in particular
 `cfc/18-runtime-implementation-profiles.md` §18.2-18.4. This document is the
 derivation itself: which CFC section each `AH-CFC` clause rests on, which
 clauses go beyond the authority, which if any are narrower than it, and which CFC
@@ -36,7 +36,7 @@ silent there rather than wrong.
 
 ## The pin
 
-Section numbers and quotations refer to `commontoolsinc/specs` at commit
+Section numbers and quotations refer to `commonfabric/specs` at commit
 `8b8613ea`. When that pin moves, this document is what gets re-derived: the
 correspondence is a claim about two texts, and it is only true of the texts it
 was read against.

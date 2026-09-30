@@ -7,8 +7,11 @@ pattern in the index through the console's `POST /api/index/feedback` route,
 signed with the console's fabric identity. A task places a panel in the current
 loom that streams the session live, and when the turn ends the panel is replaced
 by the finished piece, rendered in the person's own loom space under their own
-identity. `more <text>` continues the last session; a task that names a pattern
-id from `/patterns` has the session use that pattern.
+identity. Every task starts its own session; a task that names a pattern id from
+`/patterns` has the session use that pattern. The pill carries no way to
+continue a session yet: the console accepts a `sessionId` on a task, and the
+reference has to come from the piece the person is looking at (CT-2344,
+CT-2349).
 
 The arrangement rests on one fact: **the console and loom share one fabric.**
 The console runs against loom's toolshed, signs with loom's identity key, and
@@ -42,14 +45,15 @@ works at all, so they are worth knowing by name:
   toolshed reads `MEMORY_DIR` as; the console reads that variable as a directory
   to walk, so it is given the plain path. A `file://` URL there walks nothing
   and the console reads another store's cells as this space's.
-- **The `runsc-cfc` sidecar directories**, which are not loom's at all: the
-  Docker runtime registration names them in `--cfc-result-dir` and
-  `--cfc-invocation-context-dir`, and `docker info` reports what the running
-  daemon actually loaded. The harness asks only that they are named, so a
-  console pointed anywhere else starts cleanly and denies every observation of
-  the run. Fix a wrong one where the runtime is registered, then restart Docker
-  so the daemon reloads it — an edited `daemon.json` it has not read is not what
-  `docker info` reports, and the registration in force is the one that counts.
+- **The `runsc-cfc` sidecar directories**, on the Docker driver, which are not
+  loom's at all: the Docker runtime registration names them in
+  `--cfc-result-dir` and `--cfc-invocation-context-dir`, and `docker info`
+  reports what the running daemon actually loaded. The harness asks only that
+  they are named, so a console pointed anywhere else starts cleanly and denies
+  every observation of the run. Fix a wrong one where the runtime is registered,
+  then restart Docker so the daemon reloads it — an edited `daemon.json` it has
+  not read is not what `docker info` reports, and the registration in force is
+  the one that counts.
 
 The rest — the identity key at `defaults.identity`, the space at
 `defaults.local_space`, and the toolshed URL at `defaults.server_urls.toolshed`
@@ -85,11 +89,15 @@ deno task --cwd packages/cf-harness console:launch --instance <instance>
 
 It resolves the identity, the space and the toolshed URL from the instance's
 `pieces.json`, the store from `loom toolshed-store-dir`, and the two sidecar
-directories from the `runsc-cfc` registration `docker info` reports. It prints
-every value beside the record that decided it, and serves on 8135 — the port
-Weaver's harness console setting and loom's proxy both address. Read the
-printout before opening Weaver: a value that is wrong names where to fix it, and
-those are three different places.
+directories from the `runsc-cfc` registration `docker info` reports. A console
+whose environment selects the direct driver (`CF_HARNESS_SANDBOX_RUNTIME=runsc`,
+which a Loom that offers its native runtime sets for an instance that chose it)
+needs no sidecar directory and reads no Docker registration; the printout names
+its `runsc` binary, rootfs and CFC policy instead. It prints every value beside
+the record that decided it, and serves on 8135 — the port Weaver's harness
+console setting and loom's proxy both address. Read the printout before opening
+Weaver: a value that is wrong names where to fix it, and those are three
+different places.
 
 Without `--instance` there is no instance to read, so the identity and the space
 are named instead — `--fabric-identity`/`CF_IDENTITY` and
@@ -110,11 +118,12 @@ deno task --cwd packages/cf-harness console:launch --instance <instance> \
   -- --host-mount name=corpus,source=/absolute/corpus,target=/corpus
 ```
 
-**A console that cannot start does not take the fabric down.** It needs Docker
-and a connected model provider, and when either is missing the flag reports it
-in the script's output and in `packages/cf-harness/local-dev-console.log`, and
-the shell and toolshed keep running. That is the shape to expect: the pair is
-the fabric, and the console is a surface on it.
+**A console that cannot start does not take the fabric down.** It needs its
+sandbox runtime (Docker, unless the direct driver is selected) and a connected
+model provider, and when either is missing the flag reports it in the script's
+output and in `packages/cf-harness/local-dev-console.log`, and the shell and
+toolshed keep running. That is the shape to expect: the pair is the fabric, and
+the console is a surface on it.
 
 **One console per state directory.** The launcher names a directory per instance
 and port, so two consoles started this way keep separate runs, sessions and
@@ -277,13 +286,85 @@ Mac. Then, in Weaver's settings under Services:
 - `/cf-harness <task>` starts a fresh session and places the live panel in the
   current loom. A turn runs for minutes; the panel streams throughout, and the
   piece replaces it when the turn ends.
-- `more <text>` continues the last session.
 - `/feedback <patternId> up|down` records one vote on a pattern the index holds,
   signed with the console's fabric identity; the pill answers "recorded up for
   <patternId>" or the console's own refusal. An up vote is what promotes a
   contributed pattern's discoverability.
 - The console at its base URL holds every run: transcript, policy trace, the CFC
   withheld markers, and `deno task cfc-audit <run dir>` audits a family.
+
+## 7. Demo tasks
+
+[Running the cf-harness demos](DEMOS.md) carries the four demos proven end to
+end, in the order to run them, with the preflight to check first and the slug
+sentence that makes a prompt repeatable across takes.
+[DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md) carries a proof status for each task
+below, including the ones kept off that page.
+
+Three tasks, typed into the pill as written, exercise the arrangement end to
+end. Each names what has to be true before it is typed and what a passing run
+looks like, so an agent can say whether it will work before it is tried. The
+console's launch printout is the source for the first two conditions; loom
+writes it to `packages/cf-harness/local-dev-console.log` under the labs checkout
+it vendors.
+
+A task over a connector needs the console to hold that connector's grant: the
+printout carries a line such as `grant gmail-work (email)` or
+`grant plaid-sim (finance)`, naming both connection and class. A line reading
+`(none: …)` is a handle the instance injected that the console could not name,
+for the reason it prints; a connector the instance has not injected has no line
+at all. Either way a task over that connector authors against nothing. Each task
+below names the grants it reads.
+
+### Bills this month, from mail and bank together
+
+```text
+/cf-harness Show me the bills I need to deal with this month, using both my email and my bank transactions. From email, look only at the most recent 200 messages from this month and ignore message bodies; decide what counts as a bill from the subject line and sender with plain text rules. From my bank, look at this month's transactions and pick out the ones that look like bill payments (utilities, subscriptions, insurance, rent) with plain text rules on the merchant name. Where an email bill and a bank transaction look like the same bill, show them together as one paid bill; otherwise list unpaid email bills and unmatched bank bill payments separately. Do not send my mail or my transactions to an AI model.
+```
+
+Needs both grants. Passes when the piece lists email bills and bank bill
+payments with real rows in both; whether it pairs them is a property of the
+matcher it wrote that run, and a pane of unpaid bills over unmatched payments is
+still a pass. Expect about five minutes, most of it before the first tool call
+shows in the pane.
+
+### A skill's script, run in the sandbox, folded into a piece
+
+```text
+/cf-harness Use the skill commonfabric/labs/cf-spend-digest: run its budget script and build me a piece showing my actual spending against those budgets from my bank transactions; slug budget-digest-weaver.
+```
+
+Needs the `finance` grant and two more things. The console must run skill
+scripts: the printout's `skill scripts` line reads `run in the sandbox`, which
+loom's launch sets; a line reading `not run` means the child's script call is
+refused, so whatever piece the run goes on to build carries no budgets from the
+script and this demo cannot pass. And the pattern index must hold the seeded
+connector readers, which `deno task seed-pattern-index` publishes from
+`packages/patterns/primitives`; follow the
+[seeding guidance](../README.md#seeding-the-pattern-index) for raw readers and
+human-facing pieces. An index seeded from a reader that fails closed on the bank
+table's row-label rule yields a digest of zeros with an SQLite error in its
+alert, so a digest of zeros is a failed run, not an empty month. Passes when the
+five budgets from the script's output stand beside non-zero spend for the month.
+The skill id is the full `owner/repo/slug`; a bare slug is ambiguous and the run
+will not guess.
+
+### Revise a piece in place
+
+```text
+/cf-harness Add "overdue" to the words the email classifier treats as bill signals, and change nothing else. Revise this piece in place.
+```
+
+Typed from the pane of the piece the first task built; it reads no grant of its
+own, since it revises the attached piece. Passes when the piece gains a new
+revision whose source differs from the previous one by that word alone, and the
+piece menu offers the previous version back.
+
+This task depends on the pill attaching the focused pane's piece as an input
+cell (CT-2344). Until that lands the pill sends the text alone, the run holds no
+handle to the piece, and its child spends the turn searching the space for a
+piece it was never handed. Loom's own conversation path already attaches the
+piece, so the same request works from there today.
 
 ## Limits
 

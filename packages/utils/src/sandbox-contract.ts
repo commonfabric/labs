@@ -91,6 +91,23 @@ export const SANDBOX_WITHHELD_GLOBALS = Object.freeze(
     // number, date, and currency formatting needs no `Intl`.
     "Intl",
 
+    // `fetch` is network egress the runtime never sees. A pattern reaches the
+    // network through the fetch builtins (`fetchJson`, `fetchText`,
+    // `fetchBinary`, `fetchJsonUnchecked`, `fetchProgram`), which are reactive
+    // nodes the runtime issues on the pattern's behalf: it records each request
+    // as a CFC sink request, which a deployment's ceiling then gates, and signs
+    // it when it targets a first-party route. An ambient `fetch` performs the
+    // same egress with no record and nothing to gate.
+    "fetch",
+
+    // The web request globals. Each is inert on its own — none reaches the
+    // network — and each exists to build or read a `fetch` call, which nothing
+    // in a compartment can make. Endowing one again is a question of whether
+    // something needs it, not of what it would grant.
+    "Headers",
+    "Request",
+    "Response",
+
     // Web globals the runtime has never endowed. Unlike the entries above,
     // these are absent because nothing has supplied them, not because they are
     // unsafe.

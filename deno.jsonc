@@ -1,7 +1,6 @@
 {
   "workspace": [
     "./packages/api",
-    "./packages/background-piece-service",
     "./packages/piece",
     "./packages/cli",
     "./packages/connectors/agents/connector",
@@ -32,7 +31,6 @@
     "./packages/memory",
     "./packages/navigation",
     "./packages/patterns",
-    "./packages/patterns/auth",
     "./packages/pure-json",
     "./packages/runner",
     "./packages/runtime-client",
@@ -53,6 +51,7 @@
     "check-docs": "deno run --allow-read --allow-write --allow-run --allow-env ./docs/check.ts",
     "check-no-waitfor": "deno run --allow-read ./tasks/check-no-waitfor.ts",
     "check-conflict-markers": "deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts",
+    "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
     "check-docs-history-index": "deno run --allow-read ./tasks/check-docs-history-index.ts",
@@ -65,14 +64,16 @@
     "pattern-compat": "deno run -A ./tasks/pattern-compat.ts",
     "pattern-vintage": "deno run -A ./tasks/pattern-vintage.ts",
     "check-baselines-append-only": "deno run --allow-read --allow-run=git ./tasks/check-baselines-append-only.ts",
+    "check-bench-workflow": "deno run --allow-read ./tasks/check-bench-workflow.ts",
     "check-test-aliases": "deno run --allow-read --allow-run=git ./tasks/check-test-aliases.ts",
-    "check-test-topology": "deno run --allow-read --allow-env --allow-net ./tasks/check-test-topology.ts",
+    "check-test-topology": "deno run --allow-read --allow-env --allow-net --allow-run=git ./tasks/check-test-topology.ts",
     "check-pattern-tiers": "deno run --allow-read ./tasks/check-pattern-tiers.ts",
     // The gate above is what CI runs, and it cannot write. Applying a marker is
     // this separate task, so the permission to rewrite a pattern comes with
     // asking for it.
     "fix-pattern-tiers": "deno run --allow-read --allow-write ./tasks/check-pattern-tiers.ts --write",
     "check-skill-facts": "deno run --allow-read --allow-run=git ./tasks/check-skill-facts.ts",
+    "check-address-examples": "deno run --allow-read --allow-run=git ./tasks/check-address-examples.ts",
     "check-verb-session-sync": "deno run --allow-read ./tasks/check-verb-session-sync.ts",
     // Building the CLI's command tree is what this walks, and mounting it
     // resolves the whole CLI — including the SQLite library `cf inspect`
@@ -86,6 +87,10 @@
     "agents-host": "deno run -A ./packages/connectors/agents/host/main.ts",
     "github-host": "deno run -A ./packages/connectors/github/host/main.ts",
     "test": "./tasks/test.ts",
+    // The seed each `deno test` in the workspace shuffles by. Every test
+    // task substitutes this task's output into its own `--shuffle`, which
+    // is what makes every run of one commit agree on one order.
+    "test-seed": "deno run --allow-env=CF_TEST_SHUFFLE_SEED --allow-run=git ./tasks/test-seed.ts",
     "test-all": "echo \"Use 'deno task test' instead.\" && exit 1",
     "run-recorded": "./tasks/run-recorded.ts",
     "test-records-key": "./tasks/test-records-key.ts",
@@ -152,6 +157,7 @@
     "plugins": [
       "./tasks/lint-access-for-testing-only.ts",
       "./tasks/lint-bench-console.ts",
+      "./tasks/lint-debug-str.ts",
       "./tasks/lint-import-list.ts",
       "./tasks/lint-inline-imports.ts",
       "./tasks/lint-self-import.ts"
@@ -175,6 +181,9 @@
       // Attached data files travel byte-for-byte and their bytes are asserted
       // on; formatting them would rewrite the thing under test.
       "packages/cli/integration/pattern/data/",
+      // Language fixtures reproduce files from the surveyed repositories, and
+      // the viewer is tested on those bytes.
+      "packages/cli/test/fixtures/view-language/",
       "packages/ui/src/v2/components/cf-chart/cf-chart.ts",
       "packages/ui/src/v2/components/cf-chart/lib/axes.ts",
       "packages/ui/src/v2/components/cf-chart/lib/render.ts",

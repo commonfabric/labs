@@ -64,6 +64,29 @@ async function queryState(
   return ((await session.read([key])) ?? {}) as QueryState;
 }
 
+/** Whether `key` has settled in `session` on exactly `rows` admitted rows. */
+async function settled(
+  session: MultiRuntimeSession,
+  key: string,
+  rows: number,
+): Promise<boolean> {
+  const state = await queryState(session, key);
+  return state.pending === false && state.error === undefined &&
+    (state.result?.length ?? -1) === rows;
+}
+
+/**
+ * The steady state the seeded table settles to — one entry per session and
+ * query, naming the rows that session's reader is admitted.
+ */
+const STEADY_ROWS: readonly [label: string, key: string, rows: number][] = [
+  ["alice", "qAll", 3],
+  ["bob", "qAll", 3],
+  ["alice", "qClear", 2],
+  ["bob", "qClear", 1],
+  ["alice-tab2", "qClear", 2],
+];
+
 describe("sqlite read-time clearance across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let alice: MultiRuntimeSession;
@@ -90,6 +113,25 @@ describe("sqlite read-time clearance across runtimes", () => {
     alice = harness.session("alice");
     bob = harness.session("bob");
     aliceTab2 = harness.session("alice-tab2");
+
+    // One writer seeds rows for BOTH readers (the write gate labels each row
+    // from its own data; it does not require the writer to be a reader). The
+    // seeded table is the fixture every step reads, not the first step's side
+    // effect: CI selects individual tests, so a step run without its
+    // neighbors has to find the same table they do.
+    await alice.send("seed", {
+      rows: [
+        { reader: alice.identity.did(), body: "alice-1" },
+        { reader: alice.identity.did(), body: "alice-2" },
+        { reader: bob.identity.did(), body: "bob-only" },
+      ],
+    });
+    for (const [label, key, rows] of STEADY_ROWS) {
+      await harness.waitFor(
+        `${label}'s ${key} settles on ${rows} rows`,
+        () => settled(harness.session(label), key, rows),
+      );
+    }
   });
 
   afterAll(async () => {
@@ -100,49 +142,23 @@ describe("sqlite read-time clearance across runtimes", () => {
     const aliceDid = alice.identity.did();
     const bobDid = bob.identity.did();
 
-    // One writer seeds rows for BOTH readers (the write gate labels each row
-    // from its own data; it does not require the writer to be a reader).
-    await alice.send("seed", {
-      rows: [
-        { reader: aliceDid, body: "alice-1" },
-        { reader: aliceDid, body: "alice-2" },
-        { reader: bobDid, body: "bob-only" },
-      ],
-    });
-
-    const settled = async (
-      session: MultiRuntimeSession,
-      key: string,
-      rows: number,
-    ): Promise<QueryState | undefined> => {
-      const state = await queryState(session, key);
-      return state.pending === false && state.error === undefined &&
-          (state.result?.length ?? -1) === rows
-        ? state
-        : undefined;
-    };
-
     // Baseline sanity: without clearance BOTH readers see all three rows —
     // the table is genuinely shared, so any qClear narrowing is clearance-made.
-    await harness.waitFor(
-      "baseline query settles on all rows in both runtimes",
-      async () =>
-        (await settled(alice, "qAll", 3)) !== undefined &&
-        (await settled(bob, "qAll", 3)) !== undefined,
+    const wholeTable = ["alice-1", "alice-2", "bob-only"];
+    assertEquals(
+      (await queryState(alice, "qAll")).result?.map((r) => r.body),
+      wholeTable,
+      "alice sees the whole table without clearance",
+    );
+    assertEquals(
+      (await queryState(bob, "qAll")).result?.map((r) => r.body),
+      wholeTable,
+      "bob sees the whole table without clearance",
     );
 
     // THE POINT — the cleared query is per-reader: each runtime's acting
     // principal admits exactly the rows naming it, with a per-reader
     // withheld audit count.
-    await harness.waitFor(
-      "alice's cleared query settles on her two rows",
-      async () => (await settled(alice, "qClear", 2)) !== undefined,
-    );
-    await harness.waitFor(
-      "bob's cleared query settles on his one row",
-      async () => (await settled(bob, "qClear", 1)) !== undefined,
-    );
-
     const aliceClear = await queryState(alice, "qClear");
     assertEquals(
       aliceClear.result?.map((r) => r.body),
@@ -282,17 +298,12 @@ describe("sqlite read-time clearance across runtimes", () => {
     // live-topology guard against that regression, in both arms (OFF: both
     // tabs hash their own — identical — ambient reader; ON: one served
     // user-granularity identity).
-    const aliceDid = alice.identity.did();
-    assertEquals(aliceTab2.identity.did(), aliceDid, "one user, two tabs");
-
-    await harness.waitFor(
-      "alice's second session settles on her cleared rows",
-      async () => {
-        const state = await queryState(aliceTab2, "qClear");
-        return state.pending === false && state.error === undefined &&
-          (state.result?.length ?? -1) === 2;
-      },
+    assertEquals(
+      aliceTab2.identity.did(),
+      alice.identity.did(),
+      "one user, two tabs",
     );
+
     const tab2Clear = await queryState(aliceTab2, "qClear");
     assertEquals(
       tab2Clear.result?.map((r) => r.body),

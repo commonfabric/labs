@@ -128,12 +128,21 @@ export const MailboxMonthHeaders = pattern<
   MailboxMonthHeadersInput,
   MailboxMonthHeadersOutput
 >(({ mail, month, limit }) => {
+  // Each param is a value READ out of its input, not the input itself. A
+  // query binds the reference it is handed and resolves it without the
+  // declared default, so an input a caller forwarded and nobody supplied
+  // reaches the query as `undefined`, and an undefined param fails the whole
+  // read rather than resolving to what the SQL above answers an empty month
+  // and an absent limit with.
+  const monthParam = computed(() => month);
+  const limitParam = computed(() => limit);
+
   const monthRead = mail.query<{ month: string }>(monthSql(), {
-    params: [month],
+    params: [monthParam],
     scope: "session",
   });
   const headersRead = mail.query<MailboxHeader>(headersSql(), {
-    params: [month, limit],
+    params: [monthParam, limitParam],
     scope: "session",
   });
 

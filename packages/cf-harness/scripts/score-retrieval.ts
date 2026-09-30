@@ -1,10 +1,10 @@
 /**
- * Measures `searchPatterns` against the labelled query set in
+ * Measures client-visible `searchPatterns` against the labeled query set in
  * `pattern-index-retrieval-queries.json` and writes a report.
  *
- * Read-only against the index: `listPatterns`, `searchPatterns` and nothing
- * else. It publishes nothing and records no event, so it can be run against a
- * live corpus while that corpus is being written to.
+ * Uses `listPatterns`, `searchPatterns`, and metadata-only `getPattern` reads
+ * for successor resolution. It publishes nothing and records no event, so it
+ * can be run against a live corpus while that corpus is being written to.
  *
  * Usage, from `packages/cf-harness`:
  *

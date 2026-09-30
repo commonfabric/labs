@@ -1,7 +1,7 @@
 # Configuration Reference
 
 A categorized reference for environment variables, build flags, CLI args, and
-developer tasks across the Common Tools labs repo.
+developer tasks across the Common Fabric labs repo.
 
 This doc is **not** the source of truth — it points to the schemas that are.
 For exhaustive, always-current lists check the Zod schemas linked at the top
@@ -11,7 +11,6 @@ of each section.
 |---|---|
 | Toolshed (server) | [`packages/toolshed/env.ts`](../../packages/toolshed/env.ts) |
 | Shell (browser, build-time) | [`packages/shell/felt.config.ts`](../../packages/shell/felt.config.ts), [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts) |
-| Background piece service | [`packages/background-piece-service/src/env.ts`](../../packages/background-piece-service/src/env.ts) |
 | CLI | [`packages/cli/launcher.ts`](../../packages/cli/launcher.ts), [`packages/cli/mod.ts`](../../packages/cli/mod.ts) |
 | cf-harness | [`packages/cf-harness/src/cli.ts`](../../packages/cf-harness/src/cli.ts), [`packages/cf-harness/src/provenance.ts`](../../packages/cf-harness/src/provenance.ts) |
 | Integration tests | [`packages/integration/env.ts`](../../packages/integration/env.ts) |
@@ -34,7 +33,7 @@ Required only if you're running the toolshed.
 | `LOG_LEVEL` | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
 | `DISABLE_LOG_REQ_RES` | `false` | Suppress per-request log lines. |
 | `CACHE_DIR` | `./cache` | Local disk cache root. |
-| `API_URL` | `http://localhost:8000` | Self-referential URL used for internal server-to-server requests. |
+| `API_URL` | `http://localhost:8000` | Self-referential URL used for internal server-to-server requests, and the audience authority every first-party proof on the signed invitation and inbox routes is checked against. Set it to the public origin clients dial, or those routes refuse every correctly signed request; the server prints it at startup as its configured first-party authority. |
 | `SHELL_URL` | _(unset)_ | When set, toolshed proxies non-API paths to this upstream — used by local dev to route to the Shell dev server on `:5173`. |
 
 ---
@@ -61,17 +60,20 @@ explains why it lives in the toolshed rather than in `@commonfabric/llm`.
 
 | Var | Default | Notes |
 |---|---|---|
-| `CFTS_AI_GATEWAY_URL` | `https://llm.stage.commontools.dev` | OpenAI-compatible `/v1/models` endpoint. Toolshed probes it as it starts up, alongside binding its port rather than ahead of it; reachable models are registered and `gateway:claude-sonnet-4-6` becomes the default when present. **The default URL is Tailscale-only — external users will not be able to reach it.** That fallback path is supported: an unreachable gateway logs a warning and the direct-provider models continue to work. A request naming a direct-provider model such as `anthropic:claude-sonnet-4-6` is served while the probe is still out, because that model was registered as toolshed loaded. What waits for the probe is a request naming a model that is not registered yet — a `gateway:` one, the `default` alias, or a name that is no model at all — and `GET /models`, which answers for the whole list. Off Tailscale that wait is however long the connection takes to fail, so set to `""` to skip the probe entirely. |
+| `CFTS_AI_GATEWAY_URL` | `https://llm.stage.commontools.dev` | OpenAI-compatible `/v1/models` endpoint. Toolshed probes it as it starts up, alongside binding its port rather than ahead of it; reachable models are registered and `gateway:claude-sonnet-5` becomes the default when present. **The default URL is Tailscale-only — external users will not be able to reach it.** That fallback path is supported: an unreachable gateway logs a warning and the direct-provider models continue to work. A request naming a direct-provider model such as `anthropic:claude-sonnet-4-6` is served while the probe is still out, because that model was registered as toolshed loaded. What waits for the probe is a request naming a model that is not registered yet — a `gateway:` one, the `default` alias, or a name that is no model at all — and `GET /models`, which answers for the whole list. Off Tailscale that wait is however long the connection takes to fail, so set to `""` to skip the probe entirely. |
 
 **Default model resolution order** (defined in `models.ts` as
 `DEFAULT_MODEL_CANDIDATES`):
 
-1. `gateway:claude-sonnet-4-6`
-2. `anthropic:claude-sonnet-4-6`
-3. `anthropic:claude-sonnet-4-5`
+1. `gateway:claude-sonnet-5`
+2. `gateway:gpt-5.6-luna`
+3. `gateway:gemini-3.5-flash`
 
-The first candidate registered becomes the `default` alias and the value used
-for `TASK_MODELS.coding` / `TASK_MODELS.json`.
+The first available candidate becomes the `default` alias and the value used
+for `TASK_MODELS.coding` / `TASK_MODELS.json`. Only these candidates can become
+the default. If none is registered, the alias remains unavailable even when
+other language models are registered. A request naming an unavailable `default`
+or an unknown model is rejected.
 
 ---
 
@@ -115,18 +117,17 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 
 ## Identity & auth
 
-There are three interacting identity concepts. Pick one column based on which
+There are two interacting identity concepts. Pick one column based on which
 process you're configuring.
 
 | Process | Path-to-keyfile var | Passphrase var | Default fallback |
 |---|---|---|---|
 | Toolshed | `IDENTITY` | `IDENTITY_PASSPHRASE` _(deprecated)_ | `"implicit trust"` (dev only) |
-| Background piece service | `IDENTITY` | `OPERATOR_PASS` | `"implicit trust"` (dev only) |
 | CF CLI | `CF_IDENTITY` env or `--identity <path>` | _(none)_ | _(none — error if remote)_ |
 
-For local dev, all three default to the implicit-trust passphrase so they
-share an identity automatically. To match the CLI to the local server (only
-needed for operator/admin tasks on your own localhost):
+For local dev, toolshed defaults to the implicit-trust passphrase. To match
+the CLI to the local server (only needed for operator/admin tasks on your own
+localhost):
 
 ```bash
 deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
@@ -151,7 +152,7 @@ The toolshed-embedded memory service has two modes:
 | `DB_PATH` | _(unset)_ | **Single-file mode** — absolute path to one SQLite database holding every space, instead of a file per space. Takes precedence over `MEMORY_DIR`. Validated as an absolute path. |
 | `MEMORY_URL` | `http://localhost:8000` | Where other components reach the memory service. |
 | `MEMORY_ACL_MODE` | `enforce` | Space ACL policy: `off`, `observe`, or `enforce`. `observe` logs ordinary access shortfalls, while malformed ACLs and fresh-space genesis violations still fail closed. |
-| `MEMORY_DOCUMENT_CACHE_BUDGET_BYTES` | _(engine default, 128 MiB)_ | Byte budget of each space's decoded-document cache on the memory server, in encoded UTF-8 bytes of the documents as stored (expect a few times that in heap per active space; a Topics-board page load retains ~18 MB across ~13,300 documents). Least-recently-read eviction under a budget smaller than a corpus's working set serves nothing, so lower it only with `/api/health/stats` → `documentCaches` in view: `evictions` climbing for a space being read repeatedly means it no longer fits. |
+| `MEMORY_DOCUMENT_CACHE_BUDGET_BYTES` | _(engine default, 128 MiB)_ | Byte budget of each space's decoded-document cache on the memory server, in encoded UTF-8 bytes of the documents as stored (expect a few times that in heap per active space; a Topics-board page load retains ~18 MB across ~13,300 documents). Least-recently-read eviction under a budget smaller than a corpus's working set serves nothing, so lower it only with `/api/health/stats` → `documentCaches` in view: `evictions` climbing for a space being read repeatedly means it no longer fits, and `patchReplays` far above `misses` means a document under a run of patch commits is being lost between the commits that write it, each one rebuilding it from its base or snapshot rather than from the revision before it. A resident document still costs one row per commit, so the ratio is the signal rather than the count. |
 | `MEMORY_DOCUMENT_CACHE_MAX_ENTRIES` | _(engine default, 65536)_ | Entry cap of the same cache — the cardinality backstop beside the byte budget, kept well above any real working set (a Topics-board page load is ~13,300 documents). |
 | `MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES` | _(server default, 256 MiB)_ | Bound across every space's document cache on the memory server this process hosts, held as documents are cached, least-recently-used space first. The per-space budget decides what one corpus may keep; this decides what the server keeps in total (one memory server per toolshed process, so in deployment: the process). `documentCaches.totalBudgetEvictions` on `/api/health/stats` counts what holding it has cost. |
 | `RATE_LIMIT_TRUST_FORWARDED_FOR` | `false` | Set to `true` ONLY when a trusted reverse proxy that overwrites `X-Forwarded-For` sits in front of toolshed. Control-plane rate limiting keys on the real TCP peer by default. Enabling it without such a proxy makes the header client-controlled and the limiter a no-op; leaving it off behind a proxy collapses every caller onto one bucket. |
@@ -188,11 +189,11 @@ Used by `/routes/sandbox/exec` to execute untrusted pattern code.
 | `SANDBOX_TOOLSHED_URL` | _(falls back to `API_URL`)_ | URL injected into sandboxes as `CF_API_URL` so they can call back to this toolshed. |
 
 The executor itself is not in this repo; the toolshed only forwards to
-`SANDBOX_SERVICE_URL`. The service is `commontoolsinc/common-cluster` (Go): its
+`SANDBOX_SERVICE_URL`. The service is `commonfabric/common-cluster` (Go): its
 `node-agent` serves `/v1/sandboxes` and runs each sandbox as a gVisor container
 on a per-node ZFS dataset. The `runsc` runtime and `sandboxexec` library come
-from `commontoolsinc/gvisor` (branch `cfc_v2`), and the cluster is provisioned by
-`commontoolsinc/infra` (Terraform).
+from `commonfabric/gvisor` (branch `cfc_v2`), and the cluster is provisioned by
+`commonfabric/infra` (Terraform).
 
 ---
 
@@ -260,7 +261,7 @@ variables only decide whether the module installs one of its own on startup.
 [`docs/development/EXPERIMENTAL_OPTIONS.md`](./EXPERIMENTAL_OPTIONS.md) is the
 central registry of every experimental flag: what each gates, who added it, its
 default, its planned end state, and its removal path, plus the propagation paths
-(server / shell / bg-piece / CLI) and verification steps. Briefly:
+(server / shell / CLI) and verification steps. Briefly:
 
 - Server-side toggles take effect on restart.
 - Server-authoritative flags propagate to clients not built alongside the
@@ -305,7 +306,6 @@ Most shell config is **build-time**: esbuild injects defines in
 |---|---|---|---|
 | `PRODUCTION` | `$ENVIRONMENT` (`"production"` if set, else `"development"`) | _(unset = dev)_ | Triggers minified bundle and disables sourcemaps. |
 | `API_URL` | `$API_URL` | falls back to `location.origin` | Backend the shell calls. |
-| `PRESENCE_URL` | `$PRESENCE_URL` | _(unset)_ | WebSocket endpoint provided to collaborative editors for ephemeral co-presence. Must be a credential-free `ws:`/`wss:` URL; `packages/shell/src/lib/presence-url.ts` rejects anything else and fails the build. When unset, editor co-presence stays disabled unless a component supplies its own endpoint. Both deployed shells take it from a repository variable — see [Deploying a commit](./deploying.md). |
 | `COMMIT_SHA` | `$COMMIT_SHA` | _(unset)_ | Surfaced for diagnostics and used by deployed shells to select the immutable `/builds/<sha>` worker asset graph. In development the explicit worker URL remains `/scripts/worker-runtime.js`. It does not authorize system-pattern updates. |
 | `EXPERIMENTAL_*` (`MODERN_CELL_REP`, `COMPUTED_CELL_IDS`, `SERVER_EXECUTION`, `CONTENT_ADDRESSED_SCHEMAS`, `READER_SCHEMA_PRECEDENCE`) | `EXPERIMENTAL.<flag>` | _(unset)_ | Per-flag build-time values; changing one requires a rebuild. See experimental flags. |
 | `SHELL_PORT` | _(server-only)_ | `5173` (from `ports.json`) | Dev server port. |
@@ -330,7 +330,7 @@ the labs checkout and dispatches to `packages/cli/mod.ts`.
 | `CF_CLI_NAME` | `cf` | Override the displayed CLI name (for branded builds). |
 | `CF_CLI_TRACE_TIMINGS` | `0` | Set to `1` for detailed timing traces. |
 | `CF_SKIP_VERSION_CHECK` | _(unset)_ | Set to any non-empty value to skip the cf ↔ server version check. By default, server-touching commands compare this cf's commit (baked build metadata, or the checkout's HEAD for source runs) with the server's self-reported commit — the `gitSha` riding the `/_health` response the health check already fetches (same value as `/api/meta`) — and warn on stderr when they differ. Source runs grade the warning by git ancestry: cf newer than the server is the normal local-dev case and stays silent unless the command fails, where its note prints as neutral version context. Commit distance alone does not establish incompatibility or explain a failure. `cf piece call` suppresses the held note for confirmed unknown verbs, rejected payloads, and argument validation failures before dispatch; cf **older** than the server gets the loud OUTDATED warning immediately; diverged or unorderable pairs (including all compiled binaries, which carry no history) get the undirected wording immediately. |
-| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host, `cast-admin`. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
+| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
 | `CF_CLI_INTEGRATION_USE_LOCAL` | _(unset)_ | Used by integration tests to dispatch through local source rather than a built binary. |
 | `CF_LABS_ROOT` | _(unset)_ | Read by `bin/cf` only. Selects which labs checkout answers, overriding the nearest one walking up from the cwd. Must be a checkout (a directory with `packages/cli/launcher.ts`) or `bin/cf` exits 2. Chooses the CLI, not the working directory. |
 
@@ -397,17 +397,6 @@ the service that launched it, `ENV=test` to recognize the unit suite,
 
 ---
 
-## Background piece service
-
-| Var | Default | Notes |
-|---|---|---|
-| `OPERATOR_PASS` | `"implicit trust"` | Passphrase for implicit identity. Must match toolshed's identity in dev. |
-| `IDENTITY` | _(unset)_ | Path to keyfile; takes precedence over `OPERATOR_PASS`. |
-| `API_URL` | `http://localhost:8000` | Toolshed URL the service calls. |
-| `EXPERIMENTAL_MODERN_CELL_REP` | _(unset)_ | See experimental flags. |
-
----
-
 ## Integration tests
 
 [`packages/integration/env.ts`](../../packages/integration/env.ts) reads these
@@ -438,7 +427,7 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | `check` | Type-check all packages (`./tasks/check.sh`). |
 | `test` | Run all package tests (`./tasks/test.ts`). |
 | `integration` | Run integration tests (`./tasks/integration.ts`). |
-| `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed`, `bg-piece-service`, or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
+| `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed` or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
 | `cf` | Run the CLI via the launcher. |
 | `initialize-db` | Initialize the local development database. |
 | `install-hooks` | Install git pre-commit hooks. |
@@ -473,18 +462,6 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | `test` | Unit tests. |
 | `integration`, `fuse-integration`, `acl-integration` | Integration suites against a local toolshed. |
 
-### Background piece service (`packages/background-piece-service`)
-
-| Task | What it does |
-|---|---|
-| `start` | Run from source. |
-| `add-admin-piece` | One-time setup: cast the admin piece into the system space. |
-| `test` | Run unit tests. |
-| `check` | Type-check source files. |
-| `lint` | Lint source files. |
-| `fmt` | Format package files. |
-| `help` | Service help. |
-
 ---
 
 ## Where defaults live
@@ -496,10 +473,9 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
   - `SANDBOX_SERVICE_URL` → `https://sandbox.stage.commontools.dev`.
   Both fall back gracefully when unreachable, but expect logs warning about
   the failed probes if you're off the corporate network.
-- **`"implicit trust"`** appears as the identity-passphrase default in three
-  places (toolshed `IDENTITY_PASSPHRASE`, bg-service `OPERATOR_PASS`, and the
-  CLI dev recipe). They must match for those three processes to share an
-  identity in local dev.
+- **`"implicit trust"`** appears as the identity-passphrase default in two
+  places (toolshed `IDENTITY_PASSPHRASE` and the CLI dev recipe). They must
+  match for toolshed and the CLI to share an identity in local dev.
 
 ---
 
@@ -518,10 +494,13 @@ CFTS_AI_LLM_ANTHROPIC_API_KEY=sk-ant-...
 CFTS_AI_GATEWAY_URL=""        # silence the off-Tailscale gateway probe
 ```
 
+Name a registered Anthropic model explicitly in LLM requests. This setup has no
+gateway candidate for the `default` alias.
+
 **Local dev, on Tailscale, using the gateway:**
 ```bash
 # Defaults are fine. CFTS_AI_GATEWAY_URL already points at stage.
-# default model resolves to gateway:claude-sonnet-4-6.
+# default prefers gateway:claude-sonnet-5 when it is registered.
 ```
 
 **Production deploy:**

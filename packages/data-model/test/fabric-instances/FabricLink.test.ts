@@ -3,10 +3,11 @@
  * arbitrary nested values, a stored schema among them.
  *
  * Being an instance rather than a primitive is the first consequence -- a link
- * is mutable until frozen rather than born immutable. The payload is validated
- * on the way in, and the keys it refuses are the prototype-bearing ones: a
- * payload is a plain record, and a key that would reach the prototype chain is
- * not data.
+ * is mutable until frozen rather than born immutable. The payload's own layer
+ * is the link's internal state, though, and is frozen from construction on;
+ * its values are held as supplied. The payload is validated on the way in,
+ * and the keys it refuses are the prototype-bearing ones: a payload is a plain
+ * record, and a key that would reach the prototype chain is not data.
  *
  * Cloning carries the interesting promises. A frozen deep clone shares an
  * already-deep-frozen subtree rather than copying it, a mutable deep clone
@@ -18,24 +19,24 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  cloneIfNecessary,
+  deepFreeze,
   FabricInstance,
   FabricPrimitive,
+  hashOf,
+  isDeepFrozen,
   type MutableFabricPlainObjectLayer,
-} from "@/interface.ts";
+} from "@";
 import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+} from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricLink } from "@/fabric-instances";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
-import { cloneIfNecessary } from "@/value-clone.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
-import { hashOf } from "@/value-hash.ts";
 
 describe("FabricLink", () => {
   it("extends `FabricInstance` (not `FabricPrimitive`)", () => {
@@ -55,7 +56,39 @@ describe("FabricLink", () => {
         overwrite: "redirect",
       };
       const link = new FabricLink(payload);
-      expect(link.payload).toBe(payload);
+      expect(link.payload).toEqual(payload);
+    });
+
+    it("keeps a frozen copy of an unfrozen payload, leaving the payload unfrozen", () => {
+      const payload = { id: "fid1:abc" };
+      const link = new FabricLink(payload);
+
+      expect(link.payload).not.toBe(payload);
+      expect(Object.isFrozen(link.payload)).toBe(true);
+      expect(Object.isFrozen(payload)).toBe(false);
+    });
+
+    it("keeps a frozen payload as itself", () => {
+      const payload = Object.freeze({ id: "fid1:abc" });
+
+      expect(new FabricLink(payload).payload).toBe(payload);
+    });
+
+    it("is unaffected by a later change to the payload it was given", () => {
+      const payload: Record<string, unknown> = { id: "fid1:abc" };
+      const link = new FabricLink(payload as { id: string });
+      payload.id = "fid1:xyz";
+      payload.path = ["a"];
+
+      expect(link.payload).toEqual({ id: "fid1:abc" });
+    });
+
+    it("holds the payload's values as supplied, frozen or not", () => {
+      const schema = { type: "object" };
+      const link = new FabricLink({ id: "fid1:abc", schema });
+
+      expect(link.payload.schema).toBe(schema);
+      expect(Object.isFrozen(schema)).toBe(false);
     });
 
     it("is mutable until frozen (not born frozen, unlike a primitive)", () => {
@@ -149,12 +182,16 @@ describe("FabricLink", () => {
       });
 
       it("returns an independent mutable clone (no shared payload structure)", () => {
-        const link = new FabricLink({ id: "fid1:abc" });
+        const link = new FabricLink({
+          id: "fid1:abc",
+          schema: { type: "object" },
+        });
         const clone = link.deepClone(false) as FabricLink;
         expect(Object.isFrozen(clone)).toBe(false);
         expect(clone.payload).not.toBe(link.payload);
-        (clone.payload as MutableFabricPlainObjectLayer).id = "fid1:xyz";
-        expect(link.payload.id).toBe("fid1:abc");
+        expect(clone.payload.schema).not.toBe(link.payload.schema);
+        (clone.payload.schema as MutableFabricPlainObjectLayer).type = "array";
+        expect(link.payload.schema).toEqual({ type: "object" });
       });
 
       it("returns a frozen clone that identity-shares an already-deep-frozen payload subtree", () => {
@@ -214,6 +251,13 @@ describe("FabricLink", () => {
             id: "fid1:abc",
             path: ["a", "b"],
           });
+        });
+
+        it("encodes to frozen state, for a link that is not frozen", () => {
+          const link = new FabricLink({ id: "fid1:abc" });
+
+          expect(Object.isFrozen(link)).toBe(false);
+          expect(Object.isFrozen(codec.encode(link, env))).toBe(true);
         });
       });
 

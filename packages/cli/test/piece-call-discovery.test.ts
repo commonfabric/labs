@@ -190,10 +190,10 @@ describe("piece-call-discovery", () => {
           "Available verbs (including wrappers and deprecated verbs): `addItem`.",
         );
         expect(errors[0]).toContain(
-          `cf piece describe --cell /@${space}/${config.piece}`,
+          `cf piece describe --cell //${space}/${config.piece}@space`,
         );
         expect(errors[0]).toContain(
-          `cf cell get --cell /@${space}/${config.piece} <field>`,
+          `cf cell get --cell //${space}/${config.piece}@space <field>`,
         );
         expect(phases).toEqual([]);
         expect(outputs).toEqual([]);

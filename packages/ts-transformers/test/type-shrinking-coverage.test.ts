@@ -1,9 +1,10 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import ts from "typescript";
 
-import type {
-  CapabilityParamSummary,
-  TransformationContext,
+import {
+  type CapabilityParamSummary,
+  CrossStageState,
+  type TransformationContext,
 } from "../src/core/mod.ts";
 import {
   applyCapabilityDefaultsToTypeNode,
@@ -165,9 +166,7 @@ function createContext(sourceFile: ts.SourceFile): {
     sourceFile,
     factory: ts.factory,
     options: {},
-    state: {
-      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
-    },
+    state: new CrossStageState(),
     reportDiagnostic: (d: CollectedDiagnostic) => {
       diagnostics.push({
         severity: d.severity,

@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import type { HarnessFetch } from "../contracts/http-fetch.ts";
@@ -357,8 +358,7 @@ export const createWebFetchTool = (
 export const isWebFetchToolSuccessOutput = (
   output: unknown,
 ): output is WebFetchToolSuccessOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "type" in output &&
   output.type === "cf-harness.web-fetch-result" &&
   "outputId" in output &&
@@ -367,8 +367,7 @@ export const isWebFetchToolSuccessOutput = (
 export const isWebFetchToolErrorOutput = (
   output: unknown,
 ): output is WebFetchToolErrorOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "type" in output &&
   output.type === "cf-harness.web-fetch-error" &&
   "outputId" in output &&

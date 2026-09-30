@@ -1,0 +1,179 @@
+Task cf deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts 'test' '/tmp/cfc-round2-materialized-fixture/main.test.tsx'
+Found 1 test file(s)
+
+main.test.tsx
+Error in action: TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); its labels cannot be attributed, so it is refused — use positional ? params with an explicit column list, or literal values 
+  pieceId: of:fid1:DDMZ5aX7Liz30nfcqD0GuQJoB-KVGLMKdfYZnZfAXho 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: giQ9kapMxHg5spAc8tph-2grVX_7rTKrHkN99nTPBS0 
+TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); its labels cannot be attributed, so it is refused — use positional ? params with an explicit column list, or literal values
+  at CellImpl.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/cell.ts:1616:33)
+    at eval (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.tsx:36:7)
+  at invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11067:16)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:1:1762)
+  at runInActionExecution (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11081:12)
+  at handler:cf:module/giQ9kapMxHg5spAc8tph-2grVX_7rTKrHkN99nTPBS0/main.tsx:28:2 [as handler] (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:10358:58)
+  at action (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/events.ts:534:26)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/events.ts:2499:17
+  at SESInternals.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/harness/engine.ts:1835:34)
+  at dispatchQueuedEvent (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/events.ts:2494:33)
+  at async processPullQueuedEventDuringExecute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/events.ts:1456:3)
+  at async #processExecuteEventPhase (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2565:7)
+  at async #execute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2537:31)
+[ERROR][scheduler::17:37:05.146] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_5:MROVgllNb-oH Error: TypeError: Cannot read properties of undefined (reading 'text')
+Error in action: TypeError: Cannot read properties of undefined (reading 'text') 
+  pieceId: of:fid1:tUwpvclU2sYa2lfptyGvv7ORerZXVweuzk-3UxO-PPc 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'text')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:17:50)
+  at invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:1:1762)
+  at runInActionExecution (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:16:26:MROVgllNb-oH [as action] (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:10759:58)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:135:29)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:662:12)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:05.173] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_6:HwZTOc7IP7Bq Error: TypeError: Cannot read properties of undefined (reading 'text')
+Error in action: TypeError: Cannot read properties of undefined (reading 'text') 
+  pieceId: of:fid1:tUwpvclU2sYa2lfptyGvv7ORerZXVweuzk-3UxO-PPc 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'text')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:18:51)
+  at invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:1:1762)
+  at runInActionExecution (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:17:26:HwZTOc7IP7Bq [as action] (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:10759:58)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:135:29)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:662:12)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:05.195] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_7:9mPCV4CxqSU9 Error: TypeError: Cannot read properties of undefined (reading 'me')
+Error in action: TypeError: Cannot read properties of undefined (reading 'me') 
+  pieceId: of:fid1:tUwpvclU2sYa2lfptyGvv7ORerZXVweuzk-3UxO-PPc 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'me')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:19:50)
+  at invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:1:1762)
+  at runInActionExecution (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:18:26:9mPCV4CxqSU9 [as action] (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:10759:58)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:135:29)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:662:12)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:05.220] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_8:9LuaoV8TzVah Error: TypeError: Cannot read properties of undefined (reading 'me')
+Error in action: TypeError: Cannot read properties of undefined (reading 'me') 
+  pieceId: of:fid1:tUwpvclU2sYa2lfptyGvv7ORerZXVweuzk-3UxO-PPc 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'me')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:20:50)
+  at invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:1:1762)
+  at runInActionExecution (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:19:26:9LuaoV8TzVah [as action] (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/runner.ts:10759:58)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:135:29)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:662:12)
+  at /Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (/Users/berni/.codex/worktrees/33cf/labs/packages/runner/src/scheduler/facade.ts:2540:26)
+  ✓ assertion_1
+  ✗ assertion_2 (after action_1)
+    thread.thread.result?.length === 1
+      thread.thread.result?.length = 0
+  ✓ assertion_3 (after action_1)
+  ✗ assertion_4 (after action_2)
+    thread.bubbles.length === 11
+      thread.bubbles.length = 0
+  ✗ assertion_5 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_6 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_7 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_8 (after action_2)
+    Expected true, got undefined
+  ✗ 5 runtime error(s) during test:
+    TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); i...
+    TypeError: Cannot read properties of undefined (reading 'text')
+    TypeError: Cannot read properties of undefined (reading 'text')
+    TypeError: Cannot read properties of undefined (reading 'me')
+    TypeError: Cannot read properties of undefined (reading 'me')
+  ✗ 1 console error(s) during test:
+    [logger:scheduler] 4 error(s) (key: schedule-error)
+
+2 passed, 8 failed (981ms)

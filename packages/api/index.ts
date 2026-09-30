@@ -12,6 +12,7 @@ import type {
   FabricBytes,
   FabricHash,
   FabricPlainObjectPlus,
+  FabricPrimitiveSchemaType,
   FabricValue,
   FabricValuePlus,
 } from "@commonfabric/data-model/api";
@@ -50,25 +51,37 @@ export * from "@commonfabric/data-model/api";
 /**
  * A value that can appear in an in-memory fabric execution graph.
  *
- * Unlike a {@link FabricValue}, a `FabricExecValue` may contain functions and
- * therefore is not necessarily durable or serializable: it is
- * `FabricValuePlus` at {@link FabricExecFunction}, so a function may sit at
- * the top or inside any container.
+ * Unlike a {@link FabricValue}, a `FabricExecValue` may contain builder
+ * artifacts, patterns, and modules, and therefore is not necessarily durable
+ * or serializable: it is `FabricValuePlus` at {@link FabricExecPlusType}, so
+ * any of those may sit at the top or inside any container.
  */
-export type FabricExecValue = FabricValuePlus<FabricExecFunction>;
-
-/** A callable leaf in a {@link FabricExecValue} graph. */
-export type FabricExecFunction = (...args: any[]) => any;
-
-/** Read-only array of fabric execution values. */
-export type FabricExecArray = FabricArrayPlus<FabricExecFunction>;
+export type FabricExecValue = FabricValuePlus<FabricExecPlusType>;
 
 /**
- * Read-only plain object whose string-keyed values are execution values.
- * `Pattern` and `Module` extend it, and the schema generator recognizes that
- * base by this name.
+ * What a {@link FabricExecValue} admits beyond a {@link FabricValue}: a
+ * callable builder artifact, a {@link Pattern}, or a {@link Module}.
+ *
+ * A pattern and a module are each an arm of their own. Each declares the
+ * members it has; neither is a record that any string key may be added to.
  */
-export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecFunction>;
+export type FabricExecPlusType = FabricExecFunction | Pattern | Module;
+
+/**
+ * A callable leaf in a {@link FabricExecValue} graph: a builder artifact, which
+ * says what it is through {@link toEncodableForm}.
+ *
+ * No other function belongs in a graph. A module's implementation is a
+ * function, but it is a declared member of that {@link Module}, not a value in
+ * the graph.
+ */
+export type FabricExecFunction = ((...args: any[]) => any) & toEncodableForm;
+
+/** Read-only array of fabric execution values. */
+export type FabricExecArray = FabricArrayPlus<FabricExecPlusType>;
+
+/** Read-only plain object whose string-keyed values are execution values. */
+export type FabricExecPlainObject = FabricPlainObjectPlus<FabricExecPlusType>;
 
 //
 // Runtime Constants
@@ -87,6 +100,9 @@ export declare const TILE_UI: "$TILE_UI";
 export declare const CHIP_UI: "$CHIP_UI";
 export declare const FS: "$FS";
 export declare const TESTS: "$TESTS";
+// The single field under which a pattern offers named groups of facts and
+// streams a host may draw with its own toolkit. [UI] remains the floor.
+export declare const VIEWS: "$VIEWS";
 
 /**
  * The size/representation spectrum a piece can be rendered at (CT-1321):
@@ -168,6 +184,50 @@ export type CellKind =
 export type CellScope = "space" | "user" | "session";
 export type SchemaScope = CellScope | "any";
 export type LinkScope = "inherit" | CellScope;
+
+/** A document selected on the piece segment. */
+export type ReferenceMember = "argument" | "result";
+
+/** A location prefix, with an independently known or unknown scope. */
+export type ReferenceContext =
+  & {
+    scope?: CellScope;
+  }
+  & (
+    | {
+      space?: undefined;
+      id?: undefined;
+      member?: undefined;
+      path?: undefined;
+    }
+    | { space: string; id?: undefined; member?: undefined; path?: undefined }
+    | {
+      space: string;
+      id: string;
+      member?: ReferenceMember;
+      path?: readonly string[];
+    }
+  );
+
+/** A cell address to render, with an optional space for unresolved references. */
+export interface RenderableCellReference {
+  id: string;
+  space?: string;
+  member?: ReferenceMember;
+  scope?: CellScope;
+  pin?: string;
+  path: readonly (string | number)[];
+}
+
+/**
+ * Renders a cell address relative to a location and scope context. Without a
+ * context, includes the known space and explicit scope. Empty and dot path
+ * keys retain their literal meaning.
+ */
+export declare function renderCellReference(
+  link: RenderableCellReference,
+  context?: ReferenceContext,
+): string;
 
 export type AsCellEntry =
   | CellKind
@@ -306,6 +366,7 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    * Add one or more values to an array cell as a set: each value is appended
    * only if no existing element equals it. Mergeable — concurrent adds of
    * distinct elements merge and a repeated add is a no-op against durable state.
+   * A value read back through `get()` is refused; pass the element's cell.
    */
   addUnique(
     this: IsThisArray,
@@ -326,7 +387,8 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Remove every element equal to `ref` by stored value (a cell matches by its
    * link). Mergeable — resolved against durable state, so concurrent removes of
-   * distinct entries merge instead of clobbering via a whole-array rewrite.
+   * distinct entries merge instead of clobbering via a whole-array rewrite. A
+   * value read back through `get()` is refused; pass the element's cell.
    */
   removeByValue(
     this: IsThisArray,
@@ -873,12 +935,20 @@ export type CollectionIndexKeyEntry<K extends CollectionIndexKey> = K extends
   : { kind: "value"; value: K };
 
 /** Stored descriptor whose buckets are addressed independently by keyed lookup. */
-export interface CollectionIndexData<K extends CollectionIndexKey, V> {
+export interface CollectionIndexData<
+  K extends CollectionIndexKey,
+  V,
+  M extends "group" | "key" = "group" | "key",
+> {
   /** Descriptor marker used to recognize an index receiver. */
   readonly kind: "collection-index";
 
-  /** Missing-key behavior: an empty group or an absent unique match. */
-  readonly mode: "group" | "key";
+  /**
+   * Missing-key behavior: an empty group or an absent unique match. The
+   * operator that built the index names one, so a lookup reads it from its
+   * receiver's schema when the descriptor has not been published yet.
+   */
+  readonly mode: M;
 
   /** Occupied keys in deterministic typed-key order. */
   readonly keys: K[];
@@ -914,12 +984,12 @@ export interface CollectionIndexHandle<
 
 /** Index whose missing-key lookup yields an empty group. */
 export type GroupIndex<K extends CollectionIndexKey, T> = CollectionIndexHandle<
-  CollectionIndexData<K, T[]>
+  CollectionIndexData<K, T[], "group">
 >;
 
 /** Index whose missing-key lookup yields undefined. */
 export type KeyIndex<K extends CollectionIndexKey, T> = CollectionIndexHandle<
-  CollectionIndexData<K, T | undefined>
+  CollectionIndexData<K, T | undefined, "key">
 >;
 
 /** @internal Preserves an index selector's key kind before result serialization. */
@@ -1555,12 +1625,12 @@ export type AnyCellWrapping<T> =
 // TODO(seefeld): Subset of internal type, just enough to make it
 // differentiated. But this isn't part of the public API, so we need to find a
 // different way to handle this.
-export interface Pattern extends FabricExecPlainObject {
+export interface Pattern {
   argumentSchema: JSONSchema;
   resultSchema: JSONSchema;
   defaultScope?: CellScope;
 }
-export interface Module extends FabricExecPlainObject {
+export interface Module {
   type: "ref" | "javascript" | "pattern" | "raw" | "isolated" | "passthrough";
   defaultScope?: CellScope;
 }
@@ -1683,40 +1753,6 @@ export interface JSONObject extends Readonly<Record<string, JSONValue>> {}
  * Deeply-mutable version of `JSONValue`.
  */
 export type MutableJSONValue = Mutable<JSONValue>;
-
-/**
- * `FabricPrimitive` validation types -- a non-standard addition to the JSON
- * Schema `type` vocabulary. Each name identifies a concrete `FabricPrimitive`
- * class from the data-model, and a value matches by prototype (`instanceof`),
- * not by structure. `"object"` also accepts these values -- every
- * `FabricPrimitive` is a subtype of `"object"` the way an `"integer"` value
- * satisfies a `"number"` schema -- so schemas that predate this vocabulary keep
- * working.
- */
-export const FABRIC_PRIMITIVE_SCHEMA_TYPES = Object.freeze(
-  [
-    "FabricBytes",
-    "FabricEpochDay",
-    "FabricEpochNsec",
-    "FabricHash",
-    "FabricKeyPair",
-    "FabricRegExp",
-  ] as const,
-);
-
-export type FabricPrimitiveSchemaType =
-  typeof FABRIC_PRIMITIVE_SCHEMA_TYPES[number];
-
-const FABRIC_PRIMITIVE_SCHEMA_TYPE_SET: ReadonlySet<string> = new Set(
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-);
-
-/** Whether the given schema type names a `FabricPrimitive` class. */
-export function isFabricPrimitiveSchemaType(
-  type: string,
-): type is FabricPrimitiveSchemaType {
-  return FABRIC_PRIMITIVE_SCHEMA_TYPE_SET.has(type);
-}
 
 // Valid values for the "type" property of a JSONSchema
 export type JSONSchemaTypes =
@@ -1853,6 +1889,15 @@ export type JSONSchemaObj = {
           readonly moduleIdentity?: string;
         };
       };
+    // The lowered form of `WritePolicyAnyOf`: alternative complete writer
+    // policies, any one of which admits a write whole. A position declaring
+    // it declares no `writeAuthorizedBy` or `uiContract` of its own.
+    readonly writePolicyAnyOf?: readonly {
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly exactCopyOf?: readonly string[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON
@@ -2275,6 +2320,59 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/**
+ * The request an `agent()` node submits: a task, the cells it may read, and
+ * the schema its answer takes. A runner the requester registered executes it
+ * as the requester; the builtin's cell follows the run's record.
+ */
+export interface BuiltInAgentParams {
+  /**
+   * What the run is for, as context rather than a command. Labeled data
+   * interpolated into this text becomes a value the request carries and the
+   * sink gate measures; pass the cell through `inputs` instead.
+   */
+  task: string;
+
+  /**
+   * The cells the run may read, by the names the model sees them under. Each
+   * reaches the request as a link, never as its value, so an entry has to be
+   * a cell.
+   */
+  inputs: Record<string, AnyCell<any> | AnyBrandedCell<any> | OpaqueCell<any>>;
+
+  /** The schema the run's structured result is validated against. */
+  resultSchema: JSONSchema;
+
+  /**
+   * Confidentiality clauses bounding what the run may observe. Absent, the
+   * run observes what the requester may see; declared, it can only tighten.
+   */
+  maxConfidentiality?: readonly JSONValue[];
+
+  /**
+   * Names of the tools the run may use, from the set the deployment
+   * publishes. A name the requester's registered runner does not offer fails
+   * the request before it is staged.
+   */
+  tools?: readonly string[];
+}
+
+/**
+ * What an `agent()` node holds. `result` is a link to the document the run's
+ * harness wrote; `run` is a link to the run's record, which a pattern reads
+ * for progress, outcome, and usage; `host` is the origin of the toolshed
+ * serving the record's space, carried beside `run` because a link resolves a
+ * space and not the host that serves it.
+ */
+export interface BuiltInAgentState<T> {
+  pending: boolean;
+  result?: T;
+  error?: string;
+  requestHash?: string;
+  run?: Record<string, any>;
+  host?: string;
+}
+
 export interface BuiltInCompileAndRunParams<T> {
   files: Array<{ name: string; contents: string }>;
   main: string;
@@ -2319,11 +2417,27 @@ export interface BuiltInCompileAndRunState<T> {
  * The reserved output fields the runtime reads off a pattern's result, each
  * typed so a value of the wrong shape under a reserved key is a compile error.
  * `[NAME]` and `[TYPE]` label the piece; `[UI]`, `[TILE_UI]` and `[CHIP_UI]`
- * are its renderings; `[FS]` is its filesystem projection. Those are each
+ * are its renderings; `[FS]` is its filesystem projection; `[VIEWS]` holds the
+ * named groups it offers a host to draw natively. Those are each
  * `FactoryInput`-wrapped, so a reactive value (a `computed()`, a cell) is
  * accepted alongside a plain one. `[TESTS]` is the exception: it holds a
  * `TestStep[]` written out at build time, not a reactive value, so it is not
  * wrapped.
+ *
+ * `[VIEWS]` is typed as an object and no further. What a group holds is the
+ * pattern's to declare and a consumer's to demand through a schema, so the
+ * framework types the field that carries them rather than their members — a
+ * value that is not a group map at all is the error worth catching here.
+ *
+ * `object` is the looser of two live choices, and what it buys is the
+ * `interface` idiom. It rejects a primitive and nothing else, so an array or a
+ * view node under this key compiles — pinned in `reserved-output-types.test.ts`
+ * so that narrowing the field later is a deliberate act rather than a silent
+ * one. `Record<string, unknown>` would reject both, and would also reject a
+ * group map declared as an `interface`, which has no implicit index signature.
+ * A `type` alias does satisfy it, so the stricter field is available for one
+ * keyword of author cost, at the price of a compile error on the declaration
+ * form a group is most naturally written in.
  */
 type ReservedOutput = {
   [NAME]?: FactoryInput<string>;
@@ -2333,6 +2447,7 @@ type ReservedOutput = {
   [CHIP_UI]?: FactoryInput<VNode> | JSXElement;
   [FS]?: FactoryInput<FsProjection>;
   [TESTS]?: TestStep[];
+  [VIEWS]?: FactoryInput<object>;
 };
 
 /**
@@ -2728,6 +2843,10 @@ export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
 
+export type AgentFunction = <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
+
 export type FetchOptions = {
   body?: JSONValue;
   headers?: Record<string, string>;
@@ -2822,23 +2941,37 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
-export type CellFromUrlFunction = (
-  params: FactoryInput<{
-    url: string;
-    hosts?: string[];
-  }>,
-) => Reactive<{
-  pending: boolean;
+export type CellFromUrlFunction = {
+  /** Resolves a writable handle; storage authorization still governs writes. */
+  <T = unknown>(
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+      writable: true;
+    }>,
+  ): Reactive<{ pending: boolean; cell?: Writable<T> }>;
 
-  /**
-   * The cell the URL named, once resolved, and absent when it named none. Its
-   * value is unconstrained: a URL addresses any cell, and resolution neither
-   * requires a piece nor supplies one's `[NAME]`.
-   */
-  cell?: ReadonlyCell<unknown>;
-}>;
+  (
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+    }>,
+  ): Reactive<{
+    pending: boolean;
+
+    /**
+     * The cell the URL named, once resolved, and absent when it named none. Its
+     * value is unconstrained: a URL addresses any cell, and resolution neither
+     * requires a piece nor supplies one's `[NAME]`.
+     */
+    cell?: ReadonlyCell<unknown>;
+  }>;
+};
 
 export type FetchProgramFunction = (
   params: FactoryInput<{ url: string }>,
@@ -2961,11 +3094,11 @@ export interface ISqliteQueryable {
       readClearance?: boolean;
 
       /** Scope of the result cell. A `session`-scoped result is one each
-       *  session reads alone, which a runtime-wide read ceiling
-       *  (`cfcReadMaxConfidentiality`) requires; absent, the result takes the
-       *  narrowest of the db's scope, the pattern's output scope, and — when
-       *  `readClearance` is set — `user`, since a cleared result is one
-       *  reader's view. */
+       *  session reads alone and filters under its runtime read ceiling. Shared
+       *  results retain their labels for cell-read enforcement. Absent, the
+       *  result takes the narrowest of the db's scope, the pattern's output
+       *  scope, and — when `readClearance` is set — `user`, since a cleared
+       *  result is one reader's view. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -3055,9 +3188,9 @@ export type SqliteQueryFunction = {
   >;
 
   /** Bind the query's result cell to a scope: a `session`-scoped result is
-   *  one each session reads alone, which a runtime-wide read ceiling
-   *  (`cfcReadMaxConfidentiality`) requires. The `scope` option of
-   *  `db.query` is the same binding. */
+   *  one each session reads alone and filters under its runtime read ceiling.
+   *  Shared results retain their labels for cell-read enforcement. The `scope`
+   *  option of `db.query` is the same binding. */
   asScope(scope: CellScope): SqliteQueryFunction;
 };
 
@@ -3154,7 +3287,14 @@ export type SqliteCfLinkFunction = <_T = unknown>() => SqliteColumnSchema;
 
 export type WishTag = `/${string}` | `#${string}`;
 
-export type DID = `did:${string}:${string}`;
+/**
+ * A decentralized identifier, most often a space DID.
+ *
+ * This package is the surface patterns compile against, so it carries no
+ * import of its own; the runtime-side twin of this type, and the predicate
+ * that decides whether a string is a DID, live in `@commonfabric/identity/did`.
+ */
+export type DID = `did:${string}`;
 
 export type WishParams = {
   query: WishTag | string;
@@ -3491,6 +3631,34 @@ export type ToIndentedDebugStringFunction = (
   value: unknown,
   options?: DebugValueOptions,
 ) => string;
+/**
+ * Composes a diagnostic message. A substitution is converted the way a
+ * template literal converts one, except that the conversion never throws, and
+ * except where a _directive_ comes right before it: a dollar sign and one or
+ * more comma-separated words, as in `$quote,long${value}`. The directive is
+ * removed from the text, and the value after it gets a debug rendering, cut to
+ * the size its size word names and quoted where it holds `quote`.
+ *
+ * - With no `indent`, the rendering is that of `toCompactDebugString()`, cut
+ *   to 50 characters, or with `long` to 500, or with `xlong` to 5000; `short`
+ *   names the default. With `quote` it is a Markdown code span.
+ * - With `indent`, the rendering is that of `toIndentedDebugString()`, cut to
+ *   5 lines, or with `long` to 50, or with `xlong` to 500. With `quote` it is
+ *   a Markdown fenced block on lines of its own.
+ *
+ * Either way the quoting survives a backtick in the value, which a
+ * hand-written pair of backticks does not. A backslash before the dollar sign,
+ * as in `\$quote${value}`, makes the text literal and the substitution an
+ * ordinary one. A directive holding any other word stays in the message as
+ * text, where the misspelling can be seen, and its value gets the default
+ * rendering.
+ *
+ * As with the renderers it calls, how a value renders is not a contract.
+ */
+export type DebugStrFunction = (
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+) => string;
 
 /**
  * Compare two cells or values for equality after resolving, i.e. after
@@ -3550,6 +3718,7 @@ export declare const llm: LLMFunction;
 export declare const llmDialog: LLMDialogFunction;
 export declare const generateObject: GenerateObjectFunction;
 export declare const generateText: GenerateTextFunction;
+export declare const agent: AgentFunction;
 export declare const cellFromUrl: CellFromUrlFunction;
 export declare const fetchBinary: FetchBinaryFunction;
 export declare const fetchText: FetchTextFunction;
@@ -3591,6 +3760,7 @@ export function getPatternEnvironment(): PatternEnvironment {
 }
 export declare const toCompactDebugString: ToCompactDebugStringFunction;
 export declare const toIndentedDebugString: ToIndentedDebugStringFunction;
+export declare const debugStr: DebugStrFunction;
 
 export interface UiActionProps {
   readonly as?: string;

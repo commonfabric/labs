@@ -7,13 +7,17 @@
  * cannot follow those cells produces a bare tag with nothing inside it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+
 import { Identity } from "@commonfabric/identity";
-import type { PiecesController } from "@commonfabric/piece/ops";
-import { type Cell, Runtime, UI } from "@commonfabric/runner";
+import { assignSlug, pieceId, setSlugLink } from "@commonfabric/piece";
+import { PiecesController } from "@commonfabric/piece/ops";
+import { type Cell, createBuilder, Runtime, UI } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
+
+import { parsePieceOptions } from "../commands/piece.ts";
 import { renderPiece, renderVDomToHtml } from "../lib/piece-render.ts";
 import type { PieceConfig } from "../lib/piece.ts";
 
@@ -273,10 +277,6 @@ describe("piece-render", () => {
   });
 
   describe("renderPiece()", () => {
-    // The connection is a parameter, so the piece around the cell is a stub
-    // and only the runtime under it is real: what is asserted is the tree the
-    // render read off the piece the caller's connection holds.
-
     const config: PieceConfig = {
       apiUrl: "http://localhost:8000",
       space,
@@ -355,6 +355,76 @@ describe("piece-render", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+
+    describe("stored references", () => {
+      let runtime: Runtime;
+      let pieces: PiecesController;
+      let target: Cell<unknown>;
+
+      beforeEach(async () => {
+        runtime = makeRuntime();
+        pieces = new PiecesController({ as: signer, space }, runtime);
+        await pieces.synced();
+        const { commonfabric } = createBuilder();
+        const pattern = commonfabric.pattern<{ title: string }>((
+          { title },
+        ) => ({
+          [UI]: vnode("p", {}, [title]),
+        }));
+        target = await pieces.runPersistent(
+          pattern,
+          { title: "Slug target" },
+          "render-slug-target",
+        );
+        await assignSlug(pieces, target, "greeting");
+      });
+
+      afterEach(async () => {
+        await runtime.dispose();
+      });
+
+      it("returns the same HTML through a slug as through the piece id", async () => {
+        const deps = { loadPieces: () => Promise.resolve(pieces) };
+        const byId = await renderPiece(
+          { ...config, piece: pieceId(target)! },
+          {},
+          deps,
+        );
+        expect(byId).toBe("<p>Slug target</p>");
+
+        const bySlug = await renderPiece(
+          parsePieceOptions({ ...config, cell: "/greeting" }),
+          {},
+          deps,
+        );
+        expect(bySlug).toBe(byId);
+      });
+
+      it("returns the UI of the member selected through a collection slug", async () => {
+        const collection = await cellHolding(runtime, "render-collection", {
+          selected: target,
+        });
+        await setSlugLink(pieces, "greetings", collection);
+
+        const html = await renderPiece(
+          parsePieceOptions({ ...config, cell: "/greetings/selected" }),
+          { start: false },
+          { loadPieces: () => Promise.resolve(pieces) },
+        );
+
+        expect(html).toBe("<p>Slug target</p>");
+      });
+
+      it("throws when a slug reference names a path inside the piece", async () => {
+        await expect(renderPiece(
+          parsePieceOptions({ ...config, cell: "/greeting/title" }),
+          {},
+          { loadPieces: () => Promise.resolve(pieces) },
+        )).rejects.toThrow(
+          'embeds a path ("title") but this command takes a piece id only',
+        );
+      });
     });
   });
 });

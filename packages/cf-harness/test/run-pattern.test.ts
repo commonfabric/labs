@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
-import { isSealedOpaqueLinkObject } from "../src/structured-result.ts";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
-import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
+import {
+  createLLMFriendlyLink,
+  parseLLMFriendlyLink,
+} from "@commonfabric/runner/shared";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -18,8 +22,10 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
+import { resolveHandleToken } from "../src/handle-table.ts";
 import {
   createFabricInstantiationRecorder,
+  type FabricInstantiationRecord,
   type FabricInstantiationRecorder,
   type FabricPatternInstantiations,
 } from "../src/fabric-instantiations.ts";
@@ -305,7 +311,7 @@ async function seedLabelledSecret(
   );
   const sourceId = sourceCell.getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id: sourceId, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id: sourceId, path: [] }, {
     value: { secret: "s3cr3t" },
     cfc: {
       version: 1,
@@ -321,17 +327,17 @@ async function seedLabelledSecret(
 }
 
 /**
- * A pattern over an operator-shaped account: a balance and a list of
- * transactions, the spending summed from the negative amounts. The input is
- * typed as plain data, which is how a model wires a cell it was handed.
+ * An account's spending total beside declared pending and failed reads.
  */
 const SPENDING_PATTERN_SOURCE = [
   "import { computed, pattern } from 'commonfabric';",
   "interface Transaction { amount: number; }",
   "interface Account { balance: number; transactions: Transaction[]; }",
   "interface Input { account: Account; }",
-  "interface Output { totalSpending: number; }",
+  "interface Output { totalSpending: number; pending: boolean; errorMessage: string; }",
   "export default pattern<Input, Output>(({ account }) => ({",
+  "  pending: true,",
+  "  errorMessage: 'fixture read failed',",
   "  totalSpending: computed(() => account.transactions.reduce(",
   "    (sum, t) => sum + (t.amount < 0 ? -t.amount : 0),",
   "    0,",
@@ -387,7 +393,7 @@ async function seedAccountHolder(
   // A root-linked holder continues into the account document at `account`,
   // so that document carries the field and the label sits on it; the others
   // link straight at the account, labeled at its root.
-  seed.writeOrThrow({ space, scope: "space", id: accountId, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id: accountId, path: [] }, {
     value: shape === "root-link" ? { account } : account,
     cfc: {
       version: 1,
@@ -552,17 +558,24 @@ async function seedLabelledComputedSecret(
     seed,
   );
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id: computedId, path: [] }, {
-    value: { secret: "s3cr3t" },
-    cfc: {
-      version: 1,
-      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: {
+  seedStoredEnvelope(
+    seed,
+    { space, scope: "space", id: computedId, path: [] },
+    {
+      value: { secret: "s3cr3t" },
+      cfc: {
         version: 1,
-        entries: [{ path: ["secret"], label: { confidentiality: ["secret"] } }],
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: ["secret"] },
+          }],
+        },
       },
     },
-  });
+  );
   expect((await seed.commit()).ok).toBeDefined();
   return createLLMFriendlyLink(sourceCell.getAsNormalizedFullLink(), space);
 }
@@ -663,13 +676,20 @@ class FakeSandboxRuntime implements SandboxRuntime {
   }
 }
 
-const STRANDED_RECORDS = [{
+const STRANDED_ENTITY =
+  "of:fid1:Lu5lEvAZXeeCOI6SprXO9EG6gDFeZbLWP-MexaaM_qc" as const;
+
+const STRANDED_RECORDS: readonly FabricInstantiationRecord[] = [{
   sequence: 1,
   identity: "keyless:zStranded",
   symbol: "default",
-  cell: comparableEntityHash(
-    "of:fid1:Lu5lEvAZXeeCOI6SprXO9EG6gDFeZbLWP-MexaaM_qc",
-  )!,
+  cell: comparableEntityHash(STRANDED_ENTITY)!,
+  link: {
+    id: STRANDED_ENTITY,
+    space: signer.did(),
+    scope: "space",
+    path: [],
+  },
 }];
 
 describe("run-pattern", () => {
@@ -727,6 +747,138 @@ describe("run-pattern", () => {
   }
 
   describe("runPatternTool", () => {
+    describe("captured query status", () => {
+      for (
+        const { name, capture, pending, hasError } of [
+          {
+            name: "a pending read",
+            capture: { pending: true, error: "" },
+            pending: true,
+            hasError: false,
+          },
+          {
+            name: "a settled read",
+            capture: { pending: false, error: "", hasError: true },
+            pending: false,
+            hasError: false,
+          },
+          {
+            name: "an error branch",
+            capture: {
+              pending: false,
+              error: "private diagnostic",
+              hasError: false,
+            },
+            pending: false,
+            hasError: true,
+          },
+          {
+            name: "an errorMessage branch",
+            capture: { errorMessage: "private diagnostic" },
+            pending: false,
+            hasError: true,
+          },
+          {
+            name: "a result without status fields",
+            capture: {},
+            pending: false,
+            hasError: false,
+          },
+        ]
+      ) {
+        it(`returns host-computed booleans for ${name} without a resultSchema`, async () => {
+          const result = await createEngine().invokeBuiltinTool("run_pattern", {
+            sourceText: [
+              "import { pattern } from 'commonfabric';",
+              "interface Output { count: number; pending?: boolean; error?: string; errorMessage?: string; hasError?: boolean; }",
+              `export default pattern<Record<string, never>, Output>(() => (${
+                JSON.stringify({ count: 0, ...capture })
+              }));`,
+            ].join("\n"),
+          });
+          const output = result.output as RunPatternToolSuccessOutput;
+          expect(output.status).toBe("ok");
+          expect(output.pending).toBe(pending);
+          expect(output.hasError).toBe(hasError);
+          expect(output.value).toBeUndefined();
+          expect(output).not.toHaveProperty("error");
+          expect(output).not.toHaveProperty("errorMessage");
+          expect(output.releaseDecision?.reasonCode).toBe(
+            "cfc_release_allowed",
+          );
+        });
+      }
+
+      for (const mode of ["enforce-strict", "observe"] as const) {
+        it(`fits data-dependent status before returning it in ${mode}`, async () => {
+          const { runtime, pieces, space, dispose } = await createFabric(mode);
+          try {
+            const source = await seedLabelledSecret(
+              runtime,
+              space,
+              "query-status",
+            );
+            const engine = createStrictEngine(pieces);
+            for (const requestValue of [false, true]) {
+              const result = await engine.invokeBuiltinTool("run_pattern", {
+                sourceText: [
+                  "import { computed, pattern } from 'commonfabric';",
+                  "interface Input { source: { secret: string }; }",
+                  "interface Output { pending: boolean; error: string; }",
+                  "export default pattern<Input, Output>(({ source }) => ({",
+                  "  pending: computed(() => source.secret.length > 0),",
+                  "  error: computed(() => source.secret),",
+                  "}));",
+                ].join("\n"),
+                inputs: { source },
+                ...(requestValue
+                  ? {
+                    resultSchema: {
+                      type: "object",
+                      properties: {
+                        pending: { type: "boolean" },
+                        error: { type: "string" },
+                      },
+                      required: ["pending"],
+                    },
+                  }
+                  : {}),
+              });
+              const output = result.output as RunPatternToolSuccessOutput;
+              expect(output.status).toBe("ok");
+              expect(output.resultRef).toMatch(/^\/of:/);
+              expect(output.rawValue).toMatchObject({
+                pending: true,
+                error: "s3cr3t",
+              });
+              expect(output.pending).toBe(
+                mode === "observe" ? true : undefined,
+              );
+              expect(output.hasError).toBe(
+                mode === "observe" ? true : undefined,
+              );
+              expect(output.releaseDecision?.reasonCode).toBe(
+                mode === "observe"
+                  ? "cfc_release_observed"
+                  : "cfc_release_withheld",
+              );
+              if (requestValue && mode === "enforce-strict") {
+                expect(output.policyRefusal?.gates).toEqual(["sink-ceiling"]);
+                expect(output.outputConcerns?.map(({ concern }) => concern))
+                  .toEqual(["error-branch"]);
+              } else {
+                expect(output.policyRefusal).toBeUndefined();
+                expect(output.valueError).toBeUndefined();
+              }
+              expect(output).not.toHaveProperty("error");
+            }
+          } finally {
+            await dispose();
+          }
+        });
+      }
+    });
+
     it("runs inline `sourceText` and returns a `resultRef` with the sanitized `value`", async () => {
       const engine = createEngine();
       const result = await engine.invokeBuiltinTool("run_pattern", {
@@ -769,6 +921,71 @@ describe("run-pattern", () => {
       expect(recorded.some((one) => one.identity.startsWith("keyless:"))).toBe(
         false,
       );
+    });
+
+    it("answers over an instance whose result will not read back", async () => {
+      // The disclosure reads every pattern the run materialized, and one it
+      // cannot read says nothing about the others or about the run. A cell
+      // whose pull rejects is what a torn-down instance and a store that
+      // stopped answering both look like from inside the scan.
+      const pristineFromLink = runtime.getCellFromLink.bind(runtime);
+      const runtimeWithLink = runtime as unknown as {
+        getCellFromLink: typeof pristineFromLink;
+      };
+      let settled = false;
+      // Counted, because every assertion below also holds for a scan that
+      // read every instance cleanly: what says the failure path ran is that
+      // it ran, not that the run came back.
+      let refusedReads = 0;
+      // `withTx` answers a cell of its own, and the scan pulls THAT one, so
+      // the refusal has to follow the cell across it rather than sit on the
+      // one the link produced.
+      const refusingRead = <T>(cell: T): T =>
+        new Proxy(cell as object, {
+          get: (target, property, receiver) => {
+            if (property === "pull") {
+              return () => {
+                refusedReads += 1;
+                return Promise.reject(
+                  new Error("the store stopped answering"),
+                );
+              };
+            }
+            const member = Reflect.get(target, property, receiver);
+            if (property === "withTx" && typeof member === "function") {
+              return (...args: unknown[]) =>
+                refusingRead((member as (...a: unknown[]) => unknown).apply(
+                  target,
+                  args,
+                ));
+            }
+            return member;
+          },
+        }) as T;
+      runtimeWithLink.getCellFromLink = ((
+        ...args: Parameters<typeof pristineFromLink>
+      ) => {
+        const cell = pristineFromLink(...args);
+        return settled ? refusingRead(cell) : cell;
+      }) as typeof pristineFromLink;
+      const syncedBefore = pieces.synced.bind(pieces);
+      (pieces as unknown as { synced: () => Promise<void> }).synced =
+        async () => {
+          await syncedBefore();
+          settled = true;
+        };
+
+      const result = await createEngine().invokeBuiltinTool("run_pattern", {
+        sourceText: DOUBLING_PATTERN_SOURCE,
+        inputs: { n: 21 },
+        resultSchema: DOUBLED_RESULT_SCHEMA,
+      });
+      const output = result.output as RunPatternToolSuccessOutput;
+
+      expect(refusedReads).toBeGreaterThan(0);
+      expect(output.status).toBe("ok");
+      expect((output.value as { doubled: number }).doubled).toBe(42);
+      expect(output.outputConcerns).toBeUndefined();
     });
 
     it("fails the run when the invocation materialized a session-only pointer", async () => {
@@ -875,10 +1092,7 @@ describe("run-pattern", () => {
       });
     });
 
-    it("keeps the seal for a property the link grammar cannot round-trip", async () => {
-      // An empty property name is valid JSON, but its address serializes
-      // with a trailing slash the link parse discards — the reference would
-      // name the parent. The position keeps its seal instead.
+    it("addresses an empty property with a trailing slash", async () => {
       const engine = createEngine();
       const result = await engine.invokeBuiltinTool("run_pattern", {
         sourceText: [
@@ -899,8 +1113,9 @@ describe("run-pattern", () => {
       });
       const output = result.output as RunPatternToolSuccessOutput;
       expect(output.status).toBe("ok");
-      const sealed = (output.value as Record<string, unknown>)[""];
-      expect(isSealedOpaqueLinkObject(sealed)).toBe(true);
+      expect((output.value as Record<string, unknown>)[""]).toEqual({
+        "@link": `${output.resultRef}/`,
+      });
     });
 
     it("returns a structured error for a plain-function pattern whose compiled argument schema is undefined, rather than throwing out of the run", async () => {
@@ -1199,7 +1414,12 @@ describe("run-pattern", () => {
         );
         const sourceId = sourceCell.getAsNormalizedFullLink().id;
         writeSeedEnvelopeDoc(seed, space);
-        seed.writeOrThrow({ space, scope: "space", id: sourceId, path: [] }, {
+        seedStoredEnvelope(seed, {
+          space,
+          scope: "space",
+          id: sourceId,
+          path: [],
+        }, {
           value: { secret: "s3cr3t", amount: 2 },
           cfc: {
             version: 1,
@@ -1480,15 +1700,17 @@ describe("run-pattern", () => {
         );
         const missing = runtime.getCell(space, "unavailable-attribution-input");
         const missingId = missing.getAsNormalizedFullLink().id;
-        const prototype = Object.getPrototypeOf(missing) as Cell<unknown>;
-        const originalPull = prototype.pull;
+        const originalSubscribe = runtime.scheduler.subscribe.bind(
+          runtime.scheduler,
+        );
         let failedReads = 0;
-        using _pull = stub(prototype, "pull", function (this: Cell<unknown>) {
-          if (this.getAsNormalizedFullLink().id === missingId) {
+        using _pull = stub(runtime.scheduler, "subscribe", (...args) => {
+          const action = args[0];
+          if (action.name === `pull:${missingId}`) {
             failedReads++;
-            return Promise.reject(new Error("input became unavailable"));
+            throw new Error("input became unavailable");
           }
-          return originalPull.call(this);
+          return originalSubscribe(...args);
         });
 
         const result = await createStrictEngine(
@@ -1779,13 +2001,8 @@ describe("run-pattern", () => {
       }
     });
 
-    it("returns the result reference without consulting the ceiling when no `resultSchema` asks for values", async () => {
-      // A reference names the result without carrying it, so handing one
-      // back discloses nothing: the ceiling gates values, and a call that
-      // asks for none is not measured against it. This is the shape an
-      // agent that routes data it never reads relies on — the pattern
-      // derives from a labeled input, and the reference to what it derived
-      // comes back all the same.
+    it("silently omits refused status when no `resultSchema` asks for values", async () => {
+      // The host's status fit leaves the existing reference and concerns intact.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const accountRef = await seedLabelledAccount(
@@ -1807,11 +2024,13 @@ describe("run-pattern", () => {
         expect(output.valueError).toBeUndefined();
         expect(output.policyRefusal).toBeUndefined();
         expect(output.releaseObservation).toBeUndefined();
-        // Nothing was measured, so the trace records no decision about a
-        // boundary this call never reached.
-        expect(output.releaseDecision).toBeUndefined();
-        // The result did derive from the labeled input: the reference names
-        // exactly what the ceiling withholds as a value.
+        expect(output.releaseDecision?.reasonCode).toBe("cfc_release_withheld");
+        expect(output.pending).toBeUndefined();
+        expect(output.hasError).toBeUndefined();
+        expect(output.outputConcerns?.map(({ concern }) => concern)).toEqual([
+          "error-branch",
+          "pending",
+        ]);
         expect((output.rawValue as { totalSpending: number }).totalSpending)
           .toBe(145);
       } finally {
@@ -1820,11 +2039,8 @@ describe("run-pattern", () => {
     });
 
     it("withholds the values the ceiling refuses and still returns the result reference", async () => {
-      // Asking for values is what consults the ceiling, and a refusal
-      // withholds exactly what was measured: the values. The reference comes
-      // back with them withheld, so the agent can still pass the result on
-      // by reference, and the refusal reaches it as data and as an
-      // instruction while the reason stays in the artifact.
+      // A ceiling refusal is final for this read, so a pending output must
+      // not ask the caller to repeat it. Observed failures remain visible.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const accountRef = await seedLabelledAccount(
@@ -1863,8 +2079,13 @@ describe("run-pattern", () => {
           refusal: output.policyRefusal,
         });
         expect(output.releaseDecision?.refusal?.inputKeys).toEqual(["account"]);
-        expect((output.rawValue as { totalSpending: number }).totalSpending)
-          .toBe(145);
+        expect(output.rawValue).toMatchObject({
+          totalSpending: 145,
+          pending: true,
+        });
+        expect(output.outputConcerns?.map(({ concern }) => concern)).toEqual([
+          "error-branch",
+        ]);
       } finally {
         await dispose();
       }
@@ -2070,7 +2291,12 @@ describe("run-pattern", () => {
         );
         const sourceId = sourceCell.getAsNormalizedFullLink().id;
         writeSeedEnvelopeDoc(seed, space);
-        seed.writeOrThrow({ space, scope: "space", id: sourceId, path: [] }, {
+        seedStoredEnvelope(seed, {
+          space,
+          scope: "space",
+          id: sourceId,
+          path: [],
+        }, {
           value: {
             expenses: [
               { description: "alpha-secret", amount: 1 },
@@ -2148,7 +2374,7 @@ describe("run-pattern", () => {
       // back as the values, but no document at rest holds a copy at all: a
       // reader reaching the text does so through the source's own label map.
       // The call asks for no values, so what leaves the fabric for the model
-      // is the reference alone, and nothing is measured or withheld.
+      // is the reference alone; the host's status fit withholds its booleans.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const expenseIds: string[] = [];
@@ -2165,7 +2391,7 @@ describe("run-pattern", () => {
           );
           const id = cell.getAsNormalizedFullLink().id;
           writeSeedEnvelopeDoc(seed, space);
-          seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+          seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
             value: { description, amount: i + 1 },
             cfc: {
               version: 1,
@@ -2243,6 +2469,8 @@ describe("run-pattern", () => {
       });
       const output = result.output as RunPatternToolErrorOutput;
       expect(output.status).toBe("compile-error");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
       expect(output.message.length).toBeGreaterThan(0);
       expect(result.runState.status).not.toBe("failed");
     });
@@ -2283,6 +2511,95 @@ describe("run-pattern", () => {
       expect(spy.calls).toBe(0);
     });
 
+    it("runs over an admitted foreign input while retaining its CFC labels", async () => {
+      const { runtime, pieces, space, dispose } = await createStrictFabric();
+      try {
+        const foreign = (await createSession({
+          identity: signer,
+          spaceName: `foreign-input-${crypto.randomUUID()}`,
+        })).space;
+        const tx = runtime.edit();
+        const source = runtime.getCell(
+          foreign,
+          "foreign-labeled-input",
+          undefined,
+          tx,
+        );
+        const link = source.getAsNormalizedFullLink();
+        const label = {
+          confidentiality: ["secret"],
+          integrity: ["topic-source"],
+        };
+        writeSeedEnvelopeDoc(tx, foreign);
+        seedStoredEnvelope(tx, { ...link, path: [] }, {
+          value: { secret: "s3cr3t" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [{ path: ["secret"], label }] },
+          },
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        const ref = createLLMFriendlyLink(link, space);
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: `foreign-labels-${crypto.randomUUID()}`,
+          inputCells: [{ name: "source", ref }],
+          fabricSessionFactory: () =>
+            Promise.resolve({
+              pieces,
+              foreignSpaces: { [foreign]: "https://foreign.example/" },
+            }),
+        });
+        const [attached] = await engine.establishInputCells();
+        const admittedRef =
+          resolveHandleToken(engine.handleTable!, attached.token)!.ref;
+        expect(admittedRef).toContain(foreign);
+        const result = await engine.invokeBuiltinTool("run_pattern", {
+          sourceText: [
+            "import { pattern } from 'commonfabric';",
+            "interface Input { source: { secret: string }; }",
+            "interface Output { secret: string; }",
+            "export default pattern<Input, Output>(({ source }) => ({",
+            "  secret: source.secret,",
+            "}));",
+          ].join("\n"),
+          inputs: { source: admittedRef },
+          resultSchema: {
+            type: "object",
+            properties: { secret: { type: "string" } },
+            required: ["secret"],
+          },
+        });
+        const output = result.output as RunPatternToolSuccessOutput;
+        expect(output.status).toBe("ok");
+        expect(output.rawValue).toEqual({ secret: "s3cr3t" });
+        expect(output.value).toBeUndefined();
+        expect(output.valueError).toContain("policy refused to release");
+        const forwarded = runtime.getCellFromLink(
+          parseLLMFriendlyLink(output.resultRef, space),
+        ).key("secret");
+        expect(forwarded.get()).toBe("s3cr3t");
+        const referenceEntries = cfcLabelViewForCellFailClosed(forwarded)
+          ?.entries.filter((entry) => entry.observes === "followRef") ?? [];
+        expect(referenceEntries.flatMap((entry) => entry.label.integrity ?? []))
+          .not.toContain("topic-source");
+        expect(
+          cfcLabelViewForCellFailClosed(forwarded.resolveAsCell())?.entries,
+        )
+          .toContainEqual({ path: [], label });
+        const foreignSecret = runtime.getCellFromLink(link).key("secret");
+        expect(foreignSecret.get()).toBe("s3cr3t");
+        expect(cfcLabelViewForCellFailClosed(foreignSecret)?.entries)
+          .toContainEqual({
+            path: [],
+            label,
+          });
+      } finally {
+        await dispose();
+      }
+    });
+
     it("returns an error for a live-cell input whose value does not match the argument schema, creating no piece", async () => {
       const space = pieces.getSpace();
       const seed = runtime.getCell(
@@ -2312,6 +2629,8 @@ describe("run-pattern", () => {
       expect(output.status).toBe("error");
       expect(output.message).toContain('input "n"');
       expect(output.message).toContain("argument schema");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
       expect(spy.calls).toBe(0);
     });
 
@@ -2617,6 +2936,8 @@ describe("run-pattern", () => {
       }, { signal: controller.signal });
       const output = result.output as RunPatternToolErrorOutput;
       expect(output.status).toBe("cancelled");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
     });
 
     it("serializes a plain value and answers undefined for one JSON cannot carry", () => {
@@ -2707,6 +3028,44 @@ describe("run-pattern", () => {
       } finally {
         await dispose();
       }
+    });
+
+    it("returns a `cancelled` output when the signal aborts during the output-concern scan", async () => {
+      // The scan is the one reader of `since()`, and it asks as it begins, so
+      // aborting there lands the signal while the scan is in flight — with
+      // the release measurement's own race already resolved.
+      const controller = new AbortController();
+      const aborting: FabricPatternInstantiations = {
+        sequence: () => recorder.instantiations.sequence(),
+        since: (from) => {
+          controller.abort();
+          return recorder.instantiations.since(from);
+        },
+        keylessSince: (from) => recorder.instantiations.keylessSince(from),
+      };
+      const stopped: unknown[] = [];
+      const runner = runtime.runner as unknown as {
+        stop: (cell: unknown) => unknown;
+      };
+      const originalStop = runner.stop.bind(runtime.runner);
+      runner.stop = (cell) => {
+        stopped.push(cell);
+        return originalStop(cell);
+      };
+
+      const result = await createEngine(aborting).invokeBuiltinTool(
+        "run_pattern",
+        {
+          sourceText: DOUBLING_PATTERN_SOURCE,
+          inputs: { n: 21 },
+          resultSchema: DOUBLED_RESULT_SCHEMA,
+        },
+        { signal: controller.signal },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+
+      expect(output.status).toBe("cancelled");
+      expect(stopped.length).toBe(1);
     });
 
     it("surfaces a rejected session construction as a structured error and invokes the factory again on the next call", async () => {

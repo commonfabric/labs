@@ -119,7 +119,7 @@ describe("check-control-characters", () => {
           "packages/fuse/verify-structs.c",
           "docs/specs/memory-v2/tla/PendingStacks.tla",
           "packages/shell/public/manifest.webmanifest",
-          "tasks/test-identity-aliases.jsonl",
+          "tasks/test-identity-aliases/tags.test.ts.jsonl",
           "packages/shell/public/assets/cf.svg",
           "Dockerfile.toolshed",
           "docs/README.md",

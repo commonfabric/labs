@@ -59,6 +59,32 @@ async function runScript(
 }
 
 /**
+ * The console-launch arguments `start-local-dev.sh` builds for one fabric,
+ * with `env` over the fixed values the rest of the launch needs.
+ */
+async function consoleLaunchArgs(
+  env: Record<string, string>,
+): Promise<string[]> {
+  const { stdout } = await new Deno.Command("bash", {
+    args: ["-c", "source scripts/common/console-args.sh\nconsole_launch_args"],
+    cwd: repoRoot,
+    env: {
+      CONSOLE_PORT: "8135",
+      TOOLSHED_API_URL: "http://localhost:8000",
+      CONSOLE_STORE: "/store",
+      ...env,
+      PATH: Deno.env.get("PATH") ?? "",
+    },
+    clearEnv: true,
+    stdout: "piped",
+    stderr: "inherit",
+  }).output();
+  return new TextDecoder().decode(stdout).trim().split("\n").filter((line) =>
+    line !== ""
+  );
+}
+
+/**
  * Run a bash snippet with the local dev scripts' shared port utilities
  * sourced, and return what it printed.
  */
@@ -90,6 +116,45 @@ describe("local-dev-scripts", () => {
       );
       expect(code).not.toBe(PORT_UNREACHABLE_EXIT);
       expect(stderr).toContain("shell exited before it became ready");
+    });
+
+    it("forwards `--allow-skill-scripts` to the console launch when named", async () => {
+      // The launch site sits behind the toolshed and shell coming up, so a
+      // test driving the whole script never reaches it. The arguments it
+      // builds are asserted directly instead, which is what a deleted
+      // forwarding line would otherwise slip past.
+      const named = await consoleLaunchArgs({
+        CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG: "true",
+      });
+      expect(named).toContain("--allow-skill-scripts");
+
+      const unnamed = await consoleLaunchArgs({});
+      expect(unnamed).not.toContain("--allow-skill-scripts");
+      // The rest of the launch is unchanged either way.
+      expect(unnamed).toEqual([
+        "--port",
+        "8135",
+        "--fabric-api-url",
+        "http://localhost:8000",
+        "--store",
+        "/store",
+      ]);
+    });
+
+    it("parses `--allow-skill-scripts` beside `--cf-harness`", async () => {
+      // What this reaches is the argument loop: the flag is recognized rather
+      // than falling into its catch-all, and the run still ends at the port
+      // check. It does NOT reach the console-launch invocation, so it says
+      // nothing about the flag being forwarded — that block sits behind the
+      // toolshed and shell coming up, which a stubbed `deno` never does.
+      const { code, stderr } = await runScript(
+        "start-local-dev.sh",
+        UNREACHABLE_SHELL_OFFSET,
+        { args: ["--cf-harness", "--allow-skill-scripts"] },
+      );
+
+      expect(code).toBe(PORT_UNREACHABLE_EXIT);
+      expect(stderr).not.toContain("--allow-skill-scripts");
     });
 
     it("answers from the recorded list, not from the environment", async () => {

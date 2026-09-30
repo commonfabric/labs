@@ -1,12 +1,15 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
-import { exists } from "@std/fs";
+import { exists, existsSync, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
+  COMPILE_FINGERPRINT_INPUTS,
   computeCompilerVersion,
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
+import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 
 export interface BuildConfigInitializer {
   root: string;
@@ -15,8 +18,55 @@ export interface BuildConfigInitializer {
   cliOnly?: boolean;
 }
 
-export const BINARY_NAMES = ["toolshed", "bg-piece-service", "cf"] as const;
+export const BINARY_NAMES = ["toolshed", "cf"] as const;
 export type BinaryName = (typeof BINARY_NAMES)[number];
+
+/**
+ * Everything a built binary is made from, as repository-relative files and
+ * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
+ * which `deno compile` embeds in every binary; this script and the pattern
+ * file classification it imports; the workspace
+ * manifest and lockfile; the port table the servers import; and the trees
+ * that the entry points' module graphs and every `--include` reach. A CI lane
+ * keys the binaries it caches on the tracked contents of these, so a change
+ * to any of them builds the binaries afresh and a change to anything else
+ * reuses what was built. `BuildConfig.sourcePaths()` lies within them.
+ */
+export const BINARY_SOURCES = [
+  "mise.toml",
+  "tasks/build-binaries.ts",
+  "tasks/pattern-files.ts",
+  "deno.jsonc",
+  "deno.lock",
+  "ports.json",
+  "packages/",
+  "docs/common/",
+] as const;
+
+/**
+ * The environment variables a build needs from the machine it runs on: where
+ * to find programs, the home and temporary directories, where Deno keeps its
+ * cache, and how it reaches the network to fetch dependencies, whose contents
+ * the lockfile pins. None of them reaches a binary, which
+ * `build-binaries.test.ts` holds the shell bundle's configuration to. A CI
+ * lane building a binary it caches passes these through from its own
+ * environment, and nothing else, so every other variable the build reads is
+ * one the lane either sets or leaves unset.
+ */
+export const BUILD_HOST_VARIABLES = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "DENO_DIR",
+  "XDG_CACHE_HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "DENO_CERT",
+  "DENO_TLS_CA_STORE",
+  "DENO_AUTH_TOKENS",
+  "NPM_CONFIG_REGISTRY",
+] as const;
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
   if (args.length === 0) return [...BINARY_NAMES];
@@ -128,19 +178,6 @@ export class BuildConfig {
     return this.#path("packages", "toolshed", "index.ts");
   }
 
-  bgPieceServiceEntryPath() {
-    return this.#path("packages", "background-piece-service", "src", "main.ts");
-  }
-
-  bgPieceServiceWorkerPath() {
-    return this.#path(
-      "packages",
-      "background-piece-service",
-      "src",
-      "worker.ts",
-    );
-  }
-
   toolshedEnvPath() {
     return this.#path("packages", "toolshed", "COMPILED");
   }
@@ -182,6 +219,95 @@ export class BuildConfig {
     return this.#path("packages", "fuse");
   }
 
+  /**
+   * Every path the build reads, as opposed to writes: those its path methods
+   * name, and the compiler inputs whose fingerprint `prepareWorkspace()`
+   * writes into the binaries. A binary cached under `BINARY_SOURCES` is only
+   * as fresh as this list is complete, so every path a path method of this
+   * class names is either named here or named by a method that
+   * `build-binaries.test.ts` records as naming paths the build does not read.
+   */
+  sourcePaths(): string[] {
+    return [
+      this.workspaceManifestPath(),
+      this.workspaceLockPath(),
+      this.compileCacheVersionPath(),
+      this.shellProjectPath(),
+      this.toolshedProjectPath(),
+      this.toolshedEntryPath(),
+      this.staticAssetsPath(),
+      ...this.patternPaths(),
+      this.staticTypesPath(),
+      this.docsCommonPath(),
+      this.cliEntryPath(),
+      this.cliMultiUserTestWorkerPath(),
+      this.fusePackagePath(),
+      ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
+        this.#path(...input.split("/"))
+      ),
+    ];
+  }
+
+  /**
+   * Returns the files and directories `deno compile` embeds in `binary`
+   * besides its entry point's module graph. The compile also follows the imports of every
+   * JavaScript and TypeScript module among them, declaration files aside, so
+   * those imports are embedded too.
+   */
+  includePaths(binary: BinaryName): string[] {
+    switch (binary) {
+      case "toolshed":
+        return [
+          this.toolshedShellFrontendPath(),
+          this.toolshedShellFrontendPathDev(),
+          this.toolshedEnvPath(),
+          this.staticAssetsPath(),
+          ...this.patternPaths(),
+        ];
+      case "cf":
+        return [
+          this.staticTypesPath(),
+          this.docsCommonPath(),
+          this.fusePackagePath(),
+          // The worker `cf test` spawns in multi-user mode. The compile does
+          // not follow a worker's module, so it is named here.
+          this.cliMultiUserTestWorkerPath(),
+          // The build metadata `packages/cli/lib/build-info.ts` reads.
+          this.cliEnvPath(),
+        ];
+    }
+  }
+
+  /**
+   * Returns the paths within `includePaths()` that `deno compile` does not
+   * embed in `binary` on their own account. A module among them is still
+   * embedded when an embedded module imports it. The toolshed leaves out the
+   * files in the pattern trees that it never serves to a runtime: the
+   * integration tests with their helpers and fixtures, the recorded
+   * compatibility baselines, every other test file, and every iframe guest
+   * source. Those files are the ones in the pattern trees that import
+   * npm packages, which `deno compile` would otherwise embed too.
+   */
+  excludePaths(binary: BinaryName): string[] {
+    if (binary !== "toolshed") return [];
+    const directories = [
+      this.#path("packages", "patterns", "integration"),
+      this.#path(...BASELINES_DIR.split("/")),
+    ];
+    const files = this.patternPaths().flatMap((tree) =>
+      Array.from(
+        walkSync(tree, { includeDirs: false }),
+        (entry) => entry.path,
+      ).filter((file) =>
+        (/\.test\.tsx?$/.test(file) || isIframeGuestSource(file, tree)) &&
+        !directories.some((directory) =>
+          file.startsWith(`${directory}${path.SEPARATOR}`)
+        )
+      )
+    );
+    return [...directories, ...files.sort()];
+  }
+
   distDir() {
     return this.#path("dist");
   }
@@ -200,7 +326,6 @@ export type BuildDependencies = {
   buildShell(config: BuildConfig): Promise<void>;
   prepareWorkspace(config: BuildConfig): Promise<void>;
   buildToolshed(config: BuildConfig): Promise<void>;
-  buildBgPieceService(config: BuildConfig): Promise<void>;
   buildCli(config: BuildConfig): Promise<void>;
   revertWorkspace(config: BuildConfig): Promise<void>;
 };
@@ -210,7 +335,6 @@ export const defaultBuildDependencies: BuildDependencies = {
   buildShell,
   prepareWorkspace,
   buildToolshed,
-  buildBgPieceService,
   buildCli,
   revertWorkspace,
 };
@@ -227,9 +351,6 @@ export async function build(
     if (config.builds("toolshed")) await dependencies.buildShell(config);
     await dependencies.prepareWorkspace(config);
     if (config.builds("toolshed")) await dependencies.buildToolshed(config);
-    if (config.builds("bg-piece-service")) {
-      await dependencies.buildBgPieceService(config);
-    }
     if (config.builds("cf")) await dependencies.buildCli(config);
   } catch (e: unknown) {
     buildError = e as Error;
@@ -261,15 +382,12 @@ async function buildShell(config: BuildConfig): Promise<void> {
         task,
       ],
       cwd: config.shellProjectPath(),
+      // The shell's configuration reads what it bakes in from the
+      // environment this build inherited: the same `COMMIT_SHA` and
+      // `EXPERIMENTAL_SERVER_EXECUTION` that `prepareWorkspace()` writes into
+      // the markers, each unset where the caller left it unset.
       stdout: "inherit",
       stderr: "inherit",
-      env: {
-        // `clearEnv` remains false, so this child inherits the caller's
-        // EXPERIMENTAL_SERVER_EXECUTION value and bakes the same posture as
-        // the parent binary build. This is load-bearing for the opposite
-        // CI lane's cache-miss path.
-        COMMIT_SHA: Deno.env.get("COMMIT_SHA") || mode,
-      },
     }).output();
     if (!success) {
       throw new Error("Failed to build shell app");
@@ -303,18 +421,7 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
       "--unstable-otel",
       "--output",
       config.distPath("toolshed"),
-      "--include",
-      config.toolshedShellFrontendPath(),
-      "--include",
-      config.toolshedShellFrontendPathDev(),
-      "--include",
-      config.toolshedEnvPath(),
-      "--include",
-      config.staticAssetsPath(),
-      ...config.patternPaths().flatMap((patternPath) => [
-        "--include",
-        patternPath,
-      ]),
+      ...embedArgs(config, "toolshed"),
       ...config.toolshedFlags,
       config.toolshedEntryPath(),
     ],
@@ -326,36 +433,6 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
     throw new Error("Failed to build toolshed binary");
   }
   console.log("Toolshed binary built successfully");
-}
-
-async function buildBgPieceService(config: BuildConfig): Promise<void> {
-  console.log("Building background piece service binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
-    args: [
-      ...lockedCompileArgs(config),
-      // Run `--no-check` here, as the `--include`'d
-      // `es2023.d.ts` file will attempt to be checked
-      // as a non-static asset. Checking should be done
-      // prior to building.
-      "--no-check",
-      "--output",
-      config.distPath("bg-piece-service"),
-      "--include",
-      config.bgPieceServiceWorkerPath(),
-      "--include",
-      config.staticAssetsPath(),
-      "-A", // All permissions
-      "--unstable-worker-options", // Required by bg-piece-service
-      config.bgPieceServiceEntryPath(),
-    ],
-    cwd: config.root,
-    stdout: "inherit",
-    stderr: "inherit",
-  }).output();
-  if (!success) {
-    throw new Error("Failed to build background piece service binary");
-  }
-  console.log("Background piece service binary built successfully");
 }
 
 async function buildCli(config: BuildConfig): Promise<void> {
@@ -403,19 +480,7 @@ async function buildCli(config: BuildConfig): Promise<void> {
       "--allow-run",
       "--allow-ffi", // for @db/sqlite
       "--allow-net", // for @db/sqlite lazy download
-      "--include",
-      config.staticTypesPath(),
-      "--include",
-      config.docsCommonPath(),
-      "--include",
-      config.fusePackagePath(),
-      // Worker module spawned by cf test's multi-user mode — workers are not
-      // followed by compile's static analysis, so include it explicitly.
-      "--include",
-      config.cliMultiUserTestWorkerPath(),
-      // Build metadata marker read by packages/cli/lib/build-info.ts.
-      "--include",
-      config.cliEnvPath(),
+      ...embedArgs(config, "cf"),
       config.cliEntryPath(),
     ],
     cwd: config.root,
@@ -428,6 +493,45 @@ async function buildCli(config: BuildConfig): Promise<void> {
   console.log("CLI binary built successfully");
 }
 
+/**
+ * Helper for the compile steps, which turns what `binary` embeds besides its
+ * entry point's module graph into `deno compile` flags.
+ */
+export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
+  return [
+    ...config.includePaths(binary).flatMap((at) => ["--include", at]),
+    ...[
+      ...config.excludePaths(binary),
+      ...(binary === "cf" ? unusedGrammarDirectories() : []),
+    ].flatMap((at) => ["--exclude", at]),
+  ];
+}
+
+/**
+ * Returns the directories in each Tree-sitter grammar package that the pager
+ * never reads, which the `cf` binary leaves out: every directory in the
+ * package but the one holding its compiled parser, such as generated C source
+ * and native builds. The packages are in Deno's npm cache rather than in the
+ * repository.
+ */
+export function unusedGrammarDirectories(): string[] {
+  return treeSitterGrammars.flatMap((grammar) => {
+    const parser = path.fromFileUrl(grammar.wasmUrl());
+    let root = path.dirname(parser);
+    while (!existsSync(path.join(root, "package.json"))) {
+      if (path.dirname(root) === root) {
+        throw new Error(`No package holds the ${grammar.id} grammar ${parser}`);
+      }
+      root = path.dirname(root);
+    }
+    const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
+    return Array.from(Deno.readDirSync(root))
+      .filter((entry) => entry.isDirectory && entry.name !== kept)
+      .map((entry) => path.join(root, entry.name))
+      .sort();
+  });
+}
+
 function lockedCompileArgs(config: BuildConfig): string[] {
   // Keep compiled binaries on the same resolved dependency graph as normal
   // install/test flows, even when compile runs from a package cwd.
@@ -436,6 +540,11 @@ function lockedCompileArgs(config: BuildConfig): string[] {
     "--lock",
     config.workspaceLockPath(),
     "--frozen=true",
+    // Embed only the npm packages the binary's module graph reaches, rather
+    // than every npm package in the lockfile. A package that a binary loads
+    // only through a specifier the compile cannot read statically must be
+    // named with `--include npm:<package>`.
+    "--exclude-unused-npm",
   ];
 }
 

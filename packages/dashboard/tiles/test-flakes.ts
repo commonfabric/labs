@@ -5,60 +5,72 @@
  * than from anybody's judgement at one moment, which is what makes it
  * reverse on its own the moment a test is fixed.
  *
- * The count is the whole of the tile, and the line under it says what the
- * count was drawn from: how much history the publisher measured over, and
- * how long ago it measured. Which tests they are, and what each was
- * measured at, is a page away.
+ * The line under the count says how much history the publisher measured over
+ * and how long ago it measured. The chart shows the count in every available
+ * manifest, with gaps for missing measurements. The tests are a page away.
  *
  * Following the dashboard's values (README.md): it reports on the system.
  * Neither the count nor the page behind it is aggregated per person, and
  * that page names tests, never the people who wrote or touched them.
  */
 
-import type { Status, Tile, TileView } from "../types.ts";
+import type { Manifest } from "@commonfabric/test-support/records";
+
 import { compactSpan, groupDigits } from "../lib.ts";
+import {
+  collectSelectionTile,
+  sharedTestSelection,
+  type TestSelectionSource,
+} from "../test-selection-history.ts";
 import {
   FLAKE_WINDOW_FALLBACK_DAYS,
   flakyCount,
   MANIFEST_SHARE_MS,
-  type ManifestReader,
   numberDial,
-  sharedManifest,
 } from "../test-selection-manifest.ts";
 import {
   FLAKY_SECTION_ID,
   TEST_SELECTION_PATH,
 } from "../test-selection-page.ts";
+import { publisherRunning } from "../test-selection-activity.ts";
+import type { Status, Tile, TileView } from "../types.ts";
 
-/** How many flaky tests turn the wall amber. */
+/** How many flaky tests turn the dashboard amber. */
 export const FLAKES_WARN = 1;
 
 /** How many turn it red. */
 export const FLAKES_BAD = 10;
 
-/** Builds the tile against a reader and a clock, so a test can supply both. */
+/** Builds the tile against a data source and a clock. */
 export function makeTestFlakes(
-  options: { read?: ManifestReader; now?: () => number } = {},
+  options: { source?: TestSelectionSource; now?: () => number } = {},
 ): Tile {
-  const read = options.read ?? sharedManifest;
+  const source = options.source ?? sharedTestSelection;
   return {
-    id: "test-flakes",
+    label: "flaky tests",
     intervalMs: MANIFEST_SHARE_MS,
-    collect: () => flakesView(read, options.now),
+    collectActivity: publisherRunning,
+    collect: (_ctx, publish) =>
+      collectSelectionTile(
+        source,
+        "flaky",
+        (manifest) => flakesView(manifest, options.now),
+        publish,
+      ),
   };
 }
 
-async function flakesView(
-  read: ManifestReader,
+function flakesView(
+  manifest: Manifest | undefined,
   clock?: () => number,
-): Promise<TileView> {
-  const manifest = await read();
-  if (manifest === undefined) {
+): TileView {
+  if (manifest === undefined || manifest.entries.length === 0) {
     return {
-      label: "flaky tests",
       status: "unknown",
       value: "—",
-      sub: "no selection manifest yet",
+      sub: manifest === undefined
+        ? "no selection manifest yet"
+        : "selection manifest has no tests",
     };
   }
   const held = flakyCount(manifest);
@@ -81,7 +93,6 @@ async function flakesView(
     (clock?.() ?? Date.now()) - Date.parse(manifest.generatedAt),
   );
   return {
-    label: "flaky tests",
     status,
     value: headline,
     valueLabel: headline,

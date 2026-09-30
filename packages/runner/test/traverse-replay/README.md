@@ -56,6 +56,12 @@ behavior-preserving optimization must keep byte-identical:
 3. **Schema-tracker contents** for shared/`traverseCells` contexts — the
    server-side subscription surface.
 
+The read flag `m` means metadata is present, not that scheduling or conflict
+checks ignore the read. A terminal `linkResolutionProbe` retains both surfaces
+while distinguishing reference construction from payload observation. Changes to
+that classification require reviewing the metadata as well as the recorded
+addresses and option flags.
+
 `deno task test` runs `traverse-replay.test.ts`, which asserts replay matches
 the goldens. An intended semantic change regenerates goldens via
 `regen-goldens.ts`; the golden diff in the PR is the review artifact.

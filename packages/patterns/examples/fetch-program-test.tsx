@@ -16,7 +16,7 @@ import {
 export default pattern(() => {
   // URL to a simple pattern file
   const url = new Writable(
-    "https://raw.githubusercontent.com/commontoolsinc/labs/main/packages/patterns/counter.tsx",
+    "https://raw.githubusercontent.com/commonfabric/labs/main/packages/patterns/counter.tsx",
   );
 
   // Step 1: Fetch the program from URL

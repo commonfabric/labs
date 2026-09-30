@@ -92,7 +92,7 @@ The original harm was not "you cannot do this yet" but the boundary
 copy settled, reported a plausible result, and stored a **detached copy
 inside the caller's own document**, with nothing reporting an error. Measured
 addresses and reproduction:
-[#5560](https://github.com/commontoolsinc/labs/issues/5560).
+[#5560](https://github.com/commonfabric/labs/issues/5560).
 
 At the CLI that table now reads:
 

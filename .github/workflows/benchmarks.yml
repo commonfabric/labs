@@ -90,10 +90,14 @@ jobs:
           deno bench --json -A --v8-flags=--expose-gc \
             packages/runner/test/*.bench.ts \
             packages/utils/src/cache.bench.ts \
+            packages/utils/test/string-tuple-key.bench.ts \
             packages/utils/test/deep-equal.bench.ts \
             packages/fuse/entity-projection.bench.ts \
             packages/memory/test/v2-entity-id-list.bench.ts \
             packages/memory/test/v2-cached-patch-replay.bench.ts \
+            packages/memory/test/v2-engine-read.bench.ts \
+            packages/memory/test/v2-path.bench.ts \
+            packages/memory/test/v2-refresh-schema-closure.bench.ts \
             packages/data-model/bench/hashing.bench.ts \
             packages/data-model/bench/codec-json.bench.ts \
             packages/dashboard/machine-calibration.bench.ts \
@@ -104,40 +108,24 @@ jobs:
             > bench-results/results.json \
             2> >(tee bench-results/diagnostics.log >&2)
 
-      # Fail the run if any bench file wrote non-JSON to stdout, if the report
-      # lists no benches, or if it carries no machine calibration. Failing here
-      # makes each of those a visible red run. It does not keep the artifact
-      # out of the charts, because the dashboard reads a red run's artifact
-      # too: what it drops is an artifact it cannot parse, which is this same
-      # test applied on its side. A report without calibration is not corrupt,
-      # but the dashboard cannot tell a busy host from a code change in it, so
-      # it fails here rather than feeding an uncorrected run into the trend.
-      # The script rides in a single-quoted shell argument — keep apostrophes
-      # out of it.
+      # Fail the run when stdout carried anything besides the report, or when
+      # the report is missing something the dashboard needs from it: the
+      # processor identity, product measurements, the machine calibration, or
+      # the two series the key benchmarks tile trends. Failing here makes each
+      # of those a visible red run. It does not keep the artifact out of the
+      # charts, because the dashboard reads a red run's artifact too. What the
+      # dashboard does with a report missing one of these differs by which one:
+      # a report that does not parse or names no processor is dropped whole, a
+      # report without calibration is charted uncorrected, and measurements the
+      # key tile selects by name are simply absent from it. None of that is a
+      # corrupt report, but a chart that quietly thins says nothing about when
+      # it started, so the run that produced one fails here instead. The checks
+      # live in packages/dashboard/bench-report.ts, beside the code that reads
+      # the report, so the two cannot drift apart.
       - name: ✅ Validate benchmark results
-        run: |
-          deno eval '
-            const data = JSON.parse(
-              Deno.readTextFileSync("bench-results/results.json"),
-            );
-            if (!Array.isArray(data.benches) || data.benches.length === 0) {
-              throw new Error("results.json parsed but contains no benches");
-            }
-            const calibration = data.benches.filter((bench) =>
-              String(bench.origin ?? "").endsWith(
-                "/packages/dashboard/machine-calibration.bench.ts",
-              )
-            );
-            if (calibration.length === 0) {
-              throw new Error(
-                "results.json carries no machine-calibration benches",
-              );
-            }
-            console.log(
-              `results.json OK: ${data.benches.length} benches, ` +
-                `${calibration.length} of them machine calibration`,
-            );
-          '
+        run: >
+          deno run --allow-read tasks/check-bench-report.ts
+          bench-results/results.json
 
       - name: 📤 Upload benchmark results
         if: always()

@@ -202,12 +202,17 @@ function traverseWithSchema(value, schema):
         matches.push(match)
     return mergeAnyOfMatches(matches)
 
-  if schema.allOf:
-    // All must match
+  if schema.allOf and schema.allOf is not empty:
+    // An empty allOf constrains nothing and is passed over; the keywords
+    // beside it decide the node below.
+    // All must match, and their results merge the same way
+    matches = []
     for each option in schema.allOf:
-      if traverseWithSchema(value, merge(schema, option)) == undefined:
+      match = traverseWithSchema(value, merge(schema, option))
+      if match == undefined:
         return undefined  // mismatch
-    return last successful result
+      matches.push(match)
+    return mergeAnyOfMatches(matches)
 
   // Primitive types: validate and return
   if typeMatches(value, schema.type):
@@ -216,7 +221,10 @@ function traverseWithSchema(value, schema):
 ```
 
 This mirrors the `SchemaObjectTraverser.traverseWithSchema` method from
-`traverse.ts`.
+`traverse.ts`. `merge(schema, option)` there is shallow, and
+`mergeAnyOfMatches` unions the properties of the surviving branches; both are
+specified under
+[Logical schema operators](../space-model/8-traversal.md#logical-schema-operators).
 
 #### Reference Resolution
 
@@ -264,11 +272,14 @@ ordinary cell references. The `internal` field is raw metadata, not a direct
 metadata link. It stores a manifest array, and each manifest-entry `link` names
 an internal cell owned by the result cell. The `cfc` metadata field is also
 special: it uses a compact metadata object, and traversal converts its
-`schemaHash` into a CID sigil link before loading the referenced document. The
+`schemaHash` into a CID sigil link before loading the referenced document, and
+does the same for every label document a version-2 envelope's entries
+reference by `{ "$ref": "cid:…" }`
+([content-addressed-cfc-labels.md](../content-addressed-cfc-labels.md)). Each
 synthesized link MUST declare
 [space scope](../content-addressed-schemas.md#schema-documents) even when the
 document carrying the metadata is user- or session-scoped: content-addressed
-schema documents never inherit a referrer's scope.
+documents never inherit a referrer's scope.
 
 What the evaluation loads of that metadata is the same for every document it
 delivers, whether a query NAMED the document as a root or the walk reached it
@@ -279,6 +290,11 @@ through a link crossing:
   resolve the envelope's hash to a CID document, load it, add it to the query
   result and the watch tracker, and track an absent one so that it is
   delivered when it is written.
+
+- The label documents its `cfc` envelope references, one per distinct
+  reference. A reader resolves the envelope's labels from them synchronously,
+  so the server MUST load, deliver, and track each of them exactly as it does
+  the schema document.
 
 - Nothing else. The server MUST NOT load, deliver, or track the target of a
   `pattern`, `argument`, or `result` link, or the cells an `internal`
@@ -308,8 +324,8 @@ registered, and refs to it stay unresolved.
 
 ### 5.3.3 Cycle Detection
 
-Graph traversal must handle cycles. Two cycle detection mechanisms are used,
-both derived from `traverse.ts`:
+Graph traversal must handle cycles. Three cycle detection mechanisms are used,
+all derived from `traverse.ts`:
 
 #### CycleTracker
 
@@ -364,6 +380,28 @@ type PointerCycleTracker = CompoundCycleTracker<
   any // The traversal result for this node
 >;
 ```
+
+#### Branches returning to their own position
+
+A combinator branch evaluates the same value at the same address as the schema
+it belongs to, so neither tracker sees it come back. A union whose handle
+branch names the union itself (`type Recursive = Cell<Recursive> | null`)
+returns to its own traversal without descending. The traverser keeps the memo
+keys of the traversals in progress at the current position, and a branch that
+reaches one of them stands for that traversal's result, which the traversal
+that began the position reaches as a fixed point in rounds. The first round
+takes the branch as no match. Each later round takes the result the traversal
+it comes back to had in the latest round that reached it, and a traversal
+reached again within a round takes its result from earlier in the round, so a
+round traverses each schema at the position once. Rounds repeat until one
+leaves no traversal a branch came back to matching where what stood in for it
+did not. The result then matches as the schema unrolled does and selects the
+properties it selects; where matching branches project one property
+differently, the round's merges decide which projection is kept, since an
+unrolling need not settle on one. A `oneOf`, which can reject in one round what
+it accepted in the round before, keeps the round before that rejection. A result
+that took something standing in for a traversal holds only for its round, so it
+is returned but not memoized.
 
 ### 5.3.4 Schema Narrowing
 

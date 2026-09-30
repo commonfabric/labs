@@ -21,9 +21,10 @@ tests. Questions are answered in the working conversation and recorded in
 `status.json`; the page does not submit answers.
 
 `demo.json` contains recorded output from the controlled lunch-poll run, with
-its revision and reproduction command. The page lets the reader inspect each
-interval and the reported computation rows. Totals include unlisted rows; the
-recording is not a live benchmark. Preserve provenance when replacing it.
+its revision and recorded command, alongside a command for running the fixture
+on the current checkout. The page lets the reader inspect each interval and the
+reported computation rows. Totals include unlisted rows; the recording is not a
+live benchmark. Preserve provenance when replacing it.
 
 The browser section shows recorded screenshots and diagnostic samples at three
 vote-list sizes. Its p75 timings include browser/protocol overhead and are

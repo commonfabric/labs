@@ -1,22 +1,8 @@
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 
-export type DID = `did:${string}:${string}`;
-export type DIDKey = `did:key:${string}`;
-export function isDID(input: unknown): input is DID {
-  // minimum string of `did:x:y`
-  if (
-    typeof input === "string" &&
-    input.length >= 7
-  ) {
-    const secondColon = input.indexOf(":", 4);
-    return input.startsWith("did:") &&
-      // has second colon
-      secondColon !== -1 &&
-      // does not have a third colon
-      input.indexOf(":", secondColon + 1) === -1;
-  }
-  return false;
-}
+import type { DID } from "./did.ts";
+
+export * from "./did.ts";
 
 /**
  * Some principal identified via DID identifier.

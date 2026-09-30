@@ -164,8 +164,9 @@ export default pattern(() => {
       { assertion: assert_stored_image_renders_directly },
       { assertion: assert_gated_instance_shows_fallback_only },
       { assertion: assert_empty_prompt_shows_fallback_only },
-      // Drives the generating instance's mocked fetch to completion.
-      { settle: true },
+      // The first of these reads the generating instance's mocked fetch,
+      // which starts it; the harness waits for the response before it
+      // reads again.
       { assertion: assert_generation_outputs_materialize },
       { assertion: assert_generated_overlay_renders },
     ],

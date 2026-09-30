@@ -44,10 +44,11 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
+  URI,
 } from "../src/storage/interface.ts";
 import { ReplicaLoadFailureError } from "../src/storage/interface.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
@@ -69,9 +70,19 @@ import { normalizeClause } from "../src/cfc/clause.ts";
 import type { CfcMetadata } from "../src/cfc/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredReferenceEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { waitUntil } from "./support/wait-until.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitEach,
+  awaitEdges,
+  awaitReplica,
+  type Edge,
+  settleServing,
+} from "./support/serving-waits.ts";
 
 /** The serving-loop harness's settle-gate seam (see
  * executor-serving-loop.test.ts): when set, the loop's settle hangs at
@@ -115,9 +126,13 @@ class GatedStorageManager extends EmulatedStorageManager {
   syncGate: Promise<void> | undefined;
   syncGateWhen: ((id: string) => boolean) | undefined;
 
-  /** How many syncs the sync gate has parked (a pin's evidence that a
-   * drain WAS held in the window it constructs). */
-  syncGateHits = 0;
+  /** The syncs the sync gate has parked, by doc id — a pin's evidence
+   * that a drain WAS held in the window it constructs, and the edge a
+   * pin waits on to know the hold is in place. A parked drain runs no
+   * further cycle of its own, so the loop's own cycle edge cannot report
+   * this. Static because the host may rotate runtime tenures and a pin
+   * spans every tenure of its pass. */
+  static syncGateParks = new ArrivalLog<string>();
 
   override async inputSynced(): Promise<void> {
     await super.inputSynced();
@@ -137,9 +152,9 @@ class GatedStorageManager extends EmulatedStorageManager {
    * the pass under test. */
   static syncThrowWhen: ((id: string) => boolean) | undefined;
 
-  /** How many syncs the throw seam refused — each drain pass that
-   * touched the failing sidecar counts one. */
-  static syncThrowHits = 0;
+  /** The syncs the throw seam refused, by doc id — one per drain pass
+   * that touched the failing sidecar. */
+  static syncThrows = new ArrivalLog<string>();
 
   /** The FOURTH seam, the HEAD-EVENT LOAD-PARK FAILURE arm: a served
    * event's dispatch preflight parks on an in-flight replica load its
@@ -159,9 +174,9 @@ class GatedStorageManager extends EmulatedStorageManager {
     | { space: MemorySpace; scope: "space"; id: string }
     | undefined;
 
-  /** How many head-event load parks the seam has failed — a pin's
-   * evidence that the park was REACHED, not merely armed. */
-  static loadParkFailHits = 0;
+  /** The head-event load parks the seam has failed — a pin's evidence
+   * that the park was REACHED, not merely armed. */
+  static loadParkFails = new ArrivalLog<readonly string[]>();
 
   /** The park key is `space/scopeKey/id` (scheduler/keys.ts); the
    * scope key resolves against the runtime's identity, so match on the
@@ -197,7 +212,7 @@ class GatedStorageManager extends EmulatedStorageManager {
 
   override loadsSettled(keys: readonly string[]): Promise<void> {
     if (keys.some((key) => GatedStorageManager.#matchesArmedDoc(key))) {
-      GatedStorageManager.loadParkFailHits += 1;
+      GatedStorageManager.loadParkFails.record(keys);
       const held = GatedStorageManager.loadParkSettle;
       const failure = (cause: unknown) =>
         new ReplicaLoadFailureError({
@@ -225,7 +240,7 @@ class GatedStorageManager extends EmulatedStorageManager {
         cell.getAsNormalizedFullLink().id,
       ) === true
     ) {
-      GatedStorageManager.syncThrowHits += 1;
+      GatedStorageManager.syncThrows.record(cell.getAsNormalizedFullLink().id);
       throw new Error("emulated transient sidecar sync failure (pin seam)");
     }
     const synced = await super.syncCell(cell, options);
@@ -233,7 +248,9 @@ class GatedStorageManager extends EmulatedStorageManager {
       this.syncGate !== undefined &&
       (this.syncGateWhen?.(cell.getAsNormalizedFullLink().id) ?? true)
     ) {
-      this.syncGateHits += 1;
+      GatedStorageManager.syncGateParks.record(
+        cell.getAsNormalizedFullLink().id,
+      );
       await this.syncGate;
     }
     return synced;
@@ -254,6 +271,24 @@ const sidecarIdsIn = (engine: Engine.Engine): string[] =>
   (engine.database.prepare(
     `SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'`,
   ).all() as Array<{ id: string }>).map((row) => row.id);
+
+/**
+ * Resolve once `predicate` holds, sleeping on the sinks of `cells` between
+ * attempts. The waits that use this watch the SERVING runtime's view — a
+ * write SEALED into an open wave, which the store does not hold yet — and
+ * reading that view at quiescence is not open to them: `runtime.idle()` on
+ * the serving side runs whatever the pin parked there to completion, and
+ * what it parked is the construction under test. So the predicate compares
+ * the cells as their sinks report them.
+ *
+ * For a value the test's own code writes, report the write from that code
+ * instead: an arrival named at its source beats a view of it.
+ */
+const awaitServingView = (
+  cells: readonly Cell<unknown>[],
+  predicate: () => boolean,
+): Promise<void> =>
+  awaitEdges(cells.map((cell): Edge => (wake) => cell.sink(wake)), predicate);
 
 const BUMP_PATTERN = [
   "import { handler, pattern, Stream, Writable } from 'commonfabric';",
@@ -456,8 +491,27 @@ describe("Phase 3 events-down (serving side)", () => {
   let rejectedWaveCommits = 0;
   let gateWaveCommitWhen: ((batch: WaveSpaceCommit) => boolean) | undefined;
   let waveCommitGate: Promise<void> | undefined;
-  let waveCommitGateHits = 0;
+  /** The waves the commit gate has held — a pin's edge for "the target
+   * wave reached the sink", which no cycle boundary reports: the gate
+   * holds the cycle that would have ended. */
+  let waveCommitGateHolds: ArrivalLog<WaveSpaceCommit>;
   let observedWaveCommits: WaveSpaceCommit[];
+
+  /** The serving side's own edges, recorded for every host this suite
+   * builds (serving-waits.ts, and the `DIAGNOSTIC (tests)` options they
+   * come from). The loop's counters move inside a wave cycle and are
+   * visible only as numbers afterwards, activation finishes on neither
+   * the admission feed's edge nor a session open's, and a re-drain the
+   * in-flight guard turns away happens inside a drain pass the test may
+   * be holding parked — so each of those has a log here to wait on. */
+  let waveCycles: ArrivalLog<MemorySpace>;
+  let activations: ArrivalLog<MemorySpace>;
+  let drainSkips: ArrivalLog<string>;
+  let drainPasses: ArrivalLog<number>;
+  /** How many barrier kicks this test has committed — the value each one
+   * writes, so no two elide against each other. */
+  let kicks: number;
+  let eventDeferrals: ArrivalLog<MemorySpace>;
   type ServingCommitFailure =
     | "result-error"
     | "rejection"
@@ -492,7 +546,7 @@ describe("Phase 3 events-down (serving side)", () => {
       ) {
         const gate = waveCommitGate;
         gateWaveCommitWhen = undefined;
-        waveCommitGateHits += 1;
+        waveCommitGateHolds.record(batch);
         return gate.then(() => {
           observedWaveCommits.push(batch);
           return sink.commitWave(batch);
@@ -574,12 +628,20 @@ describe("Phase 3 events-down (serving side)", () => {
       },
       policy: policy ?? { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
       decorateWaveCommitSink,
+      onWaveCycle: waveCycles.record,
+      onActivationSettled: activations.record,
+      onDrainInFlightSkip: (_space, eventId) => drainSkips.record(eventId),
+      onEventDrainPass: (_space, queued) => drainPasses.record(queued),
+      onEventDeferred: eventDeferrals.record,
     });
 
   beforeEach(() => {
     preciseEventReferences = false;
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     GatedStorageManager.loadParkRecoveryGeneration = 0;
+    GatedStorageManager.syncGateParks = new ArrivalLog();
+    GatedStorageManager.syncThrows = new ArrivalLog();
+    GatedStorageManager.loadParkFails = new ArrivalLog();
     extraManagers = [];
     extraRuntimes = [];
     servingRuntime = undefined;
@@ -589,8 +651,14 @@ describe("Phase 3 events-down (serving side)", () => {
     rejectedWaveCommits = 0;
     gateWaveCommitWhen = undefined;
     waveCommitGate = undefined;
-    waveCommitGateHits = 0;
+    waveCommitGateHolds = new ArrivalLog();
     observedWaveCommits = [];
+    waveCycles = new ArrivalLog();
+    activations = new ArrivalLog();
+    drainSkips = new ArrivalLog();
+    drainPasses = new ArrivalLog();
+    kicks = 0;
+    eventDeferrals = new ArrivalLog();
     failNextServingCommit = undefined;
     failServingCommitSequence = [];
     failServingCommitActionPrefix = undefined;
@@ -605,6 +673,34 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientManager?.close();
     await server.close();
   });
+
+  /** Resolve once the space's SpaceServer is serving. Activation is
+   * driven from the admission feed and from session opens and finishes
+   * on neither of their edges; `onActivationSettled` is the edge it does
+   * finish on. The predicate reads the host, so a tenure that is already
+   * serving answers at once and one that parked and came back answers on
+   * its next activation. */
+  const awaitActive = (): Promise<void> =>
+    awaitEach(activations, () => host!.spaceServer(space)?.active === true);
+
+  /** Order what follows after the serving loop's next full cycle: a
+   * fresh authored write, and the watermark covering its seq. W ≥ seq
+   * is the settled contract as a client applies it (protocol.md §4), so
+   * past this barrier a consequence that never arrived is an absence to
+   * assert on rather than a not-yet. The value counts up so that every
+   * call commits, however many a test makes. */
+  const kickAndSettle = async (engine: Engine.Engine): Promise<void> => {
+    kicks += 1;
+    const kick = clientRuntime.getCell<{ n: number }>(
+      space,
+      "settle-barrier-kick",
+      undefined,
+    );
+    const tx = clientRuntime.edit();
+    kick.withTx(tx).set({ n: kicks });
+    expect((await tx.commit()).error).toBeUndefined();
+    await settleServing(engine, clientRuntime, space);
+  };
 
   const openClient = (
     signer: Identity = aliceSigner,
@@ -752,55 +848,42 @@ describe("Phase 3 events-down (serving side)", () => {
     host = newHost();
     const before = Engine.serverSeq(engine);
     // The durable-ack coupling: the send's settle callback fires from the
-    // append + authoritative consequence outcome — captured here, asserted
+    // append + authoritative consequence outcome — recorded here, asserted
     // after the consequence lands.
-    let ackStatus: string | undefined;
+    const acks = new ArrivalLog<string>();
     // The sender's own act — the append — settles `onAppended` on its
     // own, ahead of the handling: a caller that only needs its event on
     // the record waits there.
-    let appended: { delivered: boolean } | undefined;
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: { status(): { status: string } }) => void,
-        options?: { onAppended?: (delivery: { delivered: boolean }) => void },
-      ): unknown;
-    }).send({}, (ackTx) => {
-      ackStatus = ackTx.status().status;
-    }, {
-      onAppended: (delivery) => {
-        appended = delivery;
-      },
-    });
+    const appends = new ArrivalLog<{ delivered: boolean }>();
+    sendEvent(
+      result.key("bump"),
+      {},
+      (ackTx) => acks.record(ackTx.status().status),
+      { onAppended: appends.record },
+    );
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
     // The speculative echo alone is NOT the acknowledgment: nothing has
     // consequenced yet.
-    expect(ackStatus).toBeUndefined();
+    expect(acks.entries).toEqual([]);
 
     // The serving side processes the event: the sidecar entry is
     // marked consequenced and the per-stream watermark advances to its
     // seq — in the SAME derived commit as the handler's consequence
     // (events.md §4).
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
-    await waitUntil(() => appended !== undefined, "the append to settle");
-    expect(appended).toEqual({ delivered: true });
-    expect(ackStatus).toBeUndefined();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    await appends.reached(1);
+    expect(appends.entries[0]).toEqual({ delivered: true });
+    expect(acks.entries).toEqual([]);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the entry to consequence and the stream watermark to advance",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
     const sidecar = Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue;
     const entry = sidecar.entries![0];
@@ -828,27 +911,26 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(JSON.stringify(carryingBatch!.operations)).not.toContain(
       "deliveryDeferral",
     );
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === 1;
-      },
-      "the handler consequence to land durably",
-    );
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 1;
+    });
 
     // The client: the echo retired (the consequence signal — or the
     // watermark backstop — withdrew it) and the authoritative value
     // renders through the store.
-    await waitUntil(
+    await awaitReplica(
+      clientManager,
       () => (clientRuntime.speculationOverlay?.entryCount(space) ?? 0) === 0,
-      "the echo to retire",
     );
-    await waitUntil(
-      () => (argument.key("value").get() as number | undefined) === 1,
-      "the authoritative value to render",
-    );
+    await awaitReplica(clientManager, async () => {
+      // A client cell is compared at quiescence: the value the replica
+      // pushed can still be superseded by work the scheduler has not run.
+      await clientRuntime.idle();
+      return (argument.key("value").get() as number | undefined) === 1;
+    });
 
     // Counters (testing.md §4): the drain counted the event.
     const stats = host!.stats();
@@ -856,11 +938,8 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(stats.events.processed).toBeGreaterThanOrEqual(1);
     // The durable ack settled — from the DELIVERED append and the
     // consequenced handling, not the local echo — and reads non-error.
-    await waitUntil(
-      () => ackStatus !== undefined,
-      "the durable-ack settle callback",
-    );
-    expect(ackStatus).not.toBe("error");
+    await acks.reached(1);
+    expect(acks.entries[0]).not.toBe("error");
     cancelDemand();
   });
 
@@ -890,17 +969,10 @@ describe("Phase 3 events-down (serving side)", () => {
       poke.withTx(tx).set({ n: 1 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space to activate",
-    );
+    await awaitActive();
     // Let the boot serve settle so the walk below is the only work.
     const bootSeq = Engine.serverSeq(engine);
-    await waitUntil(
-      () => readWatermarkSeq(engine) >= bootSeq,
-      "the boot serve to settle",
-      15_000,
-    );
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= bootSeq);
     // A synthetic 1.2-s settle on the SERVING runtime (30 × 40 ms of
     // synchronous work, one sealed write each): the fire's dispatch waits
     // behind it, and ~10 cut cycles re-drain the still-pending entry
@@ -931,26 +1003,19 @@ describe("Phase 3 events-down (serving side)", () => {
     result.key("bump").send({});
     await clientRuntime.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0]?.consequenced === true;
-      },
-      "the entry to consequence",
-      20_000,
-    );
-    // Let any duplicate copy that was queued run its course before the
-    // negative assertions.
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.[0]?.consequenced === true;
+    });
+    // Any duplicate copy the guard failed to turn away sits in the
+    // serving scheduler: drain it, then order the reads below after the
+    // wave its run would have sealed into.
     await serving.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await serving.idle();
+    await kickAndSettle(engine);
     const entry = (Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue).entries![0];
     const stats = host.stats();
@@ -1005,16 +1070,9 @@ describe("Phase 3 events-down (serving side)", () => {
       poke.withTx(tx).set({ n: 1 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space to activate",
-    );
+    await awaitActive();
     const bootSeq = Engine.serverSeq(engine);
-    await waitUntil(
-      () => readWatermarkSeq(engine) >= bootSeq,
-      "the boot serve to settle",
-      15_000,
-    );
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= bootSeq);
     // The serving-side view of the consequence doc: a SEALED write is
     // visible through it (the open wave's overlay) before the store
     // holds it. Synced before the fire.
@@ -1041,14 +1099,13 @@ describe("Phase 3 events-down (serving side)", () => {
       "sealwindow-walk-trigger",
       undefined,
     );
-    const outs: Cell<{ step: number }>[] = [];
+    const walkSteps = new ArrivalLog<number>();
     for (let step = 0; step < 30; step++) {
       const out = serving.getCell<{ step: number }>(
         space,
         `sealwindow-walk-out-${step}`,
         undefined,
       );
-      outs.push(out);
       const walk = (tx: IExtendedStorageTransaction): void => {
         trigger.withTx(tx).get();
         const until = performance.now() + 40;
@@ -1056,12 +1113,16 @@ describe("Phase 3 events-down (serving side)", () => {
           // spin
         }
         out.withTx(tx).set({ step });
+        walkSteps.record(step);
       };
       serving.scheduler.register(walk, undefined, { isEffect: true });
     }
-    // The walk is under way (its first step sealed) before the fire, so
-    // the copy is queued mid-walk, never ahead of it.
-    await waitUntil(() => outs[0].get() !== undefined, "the walk to start");
+    // The walk is under way (its first step has written) before the
+    // fire, so the copy is queued mid-walk, never ahead of it. The step
+    // reports itself: a sink on its output cell would answer only once
+    // the whole walk has drained the scheduler ahead of it, and a fire
+    // placed there is no longer mid-walk.
+    await walkSteps.reached(1);
 
     // The sync gate: engaged for RE-drains only — the drain that queues
     // the copy counts it at its end (`processed`), so the first drain
@@ -1075,54 +1136,55 @@ describe("Phase 3 events-down (serving side)", () => {
     try {
       result.key("bump").send({});
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 1,
-        "the event append to land",
-      );
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
       sidecarId = sidecarIdsIn(engine)[0];
-      await waitUntil(
-        () => host!.stats().events.processed === 1,
-        "the copy to be queued once",
-      );
       // The copy runs after the walk and its consequence SEALS — visible
       // on the serving overlay while the store still holds the pre-fire
       // value and the entry is unconsequenced: the seal→outcome window
-      // is open, and a re-drain is parked in it (the gate was hit).
-      await waitUntil(
+      // is open, and a re-drain is parked in it (the gate was hit). The
+      // seal is on the SERVING runtime's own view, so the sink is the
+      // only edge that reports it; idling that runtime instead would
+      // finish the walk this construction is built on.
+      await awaitServingView(
+        [servingArg.key("value")],
         () => (servingArg.key("value").get() as number | undefined) === 1,
-        "the copy's consequence to SEAL into the open wave",
-        20_000,
       );
       expect(storedValue()).toBe(0);
       const sealedEntry = (Engine.read(engine, { id: sidecarId })
         ?.value as StreamEventsDocValue).entries![0];
       expect(sealedEntry.consequenced).not.toBe(true);
-      expect(servingManager!.syncGateHits).toBeGreaterThanOrEqual(1);
+      expect(GatedStorageManager.syncGateParks.entries.length)
+        .toBeGreaterThanOrEqual(1);
       expect(host!.stats().events.processed).toBe(1);
       // Let the parked re-drain reach the entry's guard check now — copy
-      // sealed, wave uncommitted.
+      // sealed, wave uncommitted — and wait for THAT check: it is made
+      // inside the drain pass the gate was holding, so the loop's cycle
+      // edge reports it only afterwards, and an earlier skip of the same
+      // event would not be the one this pin is about.
+      const skipsBefore = drainSkips.count((id) => id === sealedEntry.eventId);
       gate.resolve();
+      await awaitEach(
+        drainSkips,
+        () =>
+          drainSkips.count((id) => id === sealedEntry.eventId) > skipsBefore,
+      );
     } finally {
       gate.resolve();
       servingManager!.syncGate = undefined;
       servingManager!.syncGateWhen = undefined;
     }
 
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0]?.consequenced === true;
-      },
-      "the entry to consequence",
-      20_000,
-    );
-    // Let any duplicate copy that was queued run its course before the
-    // negative assertions.
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.[0]?.consequenced === true;
+    });
+    // Any duplicate copy the guard failed to turn away sits in the
+    // serving scheduler: drain it, then order the reads below after the
+    // wave its run would have sealed into.
     await serving.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await serving.idle();
+    await kickAndSettle(engine);
     const entry = (Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue).entries![0];
     const stats = host.stats();
@@ -1161,10 +1223,7 @@ describe("Phase 3 events-down (serving side)", () => {
     result.key("bump").send({});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     {
       const value = Engine.read(engine, { id: sidecarId })?.value as
@@ -1186,24 +1245,18 @@ describe("Phase 3 events-down (serving side)", () => {
         .withTx(poke).set(1);
       expect((await poke.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === 1;
-      },
-      "the recovered event's consequence",
-    );
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0].consequenced === true;
-      },
-      "the recovered entry to be marked",
-    );
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 1;
+    });
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.[0].consequenced === true;
+    });
 
     // Kill AFTER consequences; reactivate: the idempotency rule replays
     // nothing — the consequence value stays exactly-once.
@@ -1214,10 +1267,7 @@ describe("Phase 3 events-down (serving side)", () => {
     clientRuntime.getCell<number>(space, "restart-poke", undefined)
       .withTx(poke).set(1);
     expect((await poke.commit()).error).toBeUndefined();
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "reactivation",
-    );
+    await awaitActive();
     // Give the loop a settle: the value must never reach 2. The
     // negative is sharpened past the bare value read (round-2 thread
     // T24): a wrong re-run's consequence commit carries
@@ -1235,7 +1285,9 @@ describe("Phase 3 events-down (serving side)", () => {
         row.consequence_of.includes(eventId)
       ).length;
     expect(consequenceCommitsFor()).toBe(1);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // A re-run would be this tenure's own work, so read again behind a
+    // barrier that covers a full cycle of it.
+    await kickAndSettle(engine);
     {
       const doc = Engine.read(engine, {
         id: argument.getAsNormalizedFullLink().id,
@@ -1275,20 +1327,14 @@ describe("Phase 3 events-down (serving side)", () => {
     for (let i = 0; i < K; i++) result.key("bump").send({});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the stream sidecar to exist",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return (value?.entries?.length ?? 0) === K;
-      },
-      "all K event appends to land durably",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return (value?.entries?.length ?? 0) === K;
+    });
     const queued = Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue;
     expect(queued.entries!.every((e) => e.consequenced === undefined)).toBe(
@@ -1311,24 +1357,18 @@ describe("Phase 3 events-down (serving side)", () => {
     }
 
     // All K non-idempotent effects apply exactly once: value === K.
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === K;
-      },
-      "all K handler consequences to land",
-    );
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.every((e) => e.consequenced === true) === true;
-      },
-      "every entry to be consequence-marked",
-    );
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === K;
+    });
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.every((e) => e.consequenced === true) === true;
+    });
 
     // Exactly-once per event AND the batching contract: the derived
     // commits after `before` that carry consequence_of must consequence
@@ -1354,7 +1394,9 @@ describe("Phase 3 events-down (serving side)", () => {
     const stats = host!.stats();
     expect(stats.events.appended).toBe(K);
     expect(stats.events.processed).toBe(K);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // The value must not overshoot afterwards either: read it behind a
+    // barrier that covers a further cycle of the loop.
+    await kickAndSettle(engine);
     {
       const doc = Engine.read(engine, {
         id: argument.getAsNormalizedFullLink().id,
@@ -1383,10 +1425,7 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const readEntry = () =>
       (Engine.read(engine, { id: sidecarId })?.value as
@@ -1406,9 +1445,9 @@ describe("Phase 3 events-down (serving side)", () => {
     // entry consequenced with zero effects before any deferral exists (a
     // 1-op derived commit carrying ONLY the mark); the wait accepts that
     // too, so a mutation fails fast instead of hanging.
-    await waitUntil(
+    await awaitEach(
+      waveCycles,
       () => deferrals() >= 1 || readEntry()?.consequenced === true,
-      "the unresolvable dispatch to resolve (deferral or mark)",
     );
     expect(readEntry()?.consequenced).not.toBe(true);
     expect(readEntry()?.status).toBeUndefined();
@@ -1430,9 +1469,9 @@ describe("Phase 3 events-down (serving side)", () => {
       expect((await tx.commit()).error).toBeUndefined();
     }
 
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => readEntry()?.consequenced === true && argumentValue() === 1,
-      "the re-delivered handler's mark + effects to land",
     );
     // (α) exactly once: the non-idempotent effect applied exactly once…
     expect(argumentValue()).toBe(1);
@@ -1538,17 +1577,11 @@ describe("Phase 3 events-down (serving side)", () => {
     send("a");
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length >= 1,
-      "a1's append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length >= 1);
     send("b");
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 2,
-      "b1's append to land on its own sidecar",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
 
     // b1's dispatch resolves one way or the other: with the barrier it is
     // swept behind the withdrawn a1 (an arrival-barrier deferral, counted
@@ -1556,11 +1589,11 @@ describe("Phase 3 events-down (serving side)", () => {
     // it, b1 dispatches next out of the same pass and SEALS while a1 is
     // still pending, stored log ["B"]. The wait accepts both, so a
     // mutation fails fast instead of hanging.
-    await waitUntil(
+    await awaitEach(
+      waveCycles,
       () =>
         (stats().handlerNotRunDeferrals ?? 0) >= 1 &&
         ((stats().loadParkDeferrals ?? 0) >= 1 || storedLog().length >= 1),
-      "b1's dispatch to resolve (barrier or overtake)",
     );
     expect(storedLog()).toEqual([]);
 
@@ -1572,11 +1605,7 @@ describe("Phase 3 events-down (serving side)", () => {
       gateCell.withTx(tx).set(7);
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => storedLog().length === 2,
-      "both consequences to land after the heal",
-      30_000,
-    );
+    await awaitAdmitted(server, () => storedLog().length === 2);
     // THE PIN: durable consequence order equals arrival order.
     expect(storedLog()).toEqual(["A", "B"]);
     cancelDemand();
@@ -1643,10 +1672,7 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => storedLog().length === 1,
-        "the warm-up consequence to land",
-      );
+      await awaitAdmitted(server, () => storedLog().length === 1);
       const aSidecarId = sidecarIdsIn(engine)[0];
       expect(aSidecarId).toBeDefined();
       expect(servingManager).toBeDefined();
@@ -1672,23 +1698,17 @@ describe("Phase 3 events-down (serving side)", () => {
       send("b"); // B1 second — healthy closure
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 2,
-        "B1's append to land on its own sidecar",
-      );
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
 
       // The window: a pass held at B's sidecar sync, with A2's
       // withdrawal counted. The scheduler runs free while the drain
       // waits on the gate, so a queued A2 dispatches — and withdraws —
       // inside the hold.
-      await waitUntil(
-        () => (servingManager?.syncGateHits ?? 0) > 0,
-        "a drain pass held at B's sidecar",
-      );
-      await waitUntil(
-        () => deferrals() >= 1,
-        "A2's withdrawal inside the held pass",
-      );
+      await GatedStorageManager.syncGateParks.reached(1);
+      // A2 withdraws from the scheduler, which runs free while the drain
+      // waits on the gate — so the loop reaches no cycle boundary here
+      // and the deferral's own edge is what reports it.
+      await awaitEach(eventDeferrals, () => deferrals() >= 1);
       expect(storedLog()).toEqual(["A"]);
 
       // HEAL FIRST, then release: with the gate healthy, an unbarriered
@@ -1703,11 +1723,7 @@ describe("Phase 3 events-down (serving side)", () => {
       servingManager!.syncGate = undefined;
       gate.resolve();
 
-      await waitUntil(
-        () => storedLog().length === 3,
-        "all three consequences to land after the pass resumes",
-        30_000,
-      );
+      await awaitAdmitted(server, () => storedLog().length === 3);
       // THE PIN: arrival order held across the mid-pass gap.
       expect(storedLog()).toEqual(["A", "A", "B"]);
     } finally {
@@ -1737,10 +1753,7 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const readEntry = () =>
       (Engine.read(engine, { id: sidecarId })?.value as
@@ -1751,11 +1764,7 @@ describe("Phase 3 events-down (serving side)", () => {
     // through the whole 8-deferral budget (~2s), each dispatch
     // withdrawn (handler-not-run), and the terminal §5 notice seals.
     // This also exercises the threshold machinery end-to-end with THIS cause.
-    await waitUntil(
-      () => readEntry()?.status === "dropped",
-      "the terminal §5 DROP notice to seal",
-      30_000,
-    );
+    await awaitAdmitted(server, () => readEntry()?.status === "dropped");
     const entry = readEntry()!;
     // THE PIN: the drop record names the real class. The load-attempt
     // boilerplate — "no runnable handler after 8 deferred load
@@ -1793,23 +1802,17 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true &&
-          typeof entry?.error === "string" &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the error consequence + frontier advance",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        typeof entry?.error === "string" &&
+        value?.eventWatermark === entry?.seq;
+    });
     const value = Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue;
     expect(value.entries![0].error).toContain("handler exploded");
@@ -1862,10 +1865,7 @@ describe("Phase 3 events-down (serving side)", () => {
     result.key("bump").send({ kind: "warmup" });
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the warm-up append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const entriesOf = () => ((Engine.read(engine, { id: sidecarId })?.value as
       | StreamEventsDocValue
@@ -1878,14 +1878,11 @@ describe("Phase 3 events-down (serving side)", () => {
       (Engine.read(engine, { id: sidecarId })?.value as
         | StreamEventsDocValue
         | undefined)?.eventWatermark;
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => entryByKind("warmup")?.consequenced === true,
-      "the warm-up event to consequence",
     );
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "the space to activate",
-    );
+    await awaitActive();
 
     // The served dispatch target: the entry's self-describing stream
     // link (the same derivation the drain uses).
@@ -1909,14 +1906,14 @@ describe("Phase 3 events-down (serving side)", () => {
     // state read inside preparation throws, then the normal failure settles.
     const preparationCrash = "injected served CFC preparation failure";
     const preparationFailures: Array<{ kind: string; name: string }> = [];
-    const probeRuns = new Map<string, number>();
+    const probeRuns = new ArrivalLog<string>();
     const gatedRetryStarted = Promise.withResolvers<void>();
     const releaseGatedRetry = Promise.withResolvers<void>();
     const cancelProbe = servingRuntime!.scheduler.addEventHandler(
       async (tx, event) => {
         const kind = (event as { kind?: string }).kind ?? "unknown";
-        const runs = (probeRuns.get(kind) ?? 0) + 1;
-        probeRuns.set(kind, runs);
+        probeRuns.record(kind);
+        const runs = probeRuns.count((run) => run === kind);
         if (kind === "gated-retry" && runs > 1) {
           gatedRetryStarted.resolve();
           await releaseGatedRetry.promise;
@@ -1972,22 +1969,19 @@ describe("Phase 3 events-down (serving side)", () => {
       realConsoleError(...args);
     };
     try {
-      let poisonAckStatus: string | undefined;
-      (result.key("bump") as unknown as {
-        send(
-          value: unknown,
-          onCommit: (tx: { status(): { status: string } }) => void,
-        ): unknown;
-      }).send({ kind: "poison-1" }, (tx) => {
-        poisonAckStatus = tx.status().status;
-      });
+      const poisonAcks = new ArrivalLog<string>();
+      sendEvent(
+        result.key("bump"),
+        { kind: "poison-1" },
+        (tx) => poisonAcks.record(tx.status().status),
+      );
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           entryByKind("poison-1")?.deliveryDeferral?.failureCount !==
             undefined,
-        "the first durable commit-preparation checkpoint",
       );
       const deferred = entryByKind("poison-1")!;
       expect(preparationFailures).toContainEqual({
@@ -2010,16 +2004,13 @@ describe("Phase 3 events-down (serving side)", () => {
       result.key("bump").send({ kind: "follower" });
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => {
-          const entry = entryByKind("poison-1");
-          return entry?.consequenced === true &&
-            entry.status === "needs-attention" &&
-            entry.seq !== undefined &&
-            (watermarkNow() ?? 0) >= entry.seq;
-        },
-        "the commit-preparation failure to seal a terminal cover",
-      );
+      await awaitAdmitted(server, () => {
+        const entry = entryByKind("poison-1");
+        return entry?.consequenced === true &&
+          entry.status === "needs-attention" &&
+          entry.seq !== undefined &&
+          (watermarkNow() ?? 0) >= entry.seq;
+      });
       const poison1 = entryByKind("poison-1")!;
       expect(poison1.error).toBeUndefined();
       expect(poison1.deliveryDeferral).toBeUndefined();
@@ -2032,11 +2023,8 @@ describe("Phase 3 events-down (serving side)", () => {
       });
       expect(consequenceCommitsNaming(poison1.eventId).length).toBe(1);
       expect(droppedWriteReports).toEqual([]);
-      await waitUntil(
-        () => poisonAckStatus !== undefined,
-        "the terminal durable acknowledgment",
-      );
-      expect(poisonAckStatus).toBe("error");
+      await poisonAcks.reached(1);
+      expect(poisonAcks.entries[0]).toBe("error");
       const attentionIndex = Engine.read(engine, {
         id: SERVER_EXECUTION_ATTENTION_DOC_ID,
       })?.value as {
@@ -2047,30 +2035,28 @@ describe("Phase 3 events-down (serving side)", () => {
           eventAttentionEntryKey(poison1.eventId, poison1.seq!)
         ]?.sidecarId,
       ).toBe(sidecarId);
-      const poisonRunsAtTerminal = probeRuns.get("poison-1");
-      await waitUntil(
-        () => (probeRuns.get("follower") ?? 0) >= 1,
-        "the follower to release after the terminal cover",
-      );
-      expect(probeRuns.get("poison-1")).toBe(poisonRunsAtTerminal);
+      const poisonRunsAtTerminal = probeRuns.count((run) => run === "poison-1");
+      await probeRuns.matching((run) => run === "follower");
+      expect(probeRuns.count((run) => run === "poison-1"))
+        .toBe(poisonRunsAtTerminal);
       expect(consequenceCommitsNaming(poison1.eventId).length).toBe(1);
       expect(host!.stats().events.needsAttention.total).toBe(1);
       expect(
         host!.stats().events.needsAttention.byPhase["commit-preparation"],
       ).toBe(1);
 
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => entryByKind("follower")?.consequenced === true,
-        "the first terminal cover's follower to consequence",
       );
       result.key("bump").send({ kind: "gated-retry" });
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           entryByKind("gated-retry")?.deliveryDeferral?.failureCount !==
             undefined,
-        "the gated event's first commit-preparation checkpoint",
       );
       await gatedRetryStarted.promise;
 
@@ -2082,9 +2068,9 @@ describe("Phase 3 events-down (serving side)", () => {
       expect((await wake.commit()).error).toBeUndefined();
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
+      await awaitEach(
+        drainSkips,
         () => host!.stats().events.drainInFlightSkips > skipsBefore,
-        "the expired checkpoint scan to observe its in-flight owner",
       );
       const stillRunning = entryByKind("gated-retry")!;
       expect(stillRunning.consequenced).not.toBe(true);
@@ -2092,15 +2078,15 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(stillRunning.attention).toBeUndefined();
 
       releaseGatedRetry.resolve();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => entryByKind("gated-retry")?.consequenced === true,
-        "the in-flight clean retry to consequence normally",
       );
       const succeeded = entryByKind("gated-retry")!;
       expect(succeeded.status).toBeUndefined();
       expect(succeeded.attention).toBeUndefined();
       expect(succeeded.deliveryDeferral).toBeUndefined();
-      expect(probeRuns.get("gated-retry")).toBe(2);
+      expect(probeRuns.count((run) => run === "gated-retry")).toBe(2);
       expect(consequenceCommitsNaming(succeeded.eventId)).toHaveLength(1);
       expect(host!.stats().events.needsAttention.total).toBe(1);
     } finally {
@@ -2126,10 +2112,7 @@ describe("Phase 3 events-down (serving side)", () => {
     result.key("bump").send({ kind: "warmup" });
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the warm-up append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const entriesOf = () => ((Engine.read(engine, { id: sidecarId })?.value as
       | StreamEventsDocValue
@@ -2138,14 +2121,11 @@ describe("Phase 3 events-down (serving side)", () => {
       entriesOf().find((entry) =>
         (entry.payload as { kind?: string } | undefined)?.kind === kind
       );
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => entryByKind("warmup")?.consequenced === true,
-      "the warm-up event to consequence",
     );
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "the space to activate",
-    );
+    await awaitActive();
 
     const warmup = entryByKind("warmup")!;
     const streamLink = {
@@ -2168,14 +2148,11 @@ describe("Phase 3 events-down (serving side)", () => {
       result.key("bump").send({ kind: "aborted" });
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => {
-          const entry = entryByKind("aborted");
-          return entry?.consequenced === true &&
-            typeof entry.error === "string";
-        },
-        "the explicit abort to seal an error consequence",
-      );
+      await awaitAdmitted(server, () => {
+        const entry = entryByKind("aborted");
+        return entry?.consequenced === true &&
+          typeof entry.error === "string";
+      });
       const aborted = entryByKind("aborted")!;
       expect(probeRuns).toBe(1);
       expect(aborted.error).toBe("Event handler aborted its transaction");
@@ -2205,22 +2182,13 @@ describe("Phase 3 events-down (serving side)", () => {
     result.key("bump").send({ kind: "warmup" });
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the RetryImmediately stream to become durable",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
     const entries = () => ((Engine.read(engine, { id: sidecarId })?.value as
       | StreamEventsDocValue
       | undefined)?.entries ?? []);
-    await waitUntil(
-      () => entries()[0]?.consequenced === true,
-      "the warm-up event to consequence",
-    );
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "the RetryImmediately serving runtime to activate",
-    );
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+    await awaitActive();
 
     const streamLink = {
       space,
@@ -2240,9 +2208,9 @@ describe("Phase 3 events-down (serving side)", () => {
       result.key("bump").send({ kind: "retry-immediately" });
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => entries().at(-1)?.consequenced === true && runs === 2,
-        "the served name-resolution retry to consequence",
       );
       const retried = entries().at(-1)!;
       expect(retried.deliveryDeferral).toBeUndefined();
@@ -2282,21 +2250,15 @@ describe("Phase 3 events-down (serving side)", () => {
     });
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the appends to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return (value?.entries?.length ?? 0) >= 2 &&
-          value!.entries!.every((entry) => entry.consequenced === true);
-      },
-      "both events to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return (value?.entries?.length ?? 0) >= 2 &&
+        value!.entries!.every((entry) => entry.consequenced === true);
+    });
     const entries =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
         .entries!;
@@ -2318,11 +2280,8 @@ describe("Phase 3 events-down (serving side)", () => {
     // — observed by a served handler on the same stream (a probe on the
     // SERVING runtime, live now that the space is active). Fire two more
     // (marked / unmarked) once the probe handler is installed.
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space to activate",
-    );
-    const seen: Array<{ kind: string; trusted: boolean }> = [];
+    await awaitActive();
+    const seen = new ArrivalLog<{ kind: string; trusted: boolean }>();
     // The entry's self-describing stream link IS the dispatch target.
     const streamLink = {
       space,
@@ -2331,12 +2290,11 @@ describe("Phase 3 events-down (serving side)", () => {
       scope: (markedEntry.stream.scope ?? "space") as never,
     };
     const cancelProbe = servingRuntime!.scheduler.addEventHandler(
-      (_tx, event: unknown) => {
-        seen.push({
+      (_tx, event: unknown) =>
+        seen.record({
           kind: (event as { kind?: string })?.kind ?? "?",
           trusted: isRendererTrustedEvent(event),
-        });
-      },
+        }),
       streamLink,
     );
     try {
@@ -2346,14 +2304,10 @@ describe("Phase 3 events-down (serving side)", () => {
       result.key("bump").send({ kind: "unmarked-2" });
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () =>
-          seen.some((s) => s.kind === "marked-2") &&
-          seen.some((s) => s.kind === "unmarked-2"),
-        "the served probe handler to see both fires",
-      );
-      expect(seen.find((s) => s.kind === "marked-2")!.trusted).toBe(true);
-      expect(seen.find((s) => s.kind === "unmarked-2")!.trusted).toBe(false);
+      const marked2Run = await seen.matching((s) => s.kind === "marked-2");
+      const unmarked2Run = await seen.matching((s) => s.kind === "unmarked-2");
+      expect(marked2Run.trusted).toBe(true);
+      expect(unmarked2Run.trusted).toBe(false);
     } finally {
       cancelProbe();
     }
@@ -2379,7 +2333,8 @@ describe("Phase 3 events-down (serving side)", () => {
     } finally {
       await forgedManager.close();
     }
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         ((Engine.read(engine, { id: sidecarId })?.value as
           | StreamEventsDocValue
@@ -2387,7 +2342,6 @@ describe("Phase 3 events-down (serving side)", () => {
             (entry.payload as { kind?: string } | undefined)?.kind ===
               "forged"
           ),
-      "the forged-value append to land (sanitized)",
     );
     const forgedEntry =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
@@ -2413,21 +2367,15 @@ describe("Phase 3 events-down (serving side)", () => {
 
     host = newHost();
     result.key("bump").send({});
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true;
-      },
-      "the original to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true;
+    });
     const original =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
         .entries![0];
@@ -2450,21 +2398,18 @@ describe("Phase 3 events-down (serving side)", () => {
     });
     expect(delivered.deduped).toBe(false);
 
-    await waitUntil(
+    await awaitEach(
+      waveCycles,
       () => (host!.stats().events.skippedIdempotent ?? 0) >= 1,
-      "the duplicate to be skipped and counted",
     );
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.length === 2 &&
-          value.entries[1].consequenced === true &&
-          value.eventWatermark === value.entries[1].seq;
-      },
-      "the duplicate to be passed by the frontier (non-wedging)",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return value?.entries?.length === 2 &&
+        value.entries[1].consequenced === true &&
+        value.eventWatermark === value.entries[1].seq;
+    });
     // Exactly-once: the consequence ran ONCE.
     const doc = Engine.read(engine, {
       id: argument.getAsNormalizedFullLink().id,
@@ -2484,22 +2429,17 @@ describe("Phase 3 events-down (serving side)", () => {
     verb: string,
     payload: unknown,
     eventId: string,
-  ): {
-    ack: () => { status: string; tx: IExtendedStorageTransaction } | undefined;
-  } => {
-    let settled:
-      | { status: string; tx: IExtendedStorageTransaction }
-      | undefined;
-    (result.key(verb) as unknown as {
-      send(
-        value: unknown,
-        onCommit?: (tx: IExtendedStorageTransaction) => void,
-        options?: { eventId?: string; session?: string },
-      ): unknown;
-    }).send(payload, (tx) => {
-      settled = { status: tx.status().status, tx };
-    }, { eventId, session: "receipt-pin-session" });
-    return { ack: () => settled };
+  ): ArrivalLog<{ status: string; tx: IExtendedStorageTransaction }> => {
+    const acks = new ArrivalLog<
+      { status: string; tx: IExtendedStorageTransaction }
+    >();
+    sendEvent(
+      result.key(verb),
+      payload,
+      (tx) => acks.record({ status: tx.status().status, tx }),
+      { eventId, session: "receipt-pin-session" },
+    );
+    return acks;
   };
 
   /** Every commit that ever wrote a doc, from the durable record: the
@@ -2534,22 +2474,16 @@ describe("Phase 3 events-down (serving side)", () => {
     const fired = fireVerb(result, "probe", { n: 7 }, "result-carriage-1");
     await clientRuntime.idle();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the handling to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
     // The durable id: the caller pair (id, session) scopes to a hashed
     // `evt:caller:` id (event-identity.ts) — read it off the entry.
     const durableId = (Engine.read(engine, { id: sidecarId })
@@ -2557,14 +2491,14 @@ describe("Phase 3 events-down (serving side)", () => {
     // The durable ack settles non-error only after the consequence — so
     // the receipt the address names is durable BEFORE any caller could
     // dereference it (the readback-ordering half of the contract).
-    await waitUntil(() => fired.ack() !== undefined, "the durable ack");
-    expect(fired.ack()!.status).not.toBe("error");
+    await fired.reached(1);
+    expect(fired.entries[0].status).not.toBe("error");
 
     // WS-D under ON: the echo's transaction publishes the handling's
     // receipt address — the same cause-derived cell the serving side
     // wrote. An unchanged caller (the CLI verb dispatch) needs no
     // migration: address out of the callback, value by ordinary read.
-    const link = fired.ack()!.tx.handlingReceiptLink;
+    const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
 
     // The serving side wrote the DECLARED value (plainResultReceipts is
@@ -2608,25 +2542,19 @@ describe("Phase 3 events-down (serving side)", () => {
     const fired = fireVerb(result, "quiet", {}, "valueless-receipt-1");
     await clientRuntime.idle();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the handling to consequence",
-    );
-    await waitUntil(() => fired.ack() !== undefined, "the durable ack");
-    expect(fired.ack()!.status).not.toBe("error");
-    const link = fired.ack()!.tx.handlingReceiptLink;
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
+    await fired.reached(1);
+    expect(fired.entries[0].status).not.toBe("error");
+    const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
 
     // The cell EXISTS post-serve, holding exactly the empty record — the
@@ -2667,6 +2595,7 @@ describe("Phase 3 events-down (serving side)", () => {
     const probeRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: probeManager,
+      cfcFlowLabels: "off",
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
@@ -2685,13 +2614,13 @@ describe("Phase 3 events-down (serving side)", () => {
     );
     await probeRuntime.idle();
     await probeRuntime.storageManager.synced();
-    await waitUntil(() => probeFired.ack() !== undefined, "the OFF-arm ack");
-    expect(probeFired.ack()!.status).not.toBe("error");
-    const probeLink = probeFired.ack()!.tx.handlingReceiptLink;
+    await probeFired.reached(1);
+    expect(probeFired.entries[0].status).not.toBe("error");
+    const probeLink = probeFired.entries[0].tx.handlingReceiptLink;
     expect(probeLink).toBeDefined();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => Engine.read(engine, { id: probeLink!.id })?.value !== undefined,
-      "the pre-created receipt to land durably",
     );
     expect(Engine.read(engine, { id: probeLink!.id })?.value).toEqual({
       token: "tok-99",
@@ -2703,32 +2632,25 @@ describe("Phase 3 events-down (serving side)", () => {
     host = newHost();
     const fired = fireVerb(result, "probe", { n: 7 }, "cas-loss-1");
     await clientRuntime.idle();
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.consequenced === true &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the wave to commit despite the CAS loss (never an error that " +
-        "fails the wave)",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
     const durableId = (Engine.read(engine, { id: sidecarId })
       ?.value as StreamEventsDocValue).entries![0].eventId;
-    await waitUntil(() => fired.ack() !== undefined, "the durable ack");
-    expect(fired.ack()!.status).not.toBe("error");
+    await fired.reached(1);
+    expect(fired.entries[0].status).not.toBe("error");
 
     // Cross-arm address agreement: the ON echo published the SAME
     // cause-derived address the OFF-arm writer used — the no-migration
     // property, witnessed through the real machinery on both sides.
-    const link = fired.ack()!.tx.handlingReceiptLink;
+    const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
     expect(link!.id).toBe(probeLink!.id);
 
@@ -2793,21 +2715,15 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.storageManager.synced();
     await bob.runtime.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the appends to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return (value?.entries?.length ?? 0) >= 2 &&
-          value!.entries!.every((entry) => entry.consequenced === true);
-      },
-      "both events to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return (value?.entries?.length ?? 0) >= 2 &&
+        value!.entries!.every((entry) => entry.consequenced === true);
+    });
     const entries =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
         .entries!;
@@ -2856,15 +2772,12 @@ describe("Phase 3 events-down (serving side)", () => {
 
     // Both bumps survived (the two-user semantics — each handler run
     // read the other's committed consequence or requeued and re-ran).
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === 2;
-      },
-      "both consequences to land",
-    );
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 2;
+    });
     cancelDemand();
   });
 
@@ -2889,19 +2802,15 @@ describe("Phase 3 events-down (serving side)", () => {
       localSeq: 990_100,
     });
     expect(delivered.deduped).toBe(false);
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, {
-          id: streamEntriesDocId(neverAPieceStream),
-        })?.value as StreamEventsDocValue | undefined;
-        const entry = value?.entries?.[0];
-        return entry?.status === "dropped" &&
-          entry?.consequenced === true &&
-          value?.eventWatermark === entry?.seq;
-      },
-      "the dropped-event notice + frontier pass (non-wedging)",
-      30_000,
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, {
+        id: streamEntriesDocId(neverAPieceStream),
+      })?.value as StreamEventsDocValue | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.status === "dropped" &&
+        entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
     const entry = (Engine.read(engine, {
       id: streamEntriesDocId(neverAPieceStream),
     })?.value as StreamEventsDocValue).entries![0];
@@ -2913,13 +2822,15 @@ describe("Phase 3 events-down (serving side)", () => {
 
   it("consumes REAL TIME on a deferral, never back-to-back waves: the drop cannot land inside the creation-race window", async () => {
     // Each retry waits for input or the 250ms backstop tick, so the budget
-    // spans >= threshold * tick of wall clock. Were a deferral to set
-    // #eventScanOwed synchronously, #hasWork() would spin the next wave at
-    // once and the whole 8-slot budget would burn in immediate succession —
-    // an event whose creation input was milliseconds away permanently
-    // dropped. The pin: at +500ms the entry must still be PENDING (at most
-    // ~2 ticks consumed); the drop still arrives eventually (the DROP-arm
-    // test above).
+    // spans at least its own threshold's worth of them. Were a deferral to
+    // set #eventScanOwed synchronously, #hasWork() would spin the next wave
+    // at once and the whole 8-slot budget would burn in immediate
+    // succession — an event whose creation input was milliseconds away
+    // permanently dropped. The pin measures the wall clock the drop costs:
+    // an unrunnable event with no other input in the space retries on the
+    // tick alone, so the drop cannot arrive before those ticks have
+    // elapsed. Stated as a floor, a slow machine only makes it hold more
+    // easily.
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);
     host = newHost();
@@ -2937,24 +2848,28 @@ describe("Phase 3 events-down (serving side)", () => {
       localSeq: 990_200,
     });
     expect(delivered.deduped).toBe(false);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "activation on the delivered event",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const value = Engine.read(engine, {
-      id: streamEntriesDocId(laggardStream),
-    })?.value as StreamEventsDocValue | undefined;
-    const entry = value?.entries?.[0];
-    // Still pending: NOT consequenced, NOT dropped — the budget has
-    // structurally not had time to exhaust (8 ticks x 250ms >> 500ms).
-    expect(entry?.eventId).toBe("evt-laggard");
-    expect(entry?.status).toBeUndefined();
-    expect(entry?.consequenced).not.toBe(true);
-    // The event is still discoverable work (nothing wedged, nothing
-    // lost): the drop (or a late-arriving piece) resolves it later.
+    await awaitActive();
+    const laggardEntry = () =>
+      (Engine.read(engine, { id: streamEntriesDocId(laggardStream) })
+        ?.value as StreamEventsDocValue | undefined)?.entries?.[0];
+    // Discoverable work from the start (nothing wedged, nothing lost):
+    // the drop is what resolves it, and it takes the budget to get
+    // there.
+    const startedAt = Date.now();
     expect(Engine.selectPendingStreamEventDocs(engine).length)
       .toBeGreaterThanOrEqual(1);
+    await awaitAdmitted(server, () => laggardEntry()?.status === "dropped");
+    const elapsed = Date.now() - startedAt;
+    const entry = laggardEntry();
+    expect(entry?.eventId).toBe("evt-laggard");
+    expect(entry?.consequenced).toBe(true);
+    // THE PIN: the budget cost real time — a whole second of it, on a
+    // space where nothing else was happening. A floor, not the cost:
+    // the drop takes a retry per slot of the deferral budget and each
+    // waits a backstop tick, except one that rides an admission the
+    // loop's own bookkeeping produced. Back-to-back waves spend the
+    // whole budget in one quiet moment and the drop lands at once.
+    expect(elapsed).toBeGreaterThanOrEqual(1_000);
   });
 
   it("reactivates the space on an event-only admission RACING a park: the fire-time gate honors the undelivered-events criterion, not just live sessions", async () => {
@@ -2980,10 +2895,7 @@ describe("Phase 3 events-down (serving side)", () => {
       localSeq: 990_300,
     });
     expect(first.deduped).toBe(false);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "activation on the first delivered event",
-    );
+    await awaitActive();
     const spaceServer = host!.spaceServer(space)!;
     // Start the park, then deliver DURING it: the admission hook sees a
     // registered, no-longer-active server and chains reactivation
@@ -3007,10 +2919,41 @@ describe("Phase 3 events-down (serving side)", () => {
     // the engine holds undelivered events.
     expect(Engine.selectPendingStreamEventDocs(engine).length)
       .toBeGreaterThanOrEqual(1);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "reactivation on the event-only admission racing the park",
-    );
+    await awaitActive();
+  });
+
+  it("reactivates a space with undelivered events and no session after its activation and the events check both fail to open the engine", async () => {
+    // With no session to see, the gate after a failed activation looks
+    // for undelivered events, and that look needs the engine the
+    // activation just failed to open. Failing it too must not end the
+    // recovery: the host activates to look again.
+    const engine = await server.engineForSpace(space);
+    const engineForSpace = server.engineForSpace.bind(server);
+    let engineOpenFailures = 2;
+    server.engineForSpace = (openedSpace) => {
+      if (engineOpenFailures === 0) return engineForSpace(openedSpace);
+      engineOpenFailures -= 1;
+      return Promise.reject(new Error("induced engine open failure"));
+    };
+    host = newHost();
+    const stream = { id: "of:engine-open-failure-piece", path: ["stream"] };
+    const appended = await server.commitDelegatedAppend({
+      targetSpace: space,
+      targetStream: streamEntriesDocId(stream),
+      targetStreamLink: stream,
+      eventId: "evt-engine-open-failure",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "engine-open-failure-session",
+      capabilityRef: "cap-engine-open-failure",
+      sessionId: `service:${space}`,
+      localSeq: 990_400,
+    });
+    expect(appended.deduped).toBe(false);
+    expect(Engine.selectPendingStreamEventDocs(engine).length)
+      .toBeGreaterThanOrEqual(1);
+    await awaitActive();
+    expect(engineOpenFailures).toBe(0);
   });
 
   it("retains reference acquisitions in a same-space served cascade", async () => {
@@ -3049,7 +2992,10 @@ describe("Phase 3 events-down (serving side)", () => {
       seed,
     );
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ ...selected.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredReferenceEnvelope(seed, {
+      ...selected.getAsNormalizedFullLink(),
+      path: [],
+    }, {
       value: result.key("first").getAsLink(),
       cfc: {
         version: 2,
@@ -3124,25 +3070,21 @@ describe("Phase 3 events-down (serving side)", () => {
     // cascade's — the served run of `first` emitted `second`'s entry as
     // a WRITE WITHIN its wave (LT1), engine-stamped and declared, and
     // a later wave drained it (the budget-exhausted fallback shape).
-    await waitUntil(
-      () => {
-        const ids = sidecarIdsIn(engine);
-        if (ids.length < 2) return false;
-        return ids.every((id) => {
-          const value = Engine.read(engine, { id })?.value as
-            | StreamEventsDocValue
-            | undefined;
-          return (value?.entries ?? []).every(
-            (entry) =>
-              entry.consequenced === true &&
-              typeof entry.seq === "number" &&
-              value?.eventWatermark === entry.seq,
-          );
-        });
-      },
-      "both streams' entries to consequence with stamped seqs",
-      30_000,
-    );
+    await awaitAdmitted(server, () => {
+      const ids = sidecarIdsIn(engine);
+      if (ids.length < 2) return false;
+      return ids.every((id) => {
+        const value = Engine.read(engine, { id })?.value as
+          | StreamEventsDocValue
+          | undefined;
+        return (value?.entries ?? []).every(
+          (entry) =>
+            entry.consequenced === true &&
+            typeof entry.seq === "number" &&
+            value?.eventWatermark === entry.seq,
+        );
+      });
+    });
     // The cascade entry carries the INHERITED actor (events.md §2:
     // events run as the session they originated from) — the root
     // (user, session) preserved hop by hop.
@@ -3156,22 +3098,73 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(entry.firedAt?.user).toBe(aliceSigner.did());
     }
     // Exactly once: 1 + 10, never doubled.
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === 11;
-      },
-      "the cascade's consequences to land exactly once",
-      30_000,
-    );
-    // Give a settle beat: the value must STAY 11 (no re-run).
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 11;
+    });
+    // The value must STAY 11 (no re-run): read it behind a barrier
+    // covering a further cycle of the loop.
+    await kickAndSettle(engine);
     const doc = Engine.read(engine, {
       id: argument.getAsNormalizedFullLink().id,
     });
     expect((doc?.value as { value?: number })?.value).toBe(11);
+    cancelDemand();
+  });
+
+  it("holds the store's admission-stamped sidecar in the serving replica under the store read-through posture once its own wave commits a same-space cascade", async () => {
+    // The served run of `first` marks its own entry consequenced and
+    // appends `second`'s entry to another sidecar, and the serving replica
+    // seals both sidecars itself. As the wave commits, admission stamps the
+    // appended entry's `seq` and advances each touched stream's
+    // `eventWatermark`, so the sidecars the store holds are not the ones
+    // the replica sealed. With no session watch to deliver them, the feed's
+    // refresh of the loop's own commit is the one path that brings them
+    // into the replica. A drain queues an entry only once the replica's view
+    // holds it at its stamped seq, so a view left with a sealed copy defers
+    // every later event in the space.
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(clientRuntime, CASCADE_PATTERN, {
+      arg: "cascade-read-through-arg",
+      result: "cascade-read-through-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      storeReadThrough: true,
+    });
+    result.key("first").send({});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 11;
+    });
+    // A cycle past the wave that committed the cascade, so its feed record
+    // has been drained.
+    await kickAndSettle(engine);
+
+    const replica = servingManager!.open(space).replica;
+    const sidecars = sidecarIdsIn(engine);
+    expect(sidecars.length).toBe(2);
+    for (const id of sidecars) {
+      const stored = Engine.read(engine, { id })?.value as StreamEventsDocValue;
+      for (const entry of stored.entries ?? []) {
+        expect(typeof entry.seq).toBe("number");
+      }
+      expect(replica.getDocument(id as URI)?.value).toEqual(stored);
+    }
+    expect(host.stats().events.visibilityDeferrals).toBe(0);
     cancelDemand();
   });
 
@@ -3268,10 +3261,7 @@ describe("Phase 3 events-down (serving side)", () => {
         .withTx(poke).set(1);
       expect((await poke.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "the space to activate",
-    );
+    await awaitActive();
 
     const parentArgId = parentArg.getAsNormalizedFullLink().id;
     const childArgId = child.argument.getAsNormalizedFullLink().id;
@@ -3287,25 +3277,20 @@ describe("Phase 3 events-down (serving side)", () => {
     parentResult.key("fire").send({});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         engineValueOf(parentArgId) === 1 && engineValueOf(childArgId) === 10,
-      "the warm-up cascade to land",
-      30_000,
     );
-    await waitUntil(
-      () =>
-        sidecarIdsIn(engine).every((id) => {
-          const value = Engine.read(engine, { id })?.value as
-            | StreamEventsDocValue
-            | undefined;
-          return (value?.entries ?? []).every((entry) =>
-            entry.consequenced === true
-          );
-        }),
-      "the warm-up entries to consequence",
-      30_000,
-    );
+    await awaitAdmitted(server, () =>
+      sidecarIdsIn(engine).every((id) => {
+        const value = Engine.read(engine, { id })?.value as
+          | StreamEventsDocValue
+          | undefined;
+        return (value?.entries ?? []).every((entry) =>
+          entry.consequenced === true
+        );
+      }));
     // Let the loop settle into wait-for-input (NOT mid-settle) before
     // the gate closes — a gated PRIOR wave would absorb the rival
     // before the parent ever read. W chases AUTHORED inputs only, so
@@ -3327,11 +3312,7 @@ describe("Phase 3 events-down (serving side)", () => {
       scopeKey: "space",
     });
     expect(pokeSeq).toBeGreaterThan(0);
-    await waitUntil(
-      () => readWatermarkSeq(engine) >= pokeSeq,
-      "the warm-up cycles to settle",
-      30_000,
-    );
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= pokeSeq);
 
     // Serving-side views of both consequence docs (read through the
     // wave's sealed overlay), synced BEFORE the gate closes.
@@ -3362,11 +3343,11 @@ describe("Phase 3 events-down (serving side)", () => {
       parentResult.key("fire").send({});
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
+      await awaitServingView(
+        [servingParentArg.key("value"), servingChildArg.key("value")],
         () =>
           (servingParentArg.key("value").get() as number | undefined) === 2 &&
           (servingChildArg.key("value").get() as number | undefined) === 20,
-        "parent and cascade child to SEAL into the open wave",
       );
 
       // The rival races P's consequence: a whole-doc set of the
@@ -3406,23 +3387,20 @@ describe("Phase 3 events-down (serving side)", () => {
     // frame's integration into the serving view, so it lands as a
     // field-level rebase either over the rival (2) or of it (1001) —
     // C8b's territory, not this fold's.)
-    await waitUntil(
-      () =>
-        engineValueOf(childArgId) === 20 &&
-        sidecarIdsIn(engine).every((id) => {
-          const value = Engine.read(engine, { id })?.value as
-            | StreamEventsDocValue
-            | undefined;
-          return (value?.entries ?? []).every((entry) =>
-            entry.consequenced === true
-          );
-        }),
-      "the folded cascade to land exactly once, everything consequenced",
-      30_000,
-    );
-    // The settle beat: the child value must STAY 20 — never 30 (the
-    // double an orphan commit plus a fresh-id re-emission would produce).
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await awaitAdmitted(server, () =>
+      engineValueOf(childArgId) === 20 &&
+      sidecarIdsIn(engine).every((id) => {
+        const value = Engine.read(engine, { id })?.value as
+          | StreamEventsDocValue
+          | undefined;
+        return (value?.entries ?? []).every((entry) =>
+          entry.consequenced === true
+        );
+      }));
+    // The child value must STAY 20 — never 30 (the double an orphan
+    // commit plus a fresh-id re-emission would produce) — so read it
+    // behind a barrier covering a further cycle of the loop.
+    await kickAndSettle(engine);
     expect(engineValueOf(childArgId)).toBe(20);
     expect([2, 1001]).toContain(engineValueOf(parentArgId));
     cancelChildDemand();
@@ -3453,12 +3431,14 @@ describe("Phase 3 events-down (serving side)", () => {
       clientSigner,
     ));
     const engine = await server.engineForSpace(space);
+    // A stream document holds no value, and nothing on it says what it is:
+    // the handle that reaches it declares the stream, and the served appends
+    // land on the document.
     const mkStream = async (name: string) => {
-      const cell = clientRuntime.getCell<unknown>(space, name, undefined);
+      const cell = clientRuntime.getCell<unknown>(space, name, {
+        asCell: ["stream"],
+      });
       await cell.sync();
-      const tx = clientRuntime.edit();
-      cell.withTx(tx).setRaw({ $stream: true });
-      expect((await tx.commit()).error).toBeUndefined();
       return cell;
     };
     const mkDoc = async (name: string) => {
@@ -3486,10 +3466,7 @@ describe("Phase 3 events-down (serving side)", () => {
         .withTx(poke).set(1);
       expect((await poke.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "the space to activate",
-    );
+    await awaitActive();
     // Let the boot cycle settle into wait-for-input before the pin acts
     // (the C8d recipe): W chases AUTHORED inputs only, so a fresh poke's
     // head seq is the probe W must claim — a pin that seals into a cycle
@@ -3509,23 +3486,17 @@ describe("Phase 3 events-down (serving side)", () => {
         scopeKey: "space",
       });
       expect(pokeSeq).toBeGreaterThan(0);
-      await waitUntil(
-        () => readWatermarkSeq(engine) >= pokeSeq,
-        "the boot cycles to settle (W to cover the poke)",
-        30_000,
-      );
+      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= pokeSeq);
     }
     const serving = servingRuntime!;
-    const servingS1 = serving.getCell<unknown>(
-      space,
-      `${prefix}-s1`,
-      undefined,
-    );
-    const servingS2 = serving.getCell<unknown>(
-      space,
-      `${prefix}-s2`,
-      undefined,
-    );
+    // The serving side's handles declare the streams too: a send decides
+    // stream-or-write off the handle, and the document holds no value.
+    const servingS1 = serving.getCell<unknown>(space, `${prefix}-s1`, {
+      asCell: ["stream"],
+    });
+    const servingS2 = serving.getCell<unknown>(space, `${prefix}-s2`, {
+      asCell: ["stream"],
+    });
     const servingP = serving.getCell<{ n?: number }>(
       space,
       `${prefix}-counter-p`,
@@ -3627,13 +3598,12 @@ describe("Phase 3 events-down (serving side)", () => {
       // purged (counted), the appending wave committed both entries
       // UNMARKED, and the next cycle's drain queued both streamEntry-bearing
       // copies behind the still-parked c1 (processed: root + c1 + c2 = 3).
-      await waitUntil(
+      await awaitEach(
+        drainPasses,
         () =>
           host!.stats().events.processed === 3 &&
           w.entriesOf(s2Sidecar).length === 2 &&
           w.entriesOf(s2Sidecar).every((entry) => entry.consequenced !== true),
-        "both entries to land unmarked and the drain to queue both copies",
-        20_000,
       );
       expect(childRuns).toEqual(["c1"]);
       expect(host!.stats().events.lt1LeftoversPurged).toBe(1);
@@ -3646,9 +3616,16 @@ describe("Phase 3 events-down (serving side)", () => {
       // !== undefined`). An over-reaching predicate (`served !== undefined`
       // alone) purges them here: the count climbs past 1 and the drop
       // chokepoint writes a `dropped` notice onto the durable entries — a LOST
-      // delivery the α pins' original timing could not see.
-      await new Promise((resolve) => setTimeout(resolve, 450));
-      expect(host!.stats().wavesBudgetExhausted).toBeGreaterThan(1);
+      // delivery the α pins' original timing could not see. The cut cycles
+      // themselves are the measure: each one runs the purge over the queue,
+      // and the first that sees the drain's copies is where an over-reaching
+      // predicate reaches them — so wait past it, rather than for a span of
+      // clock that might hold no cut at all.
+      const cutsBefore = host!.stats().wavesBudgetExhausted;
+      await awaitEach(
+        waveCycles,
+        () => host!.stats().wavesBudgetExhausted >= cutsBefore + 2,
+      );
       expect(host!.stats().events.lt1LeftoversPurged).toBe(1);
       expect(host!.stats().events.processed).toBe(3);
       for (const entry of w.entriesOf(s2Sidecar)) {
@@ -3660,14 +3637,15 @@ describe("Phase 3 events-down (serving side)", () => {
       // wave → refused at the seal; the drain's c1' and c2' then run (the
       // gate is open) and complete WITH their marks.
       gate.resolve();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           w.entriesOf(s2Sidecar).every((entry) => entry.consequenced === true),
-        "the drain's copies to consequence both entries",
-        20_000,
       );
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      // Anything the release left queued runs now, and the reads
+      // below sit behind a barrier covering the wave it seals into.
       await w.serving.idle();
+      await kickAndSettle(w.engine);
 
       const entries = w.entriesOf(s2Sidecar);
       const stats = host!.stats();
@@ -3740,13 +3718,12 @@ describe("Phase 3 events-down (serving side)", () => {
       // unmarked) and the drain has re-queued it: processed reads 2 (the
       // root fire + the child's entry) while the in-process copy is still
       // parked on the gate — nothing consequenced yet.
-      await waitUntil(
+      await awaitEach(
+        drainPasses,
         () =>
           host!.stats().events.processed === 2 &&
           w.entriesOf(s2Sidecar).length === 1 &&
           w.entriesOf(s2Sidecar)[0].consequenced !== true,
-        "the child's entry to land unmarked and the drain to queue its copy",
-        20_000,
       );
       expect(childRuns).toBe(1);
       expect(host!.stats().events.lt1LateSealsRefused).toBe(0);
@@ -3755,13 +3732,14 @@ describe("Phase 3 events-down (serving side)", () => {
       // wave → refused at the seal; the drain's copy then runs (the gate
       // is open) and completes WITH the mark.
       childGate.resolve();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => w.entriesOf(s2Sidecar)[0]?.consequenced === true,
-        "the drain's copy to consequence the entry",
-        20_000,
       );
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      // Anything the release left queued runs now, and the reads
+      // below sit behind a barrier covering the wave it seals into.
       await w.serving.idle();
+      await kickAndSettle(w.engine);
 
       const childEntry = w.entriesOf(s2Sidecar)[0];
       const stats = host!.stats();
@@ -3866,10 +3844,9 @@ describe("Phase 3 events-down (serving side)", () => {
       let released = false;
       try {
         await w.serving.scheduler.run(emitter as never);
-        await waitUntil(
+        await awaitServingView(
+          [w.servingC],
           () => seenView().includes("ping"),
-          "the derivation's cascade copy to SEAL into the open wave",
-          20_000,
         );
         // The RIVAL: a client fire on the SAME stream lands a concurrent
         // append on the sidecar — its head advances past the wave's
@@ -3879,12 +3856,12 @@ describe("Phase 3 events-down (serving side)", () => {
         await clientRuntime.idle();
         await clientRuntime.storageManager.synced();
         const s2Sidecar = w.sidecarOf(w.s2);
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             w.entriesOf(s2Sidecar).some((entry) =>
               (entry.payload as { tag?: string } | undefined)?.tag === "rival"
             ),
-          "the rival append to land",
         );
         gate.resolve();
         released = true;
@@ -3904,15 +3881,13 @@ describe("Phase 3 events-down (serving side)", () => {
 
       const s2Sidecar = w.sidecarOf(w.s2);
       // The rival's entry is delivered (once) by the drain.
-      await waitUntil(
-        () =>
-          w.entriesOf(s2Sidecar).length === 1 &&
-          w.entriesOf(s2Sidecar)[0].consequenced === true,
-        "the rival's entry to be the sidecar's only entry, consequenced",
-        20_000,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await awaitAdmitted(server, () =>
+        w.entriesOf(s2Sidecar).length === 1 &&
+        w.entriesOf(s2Sidecar)[0].consequenced === true);
+      // Anything the release left queued runs now, and the reads
+      // below sit behind a barrier covering the wave it seals into.
       await w.serving.idle();
+      await kickAndSettle(w.engine);
 
       const stats = host!.stats();
       const seen =
@@ -4037,27 +4012,21 @@ describe("Phase 3 events-down (serving side)", () => {
       await clientRuntime.storageManager.synced();
 
       const s2Sidecar = w.sidecarOf(w.s2);
-      await waitUntil(
-        () => w.entriesOf(s2Sidecar).length === 1,
-        "the child's entry to land",
-        20_000,
+      await awaitAdmitted(server, () => w.entriesOf(s2Sidecar).length === 1);
+      // The next drain re-queues the entry's `streamEntry` copy behind
+      // the parked in-process one (processed: root + the drain's copy =
+      // 2), which is several deadlines past the appending wave.
+      await awaitEach(
+        drainPasses,
+        () => host!.stats().events.processed === 2,
       );
-      // Several deadlines later (the gate still held): the sibling is
-      // durable, and the entry it rode beside is UNMARKED — the sibling's
-      // survival is not the handler's completion. (Were `survivedEventIds`
-      // to admit any surviving event-handler contribution with the eventId,
-      // the entry would be marked here.)
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The gate is still held, so: the sibling is durable, and the entry
+      // it rode beside is UNMARKED — the sibling's survival is not the
+      // handler's completion. (Were `survivedEventIds` to admit any
+      // surviving event-handler contribution with the eventId, the entry
+      // would be marked here.)
       expect(w.engineN(sideServing)).toBe(1);
       expect(w.entriesOf(s2Sidecar)[0].consequenced).not.toBe(true);
-      // … so the next drain re-queued the entry's `streamEntry` copy
-      // behind the parked in-process one (processed: root + the drain's
-      // copy = 2).
-      await waitUntil(
-        () => host!.stats().events.processed === 2,
-        "the drain to queue the entry's copy behind the parked one",
-        20_000,
-      );
       expect(childRuns).toBe(1);
       expect(host!.stats().events.lt1LateSealsRefused).toBe(0);
 
@@ -4065,13 +4034,14 @@ describe("Phase 3 events-down (serving side)", () => {
       // wave → refused; the drain's copy runs next and completes WITH
       // the mark.
       childGate.resolve();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => w.entriesOf(s2Sidecar)[0]?.consequenced === true,
-        "the drain's copy to consequence the entry",
-        20_000,
       );
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      // Anything the release left queued runs now, and the reads
+      // below sit behind a barrier covering the wave it seals into.
       await w.serving.idle();
+      await kickAndSettle(w.engine);
 
       const childEntry = w.entriesOf(s2Sidecar)[0];
       const stats = host!.stats();
@@ -4187,28 +4157,23 @@ describe("Phase 3 events-down (serving side)", () => {
       let released = false;
       try {
         await w.serving.scheduler.run(emitter as never);
-        await waitUntil(
+        await awaitServingView(
+          [w.servingC, sideServing],
           () => seenView().includes("ping") && sideView() === 1,
-          "the derivation's cascade copy AND its sibling to SEAL into the open wave",
-          20_000,
         );
-        await waitUntil(
-          () => waveCommitGateHits === 1,
-          "the target wave to reach the commit sink",
-          20_000,
-        );
+        await waveCommitGateHolds.reached(1);
         expect(pingEventId).toBeDefined();
         expect(w.entriesOf(s2Sidecar)).toEqual([]);
 
         w.s2.send({ tag: "rival" } as never);
         await clientRuntime.idle();
         await clientRuntime.storageManager.synced();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () =>
             w.entriesOf(s2Sidecar).some((entry) =>
               (entry.payload as { tag?: string } | undefined)?.tag === "rival"
             ),
-          "the rival append to land",
         );
         commitGate.resolve();
         released = true;
@@ -4218,17 +4183,15 @@ describe("Phase 3 events-down (serving side)", () => {
         waveCommitGate = undefined;
       }
 
-      expect(waveCommitGateHits).toBe(1);
+      expect(waveCommitGateHolds.entries.length).toBe(1);
 
-      await waitUntil(
-        () =>
-          w.entriesOf(s2Sidecar).length === 1 &&
-          w.entriesOf(s2Sidecar)[0].consequenced === true,
-        "the rival's entry to be the sidecar's only entry, consequenced",
-        20_000,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await awaitAdmitted(server, () =>
+        w.entriesOf(s2Sidecar).length === 1 &&
+        w.entriesOf(s2Sidecar)[0].consequenced === true);
+      // Anything the release left queued runs now, and the reads
+      // below sit behind a barrier covering the wave it seals into.
       await w.serving.idle();
+      await kickAndSettle(w.engine);
 
       const stats = host!.stats();
       const seen =
@@ -4314,10 +4277,7 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => storedLog().length === 1,
-        "the warm-up consequence to land",
-      );
+      await awaitAdmitted(server, () => storedLog().length === 1);
       expect(storedLog()).toEqual(["A"]);
       const aSidecarId = sidecarIdsIn(engine)[0];
       expect(aSidecarId).toBeDefined();
@@ -4331,41 +4291,28 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => {
-          const value = Engine.read(engine, { id: aSidecarId })?.value as
-            | StreamEventsDocValue
-            | undefined;
-          return (value?.entries?.length ?? 0) === 2;
-        },
-        "A2's append to land",
-      );
+      await awaitAdmitted(server, () => {
+        const value = Engine.read(engine, { id: aSidecarId })?.value as
+          | StreamEventsDocValue
+          | undefined;
+        return (value?.entries?.length ?? 0) === 2;
+      });
       send("b");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 2,
-        "B1's append to land on its own sidecar",
-      );
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
 
       // Let the drain meet the failure WITH BOTH EVENTS PENDING:
       // baseline the throw counter only after B1's append is durable,
       // then require one more failing pass beyond it — that pass's
       // snapshot holds A2 (sidecar sync failing) AND B1 (healthy
       // sidecar), the exact overtake window.
-      const failingPassesBefore = GatedStorageManager.syncThrowHits;
-      await waitUntil(
-        () => GatedStorageManager.syncThrowHits > failingPassesBefore,
-        "a failing drain pass to run with both events pending",
-      );
+      const failingPassesBefore = GatedStorageManager.syncThrows.entries.length;
+      await GatedStorageManager.syncThrows.reached(failingPassesBefore + 1);
       // Heal: the sidecar syncs again and the deferred entry drains.
       GatedStorageManager.syncThrowWhen = undefined;
 
-      await waitUntil(
-        () => storedLog().length === 3,
-        "all three consequences to land",
-        30_000,
-      );
+      await awaitAdmitted(server, () => storedLog().length === 3);
       // THE PIN: consequence order equals arrival order. The pre-barrier
       // drain let B1 (later arrival, warm sidecar) overtake the deferred
       // A2 — the log read A,B,A.
@@ -4426,17 +4373,14 @@ describe("Phase 3 events-down (serving side)", () => {
       (result.key(stream) as unknown as { send(value: unknown): unknown })
         .send({});
 
-    GatedStorageManager.loadParkFailHits = 0;
+    GatedStorageManager.loadParkFails = new ArrivalLog();
     try {
       // Warm the piece and stream `a`'s sidecar: one consequenced send,
       // with no park armed.
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => storedLog().length === 1,
-        "the warm-up consequence to land",
-      );
+      await awaitAdmitted(server, () => storedLog().length === 1);
       expect(storedLog()).toEqual(["A"]);
       const aSidecarId = sidecarIdsIn(engine)[0];
       expect(aSidecarId).toBeDefined();
@@ -4458,13 +4402,10 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => entriesOf(aSidecarId).length === 2,
-        "A2's append to land",
-      );
-      await waitUntil(
+      await awaitAdmitted(server, () => entriesOf(aSidecarId).length === 2);
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.deliveryCheckpointWriteFailures === 1,
-        "the first checkpoint write rejection to be counted",
       );
       expect(rejectedWaveCommits).toBe(0);
       expect(
@@ -4497,14 +4438,11 @@ describe("Phase 3 events-down (serving side)", () => {
       send("b");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 2,
-        "B1's append to land on its own sidecar",
-      );
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
 
-      await waitUntil(
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.deliveryCheckpointWriteFailures >= 2,
-        "the whole-wave checkpoint rejection to be counted",
       );
       expect(rejectedWaveCommits).toBe(1);
       rejectWaveCommitWhen = undefined;
@@ -4520,23 +4458,23 @@ describe("Phase 3 events-down (serving side)", () => {
         expect((await tx.commit()).error).toBeUndefined();
       };
       await wakeCheckpointRetry("rejection", 1);
-      await waitUntil(
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.deliveryCheckpointWriteFailures >= 3,
-        "the rejected checkpoint promise to be counted",
       );
       await wakeCheckpointRetry("throw", 2);
-      await waitUntil(
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.deliveryCheckpointWriteFailures >= 4,
-        "the synchronously failed checkpoint staging to be counted",
       );
       await wakeCheckpointRetry("success", 3);
 
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           allEntries().some((entry) =>
             entry.deliveryDeferral?.phase === "dispatch-load"
           ),
-        "the head-event load failure checkpoint to commit",
       );
       const checkpoint = allEntries().find((entry) =>
         entry.deliveryDeferral?.phase === "dispatch-load"
@@ -4583,11 +4521,7 @@ describe("Phase 3 events-down (serving side)", () => {
       GatedStorageManager.loadParkFailAddress = undefined;
       GatedStorageManager.signalLoadRecovery(servingManager!);
 
-      await waitUntil(
-        () => storedLog().length === 3,
-        "all three consequences to land after the load failure clears",
-        30_000,
-      );
+      await awaitAdmitted(server, () => storedLog().length === 3);
       // PIN 4 — exactly-once ((α)) AND arrival order: one consequence per
       // event, A2 before B1. A re-delivery would read ["A","A","A","B"].
       expect(storedLog()).toEqual(["A", "A", "B"]);
@@ -4598,13 +4532,10 @@ describe("Phase 3 events-down (serving side)", () => {
       // pending-entry scan can no longer select any of them — a re-delivery is
       // excluded by construction, not by having failed to show up yet.
       const lastSeq = Math.max(...allEntries().map((entry) => entry.seq ?? 0));
-      await waitUntil(
-        () =>
-          allEntries().length === 3 &&
-          allEntries().every((entry) => entry.consequenced === true) &&
-          readWatermarkSeq(engine) >= lastSeq,
-        "every entry consequenced and the watermark advanced past them",
-      );
+      await awaitAdmitted(server, () =>
+        allEntries().length === 3 &&
+        allEntries().every((entry) => entry.consequenced === true) &&
+        readWatermarkSeq(engine) >= lastSeq);
       expect(storedLog(), "no residual re-delivery of the deferred event")
         .toEqual(["A", "A", "B"]);
       expect(
@@ -4673,7 +4604,7 @@ describe("Phase 3 events-down (serving side)", () => {
       (result.key(stream) as unknown as { send(value: unknown): unknown })
         .send({});
 
-    GatedStorageManager.loadParkFailHits = 0;
+    GatedStorageManager.loadParkFails = new ArrivalLog();
     const gate = Promise.withResolvers<void>();
     const park = Promise.withResolvers<void>();
     try {
@@ -4681,10 +4612,7 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => storedLog().length === 1,
-        "the warm-up consequence to land",
-      );
+      await awaitAdmitted(server, () => storedLog().length === 1);
       const aSidecarId = sidecarIdsIn(engine)[0];
       expect(aSidecarId).toBeDefined();
       expect(servingManager).toBeDefined();
@@ -4709,31 +4637,24 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => entriesOf(aSidecarId).length === 2,
-        "A2's append to land",
-      );
+      await awaitAdmitted(server, () => entriesOf(aSidecarId).length === 2);
       send("b");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 2,
-        "B1's append to land on its own sidecar",
-      );
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
 
       // Reject only after both gates are held, so the failure belongs to
       // the pass that is still waiting for B's sidecar sync.
-      await waitUntil(
-        () =>
-          (servingManager?.syncGateHits ?? 0) > 0 &&
-          GatedStorageManager.loadParkFailHits > 0,
-        "a drain pass held at B's sidecar with A2's load pending",
-      );
+      await GatedStorageManager.syncGateParks.reached(1);
+      await GatedStorageManager.loadParkFails.reached(1);
 
       park.reject(new Error("memory session revoked: unauthorized (pin seam)"));
-      await waitUntil(
+      // The deferral is charged from the scheduler while the drain pass is
+      // still held at B's sidecar, so the loop reaches no cycle boundary
+      // here and the deferral's own edge is what reports it.
+      await awaitEach(
+        eventDeferrals,
         () => host!.stats().events.loadParkDeferrals > deferralsBefore,
-        "A2's load failure to defer while B's sidecar sync remains held",
       );
       expect(storedLog()).toEqual(["A"]);
 
@@ -4747,11 +4668,7 @@ describe("Phase 3 events-down (serving side)", () => {
       gate.resolve();
       GatedStorageManager.signalLoadRecovery(servingManager!);
 
-      await waitUntil(
-        () => storedLog().length === 3,
-        "all three consequences to land after the pass resumes",
-        30_000,
-      );
+      await awaitAdmitted(server, () => storedLog().length === 3);
       // THE PIN: arrival order held across the mid-pass gap.
       expect(storedLog()).toEqual(["A", "A", "B"]);
     } finally {
@@ -4824,7 +4741,7 @@ describe("Phase 3 events-down (serving side)", () => {
       (result.key(stream) as unknown as { send(value: unknown): unknown })
         .send({});
 
-    GatedStorageManager.loadParkFailHits = 0;
+    GatedStorageManager.loadParkFails = new ArrivalLog();
     const park = Promise.withResolvers<void>();
     park.promise.catch(() => {});
     try {
@@ -4832,10 +4749,7 @@ describe("Phase 3 events-down (serving side)", () => {
       send("a");
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => storedLog().length === 1,
-        "the warm-up consequence to land",
-      );
+      await awaitAdmitted(server, () => storedLog().length === 1);
       expect(storedLog()).toEqual(["A"]);
 
       // Arm the failure on the GATE doc — pushA's closure only — and HOLD
@@ -4862,11 +4776,13 @@ describe("Phase 3 events-down (serving side)", () => {
       // [A2 parked at head, B1 behind it] — B1 is exactly what the in-queue
       // sweep must reach, and the mid-pass half is irrelevant because no
       // deferral has happened yet.
-      await waitUntil(
-        () =>
-          host!.stats().events.processed >= processedBefore + 2 &&
-          GatedStorageManager.loadParkFailHits > 0,
-        "both entries queued with A2 parked on the held load",
+      await GatedStorageManager.loadParkFails.reached(1);
+      // The drain counts a pass's queueings at its end, so a pass that
+      // reached only A2 shows one — and the next pass, once the held
+      // settle is cut, shows the other.
+      await awaitEach(
+        drainPasses,
+        () => host!.stats().events.processed >= processedBefore + 2,
       );
       expect(storedLog(), "neither may have run while A2 holds the head")
         .toEqual(["A"]);
@@ -4874,9 +4790,9 @@ describe("Phase 3 events-down (serving side)", () => {
       // Now fail the park. A2 defers; the in-queue barrier must take B1 with
       // it even though B1's own closure is perfectly loadable.
       park.reject(new Error("memory session revoked: unauthorized (pin seam)"));
-      await waitUntil(
+      await awaitEach(
+        eventDeferrals,
         () => host!.stats().events.loadParkDeferrals >= 2,
-        "the head deferral and its barrier victim",
       );
       expect(
         storedLog(),
@@ -4889,11 +4805,7 @@ describe("Phase 3 events-down (serving side)", () => {
       GatedStorageManager.loadParkSettle = undefined;
       GatedStorageManager.signalLoadRecovery(servingManager!);
 
-      await waitUntil(
-        () => storedLog().length === 3,
-        "all three consequences to land after the load failure clears",
-        30_000,
-      );
+      await awaitAdmitted(server, () => storedLog().length === 3);
       // THE PIN: arrival order. Without the in-queue sweep B1 runs at the
       // moment A2 defers and the log reads ["A","B","A"].
       expect(storedLog()).toEqual(["A", "A", "B"]);
@@ -4942,7 +4854,7 @@ describe("Phase 3 events-down (serving side)", () => {
       bump();
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(() => storedValue() === 1, "the warm-up bump to land");
+      await awaitAdmitted(server, () => storedValue() === 1);
 
       rejectWaveCommitWith = (batch) => {
         if (batch.consequenceOf.length === 0) return undefined;
@@ -4960,13 +4872,13 @@ describe("Phase 3 events-down (serving side)", () => {
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
 
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           allEntries().some((entry) =>
             entry.status === "needs-attention" &&
             entry.attention?.phase === "commit-finalization"
           ),
-        "the refused wave to reach commit-finalization attention",
       );
       const terminal = allEntries().find((entry) =>
         entry.status === "needs-attention" &&
@@ -5006,14 +4918,11 @@ describe("Phase 3 events-down (serving side)", () => {
         kind: "retried";
         eventId: string;
       }).eventId;
-      await waitUntil(
-        () =>
-          storedValue() === 2 &&
-          allEntries().some((entry) =>
-            entry.eventId === retryId && entry.consequenced === true
-          ),
-        "the explicit retry to consequence exactly once",
-      );
+      await awaitAdmitted(server, () =>
+        storedValue() === 2 &&
+        allEntries().some((entry) =>
+          entry.eventId === retryId && entry.consequenced === true
+        ));
       expect(
         allEntries().filter((entry) => entry.retryOf === terminal.eventId),
       ).toHaveLength(1);
@@ -5055,13 +4964,13 @@ describe("Phase 3 events-down (serving side)", () => {
       (result.key("bump") as unknown as { send(value: unknown): unknown })
         .send({});
 
-    GatedStorageManager.loadParkFailHits = 0;
+    GatedStorageManager.loadParkFails = new ArrivalLog();
     try {
       // Warm the piece and its sidecar, unarmed.
       bump();
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(() => storedValue() === 1, "the warm-up bump to land");
+      await awaitAdmitted(server, () => storedValue() === 1);
 
       // A PERSISTENT failure — never healed inside this pin.
       GatedStorageManager.loadParkFailDocId = argumentId;
@@ -5074,12 +4983,12 @@ describe("Phase 3 events-down (serving side)", () => {
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
 
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           allEntries().some((entry) =>
             entry.deliveryDeferral?.phase === "dispatch-load"
           ),
-        "the failed-head checkpoint to commit",
       );
       deliveryNow += 60_000;
       expect(host!.stats().events.maxAccumulatedDeliveryFailureMs).toBe(
@@ -5093,9 +5002,9 @@ describe("Phase 3 events-down (serving side)", () => {
       // immediately. Reject that notice wave: the entry and its arrival
       // barrier must remain pending.
       GatedStorageManager.signalLoadRecovery(servingManager!);
-      await waitUntil(
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.needsAttentionSealFailures === 1,
-        "the rejected attention notice to be counted",
       );
       expect(rejectedWaveCommits).toBe(0);
       expect(
@@ -5117,13 +5026,10 @@ describe("Phase 3 events-down (serving side)", () => {
       bump();
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
-      await waitUntil(
-        () => allEntries().length === 3,
-        "the later event append to become durable",
-      );
-      await waitUntil(
+      await awaitAdmitted(server, () => allEntries().length === 3);
+      await awaitEach(
+        waveCycles,
         () => host!.stats().events.needsAttentionSealFailures === 2,
-        "the whole-wave attention rejection to be counted",
       );
       expect(rejectedWaveCommits).toBe(1);
       rejectWaveCommitWhen = undefined;
@@ -5136,13 +5042,13 @@ describe("Phase 3 events-down (serving side)", () => {
       const wakeTx = clientRuntime.edit();
       noticeWake.withTx(wakeTx).set({ value: 1 });
       expect((await wakeTx.commit()).error).toBeUndefined();
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           allEntries().some((entry) =>
             entry.status === "needs-attention" &&
             entry.attention?.phase === "dispatch-load"
           ) && storedValue() === 2,
-        "the cover to commit before the later healthy consequence",
       );
       const terminal = allEntries().find((entry) =>
         entry.status === "needs-attention"
@@ -5182,14 +5088,11 @@ describe("Phase 3 events-down (serving side)", () => {
         kind: "retried";
         eventId: string;
       }).eventId;
-      await waitUntil(
-        () =>
-          storedValue() === 3 &&
-          allEntries().some((entry) =>
-            entry.eventId === retryId && entry.consequenced === true
-          ),
-        "the one explicit retry to consequence",
-      );
+      await awaitAdmitted(server, () =>
+        storedValue() === 3 &&
+        allEntries().some((entry) =>
+          entry.eventId === retryId && entry.consequenced === true
+        ));
       const replay = await clientManager.resolveEventAttention(
         space,
         terminal.eventId,

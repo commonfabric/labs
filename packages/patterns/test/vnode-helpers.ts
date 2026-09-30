@@ -75,6 +75,16 @@ export const findNode = (
     .find((child) => child !== undefined);
 };
 
+/** How many elements named `name` sit under `root`, counting nested ones. */
+export const countElements = (root: unknown, name: string): number => {
+  const value = readValue(root);
+  const self = isRecord(value) && readValue(value.name) === name ? 1 : 0;
+  return childNodes(value).reduce<number>(
+    (sum, child) => sum + countElements(child, name),
+    self,
+  );
+};
+
 export const findNodeByProp = (
   root: unknown,
   prop: string,
@@ -124,3 +134,65 @@ export const findElementByExactText = (
     return isRecord(value) && value.name === name &&
       hasExactText(value, expected);
   });
+
+/** Whether `node` is a clickable control whose whole text is `label`. */
+export const isButton = (label: string) => (node: unknown): boolean =>
+  propsOf(node)?.onClick !== undefined && hasExactText(node, label);
+
+/** The innermost node `accept` admits: the row itself rather than every
+ * container that also carries the row's text. */
+export const innermostNode = (
+  node: unknown,
+  accept: (node: unknown) => boolean,
+): unknown => {
+  for (const child of childNodes(node)) {
+    const hit = innermostNode(child, accept);
+    if (hit !== undefined) return hit;
+  }
+  return accept(node) ? node : undefined;
+};
+
+/** Fires the event handler a node binds under `prop` (`onClick`,
+ * `oncf-submit`, …), sending it `event`. A handler bound only in JSX is
+ * reached through the rendered tree. Throws when there is no node or it binds
+ * nothing under `prop`, so a mistyped label fails the test rather than
+ * passing as a control that did nothing. */
+export const fireEvent = (
+  node: unknown,
+  prop: string,
+  event: unknown,
+  what = "the node",
+): void => {
+  if (node === undefined) throw new Error(`fireEvent: ${what} was not found`);
+  const handler = propsOf(node)?.[prop];
+  if (!isRecord(handler) || typeof handler.send !== "function") {
+    throw new Error(`fireEvent: ${what} has no ${prop} to fire`);
+  }
+  (handler.send as (event: unknown) => void)(event);
+};
+
+/** Fires a node's `onClick` the way a click does, with an empty event. */
+export const fireClick = (node: unknown, what = "the node"): void =>
+  fireEvent(node, "onClick", {}, what);
+
+/** Clicks the one button labelled `label` under `root`. */
+export const clickButton = (root: unknown, label: string): void =>
+  fireClick(findNode(root, isButton(label)), `a button labelled "${label}"`);
+
+/** Clicks the button labelled `label` in the row whose text carries
+ * `rowText`: the innermost node holding both the text and such a button. */
+export const clickInRow = (
+  root: unknown,
+  rowText: string,
+  label: string,
+): void => {
+  const row = innermostNode(
+    root,
+    (node) =>
+      hasText(node, rowText) && findNode(node, isButton(label)) !== undefined,
+  );
+  fireClick(
+    findNode(row, isButton(label)),
+    `a button labelled "${label}" in the row "${rowText}"`,
+  );
+};

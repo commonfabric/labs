@@ -10,10 +10,38 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
+  subtrees, graph-aware policy queries, and a reader-first stored-format migration
+  to bound the cost of staged reference diamonds.
+
+- [Shuffled test order: what is left to build](test-order-shuffle.md) carries
+  the piece the shuffle does not yet have: a shuffle inside this repository's
+  own `describe()` and `it()`, which every test file already resolves to,
+  reordering the cases inside a file that `deno test --shuffle` leaves in
+  place. Its first stage, a scheduled run under the next day's seed a day
+  ahead, is built.
+- [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview
+  of current trust boundaries and the path from runtime security to operator
+  exclusion, with remaining work and technical references in an appendix.
+- [Discovering Loom resources with wish](loom-resource-discovery.md) proposes
+  publishing existing database and companion-cell references once per Loom
+  environment, with a staged person-inbox migration and compiled integration
+  acceptance gates.
+- [Revising a piece's source from an agent session](piece-revision-from-a-session.md)
+  covers the two `pattern-author` tools that revise a piece someone already
+  has — a handle-addressed read of its current source, and a direct edit
+  through the runtime's own compatibility check and setup transaction — what
+  they lean on rather than rebuild, and the two questions left open: whether
+  revising is really `run_pattern` with a target, and what to do about an
+  agent retyping a whole pattern for a one-character mistake.
 - [View-scoped client replication](view-scoped-client-replication.md) tracks
   rollout, recovery, and adversarial verification of active-view delivery and
   guarded speculative computation. It separates execution demand from delivery
   and stages document selection before optional field projections.
+- [cf-harness task research and composition](cf-harness-inbox-reliability.md)
+  adds a `research` service that reads documentation and indexed source,
+  prepares a usable implementation kit for every task, and supports tested email
+  components that authors can compose.
 - [Interaction cost in the unified inbox](person-inbox-interaction-cost.md)
   records the runtime work behind a thread open that cost 1482 ms paced and
   10.7-19.5 s against five people's data: the per-read prefix scan over a
@@ -22,6 +50,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   render and not the transaction. It carries what was disproved with what
   landed, and the one item still open — a session that settles at ~800 ms after
   roughly twenty clicks, which is waiting rather than compute.
+- [Topics computation cost and live upgrade](topics-computation-cost.md)
+  sequences shared backlink lookup, incremental mention maintenance, topic
+  summaries, measurement gates, and rehearsed upgrades of populated boards.
 - [Cast-free patterns](cast-free-patterns.md) sequences shared type and API
   repairs, migration of authored patterns and their tests, and enforcement
   through lint and new-source admission.
@@ -53,9 +84,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   on which authority and which caveat tiers admit content to a model.
 - [CFC TypeScript authoring](cfc_typescript_authoring.md) sequences the
   TypeScript and JSX authoring surface for CFC metadata.
-- [`cf-code-editor` co-presence](cf-code-editor-copresence.md) adds an
-  ephemeral Cloudflare WebSocket plane for live participant names, carets, and
-  selections while Memory remains the sole authority for document contents.
 - [First-class serializable factories](first-class-serializable-factories.md)
   sequences the implementation of durable pattern, module, and handler
   factories.
@@ -73,14 +101,15 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy materialization fast-follow](lazy-materialization-fast-follow.md)
-  owns handler integration, rollout evidence, flag retirement, and renewed
-  measurements after the computation-cost arc, with independently checkable
-  stages F0–F5.
 - [Lazy cell materialization](lazy-cell-materialization.md) sequences a
   schema-observing lazy view over a cell, a transaction mode that hands one back
   from every read, and the runner disposition for a reader that touches data the
   schema no longer describes.
+- [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
+  moves stream-ness out of the stored `{ "$stream": true }` value and into the
+  link schema and the module wrapper, and triggers the cold-start repairs on a
+  structural mismatch instead of the missing marker. It names putting the
+  owner into a stream's address as the follow-up it is written toward.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
@@ -122,19 +151,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
   intent listener, the ruled double-dispatch implementation, the
   acceptance and the owner ruling set); it archives beside the stage-C
   closeout when that build lands.
-- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes the
-  simpler form D12 said bgUpdater would come back as: a pattern declares the
-  cadence it wants to wake on, and the space's own serving runtime honors it,
-  so background work stops needing a separate process anyone has to run and
-  keep online. Waking a piece on a timer with nobody watching is the one thing
-  the background piece service does that the executor does not, and the ruling
-  accepts that capability lapsing in the meantime — nothing depends on it, so
-  nothing is broken while it is gone. Three separable parts: the replacement,
-  the already-ruled deletion, which waits for nothing here and has a worked v1
-  inventory to read, and compute accounting, which neither of the others
-  depends on. The replacement rests on a further ruling, because a
-  scheduled wake would be the second issuer of warm demand where the spec pins
-  the count at one.
+- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes a
+  simpler form for bgUpdater, which the owner ruled will come back later: a
+  pattern declares the cadence it wants to wake on, and the space's own
+  serving runtime honors it, so background work needs no separate process
+  anyone has to run and keep online. Nothing wakes a piece on a timer with nobody watching, and the ruling
+  accepts that capability being absent in the meantime — nothing depends on
+  it. Two separable parts: the capability, and compute accounting, which the
+  capability does not depend on to function. The capability rests on a further
+  ruling, because a scheduled wake would be the second issuer of warm demand
+  where the spec pins the count at one.
 - [Revision-keyed schema memo](revision-keyed-schema-memo.md) designs a
   cross-evaluation, per-document memo of schema-walk computation on the
   memory server, keyed by each document's revision so validity needs no
@@ -146,12 +172,18 @@ a record: archive it to `docs/history/plans/` following the procedure in
   sequences how long an invocation record is kept and what the runtime knows
   about who caused it — the `AgentActor` mint, trusted ingress, and metadata
   confidentiality. Gated on a CFC review that has not happened.
+- [Random space identities](random-space-identities.md) gives every newly
+  created space a fresh random identity whose authority ends after ACL genesis,
+  while every space that already exists keeps its DID and the name that reaches
+  it. It implements the
+  [random space identity specification](../specs/random-space-identities.md),
+  uses existing DID routes, and is complete without a public name registry.
 - [CFC runner implementation](runner_cfc_implementation.md) defines the
   commit-boundary enforcement workstreams and rollout.
 - [Finishing the piece source lifecycle](piece-source-lifecycle-completion.md)
   compares the lifecycle spec against the repository and orders the remainder
-  as five pull requests in two tracks — what a revision records, and where a
-  space lives.
+  as four pull requests in two tracks — what a revision records, and how a
+  learned route persists.
 - [Bulk piece operations](piece-bulk-operations.md) designs retargeting,
   repairing, and rolling back many pieces as one reviewable, resumable
   operation over a shared plan — with batching as an execution strategy
@@ -218,3 +250,20 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the verb flags and result shapes that offer none, the source `--space` needs
   before any of it is reachable by name, and the gate that keeps completion
   from falling behind the command tree again.
+- [Handler-callable egress](handler-callable-egress.md) records the capability
+  a pattern does not have: a network request a handler can issue and await,
+  which the runtime records and gates the way it records and gates a node
+  factory's request. It carries the shape of program that has no home without
+  one, the two routes a design could take and what each gives up, and the
+  provider-side stack left standing in the meantime.
+
+## Concepts not planned for deployment
+
+These documents retain implementation detail for designs that may be evaluated
+again. They are not scheduled work and are not dependencies of current plans.
+
+- [Space name registry](space-name-registry.md) describes a possible
+  implementation of the DNS namespaces, ASP redirects, registered targets, and
+  displayed-name selection in the dormant
+  [Common Fabric URL](../specs/fabric-urls.md) concept. It remains independent of
+  space identity creation.

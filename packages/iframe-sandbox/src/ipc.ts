@@ -1,6 +1,7 @@
 // Types used by the `common-iframe-sandbox` IPC.
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 // Diagram of the messages between the Host environment, the intermediary outer
 // frame, and the guest in the inner frame.
@@ -21,6 +22,9 @@ import type { FabricValue } from "@commonfabric/data-model";
 //         │◄═════════════════════ port ═══════════════════►│
 //         │                       │                        │
 //         │◄──────ERROR───────────┤◄───────(unread)────────┤
+//         │                       │                        │
+//         │◄───PORT-REQUEST───────┤◄───────(unread)────────┤
+//         ├──────────────────PORT (transferred)───────────►│
 //
 // The host and the guest hold the two ends of a `MessagePort` and every
 // capability request, response, and event crosses on it. The outer frame
@@ -28,8 +32,18 @@ import type { FabricValue } from "@commonfabric/data-model";
 //
 // The one thing it does pass along is whatever the guest posts to it, which it
 // forwards without reading. A guest has a port for everything it means to say,
-// so a message arriving by that route is a guest reporting that it could not
-// use the port -- a way to raise an alarm, not a second way to talk.
+// so a message arriving by that route is about the port itself: an alarm from
+// a guest that could not use it, a request from a guest that has none, or the
+// flush marker below. It is not a second way to talk.
+//
+// The port goes out on `LOAD`, and the guest need not have started
+// listening by the time its document has loaded: a guest can await anything
+// it likes before it connects. A guest that starts listening only after its
+// document loaded may therefore have missed the port, and posts a
+// `PORT-REQUEST` up the parent chain. A host whose guest has loaded answers
+// it as it answers a `LOAD`, with a fresh port; one still loading a document
+// ignores it, since the `LOAD` still to come brings the listening guest a
+// port.
 //
 // The relayed route and the port are separate channels, and nothing orders one
 // against the other. The `ORDERED`/`FLUSH` exchange is the rendezvous that
@@ -113,7 +127,7 @@ export function isIPCGuestMessage(
   message: unknown,
 ): message is IPCGuestMessage {
   if (
-    typeof message !== "object" || message === null || !("type" in message)
+    !isObjectOrArray(message) || !("type" in message)
   ) {
     return false;
   }
@@ -139,8 +153,7 @@ export type GuestError = {
 };
 
 export function isGuestError(e: object): e is GuestError {
-  return typeof e === "object" &&
-    e !== null &&
+  return isObjectOrArray(e) &&
     "description" in e && typeof e.description === "string" &&
     "source" in e && typeof e.source === "string" &&
     "lineno" in e && typeof e.lineno === "number" &&
@@ -282,7 +295,7 @@ export type BridgeHostMessage = BridgeResponse | BridgeEvent | BridgeFlushAck;
 const hasBridgeHeader = (
   message: unknown,
 ): message is Record<string, unknown> =>
-  typeof message === "object" && message !== null &&
+  isObjectOrArray(message) &&
   (message as Record<string, unknown>).protocol === BRIDGE_PROTOCOL &&
   (message as Record<string, unknown>).version === BRIDGE_VERSION;
 
@@ -347,7 +360,7 @@ export function isBridgeHostMessage(
     typeof message.ok !== "boolean"
   ) return false;
   if (message.ok) return true;
-  return typeof message.error === "object" && message.error !== null &&
+  return isObjectOrArray(message.error) &&
     typeof (message.error as BridgeError).code === "string" &&
     typeof (message.error as BridgeError).message === "string" &&
     (!("resource" in message.error) ||
@@ -357,7 +370,7 @@ export function isBridgeHostMessage(
 export type GuestAlarm = { type: "error"; data: GuestError };
 
 export function isGuestAlarm(message: unknown): message is GuestAlarm {
-  return typeof message === "object" && message !== null &&
+  return isObjectOrArray(message) &&
     (message as { type?: unknown }).type === "error" &&
     "data" in message && isGuestError(message.data as object);
 }
@@ -372,7 +385,22 @@ export function isGuestAlarm(message: unknown): message is GuestAlarm {
 export type GuestFlush = { type: "flush"; nonce: string };
 
 export function isGuestFlush(message: unknown): message is GuestFlush {
-  return typeof message === "object" && message !== null &&
+  return isObjectOrArray(message) &&
     (message as { type?: unknown }).type === "flush" &&
     typeof (message as { nonce?: unknown }).nonce === "string";
+}
+
+/**
+ * Request a guest posts up the parent chain for a port, when it starts
+ * listening for one only after its document has finished loading. The host
+ * hands a port over on the load report, which the guest may then have
+ * missed, so the host answers this with another.
+ */
+export type GuestPortRequest = { type: "port-request" };
+
+export function isGuestPortRequest(
+  message: unknown,
+): message is GuestPortRequest {
+  return isObjectOrArray(message) && "type" in message &&
+    message.type === "port-request";
 }

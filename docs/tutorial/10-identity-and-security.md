@@ -226,7 +226,7 @@ required-integrity floor (e.g. tool inputs that demand certified data).
 Deployments dial it along four independent axes — enforcement mode
 (`disabled`/`observe`/`enforce-explicit`/`enforce-strict`), flow-label
 persistence (`off`/`observe`/`persist`), the write floor, and trigger-read
-gating; the shell today runs `enforce-explicit` with flow labels at
+gating; the shell today runs `enforce-strict` with flow labels at
 `persist`. The verified-source `$implRef` machinery (Chapter 7) is what
 ties labels to the exact code that produced a value. Specs live in
 `docs/specs/cfc-*.md`; demo patterns in `packages/patterns/cfc-*`.

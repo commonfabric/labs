@@ -23,6 +23,7 @@
  * of a real record is refused. This file is what says the SHIPPED controls are
  * bound to it.
  */
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   env,
@@ -148,9 +149,8 @@ const rowAt = (rows: string[], index: number, candidates: string[]): string => {
   const hit = candidates.filter((c) => text.includes(c));
   if (hit.length !== 1) {
     throw new Error(
-      `row ${index} of ${rows.length} matched ${hit.length} candidates: ${
-        JSON.stringify(text.slice(0, 200))
-      }`,
+      `row ${index} of ${rows.length} matched ${hit.length} candidates: ` +
+        debugStr`$quote,long${text}`,
     );
   }
   return hit[0]!;

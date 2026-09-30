@@ -25,13 +25,14 @@ const TRUSTED_PROFILE_CREATE_ACTION = "CreateProfile";
 // `CHURN_METRIC` tag and `key=value` shape are the stable contract — keep them
 // greppable.
 //
-// To pull the distribution from the most recent 100 CI runs (this test runs in
-// the "CI" / deno.yml `package-integration-test` job; PRs land on
-// commontoolsinc/labs — adjust -R for a fork). Requires the `gh` CLI:
+// To pull the distribution from the most recent 100 CI runs (this test is a
+// unit of the test topology's pattern integration suites, so it runs in a lane
+// of every full run and of any pull request that selects it; PRs land on
+// commonfabric/labs — adjust -R for a fork). Requires the `gh` CLI:
 //
-//   gh run list -R commontoolsinc/labs --workflow deno.yml --limit 100 \
+//   gh run list -R commonfabric/labs --workflow deno.yml --limit 100 \
 //     --json databaseId --jq '.[].databaseId' \
-//     | xargs -P4 -I{} gh run view -R commontoolsinc/labs {} --log 2>/dev/null \
+//     | xargs -P4 -I{} gh run view -R commonfabric/labs {} --log 2>/dev/null \
 //     | grep 'CHURN_METRIC label=reload' > /tmp/churn.txt
 //
 //   for k in commitConflicts commitReverts scheduleRunErrors; do
@@ -88,8 +89,9 @@ async function ensureProfileTabActive(page: any) {
 
 // deno-lint-ignore no-explicit-any
 async function createProfile(page: any, name: string) {
-  await ensureProfileTabActive(page);
+  // `activeTab` can revert during synchronization (CT-1666); check it afterward.
   await waitForRuntimeSynced(page);
+  await ensureProfileTabActive(page);
   await fillCfInput(page, "#wish-profile-picker-name-input", name);
   await clickTrustedAction(page, TRUSTED_PROFILE_CREATE_ACTION);
   await waitForRuntimeSynced(page);

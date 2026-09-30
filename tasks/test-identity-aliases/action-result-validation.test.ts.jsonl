@@ -1,0 +1,2 @@
+{"date":"2026-09-15","from":{"k":"unit","s":"runner","n":"validateAndCheckReactives > valid values > accepts materializable special and native objects"},"to":{"k":"unit","s":"runner","n":"validateAndCheckReactives > valid values > accepts materializable special and JS objects"}}
+{"date":"2026-09-15","from":{"k":"unit","s":"runner","n":"validateAndCheckReactives > invalid values > rejects class instances without native conversion"},"to":{"k":"unit","s":"runner","n":"validateAndCheckReactives > invalid values > rejects class instances without convertible-JS conversion"}}

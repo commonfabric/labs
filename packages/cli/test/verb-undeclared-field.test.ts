@@ -24,6 +24,7 @@ import {
   VerbInputValidationError,
 } from "../lib/callable.ts";
 import { executePieceCallable } from "../lib/piece.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /**
  * Dispatch `payload` at a verb publishing `schema`, through the same
@@ -52,14 +53,18 @@ async function dispatchedPayload(
       onCommit?.({ status: () => ({ status: "ok" }) });
     },
   };
-  await executeResolvedCallable({
-    callableCell: callableCell as never,
-    callableKind: "handler",
-    cellKey: "probe",
-    pieces: { runtime: {} } as never,
-    space: "did:key:undeclared-field-probe" as never,
-    inputSchema: schema,
-  }, payload);
+  await executeResolvedCallable(
+    {
+      callableCell: callableCell as never,
+      callableKind: "handler",
+      cellKey: "probe",
+      pieces: { runtime: {} } as never,
+      space: "did:key:undeclared-field-probe" as never,
+      inputSchema: schema,
+    },
+    payload,
+    { sendEvent: sendThroughStandIn },
+  );
   return sent;
 }
 
@@ -873,14 +878,19 @@ describe("verb-undeclared-field", () => {
   describe("cf piece call against a live verb", () => {
     it("declares an event schema naming `properties` with no `additionalProperties`", async () => {
       // The coupling every refusal below rests on: the shape the transformer
-      // emits is one that drops what it does not name.
+      // emits is one that drops what it does not name. The link the verb is
+      // reached through declares the stream in front of that shape.
       await withList("undeclared-shape", ({ root }) => {
         expect(resolvedSchema(root.key("addItem").schema)).toEqual({
+          asCell: ["stream"],
           type: "object",
           properties: { title: { type: "string" }, done: { type: "boolean" } },
           required: ["title", "done"],
         });
-        expect(root.key("ping").schema).toBeUndefined();
+        // A verb declaring no event schema still declares the stream.
+        expect(resolvedSchema(root.key("ping").schema)).toEqual({
+          asCell: ["stream"],
+        });
         return Promise.resolve();
       });
     });

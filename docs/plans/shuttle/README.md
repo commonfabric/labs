@@ -22,7 +22,7 @@ shuttle estuary/board> watch topics/3
 │ replies  14                          │
 └── q: back (watch stays armed) ───────┘
 shuttle estuary/board> call topics/3 add-reply --body "hi"
-watch topics/3: replies 14 → 15
+watch topics/3 @space: changed
 shuttle estuary/board>
 ```
 
@@ -49,12 +49,12 @@ The moving half of context has no home. `CF_API_URL`, `CF_IDENTITY`, and
 parameter that is required everywhere and identical across a working
 session is one a caller should state once" — caps out exactly there,
 because piece, path, and scope are not identical across a session: they
-change with every step, because they are the work. The fabric's reference
-grammar is right-anchored —
-`/[@did:key:…/]of:fid1:<id>[@scope][/path…]`, documented at the top of
-`packages/cli/lib/llm-friendly-ref.ts`, which adds the `#argument` suffix
-at the CLI's intake seams — with omitted levels
-supplied by context, and shuttle makes that context a position you
+change with every step, because they are the work. The fabric's cell
+reference grammar — `//<space>/<piece>[#member][@qualifier…][/path…]` and its
+space- and piece-relative forms, recorded in
+[`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md) and read
+by `packages/runner/src/cell-reference.ts` — takes the levels a reference
+omits from a context, and shuttle makes that context a position you
 navigate: **a place is the context that fills in the omitted levels of a
 reference**, moved by `cd`, relative references, and handles instead of by
 copying printed addresses between commands (the composition axis of
@@ -149,8 +149,8 @@ invisible, the prompt renders the whole ambient record — place and scope
     would name another cell entirely. Inside a piece nothing is reserved.
 
     **The reservation diverges from the canonical grammar, for two slug
-    values.** The rooted spelling is not shuttle's — `/[@space/]<piece>…`
-    is the canonical cell reference, the runner's `parseReferenceParts`,
+    values.** The rooted spelling is not shuttle's — `[//space]/<piece>…`
+    is the canonical cell reference, the runner's `parseCellReference`,
     the same structure in patterns and at every `cf` intake seam, and this
     CLI resolves the piece segment by slug as well as by handle
     (`packages/cli/lib/llm-friendly-ref.ts`). The facets are the
@@ -160,7 +160,7 @@ invisible, the prompt renders the whole ambient record — place and scope
     current state and it is what decision 11 costs: a piece slugged
     `slugs` or `pieces` has no rooted slug spelling in shuttle, and is
     reached by handle or by a complete reference carrying its space.
-    Issue [#6992](https://github.com/commontoolsinc/labs/issues/6992)
+    Issue [#6992](https://github.com/commonfabric/labs/issues/6992)
     retires the divergence by having `set-slug` refuse those two values,
     after which no piece can carry them and the two grammars agree
     everywhere.
@@ -211,7 +211,21 @@ invisible, the prompt renders the whole ambient record — place and scope
     character; [`grammar.md`](grammar.md) carries that rendering.
 18. **`!` means local, everywhere.** Line-initial `! <cmd>` runs a local
     program, `|!` is the same escape inside a pipeline, `!cf` the special
-    case that injects place-derived flags.
+    case that injects place-derived flags. Four readings follow from
+    "local". The words after `!` are read by the system shell rather than
+    by shuttle's split, because an escape that is a weaker shell than the
+    one outside is not an escape — globs, `&&` and the rest are what a
+    person reached for `!` to get. A local program runs at the external
+    working location, which decision 30 makes a directory on this machine.
+    `!cf` injects the dimensions fixed at launch — api endpoint, identity
+    and the space (decision 22) — and not the piece and path standing
+    under them: a `cf` command takes a reference as an operand rather than
+    a flag, and knowing which operand that is for each command is `cf`'s
+    grammar rather than shuttle's, which is the drift decision 9 warns
+    about. A flag written on the line wins over the injected one,
+    silently: the escape is a subprocess, so it may reach a space this
+    process cannot, and refusing would leave `!cf` weaker than the `cf`
+    outside it.
 19. **Shuttle is what it is; `cf sh` is what you type.** The relationship is
     the one Fabric already has with `cf`: a product carries the name a person
     means, and the command carries the name a person types thirty times an
@@ -246,14 +260,12 @@ invisible, the prompt renders the whole ambient record — place and scope
     everywhere else, so `cd @session` reaches a key of that name and a
     refusal that finds none offers `.@session` instead.
 
-    This tracks
-    [#6814](https://github.com/commontoolsinc/labs/issues/6814), which is
-    proposed rather than merged. Shuttle ships conforming to it because
-    the alternative is migrating the spelling later, and a shell's
-    navigation words are what a person's fingers learn first. A qualifier names the
-    base scope or the reading identity's own
-    overlays, never another identity's; standing in another identity's
-    overlay is a canonical-grammar extension, out of v1.
+    The spelling is the cell reference grammar's
+    ([`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md)),
+    and shuttle reads it through that grammar's own reader. A qualifier names
+    the base scope or the reading identity's own overlays, never another
+    identity's; standing in another identity's overlay is a canonical-grammar
+    extension, out of v1.
 21. **The native tool set v0 is ruled and deferred** with decision 16's
     contract: the list, and `cat`'s deliberate absence, are preserved in
     [`futures.md`](futures.md).
@@ -269,10 +281,16 @@ invisible, the prompt renders the whole ambient record — place and scope
     which also honors the one-connection-per-process limit the seam work
     records. `cd`/`xcd` are conveniences over the hottest dimensions;
     launch flags seed the initial record.
-23. **A scheme is legal only on an absolute complete path.** Relative
-    external operands are rooted with the `x:` base (`> x:../out.json`) —
-    a base name, not a scheme — and a bare relative operand is always
-    fabric, so no operand ever changes plane by position.
+23. **A schemed operand names its plane; a leading `/` makes it absolute.**
+    Without one it is relative to the external working location
+    (`> file:../out.json`), and a bare relative operand is always fabric —
+    so no operand ever changes plane by position, the scheme deciding that
+    and position deciding nothing. There is no separate base name. `x:` was
+    one, and what it bought was naming the external plane without naming
+    which member of it a location stood on. A schemed operand names that
+    member outright, and shuttle stands on one at a time, so the base says
+    a second time what the scheme has said already (decision 13) — which
+    holds however many members the family comes to have.
 24. **Pagination: height-fit pages, and `more` continues.** `ls` prints
     one terminal-height page plus a status line and never escalates to a
     view uninvited; `more` continues the listing and its handle numbering,
@@ -285,7 +303,7 @@ invisible, the prompt renders the whole ambient record — place and scope
     cost bounded by the visible page in element documents; membership is
     one document whose size grows with the collection's link array — linear
     in links, not in element closures. The seam and solution lanes are
-    issue [#6534](https://github.com/commontoolsinc/labs/issues/6534); B3
+    issue [#6534](https://github.com/commonfabric/labs/issues/6534); B3
     opens by proving the seam, and falls back to a capped deep sink with
     an honest label if it disappoints. The raw subscription serves the
     base scope only — `SpaceReplica.sinkDocument` keys on the base
@@ -293,9 +311,22 @@ invisible, the prompt renders the whole ambient record — place and scope
     `@session` takes the capped deep sink, which reads through the scope
     its cells carry. Making that seam scope-aware end to end is part of
     #6534, not a shuttle workaround.
-26. **The piece overview ships structured, not live.** One frame —
-    arguments, result summary, callables, pattern identity — rendered as a
-    refreshable snapshot in B3; the live piece watch is deferred.
+26. **A piece reads through one verb, and `describe` is it.** The four
+    things a reader wants of a piece — its arguments, a summary of its
+    result, its callables with their doc annotations, and its pattern
+    identity — are one reading, and `describe` writes it. This decision
+    ruled a second surface onto those four on 2026-08-29, before that verb
+    existed: `describe` reached the shell on 2026-09-07, in B2, and the two
+    were written several slices apart. The dates are here so that a second
+    surface is not ruled a second time by a reader who finds this decision
+    and not the verb. A second surface
+    onto the same four is an overlap in purpose that a difference in form
+    does not pay for: a frame over them would add a way to refresh in
+    place, where a shell refreshes by running the line again, and a way to
+    scroll, where `more` continues the page already. So v1 ships the one
+    verb. A live view of a piece is deferred
+    ([`futures.md`](futures.md)), and it is deferred for the seam rather
+    than the form.
 27. **Handles are structured.** A handle is a bound reference with
     structure, not a string: a listing records each row's kind as it mints
     the handle, and for a callable row it records the receiver and the
@@ -324,7 +355,23 @@ invisible, the prompt renders the whole ambient record — place and scope
     separate feature and is deferred ([`futures.md`](futures.md)). The
     traversal runs over those lines and the line being typed, one position
     each, so an edit is held wherever it was made and everything that ends
-    the line returns the traversal to it. `tab` completes the token the line
+    the line returns the traversal to it. A line is recorded with each `%n`
+    replaced by what it bound to when it ran: `%n` is a reference only until
+    the next listing (decision 17) and recall outlives listings, so a
+    recalled handle would otherwise act on whichever row that number names
+    now — the wrong thing, silently and successfully, which is the one
+    failure a shell must not have. What is recorded resolves from
+    anywhere the session can stand: a piece row records the id the listing
+    resolved it to — a slug is repointable, so recording one would name
+    whichever piece it comes to mean — and a row inside a piece records
+    the reference naming
+    the cell — the piece and the path, which is what a callable row
+    already records for its receiver. A bare name would not do, two pieces
+    being free to hold a key of the same name, so a recalled name could
+    still reach a different cell without saying so. What the prompt shows
+    is what was typed; what recall replays is what it meant, and the
+    listing knows the difference already at mint time (decision 27). `tab`
+    completes the token the line
     ends in: a verb where the line names none, and otherwise whatever the
     verb declares its next operand completes, which the two arms of the arity
     that take an operand require and the arm that takes none cannot express.
@@ -334,6 +381,25 @@ invisible, the prompt renders the whole ambient record — place and scope
     13's checked names rest on, held by reuse rather than by a second answer.
     A completion is a read, so it is work in flight: it is cancelled by
     `ctrl-c` and written onto the line it was computed for and onto no other.
+30. **An operand reaches a plane; the plane decides what it affords.** A
+    refusal names the plane's limit rather than shuttle's gap, and the two
+    are different because only one of them will ever change. `file:`
+    affords navigation, listing, reading, writing, and a directory a local
+    program can run in. `https:` affords a read and nothing else: HTTP has
+    no listing primitive — an auto-index page is a server's choice, not the
+    protocol's — and no traversal for `..` to mean anything against. So
+    `xcd https://…` is refused on the same rule that refuses a listing
+    there, rather than as a thing not yet built: a place is stood in by
+    moving through it, and that plane has nothing for a move to land on.
+    Two things follow. The external working location is always a directory
+    on this machine, which is what gives `!` somewhere to run and what lets
+    decision 23 retire the base. And the rule is what a later member of
+    the family would be admitted by rather than something a later member
+    would change: a scheme that answers what stands under a path has a
+    `navigate` to give, where `https:` has none and stays what
+    [`futures.md`](futures.md) makes it — a read end, naming its place
+    whole. No such member is in v1, and `file:` is the whole of the table
+    shuttle acts on today.
 
 The line grammar itself — what a line may say, what its parts denote, and what
 shuttle does and shows in return — is drafted in [`grammar.md`](grammar.md). The
@@ -352,8 +418,10 @@ The ambient context is one record:
   inside it) and scope.
 - **External working location**, **invocation session**.
 
-`cd` accepts relative path segments, `..`, `-`, `/`, rooted and complete
-canonical references, slugs, wish targets, and scope qualifiers. A space
+`cd` accepts relative references — a head, `.` or a run of `..` that climbs
+back through the route shuttle walked, and a literal path after it — `-`,
+`/`, rooted and complete canonical references, slugs, numbered handles, wish
+targets, and scope qualifiers. A space
 named by name inside a reference is accepted and settled in two steps,
 since deriving a DID from a name needs a session: the move comes back
 carrying the name, and landing it means handing it over again with the
@@ -381,11 +449,12 @@ where an operand points is the operand's own fact, and a read of a cell
 that is not there fails on its own account. Every
 reference a command takes resolves against the cwd, and how much of the
 cwd it needs varies: a rooted `/of:…` fixes the piece and path but draws
-its space and its scope from the place, a complete `/@did:key:…/of:…`
+its space and its scope from the place, a complete `//did:key:…/of:…`
 carries the space and still draws the scope, and only a fully qualified
-`/@did:key:…/of:…@scope` names its cell from anywhere
+`//did:key:…/of:…@scope` names its cell from anywhere
 ([`grammar.md`](grammar.md)). The place is result-rooted — `cd` refuses a
-reference carrying `#argument`, and arguments are reached per operand. The
+reference selecting the `#argument` member, and arguments are reached per
+operand, as in `get .#argument/title`. The
 prompt renders position and scope compactly (an elided alias is checked
 against the target's declared name, never guessed).
 
@@ -397,7 +466,7 @@ several) stay reachable later.
 
 | Component | Where | What it gives shuttle |
 | --- | --- | --- |
-| Canonical + alias reference grammar | `packages/cli/lib/llm-friendly-ref.ts` (doc comment), runner's `parseLLMFriendlyLink` | The address syntax; shuttle consumes it and must not fork it |
+| Cell reference grammar | [`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md); `packages/runner/src/cell-reference.ts` — `parseCellReference`, `parseRelativeReference`, `parsePieceSegment`, `renderCellReference` — and `packages/cli/lib/llm-friendly-ref.ts` at the CLI's intake | The address syntax; shuttle consumes it and must not fork it |
 | Target option surface | `targetOptions` in `packages/cli/commands/piece.ts` | The enumeration of exactly what a place must supply |
 | Live-state listing and completion | `keysOf` in `packages/cli/lib/cell-listing.ts` — exported, beside the `listCellKeys` that reads a cell through it, which path completion in `packages/cli/lib/completion/providers.ts` uses | The `ls` primitive and tab completion; shuttle reads the cell over the connection it holds and names its rows through `keysOf`, and a failed read raises rather than listing empty. Shuttle's own tab completion reads that listing rather than a second read, and swallows the failure at its own call site, as the providers do at theirs |
 | Pager/TUI substrate | `packages/cli/lib/view/` — `pager.ts` is the only module doing raw-mode full-screen TTY handling; `mod.ts` and `loadinput.ts` touch stdio for the one-shot path (capability probes, plain-output writes, piped input); `keys.ts`, `ansi.ts`, `render.ts`, `session.ts` hold state and decoding as pure logic | The full-screen half: raw mode, frames, key decoding, testable without a terminal; already follows references and edits buffers |
@@ -442,9 +511,10 @@ way.
 
 None blocking v1. The B3 seam-proving gate and its two preparatory
 experiments are recorded in decision 25 and issue
-[#6534](https://github.com/commontoolsinc/labs/issues/6534); the piece
-overview's liveness is deferred with the live piece watch
-([`views.md`](views.md)).
+[#6534](https://github.com/commonfabric/labs/issues/6534). Reading what a
+piece is belongs to `describe` rather than to a view (decision 26), so what
+stands deferred is a *live* view of one, and that whole
+([`futures.md`](futures.md)).
 
 ## Non-goals for v1
 

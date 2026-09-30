@@ -8,7 +8,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { type FabricConvertibleValue } from "@commonfabric/data-model";
+import { type FabricConvertibleJsValue } from "@commonfabric/data-model";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 
 import { convertCellsToLinks } from "../src/cell.ts";
@@ -62,7 +62,7 @@ describe("convert-cells-to-links-sharing", () => {
   });
 
   it("returns a back-link for an ancestor, so a cycle stays representable", () => {
-    const cyclic: Record<string, FabricConvertibleValue> = { n: 1 };
+    const cyclic: Record<string, FabricConvertibleJsValue> = { n: 1 };
     cyclic.self = cyclic;
     const result = convertCellsToLinks(cyclic) as Record<string, unknown>;
 
@@ -77,7 +77,7 @@ describe("convert-cells-to-links-sharing", () => {
     // The root case above cannot tell a path that was computed from one that
     // was assumed, its answer being the empty path either way.
 
-    const inner: Record<string, FabricConvertibleValue> = { depth: 2 };
+    const inner: Record<string, FabricConvertibleJsValue> = { depth: 2 };
     const cyclic = { outer: { inner }, sibling: "untouched" };
 
     inner.back = inner;
@@ -95,7 +95,7 @@ describe("convert-cells-to-links-sharing", () => {
   });
 
   it("returns a back-link whose path names the array index it was reached through", () => {
-    const element: Record<string, FabricConvertibleValue> = { tag: "first" };
+    const element: Record<string, FabricConvertibleJsValue> = { tag: "first" };
     const cyclic = { items: [element] };
 
     element.owner = element;
@@ -114,8 +114,8 @@ describe("convert-cells-to-links-sharing", () => {
     // was found. A walk that carried the first branch's segments into the
     // second would name `left` somewhere under `right`.
 
-    const left: Record<string, FabricConvertibleValue> = { side: "left" };
-    const right: Record<string, FabricConvertibleValue> = { side: "right" };
+    const left: Record<string, FabricConvertibleJsValue> = { side: "left" };
+    const right: Record<string, FabricConvertibleJsValue> = { side: "right" };
 
     left.loop = left;
     right.loop = right;
@@ -139,7 +139,7 @@ describe("convert-cells-to-links-sharing", () => {
     // cycle in the following member, where the object branch's sibling case
     // cannot reach.
 
-    const inner: Record<string, FabricConvertibleValue> = { kind: "inner" };
+    const inner: Record<string, FabricConvertibleJsValue> = { kind: "inner" };
     const cyclic = { items: ["x"], inner };
 
     inner.loop = inner;
@@ -160,7 +160,7 @@ describe("convert-cells-to-links-sharing", () => {
 
     expect(() => convertCellsToLinks({ bad: () => {} } as never)).toThrow();
 
-    const cyclic: Record<string, FabricConvertibleValue> = { kind: "after" };
+    const cyclic: Record<string, FabricConvertibleJsValue> = { kind: "after" };
 
     cyclic.loop = cyclic;
 
@@ -178,7 +178,9 @@ describe("convert-cells-to-links-sharing", () => {
     // shallow cycle's path is taken, so this fails where the first one does
     // not.
 
-    const shallow: Record<string, FabricConvertibleValue> = { kind: "shallow" };
+    const shallow: Record<string, FabricConvertibleJsValue> = {
+      kind: "shallow",
+    };
     const deep = { a: { b: { c: { d: "bottom" } } } };
 
     shallow.loop = shallow;

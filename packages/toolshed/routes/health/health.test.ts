@@ -81,6 +81,8 @@ Deno.test("health routes", async (t) => {
             "hits",
             "maxEntries",
             "misses",
+            "patchReplays",
+            "resumes",
           ],
         );
         assertEquals(

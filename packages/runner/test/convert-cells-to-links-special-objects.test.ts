@@ -48,7 +48,7 @@ describe("convert-cells-to-links-special-objects", () => {
     );
   });
 
-  it("returns a native `Uint8Array` as a whole `FabricBytes`", () => {
+  it("returns a JS `Uint8Array` as a whole `FabricBytes`", () => {
     // The other form that reaches the leaf branch: minted by the shallow
     // conversion on the way in rather than handed over already built.
     const result = convertCellsToLinks({
@@ -59,7 +59,7 @@ describe("convert-cells-to-links-special-objects", () => {
     expect((result.x as FabricBytes).slice()).toEqual(new Uint8Array([4, 5]));
   });
 
-  it("returns a native `Date` as a whole `FabricEpochNsec`", () => {
+  it("returns a JS `Date` as a whole `FabricEpochNsec`", () => {
     const result = convertCellsToLinks({ x: new Date(1000) }) as { x: unknown };
 
     expect(result.x).toBeInstanceOf(FabricEpochNsec);
@@ -75,8 +75,8 @@ describe("convert-cells-to-links-special-objects", () => {
     );
   });
 
-  it("throws for a native `Error`, which the conversion mints into one", () => {
-    // The other way in: the shallow conversion turns a native `Error` into a
+  it("throws for a JS `Error`, which the conversion mints into one", () => {
+    // The other way in: the shallow conversion turns a JS `Error` into a
     // `FabricError` on the way past, so the refusal has to catch what it mints
     // and not only what a caller hands over already built.
     expect(() => convertCellsToLinks({ x: new TypeError("nope") })).toThrow(

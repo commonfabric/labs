@@ -1,3 +1,4 @@
+import { isObjectOrArray } from "@commonfabric/utils/types";
 export const AUTH_METHOD_PASSKEY = "passkey" as const;
 export const AUTH_METHOD_PASSPHRASE = "passphrase" as const;
 export const AUTH_METHOD_KEYFILE = "keyfile" as const;
@@ -19,9 +20,9 @@ function isAuthMethod(method: unknown): method is AuthMethod {
 }
 
 function isStoredCredential(value: unknown): value is StoredCredential {
-  return typeof value === "object" && value !== null &&
-    typeof (value as StoredCredential).id === "string" &&
-    isAuthMethod((value as StoredCredential).method);
+  return isObjectOrArray(value) &&
+    typeof value.id === "string" &&
+    isAuthMethod(value.method);
 }
 
 export function getStoredCredential(): StoredCredential | null {

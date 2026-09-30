@@ -14,6 +14,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isAuthorizationRead } from "../src/storage/reactivity-log.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -56,13 +57,13 @@ describe("prepare", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, name, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({
+    seedStoredEnvelope(tx, {
       ...cell.getAsNormalizedFullLink(),
       path: [],
     }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -188,9 +189,9 @@ describe("prepare", () => {
       tx,
     );
     writeSeedEnvelopeDoc(tx, signer.did());
-    tx.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...source.getAsNormalizedFullLink(), path: [] }, {
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -674,6 +675,7 @@ describe("prepare", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: ["private-review"] },
       }]);
       const reference = source.getAsLink();
@@ -764,6 +766,7 @@ describe("prepare", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { integrity: [APPROVED] },
     }]);
     const tx = runtime.edit();

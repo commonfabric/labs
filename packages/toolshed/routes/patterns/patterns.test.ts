@@ -107,23 +107,23 @@ describe("Patterns API", () => {
       expect(response.status).toBe(200);
     });
 
-    it("serves nested subdirectory google/core/experimental/gmail-sender.tsx", async () => {
+    it("serves nested subdirectory catalog/ui/story-renderer.tsx", async () => {
       const response = await app.request(
-        "/api/patterns/google/core/experimental/gmail-sender.tsx",
+        "/api/patterns/catalog/ui/story-renderer.tsx",
       );
       expect(response.status).toBe(200);
     });
 
-    it("serves deeply nested google/core/util/google-docs-client.ts", async () => {
+    it("serves deeply nested catalog/ui/controls/select-control.tsx", async () => {
       const response = await app.request(
-        "/api/patterns/google/core/util/google-docs-client.ts",
+        "/api/patterns/catalog/ui/controls/select-control.tsx",
       );
       expect(response.status).toBe(200);
     });
 
-    it("serves google/core/util/gmail-client.ts", async () => {
+    it("serves catalog/ui/controls/index.ts", async () => {
       const response = await app.request(
-        "/api/patterns/google/core/util/gmail-client.ts",
+        "/api/patterns/catalog/ui/controls/index.ts",
       );
       expect(response.status).toBe(200);
     });

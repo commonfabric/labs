@@ -8,7 +8,7 @@ import { getLogger } from "../../utils/src/logger.ts";
 // reason as traverse.ts.
 import { isObjectOrArray } from "../../utils/src/types.ts";
 import type { JSONSchema, Pattern } from "./builder/types.ts";
-import { type Cell, isCell } from "./cell.ts";
+import { type Cell, cellRuntime, cellTx, isCell } from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -75,7 +75,7 @@ export function resolveCellPath<T>(
       );
     }
     if (value == null || !Object.hasOwn(value, segment)) {
-      const availableKeys = value != null && typeof value === "object"
+      const availableKeys = isObjectOrArray(value)
         ? Object.keys(value).filter((key) => !key.startsWith("$")).sort()
         : [];
       const hint = availableKeys.length > 0
@@ -195,7 +195,7 @@ export function schemaWithScopedLinkRequiredsRelaxed(
   // One read tx per derivation, honoring the cell's own bound transaction so
   // the chain walk sees the same (possibly uncommitted) state getRaw() does.
   // Recursion into inline records threads it through.
-  tx ??= base.runtime.readTx(base.tx);
+  tx ??= cellRuntime(base).readTx(cellTx(base));
 
   // A scoped output does not carry its scope on the first link: the result
   // doc's property links (scope "space") redirect to an intermediate doc
@@ -226,7 +226,7 @@ export function schemaWithScopedLinkRequiredsRelaxed(
     }
     try {
       let blocked = false;
-      const terminal = resolveLink(base.runtime, tx!, first, "value", {
+      const terminal = resolveLink(cellRuntime(base), tx!, first, "value", {
         onScopeBlocked: () => {
           blocked = true;
         },

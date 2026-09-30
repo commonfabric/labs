@@ -318,7 +318,7 @@ Deno.test("isIntegrationTestFile scopes to integration test files", () => {
   );
   assert(
     isIntegrationTestFile(
-      "packages/patterns/google/core/integration/google-calendar-importer.test.ts",
+      "packages/cli/test/integration/fuse-memory-proxy.test.ts",
     ),
   );
 });

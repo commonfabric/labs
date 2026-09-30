@@ -1,3 +1,4 @@
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { BuiltinToolId } from "./tool-descriptor.ts";
 
 /**
@@ -83,5 +84,5 @@ export const createHarnessInvalidToolCall = (
 export const isHarnessInvalidToolCall = (
   value: unknown,
 ): value is HarnessInvalidToolCall =>
-  typeof value === "object" && value !== null &&
+  isObjectOrArray(value) &&
   (value as { type?: unknown }).type === "cf-harness.invalid-tool-call";

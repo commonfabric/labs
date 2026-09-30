@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { decodeBase64 } from "@std/encoding/base64";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import type { HarnessRunArtifacts } from "../src/artifacts.ts";
@@ -33,6 +34,7 @@ import {
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
+import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
 import type { HarnessModelClient } from "../src/model/client.ts";
 import {
   CfHarnessPromptLoop,
@@ -920,6 +922,18 @@ Deno.test("parseCfHarnessCliArgs rejects an empty reasoning effort flag", async 
   );
 });
 
+Deno.test("parseCfHarnessCliArgs rejects an empty research reasoning effort flag", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--research-reasoning-effort", "  "],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--research-reasoning-effort requires a non-empty value",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs resolves sandbox docker runtime from flag and environment", async () => {
   const fromFlag = await parseCfHarnessCliArgs(
     ["--prompt", "hi", "--sandbox-docker-runtime", "runc"],
@@ -1155,6 +1169,49 @@ Deno.test("parseCfHarnessCliArgs preloads a skill out of the checkout's own skil
       ),
     Error,
     "--allow-skill-script requires --skills-root",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs takes an acquired pin's script without a skills root", async () => {
+  // An acquired script is keyed on the pin its bytes were read at, and those
+  // bytes reach the sandbox through the acquisition's own mount. Asking for a
+  // skills root would make the operator name a tree the skill never came from.
+  const pin = `owner/repo/slug@${"d".repeat(40)}`;
+  const config = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--allow-skill-script",
+      `${pin}:scripts/report.sh`,
+    ],
+    { cwd: "/tmp/project", env: {} },
+  );
+
+  if ("help" in config) {
+    throw new Error("expected config result");
+  }
+  assertEquals(config.allowedSkillScripts, [{
+    skill: pin,
+    path: "scripts/report.sh",
+  }]);
+});
+
+Deno.test("parseCfHarnessCliArgs still asks a registry name for its skills root, beside a pin", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        [
+          "--prompt",
+          "hi",
+          "--allow-skill-script",
+          `owner/repo/slug@${"d".repeat(40)}:scripts/report.sh`,
+          "--allow-skill-script",
+          "pattern-dev:scripts/probe.ts",
+        ],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-skill-script requires --skills-root, except for an acquired pin",
   );
 });
 
@@ -1492,6 +1549,18 @@ Deno.test("parseCfHarnessCliArgs rejects malformed structured result validation 
       ),
     Error,
     "provide only one of --structured-result-schema or --structured-result-schema-file",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs rejects submit_result without a structured result target", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "submit_result"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool submit_result requires --structured-result-path and a schema",
   );
 });
 
@@ -2774,6 +2843,9 @@ Deno.test("runCfHarnessCli announces operator input cells to the model and the o
           {
             pieces: {
               getSpace: () => cellSpace,
+              // This double names no space: the cells here are plain
+              // references, which resolve without one.
+              getSpaceName: () => undefined,
               getDefaultPattern: (_runIt: boolean) =>
                 Promise.resolve(undefined),
             },
@@ -3862,8 +3934,12 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   assertEquals(stderr, []);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "write a JSON file at /workspace/capture.results.json",
+      "Writing a JSON file at /workspace/capture.results.json",
     ),
+    true,
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes("call submit_result"),
     true,
   );
   assertEquals(writes.length, 1);
@@ -4044,7 +4120,12 @@ Deno.test({
       assertEquals(exitCode, 0);
       assertEquals(stderr, []);
       assertEquals(stdout[0].includes("Done."), true);
-      assertEquals(runPromptOptions?.contextMessages?.length, 1);
+      expect(runPromptOptions?.contextMessages).toEqual([
+        expect.stringContaining('<skill_context name="pattern-dev"'),
+        expect.stringContaining("No input cells are attached for this run"),
+        expect.stringContaining("at most one registry read"),
+        REVISION_VERIFICATION_GUIDANCE,
+      ]);
       assertEquals(
         runPromptOptions?.contextMessages?.[0].includes(
           '<skill_context name="pattern-dev" source="/workspace/labs/skills/pattern-dev/SKILL.md">',
@@ -4277,6 +4358,24 @@ Deno.test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch m
     buildCfHarnessBatchSystemPrompt({
       systemPrompt: "You are a Loom batch worker.",
     }),
+  );
+});
+
+Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the tool is not allowed", () => {
+  const config = {
+    structuredResult: {
+      path: "/tmp/project/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema: { type: "object" } as const,
+    },
+    allowedToolIds: ["write_file"] as const,
+  };
+  const prompt = buildCfHarnessBatchSystemPrompt(config);
+
+  assertEquals(prompt.includes("call submit_result"), false);
+  assertStringIncludes(
+    prompt,
+    "Writing a JSON file at /workspace/result.json",
   );
 });
 
@@ -4892,7 +4991,7 @@ Deno.test("formatCfHarnessCliResult includes policy event summaries", () => {
       "status: completed",
       "modelTurns: 1",
       "cfcMode: observe (harness)",
-      "docsCorpus: none — query_docs is absent and children cannot look documentation up",
+      "docsCorpus: none — research cannot consult local documentation",
       "skillsRoot: none — this run scanned no skills tree, so no profile preloads any skill",
       "policyEvents: 1",
       "- warning bash: bash would require direct-command authorization in enforce modes",
@@ -7274,6 +7373,58 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a sk
   );
 });
 
+Deno.test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the flag or the environment", async () => {
+  const retrieval = {
+    cliPath: "/trusted/loom",
+    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
+  };
+  const readTextFile = (path: string) => {
+    assertEquals(path, "/trusted/retrieval.json");
+    return Promise.resolve(JSON.stringify(retrieval));
+  };
+  const flagged = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--loom-retrieval-config",
+      "/trusted/retrieval.json",
+      "--allow-tool",
+      "loom_search",
+    ],
+    { cwd: "/tmp/project", env: {}, readTextFile },
+  );
+  if ("help" in flagged) throw new Error("expected config result");
+  assertEquals(flagged.loomRetrieval, retrieval);
+  const fromEnvironment = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_RETRIEVAL_CONFIG: "/trusted/retrieval.json" },
+      readTextFile,
+    },
+  );
+  if ("help" in fromEnvironment) throw new Error("expected config result");
+  assertEquals(fromEnvironment.loomRetrieval, retrieval);
+  const absent = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.loomRetrieval, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool without its configuration", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "loom_people"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool loom_people requires a Loom retrieval configuration",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {
   await assertRejects(
     () =>
@@ -7802,4 +7953,126 @@ Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no
       /--max-confidentiality (requires a JSON array|must be JSON)/,
     );
   }
+});
+
+Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc settings", async () => {
+  const fromFlags = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--sandbox-runtime",
+      "runsc",
+      "--sandbox-rootfs",
+      "/images/kitchensink",
+      "--sandbox-cfc-policy",
+      "/policy.json",
+    ],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+      },
+    },
+  );
+  if ("help" in fromFlags) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromFlags.sandboxRuntimeKind, "runsc");
+  assertEquals(fromFlags.sandboxRootfs, "/images/kitchensink");
+  assertEquals(fromFlags.sandboxCfcPolicy, "/policy.json");
+  assertEquals(fromFlags.sandboxRunscBinary, "/opt/runsc");
+  // docker's network vocabulary maps onto runsc's: bridge is runsc's netstack.
+  assertEquals(fromFlags.sandboxRunscNetworkMode, "sandbox");
+
+  const fromEnv = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_SANDBOX_ROOTFS: "/r",
+        CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "none",
+      },
+    },
+  );
+  if ("help" in fromEnv) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromEnv.sandboxRuntimeKind, "runsc");
+  assertEquals(fromEnv.sandboxRootfs, "/r");
+  assertEquals(fromEnv.sandboxCfcPolicy, "/p");
+  assertEquals(fromEnv.sandboxRunscNetworkMode, "none");
+
+  const unset = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in unset) {
+    throw new Error("expected config result");
+  }
+  assertEquals(unset.sandboxRuntimeKind, undefined);
+  assertEquals(unset.sandboxRunscNetworkMode, undefined);
+
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--sandbox-runtime", "podman"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "sandbox runtime must be one of docker, runsc",
+  );
+});
+
+Deno.test("cf-harness cli discovers the default CFC policy for the runsc runtime", async () => {
+  const defaultPolicy = "/home/u/.local/share/runsc-cfc/cfc-policy.json";
+  const parse = (
+    runtime: "runsc" | "docker",
+    present: boolean,
+  ) =>
+    parseCfHarnessCliArgs(
+      [
+        "hi",
+        "--sandbox-runtime",
+        runtime,
+        "--sandbox-rootfs",
+        "/images/kitchensink",
+      ],
+      {
+        cwd: "/tmp/project",
+        env: { HOME: "/home/u" },
+        pathExists: (path: string) =>
+          Promise.resolve(present && path === defaultPolicy),
+      },
+    );
+  const found = await parse("runsc", true);
+  if ("help" in found) throw new Error("expected config result");
+  // The usage text promises this default, so it is looked up.
+  assertEquals(found.sandboxCfcPolicy, defaultPolicy);
+  const absent = await parse("runsc", false);
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.sandboxCfcPolicy, undefined);
+  // The docker runtime has its own policy registration; the default is
+  // runsc's alone.
+  const docker = await parse("docker", true);
+  if ("help" in docker) throw new Error("expected config result");
+  assertEquals(docker.sandboxCfcPolicy, undefined);
+});
+
+Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["hi", "--sandbox-runtime", "runsc", "--sandbox-rootfs", "/images/k"],
+        {
+          cwd: "/tmp/project",
+          env: { CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish" },
+        },
+      ),
+    Error,
+    "must be one of none, bridge, or host",
+  );
 });

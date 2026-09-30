@@ -10,8 +10,7 @@
  */
 
 import { FabricPrimitive } from "@/interface.ts";
-import { toCompactDebugString } from "@/value-debug.ts";
-import type { FabricPrimitiveValueTag } from "@/value-tags.ts";
+import type { FabricPrimitiveValueTag } from "@/fabric-primitives";
 
 /**
  * Well-known symbol keying the getter through which a concrete primitive
@@ -51,31 +50,11 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
 
   /**
    * The tag this instance reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, which
-   * the `tagFrom*()` dispatches return for it. Each concrete class supplies
+   * the `tagOf*()` dispatches return for it. Each concrete class supplies
    * its own. A subclass of one that does not is tagged as its parent, which
    * is a bug in that subclass and not one the dispatches defend against.
    */
   abstract get [VALUE_TAG](): FabricPrimitiveValueTag;
-
-  //
-  // Instance members
-  //
-
-  /**
-   * Custom inspector, so that a `console.log()` or a debugger shows what this
-   * value IS. The default rendering is `{}`: state lives in private fields,
-   * which have no enumerable own properties for an inspector to find.
-   *
-   * Delegates to the canonical debug renderer rather than formatting here, so
-   * that this surface improves whenever that one does.
-   *
-   * Duplicated on `BaseFabricInstance`, unavoidably. There is no shared base
-   * class below `FabricSpecialObject`, and `FabricSpecialObject` itself is the
-   * runtime-import-free abstract contract, so it cannot reach `value-debug`.
-   */
-  [Symbol.for("Deno.customInspect")](): string {
-    return toCompactDebugString(this);
-  }
 
   //
   // Static members

@@ -135,7 +135,9 @@ function difference(first: Triple, second: Triple): number {
   );
 }
 
-/** How far apart two of the wall's colors look to the named kind of viewer. */
+/**
+ * How far apart two of the dashboard's colors look to the named kind of viewer.
+ */
 function apart(
   first: string,
   second: string,
@@ -149,7 +151,7 @@ function apart(
 
 // Below about this, two colors read as the same one at a glance. Every pair of
 // statuses has to clear it under every kind of vision, so a later change to a
-// color cannot quietly collapse a distinction the wall depends on.
+// color cannot quietly collapse a distinction the dashboard depends on.
 const LEGIBLE = 10;
 
 const STATUSES: readonly Status[] = ["good", "warn", "bad", "unknown"];

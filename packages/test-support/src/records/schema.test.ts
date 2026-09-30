@@ -5,6 +5,7 @@ import {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  isMainPush,
   localObjectName,
   objectNameSlug,
   parseContextLine,
@@ -28,7 +29,7 @@ const CONTEXT: RunContext = {
   schema: 1,
   line: "context",
   reportId: "01JEXAMPLEULID0000000000",
-  repo: "commontoolsinc/labs",
+  repo: "commonfabric/labs",
   commit: "0123456789abcdef0123456789abcdef01234567",
   dirty: false,
   branch: "main",
@@ -167,6 +168,25 @@ describe("schema", () => {
         .toEqual(context);
     });
 
+    it("keeps the seed the run shuffled by", () => {
+      const context: RunContext = { ...CONTEXT, shuffleSeed: 20260922 };
+      expect(parseContextLine(serializeContextLine(context).trim()))
+        .toEqual(context);
+    });
+
+    it("leaves the seed out of a run that did not shuffle", () => {
+      const parsed = parseContextLine(serializeContextLine(CONTEXT).trim());
+      expect(parsed).toBeDefined();
+      expect("shuffleSeed" in parsed!).toBe(false);
+    });
+
+    it("returns undefined for a seed deno test would not take", () => {
+      for (const shuffleSeed of [-1, 1.5, "20260922", null]) {
+        const line = JSON.stringify({ ...CONTEXT, shuffleSeed });
+        expect(parseContextLine(line)).toBeUndefined();
+      }
+    });
+
     it("returns undefined for a wrong schema version", () => {
       const line = JSON.stringify({ ...CONTEXT, schema: 2 });
       expect(parseContextLine(line)).toBeUndefined();
@@ -225,6 +245,32 @@ describe("schema", () => {
       expect(parseContextLine(lines[0]!)).toEqual(CONTEXT);
       expect(parseRecordLine(lines[1]!)).toEqual(RECORD);
       expect(parseRecordLine(lines[2]!)).toEqual(RECORD);
+    });
+  });
+
+  describe("isMainPush()", () => {
+    const ci = {
+      workflowRunId: "1",
+      runAttempt: 1,
+      workflow: "CI",
+      job: "Coverage Check",
+      event: "push",
+      fork: false,
+    };
+    const pushed: RunContext = { ...CONTEXT, env: "ci", ci };
+
+    it("returns true for a push to main the fork flag does not mark", () => {
+      expect(isMainPush(pushed)).toBe(true);
+      const { fork: _, ...unmarked } = ci;
+      expect(isMainPush({ ...pushed, ci: unmarked })).toBe(true);
+    });
+
+    it("returns false for any other run", () => {
+      expect(isMainPush({ ...pushed, ci: { ...ci, fork: true } })).toBe(false);
+      expect(isMainPush({ ...pushed, ci: { ...ci, event: "pull_request" } }))
+        .toBe(false);
+      expect(isMainPush({ ...pushed, branch: "topic" })).toBe(false);
+      expect(isMainPush(CONTEXT)).toBe(false);
     });
   });
 

@@ -1,6 +1,3 @@
-import { assertEquals } from "@std/assert";
-import type { ActionFunction, Stream } from "@commonfabric/api";
-
 /**
  * `ActionFunction` is the `action` a PATTERN sees: `commonfabric` resolves to
  * `api/index.ts`, so this type — not `builder/module.ts`'s implementation
@@ -17,8 +14,9 @@ import type { ActionFunction, Stream } from "@commonfabric/api";
  * `action-overload-types.test.ts` covers the builder half; both must hold.
  */
 
-type MustBeTrue<T extends true> = T;
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+import { assertEquals } from "@std/assert";
+import type { ActionFunction, Stream } from "@commonfabric/api";
+import type { MustBeTrue, Same } from "@commonfabric/utils/types";
 
 interface AddTopic {
   title: string;

@@ -1,16 +1,26 @@
+import {
+  createHarnessTranscriptOmissions,
+  restoreHarnessTranscriptOmissions,
+} from "./contracts/transcript-omissions.ts";
+import { selectResearchContext } from "./research/context.ts";
 import { loomAuthoringForTurn } from "./loom-authoring.ts";
+import { ensureSESLockdown, type Runtime } from "@commonfabric/runner";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
 } from "@commonfabric/utils/types";
 import { CfHarnessEngine } from "./engine.ts";
+import type { HarnessFabricSession } from "./fabric-session.ts";
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
   type RunHarnessTranscriptOptions,
 } from "./prompt-loop.ts";
 import { establishHarnessSessionContext } from "./session-assembly.ts";
+import { pieceTargetingContextMessages } from "./piece-targeting.ts";
+import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessPatternRefSpec } from "./contracts/pattern-refs.ts";
 import {
   createHarnessChatErrorResponse,
@@ -35,6 +45,7 @@ import {
   type HarnessChatStructuredEvent,
   type HarnessChatSubagentRef,
   type HarnessChatSubagentSummary,
+  harnessChatTurnElapsedMs,
   type HarnessChatTurnRecord,
   type HarnessChatTurnStatus,
   reduceHarnessChatSessionStatus,
@@ -57,7 +68,10 @@ import {
   type HarnessTranscriptSubagentContext,
   isResumableHarnessTranscript,
 } from "./contracts/transcript.ts";
-import type { HarnessChatSessionStore } from "./session-store.ts";
+import type {
+  HarnessChatResearchContext,
+  HarnessChatSessionStore,
+} from "./session-store.ts";
 import { HarnessControlError } from "./control-errors.ts";
 
 export type HarnessInteractivePromptLoop = Pick<
@@ -86,6 +100,7 @@ export type HarnessInteractiveChatEventDeliveryErrorHandler = (
 ) => void;
 
 export interface CreateHarnessInteractiveChatServiceOptions {
+  /** An injected engine remains caller-owned, including its Fabric runtime. */
   basePromptLoopOptions?: CreateHarnessPromptLoopOptions;
 
   /**
@@ -132,6 +147,12 @@ interface HarnessInteractiveChatSessionRecord {
    */
   transcript: readonly HarnessTranscriptMessage[];
 
+  /** Host-admitted findings retained with the durable transcript. */
+  researchContext?: HarnessChatResearchContext;
+
+  /** Host-confirmed named pieces available to a bare follow-up. */
+  assignedPieces?: readonly HarnessAssignedPiece[];
+
   /**
    * Why a restored session cannot be resumed. Set when the recorded history
    * could not be repaired into valid model history; a turn started on such a
@@ -144,6 +165,7 @@ interface HarnessInteractiveChatSessionRecord {
   activeTurnToken?: object;
   activeTask?: Promise<void>;
   activeAbortController?: AbortController;
+  fabricRuntimes: Set<Runtime>;
   canceledTurnIds: Set<string>;
   turns: Map<string, HarnessChatTurnRecord>;
 }
@@ -159,6 +181,12 @@ interface HarnessInteractiveChatEmitOptions {
    * in place for the failure path to fall back on.
    */
   transcript?: readonly HarnessTranscriptMessage[];
+
+  /** Research checkpoint committed atomically with a completed turn. */
+  researchContext?: HarnessChatResearchContext;
+
+  /** Naming checkpoint committed with the completed turn's transcript. */
+  assignedPieces?: readonly HarnessAssignedPiece[];
 }
 
 const defaultPromptLoopFactory: HarnessInteractivePromptLoopFactory = (
@@ -701,6 +729,14 @@ export class HarnessInteractiveChatService {
 
   constructor(options: CreateHarnessInteractiveChatServiceOptions = {}) {
     this.#basePromptLoopOptions = options.basePromptLoopOptions ?? {};
+    if (
+      this.#basePromptLoopOptions.fabricSession !== undefined ||
+      this.#basePromptLoopOptions.fabricSessionFactory !== undefined
+    ) {
+      // SES retains its initialization stack. Initialize before a turn's
+      // engine can appear there and retain the runtime it later constructs.
+      ensureSESLockdown();
+    }
     const injectedRunSource = this.#basePromptLoopOptions.engine !== undefined
       ? "engine"
       : this.#basePromptLoopOptions.runState !== undefined
@@ -788,6 +824,13 @@ export class HarnessInteractiveChatService {
     this.#maxInMemoryEvents = options.maxInMemoryEvents;
   }
 
+  /**
+   * Loads every session, turn, and event the store holds and settles the
+   * turns no process is running. A durable store reaches this service held
+   * for its own process — a SQLite store another live process holds is
+   * refused at open — so every non-terminal turn it carries was left by a
+   * process that has exited.
+   */
   async initializeFromStore(): Promise<void> {
     if (this.#sessionStore === undefined) {
       return;
@@ -803,7 +846,14 @@ export class HarnessInteractiveChatService {
       this.#sessions.set(snapshot.session.sessionId, {
         status: snapshot.session,
         transcript: [...snapshot.transcript],
+        ...(snapshot.researchContext === undefined
+          ? {}
+          : { researchContext: snapshot.researchContext }),
+        ...(snapshot.assignedPieces === undefined
+          ? {}
+          : { assignedPieces: snapshot.assignedPieces }),
         canceledTurnIds: new Set(),
+        fabricRuntimes: new Set(),
         turns: new Map(
           (turnsBySession.get(snapshot.session.sessionId) ?? []).map((
             turn,
@@ -1184,6 +1234,7 @@ export class HarnessInteractiveChatService {
       status: session,
       transcript: [],
       canceledTurnIds: new Set(),
+      fabricRuntimes: new Set(),
       turns: new Map(),
     });
     try {
@@ -1455,14 +1506,32 @@ export class HarnessInteractiveChatService {
         reason,
       });
     }
-    await this.#emit(sessionId, undefined, {
-      kind: "session_closed",
-      reason,
-    });
+    try {
+      await this.#emit(sessionId, undefined, {
+        kind: "session_closed",
+        reason,
+      });
+    } finally {
+      // Closing is durable even if event delivery fails. An active turn may
+      // still be using its runtime; its finally block releases it on unwind.
+      if (
+        record.status.status === "closed" && record.activeTask === undefined
+      ) {
+        await this.#disposeFabricRuntimes(record);
+      }
+    }
     return createHarnessChatOkResponse(
       requestId,
       this.#sessions.get(sessionId)!.status,
     );
+  }
+
+  async #disposeFabricRuntimes(
+    record: HarnessInteractiveChatSessionRecord,
+  ): Promise<void> {
+    const runtimes = [...record.fabricRuntimes];
+    record.fabricRuntimes.clear();
+    await Promise.all(runtimes.map((runtime) => runtime.dispose()));
   }
 
   async #runTurn(
@@ -1474,6 +1543,13 @@ export class HarnessInteractiveChatService {
     browserAccess: HarnessChatBrowserAccessLease | undefined,
   ): Promise<void> {
     const session = record.status;
+    const researchGoal = record.researchContext?.researchGoal ??
+      params.input.text;
+    const inputCells = params.inputCells !== undefined
+      ? params.inputCells
+      : record.assignedPieces?.length
+      ? record.assignedPieces.map(({ slug, ref }) => ({ name: slug, ref }))
+      : undefined;
     // Seeded only when the durable history carries no system message. A turn
     // persists the transcript it ran, so the second turn of a seeded session
     // finds the message already there and prepends nothing.
@@ -1483,6 +1559,10 @@ export class HarnessInteractiveChatService {
         ? [{ role: "system", content: this.#systemPrompt }]
         : [];
     let observedTranscriptLength = 0;
+    let completedCheckpoint: {
+      transcript: HarnessTranscriptMessage[];
+      researchContext: HarnessChatResearchContext;
+    } | undefined;
     // The `delegate_task` children this turn has announced, keyed by the
     // parent tool call that started each one. Membership is what closes the
     // bracket: a `subagent_completed` is emitted only for a child whose
@@ -1491,15 +1571,35 @@ export class HarnessInteractiveChatService {
 
     try {
       const { loop, contextMessages } = await this.#startPromptLoop(
-        this.#buildPromptLoopOptions(
-          session,
-          turnId,
-          policy,
-          browserAccess,
-          params.inputCells,
-          params.patternRefs,
-          params.input.loomId,
-        ),
+        {
+          ...this.#buildPromptLoopOptions(
+            session,
+            turnId,
+            policy,
+            browserAccess,
+            inputCells,
+            params.patternRefs,
+            params.input.loomId,
+          ),
+          taskText: params.input.text,
+          researchGoal,
+          ...(this.#basePromptLoopOptions.fabricSession !== undefined ||
+              this.#basePromptLoopOptions.fabricSessionFactory !== undefined
+            ? {
+              onFabricSessionCreated: (fabric: HarnessFabricSession) => {
+                record.fabricRuntimes.add(fabric.pieces.runtime);
+                this.#basePromptLoopOptions.onFabricSessionCreated?.(fabric);
+              },
+            }
+            : {}),
+          ...(record.researchContext === undefined ? {} : {
+            inheritedResearchRuns: record.researchContext.runs.map((run) => ({
+              ...run,
+              historical: true as const,
+            })),
+            inheritedCfcModelContext: record.researchContext.cfcModelContext,
+          }),
+        },
       );
       // The context messages announce what this turn's own run holds — its
       // preloaded skills, its granted references, its input cells, its
@@ -1533,9 +1633,63 @@ export class HarnessInteractiveChatService {
       observedTranscriptLength = transcript.length;
       const result = await loop.runTranscript({
         transcript,
+        ...(record.researchContext?.runs.length
+          ? {}
+          : { openingResearchTask: params.input.text }),
         model: session.model,
         promptSlotBinding: policy.promptSlot,
         signal,
+        onOpeningResearch: async (research) => {
+          if (record.canceledTurnIds.has(turnId)) return;
+          const tool = {
+            toolCallId: research.toolCallId,
+            toolId: "research",
+            title: "Orienting: working out what is already available",
+          };
+          await this.#emit(
+            session.sessionId,
+            turnId,
+            research.status === "pending"
+              ? { kind: "tool_started", tool }
+              : { kind: "tool_completed", tool, status: research.status },
+          );
+        },
+        onModelUsage: async ({ totalUsage }) => {
+          if (record.canceledTurnIds.has(turnId)) return;
+          await this.#emit(session.sessionId, turnId, {
+            kind: "turn_usage",
+            turnId,
+            ...(totalUsage === undefined ? {} : { usage: totalUsage }),
+            elapsedMs: harnessChatTurnElapsedMs(
+              record.turns.get(turnId)?.turn.startedAt,
+              this.#now(),
+            ),
+          });
+        },
+        onCheckpoint: (checkpoint) => {
+          if (
+            !this.#basePromptLoopOptions.finalizeOnTurnLimit ||
+            record.canceledTurnIds.has(turnId) ||
+            !isResumableHarnessTranscript(checkpoint.transcript)
+          ) return;
+          const transcript = structuredClone([...checkpoint.transcript]);
+          restoreHarnessTranscriptOmissions(
+            transcript,
+            createHarnessTranscriptOmissions(checkpoint.transcript),
+          );
+          completedCheckpoint = {
+            transcript,
+            researchContext: structuredClone({
+              researchGoal,
+              runs: selectResearchContext(
+                checkpoint.runState.researchRuns ?? [],
+              ),
+              ...(checkpoint.runState.cfcModelContext === undefined ? {} : {
+                cfcModelContext: checkpoint.runState.cfcModelContext,
+              }),
+            }),
+          };
+        },
         onTranscriptEvent: async (event) => {
           if (record.canceledTurnIds.has(turnId)) {
             return;
@@ -1562,11 +1716,6 @@ export class HarnessInteractiveChatService {
             return;
           }
           observedTranscriptLength = event.transcript.length;
-          // The event carries the turn's live transcript, whose tool calls may
-          // not have their results yet. It is reported and deliberately not
-          // promoted into `record.transcript`: an interrupted turn must not
-          // durably commit history a provider would reject. The full working
-          // transcript is on disk in the run's artifacts either way.
           await this.#emitTranscriptEvent(
             session.sessionId,
             turnId,
@@ -1591,11 +1740,26 @@ export class HarnessInteractiveChatService {
       await this.#emit(session.sessionId, turnId, {
         kind: "turn_completed",
         turnId,
+        ...(result.taskOutcome ?? { outcome: "completed" as const }),
         finalText: result.finalAssistantText,
         ...((result.totalUsage ?? result.usage) !== undefined
           ? { usage: result.totalUsage ?? result.usage }
           : {}),
-      }, { transcript: [...result.transcript] });
+      }, {
+        transcript: [...result.transcript],
+        researchContext: {
+          researchGoal,
+          runs: selectResearchContext(result.runState.researchRuns ?? []),
+          ...(result.runState.cfcModelContext === undefined
+            ? {}
+            : { cfcModelContext: result.runState.cfcModelContext }),
+        },
+        ...(result.runState.assignedPieces?.length
+          ? { assignedPieces: result.runState.assignedPieces }
+          : params.inputCells !== undefined
+          ? { assignedPieces: [] }
+          : {}),
+      });
     } catch (error) {
       if (record.canceledTurnIds.has(turnId)) {
         return;
@@ -1608,14 +1772,17 @@ export class HarnessInteractiveChatService {
       if (isTerminalTurnStatus(record.turns.get(turnId)?.turn.status)) {
         return;
       }
-      // `record.transcript` still holds the transcript from before this turn.
-      // Persisting it here is the rollback: the turn's partial history stays in
-      // the event log and the run artifacts, and never becomes model history.
+      // Promote completed evidence atomically with the failure. Unpaired
+      // activity remains solely in the audit trail and run artifacts.
       await this.#emit(session.sessionId, turnId, {
         kind: "turn_failed",
         turnId,
         error: chatTurnError(error),
-      });
+      }, completedCheckpoint);
+    } finally {
+      if (record.status.status === "closed") {
+        await this.#disposeFabricRuntimes(record);
+      }
     }
   }
 
@@ -1648,12 +1815,19 @@ export class HarnessInteractiveChatService {
     if (
       options.engine === undefined && skillsRoot === undefined &&
       fabricSession === undefined &&
+      (options.inputCells?.length ?? 0) === 0 &&
       (options.patternRefs?.length ?? 0) === 0
     ) {
       // Nothing configured needs a run to be brought up before its first model
       // turn, and constructing an engine to discover that would build a
       // sandbox runtime for a turn that has no use for one.
-      return { loop: this.#createPromptLoop(options), contextMessages: [] };
+      return {
+        loop: this.#createPromptLoop(options),
+        contextMessages: [
+          ...pieceTargetingContextMessages([]),
+          REVISION_VERIFICATION_GUIDANCE,
+        ],
+      };
     }
     const engine = options.engine ?? new CfHarnessEngine(options);
     const contextMessages = await establishHarnessSessionContext({
@@ -1688,9 +1862,7 @@ export class HarnessInteractiveChatService {
     return {
       ...this.#basePromptLoopOptions,
       ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
-      ...(inputCells !== undefined && inputCells.length > 0
-        ? { inputCells }
-        : {}),
+      ...(inputCells !== undefined ? { inputCells } : {}),
       ...(patternRefs !== undefined && patternRefs.length > 0
         ? { patternRefs }
         : {}),
@@ -2029,6 +2201,14 @@ export class HarnessInteractiveChatService {
     });
     const record = this.#sessions.get(sessionId);
     const transcript = options.transcript ?? record?.transcript ?? [];
+    const researchContext = options.researchContext ?? record?.researchContext;
+    const researchSnapshot = researchContext === undefined
+      ? {}
+      : { researchContext };
+    const assignedPieces = options.assignedPieces ?? record?.assignedPieces;
+    const pieceSnapshot = assignedPieces === undefined
+      ? {}
+      : { assignedPieces };
     const nextStatus = record === undefined
       ? undefined
       : reduceHarnessChatSessionStatus(record.status, envelope);
@@ -2039,7 +2219,12 @@ export class HarnessInteractiveChatService {
     if (record !== undefined && nextStatus !== undefined) {
       if (nextTurn !== undefined) {
         const saved = await this.#sessionStore?.saveSessionTurnAndAppendEvent({
-          session: { session: nextStatus, transcript },
+          session: {
+            session: nextStatus,
+            transcript,
+            ...researchSnapshot,
+            ...pieceSnapshot,
+          },
           turn: nextTurn,
           event: envelope,
           ...(options.createTurn ? { createTurn: true } : {}),
@@ -2051,6 +2236,8 @@ export class HarnessInteractiveChatService {
         await this.#sessionStore?.saveSessionAndAppendEvent({
           session: nextStatus,
           transcript,
+          ...researchSnapshot,
+          ...pieceSnapshot,
         }, envelope);
       }
     } else {
@@ -2062,6 +2249,12 @@ export class HarnessInteractiveChatService {
     if (record !== undefined && options.transcript !== undefined) {
       record.transcript = options.transcript;
     }
+    if (record !== undefined && options.researchContext !== undefined) {
+      record.researchContext = options.researchContext;
+    }
+    if (record !== undefined && options.assignedPieces !== undefined) {
+      record.assignedPieces = options.assignedPieces;
+    }
     if (record !== undefined && nextStatus !== undefined) {
       record.status = nextStatus;
     }
@@ -2071,13 +2264,10 @@ export class HarnessInteractiveChatService {
     try {
       await this.#onEvent?.(envelope);
     } catch (error) {
-      // The event is committed by this point, and the record already carries
-      // the state it announced. Callers that asked for this emit still hear
-      // about the failure, so it is reported and rethrown rather than caught
-      // here — what must not happen is further up, where a turn's outcome is
-      // decided.
+      // The event is committed. Usage delivery is advisory and cannot decide
+      // the turn's outcome; other emit callers still receive delivery errors.
       this.#reportEventDeliveryError(envelope, error);
-      throw error;
+      if (event.kind !== "turn_usage") throw error;
     }
   }
 

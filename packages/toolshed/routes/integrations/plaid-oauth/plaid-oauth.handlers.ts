@@ -1,9 +1,3 @@
-import { setBGPiece } from "@commonfabric/background-piece";
-import {
-  type NormalizedLink,
-  parseLink,
-  type SigilLink,
-} from "@commonfabric/runner";
 import {
   CountryCode,
   LinkTokenCreateRequest,
@@ -13,7 +7,6 @@ import {
 
 import { plaidErrorFrom } from "./plaid-oauth.error.ts";
 import type {
-  BackgroundIntegrationRoute,
   CreateLinkTokenRoute,
   ExchangeTokenRoute,
   RefreshAccountsRoute,
@@ -29,7 +22,6 @@ import {
   upsertPlaidItem,
 } from "./plaid-oauth.utils.ts";
 import env from "@/env.ts";
-import { runtime } from "@/index.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 
 /**
@@ -190,35 +182,6 @@ export const exchangeToken: AppRouteHandler<ExchangeTokenRoute> = async (c) => {
 
     // Save to auth cell
     await upsertPlaidItem(payload.authCellId, plaidItem);
-
-    // Register this piece for background updates
-    try {
-      const authCellLink = typeof payload.authCellId === "string"
-        ? JSON.parse(payload.authCellId) as SigilLink
-        : payload.authCellId as SigilLink;
-      const parsedLink = parseLink(authCellLink) as NormalizedLink;
-      const space = parsedLink.space;
-      const integrationPieceId = payload.integrationPieceId;
-
-      if (space && integrationPieceId) {
-        logger.info(
-          { space, integrationPieceId },
-          "Registering Plaid integration piece for background updates",
-        );
-
-        await setBGPiece({
-          space,
-          pieceId: integrationPieceId,
-          integration: "plaid",
-          runtime,
-        });
-      }
-    } catch (error) {
-      logger.warn(
-        { error },
-        "Failed to register piece for background updates, continuing anyway",
-      );
-    }
 
     return c.json(
       {
@@ -536,31 +499,6 @@ export const removeItem: AppRouteHandler<RemoveItemRoute> = async (c) => {
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : "Failed to remove item",
-    }, 400) as any;
-  }
-};
-
-/**
- * Background Integration Handler
- * Sets up background sync for Plaid
- */
-export const backgroundIntegration: AppRouteHandler<
-  BackgroundIntegrationRoute
-> = async (c) => {
-  try {
-    const payload = await c.req.json();
-
-    await setBGPiece({
-      space: payload.space,
-      pieceId: payload.pieceId,
-      integration: payload.integration,
-      runtime,
-    });
-    return c.json({ success: true, message: "success" });
-  } catch (_) {
-    return c.json({
-      success: false,
-      error: "Failed to process background integration request",
     }, 400) as any;
   }
 };

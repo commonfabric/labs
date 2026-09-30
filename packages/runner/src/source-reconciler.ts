@@ -31,15 +31,19 @@
  * "Saying when a piece has stopped following its origin" in the lifecycle spec.
  */
 
+import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { Pattern } from "./builder/types.ts";
 import type { Cell } from "./cell.ts";
 import { prepareSourceClosureVerification } from "./compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "./harness/types.ts";
+import type { PreparedSourceUpdate } from "./pattern-manager.ts";
 import {
   classifyPieceOriginString,
   type PieceOriginKind,
@@ -60,6 +64,7 @@ import {
   setPieceReconciliation,
 } from "./runner.ts";
 import type { Runtime } from "./runtime.ts";
+import { schemaRegistryEpoch } from "./schema-registry.ts";
 import { fabricAuthorityMatchesSpaceHost } from "./space-host.ts";
 import type { MemorySpace } from "./storage/interface.ts";
 
@@ -222,11 +227,33 @@ type SourcePass = {
   done: Promise<unknown>;
 };
 
+/**
+ * Resolved source for one supplied origin in one destination space, and the
+ * pattern it compiled to there once an open has verified it.
+ */
+type SuppliedSource = {
+  /** The resolved program, which each compile gets its own containers of. */
+  readonly program: RuntimeProgram;
+
+  /**
+   * The pattern `program` compiled to in the destination space, with the
+   * advertised identity verified and the source closure persisted there, and
+   * the schema registry epoch it was compiled in. Usable only in that epoch:
+   * its serialized graph carries `cid:` references minted from the registry.
+   */
+  compiled?: { pattern: Pattern; epoch: number };
+};
+
 /** Maximum retained source text and key size, measured in UTF-16 code units. */
 const SUPPLIED_SOURCE_MAX_WEIGHT = 4 * 1024 * 1024;
 
-/** The string weight of one resolved program and its lookup key. */
-function suppliedSourceWeight(key: string, program: RuntimeProgram): number {
+/**
+ * The string weight of one resolved program and its lookup key. A compiled
+ * pattern kept beside it is not weighed: this budget bounds retained source
+ * text, and the entry count bounds how many patterns are kept.
+ */
+function suppliedSourceWeight(key: string, source: SuppliedSource): number {
+  const { program } = source;
   let weight = key.length + program.main.length +
     (program.mainExport?.length ?? 0);
   for (const file of program.files) {
@@ -257,16 +284,23 @@ export class SourceReconciler {
   readonly #fabricFollowers = new Map<string, FabricFollower>();
   readonly #stoppedFabricFollowers = new Set<string>();
   readonly #passes = new Set<SourcePass>();
-  readonly #suppliedSources = new LRUCache<string, RuntimeProgram>({
+  readonly #suppliedSources = new LRUCache<string, SuppliedSource>({
     capacity: 32,
     maxWeight: SUPPLIED_SOURCE_MAX_WEIGHT,
     weigh: suppliedSourceWeight,
   });
-  readonly #suppliedSourceFlights = new Map<string, Promise<RuntimeProgram>>();
+  readonly #suppliedSourceFlights = new Map<string, Promise<SuppliedSource>>();
   #disposed = false;
 
   constructor(runtime: Runtime) {
     this.#runtime = runtime;
+  }
+
+  /** The retained supplied sources, which a test reads to see what is kept. */
+  get accessForTestingOnly(): {
+    readonly suppliedSources: LRUCache<string, SuppliedSource>;
+  } {
+    return { suppliedSources: this.#suppliedSources };
   }
 
   /**
@@ -719,11 +753,12 @@ export class SourceReconciler {
    * The pattern a supplied origin currently names, for a piece that does not
    * exist yet.
    *
-   * Each open revalidates the advertised identity and compiles into its own
-   * destination space, including the source-closure persistence of a compiler
-   * cache hit. Opens for the same destination, target and advertised identity
-   * share resolved source. Each caller verifies that source compiles to the
-   * advertised identity before answering with a pattern.
+   * Each open revalidates the advertised identity. Opens for the same
+   * destination, target and advertised identity share resolved source, and
+   * the first to compile it into that destination verifies that it compiles
+   * to the advertised identity, including the source-closure persistence of a
+   * compiler cache hit. Later opens in the same schema registry epoch answer
+   * with that verified pattern, whose closure the destination already holds.
    */
   async #resolveSupplied(
     space: MemorySpace,
@@ -737,21 +772,25 @@ export class SourceReconciler {
       // resolving for does not exist yet.
       if ("detail" in answer) return undefined;
       const advertised = answer.identity;
-      // The destination must hold the closure behind its creation revision.
-      // A compiler hit still performs the destination's persistence work.
-      await prepareSourceClosureVerification();
-      const key = JSON.stringify([space, target.href, advertised]);
+      const key = stringTupleKey([space, target.href, advertised]);
       const resolved = await this.#resolveSuppliedSource(
         key,
         target,
         fetch,
         signal,
       );
+      // A stopped pass answers with nothing, kept pattern or not.
+      signal.throwIfAborted();
+      const epoch = schemaRegistryEpoch();
+      if (resolved.compiled?.epoch === epoch) return resolved.compiled.pattern;
+      // The destination must hold the closure behind its creation revision.
+      // A compiler hit still performs the destination's persistence work.
+      await prepareSourceClosureVerification();
       try {
         // Compiling writes to storage; a stopped pass must leave it alone.
         signal.throwIfAborted();
         const compiled = await this.#runtime.patternManager.compilePattern(
-          copySourceProgram(resolved),
+          copySourceProgram(resolved.program),
           { space },
         );
         signal.throwIfAborted();
@@ -765,6 +804,11 @@ export class SourceReconciler {
             ref,
           ]);
           return undefined;
+        }
+        // A pattern compiled across a registry clear carries references the
+        // clear retired, so it is answered but not kept.
+        if (schemaRegistryEpoch() === epoch) {
+          resolved.compiled = { pattern: compiled, epoch };
         }
         return compiled;
       } catch (error) {
@@ -780,7 +824,7 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
-  ): Promise<RuntimeProgram> {
+  ): Promise<SuppliedSource> {
     signal.throwIfAborted();
     const cached = this.#suppliedSources.get(key);
     if (cached !== undefined) return cached;
@@ -790,7 +834,7 @@ export class SourceReconciler {
       new HttpProgramResolver(target.href, fetch),
     ).then((program) => {
       signal.throwIfAborted();
-      const retained = copySourceProgram(program);
+      const retained: SuppliedSource = { program: copySourceProgram(program) };
       // LRUCache retains a single oversized entry; source retention has a hard
       // string budget, so such a program serves only the callers in flight.
       if (suppliedSourceWeight(key, retained) <= SUPPLIED_SOURCE_MAX_WEIGHT) {
@@ -807,8 +851,8 @@ export class SourceReconciler {
   }
 
   /** A late failure may retire only the source used by its own attempt. */
-  #forgetSuppliedSource(key: string, program: RuntimeProgram): void {
-    if (this.#suppliedSources.get(key) === program) {
+  #forgetSuppliedSource(key: string, source: SuppliedSource): void {
+    if (this.#suppliedSources.get(key) === source) {
       this.#suppliedSources.delete(key);
     }
   }
@@ -929,11 +973,11 @@ export class SourceReconciler {
       return "unusable";
     }
     const named = ref.space ?? destinationSpace;
-    if (!named.startsWith("did:")) {
+    if (!isDID(named)) {
       this.#unwatchFabricSource(resultCell);
       return "unusable";
     }
-    const sourceSpace = named as MemorySpace;
+    const sourceSpace = named;
     if (
       ref.host !== undefined &&
       !fabricAuthorityMatchesSpaceHost(
@@ -1080,6 +1124,19 @@ export class SourceReconciler {
       state.snapshot,
       { allowUnavailable: true },
     );
+    // A release re-mints every handler identity in the file, so a field the
+    // running pattern's handler protects would refuse the successor's write
+    // and the update could not commit. For a `system:` origin — a release the
+    // deployment gated — the successor inherits the predecessor's authority
+    // the way an explicit `setsrc` grants it (SC-22). Every other origin
+    // stays as it is: nobody promised anything about what it ships.
+    const sourceUpdate = origin.kind === "system" && baseline.kind === "retain"
+      ? await runtime.patternManager.prepareSourceUpdate(
+        state.space,
+        state.running.identity,
+        candidateRef.identity,
+      )
+      : undefined;
     const transition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),
       baseline,
@@ -1103,6 +1160,15 @@ export class SourceReconciler {
     await runtime.runner.syncStoredPieceCells(resultCell, candidate);
     const committed = await this.#commit(resultCell, state, signal, (tx) => {
       if (!argumentUnchanged(resultCell.withTx(tx))) return false;
+      if (sourceUpdate !== undefined) {
+        runtime.patternManager.stageSourceUpdate(
+          sourceUpdate,
+          state.space,
+          state.running.identity,
+          candidateRef.identity,
+          tx,
+        );
+      }
       applyPieceSourceTransition(
         runtime,
         resultCell,
@@ -1120,7 +1186,7 @@ export class SourceReconciler {
         prepareForResume: true,
       });
       return true;
-    });
+    }, sourceUpdate);
     return committed ? "updated" : "unavailable";
   }
 
@@ -1217,33 +1283,42 @@ export class SourceReconciler {
     state: PieceState,
     signal: AbortSignal | undefined,
     write: (tx: Parameters<typeof applyPieceSourceTransition>[2]) => boolean,
+    sourceUpdate?: PreparedSourceUpdate,
   ): Promise<boolean> {
     const runtime = this.#runtime;
-    const result = await runtime.editWithRetry((tx) => {
-      // editWithRetry re-runs this callback after a retryable rejection, and a
-      // stop can abort between attempts, so every attempt re-enters the gate.
-      // Throwing ends the retry loop; aborting the transaction would be
-      // classified as retryable and consume the remaining attempts.
-      signal?.throwIfAborted();
-      const candidate = resultCell.withTx(tx);
-      const currentRef = getPatternIdentityRef(candidate);
-      // The piece must still run what the candidate was compared against, and
-      // still record the origin that was resolved. Nothing else decides this
-      // transition, so nothing else is guarded: the setup marker in
-      // particular is written by setup, which this transition triggers.
-      if (
-        currentRef?.identity !== state.running.identity ||
-        currentRef.symbol !== state.running.symbol ||
-        getPatternSource(candidate) !== state.storedSource
-      ) return false;
-      // The reconciler runs from a raw promise, with no scheduler run to stamp
-      // it — bookkeeping per serving-loop.md §3d, RULED 2026-08-05.
-      runtime.stampServerRun(tx, {
-        actionId: `source-reconcile/${resultCell.sourceURI}`,
-        kind: "bookkeeping",
-      });
-      return write(tx);
-    });
+    const result = await runtime.editWithRetry(
+      (tx) => {
+        // editWithRetry re-runs this callback after a retryable rejection, and a
+        // stop can abort between attempts, so every attempt re-enters the gate.
+        // Throwing ends the retry loop; aborting the transaction would be
+        // classified as retryable and consume the remaining attempts.
+        signal?.throwIfAborted();
+        const candidate = resultCell.withTx(tx);
+        const currentRef = getPatternIdentityRef(candidate);
+        // The piece must still run what the candidate was compared against, and
+        // still record the origin that was resolved. Nothing else decides this
+        // transition, so nothing else is guarded: the setup marker in
+        // particular is written by setup, which this transition triggers.
+        if (
+          currentRef?.identity !== state.running.identity ||
+          currentRef.symbol !== state.running.symbol ||
+          getPatternSource(candidate) !== state.storedSource
+        ) return false;
+        // The reconciler runs from a raw promise, with no scheduler run to stamp
+        // it — bookkeeping per serving-loop.md §3d, RULED 2026-08-05.
+        // An update carrying writer inheritance registers its grant from the
+        // store's verdict, so a serving loop commits it directly rather than
+        // inside a wave it could withdraw.
+        runtime.stampServerRun(tx, {
+          actionId: `source-reconcile/${resultCell.sourceURI}`,
+          kind: "bookkeeping",
+          ...(sourceUpdate === undefined ? {} : { directCommit: true }),
+        });
+        return write(tx);
+      },
+      undefined,
+      { sourceUpdate },
+    );
     if (signal?.aborted) return false;
     if (result.error) {
       logger.warn("reconcile-commit-failed", () => [
@@ -1294,8 +1369,7 @@ export class SourceReconciler {
         sourcePrimed = true;
         const candidate = value as Record<string, unknown>;
         if (
-          typeof value === "object" && value !== null &&
-          !Array.isArray(value) &&
+          isObjectNotArray(value) &&
           candidate.identity === targetRef.identity &&
           candidate.symbol === targetRef.symbol
         ) return;

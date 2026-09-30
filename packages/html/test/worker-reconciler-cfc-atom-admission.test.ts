@@ -5,6 +5,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -51,7 +52,7 @@ Deno.test("worker reconciler CFC atom admission", async (t) => {
     );
     const secretLink = secret.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
-    tx.writeOrThrow({
+    seedStoredEnvelope(tx, {
       space: signer.did(),
       id: secretLink.id!,
       type: "application/json",

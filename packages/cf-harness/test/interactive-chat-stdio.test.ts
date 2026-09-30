@@ -4,7 +4,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { fromFileUrl, join } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
@@ -24,6 +24,7 @@ import {
   type HarnessInteractivePromptLoopFactory,
 } from "../src/interactive-chat-service.ts";
 import {
+  type HarnessChatStoreHeldRefusal,
   type HarnessInteractiveChatOutputEnvelope,
   parseHarnessInteractiveChatStdioCliOptions,
   runHarnessInteractiveChatNdjsonTransport,
@@ -32,6 +33,11 @@ import {
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import { HarnessChatStoreHeldError } from "../src/session-store.ts";
+import {
+  openSqliteHarnessChatSessionStore,
+  sqliteHarnessChatSessionStoreHolderPath,
+} from "../src/sqlite-session-store.ts";
 
 const decodeLines = (
   lines: readonly string[],
@@ -1329,7 +1335,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
   // embedder gets a behaviour change for free.
-  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd()), {});
+  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd(), {}), {});
 
   const seen: RunHarnessInteractiveChatStdioOptions[] = [];
   await runHarnessInteractiveChatStdioCli(
@@ -1347,7 +1353,7 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
 
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
-    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd()),
+    await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
     { maxModelTurns: 32 },
   );
 });
@@ -1408,4 +1414,287 @@ Deno.test("interactive NDJSON transport reports a failed event write as a transp
     Error,
     "broken pipe",
   );
+});
+
+Deno.test("interactive stdio refuses a session database another live process holds", async () => {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const dir = await Deno.makeTempDir();
+  const dbPath = join(dir, "chat.sqlite");
+  const args = [
+    "run",
+    "-A",
+    fromFileUrl(new URL("../src/interactive-chat-stdio.ts", import.meta.url)),
+    "--chat-session-db",
+    dbPath,
+  ];
+  const first = new Deno.Command(Deno.execPath(), {
+    args,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  const input = first.stdin.getWriter();
+  let firstResponse = "";
+  let second: Deno.CommandOutput | undefined;
+  try {
+    // The response is the first process's proof that it initialized, and so
+    // holds the database, before the second process starts.
+    await input.write(encoder.encode(`${
+      JSON.stringify({
+        type: HARNESS_CHAT_REQUEST_TYPE,
+        protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+        requestId: "req-status",
+        method: "status",
+        params: {},
+      })
+    }\n`));
+    const reader = first.stdout.getReader();
+    while (!firstResponse.includes("\n")) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      firstResponse += decoder.decode(value, { stream: true });
+    }
+    reader.releaseLock();
+    second = await new Deno.Command(Deno.execPath(), {
+      args,
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+  } finally {
+    await input.close();
+  }
+  const firstStatus = await first.status;
+  const firstStderr = await new Response(first.stderr).text();
+  await first.stdout.cancel();
+  const resolvedDbPath = await Deno.realPath(dbPath);
+  await Deno.remove(dir, { recursive: true });
+
+  assertEquals(firstStatus.code, 0, firstStderr);
+  const [statusResponse] = decodeLines([firstResponse.split("\n")[0]]);
+  assertEquals("ok" in statusResponse && statusResponse.ok, true);
+  assertEquals(second?.code, 1);
+  assertEquals(decoder.decode(second?.stdout), "");
+  const [refusalLine, message] = decoder.decode(second?.stderr).split("\n");
+  const refusal = JSON.parse(refusalLine) as HarnessChatStoreHeldRefusal;
+  assertEquals(refusal.kind, "cf-harness.store-held");
+  assertEquals(refusal.version, 1);
+  assertEquals(refusal.store, resolvedDbPath);
+  assertEquals(refusal.holder?.pid, first.pid);
+  assertEquals(typeof refusal.holder?.instanceId, "string");
+  assertEquals(typeof refusal.holder?.heldSince, "string");
+  assertStringIncludes(
+    message,
+    `cf-harness chat session store ${refusal.store} is held by another live process: instance ${refusal.holder?.instanceId}, pid ${first.pid}, since ${refusal.holder?.heldSince}`,
+  );
+});
+
+Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output is locked", async () => {
+  const dir = await Deno.makeTempDir();
+  const dbPath = join(dir, "chat.sqlite");
+  const holder = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(dbPath),
+  });
+  const stdout = captureOutputLines();
+  const locked = new WritableStream<Uint8Array>();
+  const lock = locked.getWriter();
+  try {
+    await assertRejects(
+      () =>
+        runHarnessInteractiveChatStdio({
+          sessionDbPath: dbPath,
+          input: encodeInputLines([]),
+          output: stdout.output,
+          errorOutput: locked,
+        }),
+      HarnessChatStoreHeldError,
+    );
+    assertEquals(stdout.lines(), []);
+  } finally {
+    lock.releaseLock();
+    holder.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output fails to write", async () => {
+  const dir = await Deno.makeTempDir();
+  const dbPath = join(dir, "chat.sqlite");
+  const holder = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(dbPath),
+  });
+  const stdout = captureOutputLines();
+  const failing = new WritableStream<Uint8Array>({
+    write: () => Promise.reject(new Error("the error sink went away")),
+  });
+  try {
+    await assertRejects(
+      () =>
+        runHarnessInteractiveChatStdio({
+          sessionDbPath: dbPath,
+          input: encodeInputLines([]),
+          output: stdout.output,
+          errorOutput: failing,
+        }),
+      HarnessChatStoreHeldError,
+    );
+    assertEquals(stdout.lines(), []);
+  } finally {
+    holder.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("interactive stdio writes one refusal line to its error output for a held session database", async () => {
+  const dir = await Deno.makeTempDir();
+  const dbPath = join(dir, "chat.sqlite");
+  const holder = await openSqliteHarnessChatSessionStore({
+    url: toFileUrl(dbPath),
+    holder: {
+      instanceId: "instance-1",
+      pid: Deno.pid,
+      heldSince: "2026-09-15T00:00:00.000Z",
+    },
+  });
+  const stdout = captureOutputLines();
+  const stderr = captureOutputLines();
+  try {
+    await assertRejects(
+      () =>
+        runHarnessInteractiveChatStdio({
+          sessionDbPath: dbPath,
+          input: encodeInputLines([]),
+          output: stdout.output,
+          errorOutput: stderr.output,
+        }),
+      HarnessChatStoreHeldError,
+    );
+    assertEquals(stdout.lines(), []);
+    assertEquals(stderr.lines().map((line) => JSON.parse(line)), [{
+      kind: "cf-harness.store-held",
+      version: 1,
+      store: await Deno.realPath(dbPath),
+      holder: {
+        instanceId: "instance-1",
+        pid: Deno.pid,
+        heldSince: "2026-09-15T00:00:00.000Z",
+      },
+    }]);
+
+    // A record the holder has not finished writing reads as no holder, and
+    // the line says so rather than naming nobody.
+    await Deno.writeTextFile(
+      await sqliteHarnessChatSessionStoreHolderPath(toFileUrl(dbPath)),
+      "{",
+    );
+    const unnamed = captureOutputLines();
+    await assertRejects(
+      () =>
+        runHarnessInteractiveChatStdio({
+          sessionDbPath: dbPath,
+          input: encodeInputLines([]),
+          output: stdout.output,
+          errorOutput: unnamed.output,
+        }),
+      HarnessChatStoreHeldError,
+    );
+    assertEquals(stdout.lines(), []);
+    assertEquals(unnamed.lines().map((line) => JSON.parse(line)), [{
+      kind: "cf-harness.store-held",
+      version: 1,
+      store: await Deno.realPath(dbPath),
+      holder: null,
+    }]);
+  } finally {
+    holder.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
+  // Same derivation as the batch CLI, so a chat session and a batch run
+  // launched from one environment execute in the same sandbox.
+  assertEquals(
+    await resolveInteractiveProvisioning({}, Deno.cwd(), {
+      CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      CF_HARNESS_SANDBOX_ROOTFS: "/r",
+      CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+      CF_HARNESS_RUNSC_BINARY: "/b",
+      CF_HARNESS_DOCKER_NETWORK_MODE: "host",
+    }),
+    {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: "/r",
+      sandboxCfcPolicy: "/p",
+      sandboxRunscBinary: "/b",
+      sandboxRunscNetworkMode: "host",
+    },
+  );
+  await assertRejects(
+    () =>
+      resolveInteractiveProvisioning({}, Deno.cwd(), {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridgeish",
+      }),
+    Error,
+    "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",
+  );
+
+  // The default policy the usage text promises is discovered under HOME for
+  // the runsc runtime, through the real file system.
+  const home = await Deno.makeTempDir();
+  try {
+    const policy = join(
+      home,
+      ".local",
+      "share",
+      "runsc-cfc",
+      "cfc-policy.json",
+    );
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc" },
+    );
+    await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
+      recursive: true,
+    });
+    await Deno.writeTextFile(policy, "{}");
+    assertEquals(
+      await resolveInteractiveProvisioning({}, Deno.cwd(), {
+        HOME: home,
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+      }),
+      { sandboxRuntimeKind: "runsc", sandboxCfcPolicy: policy },
+    );
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its environment", async () => {
+  // The standalone entrypoint reads the process environment itself; the
+  // Loom-local host is covered in its own suite.
+  const previous = Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME");
+  Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", "runsc");
+  try {
+    const seen: RunHarnessInteractiveChatStdioOptions[] = [];
+    await runHarnessInteractiveChatStdioCli([], Deno.cwd(), (options) => {
+      seen.push(options);
+      return Promise.resolve();
+    });
+    assertEquals(seen.length, 1);
+    assertEquals(seen[0].basePromptLoopOptions?.sandboxRuntimeKind, "runsc");
+  } finally {
+    if (previous === undefined) {
+      Deno.env.delete("CF_HARNESS_SANDBOX_RUNTIME");
+    } else {
+      Deno.env.set("CF_HARNESS_SANDBOX_RUNTIME", previous);
+    }
+  }
 });

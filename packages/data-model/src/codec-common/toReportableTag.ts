@@ -1,4 +1,4 @@
-import { toCompactDebugString } from "@/value-debug.ts";
+import { toCompactDebugString } from "@/value-debug";
 
 /** How much of a rendered tag to keep. */
 const MAX_RENDERED_LENGTH = 60;

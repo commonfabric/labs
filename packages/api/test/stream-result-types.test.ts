@@ -9,7 +9,6 @@ import type { CELL_RESULT_TYPE, Stream } from "@commonfabric/api";
 // (Verified: `MustBeTrue<AssertAssignable<string, number>>` compiles clean.)
 type AssertAssignable<T, U> = [T] extends [U] ? true : never;
 type AssertNotAssignable<T, U> = [T] extends [U] ? never : true;
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 interface AddTopic {
   title: string;

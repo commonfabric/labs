@@ -1,5 +1,6 @@
 import type { FabricValue } from "@commonfabric/data-model";
 import { defer } from "@commonfabric/utils/defer";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
   BridgeCell,
@@ -57,7 +58,7 @@ export class ContextShim {
     const get = (): FabricValue | undefined => {
       let value: unknown = this.get({} as CommonIframeSandboxElement, key);
       for (const part of path) {
-        if (value === null || typeof value !== "object") return undefined;
+        if (!isObjectOrArray(value)) return undefined;
         value = (value as Record<string, unknown>)[String(part)];
       }
       return value as FabricValue | undefined;
@@ -71,13 +72,13 @@ export class ContextShim {
           return;
         }
         const root = this.get({} as CommonIframeSandboxElement, key);
-        if (root === null || typeof root !== "object") {
+        if (!isObjectOrArray(root)) {
           throw new TypeError("Cannot descend through a non-object value.");
         }
         let parent = root as Record<string, FabricValue>;
         for (const part of path.slice(0, -1)) {
           const child = parent[String(part)];
-          if (child === null || typeof child !== "object") {
+          if (!isObjectOrArray(child)) {
             throw new TypeError("Cannot descend through a non-object value.");
           }
           parent = child as Record<string, FabricValue>;

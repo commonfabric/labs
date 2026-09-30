@@ -6,6 +6,8 @@ import {
   assertStrictEquals,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+
 import {
   isLinkRef,
   linkRefFrom,
@@ -16,6 +18,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
+  newLoopbackServer,
   type Options,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
@@ -31,22 +34,52 @@ import {
   cellHasOwnerProtection,
   pushStableCellGraph,
   readStableCellGraphValue,
+  stableCellId,
 } from "../src/fabric-graph.ts";
 import {
   materializeStableArrayCells,
   planStableArrayCells,
 } from "../src/array-cell-identity.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "../src/protocol.ts";
+import type { AgentSessionCommandReceipt } from "../src/commands.ts";
 import type {
   AgentDriver,
   NativeSessionSnapshot,
   SourceDescriptor,
 } from "../src/types.ts";
-import { commandReceiptCause, sessionCause } from "../src/session-contract.ts";
+import { commandReceiptCause, sessionKey } from "../src/session-contract.ts";
 import {
   type GitCommandRunner,
   GitContextResolver,
 } from "../src/git-context.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "@commonfabric/runner/cfc/trust-authority";
+
+async function publishedManifestCell(
+  connection: Parameters<typeof readStableCellGraphValue>[0],
+  target: AgentFabricTarget,
+  nativeSessionId: string,
+): Promise<Cell<unknown>> {
+  const index = await readStableCellGraphValue(
+    connection,
+    target.cells.allIndex,
+    new Map(),
+    { preserveLinkFields: new Set(["manifest"]) },
+  ) as Record<string, unknown>;
+  const row = (index.sessions as Array<Record<string, unknown>>).find(
+    (session) => session.nativeSessionId === nativeSessionId,
+  );
+  if (!row || !isLinkRef(row.manifest)) {
+    throw new Error(`session manifest link is unavailable: ${nativeSessionId}`);
+  }
+  return connection.runtime.getCellFromLink(
+    linkRefPayload(row.manifest) as Parameters<
+      Runtime["getCellFromLink"]
+    >[0],
+  );
+}
 
 Deno.test("Fabric target validates a discovered checkout", async () => {
   const signer = await Identity.fromPassphrase(
@@ -98,8 +131,6 @@ Deno.test("Fabric target validates a discovered checkout", async () => {
     await storageManager.close();
   }
 });
-
-const EMULATED_AUDIENCE = "did:key:z6Mk-agent-connector-isolation-test";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -275,7 +306,21 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       Record<string, unknown>
     >)[0].link as Record<string, unknown>;
     assertEquals(publishedChunk.events, [{ type: "message", text: "hello" }]);
+    const firstManifestCell = await publishedManifestCell(
+      connection,
+      target,
+      "session-1",
+    );
     assertEquals(await target.publish(collected), 1);
+    const unchangedManifestCell = await publishedManifestCell(
+      connection,
+      target,
+      "session-1",
+    );
+    assertEquals(
+      unchangedManifestCell.getAsNormalizedFullLink(),
+      firstManifestCell.getAsNormalizedFullLink(),
+    );
 
     const reconfiguredSource: SourceDescriptor = {
       ...source,
@@ -358,7 +403,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const malformedReceiptTx = runtime.edit();
-    malformedReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(malformedReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -386,7 +431,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
       agentOwnerSchema(space),
     );
     const wrongOwnerReceiptTx = runtime.edit();
-    wrongOwnerReceiptTx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(wrongOwnerReceiptTx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -571,7 +616,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
     try {
       const command = JSON.stringify({ id: "command-2" });
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity:
           commandWriterAuthorization.__ctWriterIdentityOf.moduleIdentity,
@@ -795,6 +840,149 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
   }
 });
 
+Deno.test("Fabric target releases graph storage after every session", async () => {
+  const server = newLoopbackServer();
+  const identity = await Identity.fromPassphrase(
+    "agent graph storage release test",
+  );
+  const session = await createSession({
+    identity,
+    spaceName: `agent-graph-release-${crypto.randomUUID()}`,
+  });
+  const mainStorage = SharedServerStorageManager.connectTo(server, {
+    as: session.as,
+  });
+  const graphStorage = SharedServerStorageManager.connectTo(server, {
+    as: session.as,
+  });
+  const mainRuntime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager: mainStorage,
+  });
+  const graphRuntime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager: graphStorage,
+  });
+  let releases = 0;
+  let releaseFails = false;
+  let wrongOwner = false;
+  const connection = {
+    runtime: mainRuntime,
+    spaceDid: session.space,
+    ownerDid: identity.did(),
+  };
+  const graphConnection = {
+    runtime: graphRuntime,
+    spaceDid: session.space,
+    ownerDid: identity.did(),
+  };
+  try {
+    const target = await AgentFabricTarget.open(
+      connection,
+      undefined,
+      () =>
+        Promise.resolve({
+          connection: wrongOwner
+            ? { ...graphConnection, ownerDid: "did:key:other-owner" }
+            : graphConnection,
+          release: async () => {
+            releases++;
+            await graphStorage.close();
+            if (releaseFails) {
+              throw new Error("graph release failed");
+            }
+          },
+        }),
+    );
+    const source: SourceDescriptor = {
+      id: "codex:test",
+      driver: "codex-app-server",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: false,
+        cancel: false,
+        rename: false,
+        setMode: false,
+        setConfigOption: false,
+      },
+    };
+    const snapshot = (nativeSessionId: string): NativeSessionSnapshot => ({
+      summary: {
+        nativeSessionId,
+        title: nativeSessionId,
+        cwd: null,
+        createdAt: null,
+        updatedAt: new Date().toISOString(),
+        archived: false,
+        active: false,
+        raw: { nativeSessionId },
+      },
+      events: [{ type: "message", nativeSessionId }],
+      normalizedMessages: [],
+      complete: true,
+    });
+
+    assertEquals(
+      await target.publish([{
+        source,
+        sessions: [snapshot("session-1"), snapshot("session-2")],
+        errors: [],
+        complete: true,
+      }]),
+      2,
+    );
+    assertEquals(releases, 2);
+    const index = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (index.sessions as Array<Record<string, unknown>>).map((entry) =>
+        entry.nativeSessionId
+      ),
+      ["session-1", "session-2"],
+    );
+
+    releaseFails = true;
+    await expect(target.publish([{
+      source,
+      sessions: [snapshot("session-3")],
+      errors: [],
+      complete: true,
+    }])).rejects.toThrow("graph release failed");
+    expect(releases).toBe(3);
+    expect(await readStableCellGraphValue(connection, target.cells.allIndex))
+      .toEqual(index);
+
+    wrongOwner = true;
+    const error = await assertRejects(
+      () =>
+        target.publish([{
+          source,
+          sessions: [snapshot("session-3")],
+          errors: [],
+          complete: true,
+        }]),
+      AggregateError,
+      "agent session publication and graph storage release failed",
+    );
+    assertEquals(
+      error.errors.map((failure) => (failure as Error).message),
+      [
+        "agent graph session must use the target space and owner",
+        "graph release failed",
+      ],
+    );
+    expect(releases).toBe(4);
+  } finally {
+    await graphRuntime.dispose();
+    await mainRuntime.dispose();
+    await graphStorage.close();
+    await mainStorage.close();
+  }
+});
+
 Deno.test("Fabric target data is owner-scoped and owner-confidential", async () => {
   const owner = await Identity.fromPassphrase("agent connector data owner");
   const otherOwner = await Identity.fromPassphrase(
@@ -855,11 +1043,11 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
     inspect.abort();
 
     const attack = runtime.edit();
-    attack.setCfcTrustSnapshot({
+    setCfcTrustSnapshot(attack, {
       id: `principal:${otherOwner.did()}`,
       actingPrincipal: otherOwner.did(),
     });
-    attack.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(attack, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -876,14 +1064,7 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
 });
 
 Deno.test("shared-space agent discovery and commands are owner-isolated", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("shared agent graph owner");
   const otherOwner = await Identity.fromPassphrase(
     "shared agent graph other owner",
@@ -1033,14 +1214,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
 });
 
 Deno.test("stable graph checks remote children before adoption", async () => {
-  const server = new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: { audience: EMULATED_AUDIENCE },
-  });
+  const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("stable graph remote owner");
   const otherOwner = await Identity.fromPassphrase(
     "stable graph remote squatter",
@@ -1345,7 +1519,7 @@ Deno.test("Fabric target refuses an owner root with another writer", async () =>
       agentPrincipalSchema(owner.did(), [otherWriter]),
     );
     const seed = runtime.edit();
-    seed.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(seed, {
       kind: "builtin",
       builtinId: otherWriter,
     });
@@ -1439,12 +1613,12 @@ Deno.test("Fabric target binds only an empty owner command queue", async () => {
       await assertRejects(
         () => second.pollCommands(),
         Error,
-        "owner command cell has not been bound",
+        "no command queue has been bound",
       );
       await assertRejects(
         () => second.subscribeCommands(() => {}),
         Error,
-        "owner command cell has not been bound",
+        "no command queue has been bound",
       );
       const commandValueBefore = second.cells.commands.getRaw();
       const commandProtectionBefore = cellHasOwnerProtection(
@@ -1768,11 +1942,6 @@ Deno.test("publication finishes after its first graph commit", async () => {
   try {
     const target = await AgentFabricTarget.open(connection);
     await target.publish(collected("Before"));
-    const manifest = runtime.getCell(
-      space,
-      sessionCause(space, space, source.id, "session-1"),
-    );
-    const manifestId = manifest.getAsNormalizedFullLink().id;
     const controller = new AbortController();
     const originalEdit = runtime.edit;
     let manifestCommitObserved = false;
@@ -1781,8 +1950,21 @@ Deno.test("publication finishes after its first graph commit", async () => {
       let writesManifest = false;
       const originalWrite = tx.writeOrThrow.bind(tx);
       tx.writeOrThrow = (...args) => {
-        if (args[0].id === manifestId) writesManifest = true;
+        if (
+          args[0].path.at(-1) === "schema" &&
+          args[1] === AGENT_CONNECTOR_SCHEMAS.session
+        ) {
+          writesManifest = true;
+        }
         return originalWrite(...args);
+      };
+      const originalWriteValue = tx.writeValueOrThrow.bind(tx);
+      tx.writeValueOrThrow = (...args) => {
+        const value = args[1] as Record<string, unknown> | undefined;
+        if (value?.schema === AGENT_CONNECTOR_SCHEMAS.session) {
+          writesManifest = true;
+        }
+        return originalWriteValue(...args);
       };
       const originalCommit = tx.commit.bind(tx);
       tx.commit = async () => {
@@ -1810,9 +1992,14 @@ Deno.test("publication finishes after its first graph commit", async () => {
       target.cells.allIndex,
     ) as Record<string, unknown>;
     const session = (index.sessions as Array<Record<string, unknown>>)[0];
+    const currentManifest = await publishedManifestCell(
+      connection,
+      target,
+      "session-1",
+    );
     const publishedManifest = await readStableCellGraphValue(
       connection,
-      manifest,
+      currentManifest,
     ) as Record<string, unknown>;
     assertEquals(session.title, "After");
     assertEquals(
@@ -1885,20 +2072,33 @@ Deno.test("an interrupted publication leaves the prior session graph intact", as
       errors: [],
       complete: true,
     }]);
-    const manifest = runtime.getCell(
-      space,
-      sessionCause(space, space, source.id, "session-1"),
+    const manifest = await publishedManifestCell(
+      connection,
+      target,
+      "session-1",
     );
 
     const originalEdit = runtime.edit;
-    const manifestId = manifest.getAsNormalizedFullLink().id;
     runtime.edit = function () {
       const tx = originalEdit.call(this);
       let writesManifest = false;
       const originalWrite = tx.writeOrThrow.bind(tx);
       tx.writeOrThrow = (...args) => {
-        if (args[0].id === manifestId) writesManifest = true;
+        if (
+          args[0].path.at(-1) === "schema" &&
+          args[1] === AGENT_CONNECTOR_SCHEMAS.session
+        ) {
+          writesManifest = true;
+        }
         return originalWrite(...args);
+      };
+      const originalWriteValue = tx.writeValueOrThrow.bind(tx);
+      tx.writeValueOrThrow = (...args) => {
+        const value = args[1] as Record<string, unknown> | undefined;
+        if (value?.schema === AGENT_CONNECTOR_SCHEMAS.session) {
+          writesManifest = true;
+        }
+        return originalWriteValue(...args);
       };
       const originalCommit = tx.commit.bind(tx);
       tx.commit = () => {
@@ -1959,6 +2159,44 @@ Deno.test("an interrupted publication leaves the prior session graph intact", as
       type: "message",
       detail: { value: 1 },
     }]);
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const invalidLaterSession = snapshot("Invalid", [circular]);
+    invalidLaterSession.summary = {
+      ...invalidLaterSession.summary,
+      nativeSessionId: "session-2",
+    };
+    await assertRejects(
+      () =>
+        target.publish([{
+          source,
+          sessions: [
+            snapshot("Not committed", [{ id: "replacement" }]),
+            invalidLaterSession,
+          ],
+          errors: [],
+          complete: true,
+        }]),
+      Error,
+      "Conversion refuses a circular reference",
+    );
+    const retainedAfterLaterFailure = await readStableCellGraphValue(
+      connection,
+      manifest,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (retainedAfterLaterFailure.summary as Record<string, unknown>).title,
+      "Before",
+    );
+    const retainedIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (retainedIndex.sessions as Array<Record<string, unknown>>)[0].title,
+      "Before",
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -2025,9 +2263,10 @@ Deno.test("session publication captures native values once", async () => {
     }]);
     assertEquals(conversions, 1);
 
-    const manifest = runtime.getCell(
-      space,
-      sessionCause(space, space, source.id, "session-1"),
+    const manifest = await publishedManifestCell(
+      connection,
+      target,
+      "session-1",
     );
     const published = await readStableCellGraphValue(
       connection,
@@ -2042,6 +2281,83 @@ Deno.test("session publication captures native values once", async () => {
       first: { value: "captured-1" },
       second: { value: "captured-1" },
     }]);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("session publication captures its snapshot before the first commit", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector incremental session publication test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  let captures = 0;
+  const events = ["one", "two", "three"].map((id) => ({
+    toJSON() {
+      captures++;
+      return { id, text: "x".repeat(530_000) };
+    },
+  }));
+  const source: SourceDescriptor = {
+    id: "codex:test",
+    driver: "codex-app-server",
+    capabilities: {
+      inventory: true,
+      read: true,
+      prompt: false,
+      cancel: false,
+      rename: false,
+      setMode: false,
+      setConfigOption: false,
+    },
+  };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const capturesAtCommit: number[] = [];
+    const originalEdit = runtime.edit;
+    runtime.edit = function () {
+      const tx = originalEdit.call(this);
+      const originalCommit = tx.commit.bind(tx);
+      tx.commit = async () => {
+        capturesAtCommit.push(captures);
+        return await originalCommit();
+      };
+      return tx;
+    };
+    try {
+      await target.publish([{
+        source,
+        sessions: [{
+          summary: {
+            nativeSessionId: "session-1",
+            title: "Incremental publication",
+            cwd: null,
+            createdAt: null,
+            updatedAt: null,
+            archived: false,
+            active: false,
+            raw: { id: "session-1" },
+          },
+          events,
+          normalizedMessages: [],
+          complete: true,
+        }],
+        errors: [],
+        complete: true,
+      }]);
+    } finally {
+      runtime.edit = originalEdit;
+    }
+
+    assertEquals(captures, 3);
+    assertEquals(capturesAtCommit[0], 3);
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -2187,6 +2503,274 @@ Deno.test("newer session refresh wins over an older full collection", async () =
   }
 });
 
+Deno.test("newer session refresh wins over an older retained inventory", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector retained observation ordering test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  const gitContext = new GitContextResolver((args) => {
+    const directory = args[1];
+    const command = args.slice(2).join(" ");
+    if (command === "rev-parse --show-toplevel") {
+      return Promise.resolve({ code: 0, stdout: `${directory}\n` });
+    }
+    if (command === "branch --show-current") {
+      return Promise.resolve({ code: 0, stdout: `${directory.slice(1)}\n` });
+    }
+    if (command === "rev-parse HEAD") {
+      return Promise.resolve({
+        code: 0,
+        stdout: `head-${directory.slice(1)}\n`,
+      });
+    }
+    if (command === "remote -v") {
+      return Promise.resolve({ code: 0, stdout: "" });
+    }
+    return Promise.resolve({ code: 1, stdout: "" });
+  }, () => new Date("2026-09-14T12:00:00.000Z"));
+  try {
+    const target = await AgentFabricTarget.open(connection, gitContext);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+      },
+    };
+    const snapshot = (cwd: string, title: string): NativeSessionSnapshot => ({
+      summary: {
+        nativeSessionId: "session-1",
+        title,
+        cwd,
+        createdAt: "2026-09-14T10:00:00.000Z",
+        updatedAt: "2026-09-14T10:01:00.000Z",
+        archived: false,
+        active: false,
+        raw: { id: "session-1", title },
+      },
+      events: [],
+      normalizedMessages: [],
+      complete: true,
+      revision: title,
+    });
+    const initial = snapshot("/initial", "Initial snapshot");
+    await target.publish([{
+      source,
+      sessions: [initial],
+      errors: [],
+      complete: true,
+    }]);
+
+    const olderObservation = target.beginSessionObservation();
+    const driver = {
+      source,
+      readSession: () => Promise.resolve(snapshot("/new", "New snapshot")),
+    } as unknown as AgentDriver;
+    await target.refreshSession(driver, "session-1");
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [{ ...initial.summary, cwd: "/stale" }],
+      errors: [],
+      complete: true,
+    }], { observationSequence: olderObservation });
+
+    const index = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    const published = (index.sessions as Array<Record<string, unknown>>)[0];
+    assertEquals(
+      [
+        published.title,
+        published.gitWorktreeRoot,
+        published.gitBranch,
+        published.gitHeadSha,
+      ],
+      ["New snapshot", "/new", "new", "head-new"],
+    );
+    const manifest = published.manifest as Record<string, unknown>;
+    assertEquals(
+      (manifest.summary as Record<string, unknown>).title,
+      "New snapshot",
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a published pairing with a desktop start survives a driver that no longer knows it", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector desktop pairing persistence test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+        startSession: true,
+        surfaces: ["headless", "desktop"],
+      },
+    };
+    const snapshot = (
+      revision: string,
+      startedAs?: string,
+    ): NativeSessionSnapshot => ({
+      summary: {
+        nativeSessionId: "app-made",
+        title: "topic #7: the workbench",
+        cwd: "/work/labs",
+        createdAt: "2026-09-22T20:00:00.000Z",
+        updatedAt: `2026-09-22T20:0${revision}:00.000Z`,
+        archived: false,
+        active: null,
+        ...(startedAs ? { startedAs } : {}),
+        raw: { id: "app-made", revision },
+      },
+      events: [],
+      normalizedMessages: [],
+      complete: true,
+      revision,
+    });
+    const rowOf = async () => {
+      const index = await readStableCellGraphValue(
+        connection,
+        target.cells.allIndex,
+      ) as Record<string, unknown>;
+      return (index.sessions as Array<Record<string, unknown>>)[0];
+    };
+
+    // The driver that opened the desktop start pairs the session it made.
+    await target.publish([{
+      source,
+      sessions: [snapshot("1", "the-start-id")],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    assertEquals((await rowOf()).startedAs, "the-start-id");
+    expect(
+      (await target.publishedSessions()).get(sessionKey(source.id, "app-made"))
+        ?.startedAs,
+    ).toBe("the-start-id");
+
+    // After a host restart the driver reads the session without the pairing
+    // it no longer holds; the row keeps the one it was published with, so
+    // the workbench that attached the session through its start keeps it.
+    await target.publish([{
+      source,
+      sessions: [snapshot("2")],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const republished = await rowOf();
+    assertEquals(republished.startedAs, "the-start-id");
+    assertEquals(republished.updatedAt, "2026-09-22T20:02:00.000Z");
+
+    // A post-command refresh reads the session the same way.
+    const driver = {
+      source,
+      readSession: () => Promise.resolve(snapshot("3")),
+    } as unknown as AgentDriver;
+    await target.refreshSession(driver, "app-made");
+    const refreshed = await rowOf();
+    assertEquals(refreshed.startedAs, "the-start-id");
+    assertEquals(refreshed.updatedAt, "2026-09-22T20:03:00.000Z");
+    expect(
+      (await target.publishedSessions()).get(sessionKey(source.id, "app-made"))
+        ?.startedAs,
+    ).toBe("the-start-id");
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("publication refuses a stored index whose source surfaces are malformed", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector malformed surfaces test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+        startSession: true,
+        surfaces: ["headless", "desktop"],
+      },
+    };
+    await target.publish(
+      [{ source, sessions: [], errors: [], complete: true }],
+      { observationSequence: target.beginSessionObservation() },
+    );
+    // A surface that is not a string, written into the stored row past the
+    // connector; a pattern reading `surfaces` would otherwise throw on it.
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: AGENT_CONNECTOR_WRITER_ID,
+    });
+    target.cells.allIndex.key("sources").key(0).key("capabilities").withTx(tx)
+      .set({ ...source.capabilities, surfaces: "desktop" });
+    tx.prepareCfc();
+    const commit = await tx.commit();
+    if (commit.error) throw commit.error;
+    await assertRejects(
+      () =>
+        target.publish([], {
+          observationSequence: target.beginSessionObservation(),
+        }),
+      Error,
+      "has an invalid shape",
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
 Deno.test("publication refuses a stored index whose source capabilities are malformed", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector malformed capabilities test",
@@ -2222,7 +2806,7 @@ Deno.test("publication refuses a stored index whose source capabilities are malf
     // A capability flag that is not a boolean, written into the stored row
     // past the connector, as a row the connector never produced would be.
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -2239,6 +2823,647 @@ Deno.test("publication refuses a stored index whose source capabilities are malf
       Error,
       "has an invalid shape",
     );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+/** A verified-writer authorization naming a handler in module `path`. */
+function writerAuthorizationFor(path: string) {
+  return {
+    __ctWriterIdentityOf: {
+      file: `${path}/main.tsx`,
+      moduleIdentity: `fid1:verified-${path}`,
+      path: ["sendCommand"],
+    },
+  };
+}
+
+Deno.test("Fabric target binds producer queues and reads commands from every bound queue", async () => {
+  const owner = await Identity.fromPassphrase("producer queue binding owner");
+  const storageManager = StorageManager.emulate({ as: owner });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const pushAs = async (
+    cell: Cell<unknown>,
+    authorization: ReturnType<typeof writerAuthorizationFor>,
+    value: string,
+  ) => {
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "verified",
+      moduleIdentity: authorization.__ctWriterIdentityOf.moduleIdentity,
+      sourceFile: authorization.__ctWriterIdentityOf.file,
+      bindingPath: authorization.__ctWriterIdentityOf.path,
+    });
+    const queue = cell.withTx(tx);
+    const existing = queue.getRawUntyped({ frozen: false });
+    queue.setRawUntyped([...(Array.isArray(existing) ? existing : []), value]);
+    tx.prepareCfc();
+    const result = await tx.commit();
+    if (result.error) throw result.error;
+  };
+  try {
+    const target = await AgentFabricTarget.open({
+      runtime,
+      spaceDid: owner.did(),
+      ownerDid: owner.did(),
+    });
+    assertEquals(target.commandsAreBound(), false);
+    await assertRejects(
+      () => target.bindProducerCommandCell("workbench", { bogus: true }),
+      Error,
+      "command writer authorization is invalid",
+    );
+
+    const workbenchAuthorization = writerAuthorizationFor("workbench");
+    const workbenchQueue = await target.bindProducerCommandCell(
+      "workbench",
+      workbenchAuthorization,
+    );
+    assertEquals(target.commandsAreBound(), true);
+    assertNotEquals(
+      stableCellId(workbenchQueue.resolveAsCell()),
+      target.commandCellId(),
+    );
+    assertEquals(
+      cellHasOwnerProtection(runtime.readTx(), workbenchQueue, owner.did()),
+      true,
+    );
+    // A producer ID names one queue.
+    await assertRejects(
+      () => target.bindProducerCommandCell("workbench", workbenchAuthorization),
+      Error,
+      "command producer is already bound: workbench",
+    );
+    const ownerAuthorization = writerAuthorizationFor("debug-view");
+    await target.bindCommandCell(target.cells.commands, ownerAuthorization);
+    assertEquals(await target.pollCommands(), []);
+
+    // Every queue bound before the subscription is read, and each delivery
+    // names its queue's producer; the owner's queue names none. The
+    // deliveries arrive through the cells' sinks, so the test waits for the
+    // two it pushes rather than reading the list at a moment of its choosing.
+    const received: Array<{ producer?: string; commands: unknown[] }> = [];
+    const bothDelivered = Promise.withResolvers<void>();
+    const cancel = await target.subscribeCommands((commands, producer) => {
+      received.push({ producer, commands });
+      const fromWorkbench = received.some((delivery) =>
+        delivery.producer === "workbench" &&
+        delivery.commands.includes("from-workbench")
+      );
+      const fromOwner = received.some((delivery) =>
+        delivery.producer === undefined &&
+        delivery.commands.includes("from-owner")
+      );
+      if (fromWorkbench && fromOwner) bothDelivered.resolve();
+    });
+    try {
+      // A subscription covers the queues bound when it began, so binding
+      // another while it is live is refused rather than silently unread.
+      await assertRejects(
+        () =>
+          target.bindProducerCommandCell(
+            "late",
+            writerAuthorizationFor("late"),
+          ),
+        Error,
+        "producer late queue cannot be bound while commands are subscribed",
+      );
+      await pushAs(workbenchQueue, workbenchAuthorization, "from-workbench");
+      await pushAs(target.cells.commands, ownerAuthorization, "from-owner");
+      await runtime.storageManager.synced();
+      assertEquals(
+        (await target.pollCommands()).toSorted(),
+        ["from-owner", "from-workbench"],
+      );
+      await bothDelivered.promise;
+    } finally {
+      cancel();
+    }
+    // Once the subscription is cancelled, a queue can be bound again.
+    await target.bindProducerCommandCell(
+      "late",
+      writerAuthorizationFor("late"),
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a session read this publication is not also retained", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector read wins over retention test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+      },
+    };
+    const snapshot: NativeSessionSnapshot = {
+      summary: {
+        nativeSessionId: "session-1",
+        title: "Read once",
+        cwd: null,
+        createdAt: "2026-09-11T10:00:00.000Z",
+        updatedAt: "2026-09-11T10:01:00.000Z",
+        archived: null,
+        active: null,
+        raw: { id: "session-1" },
+      },
+      events: [{ text: "hello" }],
+      normalizedMessages: [],
+      complete: true,
+    };
+    await target.publish([{
+      source,
+      sessions: [snapshot],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+
+    // A collected source naming one session as both read (now a partial
+    // transcript) and retained: the read is the session's outcome, so its
+    // row is partial and the source counts it once.
+    await target.publish([{
+      source,
+      sessions: [{ ...snapshot, events: [{ text: "hel" }], complete: false }],
+      retained: [snapshot.summary],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const index = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (index.sessions as Array<Record<string, unknown>>).map((row) => [
+        row.nativeSessionId,
+        row.syncStatus,
+      ]),
+      [["session-1", "partial"]],
+    );
+    const sourceRow = (index.sources as Array<Record<string, unknown>>)[0];
+    assertEquals(sourceRow.sessionCount, 1);
+    assertEquals(sourceRow.errors, []);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a retained session's row carries the checkout's current Git context", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector retained git context test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  // The checkout as Git reports it, changed between publications.
+  let branch = "main";
+  let head = "head-1";
+  let observedAt = "2026-09-14T12:00:00.000Z";
+  let failObservation = false;
+  const gitContext = new GitContextResolver(
+    (args) => {
+      const command = args.slice(2).join(" ");
+      if (command === "rev-parse --show-toplevel") {
+        if (failObservation) {
+          return Promise.reject(new Deno.errors.NotFound("git"));
+        }
+        return Promise.resolve({ code: 0, stdout: "/repo\n" });
+      }
+      if (command === "branch --show-current") {
+        return Promise.resolve({ code: 0, stdout: `${branch}\n` });
+      }
+      if (command === "rev-parse HEAD") {
+        return Promise.resolve({ code: 0, stdout: `${head}\n` });
+      }
+      if (command === "remote -v") {
+        return Promise.resolve({
+          code: 0,
+          stdout: "origin\tgit@github.com:common/repo.git (fetch)\n",
+        });
+      }
+      if (command === "remote get-url upstream") {
+        return Promise.resolve({ code: 1, stdout: "" });
+      }
+      return Promise.resolve({ code: 1, stdout: "" });
+    },
+    () => new Date(observedAt),
+  );
+  try {
+    const target = await AgentFabricTarget.open(connection, gitContext);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+      },
+    };
+    const snapshot: NativeSessionSnapshot = {
+      summary: {
+        nativeSessionId: "session-1",
+        title: "On a branch",
+        cwd: "/repo",
+        createdAt: "2026-09-11T10:00:00.000Z",
+        updatedAt: "2026-09-11T10:01:00.000Z",
+        archived: null,
+        active: null,
+        raw: { id: "session-1" },
+      },
+      events: [{ text: "hello" }],
+      normalizedMessages: [],
+      complete: true,
+    };
+    const readRow = async () => {
+      const index = await readStableCellGraphValue(
+        connection,
+        target.cells.allIndex,
+      ) as Record<string, unknown>;
+      const row = (index.sessions as Array<Record<string, unknown>>)[0];
+      const manifest = row.manifest as Record<string, unknown>;
+      const checkouts = index.checkouts as Array<Record<string, unknown>>;
+      return {
+        branch: row.gitBranch,
+        head: row.gitHeadSha,
+        contentHash: row.contentHash,
+        manifestBranch: (manifest.summary as Record<string, unknown>)
+          .gitBranch,
+        checkoutHead: checkouts.find((c) => c.root === "/repo")?.gitHeadSha,
+      };
+    };
+    await target.publish([{
+      source,
+      sessions: [snapshot],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const read = await readRow();
+    assertEquals(
+      [read.branch, read.head, read.manifestBranch, read.checkoutHead],
+      ["main", "head-1", "main", "head-1"],
+    );
+
+    // The checkout moves while the transcript does not: the retained row and
+    // the checkout index follow it; the graph keeps its content and the
+    // manifest the context of its last read.
+    branch = "feature";
+    head = "head-2";
+    observedAt = "2026-09-14T12:05:00.000Z";
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [snapshot.summary],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const retained = await readRow();
+    assertEquals(
+      [
+        retained.branch,
+        retained.head,
+        retained.manifestBranch,
+        retained.checkoutHead,
+      ],
+      ["feature", "head-2", "main", "head-2"],
+    );
+    assertEquals(retained.contentHash, read.contentHash);
+
+    // A failed observation keeps the row's last context, as a read does.
+    failObservation = true;
+    observedAt = "2026-09-14T12:10:00.000Z";
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [snapshot.summary],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const preserved = await readRow();
+    assertEquals([preserved.branch, preserved.head], ["feature", "head-2"]);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("a subscription that fails on a later queue leaves no queue subscribed", async () => {
+  const owner = await Identity.fromPassphrase(
+    "producer subscription failure owner",
+  );
+  const storageManager = StorageManager.emulate({ as: owner });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  try {
+    const target = await AgentFabricTarget.open({
+      runtime,
+      spaceDid: owner.did(),
+      ownerDid: owner.did(),
+    });
+    await target.bindCommandCell(
+      target.cells.commands,
+      writerAuthorizationFor("debug-view"),
+    );
+    await target.bindProducerCommandCell(
+      "workbench",
+      writerAuthorizationFor("workbench"),
+    );
+
+    // Each queue's sink delivers its current commands as the subscription
+    // begins. The owner's queue is subscribed first; a callback that fails
+    // on the producer's queue fails the subscription, and the owner's queue
+    // is unsubscribed again rather than left delivering to nobody.
+    const deliveries: Array<string | undefined> = [];
+    await assertRejects(
+      () =>
+        target.subscribeCommands((_commands, producer) => {
+          deliveries.push(producer);
+          if (producer === "workbench") {
+            throw new Error("workbench delivery refused");
+          }
+        }),
+      Error,
+      "workbench delivery refused",
+    );
+    assertEquals(deliveries, [undefined, "workbench"]);
+    // Nothing is subscribed, so a queue can still be bound, and a
+    // subscription that succeeds covers all three queues.
+    await target.bindProducerCommandCell(
+      "late",
+      writerAuthorizationFor("late"),
+    );
+    const subscribed: Array<string | undefined> = [];
+    const cancel = await target.subscribeCommands((_commands, producer) => {
+      subscribed.push(producer);
+    });
+    try {
+      assertEquals(subscribed, [undefined, "workbench", "late"]);
+    } finally {
+      cancel();
+    }
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("receipts from different queues share a command ID without colliding", async () => {
+  const owner = await Identity.fromPassphrase(
+    "producer receipt identity owner",
+  );
+  const storageManager = StorageManager.emulate({ as: owner });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = owner.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  const receipt = (
+    overrides: Partial<AgentSessionCommandReceipt>,
+  ): AgentSessionCommandReceipt => ({
+    schema: AGENT_CONNECTOR_SCHEMAS.commandReceipt,
+    ownerDid: space,
+    commandId: "one",
+    sourceId: "claude-code:test",
+    nativeSessionId: "session-1",
+    status: "succeeded",
+    claimedAt: "2026-09-13T10:00:00.000Z",
+    completedAt: "2026-09-13T10:00:01.000Z",
+    ...overrides,
+  });
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    await target.publishReceipt(receipt({}));
+    await target.publishReceipt(receipt({
+      producer: "workbench",
+      status: "failed",
+      error: { code: "refused", message: "no", retryable: false },
+    }));
+    // The owner's and the producer's receipts are distinct cells and rows.
+    assertEquals((await target.readReceipt("one"))?.status, "succeeded");
+    assertEquals((await target.readReceipt("one"))?.producer, undefined);
+    assertEquals(
+      (await target.readReceipt("one", "workbench"))?.status,
+      "failed",
+    );
+    assertEquals(
+      (await target.readReceipt("one", "workbench"))?.producer,
+      "workbench",
+    );
+    assertEquals(await target.readReceipt("one", "dashboard"), undefined);
+    const index = await readStableCellGraphValue(
+      connection,
+      target.cells.receipts,
+    ) as { receipts: Array<Record<string, unknown>> };
+    assertEquals(
+      index.receipts.map((row) => [row.commandId, row.producer, row.status]),
+      [["one", undefined, "succeeded"], ["one", "workbench", "failed"]],
+    );
+    // A later receipt for the producer's command replaces its own row only.
+    await target.publishReceipt(receipt({
+      producer: "workbench",
+      status: "succeeded",
+    }));
+    const updated = await readStableCellGraphValue(
+      connection,
+      target.cells.receipts,
+    ) as { receipts: Array<Record<string, unknown>> };
+    assertEquals(
+      updated.receipts.map((row) => [row.commandId, row.producer, row.status]),
+      [["one", undefined, "succeeded"], ["one", "workbench", "succeeded"]],
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("publication keeps an older retained session and vouches only for complete copies", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector retained session test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+      },
+    };
+    const snapshot: NativeSessionSnapshot = {
+      summary: {
+        nativeSessionId: "session-1",
+        title: "Read once",
+        cwd: null,
+        createdAt: "2000-01-01T10:00:00.000Z",
+        updatedAt: "2000-01-01T10:01:00.000Z",
+        archived: null,
+        active: null,
+        raw: { id: "session-1" },
+      },
+      events: [{ text: "hello" }],
+      normalizedMessages: [],
+      complete: true,
+    };
+    await target.publish([{
+      source,
+      sessions: [snapshot],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const recentIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.index,
+    ) as Record<string, unknown>;
+    assertEquals(recentIndex.sessions, []);
+    const before = await target.publishedSessions();
+    const priorState = before.get("claude-code%3Atest/session-1");
+    assertEquals(priorState, {
+      driver: "claude-agent-sdk",
+      updatedAt: "2000-01-01T10:01:00.000Z",
+      archived: null,
+      active: null,
+      syncStatus: "complete",
+    });
+    const firstIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    const firstHash =
+      (firstIndex.sessions as Array<Record<string, unknown>>)[0].contentHash;
+
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [snapshot.summary],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const retainedIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    const rows = retainedIndex.sessions as Array<Record<string, unknown>>;
+    assertEquals(
+      rows.map((row) => [row.nativeSessionId, row.syncStatus, row.contentHash]),
+      [["session-1", "complete", firstHash]],
+    );
+    assertEquals(
+      ((rows[0].manifest as Record<string, unknown>).summary as Record<
+        string,
+        unknown
+      >).title,
+      "Read once",
+    );
+    const sourceRow = (retainedIndex.sources as Array<Record<string, unknown>>)[
+      0
+    ];
+    assertEquals(sourceRow.complete, true);
+    assertEquals(sourceRow.sessionCount, 1);
+
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [{ ...snapshot.summary, nativeSessionId: "session-2" }],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const afterIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (afterIndex.sessions as Array<Record<string, unknown>>).map((row) => [
+        row.nativeSessionId,
+        row.syncStatus,
+      ]),
+      [["session-1", "stale"]],
+    );
+    const afterSource = (afterIndex.sources as Array<Record<string, unknown>>)[
+      0
+    ];
+    assertEquals(afterSource.complete, false);
+    assertEquals(afterSource.errors, [{
+      nativeSessionId: "session-2",
+      message: "retained session has no complete published copy",
+    }]);
+
+    // Retaining a session whose prior row is not complete is an error like a
+    // failed read: the row is marked partial, not restored to complete.
+    await target.publish([{
+      source,
+      sessions: [],
+      retained: [snapshot.summary],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const partialIndex = await readStableCellGraphValue(
+      connection,
+      target.cells.allIndex,
+    ) as Record<string, unknown>;
+    assertEquals(
+      (partialIndex.sessions as Array<Record<string, unknown>>).map((row) => [
+        row.nativeSessionId,
+        row.syncStatus,
+        row.contentHash,
+      ]),
+      [["session-1", "partial", firstHash]],
+    );
+    const partialSource =
+      (partialIndex.sources as Array<Record<string, unknown>>)[0];
+    assertEquals(partialSource.complete, false);
+    assertEquals(partialSource.errors, [{
+      nativeSessionId: "session-1",
+      message: "retained session has no complete published copy",
+    }]);
   } finally {
     await runtime.dispose();
     await storageManager.close();

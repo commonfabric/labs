@@ -14,6 +14,7 @@ import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
 import { deepFreeze } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { writeDetailValueForTarget } from "../src/cfc/prepare.ts";
 import { normalizeCellScope } from "../src/scope.ts";
@@ -55,8 +56,8 @@ const target = (path: readonly string[]) => ({
 const countUnsharedNodes = (orig: unknown, copy: unknown): number => {
   if (orig === copy) return 0; // shared subtree -- stop descending
   if (
-    orig === null || typeof orig !== "object" ||
-    copy === null || typeof copy !== "object"
+    !isObjectOrArray(orig) ||
+    !isObjectOrArray(copy)
   ) {
     return 0; // primitives aren't "copies"
   }
@@ -79,6 +80,33 @@ Deno.test("writeDetailValueForTarget: coarse whole-object write reconstructs as-
   assertEquals(writeDetailValueForTarget(tx, target([]), "value"), {
     origin: "imported",
     body: "allowed",
+  });
+});
+
+Deno.test("writeDetailValueForTarget: uses document-narrowed write details when available", () => {
+  const wanted = detail(["value"], { body: "bounded" });
+  const tx = {
+    getWriteDetails: () => {
+      throw new Error("must not scan every document in the space");
+    },
+    getWriteDetailsForTarget: (requested: {
+      space: MemorySpace;
+      id: URI;
+      scope?: string;
+      path?: readonly PropertyKey[];
+    }) => {
+      assertEquals(requested, {
+        space: SPACE,
+        id: ID,
+        scope: SCOPE,
+        path: [],
+      });
+      return [wanted];
+    },
+  } as unknown as IExtendedStorageTransaction;
+
+  assertEquals(writeDetailValueForTarget(tx, target([]), "value"), {
+    body: "bounded",
   });
 });
 

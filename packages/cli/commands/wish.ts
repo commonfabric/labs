@@ -1,5 +1,5 @@
 import { Command, ValidationError } from "@cliffy/command";
-import { type DID, isDID } from "@commonfabric/identity";
+import { type DID, isDID } from "@commonfabric/identity/did";
 import { parseCellPath } from "@commonfabric/runner";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { cliText } from "../lib/cli-name.ts";

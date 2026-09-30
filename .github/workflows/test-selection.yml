@@ -41,11 +41,7 @@ on:
         description: Days of submissions to read (default 2, or 60 with a cold start)
         required: false
 
-# `actions: read` is what lets the publisher read the `perf-metrics`
-# artifact of each recent run on main, which is where the coverage gate's
-# baselines come from. Read-only, and over this repository's own runs.
 permissions:
-  actions: read
   contents: read
   id-token: write
 
@@ -113,7 +109,6 @@ jobs:
           TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
           PUBLISH_BOOTSTRAP: ${{ inputs.bootstrap }}
           PUBLISH_DAYS: ${{ inputs.days }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           args=()
@@ -136,17 +131,48 @@ jobs:
             fi
             args+=(--days "$PUBLISH_DAYS")
           fi
+          # The standard error joins the standard output in the log. The
+          # publisher says on it what stopped a run — which stored
+          # aggregates it could not read, what stopped it in each, and
+          # what to do about it — and the summary below, which is where a
+          # person reads a failed run, is built from this log alone.
           deno run --allow-read --allow-env --allow-net --allow-write \
             tasks/test-selection-publish.ts "${args[@]}" \
-            | tee publish.log
+            2>&1 | tee publish.log
 
+      # A job summary is taken whole or not at all: GitHub refuses one
+      # past 1024 KiB, and what it held is lost rather than shortened. So
+      # the log goes through the same cut every task in the tree writes a
+      # summary through, and the rest stays in the job log, which holds
+      # the run's output in full either way. The room asked for leaves
+      # the heading and the fences out of it.
       - name: 📝 Summarize
         if: always()
+        env:
+          SUMMARY_BYTES: 1000000
         run: |
+          set -euo pipefail
+          # Built whole before any of it is appended, so a step that dies
+          # partway adds nothing rather than a heading and an opening
+          # fence with no text and no closing fence under them.
           {
             echo "## Test selection"
             echo ""
-            echo '```'
-            grep -v '^test selection: folded [0-9]* of ' publish.log || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            if [ -s publish.log ]; then
+              # A `grep` that matched nothing is a log of nothing but
+              # folded lines; one that could not read the file is a
+              # failure, and says so by failing.
+              grep -v '^test selection: folded [0-9]* of ' publish.log \
+                > summary.log || [ $? -eq 1 ]
+              echo '```'
+              deno run tasks/step-summary.ts --room "$SUMMARY_BYTES" \
+                < summary.log
+              echo '```'
+            else
+              # The publish step died before it printed anything, or
+              # never ran. An empty block here would read as a run with
+              # nothing to report, which is the one thing it is not.
+              echo "The publisher printed nothing. The job log has why."
+            fi
+          } > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"

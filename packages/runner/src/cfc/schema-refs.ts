@@ -1,21 +1,27 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import {
+  debugStr,
   fabricAwareEqual,
   isDeepFrozen,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
-
-import { decodeJsonPointer, encodeJsonPointer } from "../link-types.ts";
 import {
   forEachSubschema,
   isSubschema,
   mapSubschemas,
   type SchemaWalkOptions,
-} from "../schema-walk.ts";
+} from "@commonfabric/data-model-schema/schema-walk";
+import {
+  type ExternalSchemaRef,
+  formatExternalSchemaRef,
+  isExternalSchemaRef,
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import { getLogger } from "@commonfabric/utils/logger";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
+
+import { decodeJsonPointer, encodeJsonPointer } from "../link-types.ts";
 
 // `$ref` discovery / rewriting must be COMPLETE over every subschema keyword,
 // including the ones we never emit: a ref this walk misses is a schema doc that
@@ -28,20 +34,26 @@ import {
   isEmbeddedCfcSchemaRef,
 } from "../embedded-schemas.ts";
 import {
-  type ExternalSchemaRef,
-  formatExternalSchemaRef,
-  isExternalSchemaRef,
-  parseExternalSchemaRef,
-} from "../schema-decompose.ts";
-import {
   externalResolutionMissCount,
   isSchemaDocumentClosureComplete,
   lookupSchemaDocument,
   noteExternalResolutionMiss,
   onSchemaRegistryClear,
 } from "../schema-registry.ts";
+import {
+  cfcSchemaToObject,
+  isRootDefsSchemaPointer,
+  localDefinitionName,
+} from "./schema-primitives.ts";
 
 export { isEmbeddedCfcSchemaRef };
+export {
+  cfcSchemaIsFalse,
+  cfcSchemaIsInternalKey,
+  cfcSchemaIsTrue,
+  cfcSchemaToObject,
+  localDefinitionName,
+} from "./schema-primitives.ts";
 
 const logger = getLogger("cfc");
 
@@ -89,17 +101,6 @@ const resolvedRefCache = new WeakMap<
   Map<string, JSONSchema | undefined>
 >();
 
-const isRootDefsSchemaPointer = (pathToDef: readonly string[]): boolean =>
-  pathToDef.length === 3 && pathToDef[0] === "#" && pathToDef[1] === "$defs" &&
-  pathToDef[2].length > 0;
-
-export const cfcSchemaToObject = (schema?: JSONSchema): JSONSchemaObj =>
-  (schema === true || schema === undefined)
-    ? {}
-    : schema === false
-    ? { not: true }
-    : schema;
-
 const hasDefinitionMap = (
   schema: JSONSchema,
 ): schema is JSONSchemaObj & { $defs: SchemaDefinitions } =>
@@ -132,31 +133,6 @@ export const cfcSchemaResolvedRoot = (
     !(isObjectOrArray(owningRoot) && resolved.$defs === owningRoot.$defs)
     ? resolved
     : owningRoot;
-
-export const cfcSchemaIsInternalKey = (key: string): boolean =>
-  key === "ifc" || key === "asCell" || key === "asStream" ||
-  key === "scope";
-
-export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
-  if (schema === true) {
-    return true;
-  }
-  return isObjectOrArray(schema) &&
-    Object.keys(schema).every((key) =>
-      cfcSchemaIsInternalKey(key) || key === "default" || key === "$defs"
-    );
-};
-
-export const cfcSchemaIsFalse = (schema: JSONSchema): boolean =>
-  schema === false ||
-  (isObjectOrArray(schema) && Object.hasOwn(schema, "not") &&
-    cfcSchemaIsTrue(schema["not"]!));
-
-const localDefinitionName = (schemaRef: string): string | undefined => {
-  if (!schemaRef.startsWith("#")) return undefined;
-  const path = decodeJsonPointer(schemaRef);
-  return isRootDefsSchemaPointer(path) ? path[2] : undefined;
-};
 
 const encodedLocalDefinitionRef = (name: string): string =>
   encodeJsonPointer(["#", "$defs", name]);
@@ -192,6 +168,12 @@ const namespaceLocalDefinitionScope = (
   tag: string,
 ): JSONSchemaObj => {
   const names = localDefinitionNamesInScope(schema, definitions);
+  if (names.size === 0) {
+    // No local name crosses the document boundary. An empty map would mint
+    // a new document identity on each visit to an external recursive branch.
+    const { $defs: _empty, ...body } = schema;
+    return body;
+  }
 
   const usedNames = new Set([...reservedNames, ...names]);
   const renamed = new Map<string, string>();
@@ -995,16 +977,17 @@ const resolveCfcSchemaRefsUncached = (
           : undefined;
         if (siblingRoot !== resolvedRoot) {
           // The `$ref` target and the ref-site siblings belong to different
-          // documents. Namespace even an empty ref-site definition map: its
-          // unresolved local refs must not begin resolving against target
-          // definitions merely because the two documents are flattened into
-          // one object.
+          // documents. Carry only the definitions the siblings reach, so
+          // unrelated definitions do not mint new scopes at recursive hops.
+          // Unresolved local refs must still be namespaced even when that
+          // closure is empty, to keep them from binding in the target.
           const targetDefinitions = isObjectOrArray(resolvedDefinitions)
             ? resolvedDefinitions
             : {};
-          const refSiteDefinitions = isObjectOrArray(siblingDefinitions)
-            ? siblingDefinitions
-            : {};
+          const refSiteDefinitions = selectReferencedCfcSchemaDefs(
+            siblings,
+            siblingDefinitions,
+          ) ?? {};
           scopedSiblings = namespaceLocalDefinitionScope(
             siblings,
             refSiteDefinitions,
@@ -1089,9 +1072,7 @@ export const resolveCfcSchemaRefsOrThrow = (
   if (resolved === undefined) {
     const ref = Object.hasOwn(schemaObj, "$ref")
       ? schemaObj.$ref
-      : toCompactDebugString(
-        schemaObj,
-      );
+      : debugStr`$quote${schemaObj}`;
     throw new Error(
       `Failed to resolve $ref: ${ref}. ` +
         (typeof ref === "string" && ref.startsWith("http")
@@ -1099,7 +1080,7 @@ export const resolveCfcSchemaRefsOrThrow = (
             `If you added a new native type to NATIVE_TYPE_SCHEMAS in ` +
             `packages/schema-generator/src/formatters/native-type-formatter.ts, ` +
             `add its schema to embeddedSchemas as well.`
-          : `Schema: ${toCompactDebugString(schemaObj)}`),
+          : debugStr`Schema: $quote,long${schemaObj}`),
     );
   }
   return resolved;

@@ -8,6 +8,7 @@ import type {
   PatternCoverageSpan,
 } from "@commonfabric/ts-transformers";
 import { getLogger } from "@commonfabric/utils/logger";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type ts from "typescript";
 
 import { compilerStack } from "../harness/deferred-compiler-stack.ts";
@@ -296,7 +297,7 @@ export function createHoistRegistrar(
       throw new Error("__cfReg may be called at most once per module");
     }
     called = true;
-    if (entries === null || typeof entries !== "object") {
+    if (!isObjectOrArray(entries)) {
       throw new Error("__cfReg expects an object of { symbol: value }");
     }
     for (const key of Object.keys(entries)) {

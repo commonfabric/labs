@@ -82,8 +82,9 @@ function staysInPatternsRoute(pathname: string): boolean {
   let decoded: string;
   try {
     decoded = decodeURIComponent(pathname);
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof URIError) return false;
+    throw error;
   }
   // The prefix itself survives decoding — it was matched literally above — so
   // only what follows it can climb.

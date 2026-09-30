@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -15,6 +16,7 @@ import { atomPropagationClass } from "../src/cfc/atom-classes.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-flow-integrity");
 const space = signer.did();
@@ -57,7 +59,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
     const cell = runtime.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value: { n: 1 },
       cfc: {
         version: 1,
@@ -168,7 +170,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       const bCell = runtime.getCell(space, "flow-wl-b", undefined, seed);
       const bId = bCell.getAsNormalizedFullLink().id;
       writeSeedEnvelopeDoc(seed, space);
-      seed.writeOrThrow({ space, scope: "space", id: bId, path: [] }, {
+      seedStoredEnvelope(seed, { space, scope: "space", id: bId, path: [] }, {
         value: { n: 2 },
         cfc: {
           version: 1,
@@ -216,7 +218,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "flow-test-builtin",
       });
@@ -257,7 +259,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-multi-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.x",
       });
@@ -269,7 +271,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { space, scope: "space", id: out1Id, path: ["value"] },
         { copied: raw.n },
       );
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "writer.y",
       });
@@ -311,7 +313,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
         { space, scope: "space", id: out1Id, path: ["value"] },
         { copied: raw.n },
       );
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "late-identity",
       });
@@ -342,7 +344,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       await seedDoc(runtime, "flow-tb-author-src", [certified("p1")]);
 
       const tx = runtime.edit();
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "the-author",
       });
@@ -356,7 +358,7 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
       );
       // A later run in the same tx changes the identity but writes nothing:
       // the write-authoring identity is still uniform.
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "the-bystander",
       });

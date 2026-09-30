@@ -9,14 +9,11 @@ import type {
   FabricBytesConstructor as ApiFabricBytesConstructor,
 } from "@/api.ts";
 import type { FabricValue } from "@/interface.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
+import { ProblematicValue } from "@/codec-common";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import {
   JSON_CODEC,
@@ -27,7 +24,7 @@ import {
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
-} from "@/value-tags.ts";
+} from "./interface.ts";
 
 /**
  * Immutable byte sequence in the fabric type system.
@@ -70,6 +67,11 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
   /** @inheritDoc */
   get [VALUE_TAG](): FabricPrimitiveValueTag {
     return FABRIC_PRIMITIVE_VALUE_TAGS.FabricBytes;
+  }
+
+  /** @inheritDoc */
+  get schemaType(): "FabricBytes" {
+    return "FabricBytes";
   }
 
   /** The number of bytes. */
@@ -154,15 +156,17 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
         typeTag: string,
         state: string,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricBytes | ProblematicValue {
         try {
           const bytes = fromBase64url(state);
           return new FabricBytes(bytes, true);
         } catch {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `Bytes: invalid base64: ${state}`,
+            mutable,
           );
         }
       }

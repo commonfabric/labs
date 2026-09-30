@@ -17,27 +17,13 @@
  * gains alone fails here as well.
  */
 
+import type { MustBeTrue, Same } from "@commonfabric/utils/types";
+
 import type {
   FabricInstance as ApiFabricInstance,
   FabricPrimitive as ApiFabricPrimitive,
-  FabricSpecialObject as ApiFabricSpecialObject,
 } from "./api.ts";
-import type {
-  FabricInstance,
-  FabricPrimitive,
-  FabricSpecialObject,
-} from "./interface.ts";
-
-/** Whether `A` and `B` are mutually assignable. */
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-
-/** Compiles only when its argument is `true`. */
-type MustBeTrue<T extends true> = T;
-
-/** Whether `FabricSpecialObject` agrees with its declaration. */
-export type SpecialObjectAgrees = MustBeTrue<
-  Same<FabricSpecialObject, ApiFabricSpecialObject>
->;
+import type { FabricInstance, FabricPrimitive } from "./interface.ts";
 
 /** Whether `FabricInstance` agrees with its declaration. */
 export type InstanceAgrees = MustBeTrue<
@@ -47,11 +33,6 @@ export type InstanceAgrees = MustBeTrue<
 /** Whether `FabricPrimitive` agrees with its declaration. */
 export type PrimitiveAgrees = MustBeTrue<
   Same<FabricPrimitive, ApiFabricPrimitive>
->;
-
-/** Whether the `FabricSpecialObject` constructor agrees with its declaration. */
-export type SpecialObjectConstructorAgrees = MustBeTrue<
-  Same<typeof FabricSpecialObject, typeof ApiFabricSpecialObject>
 >;
 
 /** Whether the `FabricInstance` constructor agrees with its declaration. */

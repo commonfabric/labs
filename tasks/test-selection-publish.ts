@@ -7,11 +7,21 @@
  *   deno run -A tasks/test-selection-publish.ts [--days N] [--bootstrap]
  *     [--out <dir>] [--dry-run] [--concurrency N]
  *
- * A run reads the newest aggregate and folds what that aggregate does not
- * already hold, which in the steady state is about two thousand objects.
- * A cold start has no aggregate to read and cannot fold three weeks of
- * raw history in one job either, so `--bootstrap` is the one-off that
- * starts from an empty one over a wider window, run by hand.
+ * A run folds what the newest aggregate it can read does not already
+ * hold, which in the steady state is about two thousand objects. A cold
+ * start has no aggregate to read and cannot fold three weeks of raw
+ * history in one job either, so `--bootstrap` is the one-off that starts
+ * from an empty one over a wider window, run by hand.
+ *
+ * A store with no aggregate under the area at all is the whole of what
+ * asks for it. Nothing that happens to a stored aggregate does: the area
+ * they are written under is named rather than numbered and does not
+ * move, a body written in a shape under this publisher's is read
+ * forward, and one this publisher cannot read is passed over for the
+ * newest one behind it that it can. A bootstrap in any of those cases
+ * would publish from an empty aggregate and throw away the catches the
+ * stored ones hold, which accumulate over unbounded history and which no
+ * window of records rebuilds.
  *
  * That is the whole of what the flag does. What to read is `inputChoice`
  * asked of each source and date the window covers, and both modes ask it
@@ -24,6 +34,7 @@
  * direction for a system nothing should gate on.
  */
 
+import { duration } from "./test-selection/duration.ts";
 import { join } from "@std/path";
 import { ulid } from "@std/ulid";
 import {
@@ -34,6 +45,7 @@ import {
   objectUrl,
   readObject,
   type StoredReport,
+  testIdentityKey,
   testIdentityOfKey,
 } from "@commonfabric/test-support/records";
 import {
@@ -42,11 +54,14 @@ import {
   storePrefix,
 } from "./test-records-config.ts";
 import { rollupShards } from "./test-records-compact.ts";
+import { calibrate, laneObservations } from "./test-selection/calibrate.ts";
+import { calibrationHealth, healthLines } from "./test-selection/health.ts";
 import {
   type AggregateState,
   buildManifest,
   CI_SOURCE,
   dayOf,
+  departed,
   emptyAggregate,
   Fold,
   locateSurfaces,
@@ -55,9 +70,14 @@ import {
   surfaceName,
   type Unplaced,
 } from "./test-selection/build.ts";
-import { isLaneMeasurement } from "./lane-measurement.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
-import { publishableBaselines } from "./test-selection/baselines.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  unitProcesses,
+  wholeUnits,
+} from "./test-topology.ts";
+import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
+import { measuredCostLines } from "./test-selection/coverage.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   fetchManifest,
@@ -65,15 +85,24 @@ import {
   manifestObjectName,
   manifestPrefix,
   newestAtOrBefore,
+  stateDayOf,
   stateObjectName,
   statePrefix,
 } from "./test-selection/store.ts";
 import {
   type CoverageBaseline,
+  declaredSchema,
+  type Manifest,
+  MANIFEST_SCHEMA_VERSION,
   serializeManifest,
+  writtenAhead,
 } from "./test-selection/manifest.ts";
-import { plan } from "./test-selection/plan.ts";
-import { LANE_BUDGET_SECONDS, LANES } from "./test-selection/policy.ts";
+import { costliestUnschedulable, plan } from "./test-selection/plan.ts";
+import {
+  COST_WINDOW_DAYS,
+  LANE_BUDGET_SECONDS,
+  LANES,
+} from "./test-selection/policy.ts";
 
 /**
  * Everything this reaches the world through. The default is the real
@@ -105,6 +134,11 @@ export interface StoreAccess {
    * A rollup is a read optimization rather than the record of its day —
    * an object arriving after its shard is written stays in the raw area
    * alone — so a pair taken this way keeps only what the rollup held.
+   * That is also what makes a rollup safe to give up on: a day whose
+   * shards will not read is read from its raw objects instead, which is
+   * how a day with no rollup at all is read, and no record of that day
+   * is lost by it. What it costs is in
+   * `docs/development/test-selection.md`.
    */
   rollupShards(day: string): Promise<string[] | undefined>;
 
@@ -145,6 +179,16 @@ export function liveStore(bucket: string): StoreAccess {
     token: writeToken,
   };
 }
+
+/**
+ * What a run says where it has read part of its window and will not
+ * publish from that. A manifest going stale degrades selection slowly,
+ * where one built from part of a window scores every identity in the
+ * part it missed as though it had not run.
+ */
+const PARTIAL_WINDOW =
+  "test selection: refusing to publish from part of the window. The " +
+  "previous manifest is still the newest one.";
 
 /** How many objects are fetched at once. */
 const DEFAULT_CONCURRENCY = 24;
@@ -336,18 +380,40 @@ export function byDayThenName(left: string, right: string): number {
   return day !== 0 ? day : left.localeCompare(right);
 }
 
+/** One state object a run could not read, and what stopped it. */
+interface PassedOver {
+  /** The object's name, so a reader can go and look at it. */
+  name: string;
+
+  /**
+   * The shape it declares, for the one fault that names its own remedy:
+   * a body written further ahead than this publisher. Undefined for
+   * every other fault, which is a body that is not an aggregate at all.
+   */
+  ahead?: number;
+}
+
+/** Why a state was passed over, as a sentence fragment. */
+function faultOf({ ahead }: PassedOver): string {
+  return ahead === undefined
+    ? "it is not an aggregate this publisher understands"
+    : `it is written in shape ${ahead}, and this publisher reads shape ` +
+      `${MANIFEST_SCHEMA_VERSION}`;
+}
+
 /** What reading the rolling aggregate found. */
 type AggregateRead =
 
-  /** The state a previous run left. */
-  | { state: AggregateState }
+  /** The state to fold onto, and what was passed over to reach it. */
+  | { state: AggregateState; name: string; passedOver: readonly PassedOver[] }
   /** The area holds no state at all, so this would be a first run. */
   | { absent: true }
-  /** Something went wrong, and what a previous run left is unknown. */
-  | { failed: string };
+  /** Nothing to fold onto, with the lines saying what stopped it. */
+  | { failed: readonly string[] };
 
 /**
- * Reads the newest aggregate.
+ * Reads the aggregate to fold onto, which is the newest state object
+ * this publisher can read.
  *
  * The three outcomes are kept apart because folding into an empty
  * aggregate while a real one exists is the worst thing this program can
@@ -359,8 +425,39 @@ type AggregateRead =
  * outcome — the previous manifest stays newest and selection decays
  * slowly — so an unreadable state is told apart from an absent one rather
  * than both becoming an empty one.
+ *
+ * Passing over a state this publisher cannot read is what keeps one from
+ * stopping it for good. Nothing but the publisher creates a state, and it
+ * creates one only where it folded, so a newest state it cannot read is
+ * one every later run comes to in the same condition: a body written in
+ * a shape from further ahead, which is what a lowered shape leaves
+ * behind, and a body that arrives and is not an aggregate, which the
+ * store's create-only credentials mean nothing can replace.
+ *
+ * A read that does not arrive is neither of those and is refused, as a
+ * listing that fails is. It says nothing about the object, so a run that
+ * passed over on it would be reading a fault of its own as a fact about
+ * the store, and the state it then wrote would supersede the one it
+ * skipped for good.
+ *
+ * `from` is the first day this run reads, and it bounds how far back a
+ * state may be passed over. What a passed-over state folded and the one
+ * behind it did not comes back from the records, so the walk reaches
+ * back over the days this run reads and no further. That bound is the
+ * one this run can state rather than an exact account of the gap: the
+ * runs that wrote the passed-over states read windows of their own,
+ * reaching a day earlier than their own day for as many days as their
+ * window held, and a record that arrived for one of those earlier days
+ * after the state behind it was written is outside what this run reads.
+ * A run that passes over says which state it passed over and which it
+ * folded onto, rather than reporting the gap as closed. The newest state
+ * is read whatever day it carries, since taking it is not a choice
+ * between two aggregates.
  */
-async function readAggregate(store: StoreAccess): Promise<AggregateRead> {
+async function readAggregate(
+  store: StoreAccess,
+  from: string,
+): Promise<AggregateRead> {
   const prefix = statePrefix();
   let names: string[];
   try {
@@ -368,40 +465,112 @@ async function readAggregate(store: StoreAccess): Promise<AggregateRead> {
     // bare prefix matches a longer sibling too.
     names = await store.list(`${prefix}/`);
   } catch (error) {
-    return { failed: `listing ${prefix} failed: ${error}` };
+    return { failed: [`listing ${prefix} failed: ${error}`] };
   }
-  const newest = names.filter((name) => name.endsWith(".json.gz")).sort().at(
-    -1,
-  );
-  if (newest === undefined) return { absent: true };
-  try {
-    const state = parseAggregate(await store.readText(newest));
-    return state === undefined
-      ? { failed: `${newest} is not an aggregate this reader understands` }
-      : { state };
-  } catch (error) {
-    return { failed: `reading ${newest} failed: ${error}` };
+  // Newest first, which for these names is by the day they carry and
+  // then by the identifier the run that created them drew. An object
+  // under the prefix named some other way is not one of the publisher's
+  // states, so it is neither read as an aggregate nor counted as one.
+  const states = names.filter((name) => stateDayOf(name) !== undefined)
+    .sort().reverse();
+  if (states.length === 0) return { absent: true };
+  const passedOver: PassedOver[] = [];
+  let cutOff = false;
+  for (const [index, name] of states.entries()) {
+    if (index > 0 && stateDayOf(name)! < from) {
+      cutOff = true;
+      break;
+    }
+    let text: string;
+    try {
+      text = await store.readText(name);
+    } catch (error) {
+      return { failed: [`reading ${name} failed: ${error}`] };
+    }
+    // Parsed here rather than inside each reader, so that one body is
+    // parsed once however many questions are asked of it.
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    const state = parseAggregate(body);
+    if (state !== undefined) return { state, name, passedOver };
+    const ahead = writtenAhead(body) ? declaredSchema(body) : undefined;
+    passedOver.push({ name, ...(ahead === undefined ? {} : { ahead }) });
   }
+  return { failed: refusal(passedOver, cutOff ? from : undefined) };
 }
 
 /**
- * The coverage baselines the next manifest carries: what the newest one
- * holds, brought forward, plus whatever the `main` runs since then
- * published. Reading the previous manifest is one public read and is
- * what keeps a publish from asking about every run in the window.
+ * What a run says when every state it looked at was one it could not
+ * read: each object and its fault, then where there are more states to
+ * reach and what reaches them, then the thing not to do.
+ *
+ * `cutOffAt` is the first day the run reads, given where the day bound
+ * is what stopped the walk and absent where the walk ran out of states.
+ * Only in the first case are there states behind these at all, and what
+ * is said of them is that they are there, since whether one of them
+ * reads is what the run that reaches them finds out.
  */
-export async function liveBaselines(
+function refusal(
+  passedOver: readonly PassedOver[],
+  cutOffAt: string | undefined,
+): readonly string[] {
+  const lines = passedOver.map((entry) => `${entry.name}: ${faultOf(entry)}`);
+  const shapes = passedOver.flatMap(({ ahead }) =>
+    ahead === undefined ? [] : [ahead]
+  );
+  if (shapes.length > 0) {
+    lines.push(
+      `deploy a publisher that reads shape ${Math.max(...shapes)} or ` +
+        `above, which is the highest shape any of these is written in`,
+    );
+  }
+  if (cutOffAt !== undefined) {
+    lines.push(
+      `the states behind these are named for days before ${cutOffAt}, ` +
+        `which is the first day this run reads, and --days is what ` +
+        `reaches them`,
+    );
+  }
+  lines.push(
+    `do not bootstrap before establishing that no stored state reads at ` +
+      `all: it starts from an empty aggregate, and the catches the stored ` +
+      `states hold accumulate over unbounded history and are not in the ` +
+      `records any window reads`,
+  );
+  return lines;
+}
+
+/**
+ * The newest manifest, which the one this run creates follows. Its
+ * coverage baselines are brought forward, and its charges are what this
+ * run's are compared with. The objects a run folds are the ones no
+ * earlier run folded, so the baselines they hold are added to its
+ * baselines rather than standing in for them.
+ *
+ * Throws where the store could not be asked. The objects those baselines
+ * came from are ones no later run folds again, so a manifest published
+ * without them would hold none of them, and neither would any manifest
+ * after it. Where the store answers that it holds no manifest this
+ * publisher can read, there is nothing to follow: the baselines start
+ * empty, and the ones in objects earlier runs folded come back only from
+ * a `--bootstrap`, which folds the window again.
+ */
+export async function livePrevious(
   now: Date,
   fetch?: typeof globalThis.fetch,
-): Promise<CoverageBaseline[]> {
+): Promise<Manifest | undefined> {
   const previous = await fetchManifest({
     at: now.toISOString(),
     ...(fetch === undefined ? {} : { fetch }),
   });
-  return await publishableBaselines(
-    now,
-    previous.manifest?.coverageBaselines ?? [],
-  );
+  if (previous.unreachable) {
+    throw new Error(`reading the previous manifest failed: ${previous.absent}`);
+  }
+  return previous.manifest;
 }
 
 /**
@@ -425,7 +594,7 @@ export async function publish(
   store: StoreAccess = liveStore(storeBucket()),
   now: Date = new Date(),
   topology: () => Promise<readonly Suite[]> = () => loadTopology(),
-  baselines: (now: Date) => Promise<CoverageBaseline[]> = liveBaselines,
+  previousManifest: (now: Date) => Promise<Manifest | undefined> = livePrevious,
 ): Promise<number> {
   const options = parseArgs(args);
   if (options === undefined) {
@@ -438,13 +607,31 @@ export async function publish(
 
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
+  const partitions = dayPartitions(startedAt, options.days);
+  let previous: Manifest | undefined;
+  try {
+    previous = await previousManifest(startedAt);
+  } catch (error) {
+    console.warn(`test selection: ${error}`);
+    console.warn(
+      "test selection: refusing to publish without the coverage baselines " +
+        "the previous manifest carries. The previous manifest is still the " +
+        "newest one.",
+    );
+    return 1;
+  }
   let aggregate: AggregateState;
   if (options.bootstrap) {
     aggregate = emptyAggregate(today);
   } else {
-    const read = await readAggregate(store);
+    // The first day this run reads, written the way a state object's name
+    // writes a day, which is how far back a state may be passed over.
+    const read = await readAggregate(
+      store,
+      partitions[0]!.replaceAll("/", "-"),
+    );
     if ("failed" in read) {
-      console.warn(`test selection: ${read.failed}`);
+      for (const line of read.failed) console.warn(`test selection: ${line}`);
       console.warn(
         "test selection: refusing to publish from an empty aggregate, " +
           "which would score every test at the floor. The previous " +
@@ -459,12 +646,24 @@ export async function publish(
       );
       return 1;
     }
+    for (const entry of read.passedOver) {
+      console.log(
+        `test selection: passing over ${entry.name}: ${faultOf(entry)}`,
+      );
+    }
+    if (read.passedOver.length > 0) {
+      console.log(
+        `test selection: folding onto ${read.name}, the newest aggregate ` +
+          `this publisher can read. What the states above it folded from ` +
+          `days this run does not read is not counted.`,
+      );
+    }
     aggregate = read.state;
   }
-  const partitions = dayPartitions(startedAt, options.days);
   const resolver = await loadAliasResolver();
   const fold = new Fold(aggregate, resolver, today);
   const runs = new Set<string>();
+  const found: { attempt: number; baseline: CoverageBaseline }[] = [];
   let commit = "unknown";
 
   const noteReport = (report: StoredReport): void => {
@@ -472,6 +671,10 @@ export async function publish(
       const id = group.context?.ci?.workflowRunId;
       if (id !== undefined) runs.add(id);
       if (group.context?.branch === "main") commit = group.context.commit;
+      const attempt = group.context?.ci?.runAttempt ?? 0;
+      for (const baseline of baselinesOf(group)) {
+        found.push({ attempt, baseline });
+      }
     }
   };
 
@@ -526,18 +729,33 @@ export async function publish(
       console.warn(
         `test selection: reading the rollup of ${date} failed: ${error}`,
       );
+      // A failure that left part of the day in the fold is the one this
+      // cannot read its way out of: reading the day again, by any route,
+      // would count that part twice.
+      if (!fold.intact) {
+        console.warn(PARTIAL_WINDOW);
+        return 1;
+      }
+      // Ending the run here would end every later one the same way: the
+      // store holds create and nothing else, so a shard that will not
+      // read stays where it is, and the day is never recorded as folded.
+      // The day's raw objects are all still there, so it is read the long
+      // way instead. The pair is left open rather than settled, so later
+      // runs read the day the same way.
       console.warn(
-        "test selection: refusing to publish from part of the window. " +
-          "The previous manifest is still the newest one.",
+        `test selection: reading ${date} from its raw objects instead, ` +
+          `as a day with no rollup is read`,
       );
-      return 1;
+      ciDays.push(date);
+      continue;
     }
     fold.markSettled(CI_SOURCE, date);
     settled++;
   }
   if (rollups.size > 0) {
     console.log(
-      `test selection: folded ${settled} day(s) from their rollups`,
+      `test selection: folded ${settled} of ${rollups.size} day(s) from ` +
+        `their rollups`,
     );
   }
 
@@ -548,10 +766,7 @@ export async function publish(
     listed = await listSubmissions(store, ciDays, partitions);
   } catch (error) {
     console.warn(`test selection: listing the submissions failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const fresh = listed.filter((name) => !fold.knows(name));
@@ -583,10 +798,7 @@ export async function publish(
     }
   } catch (error) {
     console.warn(`test selection: reading a submission failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const folded = fold.finish();
@@ -597,27 +809,20 @@ export async function publish(
   // built without it names surfaces nothing in the tree answers to.
   const suites = await topology();
   const { placed, unplaced } = locateSurfaces(suites, folded.surfaces);
-  // What nothing has worked out a unit for, kept from one publish to the
-  // next. A surface records on its own schedule, and a run reads surfaces
-  // only from the objects it folds for the first time, so a surface
-  // recording less often than this runs is absent from most runs. An
-  // entry is removed when the topology has a unit for its identity, and
-  // one an earlier run wrote is removed as soon as it names something the
-  // count no longer holds.
-  const stillUnplaced = (key: string): boolean => {
-    if (placed.has(key)) return false;
-    const test = testIdentityOfKey(key);
-    return test !== undefined && !isLaneMeasurement(test);
-  };
-  folded.aggregate.unclaimed = [
-    ...new Set([
-      ...(aggregate.unclaimed ?? []).filter(stillUnplaced),
-      ...unplaced.unclaimed,
-    ]),
-  ].sort();
+  // A test the tree no longer holds leaves the aggregate here rather
+  // than being carried and rescored for the rest of the store's life.
+  // The state written below is the one the next run reads, so dropping
+  // the entries from it is the whole of what forgetting an identity is.
+  const left = departed(suites, unplaced, folded);
+  for (const key of left) {
+    delete folded.aggregate.states[key];
+    delete folded.aggregate.files[key];
+    folded.states.delete(key);
+  }
   const states = new Map(
     [...folded.states].filter(([key]) => placed.has(key)),
   );
+  const observed = laneObservations(folded.aggregate.lanes ?? []);
 
   const manifest = buildManifest({
     states,
@@ -627,11 +832,23 @@ export async function publish(
     seed: ulid(),
     commit,
     runs: runs.size,
+    // What a lane costs beyond the tests it runs, from what lanes have
+    // spent. Without it the packer charges nothing for opening a
+    // capability, starting a runner, or loading a module, and a lane
+    // packed to its budget runs past the bound it is packed to finish
+    // inside.
+    calibration: calibrate(observed),
   });
-  // What the coverage gate compares a pull request against. It comes from
-  // outside the fold, because the counts are published by the full run on
-  // `main` rather than recorded as tests.
-  manifest.coverageBaselines = await baselines(startedAt);
+  // What the coverage gate compares a pull request against. The full run on
+  // `main` writes the counts as measurements, which the fold passes over,
+  // so they are collected beside it.
+  // Ordered by attempt, stably, so that of two attempts stamped with one
+  // start the later is the one kept.
+  manifest.coverageBaselines = mergeBaselines(
+    previous?.coverageBaselines ?? [],
+    found.sort((a, b) => a.attempt - b.attempt).map(({ baseline }) => baseline),
+    startedAt,
+  );
   manifest.unavailable = suites.flatMap((suite) =>
     suite.unavailable.map((entry) => ({
       suite: suite.id,
@@ -642,10 +859,14 @@ export async function publish(
       reason: entry.reason,
     }))
   );
+  const capabilities = capabilitiesBySuite(suites);
+  const processes = unitProcesses(suites);
   const reference = plan({
     manifest,
     mandatory: new Map(),
-    capabilities: capabilitiesBySuite(suites),
+    capabilities,
+    wholeUnits: wholeUnits(suites),
+    processes,
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every
@@ -662,13 +883,28 @@ export async function publish(
           .map((s) => JSON.stringify(s.entry.test)),
       })),
   }));
+  // Whether the model this manifest carries still describes the lanes.
+  // Nothing obeys it, so the manifest is published whatever it says, and
+  // the dashboard's test selection tile is what shows it.
+  manifest.health = calibrationHealth({
+    manifest,
+    previous,
+    capabilities,
+    processes,
+    observations: observed,
+  });
 
+  for (const line of healthLines(manifest.health)) {
+    console.log(`test selection: ${line}`);
+  }
   summarize(
     manifest,
+    suites,
     reference,
     folded.observations,
     unplaced,
-    aggregate.unclaimed,
+    left,
+    fold.declined,
   );
 
   if (options.out !== undefined) {
@@ -737,27 +973,71 @@ export function namingSurfaces(keys: readonly string[]): string {
     (rest > 0 ? `, and ${rest} more` : "");
 }
 
-/**
- * What the job summary says: the shape of what this run decided.
- *
- * `wasUnclaimed` is everything no run had worked out a unit for by the
- * previous publish, from the aggregate this run read. It separates an
- * identity recorded once and not yet given a unit from one whose records
- * keep arriving and keep saying too little. A run folding into an empty
- * aggregate has nothing to compare against, and so does one reading an
- * aggregate that records no such list; both say neither.
- */
+/** What the job summary says: the shape of what this run decided. */
 function summarize(
   manifest: ReturnType<typeof buildManifest>,
+  topology: readonly Suite[],
   reference: ReturnType<typeof plan>,
   observations: number,
   unplaced: Unplaced,
-  wasUnclaimed: readonly string[] | undefined,
+  left: readonly string[],
+  declined: number,
 ): void {
   console.log(
-    `test selection: folded ${observations} execution(s) into ` +
-      `${manifest.entries.length} identities`,
+    `test selection: folded ${observations} execution(s); the manifest ` +
+      `holds ${manifest.entries.length} identities`,
   );
+  // Said every run, so that a model nobody measured is as visible as one
+  // somebody did. The two halves are counted apart because they come
+  // from different records: a lane writes one per capability it opens,
+  // and a pair per batch, and a lane killed part way through a batch
+  // leaves the pair unmatched and contributes a setup cost alone.
+  const withCoverage = Object.keys(
+    manifest.calibration.suitesWithCoverage ?? {},
+  );
+  const suites = new Set([
+    ...Object.keys(manifest.calibration.suites),
+    ...withCoverage,
+  ]).size;
+  const measured = withCoverage.length;
+  console.log(
+    `test selection: the cost model holds ${suites} suite(s) and ` +
+      `${Object.keys(manifest.calibration.setupCost).length} ` +
+      `capability setup(s), and ${measured} of those suite(s) have a ` +
+      `cost with coverage on`,
+  );
+  // A suite's own figures are what a lane is charged for holding the suite and
+  // for opening each of its units, so a model with no suite in it charges
+  // nothing for either and a lane packed to its budget runs past the bound it
+  // is packed to finish inside. A capability setup is measured from a lane's
+  // own records and is unaffected, and the prologue is a fixed dial rather than
+  // a measurement, so it is there either way; this names the suites rather than
+  // everything a lane is charged. Four things end here — no lane has run, none
+  // recorded what it measured, the fold declines the records of the ones that
+  // did, or the fold stopped reading a figure it used to read — and the empty
+  // map alone says none of them.
+  if (suites === 0) {
+    console.log(
+      `test selection: no suite has a measured cost in the last ` +
+        `${COST_WINDOW_DAYS} day(s), so a lane is charged nothing for ` +
+        `holding one or for opening its units, and a lane packed against ` +
+        `this manifest overruns. See docs/development/test-selection.md.`,
+    );
+    // Said only where there is a figure to say, so that a run with
+    // nothing to report claims nothing. A lane that ran and whose
+    // measurement cannot be read is a different thing from a lane that
+    // has not run, and it is the one an operator can act on.
+    if (declined > 0) {
+      console.log(
+        `test selection: ${declined} lane measurement(s) this run read ` +
+          `came from a run the fold could not place, so the model was ` +
+          `fitted without them.`,
+      );
+    }
+  }
+  for (const line of measuredCostLines(manifest, topology)) {
+    console.log(`test selection: ${line}`);
+  }
   if (unplaced.suiteLevel.length > 0) {
     console.log(
       `test selection: ${unplaced.suiteLevel.length} identities measure a ` +
@@ -766,39 +1046,45 @@ function summarize(
         `is missing and there is nothing to act on.`,
     );
   }
-  if (unplaced.unclaimed.length > 0) {
+  if (left.length > 0) {
     console.log(
-      `test selection: the topology has no unit for ` +
-        `${unplaced.unclaimed.length} identities, so no lane can be asked ` +
-        `to run one. An identity is left out until one of its records ` +
-        `says enough to work out which unit it is in.`,
+      `test selection: ${left.length} identities have left the tree: no ` +
+        `suite claims them and no run of them has been recorded inside ` +
+        `the window a state keeps counters for. Their states are dropped ` +
+        `from the aggregate.`,
     );
     console.log(
-      `test selection: those ${unplaced.unclaimed.length} were recorded ` +
-        `by ${namingSurfaces(unplaced.unclaimed)}`,
+      `test selection: those ${left.length} were recorded by ` +
+        `${namingSurfaces(left)}`,
     );
-    if (wasUnclaimed !== undefined) {
-      const before = new Set(wasUnclaimed);
-      const stuck = unplaced.unclaimed.filter((key) => before.has(key));
-      if (stuck.length === 0) {
-        console.log(
-          `test selection: none of them were in this count at the last ` +
-            `publish, so nothing has been recorded twice with no unit.`,
-        );
-      } else {
-        console.log(
-          `test selection: ${stuck.length} of them were in this count at ` +
-            `the last publish too, so more of their records have been ` +
-            `read since and those records still do not say which unit. A ` +
-            `surface whose records never say which unit is worth fixing. ` +
-            `See docs/development/test-selection.md.`,
-        );
-        console.log(
-          `test selection: those ${stuck.length} were recorded by ` +
-            `${namingSurfaces(stuck)}`,
-        );
-      }
-    }
+  }
+  const gone = new Set(left);
+  const unclaimed = unplaced.unclaimed.filter((key) => !gone.has(key));
+  if (unclaimed.length > 0) {
+    console.log(
+      `test selection: no suite claims ${unclaimed.length} identities the ` +
+        `aggregate still carries, so no lane can be asked to run one. ` +
+        `Each has run inside the window a state keeps counters for, or a ` +
+        `configuration declares its unit unavailable. What puts an ` +
+        `identity here, and what takes it out again, is in ` +
+        `docs/development/test-selection.md.`,
+    );
+    console.log(
+      `test selection: those ${unclaimed.length} were recorded ` +
+        `by ${namingSurfaces(unclaimed)}`,
+    );
+  }
+  if (unplaced.contested.length > 0) {
+    console.log(
+      `test selection: ${unplaced.contested.length} identities are ` +
+        `claimed by more than one suite, which is a topology defect the ` +
+        `drift guard fails on. They are left out rather than placed in ` +
+        `whichever suite came first.`,
+    );
+    console.log(
+      `test selection: those ${unplaced.contested.length} were recorded ` +
+        `by ${namingSurfaces(unplaced.contested)}`,
+    );
   }
   const held = new Map<string, number>();
   for (const entry of manifest.withheld) {
@@ -812,13 +1098,15 @@ function summarize(
     console.log(
       `test selection: lane ${lane.lane} would run ` +
         `${lane.selections.length} test(s) in ` +
-        `${lane.projectedSeconds.toFixed(1)}s of ${LANE_BUDGET_SECONDS}s`,
+        `${duration(lane.projectedSeconds)} of ${
+          duration(LANE_BUDGET_SECONDS)
+        }`,
     );
   }
   if (times.length > 0) {
     const spread = Math.max(...times) - Math.min(...times);
     console.log(
-      `test selection: ${LANES} lanes, spread ${spread.toFixed(1)}s`,
+      `test selection: ${LANES} lanes, spread ${duration(spread)}`,
     );
   }
   const selected = reference.lanes.reduce(
@@ -829,10 +1117,19 @@ function summarize(
     `test selection: ${selected} of ${manifest.entries.length} identities ` +
       `fit the budget`,
   );
-  for (const entry of reference.unschedulable) {
+  // The count and the surfaces say how much there is and where.
+  const { named, rest } = costliestUnschedulable(reference.unschedulable);
+  for (const entry of named) {
     console.log(
-      `test selection: unschedulable, ${entry.cost.toFixed(1)}s: ` +
+      `test selection: unschedulable, ${duration(entry.cost)}: ` +
         JSON.stringify(entry.test),
+    );
+  }
+  if (rest.length > 0) {
+    console.log(
+      `test selection: ${rest.length} further identities cost more than a ` +
+        `lane can hold, recorded by ` +
+        `${namingSurfaces(rest.map((entry) => testIdentityKey(entry.test)))}`,
     );
   }
 }

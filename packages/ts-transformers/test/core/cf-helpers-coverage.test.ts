@@ -230,6 +230,117 @@ Deno.test("injectCfHelpers uses JS-only helper-shim syntax for JavaScript file n
   assertFalse(out.includes("function h(...args: any[])"));
 });
 
+const FALLBACK_TRAILER_TS = "// @ts-ignore: Internals\n" +
+  "function __cfHelpersShim(...args: any[]) { return __cfHelpers.h.apply(null, args); }\n";
+const FALLBACK_TRAILER_JS = "// @ts-ignore: Internals\n" +
+  "function __cfHelpersShim(...args) { return __cfHelpers.h.apply(null, args); }\n";
+
+Deno.test("injectCfHelpers renames the shim to `__cfHelpersShim` when the source binds `h` at top level", () => {
+  // A second module-scope `h` would be a duplicate identifier (TS2300, or
+  // TS2440 against an import) at the authored declaration. Keeping the helper
+  // import live is all the shim contributes once JSX dispatches through
+  // `__cfHelpers.h` (js-compiler `jsxFactory`), so only its name changes; the
+  // shape stays a direct function, which the runner's module-body verifier
+  // admits at module scope.
+  const declarations: Record<string, string> = {
+    "const": "export const h = [1, 2];",
+    "let": "let h = 1;",
+    "var": "var h = 1;",
+    "function": "export function h(x: number) { return x; }",
+    "ambient function": "declare function h(): void;",
+    "class": "class h {}",
+    "enum": "enum h { A }",
+    "namespace": "namespace h { export const a = 1; }",
+    "object destructuring": "const { a: { h } } = { a: { h: 1 } };",
+    "array destructuring": "const [, [h]] = [0, [1]];",
+    "default import": 'import h from "./h.ts";',
+    "named import alias": 'import { hyperscript as h } from "./h.ts";',
+    "namespace import": 'import * as h from "./h.ts";',
+    "import equals": 'import h = require("./h.ts");',
+    // A type-only import still occupies the binding (TS2440 against a local
+    // declaration), so it counts too.
+    "type-only import": 'import type { h } from "./h.ts";',
+    // `var` hoists out of nested blocks and loops to the module scope.
+    "var in a block": "{ var h = 1; }",
+    "var in an if": "if (Math.random()) { var h = 1; } else { const x = 1; }",
+    "var in a classic for": "for (var h = 0; h < 1; h++) {}",
+    "var in a for-of": "for (var h of [1]) {}",
+    "var in a for-in": "for (var h in { a: 1 }) {}",
+    "var in a try": "try { var h = 1; } catch { }",
+    "var in a catch": "try { } catch (e) { var h = e; }",
+    "var in a switch case": "switch (1) { case 1: var h = 1; break; default: }",
+    "var in a labeled block": "outer: { var h = 1; }",
+    "var in a while": "while (false) { var h = 1; }",
+    "var in a do-while": "do { var h = 1; } while (false);",
+    "var destructured in a block": "{ var { h } = { h: 1 }; }",
+  };
+  for (const [label, declaration] of Object.entries(declarations)) {
+    for (const fileName of ["/main.tsx", "/main.jsx"]) {
+      const out = injectCfHelpers(
+        `${declaration}\nexport const ui = <div />;`,
+        fileName,
+      );
+      assert(out.startsWith(`import { ${CF_HELPERS_IDENTIFIER} } from`), label);
+      // The shim's own head, not `function h(` — the authored declaration may
+      // be a function itself.
+      assertFalse(out.includes("function h(...args"), `${label} (${fileName})`);
+      const trailer = fileName.endsWith(".jsx")
+        ? FALLBACK_TRAILER_JS
+        : FALLBACK_TRAILER_TS;
+      assert(out.endsWith(`\n${trailer}`), `${label} (${fileName})`);
+    }
+  }
+});
+
+Deno.test("injectCfHelpers parses `.ts` sources as TypeScript, so a `<T>` assertion cannot hide a later `h`", () => {
+  // Parsed as TSX, `<number>1` opens a JSX element that swallows the rest of
+  // the file, and the scan would miss `h`.
+  const sources = [
+    "export const n = <number>1;\nexport const h = [1];",
+    "export const id = <T>(x: T) => x;\nexport const h = 1;",
+  ];
+  for (const source of sources) {
+    const out = injectCfHelpers(source, "/main.ts");
+    assert(out.endsWith(`\n${FALLBACK_TRAILER_TS}`), source);
+  }
+});
+
+Deno.test("injectCfHelpers rejects the reserved fallback shim name in authored source", () => {
+  assertThrows(
+    () => injectCfHelpers("const __cfHelpersShim = 1;\nconst h = 2;"),
+    Error,
+    "reserved helper symbol '__cfHelpersShim'",
+  );
+});
+
+Deno.test("injectCfHelpers keeps the `h` shim when `h` is only nested, type-only, or not a local binding", () => {
+  const sources: Record<string, string> = {
+    "local inside a function":
+      "export function render() { const h = [1]; return <div>{h}</div>; }",
+    "parameter": "export const f = (h: number) => h + 1;",
+    "interface": "interface h { a: number }",
+    "type alias": "type h = number;",
+    "re-export without a local binding": 'export { h } from "./h.ts";',
+    "property named h": "export const o = { h: 1 };",
+    "other top-level binding": "export const hh = 1;",
+    "anonymous default function": "export default function () {}",
+    "anonymous default class": "export default class {}",
+    "side-effect import": 'import "./side-effect.ts";',
+    "named import of something else": 'import { hyperscript } from "./h.ts";',
+    // Block-scoped nested bindings and function-scoped `var` do not hoist.
+    "const in a block": "{ const h = 1; }",
+    "let in a for-of": "for (let h of [1]) {}",
+    "var inside a nested function": "if (true) { function f() { var h = 1; } }",
+    "var inside an arrow body": "export const f = () => { var h = 1; };",
+    "var inside a class method": "class C { m() { var h = 1; } }",
+  };
+  for (const [label, source] of Object.entries(sources)) {
+    const out = injectCfHelpers(source);
+    assert(out.includes("function h(...args: any[])"), label);
+    assertFalse(out.includes("__cfHelpersShim"), label);
+  }
+});
+
 Deno.test("injectCfHelpers throws when the source already uses the reserved helper symbol", () => {
   assertThrows(
     () => injectCfHelpers(`const ${CF_HELPERS_IDENTIFIER} = {};`),

@@ -15,8 +15,16 @@ the rendered board read one derivation rather than two.
 The board also **names its members**. It owns a namespace of decimal names,
 dense from `1` and never reused, through the library in
 [`collection-naming/`](../collection-naming/README.md); a topic is cited as
-`top/42`, and the number renders as a badge beside its title rather than in
-place of it.
+`top/42`.
+
+**A topic publishes the number it stores**, as `shortName`, and one property is
+what every place a number shows reads: the topic's header, the board's cards,
+the survey rows, and the entries of whatever mention universe a topic's editor
+completes over — the board's derived copies, or the topics themselves where a
+topic is not yet rewired to that universe. So a mention's pill shows the number
+and `#42` offers the topic storing it. A topic nobody has numbered publishes
+none, and every one of those surfaces reads nothing for it. A number renders as
+a badge beside its topic's title rather than in place of it.
 
 Topics reference each other. A reference is a **cell**, not a string: picking a
 completion in the body editor stores the destination piece itself, and a link
@@ -48,7 +56,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   signature is carried in the same event as the content, avoiding shared mutable
   attribution state. `mention` and `unmention` carry no authored content, so
   they take only the referenced piece; Fabric still retains the authenticated
-  principal behind the edge.
+  principal behind the edge. `recordName` carries none either: the number it
+  stores is the board's allocation rather than something a caller authored.
 - **Mergeable writes everywhere users collide**: comments, links, and topics are
   `push` appends; concurrent writers all land. The body and the title are single
   strings (whole-value conflict semantics), so both edit through an explicit
@@ -65,24 +74,64 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   current authored-content verb writes structured attribution; the public result
   and mutation contracts contain no mutable "current author" state or
   display-name mirrors.
-- **The board names its members, and every reader reaches a name the same way.**
-  `addTopic` allocates the next name in the same transaction as the append, so
-  no reader observes a topic without its name and two concurrent creates
-  serialize on the map's keys rather than taking the same one; the browser
-  composer allocates through the same call. The namespace is one map cell,
+- **Topic state upgrades run in order.** Running a Topic runs an upgrade lift,
+  even without a consumer reading its result. The input `topicStateVersion`
+  defaults to zero; pending steps run in order, and each records its new version
+  after its writes in the same transaction. Every durable mutation uses the same
+  upgrade function before writing. Both board creation paths stamp the current
+  version. A stored future or invalid version makes the lift inert and durable
+  mutations reject; session editor controls remain available.
+- **The first upgrade preserves legacy attribution.** It fills missing
+  structured names from `createdByName` and comment `authorName`, retaining
+  nonblank structured names, kinds, avatars, legacy fields, and comment
+  identity. Partially populated author objects retain their other properties;
+  absent or explicitly undefined authors receive new objects. Names without a
+  known kind receive `kind: "legacy"`. Blank strings and the trimmed placeholder
+  `"someone"` supply no attribution. Legacy inputs stay `unknown`; explicit
+  reader schemas materialize strings and keep other values opaque and unchanged.
+  Every source and destination is read through handles before the first write.
+  In the lift, unresolved linked comments or names suspend the step until data
+  arrives. Handlers can conflate absence with unresolved data; ambiguous reads
+  leave the step incomplete without author writes or a version stamp. Content
+  edits can still proceed on version-zero state when their own inputs are
+  available. The lift completes genuine absence, while a standalone handler
+  needs unambiguous inputs to complete migration. Once complete, later legacy
+  writes are outside this pass.
+
+  [State upgrade design](state-upgrades.md) describes the sequence, mutation
+  boundary, schema bindings, tests, and rollback limits. Legacy writers must be
+  retired before rollout. Source rollback preserves stored data; only code that
+  implements the version guard can refuse writes to a newer state version.
+- **Each topic stores the number the board calls it by, and every reader reaches
+  it the same way.** `addTopic` allocates the next number and passes it into the
+  topic it is creating, in the same transaction as the append, so no reader
+  observes a topic without its number and two concurrent creates serialize on
+  the map's keys rather than taking the same one; the browser composer allocates
+  through the same call. The namespace is one map cell,
   `names: { "42": <topic> }`, written one key at a time and holding each topic
-  as an unread reference, so surveying its keys expands no topic. A topic reads
-  its own row out of the board's `namesTable` by identity and publishes the
-  result as `shortName` — one derivation — and the survey row, the mention
-  universe row, and a mention's pill all read that one property. `backfillNames`
-  names what the board held before it numbered anything, in filing order,
-  skipping what is already named; it writes the namespace and nothing else, so
-  on a board whose topics were filed past `addTopic` it has to be paired with a
-  one-time link-bind of `namesTable` onto each of them, the same operator step
-  `mentionable` states for itself. Until that bind the topic is named — `names`
-  and `namesTable` carry it — and its row still carries no name. `naming` is
-  what the board declares about those names, so a consumer reads the promise
-  rather than assuming one.
+  as an unread reference, so surveying its keys expands no topic. A topic
+  publishes what it stores as `shortName`, and every reader reaches the number
+  through that one property: the survey row, the card badge, and the mention
+  universe row, which a mention's pill and a `#42` query read. A topic reads
+  nothing of its board to hold its number, which is what keeps a topic's reads
+  out of its siblings.
+
+  `backfillNames` is the step for a board that held topics before it numbered
+  anything: it numbers every topic the namespace does not hold, in filing order,
+  and asks every topic reporting no number to store the one the namespace holds
+  for it, through that topic's own `recordName`. Asking is the most a board can
+  do — a board writes a member's result and never a member's argument — so the
+  step reports what it allocated, what it found already stored, and what it
+  asked, and running it again completes whichever asking did not land. An empty
+  `pending` is the finished state, and a topic's published number is the signal
+  the step reads to reach it. A repeat over a board in that state writes nothing
+  at all — no namespace key and no event. Where a topic is still outstanding the
+  repeat is safe but not free: the step asks it again, that asking is itself a
+  write, and the topic stores the number if it has not already. `naming` is what
+  the board declares about those numbers, so a consumer reads the promise rather
+  than assuming one, and `namesTable` is the reverse lookup a caller uses to
+  find the board's number for a topic by identity, including one that publishes
+  none.
 
   Every demand for that property is declared OPTIONAL rather than defaulted, and
   the spelling is what lets the whole graft be applied over a board deployed
@@ -103,7 +152,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   of every reader paying it on every load. The lift and its row type are shared
   with the collection-naming exemplar (`../collection-naming/mentionable.ts`):
   both boards derive their universe through the one derivation, so a member's
-  number reads the same on either.
+  number reads the same on either. A row carries the empty name where the copy
+  is taken off a member that publishes none.
 
   The reference is what a picked completion stores, and it is deliberately
   outside the demand a topic declares over the universe: a property that demand
@@ -129,8 +179,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention pivot from it; `cardsByActivity` takes a single timestamp per topic
   and orders the cards by it; `mentionableIndex` takes the three display strings
   per topic and builds the mention universe; `namesTable` takes the namespace
-  map and builds one row per named member without reading through any of them.
-  None expands a topic's prose, thread, verbs, or rendered UI.
+  map and builds one row per numbered member, for a caller's reverse lookup,
+  without reading through any of them. None expands a topic's prose, thread,
+  verbs, or rendered UI.
 
   A lift's parameter and its result look like one type, which seems to force a
   choice: narrow the parameter to bound the read, and what comes out narrows
@@ -178,9 +229,14 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 - **A reference is a cell, and identity is the only thing compared.** The board
   derives the whole graph once, in `crossrefTable`, from the same topics array
   read under two minimal declared views: one for identity, one for what each
-  topic points at. Matching is a linear scan of `equals` — with a cell reference
-  as the identity there is nothing to key a map by, and at board scale it is a
-  few hundred comparisons of resolved links.
+  topic points at. Matching is a scan of `equals`, because nothing in the
+  pattern API turns a topic reference into a resolved key carrying space, scope,
+  and path. The comparisons come from two passes. Finding the distinct topics,
+  in `distinctByIdentity`, compares each of the board's `n` entries with the
+  distinct entries kept before it, at most `n(n - 1) / 2` comparisons, which
+  grows with the square of the topic count even on a board with no mentions.
+  Each distinct topic's row then checks every source's mentions for that topic,
+  which grows as the number of topics times the number of mentions.
 
   Each topic then does a lookup rather than the join: `backlinksOf` scans the
   pivot for the row whose topic is itself, and takes that row's `mentionedBy`.
@@ -190,10 +246,14 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   at. The published row declares both sides `unknown` instead, so a consumer
   that only carries the graph onward expands neither.
 
-  Every row is addressed by the topic it describes (`Writable.for(topic)`), so a
-  row keeps its identity however the board is reordered, and a lookup re-run by
-  an unrelated change recomputes the same links at the same address and writes
-  nothing.
+  The pivot works over the board's distinct topics, with distinctness decided by
+  the same `equals`: a topic the board lists at two entries, whether as the same
+  link twice or as a link and an alias of it, has one row, so its lookup returns
+  its backlinks once, and counts once as a source in the rows of the topics it
+  mentions, at the place of its first entry. Every row is addressed by the topic
+  it describes (`Writable.for(topic)`), so a row keeps its identity however the
+  board is reordered, and a lookup re-run by an unrelated change recomputes the
+  same links at the same address and writes nothing.
 - **Agents reference through a verb.** `mention` and `unmention` take the piece
   itself. With prose no longer scanned there is otherwise no headless way to
   make a reference, and `kind: "topic"` links are ordinary links unless their
@@ -230,9 +290,12 @@ cf piece call --cell <board> addTopic \
 # -> { "result": { "name": "1", "topic": { "$link": "/of:fid1:..." } } }
 cf cell get --cell <board> names
 # -> { "1": {} }
-# Idempotent, so a board whose members are all named reports nothing written.
+# Idempotent. Re-run until `pending` comes back empty, which is the finished
+# state: every listed topic publishes the number the namespace holds for it.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
-# -> { "result": { "assigned": [] } }
+# -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
+cf cell get --cell <topic> shortName --input
+# -> "1"
 cf cell get --cell <board> topics --input \
   --select title,createdAt,lastActivityAt,commentCount
 cf piece call --cell <topic> addComment \
@@ -245,6 +308,14 @@ cf piece call --cell <topic> addLink \
   '{"url":"https://github.com/org/repo/pull/123","kind":"pr","label":"PR #123","agentName":"Sol"}'
 cf piece call --cell <topic> mention '{"topic":"/of:fid1:other-topic"}'
 cf piece call --cell <topic> unmention '{"topic":"/of:fid1:other-topic"}'
+# Store a number on one topic, which is what `backfillNames` asks each topic to
+# do. Idempotent, and refused where it disagrees with what the topic stores —
+# so against this flow's topic 1, which the create already numbered, the number
+# the namespace holds for it is the one that answers.
+cf piece call --cell <topic> recordName '{"name":"1"}'
+# -> { "result": { "name": "1", "wrote": false } }   already stored
+# `wrote: true` comes back only from a topic holding no number yet: one filed
+# before the board numbered anything, which is what `backfillNames` is for.
 cf piece call --cell <topic> removeLink \
   '{"url":"https://github.com/org/repo/pull/123","agentName":"Sol"}'
 ```
@@ -345,17 +416,19 @@ then searching the board for it. The result is declared through the index's row
 schema rather than the full topic: the declared schema bounds the default
 readback, and every name a verb's result publishes is permanent, so the create
 hands back the survey row plus the write-time facts only the pattern could
-resolve (`createdAt`, `createdBy`). `name` rides beside it — the name the create
-allocated, as written to the namespace — because the topic's own `shortName` is
-a lookup that may not have produced a value when the call returns, and a caller
-must not have to wait for a derivation to learn what it just allocated.
-`backfillNames` returns the names it wrote, in filing order, and `[]` on a
-second run. `addComment` and `addLink` return the appended record, `setBody` the
-persisted body plus the attribution it wrote, `setTitle` the persisted title
-plus its attribution; each carries fields the pattern resolved that a caller
-cannot compute for itself. Counts are deliberately not returned: these appends
-are mergeable ops, so a length observed inside one handling is not a fact about
-the resulting list — read `commentCount` when you want the count.
+resolve (`createdAt`, `createdBy`). `name` rides beside it — the number the
+create allocated, as written to the namespace and passed into the topic —
+because the row IS the created topic, so reading its `shortName` waits for that
+piece to materialize. `backfillNames` returns three lists of numbers in filing
+order: `assigned`, what it wrote into the namespace; `named`, the topics it
+found already publishing theirs; and `pending`, the ones it asked, none of which
+it can confirm. An empty `pending` is the finished state. `addComment` and
+`addLink` return the appended record, `setBody` the persisted body plus the
+attribution it wrote, `setTitle` the persisted title plus its attribution; each
+carries fields the pattern resolved that a caller cannot compute for itself.
+Counts are deliberately not returned: these appends are mergeable ops, so a
+length observed inside one handling is not a fact about the resulting list —
+read `commentCount` when you want the count.
 
 A returned value reaches the caller through the handling's receipt. A result
 carrying a piece (`addTopic`) travels the result-pattern projection path; the
@@ -372,9 +445,10 @@ rule, `docs/plans/pattern-verb-contract.md`). Body-at-create is not a body
 _update_: `bodyUpdatedBy`/`bodyUpdatedAt` stay unset.
 
 Invalid mutations **throw** instead of silently returning (verb contract rule
-4): an empty title, an empty comment body, a blank or non-http(s) link URL, and
-a blank `agentName` on an authored-content verb — `backfillNames` included,
-which writes the namespace on someone's behalf — all surface as a failed call —
-a nonzero CLI exit — never as apparent success. The UI composer wrappers keep
-their silent guards: an empty draft is a non-event in a composer, not a headless
-mutation.
+4): an empty title, an empty comment body, a blank or non-http(s) link URL, a
+blank `agentName` on an authored-content verb — `backfillNames` included, which
+writes the namespace on someone's behalf — and a `recordName` naming something
+outside the number grammar or disagreeing with the number the topic already
+stores, all surface as a failed call — a nonzero CLI exit — never as apparent
+success. The UI composer wrappers keep their silent guards: an empty draft is a
+non-event in a composer, not a headless mutation.

@@ -7,6 +7,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { MustBeTrue } from "@commonfabric/utils/types";
 import type {
   AsCell,
   Cell,
@@ -24,12 +25,6 @@ import type {
  */
 type AssertEqual<T, U> = [T] extends [U] ? ([U] extends [T] ? true : never)
   : never;
-
-/**
- * Helper to force a compile error if the type is not `true`.
- * Usage: const _check: MustBeTrue<AssertEqual<A, B>> = true;
- */
-type MustBeTrue<T extends true> = T;
 
 // Test data types
 type User = {

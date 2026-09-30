@@ -9,8 +9,15 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
-import { encodeMemoryBoundary, ProtocolError } from "../v2.ts";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  CODEMIRROR_CHANGESET_CODEC,
+  encodeMemoryBoundary,
+  ProtocolError,
+} from "../v2.ts";
+import {
+  FabricBytes,
+  FabricRegExp,
+} from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
@@ -126,7 +133,7 @@ Deno.test("a valid set still reads back after the validation batteries", async (
   });
 });
 
-Deno.test("rejects deleting or patching a content-addressed document", async () => {
+Deno.test("admits no operation but `set` against a content-addressed document", async () => {
   await withEngine((engine) => {
     const schema = { type: "string", title: "immutable" } as const;
     const id = `cid:${internSchemaAsTaggedHashString(schema)}`;
@@ -134,32 +141,47 @@ Deno.test("rejects deleting or patching a content-addressed document", async () 
       sessionId: "s:a",
       commit: commit(1, { operations: [setOp(id, schema)] }),
     });
-    assertThrows(
-      () =>
-        applyCommit(engine, {
-          sessionId: "s:a",
-          commit: commit(2, {
-            operations: [{ op: "delete", id } as never],
+    // Every operation the protocol carries beside `set`, so that an
+    // operation added to the union is refused here by default rather
+    // than admitted by an enumeration that forgot it. `sqlite` writes no
+    // entity and so names no id.
+    const refused = [
+      { op: "delete", id },
+      { op: "patch", id, patches: [] },
+      {
+        op: "apply-op",
+        id,
+        path: ["text"],
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        submissionId: "sub-1",
+        base: null,
+        payload: [],
+      },
+      {
+        op: "release-op-field",
+        id,
+        path: ["text"],
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        cursor: { epoch: 1, version: 1 },
+      },
+    ];
+    for (const [index, operation] of refused.entries()) {
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "s:a",
+            commit: commit(2 + index, { operations: [operation] as never }),
           }),
-        }),
-      ProtocolError,
-      "cannot delete content-addressed document",
-    );
-    assertThrows(
-      () =>
-        applyCommit(engine, {
-          sessionId: "s:a",
-          commit: commit(3, {
-            operations: [{ op: "patch", id, patches: [] } as never],
-          }),
-        }),
-      ProtocolError,
-      "cannot patch content-addressed document",
-    );
+        ProtocolError,
+        `cannot ${operation.op} content-addressed document`,
+      );
+    }
     // An idempotent re-set stays legal: it is how writers install closures.
     applyCommit(engine, {
       sessionId: "s:a",
-      commit: commit(4, { operations: [setOp(id, schema)] }),
+      commit: commit(2 + refused.length, {
+        operations: [setOp(id, schema)],
+      }),
     });
   });
 });
@@ -255,6 +277,27 @@ Deno.test("rejects a content-addressed document whose content hashes to neither 
         }),
       ProtocolError,
       "whose content does not hash to its id",
+    );
+  });
+});
+
+Deno.test("rejects a content-addressed set whose value is not a document", async () => {
+  await withEngine((engine) => {
+    // A `FabricRegExp` where the document belongs. Its `value` member is a JS
+    // `RegExp`, which hashes as the `FabricRegExp` itself does, so under this
+    // id the content check alone would pass it.
+    const pattern = new FabricRegExp(/a+/g);
+    const id = `cid:${taggedHashStringOf(pattern)}`;
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [{ op: "set", id, value: pattern }],
+          }),
+        }),
+      ProtocolError,
+      "to something other than a document",
     );
   });
 });
@@ -847,14 +890,14 @@ Deno.test("validates the schema document a result's `schema` metadata references
 
     // The member's grammar has two forms. A `cid:` reference in any other
     // position — nested inside an inline schema, or a root reference with
-    // sibling keywords — is refused outright, whether a set or a patch
-    // lands it, before any backing is consulted.
+    // sibling keywords — is refused outright, as is a non-schema value,
+    // whether a set or a patch lands it, before any backing is consulted.
     const hybridNested = {
       type: "object",
       properties: { nested: { $ref: `cid:${resultHash}` } },
     };
     const hybridSiblings = { $ref: `cid:${resultHash}`, title: "sibling" };
-    for (const hybrid of [hybridNested, hybridSiblings]) {
+    for (const malformed of [null, hybridNested, hybridSiblings]) {
       assertThrows(
         () =>
           applyCommit(engine, {
@@ -863,7 +906,7 @@ Deno.test("validates the schema document a result's `schema` metadata references
               operations: [{
                 op: "set",
                 id: "of:hybrid-carrier",
-                value: { value: { title: "v" }, schema: hybrid },
+                value: { value: { title: "v" }, schema: malformed },
               } as never],
             }),
           }),
@@ -878,7 +921,7 @@ Deno.test("validates the schema document a result's `schema` metadata references
               operations: [{
                 op: "patch",
                 id: "of:result-carrier",
-                patches: [{ op: "replace", path: "/schema", value: hybrid }],
+                patches: [{ op: "replace", path: "/schema", value: malformed }],
               } as never],
             }),
           }),
@@ -1340,6 +1383,209 @@ Deno.test("validates the schema document a CFC envelope's schemaHash references"
         }),
       ProtocolError,
       "neither included in the commit nor stored in the space",
+    );
+  });
+});
+
+Deno.test("validates the label documents a version-2 CFC envelope references", async () => {
+  await withEngine((engine) => {
+    const envelopeSchema = {
+      type: "object",
+      properties: { field: { type: "string" } },
+    } as const;
+    const envelopeHash = internSchemaAsTaggedHashString(envelopeSchema);
+    const label = { confidentiality: ["secret", "vaulted"] };
+    const labelHash = taggedHashStringOf(label);
+    const docWithLabel = (ref: string) =>
+      ({
+        op: "set",
+        id: "of:label-carrier",
+        value: {
+          value: { field: "v" },
+          cfc: {
+            version: 2,
+            schemaHash: envelopeHash,
+            labelMap: {
+              version: 1,
+              entries: [{ path: ["field"], label: { $ref: ref } }],
+            },
+          },
+        },
+      }) as never;
+
+    // A label reference nothing backs is the same broken closure a
+    // dangling schema reference is, and is refused the same way.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [
+              docWithLabel(`cid:${labelHash}`),
+              setOp(`cid:${envelopeHash}`, envelopeSchema),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "references CFC label document",
+    );
+
+    // A reference outside the `cid:` namespace can never be backed.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(2, {
+            operations: [
+              docWithLabel("of:not-content-addressed"),
+              setOp(`cid:${envelopeHash}`, envelopeSchema),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "outside the cid: namespace",
+    );
+
+    // The label document included in the SAME commit backs the reference,
+    // its content already verified against its id by the `cid:` rule...
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(3, {
+        operations: [
+          docWithLabel(`cid:${labelHash}`),
+          setOp(`cid:${envelopeHash}`, envelopeSchema),
+          setOp(`cid:${labelHash}`, label),
+        ],
+      }),
+    });
+
+    // ...and once stored, it backs later envelopes by itself.
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(4, {
+        operations: [docWithLabel(`cid:${labelHash}`)],
+      }),
+    });
+
+    // Entries that hold no reference — inline labels, a malformed label,
+    // an envelope with no entries array — name no document and pass the
+    // scan; the boundary polices backing, not the map's shape.
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(40, {
+        operations: [{
+          op: "set",
+          id: "of:inline-carrier",
+          value: {
+            value: { field: "v" },
+            cfc: {
+              version: 2,
+              schemaHash: envelopeHash,
+              labelMap: {
+                version: 1,
+                entries: [
+                  { path: ["field"], label: { confidentiality: ["secret"] } },
+                  { path: ["field"], label: "malformed" },
+                ],
+              },
+            },
+          },
+        } as never, {
+          op: "set",
+          id: "of:entryless-carrier",
+          value: {
+            value: { field: "v" },
+            cfc: { version: 2, schemaHash: envelopeHash, labelMap: {} },
+          },
+        } as never],
+      }),
+    });
+
+    // A document that verifies against its id but is not label-shaped is
+    // refused as well: the hash cannot tell a label from any other record,
+    // and a reader resolving it would fail closed on every read.
+    const malformed = { confidentiality: "secret" };
+    const malformedHash = taggedHashStringOf(malformed);
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(5, {
+            operations: [
+              docWithLabel(`cid:${malformedHash}`),
+              setOp(`cid:${malformedHash}`, malformed),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "does not hold a label",
+    );
+
+    // A stored label document whose bytes were changed out of band no
+    // longer hashes to its id, and a later envelope naming it is refused:
+    // the commit API rejects every `cid:` mutation, so direct database
+    // manipulation is the only door left, and this models genuine
+    // corruption.
+    engine.database.prepare(
+      `UPDATE revision SET data = :data, seq = seq + 1 WHERE id = :id`,
+    ).run({
+      data: encodeMemoryBoundary({ value: { confidentiality: ["forged"] } }),
+      id: `cid:${labelHash}`,
+    });
+    engine.database.prepare(`UPDATE head SET seq = seq + 1 WHERE id = :id`)
+      .run({ id: `cid:${labelHash}` });
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(41, {
+            operations: [{
+              op: "set",
+              id: "of:tampered-carrier",
+              value: {
+                value: { field: "v" },
+                cfc: {
+                  version: 2,
+                  schemaHash: envelopeHash,
+                  labelMap: {
+                    version: 1,
+                    entries: [{
+                      path: ["field"],
+                      label: { $ref: `cid:${labelHash}` },
+                    }],
+                  },
+                },
+              },
+            } as never],
+          }),
+        }),
+      ProtocolError,
+      "whose stored content does not verify",
+    );
+
+    // A patch that lands a reference at the reserved member is collected
+    // from the post-patch document like the schema reference is.
+    const otherHash = taggedHashStringOf({ confidentiality: ["other"] });
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(6, {
+            operations: [
+              {
+                op: "patch",
+                id: "of:label-carrier",
+                patches: [{
+                  op: "replace",
+                  path: "/cfc/labelMap/entries/0/label",
+                  value: { $ref: `cid:${otherHash}` },
+                }],
+              } as never,
+            ],
+          }),
+        }),
+      ProtocolError,
+      "references CFC label document",
     );
   });
 });

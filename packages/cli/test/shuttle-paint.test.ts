@@ -1,6 +1,6 @@
 /**
  * Unit tests for what a terminal is sent to show the line being typed, to end
- * it, and to put a line above it.
+ * it, to put a line above it, and to take the screen for a frame.
  *
  * The expectations are the escape sequences themselves, written out. That is
  * the whole point of the module being separate from the writing: what a
@@ -17,9 +17,12 @@ import { describe, it } from "@std/testing/bdd";
 import {
   above,
   finish,
+  givingScreen,
   NOTHING_PAINTED,
   type PaintedLine,
   repaint,
+  screenOf,
+  takingScreen,
 } from "../lib/shuttle/paint.ts";
 import { glyphFor } from "../lib/view/display.ts";
 
@@ -267,6 +270,75 @@ describe("paint", () => {
             "a".repeat(25)
           }\x1b8\x1b[1B\x1b[5C`,
         );
+    });
+  });
+  describe("takingScreen()", () => {
+    it("enters the alternate screen, which is what keeps the transcript whole", () => {
+      // A frame drawn on the screen the transcript is on would scroll it, and
+      // what scrolls off is what history is.
+
+      expect(takingScreen()).toBe("\x1b[?1049h\x1b[?25l");
+    });
+  });
+
+  describe("screenOf()", () => {
+    it("positions and clears each row before writing it", () => {
+      // A redraw replaces what is there rather than blanking the screen and
+      // drawing again, which is what a reader sees as a flicker.
+
+      expect(screenOf(["a", "b"])).toBe(
+        "\x1b[?7l" +
+          "\x1b[1;1H\x1b[2Ka" +
+          "\x1b[2;1H\x1b[2Kb" +
+          "\x1b[?7h",
+      );
+    });
+
+    it("writes a row a terminal would act on as the picture of itself", () => {
+      // A frame row is composed from what a cell holds, which is data a user
+      // program authored and no door of shuttle's has held. Written through,
+      // an escape sequence in one reaches the terminal as an instruction: it
+      // can clear the screen, move the cursor off the row it was given, or
+      // draw a frame of its own over this one. The line written above the
+      // prompt passes the same class through `escapeControlCharacters`
+      // (`above`), and a frame is the same terminal.
+      //
+      // Kills: concatenating rows verbatim, which sends `\x1b[2J` on as a
+      // clear-screen rather than as the glyph naming the escape.
+
+      const drawn = screenOf(["\x1b[2Jgone"]);
+      expect(drawn).not.toContain("\x1b[2J");
+      expect(drawn).toContain("\u241b[2Jgone");
+    });
+
+    it("leaves a row already held to that class alone", () => {
+      // The escape is idempotent, a glyph being no longer a character a
+      // terminal acts on, so a row composed through a renderer that already
+      // held it reaches the screen unchanged rather than doubly escaped.
+      //
+      // Kills: an escape that rewrites its own output.
+
+      expect(screenOf(["plain \u241b[2J text"]))
+        .toContain("plain \u241b[2J text");
+    });
+
+    it("turns line wrapping off around the drawing", () => {
+      // A row filling the last column carries the cursor onto the next line,
+      // and on the last row of the screen that scrolls the frame up by one.
+
+      const drawn = screenOf(["a"]);
+      expect(drawn.startsWith("\x1b[?7l")).toBe(true);
+      expect(drawn.endsWith("\x1b[?7h")).toBe(true);
+    });
+
+    it("sends nothing but the wrapping for a frame with no rows", () => {
+      expect(screenOf([])).toBe("\x1b[?7l\x1b[?7h");
+    });
+  });
+
+  describe("givingScreen()", () => {
+    it("leaves the alternate screen and shows the cursor again", () => {
+      expect(givingScreen()).toBe("\x1b[?25h\x1b[?1049l");
     });
   });
 });

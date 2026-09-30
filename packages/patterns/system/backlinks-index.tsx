@@ -48,7 +48,7 @@ const computeIndex = lift<
   const cs = pieceRegistry ?? [];
 
   // Reset backlinks for pieces that support it.
-  // Many pieces don't have backlinks (e.g., auth pieces, google patterns),
+  // Many pieces don't have backlinks,
   // so we safely skip them with optional chaining.
   // Also skip undefined/null entries that may exist in the array.
   for (const c of cs) {

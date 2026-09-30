@@ -7,6 +7,7 @@ import {
   undeclaredVerbFieldError,
 } from "../lib/callable.ts";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type ExecCommandSpec,
   normalizeCallableInputForExecution,
@@ -23,7 +24,8 @@ import {
 } from "../lib/exec.ts";
 import { writeMountState } from "../lib/fuse.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
-import { cf, relevantStderr } from "./utils.ts";
+import { externalizeSchema } from "../../runner/src/link-utils.ts";
+import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 
 function makeSpec(
   callableKind: "handler" | "tool",
@@ -386,6 +388,18 @@ describe("parseExecArgs", () => {
       makeSpec("handler", { asCell: ["stream"] } as JSONSchema),
       [],
     );
+
+    expect(result.verb).toBe("invoke");
+    expect(result.input).toBeUndefined();
+  });
+
+  it("allows a schema-less handler whose schema is a content-addressed reference to invoke without arguments", () => {
+    // A stored link carries its schema as a reference, so the stream
+    // declaration is on the document the reference names, not at the root.
+    const stored = externalizeSchema({ asCell: ["stream"] });
+    expect(stored).toEqual({ $ref: expect.stringMatching(/^cid:/) });
+
+    const result = parseExecArgs(makeSpec("handler", stored), []);
 
     expect(result.verb).toBe("invoke");
     expect(result.input).toBeUndefined();
@@ -1338,6 +1352,34 @@ describe("resolveParsedExecInput edge cases", () => {
       deps,
     );
     expect(unschematized.input).toBeUndefined();
+
+    // The same verb as a stored link carries it: a content-addressed
+    // reference, with the declaration on the document it names.
+    const referenced = await resolveExecInvocation(
+      makeSpec("handler", externalizeSchema({ asCell: ["stream"] })),
+      [],
+      deps,
+    );
+    expect(referenced.parsed.verb).toBe("invoke");
+    expect(referenced.input).toBeUndefined();
+  });
+
+  it("reads piped stdin for a single-value handler whose schema is a content-addressed reference", async () => {
+    // The reference's root looks as bare as a schema-less verb's. What the
+    // verb takes is on the document it names: a string, so the piped payload
+    // is its input and the call is not a bare one.
+    const stored = externalizeSchema({ asCell: ["stream"], type: "string" });
+    expect(stored).toEqual({ $ref: expect.stringMatching(/^cid:/) });
+
+    const piped = await resolveExecInvocation(
+      makeSpec("handler", stored),
+      [],
+      {
+        isStdinTerminal: () => false,
+        readTextInput: () => Promise.resolve("hello"),
+      },
+    );
+    expect(piped.input).toBe("hello");
   });
 
   it("normalizes only object inputs for tools with a string help field", () => {
@@ -2283,7 +2325,7 @@ describe("mounted callable resolution and execution", () => {
         symbol: "default",
         source: {
           ref: `cf:pattern:${"A".repeat(43)}`,
-          repository: "https://github.com/commontoolsinc/labs",
+          repository: "https://github.com/commonfabric/labs",
           entry: "/notes/note.tsx",
           origin: "file:///repo/notes/note.tsx",
         },
@@ -2325,7 +2367,7 @@ describe("mounted callable resolution and execution", () => {
       symbol: "default",
       source: {
         ref: `cf:pattern:${"A".repeat(43)}`,
-        repository: "https://github.com/commontoolsinc/labs",
+        repository: "https://github.com/commonfabric/labs",
         entry: "/notes/note.tsx",
         origin: "file:///repo/notes/note.tsx",
       },
@@ -2588,6 +2630,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--query", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
       },
@@ -2620,6 +2663,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--query", "milk"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
@@ -2657,6 +2701,7 @@ describe("mounted callable resolution and execution", () => {
     await writeLiveMountState(stateDir, mountpoint);
 
     await executeMountedCallableFile(filePath, ["--query", "milk"], {
+      sendEvent: sendThroughStandIn,
       stateDir,
       loadPieces: () => Promise.resolve(harness.pieces),
       loadPiece: () => Promise.resolve(harness.piece),
@@ -2697,6 +2742,7 @@ describe("mounted callable resolution and execution", () => {
         filePath,
         ["--message", "milk"],
         {
+          sendEvent: sendThroughStandIn,
           stateDir,
           loadPieces: () => Promise.resolve(harness.pieces),
           loadPiece: () => Promise.resolve(harness.piece),
@@ -3162,6 +3208,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       ["--json"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
@@ -3198,6 +3245,7 @@ describe("mounted callable resolution and execution", () => {
       filePath,
       [],
       {
+        sendEvent: sendThroughStandIn,
         stateDir,
         loadPieces: () => Promise.resolve(harness.pieces),
         loadPiece: () => Promise.resolve(harness.piece),
@@ -3850,10 +3898,9 @@ function createMockCell(
       if (options?.childOverrides?.[key]) {
         return options.childOverrides[key];
       }
-      const nextValue =
-        typeof value === "object" && value !== null && !Array.isArray(value)
-          ? (value as Record<string, unknown>)[key]
-          : undefined;
+      const nextValue = isObjectNotArray(value)
+        ? (value as Record<string, unknown>)[key]
+        : undefined;
       const nextSchema = getChildSchema(schema, key);
       return createMockCell(nextValue, nextSchema);
     },
@@ -3867,17 +3914,13 @@ function getChildSchema(
   key: string,
 ): JSONSchema | undefined {
   if (
-    !schema || typeof schema !== "object" || schema === null ||
-    Array.isArray(schema)
+    !schema || !isObjectNotArray(schema)
   ) {
     return undefined;
   }
 
   const properties = schema.properties;
-  if (
-    typeof properties !== "object" || properties === null ||
-    Array.isArray(properties)
-  ) {
+  if (!isObjectNotArray(properties)) {
     return undefined;
   }
 

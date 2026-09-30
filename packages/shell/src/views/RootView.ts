@@ -1,4 +1,4 @@
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
 import { resolveSpaceDid, RuntimeInternals } from "@commonfabric/lib-shell";
 import {
@@ -13,11 +13,7 @@ import {
   type RuntimeClient,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
-import {
-  presenceUrlContext,
-  runtimeContext,
-  spaceContext,
-} from "@commonfabric/ui";
+import { runtimeContext, spaceContext } from "@commonfabric/ui";
 import { provide } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
 import { css, html, PropertyValues } from "lit";
@@ -40,12 +36,7 @@ import {
   type CommonfabricDebugState,
   exposeCommonfabricGlobals,
 } from "../lib/debug-utils.ts";
-import {
-  COMMIT_SHA,
-  ENVIRONMENT,
-  EXPERIMENTAL,
-  PRESENCE_URL,
-} from "../lib/env.ts";
+import { COMMIT_SHA, ENVIRONMENT, EXPERIMENTAL } from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
@@ -218,10 +209,6 @@ export class XRootView extends BaseView implements ShellApp {
   @state()
   private accessor space: DID | undefined = undefined;
 
-  @provide({ context: presenceUrlContext })
-  @state()
-  private accessor presenceUrl: string | undefined = PRESENCE_URL?.href;
-
   /**
    * The runtime task, which runs when `AppState` changes and determines if a
    * new `RuntimeInternals` must be created — only when identity or host
@@ -291,6 +278,9 @@ export class XRootView extends BaseView implements ShellApp {
             ? new URL("/scripts/worker-runtime.js", globalThis.location.href)
             : undefined,
           onError: (event) => this._handleRuntimeError(event, generation),
+          // The shell's boot refuses an unreachable backend rather than
+          // standing a runtime up over storage that is still reconnecting.
+          awaitHealth: true,
           // Per-profile dogfood toggles: worker-console forwarding and the
           // Epic H3a render ceiling (see lib/host-toggles.ts).
           ...runtimeHostFlags(),
@@ -666,9 +656,7 @@ export class XRootView extends BaseView implements ShellApp {
         return this.setConfig(command.key, command.value);
     }
     throw new Error(
-      `Received a non-command: ${
-        toCompactDebugString(command, { maxLength: 200, backtickQuote: true })
-      }`,
+      debugStr`Received a non-command: $quote,long${command}`,
     );
   }
 

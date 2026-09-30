@@ -15,7 +15,10 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 // space. The fix routes profile creation through an anonymous `inSpace()` whose
 // DID derives from the creating handler's cause (which carries the per-user home
 // space links + the per-event id), making it per-user AND per-profile unique
-// while the display name flows only to `initialName`.
+// while the display name flows only to `initialName`. The named path supports
+// the legacy space names used during development and nothing else, and is
+// removed once those development-only spaces have been migrated
+// (docs/plans/random-space-identities.md).
 
 export const userA = await Identity.fromPassphrase("ct1650-user-a");
 export const userB = await Identity.fromPassphrase("ct1650-user-b");

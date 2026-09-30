@@ -32,21 +32,28 @@ import type {
   EntityIdListOptions,
   EntityIdListResult,
   EventAttentionResolveResult,
+  GenesisRoot,
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
+  SessionReadCeiling,
   SessionSyncUpsert,
   SqliteDbRef,
   SqliteOperation,
   SqliteParamsWire,
+  SqliteQueryReader,
   SqliteQueryResult,
   SqliteRegisterDiskSourceResult,
   ViewInterest,
   ViewPlan,
 } from "@commonfabric/memory/v2";
+import type {
+  PresenceEvent,
+  PresenceMembership,
+} from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { Immutable } from "@commonfabric/utils/types";
 
@@ -54,16 +61,19 @@ import type { Cancel } from "../cancel.ts";
 import { Cell } from "../cell.ts";
 import type {
   CfcAddress,
+  CfcContentAddressedLabels,
   CfcDeclaredMonotonicityMode,
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
   CfcEnforcementMode,
+  CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
   CfcPolicyEvaluationMode,
+  CfcPreparationWork,
   CfcReferenceObservation,
   CfcReferenceProvenance,
   CfcRefusalDetail,
@@ -75,12 +85,12 @@ import type {
   ImplementationIdentity,
   PostCommitSideEffect,
   RuntimeWritePolicyAuthorization,
-  TrustSnapshot,
   WritePolicyInput,
 } from "../cfc/mod.ts";
 import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 export type {
@@ -171,7 +181,7 @@ export const toReplicaLoadFailureError = (
 /**
  * Metadata that can be attached to read operations
  */
-export interface Metadata extends Record<PropertyKey, unknown> {}
+export interface Metadata extends Record<PropertyKey, FabricValue> {}
 
 /**
  * Options for read operations
@@ -302,6 +312,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   openedSpaces?(): MemorySpace[];
 
   /**
+   * Declares the read ceiling every session this manager opens carries in
+   * its signed `session.open` descriptor (`SessionDescriptor.readCeiling`),
+   * so a space server serving this runtime's queries bounds them by it. A
+   * flag-ON client runtime configured with `cfcReadMaxConfidentiality`
+   * calls this at construction; a manager without the method cannot carry
+   * a ceiling, and the runtime refuses to be built with one over it.
+   *
+   * @throws If a session is already open: a ceiling declared after the
+   * fact would leave that session reading unbounded.
+   */
+  setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
+
+  /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
    * (federation site table). Optional: managers without remote resolution
    * (emulated/test) simply don't implement it. Returns true when the
@@ -312,6 +335,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * through the provisional route.
    */
   registerSpaceHost?(space: MemorySpace, host: string): boolean;
+
+  /**
+   * Record a host hint as {@link registerSpaceHost} does, and say why when it
+   * is refused. Optional: a manager may implement either method, or both
+   * with the same verdict.
+   */
+  registerSpaceHostDetailed?(
+    space: MemorySpace,
+    host: string,
+  ): SpaceHostRegistration;
 
   /** Changes memory-message compression for live and later remote sessions. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
@@ -340,10 +373,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * not once the space's first mount has begun. A manager that cannot
    * bootstrap an ACL refuses it rather than accept a document it would
    * never write.
+   *
+   * `options.genesisRoot` requires an explicit `genesisAcl`. Its complete
+   * source, cause, arguments, and attached source roots are snapshotted in
+   * the genesis receipt and authenticated on every mount. Later mounts must
+   * match that immutable reservation.
    */
   registerSpaceIdentity?(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL },
+    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
   ): void;
 
   /**
@@ -429,6 +467,25 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * managers may omit it.
    */
   authorizationError?(space: MemorySpace): Error | undefined;
+
+  /** The latest authoritative access loss for a space, cleared on reopening. */
+  spaceAccessError?(space: MemorySpace): Error | undefined;
+
+  /**
+   * Observes authoritative access loss synchronously. Transient connection
+   * failures and normal closure do not emit; `spaceAccessError()` supplies
+   * the current snapshot for subscriptions installed after a loss.
+   */
+  subscribeSpaceAccessLoss?(
+    observer: (space: MemorySpace, error: Error) => void,
+  ): Cancel;
+
+  /**
+   * Observes authoritative denial and recovery after an authorized reopen.
+   * Read `spaceAccessError()` for the current verdict. Initial successful
+   * opens and transient connection failures do not emit.
+   */
+  subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * Register an in-flight commit so the durability barrier
@@ -764,6 +821,7 @@ export interface IStorageProvider {
     db: SqliteDbRef,
     sql: string,
     params?: SqliteParamsWire,
+    reader?: SqliteQueryReader,
   ): Promise<SqliteQueryResult>;
 
   // No `sqliteExecute`: SQLite writes go through the commit fold
@@ -816,6 +874,33 @@ export const hasOperationStorageCapability = (
     typeof candidate.applyOperation === "function" &&
     typeof candidate.releaseOperationField === "function" &&
     typeof candidate.subscribeOperationField === "function";
+};
+
+/**
+ * A storage provider that reaches the memory server's presence rooms
+ * (memory-v2 `04-protocol.md` §4.13) through its space session. The
+ * membership outlives the session it was joined through: a reconnect rejoins
+ * it, and a replacement of the provider's replica rejoins it on the
+ * replacement's session, each time delivering a fresh `snapshot` with the id
+ * the relay assigned there and republishing the last record.
+ */
+export interface IPresenceStorageCapability {
+  /**
+   * Joins `room` under this provider's space, delivering the room's events
+   * to `observer`, and returns the membership.
+   */
+  joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership>;
+}
+
+export const hasPresenceStorageCapability = (
+  value: unknown,
+): value is IPresenceStorageCapability => {
+  if (value === null || value === undefined) return false;
+  const candidate = value as Partial<IPresenceStorageCapability>;
+  return typeof candidate.joinPresenceRoom === "function";
 };
 
 /**
@@ -1034,7 +1119,8 @@ export interface IWriteOptions {
    * object key or punching an array hole — instead of storing a value.
    * `value` must be `undefined`. Without this flag, writing `undefined`
    * stores `undefined` as a real value: present-but-undefined is distinct
-   * from absent. A root-path delete retracts the document.
+   * from absent. A root-path delete retracts the document, and a delete of
+   * an array's `length` empties the array.
    */
   delete?: boolean;
 
@@ -1146,6 +1232,13 @@ export interface IStorageTransaction {
    * across instances.
    */
   sourceAction?: object;
+
+  /**
+   * Check scheduling dependencies before accepting an empty commit or seal.
+   * Set by reactive computations, whose subscriptions must cover changes since
+   * their reads. Event handlers retain ordinary empty-commit behavior.
+   */
+  validateReactiveReads?: boolean;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
@@ -1399,6 +1492,15 @@ export interface IStorageTransaction {
   currentActivityIndex?(): number | undefined;
 
   /**
+   * Optional ordered superset of reads that can be noninternal CFC inputs.
+   * Only records whose internal-verifier classification is permanently sealed
+   * may be omitted. Mutable records remain here and consumers recheck their
+   * metadata. Preserves duplicates, activity-clock positions and record
+   * identity; the full journal remains available through getReadActivities.
+   */
+  getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
+
+  /**
    * Optional ordered log of every applied write attempt, in transaction
    * order, stamped on the same per-transaction activity clock as read
    * activities. Unlike `getWriteDetails` (per-path, last-value upserts,
@@ -1416,6 +1518,29 @@ export interface IStorageTransaction {
    * instead of materializing novelty/history attestations.
    */
   getWriteDetails?(space: MemorySpace): Iterable<TransactionWriteDetail>;
+
+  /**
+   * Optional write details narrowed to one document.
+   *
+   * Boundary verification reconstructs several paths for each written
+   * document. Transactions that can address their document table directly
+   * avoid rescanning every write in the space for each reconstruction.
+   */
+  getWriteDetailsForTarget?(target: {
+    space: MemorySpace;
+    id: URI;
+    scope?: CellScope;
+    path?: readonly PropertyKey[];
+  }): Iterable<TransactionWriteDetail>;
+
+  /**
+   * Retains the exact-instance commit basis of an elided write when its target
+   * has pending state. The dependency adds neither a scheduling subscription
+   * nor CFC value taint. Transactions without optimistic pending layers may
+   * omit this operation. Callers supply the resolved target that compared equal,
+   * not an outer binding that may point into another document or scope.
+   */
+  retainPendingWriteElision?(address: IMemorySpaceAddress): void;
 
   /**
    * The manager's `isContentAddressedDocPersisted`, reachable from the
@@ -1531,6 +1656,12 @@ export interface IStorageTransaction {
   /**
    * Optional batched write hook for transactions that can apply multiple path
    * writes more efficiently than one-at-a-time.
+   *
+   * Not atomic: a batch that fails, whether a write returns an error or
+   * something throws, may leave some of its writes applied, and which ones is
+   * unspecified. The writes it does apply are applied consistently: the
+   * transaction's reads, its write details and its commit all include them. A
+   * caller that must not land part of a batch aborts the transaction.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
@@ -1722,6 +1853,24 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   stageContentAddressedDocument(space: MemorySpace, value: FabricValue): URI;
 
+  /**
+   * Mints the runtime secret called `name` in `space` when no trusted value
+   * is stored: a random value, written under the secret's label and writer
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
+   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
+   * one writer of the reserved namespace, which refuses every unprivileged
+   * write, and callable only with the runtime's authorization, since code
+   * that minted a secret in its own transaction could read it back there
+   * before its label is stored.
+   *
+   * @throws Error without the runtime's authorization.
+   */
+  ensureRuntimeSecret(
+    space: MemorySpace,
+    name: string,
+    authorization: RuntimeWritePolicyAuthorization,
+  ): void;
+
   tx: IStorageTransaction;
 
   /**
@@ -1834,6 +1983,15 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcTriggerReadGating(enabled: CfcTriggerReadGating): void;
 
   setCfcDecomposedEnvelopes(enabled: CfcDecomposedEnvelopes): void;
+
+  /**
+   * Selects the envelope version the persist path writes: version 2, which
+   * holds each label above the inline limit as a reference to a
+   * content-addressed label document and shorter ones inline, or version 1
+   * with every label inline. A spelling dial: neither setting is pinned,
+   * and the value is read when the transaction prepares.
+   */
+  setCfcContentAddressedLabels(enabled: CfcContentAddressedLabels): void;
 
   /**
    * Set the exchange-rule policy evaluation dial (Epic B5, spec §4.4.5).
@@ -2050,6 +2208,21 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   recordCfcStructureContainer(address: CfcAddress): void;
 
   /**
+   * Records a destination the runtime wrote a whole value to, so the flow
+   * stamp lands there rather than only at the paths the diff changed. See
+   * `CfcTxState.assertedValueRoots`. `reference` names the document root a
+   * pointer the runtime stored at `address` refers to (a custody box, or an
+   * entity anchoring split out). Dropped unless
+   * `authorization` carries the runtime's mark. The address is
+   * `deepFreeze()`d on entry.
+   */
+  recordCfcAssertedValueRoot(
+    address: CfcAddress,
+    authorization?: RuntimeWritePolicyAuthorization,
+    reference?: CfcAddress,
+  ): void;
+
+  /**
    * Settles whether this transaction is CFC-relevant — the flow-label
    * relevance probe, then the sink-request ceiling probe — and runs
    * `prepareCfc()` when it is.
@@ -2064,6 +2237,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
+   * Runs the same preparation with cooperative yields between targets and
+   * within staged-reference label derivation.
+   * Cancellation aborts the uncommitted transaction. The caller must await
+   * completion before committing; activity during a yield aborts the attempt.
+   */
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void>;
+
+  /**
    * Runs CFC boundary verification for this transaction and records the
    * prepared digest. Takes no caller-supplied input: the commit-time digest
    * recheck only confirms the prepared input matches real activity, so an
@@ -2073,17 +2254,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareCfc(): string;
 
   /**
-   * Sets (or clears) the CFC trust snapshot for this transaction. See
-   * ownership note above.
+   * Marks the values the runtime initializes in this transaction as
+   * attributed to the acting principal (`CfcTxState.attributedInitialization`):
+   * the runner marks the transaction of a handler run the principal invoked,
+   * and a start deferred from one. The mark takes the runtime's authorization,
+   * and a call without it does nothing.
    */
-  setCfcTrustSnapshot(snapshot: TrustSnapshot | undefined): void;
-
-  /**
-   * Sets (or clears) the implementation identity that will be folded
-   * into the CFC digest for this transaction. See ownership note above.
-   */
-  setCfcImplementationIdentity(
-    identity: ImplementationIdentity | undefined,
+  markCfcAttributedInitialization(
+    authorization: RuntimeWritePolicyAuthorization,
   ): void;
 
   /**
@@ -2120,9 +2298,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Whether `input` was recorded by the runtime, under
    * `runtimeWritePolicyAuthorization`.
    *
-   * `recordCfcWritePolicyInput` is on this interface, and pattern-authored
-   * code reaches the transaction its cells are bound to, so an input's own
-   * fields say only what its recorder wrote. A gate that ACTS on an input
+   * `recordCfcWritePolicyInput` is on this interface, so any code holding
+   * the transaction can record an input, and an input's own fields say only
+   * what its recorder wrote. A gate that ACTS on an input
    * asks this; a gate that measures one does not need to.
    */
   isRuntimeWritePolicyInput(input: WritePolicyInput): boolean;
@@ -2244,6 +2422,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /** Records confidentiality consumed by an acquired reference observation. */
   recordCfcReferenceObservation(observation: CfcReferenceObservation): void;
+  /** Records one runtime-authorized external CONTENT observation. */
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void;
 
   /**
    * Records a structured description of a refusal one of this transaction's
@@ -2256,6 +2439,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * detail names the INPUT to drop, which the reason alone cannot.
    */
   recordCfcRefusalDetail(detail: CfcRefusalDetail): void;
+
+  /** Counts a full consumed-label collection without changing CFC state. */
+  noteCfcConsumedLabelWalk(): void;
+
+  /** Counts prepare work without changing relevance or digest state. */
+  noteCfcPreparationWork(kind: CfcPreparationWork, count?: number): void;
 
   /**
    * The trusted policy-writer path for CFC grant documents (§8.12.7 route
@@ -2417,6 +2606,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * through a higher-level diff path such as `markReadAsAttemptedWrite`.
    * Runner-owned system metadata writes may also use this directly when they
    * are intentionally out of phase-1 value-surface CFC scope.
+   * Outside UI blind-write mode, elision over pending state retains an internal
+   * commit dependency; this does not add attempted-target coverage.
    *
    * @param address - Memory address to write to.
    * @param value - Value to write.
@@ -2489,6 +2680,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     variant: string,
     value: unknown,
   ): void;
+
+  /**
+   * Drops memoized reads of the transaction's current instant. A caller uses
+   * this after an asynchronous load fills a document that an earlier read
+   * could not traverse; reads at an issued epoch retain their fixed snapshot.
+   */
+  resetCurrentReadMemoization(): void;
 
   /**
    * Optional diagnostics for the transaction-local `Cell.get()` cache.
@@ -2565,6 +2763,9 @@ export interface IStorageTransactionInconsistent extends IStorageError {
   readonly name: "StorageTransactionInconsistent";
 
   readonly address: IMemoryAddress;
+
+  /** An empty reactive commit needs a fresh run; first results may bypass gates. */
+  readonly emptyReactiveCommit?: true;
 
   from(space: MemorySpace): IStorageTransactionInconsistent;
 }
@@ -2702,7 +2903,8 @@ export type WriteError =
   | IUnsupportedMediaTypeError
   | InactiveTransactionError
   | IReadOnlyAddressError
-  | ITypeMismatchError;
+  | ITypeMismatchError
+  | IInvalidArrayLengthError;
 
 export type WriterError =
   | InactiveTransactionError
@@ -2887,6 +3089,12 @@ export interface ISpaceReplica extends ISpace {
     identity?: ScopeKeyIdentity,
     excludeSpeculative?: boolean,
   ): CommitReadBasis;
+  /** Whether this exact document instance has an unpromoted local write. */
+  hasPendingWrite(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean;
 
   /** Claims renderer ownership and retires the previous owner's local graphs. */
   acquireViewInterests?(onReplaced: Cancel): ViewInterestLease;
@@ -2917,6 +3125,22 @@ export interface ISpaceReplica extends ISpace {
     scope?: CellScope,
     identity?: ScopeKeyIdentity,
   ): boolean;
+
+  /**
+   * The seq this replica's CONFIRMED view stands at for the document
+   * instance — the last accepted write to it this replica has taken, and 0
+   * for one it has taken none of. Says nothing about the replica's own
+   * pending writes over that base, which carry no accepted seq.
+   *
+   * A caller comparing this against the store's head learns whether the
+   * replica is behind the store on the document, and so whether a run that
+   * read it here read what the store now holds.
+   */
+  confirmedDocumentSeq(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): number;
 
   /** Observes changes in residency, including delivery of a known absence. */
   subscribeLocalCoverage?(
@@ -3168,6 +3392,12 @@ export interface ISpaceReplica extends ISpace {
 }
 
 /**
+ * Why a wave withdrew a sealed contribution. A contribution drop is retryable
+ * in place; an explicit wave abandon is expected enclosing-lifecycle teardown.
+ */
+export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
+
+/**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
  * sealed commit's pending writes promote to confirmed at that seq.
@@ -3192,9 +3422,8 @@ export type SealedCommitVerdict =
       message: string;
       superseded?: true;
       /** Structured withdrawal classification for consumers that must not
-       * parse diagnostic prose. A contribution drop is retryable in place;
-       * an explicit wave abandon is expected enclosing-lifecycle teardown. */
-      cause?: "contribution-dropped" | "wave-abandoned";
+       * parse diagnostic prose. */
+      cause?: WaveWithdrawalCause;
     };
   };
 
@@ -3261,7 +3490,9 @@ export interface TransactionWriteDetail {
    * absent slot from a present slot holding `undefined`, which
    * `previousValue` alone cannot (the storage write path keeps presence
    * distinct from value). Optional: transactions that cannot compute it
-   * omit it, and consumers fall back to `previousValue` definedness.
+   * omit it. Consumers that only need approximate presence may fall back
+   * to `previousValue` definedness; authorization requiring proven absence
+   * must refuse unknown presence.
    */
   previousPresent?: boolean;
 }
@@ -3377,6 +3608,20 @@ export interface IReadOnlyAddressError extends IStorageError {
   readonly address: IMemoryAddress;
 
   from(space: MemorySpace): IReadOnlyAddressError;
+}
+
+/**
+ * Error returned when a write to an array's `length` would grow the array to
+ * `2 ** 32` or more, past the longest an array can be. Like a type mismatch,
+ * it would persist if the transaction were retried.
+ */
+export interface IInvalidArrayLengthError extends IStorageError {
+  readonly name: "InvalidArrayLengthError";
+
+  /** The address written, whose path ends in `length`. */
+  readonly address: IMemoryAddress;
+
+  from(space: MemorySpace): IInvalidArrayLengthError;
 }
 
 /**

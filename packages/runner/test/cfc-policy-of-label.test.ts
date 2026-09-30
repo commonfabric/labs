@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import { recordRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
 import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
@@ -522,19 +524,17 @@ describe("PolicyOf label-time binding", () => {
       undefined,
       copyTx,
     );
-    const sourceLink = source.getAsNormalizedFullLink();
     const targetLink = target.getAsNormalizedFullLink();
-    copyTx.writeValueOrThrow({
-      ...targetLink,
-      path: ["value"],
-    }, "copied secret");
-    copyTx.recordCfcWritePolicyInput({
-      kind: "link-write",
-      target: { ...targetLink, path: ["value"] },
-      source: { ...sourceLink, path: [] },
-    });
+    const owner = runtime.getCell(
+      destinationSpace,
+      "policy-copy-builtin",
+      undefined,
+      copyTx,
+    );
+    recordRuntimeOwnedStore(copyTx, owner, target);
+    target.set(source.withTx(copyTx).get());
     copyTx.prepareCfc();
-    expect((await copyTx.commit()).ok).toBeDefined();
+    expect((await copyTx.commit()).error).toBeUndefined();
 
     const coldRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -547,7 +547,7 @@ describe("PolicyOf label-time binding", () => {
       const reference = metadata?.labelMap.entries
         .flatMap((entry) => entry.label.confidentiality ?? [])
         .find((value) =>
-          typeof value === "object" && value !== null &&
+          isObjectOrArray(value) &&
           (value as Record<string, unknown>).policyRefKind === "module"
         );
       expect(reference).toBeDefined();

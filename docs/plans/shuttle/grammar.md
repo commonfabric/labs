@@ -71,8 +71,7 @@ stays bare — a slug, a handle, a flag and a path each print as themselves.
 What forces quoting is whitespace, either quote, the backslash, and the
 characters this grammar spends on structure rather than on data: the pipe,
 the `!` that marks a local program, the two redirection operators, the `#` a
-wish target and an argument suffix are written with, and the `%` a numbered
-handle is. Each is ruled elsewhere in this document; collected here, they
+wish target and a member are written with, and the `%` a numbered handle is. Each is ruled elsewhere in this document; collected here, they
 are the set a printed value is held against, and a value holding one is
 quoted wherever in the value it sits — a printer is handed a value and no
 position, so it quotes on the character rather than on the reading.
@@ -88,7 +87,7 @@ every path and every flag — which is to say nearly everything shuttle
 prints, leaving nothing conditional about conditional quoting.
 
 Some characters this grammar spends on structure are left out all the same,
-and the same cost is the reason. `:` marks a scheme and the `x:` base, and
+and the same cost is the reason. `:` marks a scheme, and
 it also sits in every handle — `of:fid1:…` — so reserving it would quote
 every reference that prints. `-` is the previous place and the stdin
 sentinel, and it opens every long flag. Each of them is read at the head of
@@ -101,8 +100,9 @@ it stops there: **a quote reaches no reading**. The split returns plain
 strings, so a reading sees the characters a token holds and never how they
 were delivered, and `cd '..'` and `cd ..` are one operand. What names a key
 whose own characters a reading would take is therefore a different spelling
-rather than a different quoting — the reference below, which reads none of
-the relative readings — and that is what a listing prints for such a row.
+rather than a different quoting — the key behind the `.` head, `./..`, which
+reads none of those readings — and that is what a listing prints for such a
+row.
 Ruling the other way has a known shape and a known cost: the split would
 start carrying which parts of a token were quoted, which grows the value it
 returns rather than adding a layer over it, and every reading that consults
@@ -170,7 +170,7 @@ does not already know it.
 The option reading costs a listing one shape, and it is the shape the quoting
 ruling above already costs one of. Every name a listing prints is one `cd`
 takes back, and a name opening with `-` is read as an option when it stands as
-a token of its own, so such a key is offered as the reference that names it
+a token of its own, so such a key is offered behind the `.` head, `./-x`,
 rather than as itself — the answer a key called `..` gets, for the same reason
 one layer up. What a listing offers and what can be typed are two questions:
 `cd -- -x` reaches that key and `cd -- --` reaches one called `--`, a bare `--`
@@ -197,7 +197,7 @@ as the canonical grammar's context rule already works:
   place-independent. A rooted operand whose first segment names a facet is
   the walk down from the space root instead, the facet names being
   reserved there too (below).
-- `/@did:key:…/of:…` — a **complete** reference: piece, path and space are
+- `//did:key:…/of:…` — a **complete** reference: piece, path and space are
   its own, and the scope is still the place's. It is place-independent in
   one dimension and not in the other, so the same string read at `@user`
   and at `@session` names two different cells. Denoting is not reaching,
@@ -205,80 +205,101 @@ as the canonical grammar's context rule already works:
   space than the place's is refused rather than followed —
   `validateEmbeddedSpaces` (`packages/cli/lib/llm-friendly-ref.ts`) already
   holds `cf` to that, and shuttle v1 holds one connection.
-- `/@did:key:…/of:…@scope` — a **fully qualified** reference: every level
+- `//did:key:…/of:…@scope` — a **fully qualified** reference: every level
   is its own and nothing is read from the place, so it denotes the same
   cell read from anywhere. This is the form a printed address or a shared
   link should be, and it is what `pwd` prints, for that reason.
 
-  The scope a complete reference omits is not a hole in it. Canonically an
-  absent qualifier *means* the base, which is why the serializer writes none
-  for a base-scoped link. The two layers read the same absence differently
-  — canonical says base, shuttle fills it from the place, the way a shell
-  reads a relative path — and that difference is why `pwd` writes the
-  qualifier rather than trusting it to be inferred.
+  The scope a complete reference omits is the context's: a reader holding a
+  context fills it from there, and one holding none reads the base. Shuttle's
+  context is the place, so it fills the scope from the place, the way a shell
+  reads a relative path — and that is why `pwd` writes the qualifier rather
+  than trusting it to be inferred.
 
-  Shuttle composes the space prefix itself, in `renderPosition`
-  (`packages/cli/lib/shuttle/place.ts`), writing `@<space>` as a segment of
-  the pointer. That spelling is the alias form under
-  [#6814](https://github.com/commontoolsinc/labs/issues/6814), whose writer
-  step replaces it with `//<space>/` and after which no writer emits the
-  alias — it stays readable for strings already rendered into harness refs,
-  stored messages and markdown. `renderPosition` is the one place shuttle
-  writes a reference, so that step has a single site to visit here.
+  A piece position is written by the shared renderer, `renderCellReference`
+  (`packages/runner/src/cell-reference.ts`), against the empty context, which
+  writes the space as `//<space>/` and the scope after the piece.
+  `renderPosition` (`packages/cli/lib/shuttle/place.ts`) is where shuttle
+  hands it a position, and the one place shuttle writes a complete reference.
 - `#…` — a wish target (entry point), resolvable from anywhere within
   the connected space. A target anchored elsewhere — profile and
   favorites resolve against the reading identity's home space regardless
   of the connected space (`packages/cli/lib/wish.ts`) — is refused with
   the reason in v1, which holds one connection to one space.
 - `/` — the space's own root, the leading `/` of a rooted reference
-  with nothing following it; `..` — up one level; `cd -` — the
-  previous place.
-- Anything else — relative: resolved as a child of the current position
-  (a facet at a space root, a key or index inside a piece, a slug inside
-  `slugs/`).
+  with nothing following it; `cd -` — the previous place.
+- `%n` — a row of the last listing, a head that what follows it is read
+  against.
+- Anything else — a **relative** reference, read by the reference grammar's
+  own reader (`parseRelativeReference`) as a head and a literal path: the
+  head, `.` or a run of `..`, says how many levels to climb and which member
+  and scope to read, and the path is descended from where the climbs land —
+  a facet at a space root, a piece segment inside `slugs/` or `pieces/`, and
+  a key or index inside a piece.
 
-The distinction is the parser's, not shuttle's: `parseLLMFriendlyLink`
-(`packages/runner/src/link-types.ts`) takes the space as a separate
-argument and uses it whenever the reference carries no `@did:key:…`
-prefix, overriding it with the embedded space when one is present. A
-rooted reference is therefore exactly as space-dependent as a relative
-one; it is the piece and path it fixes, not the space.
+The distinction is the parser's, not shuttle's: `parseCellReference`
+(`packages/runner/src/cell-reference.ts`) takes the space from a context and
+uses it whenever the reference carries no `//did:key:…/` prefix, overriding
+it with the embedded space when one is present. A rooted reference is
+therefore exactly as space-dependent as a relative one; it is the piece and
+path it fixes, not the space.
 
-How a reading is matched says where it holds.
-`-` and a lone `/` are matched against the whole operand exactly, so
-neither governs a segment: a key named `-` is reachable relatively
-wherever it is not the whole operand. `.` alone is matched that way as well, being
-the context's own cell. `./` and `.@` are **heads** rather than whole
-operands: each is read before the walk splits what follows, and governs it
-— `./items@user` is the key `items@user` and never a walk through a key
-called `.`, and `.@user` moves the scope. So a key named `.` has no bare
-spelling, the trade `-` and `/` already make, and keeps the two that
-matter: `./.` reaches it, and so does the reference a listing prints for
-it. A lone leading `#` is matched
-against the operand's head too and takes the whole operand with it:
-`cd #favorites/topics` hands on the whole string as one target. So `#` is
-an ordinary data character in every later segment that is data — inside a
-piece — and so is `@` in every segment that is data. Where a qualifier is
-read is where a segment names a cell: the `.` head, and a segment naming a
-piece, which the canonical grammar reads and which therefore takes the
-qualifier `board@session` carries. A fragment there
-is refused too, but by shuttle rather than by that grammar, which carries
-the `#argument` suffix on a piece designation and would take one. `..` is
-matched segment by segment as the walk splits them, so it is reserved in
-all of them and a key named `..` has no relative spelling — it reaches a
-place through a reference, the door that reads no `..` at all. `/` is the
-separator besides, so no segment of an operand holds one, and a key that
-does is spelled `~1`, which a reference unescapes and a walk does not.
+How a reading is matched says where it holds. `-` and a lone `/` are matched
+against the whole operand exactly, so neither governs a segment: a key named
+`-` is reachable relatively wherever it is not the whole operand, and `./-`
+reaches it there too. A lone leading `#` is matched against the operand's
+head and takes the whole operand with it: `cd #favorites/topics` hands on the
+whole string as one target. A leading `%` is a numbered handle, matched
+against the head the same way.
+
+Every other relative operand is the reference grammar's. Its head — `.`, or a
+run of `..` — is read before the path, and is where the operand takes a
+member or a qualifier: `.@user` moves the scope, and `.#argument` selects the
+arguments member. After the head the path is one RFC 6901 pointer, in which
+every segment is a literal key: `a/../b` names the three keys `a`, `..` and
+`b`, `./items@user` is the key `items@user`, and `~1` and `~0` are the
+escapes for `/` and `~` inside a key, so `cd a~1b` reaches the key `a/b`. A
+key the bare form would read as a head — `..`, `.`, and the empty key — is
+written behind the `.` head: `./..`, `./.` and `./`. What follows a handle is
+read the same way, the handle standing where `.` stands, so `%1/..` is the
+key `..` under the row's position and `%1/` the empty key under it.
+
+A head's climbs are taken one at a time through the route shuttle walked,
+and not computed from the position, because above a piece there is no parent
+function of an address: a piece reached through `slugs/` and the same piece
+reached through `pieces/` are one position with two different ways back. So
+a climb leaves a piece for the facet or the root it was reached through,
+which the reference grammar, having nothing above a piece, leaves to a reader
+that holds a route. A walk that climbs back out of a piece lands without a
+read, and one that descends waits on the read its last level needs.
+
+Above a piece there are no keys. A final empty segment where a walk ends at
+the root or a facet is the separator that ended the operand and names
+nothing, so `cd slugs/` reaches the facet; an empty segment anywhere else
+above a piece names a facet or a piece that no name is, and that level
+refuses it. Inside a piece the same separator names the empty key, so
+`cd slugs/board/` stands at the key `""` under `board`, and a `cd` that finds
+no such key says that the trailing `/` named it.
+
+Where a member and a qualifier are read is where a segment names a cell: the
+head of a relative operand or of a handle, and a segment naming a piece — one
+a walk reaches from a facet, and the piece segment of a rooted or complete
+reference — which the reference grammar reads with `parsePieceSegment`, so
+`board#argument@session` there selects the arguments member at scope
+`session`. A qualifier the grammar registers that a place cannot hold is
+refused rather than dropped where shuttle reads the head or the piece segment
+itself: a place holds no pin, so `@pin=` is refused there, while `@inherit`
+names the context's scope, which is the place's own. In every segment that
+is data, `@` and `#` are ordinary characters.
 
 The property every door is held to is that a rendering may be refused but
-may never name a cell other than the one it was printed for. Characters go
-missing between a place and the rendering that names it. Reading a
-rendering back is a parse of a reference, which trims the string and drops a
-trailing empty segment. Writing one separates its lines with a newline. Both
-reach a path segment, so an empty segment, one ending in whitespace, and one
-holding a line break are refused, while one that merely starts with
-whitespace survives and is not. The first two are refused wherever they sit
-and not only last, because `..` makes any segment the last one.
+may never name a cell other than the one it was printed for. Writing a
+rendering separates its lines with a newline, so a segment holding one would
+split the position line and leave a shorter reference naming another cell,
+and such a segment is refused wherever it sits. Reading a rendering back
+loses nothing a key holds: the reference reader keeps an empty key and a key
+ending in whitespace, and the renderer escapes the separator and the escape,
+so both are keys like any other.
 
 A control character is refused as well, for a reason the round trip cannot
 see: a rendering is read on a terminal, and there Unicode's `Cc` characters —
@@ -293,14 +314,9 @@ since what a person copies off the screen is what the terminal did with it.
 terminal prints them, and the printer quotes them, being whitespace to the
 split.
 
-Of what a rendering loses, only the newline reaches a piece that has one. The
-scope qualifier the
-rendering always writes sits between the piece and the end of the string,
-so the trim takes the qualifier rather than the piece, and the parse's split
-at the last `@` takes the qualifier's own. An empty piece is the exception,
-and one fact generates it: its rendered id segment is the qualifier and
-nothing else, so the split finds no id in front of it and the parse refuses
-the whole reference rather than handing anything back.
+Of what a rendering loses, only the newline reaches a piece that has one. An
+empty piece renders as a piece segment with no id in it, which the reader
+refuses whole rather than reading back as anything.
 
 The piece is nonetheless held to more, for a different reason: one that is
 empty, ends in whitespace, holds an `@`, or holds a control character is
@@ -332,49 +348,52 @@ an operand for.
 
 The vocabulary rule still buys no guarantee that every rendering is
 followable, and it and the rendering rules above catch different names. A
-handle-shaped piece holding an `@` or ending in whitespace is caught by the
-rendering rules above rather than by the vocabulary, `isPieceHandle` being a
-length rule that takes either; and a path segment holding a `#` reaches a
-place under the readings below and renders as a reference the parse then
-refuses.
+handle-shaped piece holding an `@` or a `#`, or ending in whitespace, is
+caught by the piece rules above rather than by the vocabulary,
+`isPieceHandle` being a length rule that takes any of them.
 
 A segment lifted out of a rendering is an operand in its own right, so
 these readings decide it rather than the key it was printed from.
 
-The `#` character has three readings, and they share nothing but the
-character. A lone `#name` token is a wish target, as above. `#argument` is
-a suffix on a target, whichever way that target is written — a reference, a
-bare id, a slug — and it selects the piece's arguments cell, the same
-selection `--input` spells as a flag. `splitArgumentSuffix`
-(`packages/cli/lib/llm-friendly-ref.ts`) is that one reading: it takes the
-suffix off before anything parses what it followed, and refuses every other
-fragment. And inside a piece `#` is an ordinary character of a data key,
-under the rule above: the wish reading is decided on the whole operand, so
-it governs the head and nothing else.
+The `#` character has three readings, and they share nothing but the character.
+A lone `#name` token is a wish target, as above. `#argument` is a **member**,
+read where the rule above reads one — on a head and on a piece segment — and it
+selects the piece's arguments cell, the same selection `--input` spells as a
+flag: `.#argument/title` from inside a piece, `%1#argument/title` against a
+listed row that stands in a piece, and `/slugs/board#argument/title` from
+anywhere. A head standing at a space root or a facet holds no arguments cell and
+is refused one, and so is a handle whose row stands at one: the row's own
+position decides, and not the place its listing was read at, so a piece row
+listed inside `slugs/` takes `%1#argument/title`. The path after the member is
+inside the arguments cell and is read from that cell's root, so `.#argument/a`
+reads the key `a` of the arguments cell wherever in the result shuttle stands,
+and a head that climbs and selects the member in one, `..#argument/a`, is
+refused — there is no level for the climb to leave, and the reference grammar
+refuses the same head. `#result` is the default member and switches nothing. And
+in every segment that is data `#` is an ordinary character:
+`/slugs/board/title#argument` is the result key `title#argument`, the wish
+reading being decided on the whole operand and governing its head and nothing
+else.
 
-Those two readings between them leave one key with no **direct** spelling. A
-key whose *first* character is `#` is a wish target when it is the whole
-operand, and a reference carrying a `#` anywhere is refused, so neither door
-names it on its own. Some multi-segment operand still reaches it — `#` is data
-in a segment that names a data key, and `slugs/board/#key` names it from the
-space root — and which routes reach it from where is not characterized here. That is
-what the quoting ruling above costs: the key is reachable by a route rather
-than by a name, and a listing prints no name for such a row, a row's name
-being what it is called and not how to get to it.
+A key whose first character is `#` is a wish target when it is the whole
+operand, and is written behind the `.` head everywhere it is named: `./#tag`
+reaches it, and that is what a listing prints for such a row.
 
 A container renders without the leading `/` that marks a reference, so a
 space root and a facet cannot be read back as a piece whose slug happens to
 match their name; `cd` refuses such a rendering rather than following it.
 
 A place is **result-rooted**, and holds exactly space, piece, path, and
-scope. `cd` refuses a target carrying `#argument`, in every spelling that
-takes one, rather than dropping the suffix silently: a place that could
-root at the arguments cell would leave every later relative read ambiguous
-about which side of the piece it addressed, and the prompt would have to
-carry the distinction for as long as you stood there. Arguments are
-reached per operand instead — `get topics/3#argument`, and `--input` on
-the `cf` verbs that take it — so the choice is one visible token at each
-use.
+scope. `cd` refuses a target selecting the `#argument` member, in every
+spelling that selects it, rather than dropping the member silently: a place
+that could root at the arguments cell would leave every later relative read
+ambiguous about which side of the piece it addressed, and the prompt would
+have to carry the distinction for as long as you stood there. Arguments are
+reached per operand instead — `get .#argument/title`,
+`get /slugs/board#argument/title`, and `--input` on the `cf` verbs that take
+it — so the choice is one visible token at each use. A `#argument` written as
+a whole operand names no piece to select the member of, and is refused with
+those two spellings.
 
 ## What `cd` reads before it moves
 
@@ -499,8 +518,8 @@ character from the facet rendering, and read as a walk it names the facet
 the prompt printed.
 
 **What it costs is a divergence from the canonical grammar, at two slug
-values.** The rooted spelling is not shuttle's own. `/[@space/]<piece>…`
-is the canonical way to name a cell — the runner's `parseReferenceParts`,
+values.** The rooted spelling is not shuttle's own. `[//space]/<piece>…`
+is the canonical way to name a cell — the runner's `parseCellReference`,
 the same structure in patterns, in the shell and at every `cf` intake
 seam — and this CLI, which opens a session before it reads anything,
 resolves that piece segment by slug as well as by handle
@@ -510,13 +529,13 @@ rooted reference whose first segment is a slug is the canonical grammar
 and predates shuttle, and reserving two values in that position means
 shuttle reads `/slugs/x` and `/pieces/x` differently from the way `cf`
 reads the same strings — and identically for every other slug. Issue
-[#6992](https://github.com/commontoolsinc/labs/issues/6992) retires the
+[#6992](https://github.com/commonfabric/labs/issues/6992) retires the
 divergence by having `set-slug` refuse those two values as slugs, after
 which no piece can carry them and the two grammars agree everywhere.
 
 The reservation reaches the rooted form and no further. A complete
 reference carries its own space and is the canonical grammar's outright,
-so `/@did:key:…/slugs/todo` still names a piece slugged `slugs` — which
+so `//did:key:…/slugs/todo` still names a piece slugged `slugs` — which
 is what leaves such a piece nameable at all until #6992 lands, beside its
 handle. The root already paid the same cost: `cd slugs` at the root has
 never reached a piece by that name.
@@ -540,7 +559,8 @@ that trimming would *root* is refused, and one that trimming leaves
 relative is read as it is written. A rooted operand carrying trailing
 whitespace is rooted as written and is read that way: the walk keeps its
 edges, so `cd "/slugs/todo "` is refused for a piece ending in whitespace,
-by the rule any part ending in whitespace answers to.
+by the rule a piece answers to, and `cd "/slugs/todo/title "` reaches the key
+`title `.
 
 The facet set stays deliberately small; growing it is a design decision,
 not a convenience.
@@ -563,7 +583,7 @@ rooted or complete reference, a `%n` row of the last listing. What a verb
 then does with what that door found is its own, and `ls` parts from `get`
 twice, each time because a listing is not a value. A space root and a facet
 hold no value and are refused there; here they are what a listing is for.
-And the `#argument` suffix, which `get` takes, is refused here — a place
+And the `#argument` member, which `get` takes, is refused here — a place
 carries no selection between a piece's two cells, and a listing's rows are
 reached from the place they were listed at. Nothing moves either way:
 listing a child reads it without standing on it, exactly as reading one
@@ -584,10 +604,13 @@ that implied completeness would be false.
 **Every name a listing prints is one `cd` takes back to that row**, and a row
 it has no name for prints none at all. Most rows print their own name,
 written as a token by the rule above — a slug, a handle and an ordinary key
-each print as themselves. A row whose name's own characters are readings —
-a key called `..` or `-`, one holding the separator, one beginning with `@` or
-with `-` — prints the reference that names it instead, which reads none of
-them and unescapes `~1`.
+each print as themselves. A key is printed as the reference grammar's writer
+writes it against the place it was listed at: a key holding the separator
+escapes it, `a~1b`, and one the bare form would read as a head is written
+behind the `.` head, `./..`, `./.`, and `./` for the empty key. Where one of
+shuttle's own readings would take that form — `-` on its own, and a leading
+`%`, `#` or `-` — the `.` head goes in front of it as well: `./-`, `./%1`,
+`./#tag`, `./-x`. A key opening with `@` is data and prints as itself.
 
 A line opens with the row's handle, in a column the widest of them sets, and
 the name comes next. What a reader copies out of the name column is
@@ -611,8 +634,9 @@ would say what the next `ls` says anyway — a container lists, and a value
 does not.
 
 A row with no name prints a marker in the name column, and says no more than
-that: a key whose first character is `#` is reached by a route, as above, and a
-listing prints names rather than routes. Everything on a listed line that is
+that: a key no door admits, such as one holding a line break, is reached by no
+operand, and a listing prints names rather than routes. Everything on a listed
+line that is
 not a name is written between angle brackets. A name holding an angle bracket
 is printed quoted, the grammar reserving it, so a name column opening with `<`
 carries no name — while a marker's own payload is not escaped, those brackets
@@ -764,15 +788,15 @@ it for that operand alone.
 
 A scope on its own is written `.@scope`, which is the reference grammar's
 own relative spelling rather than a navigation word of shuttle's: `.` is
-the context's own cell, and `.` at the head of a relative reference is
-where that reference takes a member or a qualifier
-([#6814](https://github.com/commontoolsinc/labs/issues/6814)) — `./items`
-the member, `.@user` the qualifier. The head is read before the walk
-splits what follows it, so it governs the rest rather than standing as a
-segment. So `@` carries one meaning, a qualifier on the piece, and is an
-ordinary character everywhere else — `cd @session` reaches a key called
-`@session`, and `cd ./items@user` a key called `items@user`, the `@` there
-sitting on `items` rather than on the head.
+the context's own cell, and the head of a relative reference is where that
+reference takes a member or a qualifier
+([`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md), D1) —
+`.#argument` the member, `.@user` the qualifier. The head is read before the
+path, so it governs the rest rather than standing as a segment. So `@`
+carries one meaning, a qualifier on the piece, and is an ordinary character
+everywhere else — `cd @session` reaches a key called `@session`, and
+`cd ./items@user` a key called `items@user`, the `@` there sitting on `items`
+rather than on the head.
 
 That the bare word is data is what the reading costs and what it buys. A
 key named for a scope word was unreachable while the bare form was
@@ -782,27 +806,30 @@ where the operand named no key and the word is a scope word. The offer is
 a hint on a refusal and never a reading: a place that holds the key lands
 on it and says nothing.
 
-The spelling tracks #6814, which is proposed rather than merged. Shuttle
-conforms to it now because migrating a navigation spelling later costs
-more than adopting it early.
+Shuttle reads the spelling through the reference grammar's own reader,
+`parseRelativeReference`, rather than a copy of it, so a head means here what
+it means to every other reader of that grammar.
 
 The canonical grammar bounds what a qualifier on a reference can say
-(verified against `parseScopedIdSegment` in
-`packages/runner/src/link-types.ts`):
+(`parsePieceSegment` and `parseRelativeReference` in
+`packages/runner/src/cell-reference.ts`):
 
-- The qualifier is a `CellScope` word — `@space`, `@user`, `@session` — with
-  no identity component; those are never spelled in a reference. `@session`
-  and `@user` therefore mean the **reading identity's own** overlays,
-  composed with the caller's identity at resolution.
-- `@space` is a canonical scope value, not shuttle's addition:
-  `CELL_SCOPE_VALUES` holds it beside `user` and `session`, the parser's
-  rejection text names all three, and `piece1@space/path` parses to
-  `scope: "space"` distinct from an omitted qualifier
-  (`packages/cli/test/piece.test.ts`). The base is therefore nameable, and
-  `cd .@space` sets the ambient scope back to it.
-- The serializer never emits `@space` (the base renders as a bare id), so
-  the prompt and `pwd` render the scope dimension themselves rather than
-  round-tripping through the reference serializer.
+- The scope qualifier is a scope word — `@space`, `@user`, `@session`, and
+  `@inherit` — with no identity component; identities are never spelled in a
+  reference. `@session` and `@user` therefore mean the **reading identity's
+  own** overlays, composed with the caller's identity at resolution, and
+  `@inherit` means the context's scope, which for shuttle is the place's own.
+  A word outside those is refused in the reader's own sentence.
+- `@space` is a canonical scope value, not shuttle's addition: the reader
+  takes it beside the others, its refusal names all four, and
+  `piece1@space/path` parses to `scope: "space"` distinct from an omitted
+  qualifier (`packages/cli/test/piece.test.ts`). The base is therefore
+  nameable, and `cd .@space` sets the ambient scope back to it.
+- The grammar registers `@pin=` besides, a version of a piece. A place holds
+  no pin, so shuttle refuses one on a head and on a piece segment it reads.
+- The shared renderer writes `@space` when it is handed the empty context,
+  which has no scope to leave the base to, so `pwd` writes the scope through
+  it; the prompt writes the scope after the position itself.
 - Standing in **another** identity's overlay (an `@session:<sid>`-shaped
   spelling) is not in the grammar and is out of v1. It is a
   canonical-grammar extension first — "the alias must not grow a
@@ -881,7 +908,7 @@ the line would then refuse.
 **What a completion writes is a token that reaches what it names.** The
 candidates under a place are the operands `cd` takes to the rows `ls` lists,
 which is the same answer the listing prints in its name column: a name whose
-own characters are readings comes back as the reference that names it, and a
+own characters are readings comes back as the operand that names it, and a
 name needing quotes comes back quoted. A row nothing names is not offered,
 which is the same shape as a listing printing a marker where a row has no
 operand.
@@ -918,9 +945,9 @@ candidates there are — the operands reaching what stands where shuttle stands
 — so a prefix is completed exactly where it opens one of those. Two things
 follow, and the second is the first read the other way round. An operand
 carrying the separator is completed like any other, which is what reaches a
-row whose own operand is a reference: standing at a piece, `/@space/piece@…/.`
-completes to that reference's own `/..`, since the reference *is* the operand
-`operandForChild` offers for that row. And `cd slugs/bo` at a space root
+row whose own operand carries one: standing at a piece, `./.` completes to
+`./..`, since that *is* the operand `operandForChild` offers for a key called
+`..`. And `cd slugs/bo` at a space root
 completes nothing — not because a rule turns it down, but because no row
 standing at the root is called that; the row it names stands inside `slugs/`,
 and reaching it is a read of a place the line has not moved to.
@@ -1005,23 +1032,42 @@ anything outside the fabric is named by an explicit scheme.
   copy, `link` remaining the reference-writer — is designed and deferred
   past v1 ([`futures.md`](futures.md)); the plane rules below are settled
   v1 grammar either way.
-- `file:` names a local file, the only spelling that touches disk — and a
-  scheme is legal only on an absolute complete path:
-  `get topics --json > file:/tmp/topics.json` is fine, `file:out.json` is
-  refused (`file:~/…` counts as absolute).
-- `file:` is one member of an open scheme family: a schemed operand names
-  something outside the fabric. `file:` is the v1 member; `https:` read
-  ends are designed and deferred ([`futures.md`](futures.md)), and writing
-  to an external scheme stays out of scope until a use rules it in.
+- `file:` names a local file, the only spelling that touches disk. A
+  schemed operand names its plane, and a leading `/` is what makes it
+  absolute: `get topics --json > file:/tmp/topics.json` names a whole path,
+  and `> file:out.json` names one relative to the external working location
+  below. `file:~/…` counts as absolute. There is no separate base name for
+  a relative external path — the scheme is the plane, and `/` is the root.
+- `file:` is one member of an open scheme family, and what a member affords
+  differs:
+
+  | plane | navigate | list | read | write | run a program in |
+  | ----- | -------- | ---- | ---- | ----- | ---------------- |
+  | `file:` | yes | yes | yes | yes | yes |
+  | `https:` | no | no | yes | no | no |
+  | fabric | yes | yes | yes | yes | n/a |
+
+  An operand reaches a plane and the plane decides what it affords, so a
+  refusal names the plane's limit rather than a gap in shuttle (decision
+  30). HTTP has no listing primitive — an auto-index page is a server's
+  choice rather than the protocol's — and no traversal for `..` to act on,
+  which empties four of its five columns and leaves the read. `https:` read ends are
+  designed and deferred ([`futures.md`](futures.md)), and writing to an
+  external scheme stays out of scope until a use rules it in.
 - Shuttle maintains two working positions: the fabric cwd and one
-  **external working location**. `xcd` sets it — `xcd file:~/data`,
-  `xcd https://foo.com/a/b/` — and, its argument being already on the
-  external plane, moves it with a plain relative path: `xcd ../foo`.
-  `xpwd` prints it. In operands, a relative external path is rooted with
-  the `x:` base — `> x:../out.json`, `< x:data.json`. `x:` is a base name
-  rather than a scheme: it roots a relative path at the external location
-  whatever that location's scheme, so no operand ever changes plane by
-  position. A bare relative operand is always fabric.
+  **external working location**, which stands on `file:` and nowhere else.
+  `xcd` sets it — `xcd file:~/data` — and, its argument being already on
+  that plane, moves it with a plain relative path: `xcd ../foo`. A scheme
+  the table gives no `navigate` to is refused, `xcd https://…` among them:
+  a place is stood in by moving through it. `xcd` writes where it landed,
+  where `cd` writes nothing: the prompt carries the place and carries
+  nothing about this position, so a move nothing reports is one a person
+  has to ask about, and `xpwd` prints it.
+
+  A bare relative *operand* is always fabric, so nothing reaches this
+  position by position alone. `xcd`'s argument is the one exception, and it
+  is not an operand in that sense: the verb names the plane, which is why it
+  takes `../foo` bare where an operand would have to write the scheme.
 
 ## Pipes: escaped locals
 
@@ -1047,18 +1093,6 @@ spelling reaches any of them. Adding one item to a collection is therefore
 `get`, edit, `set`: the read-modify-write those operations were made
 first-class to avoid.
 
-**The `@` sigil carries two meanings.** It is the space slot of a reference
-and the qualifier on a piece: `/@user/<handle>` is a space *named* user,
-and `/@user/<handle>@session` is both at once — and space names are unvalidated, so the collision is live
-rather than hypothetical. Shuttle cannot resolve it: decision 13 forbids
-inventing a spelling, and a second scope spelling would be worse than the
-ambiguity. Issue
-[#6775](https://github.com/commontoolsinc/labs/issues/6775) carries it. In
-v1 a space named by name is refused unless it resolves to the connected
-space, which is what keeps it dormant; multi-space sessions are where it
-wakes.
-
-The base-overlay spelling is settled above, and so is what the prompt shows
-where no slug is confirmed: the whole handle, for the reasons the Prompt
-section carries. One further open item for shuttle overall (shallow-sink
+What the prompt shows where no slug is confirmed is settled above: the whole
+handle, for the reasons the Prompt section carries. One further open item for shuttle overall (shallow-sink
 expressibility) lives in [`views.md`](views.md).

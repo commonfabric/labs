@@ -52,7 +52,6 @@ const FIXTURE = TIER_MARKERS.fixture;
 describe("tierOf", () => {
   it("tiers a file by the directory holding it", () => {
     expect(tierOf("factory-outputs/lot-watch/main.tsx")).toBe("legacy");
-    expect(tierOf("google/WIP/google-docs-importer.tsx")).toBe("legacy");
     expect(tierOf("gideon-tests/test-cell-equals.tsx")).toBe("fixture");
     expect(tierOf("test/non-idempotent/shuffle.tsx")).toBe("fixture");
   });
@@ -216,22 +215,14 @@ describe("isWritable", () => {
 describe("staleTableEntries", () => {
   it("accepts tables whose every entry matches something", () => {
     expect(
-      staleTableEntries([
-        "factory-outputs/lot-watch/main.tsx",
-        "google/WIP/a.tsx",
-        "gideon-tests/a.tsx",
-        "plain-array-callback-locals/main.tsx",
-        "scope-bug-computed-vnode-blank/main.tsx",
-        "scope-bug-ct1597-forward/MINIMAL-REPRO.tsx",
-        "scope-bug-ct1597-reduce/main.tsx",
-        "test/a.tsx",
-        "test/vnode-helpers.ts",
-        "cell-link.tsx",
-        "nested-map-ifelse-test.tsx",
-        "render-test.tsx",
-        "self-reference-test.tsx",
-        "vehicles.ts",
-      ]),
+      staleTableEntries(
+        ["fixtures/nested/main.tsx", "fixtures/helper.ts", "legacy.tsx"],
+        {
+          directories: { "fixtures/": "fixture" },
+          files: { "legacy.tsx": "legacy" },
+          untiered: { "fixtures/helper.ts": "Shared test helper." },
+        },
+      ),
     ).toEqual([]);
   });
 

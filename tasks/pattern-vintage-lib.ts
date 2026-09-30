@@ -1,77 +1,22 @@
 /**
- * Stage 3 of the pattern-update regime: where a captured vintage LIVES.
+ * Stage 3 of the pattern-update regime: capturing a vintage, comparing it, and
+ * reporting on what the comparison found.
  *
  * Tier 1 (`pattern-compat`) records a contract per pattern and proves the next
  * one is compatible with it. Tier 2 records a real prior STATE per pattern and
- * proves the next version can still read it. This module owns the fixture
- * layout the second one needs, and nothing else — capture and replay live in
- * `packages/piece/test/state-continuity-harness.ts`, the task shell in
- * `pattern-vintage.ts`.
- *
- * Layout:
- *
- *     packages/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite
- *     packages/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite.spaces/<did>.sqlite
- *
- * `<test key>` is the repo path under `packages/patterns/` of the TEST that
- * produced the fixture, so a fixture sits next to nothing and is found by path
- * alone. Keyed by test rather than by pattern because a test need not be named
- * after what it drives — `topics/main.tsx` is tested by `topics/topics.test.tsx`
- * — and one fixture routinely covers several patterns.
- *
- * The `.sqlite.spaces/` directory carries the run's OTHER spaces — a capture
- * that instantiates a pattern via `Factory.inSpace(...)` writes a second store,
- * and a fixture that held only the first would record roots whose state it does
- * not have. It is part of the FIXTURE, not a fixture itself, so
- * `parseVintagePath` declines everything inside one. Its shape lives in
- * `packages/piece/test/vintage-layout.ts`, which the snapshot/restore side needs
- * too and which is dependency-free so this module stays so.
- *
- * The tree is deliberately NOT under `packages/patterns/`, which is the
- * obvious home for it and the wrong one. `tasks/build-binaries.ts` passes that
- * whole directory to `deno compile --include`, which is recursive and takes
- * arbitrary non-source files — measured, and neither `deno.json`'s `exclude`
- * nor `.denoignore` filters it — so every fixture would be baked into the
- * shipped toolshed binary, and stage 4 accumulates fixtures. The same
- * directory is what `PatternsServer` serves by path, so they would also be
- * fetchable from any deployment. It lives beside the harness that reads it
- * instead.
- *
- * `<identity>` is PROVENANCE, not an address: it records which pattern version
- * wrote the state. Nothing looks a fixture up by it — the replay enumerates the
- * directory and replays everything it finds. That is deliberate. A gate that
- * selected fixtures by identity would silently cover nothing the moment the
- * naming drifted; enumeration cannot.
- *
- * `<iso>` is a capture timestamp, so retention can drop the oldest AUTO
- * captures without parsing anything (stage 4). Pinned vintages are never
- * dropped, which is why they live in their own directory rather than behind a
- * flag: a pruner is invoked by people doing something else, and a deep vintage
- * cannot be recaptured — the pattern that wrote it no longer exists in runnable
- * form.
- *
- * Fixtures are stored RAW, not gzipped, which is the opposite of what the
- * obvious reasoning suggests. A store is mostly slack (home.tsx is 3.5 MiB
- * across 99 revisions) and gzips 15x, so pre-compressing looks free — git
- * zlib-compresses blobs anyway.
- *
- * Measured, it is not free, because it defeats DELTA compression. Two captures
- * of home.tsx, packed into a fresh repo (`git init`, add, commit, `git gc`,
- * `git count-objects -vH`):
- *
- *     raw .sqlite     one 232.50 KiB   two 232.86 KiB   (+0.36 KiB)
- *     gzipped .gz     one 226.13 KiB   two 450.27 KiB   (+224 KiB)
- *
- * The second raw vintage is essentially free because git deltas it against the
- * first; two gzip streams delta not at all. Accumulating vintages is precisely
- * what stage 4 does, so the compounding term dominates the one-off.
- *
- * The cost is working-tree disk: 3.5 MiB a fixture rather than 226 KiB. That
- * is transient and local, where git history is permanent and shared by
- * everyone who clones.
+ * proves the next version can still read it. Capture and replay live in
+ * `packages/piece/test/state-continuity-harness.ts` and the task shell in
+ * `pattern-vintage.ts`. Where a fixture lives and how its path parses is
+ * `pattern-vintage-layout.ts`, which this module re-exports, so one import
+ * serves a caller working with vintages.
  */
 
 import { exists } from "@std/fs";
+import {
+  acceptedDropKey,
+  type AcceptedStateDrop,
+} from "./pattern-vintage-accepted-drops.ts";
+import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
   isStoredArgumentSchemaRefusal,
@@ -84,156 +29,26 @@ import {
   vintageCompanionDir,
 } from "../packages/piece/test/vintage-layout.ts";
 
-/** Root of the committed fixture tree. See the note above on why it is here. */
-export const VINTAGES_DIR = "packages/piece/test/vintages";
+import {
+  AUTO,
+  parseVintagePath,
+  PINNED,
+  type VintageRef,
+  VINTAGES_DIR,
+} from "./pattern-vintage-layout.ts";
 
-/** Vintages that are never pruned and are the gate's real coverage. */
-export const PINNED = "pinned";
-
-/** Vintages captured automatically; retention drops the oldest (stage 4). */
-export const AUTO = "auto";
-
-export const VINTAGE_SUFFIX = ".sqlite";
-
-export interface VintageRef {
-  /**
-   * TEST path relative to `packages/patterns/`, e.g. `system/home.test.tsx`.
-   * Named for the test, not the pattern: the fixture covers whatever that
-   * test instantiates, which is routinely several patterns.
-   */
-  testKey: string;
-
-  /** `pinned` or `auto`. */
-  tier: string;
-
-  /** Capture timestamp, ISO-8601 with `:` replaced (filenames). */
-  stamp: string;
-
-  /** Identity of the pattern version that WROTE this state. */
-  identity: string;
-
-  /** Repo-relative path to the fixture file. */
-  path: string;
-}
-
-/** The directory holding one TEST's fixtures of a given tier. */
-export function vintageDir(testKey: string, tier: string): string {
-  return `${VINTAGES_DIR}/${testKey}/${tier}`;
-}
-
-/**
- * `:` is legal in a POSIX filename and illegal on Windows, and an ISO
- * timestamp is full of them. Substituting keeps the name sortable — which is
- * the only property retention needs — without a platform caveat.
- */
-export function stampFor(date: Date): string {
-  return date.toISOString().replaceAll(":", "-");
-}
-
-export function vintageFileName(stamp: string, identity: string): string {
-  return `${stamp}-${identity}${VINTAGE_SUFFIX}`;
-}
-
-/**
- * `<stamp>-<identity>`, where the stamp is `stampFor`'s output (an ISO
- * timestamp with `:` substituted) and the identity is everything after it.
- * Both fields contain dashes, so the stamp's fixed shape is the only reliable
- * boundary between them.
- */
-const NAME_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z)-(.+)$/;
-
-/**
- * Parse a fixture path back into its parts, or `undefined` if it is not one.
- *
- * Returning `undefined` rather than throwing is what lets the enumerator walk
- * a directory that also holds a README or a stray file without the gate dying
- * on it.
- *
- * `root` is a parameter, not the constant, so the layout can be exercised
- * against a temp tree. Anchoring it to the repo path instead is not a
- * theoretical smell: Tier 1's `isPatternSource` did exactly that, which
- * silently disabled every exclusion the moment it was handed an absolute path,
- * and the tests could not have caught it because they could not run anywhere
- * else.
- */
-export function parseVintagePath(
-  path: string,
-  root: string = VINTAGES_DIR,
-): VintageRef | undefined {
-  const prefix = `${root}/`;
-  if (!path.startsWith(prefix) || !path.endsWith(VINTAGE_SUFFIX)) {
-    return undefined;
-  }
-  const rest = path.slice(prefix.length);
-  const cut = rest.lastIndexOf("/");
-  if (cut === -1) return undefined;
-  const fileName = rest.slice(cut + 1);
-  const dir = rest.slice(0, cut);
-  // A companion store is PART of the fixture beside it, not a fixture of its
-  // own. Declining it by name is deliberate rather than incidental: its filename
-  // is a space DID, which would not parse as `<stamp>-<identity>` today, but a
-  // gate that enumerated one as a separate vintage would replay a space against
-  // a pattern key it never belonged to — and the reason it does not would be
-  // invisible.
-  if (dir.split("/").some((part) => part.endsWith(VINTAGE_SPACES_SUFFIX))) {
-    return undefined;
-  }
-  const tierCut = dir.lastIndexOf("/");
-  if (tierCut === -1) return undefined;
-  const tier = dir.slice(tierCut + 1);
-  const testKey = dir.slice(0, tierCut);
-  if (testKey.length === 0 || tier.length === 0) return undefined;
-
-  const base = fileName.slice(0, -VINTAGE_SUFFIX.length);
-  // Anchor on the STAMP, which has a fixed shape, and take everything after it
-  // as the identity. Neither field can be found by splitting on a dash: the
-  // stamp contains them (`2026-07-29T16-40-22.484Z`) and so does a base64url
-  // identity (`xaLUAd...vaXYy-P8PAkh...`). An earlier version cut at the LAST
-  // dash and silently failed to recognize its own freshly-written fixture for
-  // home.tsx — whose identity happens to contain one — reporting the pattern
-  // as uncovered while the file sat right there.
-  //
-  // Requiring the stamp to match also rejects a non-fixture that merely ends
-  // in the suffix, so the gate says "that is not a fixture" instead of trying
-  // to replay it. Retention sorts on this field too (stage 4).
-  const parsed = NAME_PATTERN.exec(base);
-  if (parsed === null) return undefined;
-  const [, stamp, identity] = parsed;
-
-  return { testKey, tier, stamp, identity, path };
-}
-
-/** Every fixture under `root`, sorted by path so runs are reproducible. */
-export async function collectVintages(
-  root: string = VINTAGES_DIR,
-): Promise<VintageRef[]> {
-  const found: VintageRef[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    try {
-      // `Deno.readDir` returns a LAZY iterable: it does not touch the
-      // filesystem until iteration, so a try/catch around the call alone
-      // catches nothing and a missing tree escapes as ENOENT. The loop has to
-      // be inside the try.
-      for await (const entry of Deno.readDir(dir)) {
-        const path = `${dir}/${entry.name}`;
-        if (entry.isDirectory) {
-          await walk(path);
-          continue;
-        }
-        const ref = parseVintagePath(path, root);
-        if (ref !== undefined) found.push(ref);
-      }
-    } catch (error) {
-      // A missing tree is "no fixtures yet", not a failure — the gate reports
-      // that as uncovered patterns, which is the actionable message.
-      if (error instanceof Deno.errors.NotFound) return;
-      throw error;
-    }
-  };
-  await walk(root);
-  found.sort((left, right) => left.path.localeCompare(right.path));
-  return found;
-}
+// The layout is re-exported here because this module is what a caller working
+// with vintages reaches for.
+export { AUTO, parseVintagePath, PINNED, type VintageRef, VINTAGES_DIR };
+export {
+  collectVintages,
+  stampFor,
+  VINTAGE_GATE,
+  VINTAGE_SUFFIX,
+  vintageDir,
+  vintageFileName,
+  vintageRecordName,
+} from "./pattern-vintage-layout.ts";
 
 /**
  * How many generations of one test key the working tree keeps.
@@ -470,6 +285,78 @@ export function uncoveredRequiredPatterns(
   covered: ReadonlySet<string>,
 ): string[] {
   return requiredKeys.filter((key) => !covered.has(key)).sort();
+}
+
+/**
+ * What a run over the fixture tree is asked to judge, from what it
+ * replayed.
+ *
+ * Three checks need every fixture replayed: whether every required pattern
+ * is covered, whether each accepted removal still applies to some fixture,
+ * and whether each accepted removal names a pattern some fixture records.
+ * A filtered run makes none of them, and all three come back empty.
+ *
+ * A pattern is judged when a fixture's manifest names it, because a replay
+ * then either used its entries or showed they were not needed.
+ */
+export function judgeWholeTree(
+  whole: boolean,
+  requiredKeys: readonly string[],
+  replay: {
+    covered: ReadonlySet<string>;
+    coveredBy: ReadonlyMap<string, unknown>;
+    dropsApplied: ReadonlySet<string>;
+  },
+  drops: readonly AcceptedStateDrop[],
+): { uncovered: string[]; staleDrops: string[]; unjudgeableDrops: string[] } {
+  if (!whole) return { uncovered: [], staleDrops: [], unjudgeableDrops: [] };
+  const judged = new Set([...replay.covered, ...replay.coveredBy.keys()]);
+  return {
+    uncovered: uncoveredRequiredPatterns(requiredKeys, replay.covered),
+    // An accepted removal that applied to no replayed vintage is an
+    // exemption that no longer forgives anything. It is asked per path, so
+    // an entry cannot keep a line nothing needs.
+    staleDrops: drops
+      .filter((drop) => judged.has(drop.pattern))
+      .flatMap((drop) =>
+        drop.paths
+          .map((path) => acceptedDropKey(drop.pattern, path))
+          .filter((pair) => !replay.dropsApplied.has(pair))
+      ),
+    // An entry for a pattern no fixture records cannot be judged at all.
+    // Its remedy differs from a stale entry's, so it is reported apart.
+    unjudgeableDrops: drops
+      .filter((drop) => !judged.has(drop.pattern))
+      .map((drop) => drop.pattern),
+  };
+}
+
+/**
+ * What a run's command line asks it to replay: the `--only` terms, and
+ * whether the run covers every fixture. A filter next to a capture command
+ * is refused, because a capture decides what is due by reading every
+ * fixture and its positional argument is a test key rather than a fixture.
+ */
+export function replayScope(
+  args: readonly string[],
+): { only: string[]; whole: boolean } | { error: string } {
+  const filter = readOnlyArguments(args);
+  if ("error" in filter) return filter;
+  const whole = filter.only.length === 0;
+  if (!whole && CAPTURE_FLAGS.some((flag) => args.includes(flag))) {
+    return { error: reportOnlyWithCapture() };
+  }
+  return { only: filter.only, whole };
+}
+
+/** The commands that read every fixture to decide what to do. */
+const CAPTURE_FLAGS = ["--update", "--capture-changed", "--pin"] as const;
+
+/** What the task prints when a run replayed no fixture. */
+export function reportEmptyReplay(only: readonly string[]): string {
+  return only.length === 0
+    ? reportNothingReplayed()
+    : reportNothingMatched(only);
 }
 
 /** A vintage that could not be replayed under today's source. */
@@ -739,7 +626,54 @@ export function describeCaptureOutcome(
 }
 
 /** Every flag this task understands. Anything else is a mistake, not a hint. */
-export const KNOWN_FLAGS = ["--update", "--capture-changed", "--pin"] as const;
+export const KNOWN_FLAGS = [
+  "--update",
+  "--capture-changed",
+  "--pin",
+  "--only",
+] as const;
+
+/** The flag that restricts a replay, in the form that carries its value. */
+const ONLY_PREFIX = "--only=";
+
+/**
+ * Whether a fixture is one a filter asked for. The filter is matched
+ * against the fixture's repository-relative path with `/` separators, which
+ * is how a lane names it, so a term matching part of the checkout's own
+ * directory matches nothing.
+ */
+export function replayFilterTakes(
+  path: string,
+  repoRoot: string,
+  only: readonly string[],
+): boolean {
+  if (only.length === 0) return true;
+  const relative = relativeToRepo(
+    path.replaceAll("\\", "/"),
+    repoRoot.replaceAll("\\", "/"),
+  );
+  const terms = only.map((value) => value.replaceAll("\\", "/"));
+  return terms.some((value) => relative.includes(value));
+}
+
+/** What the task prints when a filter matched no fixture in the tree. */
+export function reportNothingMatched(only: readonly string[]): string {
+  return [
+    `Replayed 0 vintages — no fixture's path holds ${
+      only.map((value) => `\`${value}\``).join(" or ")
+    }.`,
+    "A filter that matches nothing proves nothing, so it is a failure.",
+  ].join("\n");
+}
+
+/** What the task prints when a filter is paired with a capture command. */
+export function reportOnlyWithCapture(): string {
+  return [
+    "`--only` restricts a replay and every command that captures or pins " +
+    "reads the whole tree, so the two cannot be given together.",
+    "Run the capture on its own, then replay what you want.",
+  ].join("\n");
+}
 
 /**
  * Flags the task does not recognize.
@@ -769,7 +703,8 @@ export function unknownFlags(args: readonly string[]): string[] {
   // `deno task` forwards it verbatim, so rejecting it refused the ordinary
   // `deno task pattern-vintage -- --update <key>` invocation.
   return args.filter((arg) =>
-    arg.startsWith("-") && arg !== "--" && !known.has(arg)
+    arg.startsWith("-") && arg !== "--" && !known.has(arg) &&
+    !arg.startsWith(ONLY_PREFIX)
   );
 }
 

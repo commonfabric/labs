@@ -13,6 +13,7 @@ import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-sink-ceiling");
 
@@ -58,7 +59,7 @@ const seedConfidentialCell = async (
   const seed = runtime.edit();
   const target = runtime.getCell(signer.did(), id, undefined, seed);
   const targetId = target.getAsNormalizedFullLink().id;
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: targetId,

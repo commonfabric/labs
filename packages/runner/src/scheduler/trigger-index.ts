@@ -2,7 +2,6 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { Cancel } from "../cancel.ts";
 import {
   addressesToPathByEntity,
-  arraysOverlap,
   determineTriggeredActions,
   nonRecursiveReadMayOverlapWrite,
   type SortedAndCompactPaths,
@@ -12,6 +11,7 @@ import type {
   IMemoryChange,
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
+import { EntityTriggers } from "./entity-triggers.ts";
 import { entityKey } from "./keys.ts";
 import type { Action, ReactivityLog, SpaceScopeAndURI } from "./types.ts";
 
@@ -19,14 +19,8 @@ export interface TriggerIndexState {
   /** Identity entity keys resolve scoped addresses against (keys.ts). */
   readonly scopeKeyIdentity: () => ScopeKeyIdentity;
 
-  readonly triggers: Map<
-    SpaceScopeAndURI,
-    Map<Action, SortedAndCompactPaths>
-  >;
-  readonly nonRecursiveTriggers: Map<
-    SpaceScopeAndURI,
-    Map<Action, SortedAndCompactPaths>
-  >;
+  readonly triggers: Map<SpaceScopeAndURI, EntityTriggers>;
+  readonly nonRecursiveTriggers: Map<SpaceScopeAndURI, EntityTriggers>;
   readonly actionTriggerEntities: WeakMap<Action, Set<SpaceScopeAndURI>>;
   addActionReads(
     action: Action,
@@ -64,21 +58,21 @@ export interface TriggerSubscriptionState extends TriggerIndexState {
 }
 
 function removeActionFromTriggerMap(
-  triggerMap: Map<SpaceScopeAndURI, Map<Action, SortedAndCompactPaths>>,
+  triggerMap: Map<SpaceScopeAndURI, EntityTriggers>,
   entity: SpaceScopeAndURI,
   action: Action,
 ): void {
-  const pathsByAction = triggerMap.get(entity);
-  if (!pathsByAction) return;
+  const triggers = triggerMap.get(entity);
+  if (!triggers) return;
 
-  pathsByAction.delete(action);
-  if (pathsByAction.size === 0) {
+  triggers.delete(action);
+  if (triggers.size === 0) {
     triggerMap.delete(entity);
   }
 }
 
 function removeTriggerMapSpace(
-  triggerMap: Map<SpaceScopeAndURI, Map<Action, SortedAndCompactPaths>>,
+  triggerMap: Map<SpaceScopeAndURI, EntityTriggers>,
   spacePrefix: string,
 ): void {
   for (const entity of triggerMap.keys()) {
@@ -198,14 +192,8 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
     readonly scopeKeyIdentity: () => ScopeKeyIdentity,
   ) {}
 
-  readonly triggers = new Map<
-    SpaceScopeAndURI,
-    Map<Action, SortedAndCompactPaths>
-  >();
-  readonly nonRecursiveTriggers = new Map<
-    SpaceScopeAndURI,
-    Map<Action, SortedAndCompactPaths>
-  >();
+  readonly triggers = new Map<SpaceScopeAndURI, EntityTriggers>();
+  readonly nonRecursiveTriggers = new Map<SpaceScopeAndURI, EntityTriggers>();
   readonly actionTriggerEntities = new WeakMap<
     Action,
     Set<SpaceScopeAndURI>
@@ -233,23 +221,13 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
 
     for (const [spaceAndURI, paths] of pathsByEntity) {
       entities.add(spaceAndURI);
-      let pathsByAction = this.triggers.get(spaceAndURI);
-      if (!pathsByAction) {
-        pathsByAction = new Map();
-        this.triggers.set(spaceAndURI, pathsByAction);
-      }
-      pathsByAction.set(action, paths);
+      triggersFor(this.triggers, spaceAndURI).set(action, paths);
       triggerPathsByEntity.set(spaceAndURI, paths);
     }
 
     for (const [spaceAndURI, paths] of nonRecursivePathsByEntity) {
       entities.add(spaceAndURI);
-      let pathsByAction = this.nonRecursiveTriggers.get(spaceAndURI);
-      if (!pathsByAction) {
-        pathsByAction = new Map();
-        this.nonRecursiveTriggers.set(spaceAndURI, pathsByAction);
-      }
-      pathsByAction.set(action, paths);
+      triggersFor(this.nonRecursiveTriggers, spaceAndURI).set(action, paths);
     }
 
     this.actionTriggerEntities.set(action, entities);
@@ -282,26 +260,18 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
     const readers = new Set<Action>();
 
     const recursiveReaders = this.triggers.get(entity);
-    if (recursiveReaders) {
-      for (const [action, paths] of recursiveReaders) {
-        if (paths.some((path) => arraysOverlap(write.path, path))) {
-          readers.add(action);
-        }
-      }
-    }
+    recursiveReaders?.forEachMatching(write.path, (_path, actions) => {
+      for (const action of actions) readers.add(action);
+    });
 
+    // A non-recursive read is reached by a write at its own path, above it, or
+    // one component below it, so the reads the index hands over are narrowed
+    // again by depth.
     const nonRecursiveReaders = this.nonRecursiveTriggers.get(entity);
-    if (nonRecursiveReaders) {
-      for (const [action, reads] of nonRecursiveReaders) {
-        if (
-          reads.some((read) =>
-            nonRecursiveReadMayOverlapWrite(read, write.path)
-          )
-        ) {
-          readers.add(action);
-        }
-      }
-    }
+    nonRecursiveReaders?.forEachMatching(write.path, (read, actions) => {
+      if (!nonRecursiveReadMayOverlapWrite(read, write.path)) return;
+      for (const action of actions) readers.add(action);
+    });
 
     return readers;
   }
@@ -331,10 +301,10 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
       { ...change.address, space },
       this.scopeKeyIdentity(),
     );
-    const paths = this.triggers.get(entity);
-    const nonRecursivePaths = this.nonRecursiveTriggers.get(entity);
+    const triggers = this.triggers.get(entity);
+    const nonRecursiveTriggers = this.nonRecursiveTriggers.get(entity);
 
-    if (!paths && !nonRecursivePaths) {
+    if (!triggers && !nonRecursiveTriggers) {
       return {
         entity,
         hasMatchingTriggerPaths: false,
@@ -342,11 +312,13 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
       };
     }
 
+    // The index hands over the reads this change can reach and no others,
+    // which is the same set the overlap test inside would keep.
     const triggeredActionSet = new Set<Action>();
-    if (paths) {
+    if (triggers) {
       for (
         const action of determineTriggeredActions(
-          paths,
+          triggers.matching(change.address.path),
           change.before,
           change.after,
           change.address.path,
@@ -355,10 +327,10 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
         triggeredActionSet.add(action);
       }
     }
-    if (nonRecursivePaths) {
+    if (nonRecursiveTriggers) {
       for (
         const action of determineTriggeredActions(
-          nonRecursivePaths,
+          nonRecursiveTriggers.matching(change.address.path),
           change.before,
           change.after,
           change.address.path,
@@ -436,7 +408,7 @@ export function ensureCancelForActionTriggers(
 }
 
 function applyActionReadDeltaToMap(
-  triggerMap: Map<SpaceScopeAndURI, Map<Action, SortedAndCompactPaths>>,
+  triggerMap: Map<SpaceScopeAndURI, EntityTriggers>,
   action: Action,
   prevPathsByEntity: Map<SpaceScopeAndURI, SortedAndCompactPaths>,
   nextPathsByEntity: Map<SpaceScopeAndURI, SortedAndCompactPaths>,
@@ -447,38 +419,24 @@ function applyActionReadDeltaToMap(
   ]);
 
   for (const entity of entities) {
-    const prevPaths = prevPathsByEntity.get(entity);
     const nextPaths = nextPathsByEntity.get(entity);
-    if (pathsEqual(prevPaths, nextPaths)) continue;
-
     if (nextPaths === undefined) {
       removeActionFromTriggerMap(triggerMap, entity, action);
       continue;
     }
-
-    let pathsByAction = triggerMap.get(entity);
-    if (!pathsByAction) {
-      pathsByAction = new Map();
-      triggerMap.set(entity, pathsByAction);
-    }
-    pathsByAction.set(action, nextPaths);
+    triggersFor(triggerMap, entity).set(action, nextPaths);
   }
 }
 
-function pathsEqual(
-  a: SortedAndCompactPaths | undefined,
-  b: SortedAndCompactPaths | undefined,
-): boolean {
-  if (a === b) return true;
-  if (a === undefined || b === undefined || a.length !== b.length) {
-    return false;
+/** The entity's registered reads, started when it has none yet. */
+function triggersFor(
+  triggerMap: Map<SpaceScopeAndURI, EntityTriggers>,
+  entity: SpaceScopeAndURI,
+): EntityTriggers {
+  let triggers = triggerMap.get(entity);
+  if (!triggers) {
+    triggers = new EntityTriggers();
+    triggerMap.set(entity, triggers);
   }
-
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].length !== b[i].length) return false;
-    for (let j = 0; j < a[i].length; j++) {
-      if (a[i][j] !== b[i][j]) return false;
-    }
-  }
-  return true;
+  return triggers;
 }

@@ -510,7 +510,9 @@ describe("cf piece call on a piece that points back at its container", () => {
         // about the write.
         expect(error).toBeInstanceOf(CyclicResultError);
         const message = (error as Error).message;
-        expect(message).toContain('closes a circle at "/0/parent/children/0"');
+        expect(message).toContain(
+          'closes a circle at "/0/parent/children/0/parent"',
+        );
         expect(message).toContain(
           "This call's --filter is answered with the elements themselves",
         );
@@ -549,7 +551,7 @@ describe("cf piece call on a piece that points back at its container", () => {
       const message = (error as Error).message;
       // Where the circle closes, so a caller can see which field to bound.
       expect(message).toContain(
-        'closes a circle at "/container/children/0/parent"',
+        'closes a circle at "/container/children/0/parent/children"',
       );
       // The property worth not losing: an unrenderable result is not a failed
       // mutation, and the message says so rather than leaving a stack trace to
@@ -583,7 +585,7 @@ describe("cf piece call on a piece that points back at its container", () => {
         // container. With a declaration in hand the cut lands at `parent` and
         // the walk never gets this far.
         expect(message).toContain(
-          'closes a circle at "/item/parent/children/0"',
+          'closes a circle at "/item/parent/children/0/parent"',
         );
         expect(message).toContain("COMMITTED");
         expect(message).toContain("cf cell get --cell of:");

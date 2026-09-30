@@ -33,7 +33,6 @@ import {
   ManagedStorageTransaction,
   MapSet,
   MapSetStringToPathSelectors,
-  mergeAnyOfBranchSchemas,
   mergeAnyOfMatches,
   PointerCycleTracker,
   schemaAcceptsType,
@@ -176,7 +175,7 @@ describe("SchemaObjectTraverser.traverseDAG", () => {
 
 describe("SchemaObjectTraverser missing value handling", () => {
   // Missing values are handled consistently with other value transforms
-  // (toJSON, shallowFabricFromNativeValue, etc.):
+  // (toJSON, shallowFabricFromConvertibleJsValue, etc.):
   // - Arrays: null is inserted for missing elements
   // - Objects: undefined is assigned for missing properties
 
@@ -218,7 +217,8 @@ describe("SchemaObjectTraverser missing value handling", () => {
       value: docValue,
     });
 
-    // Missing elements become null (consistent with toJSON, shallowFabricFromNativeValue, etc.)
+    // Missing elements become null (consistent with toJSON,
+    // shallowFabricFromConvertibleJsValue, etc.)
     expect(result).toEqual(["present", null, "also-present"]);
   });
 
@@ -362,7 +362,8 @@ describe("SchemaObjectTraverser missing value handling", () => {
       value: docValue,
     });
 
-    // Missing elements become null (consistent with toJSON, shallowFabricFromNativeValue, etc.)
+    // Missing elements become null (consistent with toJSON,
+    // shallowFabricFromConvertibleJsValue, etc.)
     expect(result).toEqual(["present", null, "also-present"]);
   });
 
@@ -2171,129 +2172,6 @@ describe("mergeAnyOfMatches", () => {
   });
 });
 
-describe("mergeAnyOfBranchSchemas", () => {
-  it("returns null for fewer than 2 branches", () => {
-    expect(
-      mergeAnyOfBranchSchemas([{ type: "object" }], {}),
-    ).toBe(null);
-  });
-
-  it("returns null when a branch is not an object type", () => {
-    expect(
-      mergeAnyOfBranchSchemas(
-        [{ type: "string" }, { type: "object" }],
-        {},
-      ),
-    ).toBe(null);
-  });
-
-  it("merges disjoint properties from two branches", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { a: { type: "string" } } },
-        { type: "object", properties: { b: { type: "number" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    expect(r.type).toBe("object");
-    const props = r.properties as Record<string, unknown>;
-    expect(props.a).toEqual({ type: "string" });
-    expect(props.b).toEqual({ type: "number" });
-  });
-
-  it("wraps overlapping properties with different schemas in anyOf", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { x: { type: "string" } } },
-        { type: "object", properties: { x: { type: "number" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const props = (result as Record<string, unknown>)
-      .properties as Record<string, unknown>;
-    const xSchema = props.x as Record<string, unknown>;
-    expect(xSchema.anyOf).toBeDefined();
-    expect((xSchema.anyOf as unknown[]).length).toBe(2);
-  });
-
-  it("uses single schema when overlapping properties are identical", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        { type: "object", properties: { x: { type: "string" } } },
-        { type: "object", properties: { x: { type: "string" } } },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const props = (result as Record<string, unknown>)
-      .properties as Record<string, unknown>;
-    expect(props.x).toEqual({ type: "string" });
-  });
-
-  it("computes required as intersection", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        {
-          type: "object",
-          properties: { a: { type: "string" }, b: { type: "string" } },
-          required: ["a", "b"],
-        },
-        {
-          type: "object",
-          properties: { a: { type: "string" }, c: { type: "number" } },
-          required: ["a"],
-        },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    // Only "a" is required by both branches
-    expect(r.required).toEqual(["a"]);
-  });
-
-  it("merges $defs from all branches", () => {
-    const result = mergeAnyOfBranchSchemas(
-      [
-        {
-          type: "object",
-          properties: { a: { type: "string" } },
-          $defs: { Foo: { type: "string" } },
-        },
-        {
-          type: "object",
-          properties: { b: { type: "number" } },
-          $defs: { Bar: { type: "number" } },
-        },
-      ],
-      {},
-    );
-    expect(result).not.toBe(null);
-    const r = result as Record<string, unknown>;
-    const defs = r.$defs as Record<string, unknown>;
-    expect(defs.Foo).toEqual({ type: "string" });
-    expect(defs.Bar).toEqual({ type: "number" });
-  });
-
-  it("returns null when branches have no properties", () => {
-    expect(
-      mergeAnyOfBranchSchemas(
-        [{ type: "object" }, { type: "object" }],
-        {},
-      ),
-    ).toBe(null);
-  });
-
-  it("returns null for boolean branch schemas", () => {
-    expect(
-      mergeAnyOfBranchSchemas([true, { type: "object" }], {}),
-    ).toBe(null);
-  });
-});
-
 describe("anyOf optimization integration", () => {
   it("preserves integer subtype matching in the prepared type prefilter", () => {
     const store = new Map<string, Revision<State>>();
@@ -3903,8 +3781,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   it("does not resolve linked properties when property schema is type: unknown", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //
-    // Behavior: All redirect links are followed, toCell() stops at first non-redirect
-    // The data is fully resolved to { test: "foo" } but the cell reference stops at `first`
+    // Ordinary links are traversed, but the unknown value omits their content.
 
     const store = new Map<string, Revision<State>>();
     const type = "application/json" as const;
@@ -4034,8 +3911,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   it("does not resolve linked properties when property schema is type: unknown and asCell is true", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //
-    // Behavior: All redirect links are followed, toCell() stops at first non-redirect
-    // The data is fully resolved to { test: "foo" } but the cell reference stops at `first`
+    // Redirects locate the reference slot; its ordinary target remains unread.
 
     const store = new Map<string, Revision<State>>();
     const type = "application/json" as const;
@@ -4079,8 +3955,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     // redirect-test-redir: holds the actual value
     const redirValue = {
       "/": {
-        [LINK_V1_TAG]: { id: redirectTestFirstUri, path: [] },
-        overwrite: "redirect",
+        [LINK_V1_TAG]: {
+          id: redirectTestFirstUri,
+          path: [],
+          overwrite: "redirect",
+        },
       },
     };
     store.set(`${redirectTestRedirUri}/${type}`, {
@@ -4092,8 +3971,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
 
     const innerValue = {
       "/": {
-        [LINK_V1_TAG]: { id: redirectTestRedirUri, path: [] },
-        overwrite: "redirect",
+        [LINK_V1_TAG]: {
+          id: redirectTestRedirUri,
+          path: [],
+          overwrite: "redirect",
+        },
       },
     };
     store.set(`${redirectTestInnerUri}/${type}`, {
@@ -4106,8 +3988,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     const outerValue = {
       inner: {
         "/": {
-          [LINK_V1_TAG]: { id: redirectTestInnerUri, path: [] },
-          overwrite: "redirect",
+          [LINK_V1_TAG]: {
+            id: redirectTestInnerUri,
+            path: [],
+            overwrite: "redirect",
+          },
         },
       },
     };
@@ -4150,12 +4035,12 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     expect(error).toBeUndefined();
     // linked object is not resolved into content
     expect(result).toEqual({ inner: undefined });
-    // We should have read all the way through to the data object
-    expect(
-      [...manager.getReadDocs()].some((att) =>
-        att.address.id === redirectTestDataUri
-      ),
-    ).toBe(true);
+    const readIds = [...manager.getReadDocs()].map((att) => att.address.id);
+    expect(readIds).toContain(redirectTestInnerUri);
+    expect(readIds).toContain(redirectTestRedirUri);
+    expect(readIds).toContain(redirectTestFirstUri);
+    expect(readIds).not.toContain(redirectTestSecondUri);
+    expect(readIds).not.toContain(redirectTestDataUri);
   });
 
   it("treats inline asCell object properties as opaque when traverseCells=false", () => {

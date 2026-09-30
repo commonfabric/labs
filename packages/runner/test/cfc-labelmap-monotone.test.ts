@@ -6,6 +6,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-labelmap-monotone");
 
@@ -47,7 +48,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
         seed,
       );
       const targetId = target.getAsNormalizedFullLink().id;
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: targetId,
@@ -144,7 +145,7 @@ describe("CFC labelMap confidentiality monotonicity", () => {
         seed,
       );
       const targetId = target.getAsNormalizedFullLink().id;
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: targetId,

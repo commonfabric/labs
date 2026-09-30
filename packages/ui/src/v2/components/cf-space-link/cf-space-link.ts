@@ -5,8 +5,8 @@ import { BaseElement } from "../../core/base-element.ts";
 
 import "../cf-chip/index.ts";
 
-import type { DID } from "@commonfabric/identity";
-import { navigate } from "@commonfabric/navigation";
+import type { DID } from "@commonfabric/identity/did";
+import { navigate, spaceViewRef } from "@commonfabric/navigation";
 
 /**
  * CFSpaceLink - Renders a space as a clickable pill that navigates to the space
@@ -55,11 +55,8 @@ export class CFSpaceLink extends BaseElement {
   private _handleClick(e: Event) {
     e.stopPropagation();
 
-    if (this.spaceName) {
-      navigate({ spaceName: this.spaceName });
-    } else if (this.spaceDid) {
-      navigate({ spaceDid: this.spaceDid });
-    }
+    const space = spaceViewRef(this.spaceName, this.spaceDid);
+    if (space) navigate(space);
   }
 
   override render() {

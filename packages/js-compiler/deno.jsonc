@@ -1,8 +1,9 @@
 {
   "name": "@commonfabric/js-compiler",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    "test": "deno test --no-check --allow-read --allow-write --allow-run --allow-env=UPDATE_GOLDENS,API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST test/*.test.ts"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-run --allow-env=UPDATE_GOLDENS,API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST test/*.test.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

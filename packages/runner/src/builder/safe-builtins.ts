@@ -61,20 +61,3 @@ export function sandboxRandom(): number {
       "precompute the value.",
   );
 }
-
-/**
- * The capability check for the sandbox `fetch` (channel 7). A network request
- * may only be started from a handler: in a lift/computed or the pattern body a
- * request would be both a non-idempotent side effect and — through its
- * settlement — a clock. The settlement itself is coarsened at the injection
- * site (see createGatedFetch in sandbox/compartment-globals.ts).
- */
-export function sandboxFetchGate(): void {
-  const frame = getTopFrame();
-  if (frame?.inHandler === true) return;
-  throw new TimeCapabilityError(
-    "fetch() is not available in this context. Start network requests from a " +
-      "handler; for reactive data reads use the fetchData/fetchText/fetchJson " +
-      "builtins at pattern-body level.",
-  );
-}

@@ -46,11 +46,13 @@ function args(configPath: string): string[] {
 function fakeRunningHost(options: {
   stop: (reason?: string) => Promise<void>;
   synchronize?: (reason?: string) => Promise<number>;
+  commandProducers?: RunningAgentsHost["commandProducers"];
 }): RunningAgentsHost {
   return {
     initialSessionCount: 2,
     spaceDid: "did:key:space",
     debugPieceId: "debug-piece",
+    commandProducers: options.commandProducers ?? [],
     ledgerPath: "/state/command-ledger.json",
     host: {
       health: () => ({
@@ -127,6 +129,48 @@ Deno.test("SIGTERM drains a running host without aborting its owner signal", asy
     assertEquals(await result, 0);
     assertEquals(stopped, ["SIGTERM"]);
     assertEquals(listeners.size, 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("the CLI reports each bound command producer", async () => {
+  const { directory, path } = await writeConfig();
+  try {
+    const listeners = new Map<Deno.Signal, () => void>();
+    const ready = Promise.withResolvers<void>();
+    const logs: string[] = [];
+    const running = fakeRunningHost({
+      stop: () => Promise.resolve(),
+      commandProducers: [{
+        id: "workbench",
+        piece: "fid1:workbench",
+        commandCellId: "fid1:workbench-commands",
+      }],
+    });
+    const deps = dependencies({
+      listeners,
+      logs,
+      start: (() =>
+        Promise.resolve(running)) as AgentsHostCliDependencies["start"],
+    });
+    const originalLog = deps.log;
+    deps.log = (...values) => {
+      originalLog(...values);
+      if (String(values[0]).startsWith("Ready;")) ready.resolve();
+    };
+
+    const result = runAgentsHostCli(args(path), deps);
+    await ready.promise;
+    listeners.get("SIGTERM")?.();
+
+    assertEquals(await result, 0);
+    assertEquals(
+      logs.filter((line) => line.startsWith("Command producer ")),
+      [
+        "Command producer workbench: fid1:workbench-commands (piece fid1:workbench)",
+      ],
+    );
   } finally {
     await Deno.remove(directory, { recursive: true });
   }

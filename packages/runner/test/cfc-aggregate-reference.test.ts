@@ -4,6 +4,8 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { cfcAtom } from "@commonfabric/api/cfc";
+import { normalizeClause } from "../src/cfc/clause.ts";
 import { Identity } from "@commonfabric/identity";
 
 import { aggregateNode } from "../src/builtins/aggregate.ts";
@@ -22,12 +24,15 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("cfc-aggregate-reference");
 const space = signer.did();
-const selection = "private-selection";
+const selection = normalizeClause({
+  anyOf: ["private-selection", cfcAtom.space(space)],
+});
 
 describe("cfc-aggregate-reference", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -56,15 +61,15 @@ describe("cfc-aggregate-reference", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
     });
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return cell.withTx(undefined);
   };
 
@@ -133,6 +138,7 @@ describe("cfc-aggregate-reference", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [selection] },
       }]);
       const acquisition = runtime.edit();
@@ -166,6 +172,7 @@ describe("cfc-aggregate-reference", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [selection] },
       }]);
       const acquisition = runtime.edit();
@@ -191,7 +198,7 @@ describe("cfc-aggregate-reference", () => {
         );
         output.set(state);
         runtime.prepareTxForCommit(tx);
-        expect((await tx.commit()).ok).toBeDefined();
+        expect((await tx.commit()).error).toBeUndefined();
         states.push(output.getAsNormalizedFullLink());
       }
       await runtime.dispose({ closeStorage: false });
@@ -278,7 +285,7 @@ describe("cfc-aggregate-reference", () => {
         elements,
       }, output);
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit()).error).toBeUndefined();
       const cancel = output.sink(() => {});
       try {
         await runtime.idle();
@@ -451,7 +458,7 @@ describe("cfc-aggregate-reference", () => {
     const output = runtime.getCell(space, "cold capped state", undefined, tx);
     output.set(state);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     const stateLink = output.getAsNormalizedFullLink();
     const targetLink = target.getAsNormalizedFullLink();
     await runtime.dispose({ closeStorage: false });

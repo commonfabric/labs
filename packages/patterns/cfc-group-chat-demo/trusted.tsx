@@ -180,10 +180,18 @@ export type SharedRoomsValue =
   | SharedRoomsStoredValue
   | Default<EmptySharedRoomsValue>;
 export type SharedRoomsCell = Writable<SharedRoomsValue>;
-export type RoomDraftCell = Writable<string | Default<"">>;
 
-const draftText = (draft: Writable<string | Default<"">>): string =>
-  (draft.get() as string | undefined) ?? "";
+/**
+ * The click a `cf-submit-input` delivers, from its button or from Enter in its
+ * field. It is a trusted DOM gesture, and it carries the field's text as
+ * `target.value`.
+ */
+export interface SubmittedTextEvent {
+  readonly target?: { readonly value?: string };
+}
+
+const submittedText = (event: SubmittedTextEvent | undefined): string =>
+  event?.target?.value ?? "";
 
 const nonEmptyEventName = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
@@ -523,45 +531,32 @@ export const prepareTrustedRoomAdd = (
 };
 
 export const commitTrustedProfileSave = handler<
-  void,
+  SubmittedTextEvent,
   {
     myProfile: MyProfileCell;
     profiles: SharedProfilesCell;
-    nameDraft: Writable<string | Default<"">>;
   }
->((
-  _,
-  { myProfile, profiles, nameDraft },
-) => {
-  const { trimmedName } = applyTrustedProfileSave(
-    myProfile,
-    profiles,
-    draftText(nameDraft),
-  );
-  if (trimmedName) {
-    nameDraft.set(trimmedName);
-  }
+>((event, { myProfile, profiles }) => {
+  applyTrustedProfileSave(myProfile, profiles, submittedText(event));
 });
 type TrustedProfileSaveInput = Parameters<typeof commitTrustedProfileSave>[0];
 
 export const commitTrustedMessageSend = handler<
-  void,
+  SubmittedTextEvent,
   {
     myProfile: MyProfileCell;
-    messageDraft: Writable<string | Default<"">>;
     messages: SharedMessagesCell;
   }
->((_, { myProfile, messageDraft, messages }) => {
+>((event, { myProfile, messages }) => {
   const { trimmedBody, message } = prepareTrustedMessageSend(
     myProfile,
-    draftText(messageDraft),
+    submittedText(event),
   );
   if (!trimmedBody || !message) {
     return;
   }
 
   messages.push(message);
-  messageDraft.set("");
 });
 type TrustedMessageSendInput = Parameters<typeof commitTrustedMessageSend>[0];
 
@@ -753,17 +748,16 @@ export const commitTrustedAdminToggle = handler<
 type TrustedAdminToggleInput = Parameters<typeof commitTrustedAdminToggle>[0];
 
 export const commitTrustedRoomAdd = handler<
-  void,
+  SubmittedTextEvent,
   {
     myProfile: MyProfileCell;
     adminRegistry: ChatAdminRegistryCell;
-    roomDraft: RoomDraftCell;
     rooms: SharedRoomsCell;
   }
->((_, { myProfile, adminRegistry, roomDraft, rooms }) => {
+>((event, { myProfile, adminRegistry, rooms }) => {
   const { trimmedName, room } = prepareTrustedRoomAdd(
     currentUserAdminRole(myProfile, adminRegistry),
-    draftText(roomDraft),
+    submittedText(event),
   );
   if (!trimmedName || !room) {
     return;
@@ -771,7 +765,6 @@ export const commitTrustedRoomAdd = handler<
 
   const nextRooms = [...roomsValue(rooms), room];
   rooms.set({ list: nextRooms as SharedRoomList });
-  roomDraft.set("");
 });
 type TrustedRoomAddInput = Parameters<typeof commitTrustedRoomAdd>[0];
 
@@ -807,7 +800,6 @@ type TrustedParticipantsPanelInputArg = Parameters<
 export interface TrustedProfileSaveSurfaceInput {
   myProfile: MyProfileCell;
   profiles: SharedProfilesCell;
-  nameDraft: Writable<string | Default<"">>;
 }
 
 export interface TrustedProfileSaveSurfaceOutput {
@@ -815,7 +807,7 @@ export interface TrustedProfileSaveSurfaceOutput {
   [UI]: any;
   myProfile: MyProfileCell;
   currentProfileName: string;
-  saveProfile: Stream<void>;
+  saveProfile: Stream<SubmittedTextEvent>;
 }
 
 export const TrustedProfileSaveSurface = pattern<
@@ -825,18 +817,15 @@ export const TrustedProfileSaveSurface = pattern<
   {
     myProfile,
     profiles,
-    nameDraft,
   }: TrustedProfileSaveSurfaceInput,
 ): TrustedProfileSaveSurfaceOutput => {
   const saveProfile = commitTrustedProfileSave({
     myProfile,
     profiles,
-    nameDraft,
   } as TrustedProfileSaveInput);
   const currentSavedName = computed(() =>
     currentProfileSnapshot(myProfile)?.name ?? "Name not set"
   );
-  const saveDisabled = computed(() => draftText(nameDraft).trim().length === 0);
 
   return {
     [NAME]: "profile save",
@@ -847,23 +836,15 @@ export const TrustedProfileSaveSurface = pattern<
         data-ui-event-integrity={TRUSTED_GROUP_CHAT_PROFILE_SURFACE}
       >
         <cf-hstack slot="content" gap="2" align="center" wrap>
-          <cf-vgroup gap="sm" style={{ minWidth: "12rem", flex: "1 1 12rem" }}>
-            <cf-input
-              id="trusted-profile-name"
-              size="sm"
-              $value={nameDraft}
-              placeholder="Set your name"
-            />
-          </cf-vgroup>
-          <cf-button
+          <cf-submit-input
             id="trusted-profile-save"
+            inputId="trusted-profile-name"
             data-ui-action={TRUSTED_GROUP_CHAT_SAVE_PROFILE_ACTION}
-            size="sm"
-            disabled={saveDisabled}
+            placeholder="Set your name"
+            buttonText="Save name"
+            style={{ minWidth: "16rem", flex: "1 1 16rem" }}
             onClick={saveProfile}
-          >
-            Save name
-          </cf-button>
+          />
           <cf-label id="trusted-profile-status">
             {currentSavedName}
           </cf-label>
@@ -1046,7 +1027,6 @@ export const TrustedAdminPanel = pattern<
 export interface TrustedChatSendSurfaceInput {
   profiles: SharedProfilesCell;
   myProfile: MyProfileCell;
-  messageDraft: Writable<string | Default<"">>;
   messages: SharedMessagesCell;
 }
 
@@ -1054,22 +1034,20 @@ export interface TrustedChatSendSurfaceOutput {
   [NAME]: string;
   [UI]: any;
   messages: SharedMessagesCell;
-  sendMessage: Stream<void>;
+  sendMessage: Stream<SubmittedTextEvent>;
 }
 
 export const TrustedChatSendSurface = pattern<
   TrustedChatSendSurfaceInput,
   TrustedChatSendSurfaceOutput
 >((
-  { profiles, myProfile, messageDraft, messages }: TrustedChatSendSurfaceInput,
+  { profiles, myProfile, messages }: TrustedChatSendSurfaceInput,
 ): TrustedChatSendSurfaceOutput => {
   const sendDisabled = computed(() =>
-    currentProfileSnapshot(myProfile) === undefined ||
-    draftText(messageDraft).trim().length === 0
+    currentProfileSnapshot(myProfile) === undefined
   );
   const sendMessage = commitTrustedMessageSend({
     myProfile,
-    messageDraft,
     messages,
   } as TrustedMessageSendInput);
 
@@ -1088,28 +1066,15 @@ export const TrustedChatSendSurface = pattern<
             messages,
             id: "trusted-participants-panel",
           } as TrustedParticipantsPanelInputArg)}
-          <cf-hstack align="center" wrap gap="2">
-            <cf-vgroup
-              gap="sm"
-              style={{ minWidth: "16rem", flex: "1 1 16rem" }}
-            >
-              <cf-input
-                id="trusted-message-draft"
-                size="sm"
-                $value={messageDraft}
-                placeholder="Write a message"
-              />
-            </cf-vgroup>
-            <cf-button
-              id="trusted-send-button"
-              data-ui-action={TRUSTED_GROUP_CHAT_SEND_ACTION}
-              size="sm"
-              disabled={sendDisabled}
-              onClick={sendMessage}
-            >
-              Send
-            </cf-button>
-          </cf-hstack>
+          <cf-submit-input
+            id="trusted-send-button"
+            inputId="trusted-message-draft"
+            data-ui-action={TRUSTED_GROUP_CHAT_SEND_ACTION}
+            placeholder="Write a message"
+            buttonText="Send"
+            disabled={sendDisabled}
+            onClick={sendMessage}
+          />
         </cf-vstack>
       </cf-card>
     ),
@@ -1121,7 +1086,6 @@ export const TrustedChatSendSurface = pattern<
 export interface TrustedRoomAddSurfaceInput {
   myProfile: MyProfileCell;
   adminRegistry: ChatAdminRegistryCell;
-  roomDraft: RoomDraftCell;
   rooms: SharedRoomsCell;
 }
 
@@ -1129,7 +1093,7 @@ export interface TrustedRoomAddSurfaceOutput {
   [NAME]: string;
   [UI]: any;
   rooms: SharedRoomsCell;
-  addRoom: Stream<void>;
+  addRoom: Stream<SubmittedTextEvent>;
 }
 
 export const TrustedRoomAddSurface = pattern<
@@ -1139,19 +1103,16 @@ export const TrustedRoomAddSurface = pattern<
   {
     myProfile,
     adminRegistry,
-    roomDraft,
     rooms,
   }: TrustedRoomAddSurfaceInput,
 ): TrustedRoomAddSurfaceOutput => {
   const addRoom = commitTrustedRoomAdd({
     myProfile,
     adminRegistry,
-    roomDraft,
     rooms,
   } as TrustedRoomAddInput);
   const addDisabled = computed(() =>
-    !currentUserIsAdmin(myProfile, adminRegistry) ||
-    draftText(roomDraft).trim().length === 0
+    !currentUserIsAdmin(myProfile, adminRegistry)
   );
 
   return {
@@ -1163,23 +1124,16 @@ export const TrustedRoomAddSurface = pattern<
         data-ui-event-integrity={TRUSTED_GROUP_CHAT_ROOM_SURFACE}
       >
         <cf-hstack slot="content" gap="2" align="center" wrap>
-          <cf-vgroup gap="sm" style={{ minWidth: "12rem", flex: "1 1 12rem" }}>
-            <cf-input
-              id="trusted-room-name"
-              size="sm"
-              $value={roomDraft}
-              placeholder="Add a room"
-            />
-          </cf-vgroup>
-          <cf-button
+          <cf-submit-input
             id="trusted-room-add-button"
+            inputId="trusted-room-name"
             data-ui-action={TRUSTED_GROUP_CHAT_ADD_ROOM_ACTION}
-            size="sm"
+            placeholder="Add a room"
+            buttonText="Add room"
             disabled={addDisabled}
+            style={{ minWidth: "16rem", flex: "1 1 16rem" }}
             onClick={addRoom}
-          >
-            Add room
-          </cf-button>
+          />
           <cf-label id="trusted-room-admin-hint">
             {computed(() =>
               currentUserIsAdmin(myProfile, adminRegistry)

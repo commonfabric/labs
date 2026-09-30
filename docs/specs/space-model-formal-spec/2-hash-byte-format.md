@@ -45,11 +45,11 @@ produce different hashes even though both could be represented as a zero byte).
 
 The authoritative tag assignments are in formal spec Section 6.3. Tags are
 organized into four categories by high nibble: **meta** (`0x0N`) for structural
-markers like `TAG_END` and `TAG_HOLE`, **compound** (`0x1N`) for containers
-whose children are tagged values, **primitive** (`0x2N`) for leaf value types,
-and **optimized** (`0xFN`) for hash-level encodings of primitive values that
-substitute a digest for the raw payload (see Section 4.4 for the long-string
-optimization). All unassigned values are reserved for future use.
+markers like `TAG_END`, `TAG_HOLE`, and `TAG_CYCLE`, **compound** (`0x1N`) for
+containers whose children are tagged values, **primitive** (`0x2N`) for leaf
+value types, and **optimized** (`0xFN`) for hash-level encodings of primitive
+values that substitute a digest for the raw payload (see Section 4.4 for the
+long-string optimization). All unassigned values are reserved for future use.
 
 ---
 
@@ -140,6 +140,17 @@ four special values that JSON cannot represent natively (`-0`, `NaN`,
 
 ### 4.4 `string`
 
+A string is encoded as **WTF-8** (<https://wtf-8.codeberg.page/>), the
+generalization of UTF-8 that can also encode lone surrogates. A well-formed
+string, one with no lone surrogates, has the same bytes in WTF-8 as in UTF-8,
+and this document speaks of a string's "UTF-8" encoding, bytes, and length in
+that sense throughout. A lone surrogate (a UTF-16 code unit in the range
+0xD800--0xDFFF with no partner to form a pair) is encoded as the three bytes
+UTF-8 would use for a code point of the same value: `"\ud800"` is `ED A0 80`.
+Under WTF-8, distinct strings always have distinct encodings. So a conforming
+implementation must not use an encoder that substitutes U+FFFD (`EF BF BD`) for
+a lone surrogate, as `TextEncoder` does.
+
 Strings use one of two encodings based on their UTF-8 byte length. The
 threshold is **64 bytes** (inclusive): strings whose UTF-8 encoding is 64 bytes
 or fewer use the **direct** form, and strings whose UTF-8 encoding exceeds 64
@@ -194,7 +205,8 @@ The hashed form applies everywhere this spec encodes a string via the
 `TAG_STRING` layout: standalone strings (this section), `symbol` keys (Section
 4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14),
 `FabricHash` algorithm tags (Section 4.11), `FabricRegExp` source/flags/flavor
-strings (Section 4.16), and `FabricKeyPair` algorithm names (Section 4.17).
+strings (Section 4.16), `FabricKeyPair` algorithm names (Section 4.17), and
+`FabricUnavailable` reasons, kinds, and messages (Section 4.18).
 
 ### 4.5 `bigint`
 
@@ -397,11 +409,13 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
   recursively as a complete tagged value.
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
-> `FabricEpochDay`, `FabricHash`, `FabricRegExp`, and `FabricKeyPair` are
+> `FabricEpochDay`, `FabricHash`, `FabricRegExp`, `FabricKeyPair`,
+> `FabricUnavailable`, `FabricDurationNsec`, and `FabricDurationDay` are
 > **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
-> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.16 and 4.17
-> respectively). These are all `FabricPrimitive` subclasses — at this layer they
-> are hashed from their own stored values, not via their wire codecs.
+> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.16, 4.17, 4.18, 4.20
+> and 4.21 respectively). These are all `FabricPrimitive` subclasses — at this
+> layer they are hashed from their own stored values, not via their wire
+> codecs.
 
 ### 4.15 Holes (sparse array elements)
 
@@ -481,6 +495,121 @@ is by construction unreachable, and its algorithm name alone is shared by every
 key of that algorithm, so hashing that would give distinct keys one identity.
 See `1-fabric-values.md` Section 1.4.11.
 
+### 4.18 `FabricUnavailable`
+
+```
+Bytes: TAG_UNAVAILABLE  REASON_STRING   ERROR_KIND       ERROR_MESSAGE
+       0x2D             <string, §4.4>  <string or null>  <string or null>
+```
+
+A string field is a complete tagged string value per Section 4.4; a `null`
+field is a complete tagged `null` per Section 4.1, the single byte `TAG_NULL`.
+
+`FabricUnavailable` represents a marker for data that is not available. It is
+a `FabricPrimitive` subclass and has a dedicated type tag; it is hashed from
+its own stored values (below) and is **not** hashed via `TAG_INSTANCE`.
+
+- **Reason**: The reason string (`pending`, `syncing`, or `error`), encoded as
+  a complete tagged string value per Section 4.4.
+- **Error kind**: For reason `error`, the kind string (`general`,
+  `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`,
+  `provider`, or `sync`), encoded as a complete tagged string value per
+  Section 4.4. For a transient reason, a complete tagged `null` per Section
+  4.1 — the single byte `TAG_NULL` — standing where the kind would be.
+- **Error message**: The message as stored (`rawErrorMessage`), encoded as a
+  complete tagged string value per Section 4.4, when there is one. When there
+  is none — for a transient reason, and for an `error` whose message was never
+  given or was given as its kind's default — a complete tagged `null`.
+
+The three fields are fed in order — reason, kind, message — with no enclosing
+container and no `TAG_END` terminator, since the field count is fixed. Every
+position is always fed, so the stream for a transient reason is the reason
+followed by two `TAG_NULL` bytes. The default message a kind supplies is not
+hashed: an `error` whose message is its kind's default hashes as one with no
+message. See `1-fabric-values.md` Section 1.4.12.
+
+### 4.19 Cycles
+
+```
+Bytes: TAG_CYCLE  DISTANCE_LEB128
+       0x02       <1+ bytes>
+```
+
+Total: 1 + len(LEB128) bytes (typically 2).
+
+A value may hold a cycle (formal spec Section 1.6). At any point in the
+traversal, the **path** is the sequence of containers whose encodings enclose
+that point, outermost first. The containers are arrays (Section 4.12), plain
+objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance
+encloses its encoded state, so when that state is an array or an object, the
+instance and the state are two entries on the path.
+
+Before encoding an array, a plain object, or a `FabricInstance`, an
+implementation checks whether that same object, by identity, is already on the
+path. If it is, the implementation emits `TAG_CYCLE` in place of the
+container's encoding, followed by the distance up the path to it, as unsigned
+LEB128: `1` for the container immediately enclosing this position, `2` for the
+one enclosing that, and so on. Otherwise it encodes the container as usual,
+with the container on the path while its contents are encoded.
+
+- **Only the path counts.** A container reached again by another route, which
+  is sharing rather than a cycle, is encoded in full each time. Sharing
+  therefore does not affect a hash.
+- **Where a cycle closes does.** `a = {x: a}` and `b = {x: {x: b}}` hash
+  differently, and so do `a` and `{x: a}`, although no finite sequence of reads
+  tells either pair apart.
+- **The distance is relative**, so a cyclic value encodes the same way wherever
+  it sits within a larger value.
+
+A value with no cycle contains no `TAG_CYCLE`.
+
+### 4.20 `FabricDurationNsec`
+
+```
+Bytes: TAG_DURATION_NSEC  LENGTH_LEB128  TWO_COMP_BYTES
+       0x2E               <1+ bytes>     <length bytes>
+```
+
+Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
+
+`FabricDurationNsec` represents a span of time in nanoseconds. It is a
+`FabricPrimitive` subclass and has a dedicated type tag.
+
+- **Length**: The number of bytes in the two's-complement representation of the
+  wrapped `bigint` value, encoded as unsigned LEB128.
+- **Payload**: The value encoded identically to `bigint` (Section 4.5): signed
+  two's-complement, big-endian, minimal bytes.
+
+The encoding is structurally identical to `TAG_BIGINT` but uses a different type
+tag (`0x2E` instead of `0x26`), ensuring that `FabricDurationNsec(42n)` and
+`42n` produce distinct hashes. It also differs from `FabricEpochNsec` (`0x27`),
+so a span and an instant holding the same `bigint` are always distinguishable.
+See `1-fabric-values.md` Section 1.4.13.
+
+### 4.21 `FabricDurationDay`
+
+```
+Bytes: TAG_DURATION_DAY  LENGTH_LEB128  TWO_COMP_BYTES
+       0x2F              <1+ bytes>     <length bytes>
+```
+
+Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
+
+`FabricDurationDay` represents a span of time in days. It is a
+`FabricPrimitive` subclass and has a dedicated type tag.
+
+- **Length**: The number of bytes in the two's-complement representation of the
+  wrapped `bigint` value, encoded as unsigned LEB128.
+- **Payload**: The value encoded identically to `bigint` (Section 4.5): signed
+  two's-complement, big-endian, minimal bytes.
+
+The encoding is structurally identical to `TAG_BIGINT` but uses a different type
+tag (`0x2F` instead of `0x26`), ensuring that `FabricDurationDay(42n)` and `42n`
+produce distinct hashes. It also differs from `FabricEpochDay` (`0x28`), so a
+span and a day holding the same `bigint` are always distinguishable, and from
+`FabricDurationNsec` (`0x2E`), so are spans counted in the two units. See
+`1-fabric-values.md` Section 1.4.14.
+
 ---
 
 ## 5. Object Key Sorting
@@ -497,8 +626,10 @@ This is equivalent to the standard lexicographic ordering on byte sequences and
 matches the behavior of `Uint8Array` comparison or C's `memcmp` with a
 length tie-breaker.
 
-Since all string data in the hash stream uses UTF-8 encoding (Section 4.4),
-the sort order and the hash encoding use the same byte representation.
+Since all string data in the hash stream uses UTF-8 encoding (WTF-8 where a
+string has lone surrogates; Section 4.4), the sort order and the hash encoding
+use the same byte representation. That byte order is the order of the keys'
+code points, with a lone surrogate taking its own code unit's value.
 
 > **UTF-8 byte sort vs. JavaScript string comparison.** JavaScript's native
 > string comparison (`<`, `>`, `localeCompare` with no locale) compares by
@@ -533,7 +664,9 @@ The overall traversal is depth-first, left-to-right:
    then the payload.
 3. For compound types (array, object), recursively hash each child, then feed
    `TAG_END`. Each child's bytes (starting with its own type tag) are fed to
-   the **same** hasher — there is no per-child sub-hash.
+   the **same** hasher — there is no per-child sub-hash. A container that is
+   already on the path from the root is fed as a cycle reference instead
+   (Section 4.19).
 4. The entire value tree is serialized into one contiguous byte stream, then
    digested once.
 
@@ -772,10 +905,88 @@ hashed form.
 This rule applies to every string the hasher feeds, including standalone strings
 (Section 4.4), `symbol` keys (Section 4.6), object keys (Section 4.13),
 `FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags (Section
-4.11), `FabricRegExp` source/flags/flavor strings (Section 4.16), and
-`FabricKeyPair` algorithm names (Section 4.17). The threshold is evaluated
+4.11), `FabricRegExp` source/flags/flavor strings (Section 4.16),
+`FabricKeyPair` algorithm names (Section 4.17), and `FabricUnavailable`
+reasons, kinds, and messages (Section 4.18). The threshold is evaluated
 per-string independently: an object may mix short keys (direct form) and long
 keys (hashed form) in the same key-value sequence.
+
+### 7.20 `FabricUnavailable("error", "network", "boom")` and `FabricUnavailable("pending")`
+
+`FabricUnavailable` is a `FabricPrimitive` with the dedicated tag
+`TAG_UNAVAILABLE` (`0x2D`); it is hashed by feeding its reason, its kind, and
+its stored message, the last two as tagged strings when present and as
+`TAG_NULL` when absent (Section 4.18). All strings here are under the 64-byte
+threshold, so each uses the direct string form.
+
+For `FabricUnavailable("error", "network", "boom")`:
+
+- Unavailable tag: `2D`
+- Reason `"error"` (5 bytes UTF-8): `24 05 65 72 72 6F 72`
+- Kind `"network"` (7 bytes UTF-8): `24 07 6E 65 74 77 6F 72 6B`
+- Message `"boom"` (4 bytes UTF-8): `24 04 62 6F 6F 6D`
+
+Full byte stream:
+```
+2D
+24 05 65 72 72 6F 72
+24 07 6E 65 74 77 6F 72 6B
+24 04 62 6F 6F 6D
+```
+
+For `FabricUnavailable("pending")`, which carries neither kind nor message:
+
+- Unavailable tag: `2D`
+- Reason `"pending"` (7 bytes UTF-8): `24 07 70 65 6E 64 69 6E 67`
+- Kind, absent: `20`
+- Message, absent: `20`
+
+Full byte stream:
+```
+2D
+24 07 70 65 6E 64 69 6E 67
+20
+20
+```
+
+There is no enclosing object and no `TAG_END` terminator — the three fields are
+fed positionally.
+
+### 7.21 `a`, where `a = { self: a }` (cycle)
+
+- Object tag: `11`
+- Key `"self"` (4 bytes UTF-8): `24 04 73 65 6C 66`
+- Value `a`, which is the object enclosing this position: `02 01`
+  (`TAG_CYCLE` + distance 1)
+- End: `00`
+
+Full byte stream:
+```
+11
+24 04 73 65 6C 66
+02 01
+00
+```
+
+### 7.22 `FabricDurationNsec(42n)`
+
+`42n` in minimal two's-complement is `0x2A` (1 byte).
+
+```
+2E  01  2A
+```
+
+`TAG_DURATION_NSEC` (`0x2E`), length 1 (`0x01`), payload `0x2A`.
+
+### 7.23 `FabricDurationDay(7n)`
+
+`7n` in minimal two's-complement is `0x07` (1 byte).
+
+```
+2F  01  07
+```
+
+`TAG_DURATION_DAY` (`0x2F`), length 1 (`0x01`), payload `0x07`.
 
 ---
 
@@ -813,5 +1024,6 @@ rejected; they have well-defined byte encodings — see Section 4.3.)
 | `symbol` registry key             | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_SYMBOL` |
 | Object keys                       | string (§4.4)   | Emitted as complete tagged string values (direct or hashed form per key) |
 | Hole run count                    | unsigned LEB128 | Number of consecutive holes      |
+| Cycle reference                   | unsigned LEB128 | Distance up the path to a container, prefixed by `TAG_CYCLE` |
 | Array elements                    | `TAG_END`       | Sentinel after last element      |
 | Object key-value pairs            | `TAG_END`       | Sentinel after last pair         |

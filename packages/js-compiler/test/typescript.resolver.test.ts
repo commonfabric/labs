@@ -55,6 +55,23 @@ describe("typescript/resolver.ts", () => {
       )).rejects.toThrow();
     });
 
+    it("names the module importing one it refuses to leave unresolved", async () => {
+      const nested = new InMemoryProgram("/main.tsx", {
+        "/main.tsx": "import { helper } from './util/mod.ts';",
+        "/util/mod.ts": "export { helper } from '@not/there';",
+      });
+      await expect(resolveProgram(
+        nested,
+        {
+          unresolvedModules: { type: "deny" },
+          resolveUnresolvedModuleTypes: false,
+          target: TARGET,
+        },
+      )).rejects.toThrow(
+        'Could not resolve "@not/there", imported by "/util/mod.ts".',
+      );
+    });
+
     it("names an import that escapes the program root", async () => {
       const escaping = new InMemoryProgram("/main.tsx", {
         "/main.tsx": "import { helper } from '../../cfc/admin/mod.ts';",

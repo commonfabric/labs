@@ -17,6 +17,7 @@
  * a check that it did.
  */
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { decodedLinkOf } from "@commonfabric/state-inspector";
 
 /**
@@ -32,7 +33,7 @@ import { decodedLinkOf } from "@commonfabric/state-inspector";
  * stops being a question these scripts have to answer.
  */
 export function argumentIdOf(
-  document: Record<string, unknown>,
+  document: Record<string, FabricValue>,
 ): string | undefined {
   return decodedLinkOf(document.argument)?.id;
 }

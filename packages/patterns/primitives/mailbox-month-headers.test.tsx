@@ -133,6 +133,55 @@ const seedNarrow = handler<void, { db: SqliteDb }>((_, { db }) => {
   ]);
 });
 
+/**
+ * A caller that takes a month and a limit of its own and requires neither, and
+ * hands both to the atom — the shape the atom meets inside a larger pattern
+ * that has those inputs to forward. An input nobody supplied reads
+ * `undefined`, and `undefined` is not a value a query can bind.
+ */
+interface ForwardedInput {
+  mail: SqliteDb;
+  month?: string;
+  limit?: number;
+}
+
+interface ForwardedOutput {
+  month: string;
+  headerCount: number;
+  errorMessage: string;
+}
+
+const ForwardingCaller = pattern<ForwardedInput, ForwardedOutput>(
+  ({ mail, month, limit }) => {
+    const mailbox = MailboxMonthHeaders({ mail, month, limit });
+    return {
+      month: mailbox.month,
+      headerCount: mailbox.headerCount,
+      errorMessage: mailbox.errorMessage,
+    };
+  },
+);
+
+/**
+ * One live message in whatever month the database's own clock is in, dated in
+ * SQL because a handler is denied the clock inside the sandbox. It is what the
+ * atom answers a caller that named no month, so it sits in a database of its
+ * own where it cannot join the month the assertions above read.
+ */
+const seedCurrentMonth = handler<void, { db: SqliteDb }>((_, { db }) => {
+  db.exec(
+    "INSERT INTO participants (id, display_name, email_address) " +
+      "VALUES (?, ?, ?)",
+    [1, "Pacific Gas", "billing@pge.example"],
+  );
+  db.exec(
+    "INSERT INTO messages (id, subject, snippet, received_at, sender_id, " +
+      "deleted_at) VALUES (?, ?, ?, " +
+      "strftime('%Y-%m', 'now', 'localtime') || '-15T09:00:00Z', ?, ?)",
+    [1, "This month", "This month snippet", 1, null],
+  );
+});
+
 export default pattern(() => {
   const db = sqliteDatabase({
     tables: { messages: messagesTable(), participants: participantsTable() },
@@ -157,6 +206,14 @@ export default pattern(() => {
   const brokenMonth = new Writable("1970-01");
   const broken = MailboxMonthHeaders({ mail: narrow, month: brokenMonth });
 
+  // A database of its own, so the message dated by the clock cannot land in
+  // the month the assertions above read.
+  const current = sqliteDatabase({
+    tables: { messages: messagesTable(), participants: participantsTable() },
+  });
+  const seedCurrent = seedCurrentMonth({ db: current });
+  const forwarded = ForwardingCaller({ mail: current });
+
   return {
     // The one warning this allows is normalizeAndDiff's "Storing a
     // session-scoped link in space-scoped data", raised when reading `[UI]`
@@ -171,6 +228,7 @@ export default pattern(() => {
 
       { action: action(() => seed.send()) },
       { action: action(() => seedNarrowRow.send()) },
+      { action: action(() => seedCurrent.send()) },
       { action: action(() => month.set("2026-03")) },
       { action: action(() => brokenMonth.set("2026-03")) },
 
@@ -272,6 +330,14 @@ export default pattern(() => {
       { assertion: assert(() => mailbox.month.length === 7) },
       { assertion: assert(() => mailbox.month.charAt(4) === "-") },
       { assertion: assert(() => mailbox.errorMessage === "") },
+
+      // A caller forwarding a month and a limit nobody supplied gets the same
+      // month from the clock, and the message the seed dated in it.
+      // Forwarding reads `undefined` rather than leaving the keys out, so the
+      // inputs' own defaults are not what makes this hold.
+      { assertion: assert(() => forwarded.errorMessage === "") },
+      { assertion: assert(() => forwarded.month.length === 7) },
+      { assertion: assert(() => forwarded.headerCount === 1) },
     ],
   };
 });

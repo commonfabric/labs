@@ -388,7 +388,7 @@ verbatim, and the text page prints that same sentence beside `item <json>`.
 The summary line is worth one more note, because an event *interface's*
 comment would be the other candidate for it. That is the one level here that
 does not compile at all
-([#5937](https://github.com/commontoolsinc/labs/issues/5937)) — so the verb's
+([#5937](https://github.com/commonfabric/labs/issues/5937)) — so the verb's
 own comment is both the shorter road and the better place for an author to
 write it, since it sits beside the type it describes.
 
@@ -841,7 +841,7 @@ there too.
 
 | Gap | Needs |
 | --- | --- |
-| An event interface's own comment absent everywhere | The one prose level that does not compile ([#5937](https://github.com/commontoolsinc/labs/issues/5937)). Nothing downstream can serve what was never emitted |
+| An event interface's own comment absent everywhere | The one prose level that does not compile ([#5937](https://github.com/commonfabric/labs/issues/5937)). Nothing downstream can serve what was never emitted |
 | `--select` completion, and refusal before the call | A provider reading the declared result the help page already resolves |
 
 Two rows, and two that used to sit beside them are gone the way this table
@@ -853,9 +853,9 @@ argument, with the detached-copy refusal standing guard beside it (step 8).
 <!-- Source links resolve against the repository's default branch, so they
      follow head rather than pinning a revision this document would outlive. -->
 
-[tracker]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/integration/pattern/tracker.tsx
-[demo]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/integration/verb-session-demo.sh
-[gaps]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/integration/verb-session-gaps.sh
-[exec-schema]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/lib/exec-schema.ts
-[piece-lib]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/lib/piece.ts
-[completion]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/lib/completion/providers.ts
+[tracker]: https://github.com/commonfabric/labs/blob/main/packages/cli/integration/pattern/tracker.tsx
+[demo]: https://github.com/commonfabric/labs/blob/main/packages/cli/integration/verb-session-demo.sh
+[gaps]: https://github.com/commonfabric/labs/blob/main/packages/cli/integration/verb-session-gaps.sh
+[exec-schema]: https://github.com/commonfabric/labs/blob/main/packages/cli/lib/exec-schema.ts
+[piece-lib]: https://github.com/commonfabric/labs/blob/main/packages/cli/lib/piece.ts
+[completion]: https://github.com/commonfabric/labs/blob/main/packages/cli/lib/completion/providers.ts

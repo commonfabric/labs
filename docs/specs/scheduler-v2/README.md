@@ -231,6 +231,7 @@ interface SchedulerNode {
   invalidCauses: Map<string, Address>; // CFC trigger reads (§10), keyed by address; cleared on run
   liveRefs: number;              // demand refcount (§5)
   provisionalDemand: boolean;    // (§5.3)
+  hasCommittedResult?: boolean;  // accepted result retained while gated (§8.3)
   gate: GateState;               // debounce/throttle/backoff (§8)
   runBudget: RunBudget;          // per-pass runs, retry counter
   observationIdentity?: ObservationIdentity; // persistence key (§9)
@@ -613,18 +614,32 @@ runnable(N) = N.status ∈ {invalid, never-ran} ∧ live(N) ∧ eligible(N)
 5. Commit optimistically. The local apply emits change records synchronously
    → downstream invalidation happens *here*, through the one channel, before
    the next node in `order` runs.
-6. On commit rejection (conflict): restore `causes` into `invalidCauses`
-   (the retry exists because of them), `N.status = invalid`, consume retry
-   budget, tick. On `RetryImmediately` (name-resolution signal): same shape.
-   On exception: report through error handlers; node keeps its registered
-   read set (it stays subscribed); status stays clean until something it read
-   changes — plus a bounded-retry policy for transient failure classes.
+6. On a stale-basis commit rejection, restore `causes` into `invalidCauses`
+   and refresh the subscription. A server conflict waits for the catch-up gate
+   and the runtime's scoped pulls of every named conflict before its retry is
+   queued; validation-only output reads can require repair without being
+   scheduling dependencies. The wait remains on the pending-commit barrier.
+   Fresh input changes may independently run the node during recovery. The
+   delayed retry checks its registration lifetime and write teardown before
+   requeueing, so removal or replacement cannot revive an old registration.
+   A same-replica inconsistency needs no remote recovery. Both stale-basis
+   classes retry outside the bounded failure budget: mark `N.status = invalid`
+   and tick. `RetryImmediately` (name resolution) restores causes and requeues
+   within the bounded retry budget. On exception, report through error handlers;
+   the node keeps its registered read set and stays clean until an input changes,
+   with a bounded retry policy for transient failure classes.
 7. Under persistence, attach the observation to the transaction (§9.3).
 
-Note what is *absent* from the run path relative to v1: no
-resubscribe/unsubscribe, no changed-write diffing and reader-marking (the
-channel does it), no demand-context entry/exit sets, no first-run/continuation
-set deletions, no conditional-scheduling cleanup.
+Retry counters belong to the action across registrations. A successful commit
+or a permanent or terminal refusal clears them even if its registration has
+retired; terminal refusals still reach the error channel. Waking consumers on
+success requires the committing run's registration to remain active.
+
+The run path refreshes live subscriptions incrementally, including during
+retry recovery, without tearing them down and recreating them. The change
+channel owns changed-write diffing and reader-marking. The run path has no
+demand-context entry/exit sets, first-run/continuation set deletions, or
+conditional-scheduling cleanup.
 
 ### 7.4 Ordering rules
 
@@ -1056,13 +1071,25 @@ stale basis, re-queued once the conflict's catch-up gate (§7.6) resolved — is
 not an input change and is queued past the debounce and throttle: the debounce
 is not re-armed and an armed readiness of either is released (the `retry`
 option of `MarkInvalidOptions`; the §7.7 backoff stays). The refused run left
-nothing durable and its wait was its delay. Held behind the debounce, such a
+nothing durable and its wait was its delay. The node keeps this release until
+the owed run starts: intervening input invalidations still record their causes
+but do not re-arm freshness gates. A retry requested during a run remains owed
+after that run completes. Starting the next run consumes the release, and
+unsubscribing retires it. Held behind the debounce, such a
 retry would count as a deferred re-run of an already-ran computation, which is
 not idle work and gets its expiry wake only from a live demander — a one-shot
 `pull()` has none once it resolves, so the retry would never run. A re-queue
-that waited on
-nothing (a local inconsistency, a transport error) keeps its gates: there the
-debounce is the spacing between the re-run and the local writer it raced.
+for a builtin that held its output pending document confirmation uses the same
+`retry` option on `invalidateAction` after confirmation completes, including
+confirmation of absence that writes no data. An empty
+reactive commit rejected for changed scheduling dependencies also releases
+debounce and throttle if that node or fan-out instance has no accepted result
+yet, or no live demander to wake it. A live node with an accepted result keeps
+its gates, preserving steady-state debounce and throttle under contention.
+Its validation compares only the deep and shallow reads that wake the node,
+so unrelated document changes do not cause retries. Other local
+inconsistencies and transport errors keep their gates: there the debounce is
+the spacing between the re-run and the local writer it raced.
 
 ### 8.4 One wake timer
 

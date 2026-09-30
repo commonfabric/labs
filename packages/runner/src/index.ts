@@ -1,17 +1,17 @@
-export {
-  decomposeSchema,
-  parseExternalSchemaRef,
-  recomposeSchema,
-} from "./schema-decompose.ts";
+export { decomposeSchema, recomposeSchema } from "./schema-decompose.ts";
+export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
-export { mapSubschemas } from "./schema-walk.ts";
+export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 export { Runtime } from "./runtime.ts";
+export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
   type FabricSpaceHostOptions,
   isLoopbackHostname,
   normalizeSpaceHost,
   spaceHostFromFabricAuthority,
+  type SpaceHostRefusalReason,
+  type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "./space-host.ts";
 export type {
@@ -59,12 +59,13 @@ export type {
 } from "./unsafe-host-trust.ts";
 export * from "./interface.ts";
 export { raw } from "./module.ts";
-export type { Cell, Stream } from "./cell.ts";
+export type { Cell, SinkConsumedLabel, Stream } from "./cell.ts";
 // The seam's vocabulary, which describes a document's shape and is read by
 // hosts. Its write authorization is deliberately not here: it rides the
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
 // it opens.
 export {
+  asPatternIdentityRef,
   isMetaField,
   META_FIELDS,
   META_LINK_FIELDS,
@@ -93,10 +94,15 @@ export type {
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
   IOperationStorageCapability,
+  IPresenceStorageCapability,
   MemorySpace,
   TransactionCommitOptions,
 } from "./storage/interface.ts";
-export { hasOperationStorageCapability } from "./storage/interface.ts";
+export {
+  hasOperationStorageCapability,
+  hasPresenceStorageCapability,
+} from "./storage/interface.ts";
+export { isCfcEnforcementRejection } from "./storage/rejection.ts";
 export type {
   EntityIdListOptions,
   EntityIdListResult,
@@ -109,12 +115,19 @@ export {
 } from "./storage/transaction-summary.ts";
 export {
   type CellLinkInput,
+  cellRuntime,
+  cellTx,
+  cellWriteSchema,
   convertCellsToLinks,
   encodeSqliteParams,
+  exportCell,
+  getCarriedCfcLabelView,
   isCell,
   isReadableCell,
   isStream,
   markCellDocumentSynced,
+  sendEvent,
+  setCell,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -123,6 +136,7 @@ export {
 } from "./query-result-proxy.ts";
 export { effect } from "./reactivity.ts";
 export { type AddCancel, type Cancel, noOp, useCancelGroup } from "./cancel.ts";
+export { cellOfOpaqueReference, isOpaqueReference } from "./back-to-cell.ts";
 export {
   CompilerStackLoadError,
   computeEntryIdentity,
@@ -165,6 +179,7 @@ export {
 } from "./link-resolution.ts";
 export {
   areLinksSame,
+  getDerivedInternalCellLink,
   getMetaLink,
   isCellLink as isLink,
   isWriteRedirectLink,
@@ -204,7 +219,6 @@ export {
 } from "./source-reconciler.ts";
 export {
   applyPieceSourceTransition,
-  asPatternIdentityRef,
   extractDefaultValues,
   getPatternIdentityRef,
   getPatternRepository,
@@ -301,6 +315,7 @@ export {
   TYPE,
   UI,
   type UnsafeBinding,
+  VIEWS,
   type VNode,
   WebhookConfigSchema,
 } from "./builder/types.ts";
@@ -397,4 +412,23 @@ export {
 } from "./slug-resolution.ts";
 
 export { schemaPathSelection } from "./schema-path.ts";
-export { storedArgumentValidationIssue } from "./stored-argument-validation.ts";
+export {
+  acceptsOpaqueCellOrUnresolvedLink,
+  overlayUnreadableLinkPlaceholders,
+  storedArgumentValidationIssue,
+} from "./stored-argument-validation.ts";
+
+export {
+  parseCellReference,
+  parsePieceSegment,
+  parseReferenceContext,
+  parseRelativeReference,
+  type ReferenceContext,
+  type ReferenceMember,
+  type RelativeReferenceParts,
+  type RenderableCellReference,
+  renderCellReference,
+  renderReferenceContext,
+} from "./cell-reference.ts";
+
+export { scopeCallerEventId } from "./scheduler/event-identity.ts";

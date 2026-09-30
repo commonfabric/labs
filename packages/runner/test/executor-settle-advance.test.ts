@@ -71,8 +71,14 @@ import { stampSpeculationRunContext } from "../src/speculation/overlay-destinati
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { markEffectCompletion } from "../src/executor/effect-completion.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitEach,
+  awaitReplica,
+} from "./support/serving-waits.ts";
 import { waitOnDelivery } from "./support/wait-on-delivery.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 const spaceSigner = await Identity.fromPassphrase("settle advance space");
 const space = spaceSigner.did() as MemorySpace;
@@ -112,11 +118,37 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
+      onEffectRetired: retirements.record,
+      onWaveCycle: cycles.record,
     });
+
+  /** Resolves once the space has an ACTIVE tenure. The serving pattern
+   * run rides `createRuntime`, so this is also the barrier a client's
+   * own edits stand behind: a run committing beside them reads a basis
+   * their writes have already moved, and the activation fails. */
+  const activated = (): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === space && entry.outcome === "active"
+    );
+
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
+
+  /** Each in-flight effect as the outbox retires it — the counts that
+   * drop with it move inside the outbox's own continuations. */
+  let retirements: ArrivalLog<void>;
+
+  /** Each wave cycle as it ends — the loop arms its input wait
+   * synchronously after one. */
+  let cycles: ArrivalLog<MemorySpace>;
 
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     onServingRuntime = undefined;
+    activations = new ArrivalLog();
+    retirements = new ArrivalLog();
+    cycles = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -152,19 +184,18 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
         resultName,
         compiled.resultSchema,
       );
-      for (let attempt = 0;; attempt++) {
-        await argument.sync();
-        await result.sync();
-        const tx = runtime.edit();
-        runtime.run(tx, compiled, argument, result);
-        const committed = await tx.commit();
-        if (committed.error === undefined) break;
-        if (attempt >= 4) {
-          throw new Error(
-            `serving pattern run failed: ${committed.error.message}`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      await argument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, compiled, argument, result);
+      const committed = await tx.commit();
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
       }
       await runtime.idle();
     };
@@ -233,6 +264,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     );
     await clientResult.sync();
     const cancelDemand = clientResult.sink(() => {});
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "s1-arg",
@@ -247,13 +279,15 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // The served derivation lands and is pushed (the client observes
     // the derived value) — the derived commit's seq is ABOVE the
     // authored input's.
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the served derivation to reach the client",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => derivedSeqs(engine).some((seq) => seq > authoredSeq),
-      "a derived commit above the authored input",
     );
     const tail = Math.max(
       ...derivedSeqs(engine).filter((seq) => seq > authoredSeq),
@@ -269,10 +303,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // land after this test's sample): at drain-settle the watermark
     // advances over the space's own derived tail. No authored traffic
     // from this test here.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => readWatermarkSeq(engine) > maxAuthoredSeq(engine),
-      "the drain-settle advance past the authored coverage " +
-        `(W frozen at input coverage; derived tail ${tail})`,
     );
     const advancedW = readWatermarkSeq(engine);
     // The advance covers the CONTENT tail. `tail` was sampled above and
@@ -283,9 +316,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // ... and the advance reached the CLIENT through the ordinary
     // watermark-doc push, with no other traffic (waitForSettled rides
     // the client's own subscription).
-    const settled = await waitForSettled(clientRuntime, space, advancedW, {
-      timeoutMs: 10_000,
-    });
+    const settled = await waitForSettled(clientRuntime, space, advancedW);
     expect(settled).toBeGreaterThanOrEqual(advancedW);
     // No authored commit drove the advance (the heal needs no
     // keystroke): the advance-carrying commits are derived-class.
@@ -300,10 +331,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // F3: the advance was DELIVERED to the pre-installed sink — a value
     // above the final authored coverage arrived through the push path
     // (both sides recomputed per poll, as above).
-    await waitUntil(
+    await awaitReplica(
+      clientManager,
       () => pushedWatermarks.some((seq) => seq > maxAuthoredSeq(engine)),
-      "the quiescence advance to arrive at the client via the " +
-        "production push (noteExecutorCommit → dirty key → refresh)",
     );
     cancelWmSink();
     cancelDemand();
@@ -322,6 +352,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     );
     await clientResult.sync();
     const cancelDemand = clientResult.sink(() => {});
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "s1b-arg",
@@ -336,17 +367,15 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // The served value arrives (confirmed at the derived commit's seq,
     // ABOVE the authored coverage) and any first-generation echoes
     // retire (their floors sit at the authored input).
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the served derivation to reach the client",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     const overlay = clientRuntime.speculationOverlay;
     expect(overlay).toBeDefined();
-    await waitUntil(
-      () => overlay!.entryCount(space) === 0,
-      "first-generation echoes to retire",
-      30_000,
-    );
+    await awaitReplica(clientManager, () => overlay!.entryCount(space) === 0);
     const derivedTail = Math.max(
       ...derivedSeqs(engine).filter((seq) => seq > authoredSeq),
     );
@@ -379,14 +408,12 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // an authored commit that never comes): the quiescence advance
     // covers the floor, the watermark sink re-sweeps, the layer
     // retires, and the HEALED confirmed value shows through.
-    await waitUntil(
-      () => overlay!.entryCount(space) === 0,
-      "the diverged layer to retire on the quiescence advance",
-      30_000,
-    );
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the healed confirmed value to render",
+    await awaitReplica(clientManager, () => overlay!.entryCount(space) === 0);
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     // No authored commit drove the heal (the report's keystroke probe
     // is exactly what S1 makes unnecessary).
@@ -414,6 +441,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     );
     await clientResult.sync();
     const cancelDemand = clientResult.sink(() => {});
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "s1c-arg",
@@ -432,13 +460,11 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       expect((await editTx.commit()).error).toBeUndefined();
     }
     const lastAuthored = Engine.serverSeq(engine);
-    await waitForSettled(clientRuntime, space, lastAuthored, {
-      timeoutMs: 30_000,
-    });
+    await waitForSettled(clientRuntime, space, lastAuthored);
     // Let the trailing quiescence transition land its advance.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => host!.stats().settleAdvances.count >= 1,
-      "the trailing quiescence advance",
     );
     const stats = host.stats();
     // Far below one-per-wave: the stream coalesces into waves whose
@@ -452,23 +478,24 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // tail; the advance-only wave's own commit is NOT chased (the
     // #coverageHead commit-storm class), and a quiet space commits
     // NOTHING further — counters and the engine head stay flat.
-    await waitUntil(
-      () => {
-        const seqs = derivedSeqs(engine);
-        const tail = seqs.length === 0 ? 0 : seqs[seqs.length - 1];
-        // Quiet: W has caught the last CONTENT commit. The advance
-        // wave's own seq sits one above W, uncovered by design.
-        return readWatermarkSeq(engine) >= tail - 1;
-      },
-      "W to cover the content tail",
-    );
+    await awaitAdmitted(server, () => {
+      const seqs = derivedSeqs(engine);
+      const tail = seqs.length === 0 ? 0 : seqs[seqs.length - 1];
+      // Quiet: W has caught the last CONTENT commit. The advance
+      // wave's own seq sits one above W, uncovered by design.
+      return readWatermarkSeq(engine) >= tail - 1;
+    });
     const advancesBefore = host.stats().settleAdvances.count;
     const wavesBefore = host.stats().waves;
-    const headBefore = Engine.serverSeq(engine);
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    // The quiet claim, observed rather than sampled over a window: a
+    // re-arming latch keeps finding work of its own, so its loop never
+    // reaches the input wait. The suspension IS the claim, and the
+    // counters are read at it — unmoved, with no poke of the test's own
+    // to allow for.
+    const quietServer = host.spaceServer(space)!;
+    await awaitEach(cycles, () => quietServer.suspendedOnInput);
     expect(host.stats().settleAdvances.count).toBe(advancesBefore);
     expect(host.stats().waves).toBe(wavesBefore);
-    expect(Engine.serverSeq(engine)).toBe(headBefore);
     cancelDemand();
   });
 
@@ -514,9 +541,11 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the OFF client's own derivation",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     // OFF derives client-side and commits as today: derived-class
     // commits and the watermark doc do not exist, so neither does any
@@ -550,6 +579,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     const engine = await server.engineForSpace(space);
     let armed = false;
     let injectionDone = false;
+    const foldInjections = new ArrivalLog<void>();
     let foldError: string | undefined;
     const innerSetup = onServingRuntime;
     onServingRuntime = async (runtime) => {
@@ -580,6 +610,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
             watermarkSeqValue > maxAuthoredSeq(engine)
           ) {
             injectionDone = true;
+            foldInjections.record();
             const foldTx = originalEdit();
             stampWaveRunContext(foldTx, {
               actionId: "s1-pin6-mid-seal-fold",
@@ -617,6 +648,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     );
     await clientResult.sync();
     const cancelDemand = clientResult.sink(() => {});
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "s1f-arg",
@@ -628,13 +660,15 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       clientArg.withTx(tx).set({ n: 6 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the served derivation to reach the client",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => readWatermarkSeq(engine) > maxAuthoredSeq(engine),
-      "the first (clean) quiescence advance",
     );
 
     // ARM, then drive ONE more content generation: the quiescence
@@ -647,17 +681,20 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       clientArg.withTx(tx).set({ n: 7 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => clientResult.key("total").get() === 49,
-      "the second served derivation to reach the client",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 49,
+      { stuckLabel: "the client's total to reach 49" },
     );
-    await waitUntil(() => injectionDone, "the mid-seal fold injection");
+    await foldInjections.reached(1);
     expect(foldError).toBeUndefined();
 
     // The interleaving REALLY happened (loud abort, not a vacuous
     // green): the folded content write and the advance's watermark
     // write landed in the SAME wave commit.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         (Engine.selectCommitsSince(engine, {
           fromSeq: 0,
@@ -666,7 +703,6 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
           .some((record) =>
             (record.writes ?? []).some((write) => write.id === FOLD_DOC_ID)
           ),
-      "the folded commit to appear in the engine",
     );
     const commits = Engine.selectCommitsSince(engine, {
       fromSeq: 0,
@@ -691,18 +727,11 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     // the next authored input, which never comes): with the consume
     // gated on the wave having stayed bookkeeping-only, the latch
     // stays armed and the NEXT quiescence covers the folded tail.
-    await waitUntil(
-      () => readWatermarkSeq(engine) >= foldSeq,
-      `the next quiescence advance to cover the folded tail (folded ` +
-        `content at seq ${foldSeq}; W frozen below it means the latch ` +
-        "was consumed by the fold-carrying advance wave)",
-    );
+    await awaitAdmitted(server, () => readWatermarkSeq(engine) >= foldSeq);
     // No authored commit drove the recovery.
     expect(authoredCount(engine)).toBe(authoredBefore);
     // And the client heals through the ordinary push.
-    const settled = await waitForSettled(clientRuntime, space, foldSeq, {
-      timeoutMs: 10_000,
-    });
+    const settled = await waitForSettled(clientRuntime, space, foldSeq);
     expect(settled).toBeGreaterThanOrEqual(foldSeq);
     cancelDemand();
   });
@@ -753,10 +782,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       }
       try {
         const serving = await ready.promise;
-        await waitUntil(
-          () => host!.spaceServer(space)?.active === true,
-          "the empty serving graph to activate",
-        );
+        await activated();
         const engine = await server.engineForSpace(space);
         const result = serving.getCell<{
           value?: number;
@@ -810,9 +836,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
           limit: 10_000,
         }).findLast((record) => record.writes.some((write) => write.id === id));
         expect(originalRecord).toBeDefined();
-        await waitUntil(
+        await awaitAdmitted(
+          server,
           () => readWatermarkSeq(engine) >= originalRecord!.seq,
-          "the original wave tail to be covered with both requests held",
         );
         expect(host.stats().memo.inflight).toBe(2);
         if (withOverlay) {
@@ -830,10 +856,10 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
         const authoredBefore = authoredCount(engine);
         releaseFirst.resolve();
         await completedFirst.promise;
-        await waitUntil(
-          () => host!.stats().memo.inflight === 1,
-          "only the unrelated request to remain in flight",
-        );
+        // The count drops when the outbox retires the effect, and an
+        // empty completion commits nothing for an admission wait to wake
+        // on, so this reads the count again on each retirement.
+        await awaitEach(retirements, () => host!.stats().memo.inflight === 1);
         expect(otherCompleted).toBe(false);
         const completionRecords = Engine.selectCommitsSince(engine, {
           fromSeq: headBefore,
@@ -872,9 +898,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
               noteExecutorCommit(notice);
             }
           }
-          await waitUntil(
+          await awaitAdmitted(
+            server,
             () => readWatermarkSeq(engine) >= completion.seq,
-            `the own completion at seq ${completion.seq} to be covered while the unrelated request stays held`,
           );
           if (withOverlay) {
             await waitOnDelivery({
@@ -972,10 +998,7 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     const cancelDemand = clientResult.sink(() => {});
     try {
       const serving = await ready.promise;
-      await waitUntil(
-        () => host!.spaceServer(space)?.active === true,
-        "the serving graph to activate",
-      );
+      await activated();
       armed = true;
       const seed = serving.edit();
       stampWaveRunContext(seed, {
@@ -999,11 +1022,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
         ),
       ).toBe(false);
       const authoredBefore = authoredCount(engine);
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => readWatermarkSeq(engine) >= completion!.seq,
-        `completion ${
-          completion!.seq
-        } after advance target ${selectedAdvance} to retain its own advance`,
       );
       const advances = Engine.selectCommitsSince(engine, { fromSeq: 0 }).filter(
         (record) =>
@@ -1011,9 +1032,9 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
           record.writes[0].id === SERVER_EXECUTION_WATERMARK_DOC_ID,
       );
       expect(advances).toHaveLength(2);
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => host!.stats().settleAdvances.count === advances.length,
-        "both advance-only commits to be counted",
       );
       expect(authoredCount(engine)).toBe(authoredBefore);
     } finally {

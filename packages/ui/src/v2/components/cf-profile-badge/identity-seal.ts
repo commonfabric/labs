@@ -68,15 +68,12 @@ const splitmix32 = (seed: number): () => number => {
 };
 
 /**
- * Normalizes a DID for hashing so trivial formatting differences (whitespace,
- * case in the method/value) don't change the aura. The method-specific id is
- * case-sensitive in general, so we only trim + lowercase the well-known prefix.
+ * Normalizes a DID for hashing so that surrounding whitespace doesn't change
+ * the aura. Nothing else is folded: a DID is the exact prefix `did:` followed
+ * by a case-sensitive method and identifier, so two strings that differ in any
+ * other character are two different principals and get two different seals.
  */
-export const normalizeDid = (did: string): string => {
-  const trimmed = did.trim();
-  // The DID scheme ("did:") is case-insensitive; the method-specific id is not.
-  return /^did:/i.test(trimmed) ? "did:" + trimmed.slice(4) : trimmed;
-};
+export const normalizeDid = (did: string): string => did.trim();
 
 const RING_STOPS = 6;
 const SATURATION = 80;

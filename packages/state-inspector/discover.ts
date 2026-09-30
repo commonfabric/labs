@@ -6,7 +6,11 @@
 // engine-v3/<did>.sqlite`. The engine-v3 segment is sometimes doubled, so we
 // walk a bounded depth under each cache base rather than assume a fixed path.
 
+import * as Path from "@std/path";
+
 import { Identity } from "@commonfabric/identity";
+import { assertNotDID, isDID } from "@commonfabric/identity/did";
+import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 
 import { openSpace } from "./db.ts";
 import { rootCacheDir } from "./remote.ts";
@@ -17,11 +21,16 @@ import { rootCacheDir } from "./remote.ts";
 // space by name (`/<space-name>/…`); we mirror that derivation so
 // `cf inspect <name>` resolves the same DB the runtime would, without anyone
 // copying a DID around.
+//
+// The derivation supports the legacy space names used during development, and
+// nothing else. It is removed once those development-only spaces have been
+// migrated; `docs/plans/random-space-identities.md` carries the migration.
 const SPACE_ROOT_PASSPHRASE = "common user";
 let spaceRoot: Promise<Identity> | undefined;
 
 /** Derive the DID of a NAMED space, the same way the runtime does. */
 export async function deriveSpaceDid(name: string): Promise<string> {
+  assertNotDID(name, "A space name");
   spaceRoot ??= Identity.fromPassphrase(SPACE_ROOT_PASSPHRASE);
   const space = await (await spaceRoot).derive(name);
   return space.did();
@@ -36,14 +45,6 @@ export interface DiscoveredSpace {
   mtimeMs: number;
 }
 
-function basename(p: string): string {
-  return p.split("/").pop() ?? p;
-}
-function dirname(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "" : p.slice(0, i);
-}
-
 function* walkSqlite(dir: string, depth: number): Generator<string> {
   let entries: Deno.DirEntry[];
   try {
@@ -52,7 +53,11 @@ function* walkSqlite(dir: string, depth: number): Generator<string> {
     return; // missing/unreadable dir
   }
   for (const e of entries) {
-    const full = `${dir}/${e.name}`;
+    // `Path.join` rather than a separator between the two: `dir` may be a store
+    // location as its configuration spelled it, trailing separator and all, and
+    // an empty segment in the middle of every path this yields would reach every
+    // caller that reports one.
+    const full = Path.join(dir, e.name);
     if (e.isFile && e.name.endsWith(".sqlite")) yield full;
     else if (e.isDirectory && depth > 0) yield* walkSqlite(full, depth - 1);
   }
@@ -61,14 +66,16 @@ function* walkSqlite(dir: string, depth: number): Generator<string> {
 /** Candidate cache directories to search, in priority order. */
 export function candidateRoots(cwd: string = Deno.cwd()): string[] {
   const roots: string[] = [];
+  // Both variables name their store the way the server was configured, which
+  // for MEMORY_DIR is a URL wherever the server itself reads it. What follows
+  // walks the filesystem, so each becomes a path first.
   const env = Deno.env.get("MEMORY_DIR");
-  if (env) roots.push(env);
+  if (env) roots.push(configuredStorePath(env));
   const dbPath = Deno.env.get("DB_PATH");
   if (dbPath) {
-    // A bare relative filename (`space.sqlite`) has an empty dirname — fall back
-    // to `.` so it still resolves to the current directory rather than dropping.
+    const dbStore = configuredStorePath(dbPath);
     roots.push(
-      dbPath.endsWith(".sqlite") ? (dirname(dbPath) || ".") : dbPath,
+      dbStore.endsWith(".sqlite") ? Path.dirname(dbStore) : dbStore,
     );
   }
   // Spaces pulled from a remote (`cf inspect --remote` / `pull`) land here.
@@ -76,10 +83,11 @@ export function candidateRoots(cwd: string = Deno.cwd()): string[] {
   // Walk up from cwd; check both cache layouts at each level.
   let dir = cwd;
   for (let i = 0; i < 8; i++) {
-    roots.push(`${dir}/packages/toolshed/cache/memory`);
-    roots.push(`${dir}/cache/memory`);
-    const parent = dirname(dir);
-    if (!parent || parent === dir) break;
+    roots.push(Path.join(dir, "packages", "toolshed", "cache", "memory"));
+    roots.push(Path.join(dir, "cache", "memory"));
+    const parent = Path.dirname(dir);
+    // A root is its own parent, which is where the walk stops.
+    if (parent === dir) break;
     dir = parent;
   }
   return roots;
@@ -117,7 +125,7 @@ export function discoverSpaceDbs(
         continue;
       }
       out.push({
-        did: basename(path).replace(/\.sqlite$/, ""),
+        did: Path.basename(path, ".sqlite"),
         path,
         sizeBytes: stat.size,
         mtimeMs: stat.mtime?.getTime() ?? 0,
@@ -180,7 +188,7 @@ export async function resolveSpace(
     return resolveSpacePath(token, spaces);
   } catch (err) {
     const looksLikeName = !token.includes("/") &&
-      !token.endsWith(".sqlite") && !token.startsWith("did:");
+      !token.endsWith(".sqlite") && !isDID(token);
     if (!looksLikeName) throw err;
     const did = await deriveSpaceDid(token);
     const match = spaces.find((s) => s.did === did);

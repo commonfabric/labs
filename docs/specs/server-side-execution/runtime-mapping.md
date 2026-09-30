@@ -50,7 +50,7 @@ Status legend:
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
 | 14 | `RetryImmediately`: abort + immediate re-run after `inSpace("name")` DID resolution | `scheduler/retry-immediately.ts` (`RetryImmediately`), `runner.ts` (`Runner.#resolvePendingSpaceNamesAndRetry()`), event path `scheduler/events.ts` (the `RetryImmediately` catch in `dispatchQueuedEvent`) | protocol §2b (provisioning kept) | COVERED |
-| 15 | Reactive stale-basis retry: off-budget re-queue on conflict / local inconsistency, `readyToRetry` catch-up | `scheduler/run.ts` (`watchReactiveActionCommit`) | serving-loop §3d (mid-wave CAS drop) | CHANGED |
+| 15 | Reactive stale-basis retry: off-budget re-queue on conflict / local inconsistency; server conflicts await catch-up and every named scoped instance pull, then re-queue only while the registration remains active | `scheduler/run.ts` (`watchReactiveActionCommit`), `runtime.ts` (`awaitCommitRetryReadiness`) | serving-loop §3d (mid-wave CAS drop) | CHANGED |
 | 16 | Bounded retry for non-conflict reactive failures (MAX_RETRIES_FOR_REACTIVE = 10); the permanent and terminal classes take no attempt, and every stop — including an exhausted name-resolution retry — abandons the transaction's staged work | `scheduler/run.ts` (`abandonAction`), `scheduler/constants.ts` (`MAX_RETRIES_FOR_REACTIVE`), `storage/extended-storage-transaction.ts` (`abandonStagedWork`) | serving-loop §3d (per-action failure isolation) | COVERED |
 | 17 | Event-commit backpressure: capped exponential backoff window, `CommitConvergenceError`, disposition classes (permanent / terminal / give-up / backoff) | `scheduler/backpressure.ts` (`CommitBackpressurePolicy`), `scheduler/events.ts` (`dispatchQueuedEvent`, `classifyCommitDisposition`) | events §5 partially | CHANGED |
 | 18 | CFC-rejected-write loud drop, on the event path and the reactive-action path alike | `scheduler/cfc-rejection-report.ts`, called from `scheduler/events.ts` and `scheduler/run.ts` | serving-loop §3c (named explicitly) | COVERED |
@@ -88,7 +88,7 @@ Status legend:
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
 | 37 | Lift/computed returning reactives: `patternFromFrame`, content-hash memo per result document and instance, changed pattern run into the same cell, scoped program groups shared by selecting instances | `runner.ts` (`#writeJavaScriptActionResult`, `#startScopedPrograms`) | builtins §3 | COVERED |
-| 38 | Handler returning reactives: result pattern run under the handler tx with receipt ownership; navigateTo-bearing results deferred to post-commit start | `runner.ts` (`Runner.#handleJavaScriptHandlerResult()`, deferring through `#handlerResultPatternHasNavigateTo()`), one-shot pull (`Runner.#patternNeedsOneShotPull()`) | events §2 (consequences), builtins §3/§4 | GAP |
+| 38 | Handler returning reactives: result pattern run under the handler tx with receipt ownership; navigateTo-bearing results deferred to post-commit start | `runner.ts` (`Runner.#handleJavaScriptHandlerResult()`, deferring through `#handlerResultPatternHasNavigateTo()`) | events §2 (consequences), builtins §3/§4 | GAP |
 | 39 | `compileAndRun`: accepted outbox compilation, stamped readiness completion, child setup in a derivation, client observation and creation callback | `builtins/compile-and-run.ts` | builtins §3 | COVERED; OW28 owns acceptance validation |
 
 ### 1f. Pattern-source updates
@@ -148,20 +148,27 @@ Status legend:
 
 ## 2. Notes on the non-trivial rows
 
-**N2 (eager effects split).** Today one `isEffect` bit covers three
-different things: external-effect built-ins (`llm`, `generateText`,
-`generateObject`, `sqliteQuery` — `registerBuiltins` in
-`builtins/index.ts`), `navigateTo` (`isEffect: true` in
-`builtins/navigate-to.ts`), and render/UI sinks. v2 splits them by
-§3.5 class: effectful built-ins become server-only memoized nodes,
-navigateTo becomes the split contract, render sinks stay client-side.
-The scheduler's effect/computation distinction itself ports unchanged;
-only the *population* of the effect set differs per posture. The
-eager-result one-shot pull after handler commits
-(`Runner.#patternNeedsOneShotPull()`, `EAGER_RESULT_BUILTIN_REFS` in
-`runner.ts`) exists to force network built-ins in fresh result pieces;
-server-side, waves make it redundant — drop it there, keep it in the
-OFF arm.
+**N2 (eager effects split).** The `isEffect` bit means one thing to the
+scheduler: a standing demand root, a node that runs whether or not anything
+reads it. Two kinds of node carry it: `navigateTo` (`isEffect: true` in
+`builtins/navigate-to.ts`), whose whole purpose is the side effect; and
+render/UI sinks. `llmDialog` is a computation: it writes its turns into the
+caller's `messages` cell and declares that write as a materializer envelope,
+which is what keeps it scheduled for a piece that renders the transcript
+without reading what the dialog returns.
+The network built-ins (`llm`, `generateText`, `generateObject`,
+`sqliteQuery`, the `fetch` family, `streamData` — `registerBuiltins` in
+`builtins/index.ts`) are computations: a node nobody reads is a no-op, and
+one a live reader reaches runs when it is read, or once on registration
+under a live parent through provisional demand (scheduler-v2 §5.3). A
+computation whose writes land in captured `Writable` inputs holds demand as
+a materializer (scheduler-v2 §4.3) and needs no special bit. v2 splits the effect population by §3.5 class: the network
+built-ins become server-only memoized nodes, navigateTo becomes the split
+contract, render sinks stay client-side. The scheduler's
+effect/computation distinction itself ports unchanged; only the
+*population* of the effect set differs per posture. That a built-in
+reaches the network is a fact for policy and placement, not for demand,
+and it wants its own declaration rather than the effect bit.
 
 **N4 (materializers).** A materializer is a *computation* whose writes
 land in caller-visible cells (write envelopes registered in

@@ -166,9 +166,13 @@ export type CfcPatternVariable = CfcAtomObject & {
 export type CfcThisPolicySubjectPattern = CfcAtomObject & {
   readonly thisPolicyField: "subject";
 };
+export type CfcThisPolicyModuleIdentityPattern = CfcAtomObject & {
+  readonly thisPolicyField: "moduleIdentity";
+};
 export type CfcThisPolicyPattern = CfcAtomObject & {
   readonly thisPolicy: true;
   readonly subject: CfcThisPolicySubjectPattern;
+  readonly moduleIdentity: CfcThisPolicyModuleIdentityPattern;
 };
 export type CfcPatternString =
   | string
@@ -469,6 +473,7 @@ export declare const CFC_CANONICAL_ALIAS_NAMES: readonly [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -588,6 +593,15 @@ export type TrustedActionWrite<
 > = TrustedActionWriteWithIntegrity<T, Binding, Action, Pattern, [
   Pattern,
 ]>;
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [
+    unknown,
+    ...unknown[],
+  ],
+> = Cfc<T, {
+  readonly writePolicyAnyOf: Policies;
+}>;
 export type TrustedActionUiContract<
   T,
   Action extends string,

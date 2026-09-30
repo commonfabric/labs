@@ -1,13 +1,12 @@
 /**
  * What a pattern's computation picks up from the rows of a real query result.
  *
- * A `sqliteQuery` result is a container holding one link per row, and the
- * column labels a db declares ride onto the row documents rather than onto the
- * container: every entry the container carries is `origin: "link"` with a
- * `LinkReference` atom and no confidentiality of its own. So what a reader
- * derives turns on whether it opened a row, and these two arms are that split
- * — one computation reads a field off every row, the other reads the row
- * count and nothing else.
+ * A `sqliteQuery` result is a container holding one link per row. The column
+ * labels a db declares ride onto the row documents, and the container
+ * declares their join on its membership and on the reference at each slot: a
+ * row document's id is derived from the row's content, so which rows a result
+ * holds is a fact about them (CFC spec §8.17.6). The cases cover field reads,
+ * including iteration, and reading the row count alone.
  *
  * The db is declared and seeded through the same path a connector store
  * reaches a pattern by: per-column `ifc` on the table contract, rows written
@@ -182,6 +181,51 @@ describe("CFC flow labels: the rows of a query result", () => {
     });
   };
 
+  it("iterates the labeled SQLite rows whose container reports a nonzero length", async () => {
+    startRuntime();
+    const { summary } = await summaryConfidentiality(
+      "query-rows-for-of",
+      (query) => {
+        const rows = query?.result ?? [];
+        const subjects: string[] = [];
+        for (const row of rows) subjects.push(row.subject);
+        return {
+          count: rows.length,
+          first: rows[0]?.subject,
+          subjects,
+          from: Array.from(rows, (row) => row.subject),
+          mapped: rows.map((row) => row.subject),
+        };
+      },
+    );
+
+    expect(summary).toEqual({
+      count: 2,
+      first: "Recovered, a service is not active",
+      subjects: ["Recovered, a service is not active", "Your weekly digest"],
+      from: ["Recovered, a service is not active", "Your weekly digest"],
+      mapped: ["Recovered, a service is not active", "Your weekly digest"],
+    });
+  });
+
+  it("carries the class of fields read only through a SQLite row iterator", async () => {
+    startRuntime();
+    const { confidentiality, summary } = await summaryConfidentiality(
+      "query-rows-iterator-class",
+      (query) => {
+        const subjects: string[] = [];
+        for (const row of query?.result ?? []) subjects.push(row.subject);
+        return subjects;
+      },
+    );
+
+    expect(summary).toEqual([
+      "Recovered, a service is not active",
+      "Your weekly digest",
+    ]);
+    expect(confidentiality).toContain(ROW_CLASS);
+  });
+
   it("carries the rows' class into a value a predicate over their fields decided", async () => {
     // Arm A. Every row's labeled field is read and none survives the
     // predicate, which is what a bill classifier that matched nothing does.
@@ -206,10 +250,10 @@ describe("CFC flow labels: the rows of a query result", () => {
     expect(confidentiality).toContainEqual(ROW_CLASS);
   });
 
-  it("carries no class into a value read off the row count alone", async () => {
-    // Arm B. The container's own entries carry no confidentiality, so a
-    // computation that never opens a row has nothing to pick up — and how
-    // many rows there are is not a fact about any one of them.
+  it("carries the rows' class into a value read off the row count alone", async () => {
+    // Arm B. A computation that never opens a row reads the container's
+    // length, and the length is an observation of its membership, which
+    // carries the join of the rows' labels.
     startRuntime();
 
     const { confidentiality, summary } = await summaryConfidentiality(
@@ -218,6 +262,6 @@ describe("CFC flow labels: the rows of a query result", () => {
     );
 
     expect(summary).toEqual({ count: 2 });
-    expect(confidentiality).not.toContainEqual(ROW_CLASS);
+    expect(confidentiality).toContainEqual(ROW_CLASS);
   });
 });

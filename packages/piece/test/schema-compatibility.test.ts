@@ -2,7 +2,14 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type JSONSchema, type Pattern } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricPrimitiveSchemaType } from "@commonfabric/api";
+import type { FabricPrimitive } from "@commonfabric/data-model";
+import {
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  FabricBytes,
+} from "@commonfabric/data-model/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/for-testing-only";
+import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
 import {
   assertPatternSchemasBackwardCompatible,
   assertSchemaSubset,
@@ -41,6 +48,51 @@ const oldPattern = pattern(
     required: ["doubled"],
   },
 );
+
+/**
+ * A value of each `FabricPrimitive` class, from the examples the data model
+ * keeps complete over its classes.
+ */
+const FABRIC_PRIMITIVE_VALUES: readonly FabricPrimitive[] = Object.values(
+  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+).map(([example]) => example);
+
+/**
+ * Returns the value in {@link FABRIC_PRIMITIVE_VALUES} that the schema type
+ * `type` matches, which is the one reporting it as `.schemaType`.
+ */
+function fabricPrimitiveValueOf(
+  type: FabricPrimitiveSchemaType,
+): FabricPrimitive {
+  const found = FABRIC_PRIMITIVE_VALUES.find((value) =>
+    value.schemaType === type
+  );
+  if (found === undefined) {
+    throw new Error(`No example reports the schema type \`${type}\`.`);
+  }
+  return found;
+}
+
+/**
+ * Returns every string-keyed member on the prototype chain of a value in
+ * {@link FABRIC_PRIMITIVE_VALUES} below `Object.prototype`, together with a
+ * name none of those values has and the brand key.
+ */
+function fabricPrimitiveMemberNames(): Set<string> {
+  const names = new Set(["absentFromEveryClass", FABRIC_SPECIAL_OBJECT_BRAND]);
+  for (const value of FABRIC_PRIMITIVE_VALUES) {
+    for (
+      let prototype = Object.getPrototypeOf(value);
+      prototype !== Object.prototype;
+      prototype = Object.getPrototypeOf(prototype)
+    ) {
+      for (const name of Object.getOwnPropertyNames(prototype)) {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
 
 /** An object whose `maxProperties` a second merged member would break. */
 const boundedObject: JSONSchema = {
@@ -258,6 +310,65 @@ describe("piece schema compatibility", () => {
         ),
       )
     ).not.toThrow();
+  });
+
+  describe("a `writePolicyAnyOf` list", () => {
+    // Each member of the list is a writer claim beside its contract, and the
+    // list is compared member by member as a lone claim is: the recompile
+    // volatility normalized out of each writer, everything else held fixed.
+
+    const listResult = (
+      moduleIdentity: string,
+      editAction = "EditFlag",
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        flag: {
+          type: "boolean",
+          ifc: {
+            writePolicyAnyOf: [
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: { ...baselineIdentity, moduleIdentity },
+                },
+                uiContract: baselineUiContract,
+              },
+              {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    ...baselineIdentity,
+                    path: ["editFlag"],
+                    moduleIdentity,
+                  },
+                },
+                uiContract: { ...baselineUiContract, action: editAction },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    it("accepts a recompile that only changes each member's moduleIdentity", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern({ type: "object" }, listResult("DCTZZ89BogydamlP301Qx")),
+        )
+      ).not.toThrow();
+    });
+
+    it("rejects a change to one member's action", () => {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern({ type: "object" }, listResult("UVJh2ChHuLkknYrVet0Iu")),
+          pattern(
+            { type: "object" },
+            listResult("UVJh2ChHuLkknYrVet0Iu", "RetitleFlag"),
+          ),
+        )
+      ).toThrow("result.flag: ifc changed");
+    });
   });
 
   // A floored path is authored to mint the atom it floors, because the write
@@ -1263,6 +1374,7 @@ describe("piece schema compatibility", () => {
     const stableSource: JSONSchema = {
       type: "object",
       properties,
+      required: ["y"],
       additionalProperties: false,
     };
     const stableTarget: JSONSchema = {
@@ -1271,7 +1383,7 @@ describe("piece schema compatibility", () => {
         ...properties,
         x: { type: "number", default: 0 },
       },
-      required: ["x"],
+      required: ["x", "y"],
       additionalProperties: false,
     };
     expect(() => assertSchemaSubset(stableSource, stableTarget)).not.toThrow();
@@ -2483,11 +2595,15 @@ describe("piece schema compatibility", () => {
   });
 
   it("fills an unconstrained required member's default for links but refuses its introduction from `true` during evolution", () => {
+    // The link source requires a key no `FabricPrimitive` has, which keeps
+    // every value it admits a record that can receive the default.
+
     const target: JSONSchema = {
       required: ["count"],
       properties: { count: { default: 1 } },
     };
-    expect(() => assertSchemaSubset(true, target)).not.toThrow();
+    expect(() => assertSchemaSubset({ required: ["title"] }, target)).not
+      .toThrow();
     expect(() =>
       assertPatternSchemasBackwardCompatible(
         pattern(true, true),
@@ -2981,6 +3097,1361 @@ describe("piece schema compatibility", () => {
     ).toThrow(/enum\/const became more restrictive/);
   });
 
+  it("reads a bare enum's or const's type set from its values", () => {
+    // `{enum: [...]}` with no `type`, the spelling a literal union compiles
+    // to, admits exactly the types its values carry. So a `type: "string"`
+    // schema accepts a string enum whichever proof reaches it, and an enum
+    // candidate is judged by the enum rule rather than refused on type.
+
+    const states = ["open", "draft", "merged", "closed"];
+    expect(() => assertSchemaSubset({ enum: states }, { type: "string" }))
+      .not.toThrow();
+    expect(() => assertSchemaSubset({ const: "open" }, { type: "string" }))
+      .not.toThrow();
+
+    const argumentWith = (state: JSONSchema): Pattern =>
+      pattern(
+        { type: "object", properties: { state } },
+        oldPattern.resultSchema,
+      );
+    const resultWith = (state: JSONSchema): Pattern =>
+      pattern(
+        oldPattern.argumentSchema,
+        { type: "object", properties: { state } },
+      );
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        argumentWith({ enum: states }),
+        argumentWith({ type: "string" }),
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        argumentWith({ type: "string" }),
+        argumentWith({ enum: states }),
+      )
+    ).toThrow(/argument\.state: enum\/const became more restrictive/);
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        resultWith({ type: "string" }),
+        resultWith({ enum: states }),
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        resultWith({ enum: states }),
+        resultWith({ type: "string" }),
+      )
+    ).toThrow(/result\.state: enum\/const became more restrictive/);
+  });
+
+  it("throws for a bare enum listing a value type the candidate does not accept", () => {
+    // Each listed value contributes the type the runtime validates it as,
+    // with an integral number an `integer`.
+
+    expect(() => assertSchemaSubset({ enum: ["a", 1] }, { type: "string" }))
+      .toThrow(/type integer is not accepted by the candidate schema/);
+    expect(() => assertSchemaSubset({ enum: [1, 2.5] }, { type: "number" }))
+      .not.toThrow();
+    expect(() => assertSchemaSubset({ enum: [1, 2.5] }, { type: "integer" }))
+      .toThrow(/type number is not accepted by the candidate schema/);
+    expect(() => assertSchemaSubset({ enum: [null] }, { type: "null" }))
+      .not.toThrow();
+    expect(() =>
+      assertSchemaSubset({ enum: [true, false] }, { type: "boolean" })
+    ).not.toThrow();
+    expect(() => assertSchemaSubset({ enum: [["a"]] }, { type: "array" }))
+      .not.toThrow();
+    expect(() => assertSchemaSubset({ enum: [{ a: 1 }] }, { type: "object" }))
+      .not.toThrow();
+  });
+
+  it("narrows a declared type to the literal values listed beside it", () => {
+    // `{type: "number", enum: [1, 2]}` and `{enum: [1, 2]}` accept the same
+    // two values and read as the same `integer` schema: the declared type
+    // bounds which listed values count, and those values bound the type.
+
+    expect(() =>
+      assertSchemaSubset({ type: "number", enum: [1, 2] }, { enum: [1, 2] })
+    ).not.toThrow();
+    expect(() =>
+      assertSchemaSubset({ enum: [1, 2] }, { type: "number", enum: [1, 2] })
+    ).not.toThrow();
+    expect(() =>
+      assertSchemaSubset(
+        { type: "integer", enum: [1, 2.5] },
+        { type: "integer" },
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertSchemaSubset(
+        { type: "number", enum: [1, 2.5] },
+        { type: "integer" },
+      )
+    ).toThrow(/type number is not accepted by the candidate schema/);
+  });
+
+  it("leaves a schema listing a `FabricPrimitive` value unbounded on type", () => {
+    // The runtime checks an object schema's `required` keys on a
+    // `FabricPrimitive` whenever the schema declares no `type` or admits
+    // `object`, so the value's class name does not say which object
+    // keywords reach it. Unbounded, the schema keeps the object proof
+    // running against a target that also declares no type, so that link is
+    // refused where the value validator rejects the value, and it is
+    // refused on type against any typed target.
+
+    const value = new FabricBytes(new Uint8Array([1]));
+    const listed = { enum: [value] } as unknown as JSONSchema;
+    const requiring = {
+      enum: [value],
+      required: ["source"],
+    } as unknown as JSONSchema;
+    expect(validateSchemaValue(requiring, value, requiring)).toBe(
+      "missing required property source",
+    );
+    expect(() => assertSchemaSubset(listed, requiring))
+      .toThrow(/value\.source: newly required argument field has no default/);
+    for (
+      const typed of [
+        { type: "object", required: ["source"] },
+        { type: "FabricBytes" },
+      ] satisfies JSONSchema[]
+    ) {
+      expect(() => assertSchemaSubset(listed, typed))
+        .toThrow(/the candidate no longer accepts every previous type/);
+    }
+  });
+
+  describe("nested anyOf subsets", () => {
+    const flat: JSONSchema = {
+      anyOf: [{ enum: [false, true, "auto"] }, { type: "null" }],
+    };
+
+    for (const depth of [1, 2, 3]) {
+      it(`accepts a source union at nesting depth ${depth}`, () => {
+        let nested: JSONSchema = {
+          anyOf: [{ type: "boolean" }, { type: "null" }],
+        };
+        for (let level = 0; level < depth; level++) {
+          nested = { anyOf: [nested], description: "A boolean or null" };
+        }
+        expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+        expect(() => assertSchemaSubset(flat, nested)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, flat),
+            pattern(flat, nested),
+          )
+        ).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(flat, true),
+            pattern(nested, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, nested),
+            pattern(true, flat),
+          )
+        ).toThrow(/result:/);
+      });
+    }
+
+    it("bounds repeated split retries while retaining whole-branch proofs", () => {
+      let nested: JSONSchema = {
+        anyOf: [{ type: "boolean" }, { type: "null" }],
+      };
+      for (let depth = 0; depth < 128; depth++) {
+        nested = { anyOf: [nested, { type: "null" }] };
+      }
+      expect(() => assertSchemaSubset(nested, flat))
+        .toThrow(/a schema alternative/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, flat),
+          pattern(flat, nested),
+        )
+      ).toThrow(/argument:[\s\S]*result:/);
+
+      // The same deep schema fits a single target alternative without the
+      // supplementary split search, so the bound does not restrict that proof.
+      const whole: JSONSchema = { enum: [false, true, null, "auto"] };
+      expect(() => assertSchemaSubset(nested, whole)).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, whole),
+          pattern(whole, nested),
+        )
+      ).not.toThrow();
+    });
+
+    it("spends the split bound on a nested shape one level at a time", () => {
+      // The bound is spent along a proof path, so a nested shape whose every
+      // level carries its own splitting union spends it one level at a time:
+      // each level's descent happens inside that level's split. Seven levels
+      // (eight unions, counting the leaf) is what the bound affords.
+      const source = (levels: number): JSONSchema => ({
+        anyOf: [{
+          anyOf: [
+            { type: "null" },
+            levels === 0 ? { type: "boolean" } : {
+              type: "object",
+              properties: { f: source(levels - 1) },
+              required: ["f"],
+            },
+          ],
+        }],
+      });
+      const target = (levels: number): JSONSchema => ({
+        anyOf: [
+          { type: "null" },
+          levels === 0 ? { enum: [false, true, "auto"] } : {
+            type: "object",
+            properties: { f: target(levels - 1) },
+            required: ["f"],
+          },
+        ],
+      });
+
+      expect(() => assertSchemaSubset(source(7), target(7))).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source(7), target(7)),
+          pattern(target(7), source(7)),
+        )
+      ).not.toThrow();
+
+      // Past the bound the proof stops and refuses rather than widening.
+      expect(() => assertSchemaSubset(source(64), target(64)))
+        .toThrow(/a schema alternative/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source(64), target(64)),
+          pattern(target(64), source(64)),
+        )
+      ).toThrow(/argument:[\s\S]*result:/);
+    });
+
+    it("keeps comment-marked wrappers at their comparison boundary", () => {
+      for (
+        const $comment of [
+          "emptyProperties",
+          "missingProperty",
+          "rejectedProperty",
+          "A boolean or null",
+        ]
+      ) {
+        const nested: JSONSchema = {
+          anyOf: [{
+            $comment,
+            anyOf: [{ type: "boolean" }, { type: "null" }],
+          }],
+        };
+        expect(() => assertSchemaSubset(nested, flat)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, flat),
+            pattern(flat, nested),
+          )
+        ).toThrow(/argument:[\s\S]*result:/);
+      }
+    });
+
+    it("retains outer constraints when matching nested alternatives separately", () => {
+      const nested: JSONSchema = {
+        maxLength: 3,
+        anyOf: [{ anyOf: [{ type: "string" }, { type: "null" }] }],
+      };
+      const flat: JSONSchema = {
+        maxLength: 3,
+        anyOf: [{ type: "string" }, { type: "null" }],
+      };
+      expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+      expect(() => assertSchemaSubset(nested, { ...flat, maxLength: 2 }))
+        .toThrow();
+    });
+
+    it("resolves nested source references in their original root", () => {
+      const nested: JSONSchema = {
+        $defs: { value: { type: "boolean" } },
+        anyOf: [{ anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] }],
+      };
+      const flat: JSONSchema = {
+        $defs: { value: { enum: [false, true, "auto"] } },
+        anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }],
+      };
+      expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+      expect(() =>
+        assertSchemaSubset(nested, {
+          ...flat,
+          $defs: { value: { type: "string" } },
+        })
+      ).toThrow();
+    });
+
+    it("refuses a nested source alternative that the flat target excludes", () => {
+      for (const branch of [{ type: "number" }, true] as const) {
+        const nested: JSONSchema = {
+          anyOf: [{ anyOf: [{ type: "boolean" }, branch] }],
+        };
+        expect(() => assertSchemaSubset(nested, flat)).toThrow();
+      }
+    });
+
+    it("preserves a whole-union default while widening nested alternatives", () => {
+      const nested: JSONSchema = {
+        default: false,
+        anyOf: [{ anyOf: [{ type: "boolean" }, { type: "null" }] }],
+      };
+      const defaulted: JSONSchema = { ...flat, default: false };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, defaulted),
+          pattern(defaulted, nested),
+        )
+      ).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, true),
+          pattern({ ...defaulted, default: true }, true),
+        )
+      ).toThrow(/argument: defaults changed/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, defaulted),
+          pattern(true, { ...nested, default: true }),
+        )
+      ).toThrow(/result: defaults changed/);
+    });
+
+    for (const referenced of [false, true]) {
+      it(`keeps ${referenced ? "referenced" : "inline"} child defaults at the nested union boundary`, () => {
+        for (
+          const nullBranch of [{ type: "null" }, {
+            type: "null",
+            default: null,
+          }] as const
+        ) {
+          const nested: JSONSchema = {
+            $defs: { value: { type: "boolean", default: false } },
+            anyOf: [{
+              anyOf: [
+                referenced
+                  ? { $ref: "#/$defs/value" }
+                  : { type: "boolean", default: false },
+                nullBranch,
+              ],
+            }],
+          };
+          const defaulted: JSONSchema = {
+            anyOf: [
+              { enum: [false, true, "auto"], default: false },
+              nullBranch,
+            ],
+          };
+          expect(() => assertSchemaSubset(nested, defaulted)).not.toThrow();
+          expect(() =>
+            assertPatternSchemasBackwardCompatible(
+              pattern(nested, true),
+              pattern(defaulted, true),
+            )
+          ).toThrow(/argument:/);
+          expect(() =>
+            assertPatternSchemasBackwardCompatible(
+              pattern(true, defaulted),
+              pattern(true, nested),
+            )
+          ).toThrow(/result:/);
+        }
+      });
+    }
+
+    it("keeps constraints and semantic metadata on a nested union", () => {
+      for (
+        const metadata of [
+          { asCell: ["cell"] },
+          { readOnly: true },
+          { not: { const: false } },
+          { default: false },
+        ] satisfies Exclude<JSONSchema, boolean>[]
+      ) {
+        const nested: JSONSchema = {
+          anyOf: [{
+            ...metadata,
+            anyOf: [{ type: "boolean" }, { type: "null" }],
+          }],
+        };
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, true),
+            pattern(flat, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, flat),
+            pattern(true, nested),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    it("keeps a nested union reached through a reference at its boundary", () => {
+      const inline: JSONSchema = {
+        $defs: { value: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
+        anyOf: [{ anyOf: [{ type: "boolean" }, { type: "null" }] }],
+      };
+      const referenced: JSONSchema = {
+        $defs: { value: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
+        anyOf: [{ $ref: "#/$defs/value" }],
+      };
+      // Written inline the wrapper is transparent, so its children may take
+      // different target alternatives.
+      expect(() => assertSchemaSubset(inline, flat)).not.toThrow();
+      // Named through a `$ref` it is not: the reference decides which schema
+      // and which root the proof compares, so the wrapper keeps its own
+      // boundary and the whole union has to fit one target alternative.
+      expect(() => assertSchemaSubset(referenced, flat)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(referenced, true),
+          pattern(flat, true),
+        )
+      ).toThrow(/argument:/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, flat),
+          pattern(true, referenced),
+        )
+      ).toThrow(/result:/);
+    });
+
+    it("splits the generated cell union only when it carries no marker", () => {
+      // The shape the generator emits for `Cell<Profile | undefined> |
+      // undefined`, the only nested `anyOf` in the pattern baselines
+      // (`cfc-group-chat-demo/main.tsx`, `authorProfile`). The result schema
+      // spells the wrapper bare; the argument schema marks it a cell.
+      const defs = {
+        profile: { type: "object", properties: { name: { type: "string" } } },
+      } satisfies Record<string, JSONSchema>;
+      const nestedUnion = (
+        marker: Exclude<JSONSchema, boolean>,
+      ): JSONSchema => ({
+        $defs: defs,
+        anyOf: [
+          { type: "undefined" },
+          {
+            ...marker,
+            anyOf: [{ type: "undefined" }, { $ref: "#/$defs/profile" }],
+          },
+        ],
+      });
+      const flattened = (branch: JSONSchema): JSONSchema => ({
+        $defs: defs,
+        anyOf: [{ type: "undefined" }, branch],
+      });
+
+      const bare = nestedUnion({});
+      const bareFlattened = flattened({ $ref: "#/$defs/profile" });
+      expect(() => assertSchemaSubset(bare, bareFlattened)).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(bare, bareFlattened),
+          pattern(bareFlattened, bare),
+        )
+      ).not.toThrow();
+
+      // Splitting the marked wrapper would drop the marker. The flattened
+      // target admits a cell of the profile and a plain `undefined`, but not
+      // a cell holding `undefined`, so that transition narrows and stays
+      // refused in both roles.
+      const marked = nestedUnion({ asCell: ["cell"] });
+      const markedFlattened = flattened({
+        asCell: ["cell"],
+        $ref: "#/$defs/profile",
+      });
+      expect(() => assertSchemaSubset(marked, markedFlattened)).toThrow();
+      // Dropping the marker outright is the transition a split that looked
+      // past it would wrongly admit: a cell is not a profile.
+      expect(() => assertSchemaSubset(marked, bareFlattened)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(marked, true),
+          pattern(markedFlattened, true),
+        )
+      ).toThrow(/argument:/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, markedFlattened),
+          pattern(true, marked),
+        )
+      ).toThrow(/result:/);
+    });
+  });
+
+  describe("type lists inside alternatives", () => {
+    // A `type` list and the `anyOf` spelling of the same union describe the
+    // same values, and a list wrapped in a one-branch `anyOf` describes what
+    // the bare list does. The proof splits a list into one branch per named
+    // type wherever it is written, so none of those spellings decides a
+    // verdict on its own.
+    const spellings = (list: JSONSchema): [string, JSONSchema][] => [
+      ["bare", list],
+      ["inside `anyOf`", { anyOf: [list] }],
+      ["nested in `anyOf`", { anyOf: [{ anyOf: [list] }] }],
+    ];
+
+    for (
+      const [name, list, target, compatible] of [
+        [
+          "widening a list to the union spelling",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          true,
+        ],
+        [
+          "dropping a listed type",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }] },
+          false,
+        ],
+        [
+          "a sibling constraint the target keeps",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 3 }, { type: "number" }] },
+          true,
+        ],
+        [
+          "a sibling constraint the target tightens",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 2 }, { type: "number" }] },
+          false,
+        ],
+        [
+          "a list naming `object`",
+          { type: ["object", "string"] },
+          { anyOf: [{ type: "object" }, { type: "string" }] },
+          true,
+        ],
+        [
+          // `unknown` admits every value, so no branch of the target covers it.
+          "a list naming `unknown`",
+          { type: ["unknown", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          false,
+        ],
+        [
+          // `object` admits every `FabricPrimitive`, so the primitive name adds
+          // no branch of its own and the runtime's `required` check is kept.
+          "a list naming `object` beside a `FabricPrimitive` and `required`",
+          {
+            type: ["object", "FabricBytes"],
+            properties: { k: { type: "string" } },
+            required: ["k"],
+          },
+          {
+            anyOf: [
+              {
+                type: "object",
+                properties: { k: { type: "string" } },
+                required: ["k"],
+              },
+              { type: "FabricBytes" },
+            ],
+          },
+          true,
+        ],
+      ] satisfies [string, JSONSchema, JSONSchema, boolean][]
+    ) {
+      it(`proves ${name} the same way wherever the list is spelled`, () => {
+        for (const [, source] of spellings(list)) {
+          if (compatible) {
+            expect(() => assertSchemaSubset(source, target)).not.toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, target),
+                pattern(target, source),
+              )
+            ).not.toThrow();
+          } else {
+            expect(() => assertSchemaSubset(source, target)).toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, true),
+                pattern(target, true),
+              )
+            ).toThrow(/argument:/);
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(true, target),
+                pattern(true, source),
+              )
+            ).toThrow(/result:/);
+          }
+        }
+      });
+    }
+
+    it("keeps a type list beside an unresolved reference whole", () => {
+      // The reference resolves with the branch's keywords laid over the
+      // referenced schema, so the list overrides the referenced `string`: the
+      // source admits every value. Splitting it would drop `type` from the
+      // untyped branch and let `string` return, proving only strings and
+      // objects against a target that rejects the rest.
+      const branch: JSONSchema = {
+        $ref: "#/$defs/value",
+        type: ["object", "unknown"],
+      };
+      const target: JSONSchema = {
+        anyOf: [{ type: "object" }, { type: "string" }],
+      };
+      for (
+        const source of [
+          { $defs: { value: { type: "string" } }, anyOf: [branch] },
+          {
+            $defs: { value: { type: "string" } },
+            anyOf: [{ anyOf: [branch] }],
+          },
+        ] satisfies JSONSchema[]
+      ) {
+        for (const value of [42, false, null]) {
+          expect(validateSchemaValue(source, value, source)).toBeUndefined();
+          expect(validateSchemaValue(target, value, target)).toBeDefined();
+        }
+        expect(() => assertSchemaSubset(source, target)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(source, true),
+            pattern(target, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, target),
+            pattern(true, source),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    it("re-spells a generated scalar branch without breaking the contract", () => {
+      // `JsonValue` as the generator emits it: a scalar `type` list as one
+      // branch of the union (`agent-sessions-debug/main.tsx`).
+      const union = (scalars: JSONSchema[]): JSONSchema => ({
+        anyOf: [
+          ...scalars,
+          { type: "boolean" },
+          { type: "array", items: { type: "unknown" } },
+        ],
+      });
+      const listed = union([{
+        type: ["null", "number", "string", "undefined"],
+      }]);
+      for (
+        const respelled of [
+          union([
+            { type: "null" },
+            { type: "number" },
+            { type: "string" },
+            { type: "undefined" },
+          ]),
+          union([{ type: ["null", "number"] }, {
+            type: ["string", "undefined"],
+          }]),
+        ]
+      ) {
+        expect(() => assertSchemaSubset(listed, respelled)).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(listed, respelled),
+            pattern(respelled, listed),
+          )
+        ).not.toThrow();
+      }
+
+      // Dropping a member of the list is still a break, however it is spelled.
+      const narrowed = union([{ type: ["null", "number", "string"] }]);
+      expect(() => assertSchemaSubset(listed, narrowed)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(listed, true),
+          pattern(narrowed, true),
+        )
+      ).toThrow(/argument:/);
+    });
+  });
+
+  describe("finite literal subsets", () => {
+    it("does not throw for listed values excluded by the source's declared type", () => {
+      for (
+        const [source, target] of [
+          [
+            { type: "string", enum: ["open", null] },
+            { enum: ["open", "closed"] },
+          ],
+          [{ type: "integer", enum: [1, 2.5] }, { const: 1 }],
+          [{ type: "number", enum: [1, "open"] }, { enum: [1, 2] }],
+          [{ type: "null", enum: [null, "open"] }, { const: null }],
+          [
+            { type: "string", const: "open", enum: ["open", null] },
+            { enum: ["open", "closed"] },
+          ],
+        ] satisfies [JSONSchema, JSONSchema][]
+      ) {
+        expect(() => assertSchemaSubset(source, target)).not.toThrow();
+      }
+    });
+
+    it("throws when the target excludes a value admitted by the source's type", () => {
+      expect(() =>
+        assertSchemaSubset(
+          { type: "number", enum: [1, 2.5] },
+          { type: "integer", enum: [1, 2.5] },
+        )
+      ).toThrow();
+      expect(() =>
+        assertSchemaSubset(
+          { type: "unknown", enum: ["open", null] },
+          { enum: ["open", "closed"] },
+        )
+      ).toThrow(/enum\/const/);
+    });
+
+    it("does not throw for a `null` type against an enum or const admitting `null`", () => {
+      for (const source of [{ type: "null" }, { type: ["null"] }] as const) {
+        expect(() => assertSchemaSubset(source, { enum: [null] })).not
+          .toThrow();
+        expect(() => assertSchemaSubset(source, { const: null })).not
+          .toThrow();
+        expect(() => assertSchemaSubset(source, { enum: ["open"] })).toThrow();
+      }
+    });
+
+    it("accepts a boolean type against an enum admitting both boolean values", () => {
+      for (
+        const source of [{ type: "boolean" }, { type: ["boolean"] }] as const
+      ) {
+        for (
+          const target of [
+            { enum: [false, true] },
+            { enum: [false, true, "auto"] },
+            { type: "boolean", enum: [false, true, "auto"] },
+          ] satisfies JSONSchema[]
+        ) {
+          expect(() => assertSchemaSubset(source, target)).not.toThrow();
+        }
+      }
+    });
+
+    it("refuses a boolean target enum or const that omits either boolean value", () => {
+      for (const value of [false, true]) {
+        for (const target of [{ enum: [value, "auto"] }, { const: value }]) {
+          expect(() => assertSchemaSubset({ type: "boolean" }, target))
+            .toThrow(/enum\/const/);
+        }
+      }
+      expect(() =>
+        assertSchemaSubset(
+          { type: "boolean" },
+          { type: "string", enum: [false, true, "auto"] },
+        )
+      ).toThrow(/enum\/const/);
+    });
+
+    it("checks sibling constraints after proving boolean enum membership", () => {
+      expect(() =>
+        assertSchemaSubset(
+          { type: "boolean" },
+          { enum: [false, true], not: { const: false } },
+        )
+      ).toThrow(/not changed/);
+    });
+
+    it("retains a boolean source's explicit enum and const restrictions", () => {
+      for (const value of [false, true]) {
+        for (
+          const source of [
+            { type: "boolean", enum: [value] },
+            { type: "boolean", const: value },
+            { type: "boolean", const: value, enum: [false, true] },
+          ] satisfies JSONSchema[]
+        ) {
+          expect(() => assertSchemaSubset(source, { const: value })).not
+            .toThrow();
+          expect(() => assertSchemaSubset(source, { const: !value })).toThrow(
+            /enum\/const/,
+          );
+        }
+      }
+    });
+
+    it("permits boolean argument widening and result narrowing through unions", () => {
+      const literalUnion: JSONSchema = { enum: [false, true, null, "auto"] };
+      for (
+        const [narrower, wider] of [
+          [{ type: "boolean" }, literalUnion],
+          [{ type: ["boolean", "null"] }, literalUnion],
+          [{ anyOf: [{ type: "boolean" }, { type: "null" }] }, literalUnion],
+          [
+            { anyOf: [{ anyOf: [{ type: "boolean" }, { type: "null" }] }] },
+            literalUnion,
+          ],
+          [
+            { anyOf: [{ type: "boolean" }, { type: "null" }] },
+            { anyOf: [{ enum: [false, true, "auto"] }, { type: "null" }] },
+          ],
+        ] satisfies [JSONSchema, JSONSchema][]
+      ) {
+        expect(() => assertSchemaSubset(narrower, wider)).not.toThrow();
+        expect(() => assertSchemaSubset(wider, narrower)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(narrower, wider),
+            pattern(wider, narrower),
+          )
+        ).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(wider, true),
+            pattern(narrower, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, narrower),
+            pattern(true, wider),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    it("permits boolean widening that preserves its effective default", () => {
+      for (const value of [false, true]) {
+        const narrower: JSONSchema = { type: "boolean", default: value };
+        const wider: JSONSchema = {
+          enum: [false, true, "auto"],
+          default: value,
+        };
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(narrower, wider),
+            pattern(wider, narrower),
+          )
+        ).not.toThrow();
+        for (
+          const changed of [
+            {
+              enum: [false, true, "auto"],
+              default: value === false ? true : "auto",
+            },
+            { enum: [false, true, "auto"] },
+          ] satisfies JSONSchema[]
+        ) {
+          expect(() =>
+            assertPatternSchemasBackwardCompatible(
+              pattern(narrower, true),
+              pattern(changed, true),
+            )
+          ).toThrow(/defaults changed/);
+        }
+      }
+    });
+
+    it("permits nullable literal argument widening and result narrowing", () => {
+      const wider: JSONSchema = { enum: ["open", "closed", null] };
+      for (
+        const narrower of [
+          { type: "null" },
+          { anyOf: [{ type: "string", enum: ["open"] }, { type: "null" }] },
+        ] satisfies JSONSchema[]
+      ) {
+        expect(() => assertSchemaSubset(narrower, wider)).not.toThrow();
+        expect(() => assertSchemaSubset(wider, narrower)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(narrower, wider),
+            pattern(wider, narrower),
+          )
+        ).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(wider, true),
+            pattern(narrower, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, narrower),
+            pattern(true, wider),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    for (
+      const [name, source] of [
+        ["a type list", { type: ["string", "null"], enum: ["open", null] }],
+        ["an `anyOf` sibling", { enum: ["open", null], anyOf: [{}] }],
+        ["an `anyOf` branch", { anyOf: [{ enum: ["open", null] }] }],
+        [
+          "a nested `anyOf` branch",
+          { anyOf: [{ anyOf: [{ enum: ["open", null] }] }] },
+        ],
+        [
+          "a type list inside `anyOf`",
+          { anyOf: [{ type: ["string", "null"], enum: ["open", null] }] },
+        ],
+      ] satisfies [string, JSONSchema][]
+    ) {
+      it(`compares mixed enums in ${name} against each target branch`, () => {
+        const target: JSONSchema = {
+          anyOf: [{ enum: ["open", "closed"] }, { type: "null" }],
+        };
+        for (const value of ["open", null]) {
+          expect(validateSchemaValue(source, value, source)).toBeUndefined();
+          expect(validateSchemaValue(target, value, target)).toBeUndefined();
+        }
+        expect(() => assertSchemaSubset(source, target)).not.toThrow();
+        expect(() => assertSchemaSubset(source, { type: ["string", "null"] }))
+          .not.toThrow();
+        expect(() =>
+          assertSchemaSubset(source, {
+            anyOf: [{ enum: ["closed"] }, { type: "null" }],
+          })
+        ).toThrow();
+        expect(() =>
+          assertSchemaSubset(source, { type: ["string", "integer"] })
+        ).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(source, target),
+            pattern(target, source),
+          )
+        ).not.toThrow();
+      });
+    }
+
+    for (
+      const [name, metadata] of [
+        ["asCell", { asCell: ["cell"] }],
+        ["readOnly", { readOnly: true }],
+        ["default", { default: "open" }],
+      ] satisfies [string, Exclude<JSONSchema, boolean>][]
+    ) {
+      it(`accepts mixed-enum widening in a branch retaining its \`${name}\``, () => {
+        const withValues = (values: string[]): JSONSchema => ({
+          anyOf: [
+            { type: "number" },
+            { enum: [...values, null], ...metadata },
+          ],
+        });
+        const narrower = withValues(["open", "closed"]);
+        const wider = withValues(["open", "closed", "archived"]);
+        expect(() => assertSchemaSubset(narrower, wider)).not.toThrow();
+        expect(() => assertSchemaSubset(wider, narrower)).toThrow(
+          /schema alternative accepted previously/,
+        );
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(narrower, wider),
+            pattern(wider, narrower),
+          )
+        ).not.toThrow();
+      });
+    }
+
+    for (
+      const [name, nested, definitions] of [
+        ["on the union", {
+          anyOf: [
+            { type: "number" },
+            { enum: ["open", "closed", null] },
+          ],
+          default: "open",
+        }, {}],
+        ["on a child branch", {
+          anyOf: [
+            { type: "number" },
+            { enum: ["open", "closed", null], default: "open" },
+          ],
+        }, {}],
+        ["in a referenced child branch", {
+          anyOf: [
+            { $ref: "#/$defs/state" },
+            { enum: [1, true] },
+          ],
+        }, {
+          state: { enum: ["open", "closed", null], default: "open" },
+        }],
+        ["when child defaults conflict", {
+          anyOf: [
+            { type: "number", default: 1 },
+            { enum: ["open", "closed", null], default: "open" },
+          ],
+        }, {}],
+      ] satisfies [
+        string,
+        Exclude<JSONSchema, boolean>,
+        Record<string, JSONSchema>,
+      ][]
+    ) {
+      it(`preserves defaults in an unchanged nested union ${name}`, () => {
+        const branch = { ...nested, asCell: ["cell"] } as const;
+        const narrower: JSONSchema = {
+          anyOf: [{ type: "string" }, branch],
+          $defs: definitions,
+        };
+        const wider: JSONSchema = {
+          anyOf: [{ type: "string" }, { type: "boolean" }, branch],
+          $defs: definitions,
+        };
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(narrower, wider),
+            pattern(wider, narrower),
+          )
+        ).not.toThrow();
+      });
+    }
+
+    it("refuses changed effective defaults in a nested union", () => {
+      const withDefault = (fallback: string): JSONSchema => ({
+        anyOf: [{
+          anyOf: [
+            { type: "number" },
+            { enum: ["open", "closed", null] },
+          ],
+          default: fallback,
+          asCell: ["cell"],
+        }],
+      });
+      const previous = withDefault("open");
+      const candidate = withDefault("closed");
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(previous, true),
+          pattern(candidate, true),
+        )
+      ).toThrow(/argument: defaults changed/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, previous),
+          pattern(true, candidate),
+        )
+      ).toThrow(/result: defaults changed/);
+    });
+
+    it("partitions a defaulted source union for a link without migrating its default", () => {
+      const source: JSONSchema = {
+        anyOf: [{
+          anyOf: [{ type: "number" }, { enum: ["open", "closed", null] }],
+          default: "open",
+        }],
+      };
+      const target: JSONSchema = {
+        anyOf: [
+          { type: ["null", "number"] },
+          { type: "string", enum: ["closed", "open"] },
+        ],
+      };
+      expect(() => assertSchemaSubset(source, target)).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source, true),
+          pattern(target, true),
+        )
+      ).toThrow(/argument: defaults changed/);
+    });
+
+    it("accepts an unchanged type-list sibling while widening a mixed enum", () => {
+      const withValues = (values: string[]): JSONSchema => ({
+        anyOf: [
+          { type: ["null", "number"] },
+          { enum: [...values, 1] },
+        ],
+      });
+      const narrower = withValues(["open"]);
+      const wider = withValues(["open", "closed"]);
+      expect(() => assertSchemaSubset(narrower, wider)).not.toThrow();
+      expect(() => assertSchemaSubset(wider, narrower)).toThrow(
+        /schema alternative accepted previously/,
+      );
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(narrower, wider),
+          pattern(wider, narrower),
+        )
+      ).not.toThrow();
+    });
+
+    it("compares a referenced mixed enum against the whole target enum", () => {
+      const source: JSONSchema = {
+        anyOf: [{ $ref: "#/$defs/state" }],
+        $defs: { state: { enum: ["open", null] } },
+      };
+      expect(() =>
+        assertSchemaSubset(source, { enum: ["open", "closed", null] })
+      ).not.toThrow();
+      expect(() => assertSchemaSubset(source, { enum: ["open", "closed"] }))
+        .toThrow(/schema alternative accepted previously/);
+    });
+
+    it("retains sibling constraints and branch extensions when splitting enums", () => {
+      const source: JSONSchema = {
+        enum: ["open", null],
+        anyOf: [{ type: "string", minLength: 4 }, { type: "null" }],
+      };
+      const target: JSONSchema = {
+        anyOf: [{ type: "string", minLength: 5 }, { type: "null" }],
+      };
+      expect(validateSchemaValue(source, "open", source)).toBeUndefined();
+      expect(validateSchemaValue(target, "open", target)).toBeDefined();
+      expect(() => assertSchemaSubset(source, target)).toThrow(
+        /schema alternative accepted previously/,
+      );
+      expect(() =>
+        assertSchemaSubset(
+          { anyOf: [{ enum: ["open", null], readOnly: true }] },
+          { type: ["string", "null"] },
+        )
+      ).toThrow(/schema alternative accepted previously/);
+    });
+
+    it("leaves mixed enums containing an unclassified value whole", () => {
+      const value = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0];
+      const source = { enum: ["open", value] } as unknown as JSONSchema;
+      const target = {
+        anyOf: [{ type: "string" }, { enum: [value] }],
+      } as unknown as JSONSchema;
+      for (const admitted of ["open", value]) {
+        expect(validateSchemaValue(source, admitted, source)).toBeUndefined();
+        expect(validateSchemaValue(target, admitted, target)).toBeUndefined();
+      }
+      expect(() => assertSchemaSubset(source, target)).toThrow(
+        /schema alternative accepted previously/,
+      );
+    });
+
+    it("retains `FabricPrimitive` values while splitting a declared type list", () => {
+      const source = {
+        type: ["string", "null", "object"],
+        enum: [
+          "open",
+          null,
+          FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0],
+        ],
+      } as unknown as JSONSchema;
+      const target: JSONSchema = { type: ["string", "null"] };
+      expect(
+        validateSchemaValue(
+          source,
+          FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0],
+          source,
+        ),
+      )
+        .toBeUndefined();
+      expect(() => assertSchemaSubset(source, target)).toThrow();
+    });
+
+    it("refuses changed descendant defaults beneath a split object enum", () => {
+      const source: JSONSchema = { anyOf: [{ enum: ["open", {}] }] };
+      const target: JSONSchema = {
+        anyOf: [
+          { type: "string" },
+          { type: "object", properties: { count: { default: 1 } } },
+        ],
+      };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source, true),
+          pattern(target, true),
+        )
+      ).toThrow(/not stable under default insertion/);
+    });
+  });
+
+  describe("bare enums spanning several types", () => {
+    // A literal union with `null` among its members compiles to one bare enum,
+    // `{enum: ["open", "closed", null]}`, and a `string | null` consumer to a
+    // type list or an `anyOf`.
+
+    const nullableUnion: JSONSchema = { enum: ["open", "closed", null] };
+    const stringOrNull: JSONSchema = {
+      anyOf: [{ type: "string" }, { type: "null" }],
+    };
+
+    it("does not throw when a type list or `anyOf` candidate has a branch accepting each listed value's type", () => {
+      expect(() =>
+        assertSchemaSubset(nullableUnion, { type: ["string", "null"] })
+      ).not.toThrow();
+      expect(() => assertSchemaSubset(nullableUnion, stringOrNull))
+        .not.toThrow();
+      expect(() =>
+        assertSchemaSubset(nullableUnion, {
+          anyOf: [{ enum: ["open", "closed"] }, { type: "null" }],
+        })
+      ).not.toThrow();
+      expect(() =>
+        assertSchemaSubset({ enum: ["a", 1] }, { type: ["string", "integer"] })
+      ).not.toThrow();
+    });
+
+    it("throws when a listed value has no candidate branch accepting it", () => {
+      // No branch of the first candidate admits `null`. The `string` branch
+      // of the second lists `open` alone, and the enum rule refuses `closed`.
+
+      expect(() =>
+        assertSchemaSubset({ enum: ["open", null] }, {
+          type: ["string", "integer"],
+        })
+      ).toThrow(/schema alternative accepted previously/);
+      expect(() =>
+        assertSchemaSubset(nullableUnion, {
+          anyOf: [{ enum: ["open"] }, { type: "null" }],
+        })
+      ).toThrow(/schema alternative accepted previously/);
+    });
+
+    it("throws for an enum listing a `FabricPrimitive` value beside values the candidate's branches accept", () => {
+      // A listed `FabricPrimitive` leaves the enum unbounded on type, so its
+      // values are not taken apart by type, and no typed branch accepts the
+      // enum whole. Here `open` and `null` each have a branch, and the
+      // `FabricBytes` value has none.
+
+      const listed = {
+        enum: ["open", null, new FabricBytes(new Uint8Array([1]))],
+      } as unknown as JSONSchema;
+      expect(() => assertSchemaSubset(listed, stringOrNull))
+        .toThrow(/schema alternative accepted previously/);
+    });
+
+    it("does not throw for a typed enum with a type list against branches accepting its values", () => {
+      // Each `type` in the list narrows the listed values to its own: the
+      // `string` branch reads as `open` alone and the `null` branch as `null`
+      // alone, which a `string` candidate refuses.
+
+      const typed: JSONSchema = {
+        type: ["string", "null"],
+        enum: ["open", null],
+      };
+      expect(() => assertSchemaSubset(typed, { type: ["string", "null"] }))
+        .not.toThrow();
+      expect(() => assertSchemaSubset(typed, stringOrNull)).not.toThrow();
+      expect(() => assertSchemaSubset(typed, { type: "string" }))
+        .toThrow(/schema alternative accepted previously/);
+    });
+
+    it("does not throw for a source branch listing values of several types against a bare enum candidate listing them all", () => {
+      // A candidate enum stays whole. A source branch has to fit inside a
+      // single candidate branch, and one listing values of several types fits
+      // only the whole enum.
+
+      expect(() =>
+        assertSchemaSubset(
+          { type: ["string", "null"], enum: ["open", null] },
+          nullableUnion,
+        )
+      ).not.toThrow();
+      expect(() =>
+        assertSchemaSubset(
+          { anyOf: [{ enum: ["open", null] }, { enum: [1] }] },
+          { enum: ["open", null, 1] },
+        )
+      ).not.toThrow();
+    });
+
+    it("throws for a type list or `anyOf` source against a bare enum candidate", () => {
+      // The `string` branch of either source meets the candidate enum whole,
+      // and a `string` schema admits values the enum does not list. The last
+      // case is that branch alone, refused by the enum rule.
+
+      const candidate: JSONSchema = { enum: ["open", null] };
+      expect(() => assertSchemaSubset({ type: ["string", "null"] }, candidate))
+        .toThrow(/schema alternative accepted previously/);
+      expect(() => assertSchemaSubset(stringOrNull, candidate))
+        .toThrow(/schema alternative accepted previously/);
+      expect(() => assertSchemaSubset({ type: "string" }, candidate))
+        .toThrow(/enum\/const became more restrictive/);
+    });
+
+    it("throws for a pattern update across the union only where it narrows an argument or widens a result", () => {
+      const argumentWith = (state: JSONSchema): Pattern =>
+        pattern(
+          { type: "object", properties: { state } },
+          oldPattern.resultSchema,
+        );
+      const resultWith = (state: JSONSchema): Pattern =>
+        pattern(
+          oldPattern.argumentSchema,
+          { type: "object", properties: { state } },
+        );
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          argumentWith(nullableUnion),
+          argumentWith(stringOrNull),
+        )
+      ).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          argumentWith(stringOrNull),
+          argumentWith(nullableUnion),
+        )
+      ).toThrow(/argument\.state: a schema alternative accepted previously/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          resultWith(stringOrNull),
+          resultWith(nullableUnion),
+        )
+      ).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          resultWith(nullableUnion),
+          resultWith(stringOrNull),
+        )
+      ).toThrow(/result\.state: a schema alternative accepted previously/);
+    });
+  });
+
+  it("keeps a composition unstable under defaults while a branch a default reaches lists the whole value", () => {
+    // Disjoint branch types keep a value from moving between branches, but a
+    // default inserted from a sibling `properties` still lands inside an
+    // object the value occupies. A branch listing that object whole, bare or
+    // typed, no longer matches it afterwards, so the default is refused. A
+    // branch admitting only scalars receives no default, and leaves the
+    // composition stable beside an open object branch.
+
+    const withBranch = (
+      combinator: "anyOf" | "oneOf",
+      branch: JSONSchema,
+    ): JSONSchema => ({
+      type: "object",
+      [combinator]: [branch, { type: "string" }],
+      properties: { a: { type: "number", default: 1 } },
+    });
+    for (const combinator of ["anyOf", "oneOf"] as const) {
+      for (
+        const branch of [
+          { enum: [{}] },
+          { type: "object", enum: [{}] },
+        ] satisfies JSONSchema[]
+      ) {
+        const schema = withBranch(combinator, branch);
+        expect(() => assertSchemaSubset(schema, schema))
+          .toThrow(/not stable under default insertion/);
+      }
+    }
+    const scalarBranch: JSONSchema = {
+      type: "object",
+      anyOf: [
+        { type: "object", properties: { b: { type: "number" } } },
+        { enum: ["none"] },
+      ],
+      properties: { a: { type: "number", default: 1 } },
+    };
+    expect(() => assertSchemaSubset(scalarBranch, scalarBranch)).not.toThrow();
+  });
+
   it("treats `FabricPrimitive` types as subtypes of object (one-way)", () => {
     // A "FabricBytes" source widens safely into an "object" target; the
     // reverse narrows and must be flagged. Same-type stays compatible.
@@ -2997,6 +4468,234 @@ describe("piece schema compatibility", () => {
     expect(() =>
       assertSchemaSubset({ type: "FabricBytes" }, { type: "FabricHash" })
     ).toThrow(/type FabricBytes is not accepted/);
+  });
+
+  describe("`required` against a `FabricPrimitive`-typed source", () => {
+    // The runtime checks a target's `required` keys on a `FabricPrimitive`
+    // with `in` when the target declares no `type` or its type list includes
+    // `object`, excusing the brand key, and leaves them unchecked under a
+    // target typed some other way. Each case reads the validator's verdict on
+    // a value of the source's class beside the proof's, so the two agree on
+    // the spelling in front of them.
+
+    const bytesSource: JSONSchema = { type: "FabricBytes" };
+    const bytes = new FabricBytes(new Uint8Array([1]));
+
+    it("refuses an `object` target requiring a key `FabricBytes` does not carry", () => {
+      const target: JSONSchema = { type: "object", required: ["source"] };
+      expect(validateSchemaValue(target, bytes, target)).toBe(
+        "missing required property source",
+      );
+      expect(() => assertSchemaSubset(bytesSource, target)).toThrow(
+        /value\.source: required field is not a member of `FabricBytes`/,
+      );
+    });
+
+    it("accepts an `object` target requiring a member every `FabricBytes` carries", () => {
+      const target: JSONSchema = { type: "object", required: ["length"] };
+      expect(validateSchemaValue(target, bytes, target)).toBeUndefined();
+      expect(() => assertSchemaSubset(bytesSource, target)).not.toThrow();
+    });
+
+    it("accepts a `FabricBytes` target requiring a key `FabricBytes` does not carry", () => {
+      const target: JSONSchema = { type: "FabricBytes", required: ["source"] };
+      expect(validateSchemaValue(target, bytes, target)).toBeUndefined();
+      expect(() => assertSchemaSubset(bytesSource, target)).not.toThrow();
+    });
+
+    it("refuses the missing key under an untyped target, a type list including `object`, and a required `anyOf` base", () => {
+      // A type list is proved branch by branch, and an `anyOf` as its base
+      // beside each branch, so these reach the proof by other routes than a
+      // node typed `object` does.
+
+      const cases: [JSONSchema, RegExp][] = [
+        [
+          { required: ["source"] },
+          /value\.source: required field is not a member of `FabricBytes`/,
+        ],
+        [
+          { type: ["FabricBytes", "object"], required: ["source"] },
+          /a schema alternative accepted previously is not accepted/,
+        ],
+        [
+          { type: ["unknown", "object"], required: ["source"] },
+          /a schema alternative accepted previously is not accepted/,
+        ],
+        [
+          { anyOf: [{ type: "FabricBytes" }], required: ["source"] },
+          /a schema alternative accepted previously is not accepted/,
+        ],
+      ];
+      for (const [target, issue] of cases) {
+        expect(validateSchemaValue(target, bytes, target)).toBe(
+          "missing required property source",
+        );
+        expect(() => assertSchemaSubset(bytesSource, target)).toThrow(issue);
+      }
+    });
+
+    it("accepts the missing key under a target typed `unknown` or by a type list without `object`", () => {
+      for (
+        const target of [
+          { type: "unknown", required: ["source"] },
+          { type: ["FabricBytes", "string"], required: ["source"] },
+        ] satisfies JSONSchema[]
+      ) {
+        expect(validateSchemaValue(target, bytes, target)).toBeUndefined();
+        expect(() => assertSchemaSubset(bytesSource, target)).not.toThrow();
+      }
+    });
+
+    it("refuses exactly the member names the validator finds missing, for every class in the vocabulary", () => {
+      const verdicts: { type: string; name: string; accepted: boolean }[] = [];
+      const disagreements: typeof verdicts = [];
+      for (const type of FABRIC_PRIMITIVE_SCHEMA_TYPES) {
+        for (const name of fabricPrimitiveMemberNames()) {
+          const target: JSONSchema = { type: "object", required: [name] };
+          const accepted = validateSchemaValue(
+            target,
+            fabricPrimitiveValueOf(type),
+            target,
+          ) === undefined;
+          let proved = true;
+          try {
+            assertSchemaSubset({ type }, target);
+          } catch {
+            proved = false;
+          }
+          verdicts.push({ type, name, accepted });
+          if (proved !== accepted) disagreements.push({ type, name, accepted });
+        }
+      }
+      expect(disagreements).toEqual([]);
+      expect(verdicts).toContainEqual({
+        type: "FabricHash",
+        name: "tag",
+        accepted: true,
+      });
+      expect(verdicts).toContainEqual({
+        type: "FabricBytes",
+        name: "tag",
+        accepted: false,
+      });
+    });
+  });
+
+  describe("a newly required field's default against a source admitting a `FabricPrimitive`", () => {
+    // Default insertion cannot add a key to a `FabricPrimitive`, since every
+    // instance is frozen, and the runtime checks `required` keys on one with
+    // `in`. Each link case reads the validator's verdict on a value beside the
+    // proof's, so the two agree on the spelling in front of them.
+
+    const bytes = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0];
+    const hash = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricHash[0];
+    const defaulted = (key: string, required: string[] = []): JSONSchema => ({
+      type: "object",
+      properties: { [key]: { default: 1 } },
+      required: [...required, key],
+    });
+
+    it("throws for a link whose `object`, `true`, or `unknown` source admits a `FabricBytes` lacking the field", () => {
+      // The runtime does not check `required` under `type: "unknown"`, so the
+      // `unknown` source admits every `FabricPrimitive` whatever it requires.
+
+      const untypedTarget: JSONSchema = {
+        properties: { x: { default: 1 } },
+        required: ["x"],
+      };
+      const cases: [JSONSchema, JSONSchema][] = [
+        [{ type: "object" }, defaulted("x")],
+        [true, untypedTarget],
+        [{ type: "unknown", required: ["title"] }, untypedTarget],
+      ];
+      for (const [source, target] of cases) {
+        expect(validateSchemaValue(source, bytes, source)).toBeUndefined();
+        expect(validateSchemaValue(target, bytes, target)).toBe(
+          "missing required property x",
+        );
+        expect(() => assertSchemaSubset(source, target)).toThrow(
+          /value\.x: newly required field is not a member of `FabricBytes`, which takes no default/,
+        );
+      }
+    });
+
+    it("does not throw for a link whose source requires a key no `FabricPrimitive` has", () => {
+      const source: JSONSchema = {
+        type: "object",
+        properties: { title: { type: "string" } },
+        required: ["title"],
+      };
+      const target: JSONSchema = {
+        type: "object",
+        properties: { title: { type: "string" }, x: { default: 1 } },
+        required: ["title", "x"],
+      };
+      expect(validateSchemaValue(source, bytes, source)).toBe(
+        "missing required property title",
+      );
+      expect(() => assertSchemaSubset(source, target)).not.toThrow();
+    });
+
+    it("throws for a field a `FabricHash` the source's `required` admits lacks, and not for one it has", () => {
+      // `required: ["length"]` admits a `FabricBytes` and a `FabricHash`. Both
+      // have `copyInto`, and only the `FabricBytes` has `slice`.
+
+      const source: JSONSchema = { type: "object", required: ["length"] };
+      expect(validateSchemaValue(source, hash, source)).toBeUndefined();
+
+      const copyInto = defaulted("copyInto", ["length"]);
+      expect(validateSchemaValue(copyInto, hash, copyInto)).toBeUndefined();
+      expect(() => assertSchemaSubset(source, copyInto)).not.toThrow();
+
+      const slice = defaulted("slice", ["length"]);
+      expect(validateSchemaValue(slice, hash, slice)).toBe(
+        "missing required property slice",
+      );
+      expect(() => assertSchemaSubset(source, slice)).toThrow(
+        /value\.slice: newly required field is not a member of `FabricHash`/,
+      );
+    });
+
+    it("throws for exactly the fields some value of the vocabulary fails the validator on, under an `object` source", () => {
+      const verdicts: { name: string; accepted: boolean }[] = [];
+      const disagreements: typeof verdicts = [];
+      for (const name of fabricPrimitiveMemberNames()) {
+        const target = defaulted(name);
+        const accepted = FABRIC_PRIMITIVE_VALUES.every((value) =>
+          validateSchemaValue(target, value, target) === undefined
+        );
+        let proved = true;
+        try {
+          assertSchemaSubset({ type: "object" }, target);
+        } catch {
+          proved = false;
+        }
+        verdicts.push({ name, accepted });
+        if (proved !== accepted) disagreements.push({ name, accepted });
+      }
+      expect(disagreements).toEqual([]);
+      expect(verdicts).toContainEqual({ name: "constructor", accepted: true });
+      expect(verdicts).toContainEqual({ name: "length", accepted: false });
+    });
+
+    it("does not throw for a pattern update adding the field under an `object` argument slot", () => {
+      // An update keeps the default. Setup validates the stored argument
+      // against the candidate and refuses a `FabricPrimitive` lacking the
+      // field (`packages/runner/test/pattern-update-argument-validation.test.ts`).
+
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            { type: "object", properties: { stamp: { type: "object" } } },
+            { type: "object" },
+          ),
+          pattern(
+            { type: "object", properties: { stamp: defaulted("zone") } },
+            { type: "object" },
+          ),
+        )
+      ).not.toThrow();
+    });
   });
 
   it("compares Fabric enum and const values canonically", () => {

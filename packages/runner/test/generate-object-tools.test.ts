@@ -13,7 +13,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { BuiltInLLMMessage, BuiltInLLMTool } from "@commonfabric/api";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import {
   addMockObjectResponse,
@@ -29,6 +29,7 @@ import { defer } from "@commonfabric/utils/defer";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Cell, FactoryInput, JSONSchema } from "../src/builder/types.ts";
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
+import { cellRuntime } from "../src/cell.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { INJECTION_SAFE_ATOM } from "../src/cfc/schema-sanitization.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
@@ -1543,6 +1544,9 @@ describe("generateObject with tools", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
+    // The built-in is a computation: a reader has to demand it before the
+    // request goes out, and the runtime's disposal ends the subscription.
+    result.sink(() => {});
     tx.commit();
 
     await childRequestSent.promise;
@@ -1623,7 +1627,7 @@ describe("generateObject with tools", () => {
       tx,
     );
 
-    runtime.run(tx, testPattern, {}, resultCell);
+    runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
     await tx.commit();
 
@@ -1694,7 +1698,7 @@ describe("generateObject with tools", () => {
       tx,
     );
 
-    runtime.run(tx, testPattern, {}, resultCell);
+    runtime.run(tx, testPattern, {}, resultCell).sink(() => {});
     runtime.prepareTxForCommit(tx);
     await tx.commit();
 
@@ -1806,7 +1810,17 @@ describe("generateObject with tools", () => {
         expect(entries).toContainEqual({
           path: [field],
           observes: "value",
-          label: { integrity: [INJECTION_SAFE_ATOM, LLM_DERIVED_ATOM] },
+          label: {
+            confidentiality: [promptRisk, promptInfluence],
+            integrity: [
+              INJECTION_SAFE_ATOM,
+              LLM_DERIVED_ATOM,
+              {
+                type: CFC_ATOM_TYPE.TransformedBy,
+                identity: { kind: "builtin", builtinId: "generateObject" },
+              },
+            ],
+          },
         });
       }
       expect(entries).toContainEqual({
@@ -1816,7 +1830,16 @@ describe("generateObject with tools", () => {
       expect(entries).toContainEqual({
         path: ["reasoning"],
         observes: "value",
-        label: { integrity: [LLM_DERIVED_ATOM] },
+        label: {
+          confidentiality: [promptRisk, promptInfluence],
+          integrity: [
+            LLM_DERIVED_ATOM,
+            {
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: { kind: "builtin", builtinId: "generateObject" },
+            },
+          ],
+        },
       });
       // Only these concrete inert fields are certified: neither reasoning nor
       // a covering root or wildcard may inherit an InjectionSafe attestation.
@@ -2429,7 +2452,7 @@ function patternOutputCell(resultCell: Cell<any>, testPattern: any): Cell<any> {
   const resultLink = getMetaLink(liveResultCell, "result");
   const parentResultCell = resultLink === undefined
     ? undefined
-    : liveResultCell.runtime.getCellFromLink(resultLink);
+    : cellRuntime(liveResultCell).getCellFromLink(resultLink);
   const path = testPattern.result?.$alias?.path;
   if (parentResultCell === undefined || !Array.isArray(path)) {
     return liveResultCell;

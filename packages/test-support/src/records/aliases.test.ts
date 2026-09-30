@@ -8,6 +8,7 @@ import {
   AliasResolver,
   loadAliasResolver,
   parseAliasLine,
+  readAliasDirectory,
 } from "./aliases.ts";
 
 const FULL: AliasLine = {
@@ -213,6 +214,45 @@ describe("aliases", () => {
     });
   });
 
+  describe("readAliasDirectory()", () => {
+    let directory: string;
+
+    beforeEach(async () => {
+      directory = await Deno.makeTempDir({ prefix: "test-records-aliases-" });
+    });
+
+    afterEach(async () => {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+    });
+
+    it("returns the `.jsonl` files and the other entries, each in order of name", async () => {
+      await Deno.writeTextFile(join(directory, "b.test.ts.jsonl"), "second\n");
+      await Deno.writeTextFile(join(directory, "a.test.ts.jsonl"), "first\n");
+      await Deno.writeTextFile(join(directory, "README.md"), "prose\n");
+      await Deno.mkdir(join(directory, "nested.jsonl"));
+      expect(await readAliasDirectory(directory)).toEqual({
+        files: [
+          { name: "a.test.ts.jsonl", text: "first\n" },
+          { name: "b.test.ts.jsonl", text: "second\n" },
+        ],
+        unread: ["README.md", "nested.jsonl"],
+      });
+    });
+
+    it("returns nothing for a missing directory", async () => {
+      expect(await readAliasDirectory(join(directory, "absent"))).toEqual({
+        files: [],
+        unread: [],
+      });
+    });
+
+    it("throws given a path that is not a directory", async () => {
+      const file = join(directory, "a.test.ts.jsonl");
+      await Deno.writeTextFile(file, "first\n");
+      await expect(readAliasDirectory(file)).rejects.toThrow();
+    });
+  });
+
   describe("loadAliasResolver()", () => {
     let directory: string;
 
@@ -224,31 +264,32 @@ describe("aliases", () => {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
     });
 
-    it("loads parsable lines and skips the rest", async () => {
-      const file = join(directory, "aliases.jsonl");
+    it("loads parsable lines from every file and skips the rest", async () => {
       await Deno.writeTextFile(
-        file,
-        `${JSON.stringify(FULL)}\nnot json\n${JSON.stringify(SCOPE)}\n`,
+        join(directory, "glaze.test.ts.jsonl"),
+        `${JSON.stringify(FULL)}\nnot json\n`,
       );
-      const resolver = await loadAliasResolver(file);
-      expect(resolver.empty).toBe(false);
+      await Deno.writeTextFile(
+        join(directory, "whole-scope.jsonl"),
+        `${JSON.stringify(SCOPE)}\n`,
+      );
+      const resolver = await loadAliasResolver(directory);
       expect(
         resolver.resolve(
           { k: "unit", s: "bakery", n: "glaze > sets" },
           "2026/08/10",
-        ).n,
-      ).toBe("glaze > cures");
+        ),
+      ).toEqual({ k: "unit", s: "patisserie", n: "glaze > cures" });
     });
 
-    it("returns an empty resolver for a missing file", async () => {
+    it("returns an empty resolver for a missing directory", async () => {
       const resolver = await loadAliasResolver(join(directory, "absent"));
       expect(resolver.empty).toBe(true);
     });
 
-    it("finds the repository's own alias file with no path given", async () => {
-      // The committed alias file is empty today; the point is that the
-      // default path resolves inside the repository and loads cleanly.
+    it("finds the repository's own alias directory with no path given", async () => {
       const resolver = await loadAliasResolver();
+      expect(resolver.empty).toBe(false);
       const identity = { k: "unit", s: "bakery", n: "unmapped" };
       expect(resolver.resolve(identity, "2026/08/10")).toEqual(identity);
     });

@@ -180,18 +180,10 @@ Deno.test("jumplist: a git show lists the commit message before its files", () =
   const s = diffSession(SHOW);
   press(s, "i");
   assertEquals(entryText(s), [
-    "● commit 012345678  Fix the widget alignment",
+    "● commit 012345678  +2 −1  Fix the widget alignment",
     "   ▸ src/app.ts  +1 −1",
     " T ▸ src/app.test.ts  +1 −0",
   ]);
-});
-
-Deno.test("jumplist: f on a commit asks for a file row", () => {
-  const s = diffSession(SHOW);
-  press(s, "i", "f");
-
-  assertEquals(s.view().message, "Select a file to hide or show.");
-  assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
 Deno.test("jumplist: enter on a file jumps the viewport to its header line", () => {
@@ -293,7 +285,9 @@ Deno.test("jumplist: a filter matching the commit subject keeps the commit", () 
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "widget");
-  assertEquals(entryText(s), ["● commit 012345678  Fix the widget alignment"]);
+  assertEquals(entryText(s), [
+    "● commit 012345678  +2 −1  Fix the widget alignment",
+  ]);
 });
 
 Deno.test("jumplist: spaces are entered in a filter", () => {
@@ -302,7 +296,9 @@ Deno.test("jumplist: spaces are entered in a filter", () => {
   type(s, "widget");
   s.handleKey({ name: "space", char: " " });
   type(s, "alignment");
-  assertEquals(entryText(s), ["● commit 012345678  Fix the widget alignment"]);
+  assertEquals(entryText(s), [
+    "● commit 012345678  +2 −1  Fix the widget alignment",
+  ]);
   assertEquals(s.view().inputLine, "jump to: widget alignment");
 });
 
@@ -612,9 +608,9 @@ Deno.test("jumplist: git log -p interleaves each commit with its own files", () 
   const s = diffSession(LOG);
   press(s, "i");
   assertEquals(entryText(s), [
-    "● commit a1a1a1a1a  Second change",
+    "● commit a1a1a1a1a  +1 −1  Second change",
     "   ▸ b.ts  +1 −1",
-    "● commit b2b2b2b2b  First change",
+    "● commit b2b2b2b2b  +1 −1  First change",
     "   ▸ a.ts  +1 −1",
   ]);
 });
@@ -717,13 +713,15 @@ Deno.test("jumplist: an email patch shows and filters by its Subject", () => {
   const s = diffSession(EMAIL);
   press(s, "i");
   assertEquals(entryText(s), [
-    "● commit 012345678  Fix the widget alignment",
+    "● commit 012345678  +1 −1  Fix the widget alignment",
     "   ▸ src/app.ts  +1 −1",
   ]);
   // The subject (with its [PATCH] prefix stripped) is filterable.
   press(s, "/");
   type(s, "widget");
-  assertEquals(entryText(s), ["● commit 012345678  Fix the widget alignment"]);
+  assertEquals(entryText(s), [
+    "● commit 012345678  +1 −1  Fix the widget alignment",
+  ]);
 });
 
 Deno.test("jumplist: a plain diff with no commit lists only files", () => {

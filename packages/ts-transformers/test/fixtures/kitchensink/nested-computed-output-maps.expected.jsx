@@ -672,11 +672,7 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
             }
         },
         selectedCommentId: {
-            anyOf: [{
-                    type: "string"
-                }, {
-                    type: "undefined"
-                }],
+            type: ["string", "undefined"],
             asCell: ["readonly"]
         },
         state: {

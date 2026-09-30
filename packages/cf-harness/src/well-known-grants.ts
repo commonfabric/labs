@@ -14,16 +14,14 @@
  * reading anything behind the token means running a pattern over it, where
  * the CFC boundary rules as it does for every other flow.
  *
- * A connector grant's NAME is the one thing here that is read rather than
- * authored: it is the CFC class a loom instance's own table contract declares
- * for that handle's columns, which is what makes `email` and `finance` the
- * words a session is given. The reading happens in the console launcher, off
- * records on the operator's machine rather than off the fabric; what this
- * module holds it to is the name shape an operator's own `--input-cell` name
- * is held to, so a declared class cannot smuggle structure into a prompt.
+ * Connection identities and CFC classes come from the operator's Loom
+ * records. Each is validated before interpolation into model-facing text.
+ * The name selects a store; its classes describe the data that store holds.
  */
 
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import { createHarnessHandleTable, mintAddressHandle } from "./handle-table.ts";
 import { HANDLE_NAME_PATTERN } from "./input-cells.ts";
@@ -49,16 +47,131 @@ export type {
  */
 const GRANT_DESCRIPTIONS: Record<HarnessWellKnownGrantName, string> = {
   "piece-registry":
-    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so if a name-reading run is refused, fall back to a pattern that returns the entry references without reading any values.",
+    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so a refused name read leaves the name unknown. For an explicit reference-listing task, a pattern can return entry references without reading values; that is not a fallback for identifying an unspecified target.",
+};
+
+const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
+const COMPANION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+const isDescriptionText = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() !== "";
+
+/** Whether a receipt observation is an ISO8601 timestamp with an explicit zone. */
+export const isConnectorObservationTimestamp = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+    .test(value) &&
+  Number.isFinite(Date.parse(value));
+
+/** The Loom store identity, independent of which piece exposes it. */
+export const connectorGrantName = (
+  source: HarnessConnectorGrantSource,
+): string =>
+  source.companionKey === undefined
+    ? source.connection
+    : `${source.connection}#${source.companionKey}`;
+
+/** Reads class metadata, including the singular and class-named record forms. */
+const connectorGrantClasses = (grant: HarnessConnectorGrantSpec): string[] =>
+  grant.cfcClasses !== undefined
+    ? grant.cfcClasses
+    : [grant.cfcClass !== undefined ? grant.cfcClass : grant.name];
+
+/** Human-readable connection and classes, shared by prompts and launch reports. */
+export const connectorGrantLabel = (grant: HarnessConnectorGrantSpec): string =>
+  `${grant.source.connection}${
+    grant.source.companionKey === undefined
+      ? ""
+      : ` / ${grant.source.companionKey}`
+  } (${connectorGrantClasses(grant).join(", ")})`;
+
+/** Describes the receipt's account state, quoting provider text as data. */
+const connectorViewerDescription = (
+  viewer: HarnessConnectorGrantSpec["viewer"],
+): string => {
+  if (viewer === undefined) {
+    return "not recorded in the injection receipt";
+  }
+  if (viewer.identity === "none") {
+    return `no account (${JSON.stringify(viewer.reason)})`;
+  }
+  if (viewer.identity === "conflicting") {
+    return "conflicting injection receipts";
+  }
+  if (viewer.identity === "unknown") {
+    return viewer.reason === undefined
+      ? "unknown"
+      : `unknown (${JSON.stringify(viewer.reason)})`;
+  }
+  const identity = viewer.sourceId ?? viewer.email ?? viewer.label;
+  const parts = [
+    identity === undefined
+      ? `account (${
+        viewer.reason === undefined
+          ? "provider identity not reported"
+          : JSON.stringify(viewer.reason)
+      })`
+      : JSON.stringify(identity),
+  ];
+  if (viewer.email === null) {
+    parts.push("no email address");
+  } else if (viewer.email !== undefined && viewer.email !== identity) {
+    parts.push(`email ${JSON.stringify(viewer.email)}`);
+  }
+  if (viewer.label !== undefined && viewer.label !== identity) {
+    parts.push(`label ${JSON.stringify(viewer.label)}`);
+  }
+  return parts.join("; ");
+};
+
+/** Describes observation time without substituting receipt or content time. */
+const connectorObservationDescription = (
+  observation: HarnessConnectorGrantSpec["observation"],
+): string => {
+  if (observation === undefined) {
+    return "unknown (not reported by the injection receipt)";
+  }
+  if (observation.newestAt !== null) {
+    return new Date(observation.newestAt).toISOString();
+  }
+  return observation.reason === "no-rows"
+    ? "none (empty store)"
+    : `unknown (${JSON.stringify(observation.reason)})`;
 };
 
 /**
- * Model-facing description of one connector grant. Harness-authored except
- * for the grant's name, which the caller has already held to
- * {@link HANDLE_NAME_PATTERN}.
+ * Describes a connector using validated identity, classes, and receipt metadata.
  */
-const connectorGrantDescription = (name: string): string =>
-  `the space's \`${name}\` connector database: a read-only SQLite handle whose columns carry \`${name}\` CFC labels. Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing.`;
+const connectorGrantDescription = (grant: HarnessConnectorGrantSpec): string =>
+  `${
+    connectorGrantLabel(grant)
+  }: a read-only connector database whose columns carry \`${
+    connectorGrantClasses(grant).join("`, `")
+  }\` CFC labels. Account identity: ${
+    connectorViewerDescription(grant.viewer)
+  }. Physical rows at injection: ${
+    grant.rowCount ?? "unknown"
+  } (including metadata and history). Newest observed at: ${
+    connectorObservationDescription(grant.observation)
+  } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
+
+/**
+ * The name a model may be handed for `grant` beside its token: a connector
+ * grant's connection label, or a fixed grant's own name. Both are names this
+ * module already pairs with the token in the grant context, so nothing new
+ * crosses to a model given one.
+ */
+export const wellKnownGrantLabel = (grant: HarnessWellKnownGrant): string => {
+  if (grant.source === undefined) {
+    return grant.name;
+  }
+  // Checked here as every other model-facing use of a connector grant checks
+  // it: the record may be run state this process did not write.
+  checkConnectorGrantSpec(grant);
+  return connectorGrantLabel(grant);
+};
 
 /**
  * Holds one connector grant to the rule its handle is minted under: a name
@@ -72,9 +185,90 @@ const connectorGrantDescription = (name: string): string =>
 export const checkConnectorGrantSpec = (
   spec: HarnessConnectorGrantSpec,
 ): void => {
-  if (!HANDLE_NAME_PATTERN.test(spec.name)) {
+  if (
+    spec.source.connection.trim() === "" || spec.source.piece.trim() === ""
+  ) {
+    throw new Error(
+      `connector grant \`${spec.name}\` records no connection and piece`,
+    );
+  }
+  if (!CONNECTION_NAME_PATTERN.test(spec.source.connection)) {
+    throw new Error(
+      `connector connection must match ${CONNECTION_NAME_PATTERN}`,
+    );
+  }
+  if (
+    spec.source.companionKey !== undefined &&
+    (typeof spec.source.companionKey !== "string" ||
+      !COMPANION_KEY_PATTERN.test(spec.source.companionKey))
+  ) {
+    throw new Error(
+      `connector companion key must match ${COMPANION_KEY_PATTERN}`,
+    );
+  }
+  if (
+    spec.cfcClasses === undefined && spec.cfcClass === undefined &&
+    !HANDLE_NAME_PATTERN.test(spec.name)
+  ) {
     throw new Error(
       `connector grant name must match ${HANDLE_NAME_PATTERN}, got \`${spec.name}\``,
+    );
+  }
+  if (spec.cfcClasses !== undefined && spec.cfcClass !== undefined) {
+    throw new Error("connector grant must carry only one class metadata field");
+  }
+  if (spec.cfcClasses !== undefined || spec.cfcClass !== undefined) {
+    const classes = connectorGrantClasses(spec);
+    if (
+      !Array.isArray(classes) || classes.length === 0 ||
+      classes.some((value) =>
+        typeof value !== "string" || !HANDLE_NAME_PATTERN.test(value)
+      )
+    ) {
+      throw new Error(`connector CFC class must match ${HANDLE_NAME_PATTERN}`);
+    }
+    if (spec.name !== connectorGrantName(spec.source)) {
+      throw new Error(
+        "connector grant name must match its connection and companion key",
+      );
+    }
+  }
+  if (
+    spec.rowCount !== undefined &&
+    (!Number.isSafeInteger(spec.rowCount) || spec.rowCount < 0)
+  ) {
+    throw new Error("connector row count must be a nonnegative safe integer");
+  }
+  const viewer = spec.viewer;
+  if (
+    viewer !== undefined &&
+    (!isObjectNotArray(viewer) ||
+      (viewer.identity !== "account" && viewer.identity !== "none" &&
+        viewer.identity !== "unknown" && viewer.identity !== "conflicting") ||
+      (viewer.identity === "conflicting" && viewer.reason !== undefined) ||
+      (viewer.reason !== undefined && !isDescriptionText(viewer.reason)) ||
+      (viewer.identity === "account"
+        ? (viewer.sourceId !== undefined &&
+          !isDescriptionText(viewer.sourceId)) ||
+          (viewer.email != null && !isDescriptionText(viewer.email)) ||
+          (viewer.label !== undefined && !isDescriptionText(viewer.label))
+        : viewer.identity === "none" && !isDescriptionText(viewer.reason)))
+  ) {
+    throw new Error(
+      "connector viewer must record account, none, unknown, or conflicting with nonempty string metadata",
+    );
+  }
+  const observation = spec.observation;
+  if (
+    observation !== undefined &&
+    (!isObjectNotArray(observation) ||
+      (observation.newestAt === null
+        ? !isDescriptionText(observation.reason)
+        : !isConnectorObservationTimestamp(observation.newestAt) ||
+          observation.reason !== undefined))
+  ) {
+    throw new Error(
+      "connector observation must name a timestamp or explain its absence",
     );
   }
   if (spec.ref.trim() === "") {
@@ -99,18 +293,7 @@ export const checkRecordedWellKnownGrant = (
   if (grant.source === undefined) {
     return;
   }
-  checkConnectorGrantSpec({
-    name: grant.name,
-    ref: grant.ref,
-    source: grant.source,
-  });
-  if (
-    grant.source.connection.trim() === "" || grant.source.piece.trim() === ""
-  ) {
-    throw new Error(
-      `connector grant \`${grant.name}\` records no connection and piece`,
-    );
-  }
+  checkConnectorGrantSpec(grant);
 };
 
 /**
@@ -120,7 +303,7 @@ export const checkRecordedWellKnownGrant = (
  */
 export type HarnessWellKnownGrantRef =
   | { name: HarnessWellKnownGrantName; ref: string; source?: undefined }
-  | { name: string; ref: string; source: HarnessConnectorGrantSource };
+  | HarnessConnectorGrantSpec;
 
 /**
  * Resolves the canonical references behind every well-known grant. The
@@ -163,7 +346,7 @@ export const resolveWellKnownGrantRefs = async (
       throw new Error(`well-known grants name \`${spec.name}\` twice`);
     }
     names.add(spec.name);
-    refs.push({ name: spec.name, ref: spec.ref, source: spec.source });
+    refs.push({ ...spec });
   }
   return refs;
 };
@@ -194,6 +377,15 @@ export const mintWellKnownGrants = async (
         ? { name: grant.name, token: minted.token, ref: entry.ref }
         : {
           name: grant.name,
+          ...(grant.cfcClasses === undefined
+            ? {}
+            : { cfcClasses: grant.cfcClasses }),
+          ...(grant.cfcClass === undefined ? {} : { cfcClass: grant.cfcClass }),
+          ...(grant.rowCount === undefined ? {} : { rowCount: grant.rowCount }),
+          ...(grant.viewer === undefined ? {} : { viewer: grant.viewer }),
+          ...(grant.observation === undefined
+            ? {}
+            : { observation: grant.observation }),
           token: minted.token,
           ref: entry.ref,
           source: grant.source,
@@ -214,7 +406,8 @@ export const mintWellKnownGrants = async (
  */
 const grantDescription = (grant: HarnessWellKnownGrant): string => {
   if (grant.source !== undefined) {
-    return connectorGrantDescription(grant.name);
+    checkConnectorGrantSpec(grant);
+    return connectorGrantDescription(grant);
   }
   // Read through `Object.hasOwn` rather than indexed directly: run state is
   // JSON this process may not have written, so a resumed record can carry a

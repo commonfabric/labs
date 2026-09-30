@@ -29,6 +29,59 @@ gated by the render declassification policy (fail-closed under `deny`).
 Regression guard: "preserves an outer unlabeled-only boundary through an
 unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
+The ceiling in force at a node gates what reaches the page from that node by
+the same fit (`canRenderLabelUnderPolicy`). Each read that a value reaches the
+page through is decided on the labels of the cell the read starts from and on
+the labels the read consumed, and the ceiling has to admit each. The cell's
+labels are its own, which include a label its handle carries, and, when its
+path resolves through links to another place, the label there, which gathers
+every link the resolution followed (spec §8.2.7). A label that cannot be read
+is refused. The consumed labels are those of
+every document the read passed through, including one behind a link crossed
+part way along the path and one a link inside the value leads to, and those of
+each slot holding a link the read followed, which a dereference retains
+(spec §4.6.3).
+
+- A cell child, and a cell mounted as the root, renders as the blocked
+  placeholder while the ceiling refuses its read. A text child
+  `table.key("row").key("name")`, where `row` links to a document of its own,
+  is decided on that document's label as well as the table's. A view a child
+  reaches through a link, as a pattern's output does through `[UI]`, is part
+  of the child's read, so a refused view renders as the placeholder.
+- A property whose value is read through a link, or is an object, is read by a
+  sink of its own and decided on that read. A property the ceiling refuses is
+  not set, and is removed if it was. That covers a cell passed as a property
+  (`<span title={cell}>`) and, in a view read from a cell, as a pattern's view
+  is, a property that links to one and an object or `style` property holding
+  such a link. A literal property is decided with the props object it sits in:
+  it is set directly while the ceiling admits that object's own label, and
+  read by a sink of its own, like the others, while it does not, as when the
+  view or its props are linked from a document of their own. An object written
+  inline in a view built outside a cell sends a cell it holds as a link, not as
+  the cell's value.
+- A `$` binding is made only while the ceiling admits the worker's read of
+  the bound cell, under the cell's schema. The worker keeps reading the bound
+  cell and removes the binding when a write leaves that read consuming a label
+  the ceiling refuses. The binding hands the host a live
+  handle, and the worker answers the host's reads through it without the
+  ceiling: a read that follows a link the worker's read did not, and the
+  host's own subscription to the cell, which can deliver the write that causes
+  a removal before the removal arrives.
+
+Each decision is made again when what its read consumed changes, labels
+included, and when the membership those labels name changes, and only a
+change in the decision is emitted. A trusted host component that never shows a
+value from a binding, handing the reference to a worker operation and showing
+only what that operation answers, declares the binding in
+`REFERENCE_BINDING_SINKS` beside the reconciler, and the ceiling does not gate
+it. A value it reads through such a binding serves only as a signal to ask the
+operation again. `cf-custody-seal` is one, whose dialog shows what the seal's
+preparation answers, and `cf-custody-answer` another, which shows the answer
+the seal published. The declaration is reviewed like the component itself,
+since a component that shows what such a binding holds releases it past the
+ceiling.
+Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
+
 ## Text integrity (`requiredTextIntegrity` / `allowLiteralText`)
 
 Composes the same way — the meet of the parent and inner policies (CT-1796):
@@ -37,6 +90,11 @@ Composes the same way — the meet of the parent and inner policies (CT-1796):
   (more enclosing requirements ⇒ stricter).
 - `allowLiteralText` = parent `&&` inner (an absent parent is unconstrained); an
   inner boundary can never re-enable literal text an enclosing boundary forbade.
+- A boundary that requires no atoms, as an authorship boundary whose author
+  names no principal does, admits no cell text, and that holds for the text
+  inside it whatever an enclosing boundary requires. Regression guard: "hides
+  text inside or around an author that represents no one" in
+  `test/worker-reconciler-cfc-text-integrity.test.ts`.
 - A block is attributed to **every** enclosing boundary — the policy carries the
   full set of enclosing boundary node ids (`boundaryNodeIds`), and
   `markTextIntegrityBlocked` stamps all of them — so no enclosing boundary can
@@ -52,6 +110,21 @@ the replace-not-compose policy dated to #3321 (text integrity enforced by
 default). Regression guards: the four "nested text integrity …" steps in
 `test/worker-reconciler-cfc-render-policy.test.ts` (two mount-time, two reactive
 block/unblock).
+
+Text is checked against the label stored on the document that holds it, at the
+text's path, counting only the entries a read of the text consumes, so an entry
+recording where a link came from counts for nothing. A text child and a declared
+text property (`TEXT_INTEGRITY_PROP_SINKS`) are checked the same way. The
+documents a read passes through on the way do not count. Integrity on a document
+that holds a link endorses the link, not the current contents of the document it
+links to (spec §3.7.2, §8.2.4). So a text child `table.key("row").key("name")`,
+where `row` links to a document of its own, is shown only when that document
+carries the required atoms. The integrity `table` carries is not counted, and
+neither is an endorsement scoped to the link, since both describe the link
+rather than the text. A requirement derived from an `author` cell is read the
+same way: the `represents-principal` atoms counted are those on the document
+that holds the author's value.
+Regression guards: `test/worker-reconciler-cfc-text-integrity.test.ts`.
 
 ## Nested pattern outputs
 

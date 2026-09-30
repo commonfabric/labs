@@ -3,9 +3,9 @@ import { expect } from "@std/expect";
 
 import {
   churn,
-  COST_SAMPLE_CAP,
+  COST_BUCKETS_PER_DOUBLING,
+  COST_RULE,
   costSeconds,
-  type DaySamples,
   daysBetween,
   emptyContext,
   emptyState,
@@ -16,6 +16,7 @@ import {
   mergeSamples,
   type Observation,
   parseContext,
+  percentile90,
   readCostsForward,
   sampledPercentile90,
   sampleDuration,
@@ -29,6 +30,7 @@ import {
 } from "./score.ts";
 import {
   CATCH_BREADTH_WINDOW_DAYS,
+  COST_WINDOW_DAYS,
   FLAKE_COMMIT_REACH,
   FLAKE_EXCLUSION_RATE,
   SAME_COMMIT_REACH_DAYS,
@@ -47,7 +49,6 @@ function saw(
   return {
     test: TEST,
     outcome,
-    durationMs: 100,
     day: "2026-08-20",
     startedAt: "2026-08-20T00:00:00.000Z",
     commit: "c1",
@@ -390,6 +391,86 @@ describe("score", () => {
     });
   });
 
+  describe("the order a run's tests were shuffled into", () => {
+    it("reads a pass and a failure at one commit in two orders as no flake", () => {
+      // An order-dependent test passes in one order and fails in another.
+      // That is a bug in the test, not chance, and a flake rate high
+      // enough would withhold it from pull requests rather than get it
+      // fixed.
+      const state = stateFrom([
+        saw("pass", { seed: 20260921, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("still reads a pass and a failure in one order as a flake", () => {
+      const state = stateFrom([
+        saw("pass", { seed: 20260922, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(1);
+    });
+
+    it("keeps a seeded run apart from one in declaration order", () => {
+      // A run with no seed ran its tests in the order they were declared,
+      // which is an order of its own.
+      const state = stateFrom([
+        saw("pass", { place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+
+    it("credits no catch to a failure on main that a new order ended", () => {
+      // The order moved on and the test stopped failing, which says
+      // nothing about whether any change fixed it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("judges a failure in the pass's order beside one in another", () => {
+      // An older failure in another order is dropped, and does not take
+      // the same-order failure after it down with it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("fail", { day: "2026-08-20", commit: "c1", seed: 20260820 }),
+        saw("pass", { commit: "c2", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("still credits a catch to a failure a later commit in one order ended", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-20", commit: "c0", seed: 20260820 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+    });
+
+    it("reads a rerun of one commit in another order as neither flake nor catch", () => {
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+  });
+
   describe("variants", () => {
     it("scores a variant apart from the default it shadows", () => {
       const marked = { ...TEST, v: "server-execution" };
@@ -515,11 +596,11 @@ describe("score", () => {
       // the combination would fold a running value into itself.
       const state = emptyState();
       sealDay(state, "2026-08-20", samplesOf([100, 100, 900]));
-      const first = state.costByDay["2026-08-20"]!.count;
       sealDay(state, "2026-08-20", samplesOf([200]));
-      const both = state.costByDay["2026-08-20"]!;
-      expect(both.count).toBe(first + 1);
-      expect(both.slowest).toEqual([100, 100, 200, 900]);
+      expect(state.costByDay["2026-08-20"]).toEqual({
+        ...samplesOf([100, 100, 200, 900]),
+        rule: COST_RULE,
+      });
     });
 
     it("reads a day the same whatever runs it arrived over", () => {
@@ -545,16 +626,32 @@ describe("score", () => {
       // The batch a slow execution arrives in can hold nothing else, and
       // a percentile of that batch would be that execution.
       const state = emptyState();
-      sealDay(state, "2026-08-20", samplesOf(Array(45).fill(50)));
+      sealDay(state, "2026-08-20", samplesOf(Array(45).fill(64)));
       sealDay(state, "2026-08-20", samplesOf([300_000]));
-      expect(costSeconds(state, "2026-08-20")).toBe(0.05);
+      expect(costSeconds(state, "2026-08-20")).toBe(0.064);
     });
 
-    it("reports the worst day inside the window, in seconds", () => {
+    it("reads the window's executions as one population, in seconds", () => {
+      // The one slow execution is the slowest tenth of the ten, which a
+      // ninetieth percentile reads past, whichever day it fell on.
       const state = emptyState();
-      sealDay(state, "2026-08-20", samplesOf([100, 200, 4000]));
-      sealDay(state, "2026-08-19", samplesOf([100, 100, 100]));
-      expect(costSeconds(state, "2026-08-20")).toBe(4);
+      sealDay(state, "2026-08-19", samplesOf(Array(9).fill(1024)));
+      sealDay(state, "2026-08-20", samplesOf([8192]));
+      expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    });
+
+    it("weighs a slow day by how many executions it holds", () => {
+      // A slow day decides the cost once it holds more than a tenth of
+      // the window's executions, and not before.
+      const fast = Array(100).fill(1024);
+      const few = emptyState();
+      sealDay(few, "2026-08-14", samplesOf(Array(11).fill(8192)));
+      sealDay(few, "2026-08-20", samplesOf(fast));
+      expect(costSeconds(few, "2026-08-20")).toBe(1.024);
+      const many = emptyState();
+      sealDay(many, "2026-08-14", samplesOf(Array(12).fill(8192)));
+      sealDay(many, "2026-08-20", samplesOf(fast));
+      expect(costSeconds(many, "2026-08-20")).toBe(8.192);
     });
 
     it("forgets a day past the window", () => {
@@ -574,6 +671,21 @@ describe("score", () => {
       expect(Object.keys(state.runsByDay)).toEqual(["2026-08-20"]);
       expect(Object.keys(state.costByDay)).toEqual([]);
     });
+
+    it("drops a failure on the default branch nothing has judged", () => {
+      // A failure waits here for a later run to pass the test, and a
+      // test the branch does not go red for is one no such run has to
+      // arrive for. Nothing would bound this otherwise.
+      const state = emptyState();
+      state.pendingMain = [
+        { day: "2026-01-01", commit: "old", source: "main" },
+        { day: "2026-08-19", commit: "new", source: "main" },
+      ];
+      trimWindows(state, "2026-08-20");
+      expect(state.pendingMain.map((pending) => pending.commit)).toEqual([
+        "new",
+      ]);
+    });
   });
 
   describe("days", () => {
@@ -586,10 +698,11 @@ describe("score", () => {
 });
 
 /**
- * The ninetieth percentile of a list, by nearest rank, over the whole list
- * rather than a bounded sample of it.
+ * The ninetieth percentile of a list, by nearest rank, worked out here
+ * rather than through the module under test so that the two are two
+ * answers to compare.
  */
-function percentile90(values: readonly number[]): number {
+function exactPercentile90(values: readonly number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(0.9 * sorted.length) - 1)]!;
@@ -600,93 +713,114 @@ function dayBefore(day: string, ago: number): string {
   return new Date(stamp).toISOString().slice(0, 10);
 }
 
-describe("a day's bounded sample of its slowest runs", () => {
-  const empty = (): DaySamples => ({ count: 0, slowest: [] });
+/**
+ * A population of durations with repeats and no order to it, spread over
+ * several doublings so that the buckets it lands in are far apart.
+ */
+function scattered(length: number): number[] {
+  return Array.from({ length }, (_, i) => ((i * 37) % 211 + 1) ** 2);
+}
 
-  it("keeps what it is given while there is room, in order", () => {
-    const samples = empty();
-    for (const ms of [30, 10, 20]) sampleDuration(samples, ms);
-    expect(samples.slowest).toEqual([10, 20, 30]);
-    expect(samples.count).toBe(3);
+describe("a day's sample of its runs", () => {
+  it("counts every run it is given", () => {
+    const samples = samplesOf([30, 10, 20, 20]);
+    expect(samples.counts.reduce((sum, each) => sum + each, 0)).toBe(4);
   });
 
-  it("counts every run, keeping only the slowest of them", () => {
-    const samples = empty();
-    for (let i = 1; i <= COST_SAMPLE_CAP + 50; i++) sampleDuration(samples, i);
-    expect(samples.count).toBe(COST_SAMPLE_CAP + 50);
-    expect(samples.slowest.length).toBe(COST_SAMPLE_CAP);
-    expect(samples.slowest[0]).toBe(51);
-    expect(samples.slowest.at(-1)).toBe(COST_SAMPLE_CAP + 50);
-  });
-
-  it("drops a run slower than nothing it kept, once it is full", () => {
-    const samples = empty();
-    for (let i = 100; i < 100 + COST_SAMPLE_CAP; i++) {
-      sampleDuration(samples, i);
+  it("reads a duration on a bucket's bound as that duration", () => {
+    for (const ms of [1, 2, 1024, 4096, 2 ** 20]) {
+      expect(sampledPercentile90(samplesOf([ms]))).toBe(ms);
     }
-    const kept = [...samples.slowest];
-    sampleDuration(samples, 1);
-    expect(samples.slowest).toEqual(kept);
-    // Counted all the same: the count is what the percentile's rank is
-    // taken from, so dropping it would move the percentile up.
-    expect(samples.count).toBe(COST_SAMPLE_CAP + 1);
   });
 
-  it("takes a run that displaces the fastest it kept", () => {
-    const samples = empty();
-    for (let i = 100; i < 100 + COST_SAMPLE_CAP; i++) {
-      sampleDuration(samples, i);
+  it("reads a duration no lower than itself, and under a bucket above", () => {
+    // The bound a cost is read at covers every duration the bucket
+    // counts, and is within one bucket's width of each of them.
+    const width = 2 ** (1 / COST_BUCKETS_PER_DOUBLING);
+    for (let ms = 1; ms < 100_000; ms = Math.ceil(ms * 1.07) + 0.5) {
+      const read = sampledPercentile90(samplesOf([ms]));
+      expect(read).toBeGreaterThanOrEqual(ms);
+      expect(read).toBeLessThan(ms * width);
     }
-    sampleDuration(samples, 150);
-    expect(samples.slowest.length).toBe(COST_SAMPLE_CAP);
-    expect(samples.slowest[0]).toBe(101);
-    expect(samples.slowest).toContain(150);
+  });
+
+  it("reads a run of a millisecond or less as a millisecond", () => {
+    expect(sampledPercentile90(samplesOf([0, 0.5, 1]))).toBe(1);
+  });
+
+  it("reads the percentile at or above the exact one, within a bucket", () => {
+    const width = 2 ** (1 / COST_BUCKETS_PER_DOUBLING);
+    for (const length of [1, 9, 10, 11, 64, 65, 1000]) {
+      const durations = scattered(length);
+      const exact = exactPercentile90(durations);
+      const read = sampledPercentile90(samplesOf(durations));
+      expect(read).toBeGreaterThanOrEqual(exact);
+      expect(read).toBeLessThan(exact * width);
+    }
   });
 
   it("has no percentile for a day nothing ran on", () => {
-    expect(sampledPercentile90(empty())).toBe(0);
+    expect(sampledPercentile90(samplesOf([]))).toBe(0);
+  });
+});
+
+describe("the ninetieth percentile of a list", () => {
+  it("answers by nearest rank", () => {
+    // Each size is checked against the nearest rank worked out
+    // separately, since an off-by-one here moves every charge the lane
+    // model reads.
+    for (let size = 1; size <= 40; size++) {
+      const values = Array.from({ length: size }, (_, i) => (i + 1) * 10);
+      expect(percentile90(values)).toBe(exactPercentile90(values));
+    }
   });
 
-  it("agrees with the exact percentile while everything is kept", () => {
-    const durations = Array.from({ length: 20 }, (_, i) => (i + 1) * 10);
-    const samples = empty();
-    for (const ms of durations) sampleDuration(samples, ms);
-    expect(sampledPercentile90(samples)).toBe(percentile90(durations));
-  });
-
-  it("over-estimates rather than under-estimates past what it kept", () => {
-    // The rank falls outside the sample, so the answer is the smallest
-    // kept run. A budget survives an over-estimate; it does not survive
-    // the other one.
-    const samples = empty();
-    for (let i = 1; i <= 1000; i++) sampleDuration(samples, i);
-    expect(sampledPercentile90(samples)).toBeGreaterThanOrEqual(900);
+  it("has no percentile for a list of nothing", () => {
+    expect(percentile90([])).toBe(0);
   });
 });
 
 describe("mergeSamples()", () => {
-  it("keeps the slowest of the union and the count of both", () => {
+  it("counts the runs of both", () => {
     const a = samplesOf([10, 40]);
     const b = samplesOf([20, 30]);
-    expect(mergeSamples(a, b)).toEqual({ slowest: [10, 20, 30, 40], count: 4 });
+    expect(mergeSamples(a, b)).toEqual(samplesOf([10, 20, 30, 40]));
   });
 
-  it("keeps what accumulating the whole would have kept", () => {
-    const whole = Array.from({ length: 3 * COST_SAMPLE_CAP }, (_, i) => i + 1);
-    const at = COST_SAMPLE_CAP + 7;
-    const merged = mergeSamples(
-      samplesOf(whole.slice(0, at)),
-      samplesOf(whole.slice(at)),
-    );
+  it("counts what accumulating the whole would have, at every cut", () => {
+    // The property a fold reading a day in parts rests on, shown over a
+    // population rather than asserted: what the merge counts cannot
+    // depend on where the day was divided.
+    const whole = scattered(256);
+    const direct = samplesOf(whole);
+    for (let at = 0; at <= whole.length; at++) {
+      expect(
+        mergeSamples(samplesOf(whole.slice(0, at)), samplesOf(whole.slice(at))),
+      ).toEqual(direct);
+    }
+  });
+
+  it("counts the same over any number of parts", () => {
+    // A fold merges each batch into what it holds, so the parts arrive
+    // one at a time and every merge but the first is against a merge.
+    const whole = scattered(256);
+    const cuts = [0, 1, 13, 64, 65, whole.length];
+    let merged = samplesOf([]);
+    for (let part = 1; part < cuts.length; part++) {
+      merged = mergeSamples(
+        merged,
+        samplesOf(whole.slice(cuts[part - 1], cuts[part])),
+      );
+    }
     expect(merged).toEqual(samplesOf(whole));
   });
 
   it("leaves both sides as they were", () => {
     const a = samplesOf([10, 40]);
-    const b = samplesOf([20]);
+    const b = samplesOf([2]);
     mergeSamples(a, b);
-    expect(a).toEqual({ slowest: [10, 40], count: 2 });
-    expect(b).toEqual({ slowest: [20], count: 1 });
+    expect(a).toEqual(samplesOf([10, 40]));
+    expect(b).toEqual(samplesOf([2]));
   });
 });
 
@@ -695,8 +829,17 @@ describe("sealDay()", () => {
     const state = emptyState();
     sealDay(state, "2026-08-20", samplesOf([]));
     expect(state.costByDay["2026-08-20"]).toBeUndefined();
-    sealDay(state, "2026-08-20", { count: 0, slowest: [] });
-    expect(state.costByDay["2026-08-20"]).toBeUndefined();
+  });
+
+  it("leaves the other days these rules sealed where they are", () => {
+    // Sealing clears what another set of rules left, and every day this
+    // set sealed is not that.
+    const state = emptyState();
+    sealDay(state, "2026-08-19", samplesOf([1024]));
+    sealDay(state, "2026-08-20", samplesOf([16]));
+    expect(Object.keys(state.costByDay).sort())
+      .toEqual(["2026-08-19", "2026-08-20"]);
+    expect(costSeconds(state, "2026-08-20")).toBe(1.024);
   });
 
   it("keeps the sample it was handed out of the state it wrote", () => {
@@ -705,59 +848,130 @@ describe("sealDay()", () => {
     sealDay(state, "2026-08-20", batch);
     sampleDuration(batch, 900);
     expect(state.costByDay["2026-08-20"]).toEqual({
-      slowest: [10, 20],
-      count: 2,
+      ...samplesOf([10, 20]),
+      rule: COST_RULE,
     });
   });
 });
 
 describe("readCostsForward()", () => {
-  /** The shape a state written before the samples were kept carries. */
-  const held = (p90: number, count: number): IdentityState => {
+  /** A state holding one day in a shape an earlier set of rules stored. */
+  const held = (stored: unknown): IdentityState => {
     const state = emptyState();
-    (state.costByDay as Record<string, unknown>)["2026-08-20"] = { p90, count };
+    (state.costByDay as Record<string, unknown>)["2026-08-20"] = stored;
     return state;
   };
 
   it("gives back the cost a day carrying a percentile was giving", () => {
-    const state = held(4000, 45);
-    readCostsForward(state);
-    expect(costSeconds(state, "2026-08-20")).toBe(4);
+    for (const count of [1, 45, 10_000]) {
+      const state = held({ p90: 4096, count });
+      readCostsForward(state);
+      expect(costSeconds(state, "2026-08-20")).toBe(4.096);
+    }
   });
 
-  it("gives it back for a day of more executions than are kept", () => {
-    const state = held(4000, 10 * COST_SAMPLE_CAP);
+  it("counts the runs a day kept only the slowest of at the least kept", () => {
+    // Every run that was not kept was no slower than the least that
+    // was, so counting it there reads the day at or above what it was.
+    // The rank is taken over every run: the three kept alone would read
+    // at the slowest of them.
+    const state = held({ slowest: [2048, 4096, 4096], count: 20 });
     readCostsForward(state);
-    expect(state.costByDay["2026-08-20"]!.slowest.length)
-      .toBe(COST_SAMPLE_CAP);
-    expect(costSeconds(state, "2026-08-20")).toBe(4);
+    expect(state.costByDay["2026-08-20"]).toEqual(
+      samplesOf([...Array(18).fill(2048), 4096, 4096]),
+    );
+    expect(costSeconds(state, "2026-08-20")).toBe(2.048);
   });
 
-  it("weighs such a day by its executions when the rest of it lands", () => {
-    // A day arrives over as many runs as it takes, so a day read forward
-    // is still open. One execution standing for the whole of it would be
-    // outweighed by the next part to arrive, and a day of slow runs
-    // would come to report a fast one.
-    const state = held(30_000, 45);
+  it("reads a day kept whole as the runs it kept, under its own rules", () => {
+    const state = held({ slowest: [16, 1024, 1024], count: 3, rule: 7 });
     readCostsForward(state);
-    sealDay(state, "2026-08-20", samplesOf([10, 20]));
-    expect(costSeconds(state, "2026-08-20")).toBe(30);
+    expect(state.costByDay["2026-08-20"]).toEqual({
+      ...samplesOf([16, 1024, 1024]),
+      rule: 7,
+    });
+  });
+
+  it("keeps a day these rules stored as its slowest runs beside new ones", () => {
+    // How a day was stored is not which executions it holds, so a day
+    // these rules sealed before they counted by bucket stays in the
+    // window, and its slow runs weigh against the new day's fast ones.
+    const state = emptyState();
+    (state.costByDay as Record<string, unknown>)["2026-08-19"] = {
+      slowest: Array(12).fill(8192),
+      count: 12,
+      rule: COST_RULE,
+    };
+    readCostsForward(state);
+    sealDay(state, "2026-08-20", samplesOf(Array(100).fill(1024)));
+    expect(Object.keys(state.costByDay).sort())
+      .toEqual(["2026-08-19", "2026-08-20"]);
+    expect(costSeconds(state, "2026-08-20")).toBe(8.192);
+  });
+
+  it("gives way to the day these rules seal, on the same day", () => {
+    // The figures it carries are ones an earlier set of rules produced,
+    // so the part of the day that lands under these replaces them rather
+    // than joining them.
+    for (
+      const stored of [{ p90: 32_768, count: 45 }, {
+        slowest: [32_768],
+        count: 45,
+      }]
+    ) {
+      const state = held(stored);
+      readCostsForward(state);
+      sealDay(state, "2026-08-20", samplesOf([16, 32]));
+      expect(costSeconds(state, "2026-08-20")).toBe(0.032);
+    }
   });
 
   it("reads a day whose stored figures are not numbers as empty", () => {
     // The read of one such day ends that day rather than the state it
     // sits in, which the aggregate reports rather than throwing over.
     for (
-      const stored of [{ p90: 4000 }, { p90: 4000, count: 2.5 }, {
-        p90: 4000,
-        count: -1,
-      }, { p90: "slow", count: 45 }]
+      const stored of [
+        { p90: 4000 },
+        { p90: 4000, count: 2.5 },
+        { p90: 4000, count: -1 },
+        { p90: "slow", count: 45 },
+        { slowest: [], count: 3 },
+        { slowest: "fast", count: 3 },
+        { slowest: [10, "slow"], count: 3 },
+        { slowest: [10, 20], count: 1 },
+        { counts: [1] },
+        { lowest: 1.5, counts: [1] },
+        { lowest: -1, counts: [1] },
+        { lowest: 0, counts: "1" },
+        { lowest: 0, counts: [1, -1] },
+        { lowest: 0, counts: [0.5] },
+      ]
     ) {
-      const state = emptyState();
-      (state.costByDay as Record<string, unknown>)["2026-08-20"] = stored;
+      const state = held(stored);
       readCostsForward(state);
-      expect(state.costByDay["2026-08-20"]).toEqual({ slowest: [], count: 0 });
+      expect(state.costByDay["2026-08-20"]).toEqual(samplesOf([]));
       expect(costSeconds(state, "2026-08-20")).toBe(0);
+    }
+  });
+
+  it("reads a day that is not a record of figures as an empty one", () => {
+    // A state is read back through this before anything has looked at
+    // what it holds, and the reader of a stored aggregate reports one it
+    // cannot read rather than ending over it. A day holding a string
+    // would end it here.
+    for (const stored of ["slowest", 7, null, true]) {
+      const state = held(stored);
+      readCostsForward(state);
+      expect(state.costByDay["2026-08-20"]).toEqual(samplesOf([]));
+    }
+  });
+
+  it("reads days that are not a record at all as none", () => {
+    for (const stored of ["days", 7, [], null]) {
+      const state = emptyState();
+      (state as { costByDay: unknown }).costByDay = stored;
+      readCostsForward(state);
+      expect(state.costByDay).toEqual({});
     }
   });
 
@@ -776,6 +990,75 @@ describe("readCostsForward()", () => {
     const kept = state.costByDay["2026-08-20"];
     readCostsForward(state);
     expect(state.costByDay["2026-08-20"]).toBe(kept);
+  });
+});
+
+describe("a day another set of cost rules sealed", () => {
+  /** A state holding one day of executions, sealed by no known set. */
+  const sealedBefore = (day: string, ms: number): IdentityState => {
+    const state = emptyState();
+    state.costByDay[day] = samplesOf(Array.from({ length: 20 }, () => ms));
+    return state;
+  };
+
+  it("answers while these rules have sealed nothing", () => {
+    // A test that has not passed since the rules changed has only what
+    // the earlier ones measured, and that is a better answer than none.
+    const state = sealedBefore("2026-08-20", 262_144);
+    expect(costSeconds(state, "2026-08-20")).toBe(262.144);
+  });
+
+  it("stops answering once these rules have sealed anything", () => {
+    // Read beside the day these rules sealed, the earlier day's twenty
+    // executions would be most of the window and would decide the cost,
+    // so this says the day is out of the reckoning rather than merely
+    // outweighed.
+    const state = sealedBefore("2026-08-20", 262_144);
+    sealDay(state, "2026-08-20", samplesOf([16_384, 16_384]));
+    expect(costSeconds(state, "2026-08-20")).toBe(16.384);
+  });
+
+  it("stops answering on a day of its own, not only on the same day", () => {
+    // A record of an older day can reach the store late, so the day
+    // these rules seal need not be the newest the state holds. Left
+    // behind, the earlier rules' figure would come back the moment the
+    // sealed day aged out from under it.
+    const state = sealedBefore("2026-08-19", 262_144);
+    state.costByDay["2026-08-20"] = samplesOf([262_144, 262_144]);
+    sealDay(state, "2026-08-19", samplesOf([1024, 1024]));
+    expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    trimWindows(state, "2026-08-27");
+    expect(costSeconds(state, "2026-08-27")).toBe(0);
+  });
+
+  it("gives way to a day these rules sealed under any other stamp", () => {
+    // Nothing orders the stamps; a day answers as one of these days or
+    // it does not.
+    for (const rule of [undefined, COST_RULE - 1, COST_RULE + 1]) {
+      const state = sealedBefore("2026-08-20", 262_144);
+      state.costByDay["2026-08-20"]!.rule = rule;
+      sealDay(state, "2026-08-20", samplesOf([1024]));
+      expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    }
+    const held = sealedBefore("2026-08-20", 262_144);
+    held.costByDay["2026-08-20"]!.rule = COST_RULE;
+    sealDay(held, "2026-08-20", samplesOf([1024]));
+    expect(costSeconds(held, "2026-08-20")).toBe(262.144);
+  });
+
+  it("ages out of the window as a day these rules sealed does", () => {
+    const inside = sealedBefore(
+      dayBefore("2026-08-20", COST_WINDOW_DAYS),
+      262_144,
+    );
+    trimWindows(inside, "2026-08-20");
+    expect(costSeconds(inside, "2026-08-20")).toBe(262.144);
+    const past = sealedBefore(
+      dayBefore("2026-08-20", COST_WINDOW_DAYS + 1),
+      262_144,
+    );
+    trimWindows(past, "2026-08-20");
+    expect(costSeconds(past, "2026-08-20")).toBe(0);
   });
 });
 
@@ -944,6 +1227,26 @@ describe("a main failure resolved in a later batch", () => {
     const state = second.get(KEY)!;
     expect(state.flakesByDay["2026-08-20"]).toBeUndefined();
     expect(state.mainCatches).toBe(1);
+  });
+
+  it("is nothing at all when the failure is older than the window", () => {
+    // A failure nothing has judged for the longest window a state keeps
+    // is one the default branch has carried for that long, and the
+    // change that passes now did not fix it. A fold resolves every
+    // observation it reads before it ages anything, so the age is
+    // checked here as well as in `trimWindows`.
+    const context = emptyContext();
+    const first = foldObservations([
+      saw("fail", { commit: "c1", day: "2026-01-01" }),
+    ], { context });
+    const second = foldObservations([
+      saw("pass", { commit: "c2", day: "2026-08-20" }),
+    ], { context, prior: first });
+    const state = second.get(KEY)!;
+    expect(state.mainCatches).toBe(0);
+    expect(state.flakesByDay["2026-01-01"]).toBeUndefined();
+    // And the wait is over either way, so nothing keeps accumulating.
+    expect(state.pendingMain).toEqual([]);
   });
 });
 

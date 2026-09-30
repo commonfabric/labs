@@ -25,12 +25,33 @@ export const parsePointer = (path: string): string[] => {
  * Map-key form within this codebase.
  */
 export const encodePointer = (path: readonly string[]): string => {
-  return path.length === 0
-    ? ""
-    : `/${
-      path.map((segment) => segment.replaceAll("~", "~0").replaceAll("/", "~1"))
-        .join("/")
-    }`;
+  let pointer = "";
+  for (let segment of path) {
+    if (segment.includes("~")) segment = segment.replaceAll("~", "~0");
+    if (segment.includes("/")) segment = segment.replaceAll("/", "~1");
+    pointer += "/" + segment;
+  }
+  return pointer;
+};
+
+/**
+ * The JSON Pointer of each prefix of `path`, indexed by the prefix's length:
+ * `prefixPointers(path)[i]` is `encodePointer(path.slice(0, i))`, from the
+ * root's (`""`) to `path`'s own. Each is built from the one before, so the list
+ * costs about one encoding of `path`.
+ *
+ * With a set of paths keyed by `encodePointer()`, which of them prefix `path`
+ * is then one lookup per entry of this list, a cost that grows with the depth
+ * of `path` rather than with the size of the set.
+ */
+export const prefixPointers = (path: readonly string[]): string[] => {
+  const pointers = [""];
+  let pointer = "";
+  for (const segment of path) {
+    pointer += encodePointer([segment]);
+    pointers.push(pointer);
+  }
+  return pointers;
 };
 
 export const isPrefixPath = (

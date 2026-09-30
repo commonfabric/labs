@@ -1,4 +1,9 @@
-import type { BuiltinToolId } from "../contracts/tool-descriptor.ts";
+import type {
+  BuiltinToolId,
+  HarnessToolDescriptor,
+} from "../contracts/tool-descriptor.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import type { SandboxRuntimeDescription } from "../sandbox/types.ts";
 import { acquireSkillTool } from "./acquire-skill.ts";
 import { assignSlugTool } from "./assign-slug.ts";
 import {
@@ -6,19 +11,24 @@ import {
   loomComposeTool,
   loomInspectTool,
 } from "./loom-authoring.ts";
+import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
 import { delegateTaskTool } from "./delegate-task.ts";
 import { describeHandleTool } from "./describe-handle.ts";
 import { editFileTool } from "./edit-file.ts";
-import { queryDocsTool } from "./query-docs.ts";
+import { finishTaskTool } from "./finish-task.ts";
+import { readPieceSourceTool, revisePieceTool } from "./piece-source.ts";
+import { researchTool } from "./research.ts";
 import { readFileTool } from "./read-file.ts";
 import { readSkillResourceTool } from "./read-skill-resource.ts";
 import { recordFeedbackTool } from "./record-feedback.ts";
+import { resolvePieceTool } from "./resolve-piece.ts";
 import { runPatternTool } from "./run-pattern.ts";
 import { runSkillScriptTool } from "./run-skill-script.ts";
 import { searchPatternsTool } from "./search-patterns.ts";
 import { searchSkillsTool } from "./search-skills.ts";
+import { submitResultTool } from "./submit-result.ts";
 import { webFetchTool } from "./web-fetch.ts";
 import { viewImageTool } from "./view-image.ts";
 import { writeFileTool } from "./write-file.ts";
@@ -36,16 +46,22 @@ export const BUILTIN_TOOLS = [
   writeFileTool,
   delegateTaskTool,
   runPatternTool,
+  readPieceSourceTool,
+  revisePieceTool,
   assignSlugTool,
+  resolvePieceTool,
   describeHandleTool,
+  finishTaskTool,
   searchPatternsTool,
   recordFeedbackTool,
   searchSkillsTool,
   acquireSkillTool,
-  queryDocsTool,
+  researchTool,
   loomComposeTool,
   loomInspectTool,
   loomAuthoringContextTool,
+  ...LOOM_RETRIEVAL_TOOLS,
+  submitResultTool,
 ] as const;
 
 export const BUILTIN_TOOL_REGISTRY = new Map<
@@ -65,3 +81,15 @@ export const getBuiltinTool = (
   toolId: string,
 ): HarnessToolDefinition | undefined =>
   BUILTIN_TOOL_REGISTRY.get(toolId as BuiltinToolId);
+
+/**
+ * The descriptor of `tool` that a run on `runtime` in `run`'s enforcement
+ * mode offers the model: the tool's own, unless the tool has one that
+ * depends on the runtime.
+ */
+export const builtinToolDescriptorForRuntime = (
+  tool: Pick<HarnessToolDefinition, "descriptor" | "descriptorForRuntime">,
+  runtime: SandboxRuntimeDescription,
+  run: { cfcEnforcementMode: CfcEnforcementMode },
+): HarnessToolDescriptor =>
+  tool.descriptorForRuntime?.(runtime, run) ?? tool.descriptor;

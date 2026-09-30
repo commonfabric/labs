@@ -1,3 +1,4 @@
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 /** Pins the trusted constructor exception without relaxing later writes. */
 
 import { expect } from "@std/expect";
@@ -19,6 +20,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -238,7 +240,7 @@ describe("cfc-constructor-seeding", () => {
     runtime.prepareTxForCommit(repeat);
 
     const update = runtime.edit();
-    update.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(update, {
       kind: "builtin",
       builtinId: "constructor-edit-handler",
     });
@@ -305,22 +307,26 @@ describe("cfc-constructor-seeding", () => {
     const seed = runtime.edit();
     const source = runtime.getCell(space, "secret", undefined, seed);
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
-      value: "secret",
-      cfc: {
-        version: 2,
-        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-        labelMap: {
-          version: 1,
-          entries: [{
-            path: [],
-            observes: "value",
-            origin: "derived",
-            label: { confidentiality: ["secret-context"] },
-          }],
+    seedStoredEnvelope(
+      seed,
+      { ...source.getAsNormalizedFullLink(), path: [] },
+      {
+        value: "secret",
+        cfc: {
+          version: 3,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              observes: "value",
+              origin: "derived",
+              label: { confidentiality: ["secret-context"] },
+            }],
+          },
         },
       },
-    });
+    );
     expect((await seed.commit()).error).toBeUndefined();
     const tx = runtime.edit();
     const value = runtime.getCell(space, "secret", undefined, tx).getRaw();

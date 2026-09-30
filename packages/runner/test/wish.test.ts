@@ -17,6 +17,7 @@ import {
   parseWishTarget,
   type SidecarSurfaceState,
   tagMatchesHashtag,
+  wishSidecarDiagnostics,
 } from "../src/builtins/wish.ts";
 import {
   getPatternEnvironment,
@@ -1637,6 +1638,81 @@ describe("wish built-in", () => {
         expect(data.type).toBe("from-other-space");
       });
 
+      it("reports confirmed absence in an arbitrary DID space and finds later arrivals", async () => {
+        const wishPattern = pattern(() => {
+          return {
+            result: wish({ query: "#late-tag", scope: [otherSpace.did()] }),
+          };
+        });
+        const resultCell = runtime.getCell<{
+          result?: { result?: unknown; error?: string };
+        }>(
+          patternSpace.did(),
+          "scope-arb-did-late-result",
+          undefined,
+          tx,
+        );
+        const result = runtime.run(tx, wishPattern, {}, resultCell);
+        await tx.commit();
+        tx = runtime.edit();
+
+        const arrived = Promise.withResolvers<void>();
+        const stopReading = result.key("result").key("result").sink((value) => {
+          if (value !== undefined) arrived.resolve();
+        });
+        try {
+          await result.pull();
+          expect(result.key("result").get()?.result).toBeUndefined();
+          expect(result.key("result").get()?.error).toContain(
+            "No 1 space(s) found",
+          );
+
+          const otherSpaceCell = runtime.getCell(
+            otherSpace.did(),
+            otherSpace.did(),
+          ).withTx(tx);
+          const otherDefaultPattern = runtime.getCell(
+            otherSpace.did(),
+            "other-late-default-pattern",
+            undefined,
+            tx,
+          );
+          const otherBacklinksIndex = runtime.getCell(
+            otherSpace.did(),
+            "other-late-backlinks-index",
+            undefined,
+            tx,
+          );
+          const otherMentionable = runtime.getCell(
+            otherSpace.did(),
+            "other-late-mentionable-item",
+            undefined,
+            tx,
+          );
+          const mentionableData: any = { type: "arrived-late" };
+          mentionableData[NAME] = "late-tag";
+          otherMentionable.set(mentionableData);
+          otherBacklinksIndex.set({ mentionable: [otherMentionable] });
+          otherDefaultPattern.set({ backlinksIndex: otherBacklinksIndex });
+          (otherSpaceCell as any).key("defaultPattern").set(
+            otherDefaultPattern,
+          );
+          expect((await tx.commit()).error).toBeUndefined();
+          tx = runtime.edit();
+
+          await arrived.promise;
+          await result.pull();
+          const recovered = result.key("result").get();
+          expect(recovered?.error).toBeUndefined();
+          const foundItem = recovered?.result;
+          expect(foundItem).toBeDefined();
+          const data = (foundItem as any).get?.() ?? foundItem;
+          expect(data.type).toBe("arrived-late");
+        } finally {
+          stopReading();
+        }
+      });
+
       it('searches both current space and arbitrary DID with scope: [".", did]', async () => {
         // Setup: Add mentionables to pattern space (current space)
         const spaceCell = runtime.getCell(
@@ -2551,6 +2627,39 @@ describe("wish built-in", () => {
       expect((journal as any[])[0].narrative).toBe("first entry");
     });
 
+    it("reports a missing requesting identity for #agent_queue", async () => {
+      runtime.homeSpacePrincipalFor = () => undefined;
+      const wishPattern = pattern(() => ({
+        result: wish({ query: "#agent_queue" }),
+      }));
+      const resultCell = runtime.getCell<{
+        result?: { error?: string; result?: unknown };
+      }>(patternSpace.did(), "agent-queue-no-identity", undefined, tx);
+      const result = runtime.run(tx, wishPattern, {}, resultCell);
+      await tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      const resolved = result.key("result").get();
+
+      expect(resolved?.error).toContain(
+        "User identity DID not available for #agent_queue",
+      );
+      expect(resolved?.result).toBeUndefined();
+    });
+
+    it("resolves #agent_queue to the home agent queue", async () => {
+      const resolved = await resolveHomeTarget(
+        "agent-queue",
+        "agentQueue",
+        { entries: [], agentRunner: { host: "https://local.example" } },
+        "#agent_queue",
+      );
+      expect(resolved?.error).toBeUndefined();
+      expect((resolved?.result as any)?.agentRunner?.host).toBe(
+        "https://local.example",
+      );
+    });
+
     it("resolves #learned to the home learned object", async () => {
       const resolved = await resolveHomeTarget(
         "learned",
@@ -2938,6 +3047,64 @@ describe("wish built-in", () => {
       expect(JSON.stringify(createCell.key(UI).get())).toContain(
         "profile-create.tsx",
       );
+    });
+
+    it("launches nothing when the create surface answers after its demander stopped", async () => {
+      // The launch is asynchronous: the surface's source is fetched, and the
+      // pattern lands later. A piece stopped while that fetch is in flight
+      // has no surface to render, so the answer, when it comes, launches
+      // nothing and writes nothing — neither the pattern nor a failure.
+      const homeSpaceCell = runtime.getHomeSpaceCell(tx);
+      const homeDefaultCell = runtime.getCell(
+        userIdentity.did(),
+        "home-default-profile-create-stopped",
+        undefined,
+        tx,
+      );
+      (homeSpaceCell as any).key("defaultPattern").set(homeDefaultCell);
+
+      await tx.commit();
+      await runtime.idle();
+      tx = runtime.edit();
+
+      const held = Promise.withResolvers<Response>();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (() => held.promise) as typeof fetch;
+      const opensBefore = wishSidecarDiagnostics.profileCreateSurfaceOpens;
+      try {
+        const wishPattern = pattern(() => ({
+          profile: wish({ query: "#profile" }),
+        }));
+        const resultCell = runtime.getCell<Record<string, any>>(
+          patternSpace.did(),
+          "wish-profile-create-stopped-result",
+          undefined,
+          tx,
+        );
+        const result = runtime.run(tx, wishPattern, {}, resultCell);
+        await tx.commit();
+        tx = runtime.edit();
+
+        // A sink is the demand that runs the wish. `idle()` would wait on the
+        // launch the run starts, and that is waiting on the fetch, so the
+        // drain here is the reactive work alone.
+        const stopReading = result.sink(() => {});
+        await clock.settle();
+        expect(wishSidecarDiagnostics.profileCreateSurfaceOpens).toBe(
+          opensBefore + 1,
+        );
+        const createCell = result.key("profile").key(UI).key("props")
+          .key("$cell").resolveAsCell();
+
+        stopReading();
+        runtime.runner.stop(resultCell);
+        held.reject(new Error("the surface's source never came"));
+        await runtime.idle();
+
+        expect(createCell.key(UI).get()).toBeUndefined();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     it("asks the host serving the surface's space for the profile-create source", async () => {
@@ -4078,11 +4245,7 @@ describe("wish built-in", () => {
           // picker-result-cell id divergence within one profile space.
           const profileSpaces: string[] = [];
           const profileCells: Array<ReturnType<Runtime["getCell"]>> = [];
-          const aliasLinks: Array<
-            ReturnType<
-              ReturnType<Runtime["getCell"]>["getAsNormalizedFullLink"]
-            >
-          > = [];
+          const aliasCells: Array<ReturnType<Runtime["getCell"]>> = [];
           for (let i = 0; i < opts.names.length; i++) {
             const spaceDid = (await Identity.fromPassphrase(
               `ct1842-${label}-space-${i}`,
@@ -4115,22 +4278,14 @@ describe("wish built-in", () => {
             await runtime.idle();
             tx = runtime.edit();
             profileCells.push(cell);
-            aliasLinks.push(alias.getAsNormalizedFullLink());
+            aliasCells.push(alias);
           }
 
           // A sigil link to the SIBLING cell (same profile space, different id) —
           // the shape a cross-space `mru` / `defaultProfile` entry resolves to in
           // production.
-          const aliasSigil = (i: number) => ({
-            "/": {
-              [LINK_V1_TAG]: {
-                id: aliasLinks[i].id,
-                space: aliasLinks[i].space,
-                path: [],
-                scope: aliasLinks[i].scope,
-              },
-            },
-          });
+          const aliasSigil = (i: number) =>
+            aliasCells[i].withTx(tx).getAsLink();
 
           const homeSpaceCell = runtime.getHomeSpaceCell(tx);
           const homeDefaultCell = runtime.getCell(

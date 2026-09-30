@@ -3,11 +3,11 @@
  *
  * SES's error taming rebuilds the `Error` constructor and copies forward only
  * the stack surface, so lockdown used to leave the realm without
- * `Error.isError` entirely — host code and compartments alike. That is a
- * silent gap until something calls it, at which point classification code that
- * uses the cross-realm-correct error test (data-model's
- * `tagFromNativeValueElseNull`, for one) throws `TypeError: Error.isError is
- * not a function`.
+ * `Error.isError` entirely — host code and compartments alike. That is a silent
+ * gap until something calls it, at which point classification code that uses
+ * the cross-realm-correct error test (data-model's
+ * `tagOfConvertibleJsValueElseNull`, for one) throws `TypeError: Error.isError
+ * is not a function`.
  *
  * Both halves matter and fail independently: repair mints a separate
  * constructor for the host realm and for compartments, and each has to carry
@@ -18,7 +18,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
-  tagFromNativeValueElseNull,
+  tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@commonfabric/data-model";
 import { restoreErrorIsError } from "../src/sandbox/error-taming.ts";
@@ -111,16 +111,16 @@ describe("Error.isError under SES lockdown", () => {
 
   describe("the caller this shim exists for", () => {
     it("classifies a constructor-less error post-lockdown", () => {
-      // data-model's `tagFromNativeValueElseNull` reaches `Error.isError` for
-      // values whose constructor is unreachable, and reaches it before its other
-      // fallbacks — so under lockdown the missing method turned a
+      // data-model's `tagOfConvertibleJsValueElseNull` reaches `Error.isError`
+      // for values whose constructor is unreachable, and reaches it before its
+      // other fallbacks — so under lockdown the missing method turned a
       // classification into a `TypeError` thrown from deep inside conversion,
       // taking pattern setup down with it. Cross-package on purpose: only the
       // runner runs lockdown, and only data-model makes the call.
       ensureSESLockdown();
       const severed = new Error("severed");
       Object.setPrototypeOf(severed, null);
-      expect(tagFromNativeValueElseNull(severed)).toBe(VALUE_TAGS.JsError);
+      expect(tagOfConvertibleJsValueElseNull(severed)).toBe(VALUE_TAGS.JsError);
     });
   });
 });

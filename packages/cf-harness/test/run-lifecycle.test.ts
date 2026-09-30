@@ -11,7 +11,7 @@ import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
 
-import { readHarnessRunState } from "../src/artifacts.ts";
+import { readHarnessRunReport, readHarnessRunState } from "../src/artifacts.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -242,6 +242,286 @@ describe("run-lifecycle", () => {
         );
       });
     });
+
+    it("records cancellation when an in-flight model returns after the run was aborted", async () => {
+      await withArtifactRoot(async (artifactRoot) => {
+        const runId = "run-canceled-model";
+        const controller = new AbortController();
+        const reason = new DOMException("stopped by the user", "AbortError");
+        const loop = new CfHarnessPromptLoop({
+          engine: new CfHarnessEngine({
+            artifactRoot,
+            runId,
+            model: "test-model",
+            sandboxRuntime: new FakeSandboxRuntime(),
+          }),
+          modelClient: {
+            providerId: "test-provider",
+            complete() {
+              controller.abort(reason);
+              return Promise.resolve({
+                assistant: { role: "assistant", content: "too late" },
+              });
+            },
+          },
+        });
+
+        await expect(loop.runPrompt({
+          prompt: "start work",
+          signal: controller.signal,
+        })).rejects.toBe(reason);
+
+        const state = await readHarnessRunState(
+          runStatePath(artifactRoot, runId),
+        );
+        const report = await readHarnessRunReport(
+          join(artifactRoot, runId, "run-report.json"),
+        );
+        for (const artifact of [state, report]) {
+          expect(artifact).toMatchObject({
+            status: "canceled",
+            terminalReason: "canceled",
+            cancelReason: "stopped by the user",
+            failureRecords: [],
+          });
+          expect(artifact.endedAt).toBeDefined();
+          expect(artifact.primaryFailure).toBeUndefined();
+        }
+        expect(report.finalAssistantText).toBeUndefined();
+        expect(await loop.engine.terminalizeInterruptedRun("SIGTERM"))
+          .toMatchObject({ status: "canceled", terminalReason: "canceled" });
+        const resumed = loop.engine.startRun();
+        expect(resumed.status).toBe("running");
+        expect(resumed.cancelReason).toBeUndefined();
+        expect(resumed.endedAt).toBeUndefined();
+      });
+    });
+
+    it("unwinds a canceled child without reclassifying it or the parent as a failure", async () => {
+      await withArtifactRoot(async (artifactRoot) => {
+        const runId = "run-canceled-child";
+        const controller = new AbortController();
+        const reason = new DOMException(
+          "stopped during delegation",
+          "AbortError",
+        );
+        let parentTurns = 0;
+        const loop = new CfHarnessPromptLoop({
+          engine: new CfHarnessEngine({
+            artifactRoot,
+            runId,
+            model: "test-model",
+            sandboxRuntime: new FakeSandboxRuntime(),
+          }),
+          modelClient: {
+            providerId: "test-provider",
+            complete(request) {
+              if (request.runId === `${runId}.subagent.1`) {
+                return Promise.resolve({
+                  assistant: { role: "assistant", content: "first child done" },
+                });
+              }
+              if (request.runId === `${runId}.subagent.2`) {
+                controller.abort(reason);
+                request.signal?.throwIfAborted();
+              }
+              request.signal?.throwIfAborted();
+              parentTurns += 1;
+              return Promise.resolve({
+                assistant: {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [{
+                    id: `delegate-${parentTurns}`,
+                    type: "function",
+                    function: {
+                      name: "delegate_task",
+                      arguments: JSON.stringify({ goal: "perform one step" }),
+                    },
+                  }],
+                },
+              });
+            },
+          },
+        });
+
+        await expect(loop.runPrompt({
+          prompt: "perform two steps",
+          promptSlotBinding: directCommandSlot,
+          signal: controller.signal,
+        })).rejects.toBe(reason);
+
+        for (const id of [runId, `${runId}.subagent.2`]) {
+          const state = await readHarnessRunState(
+            runStatePath(artifactRoot, id),
+          );
+          const report = await readHarnessRunReport(
+            join(artifactRoot, id, "run-report.json"),
+          );
+          for (const artifact of [state, report]) {
+            expect(artifact).toMatchObject({
+              status: "canceled",
+              terminalReason: "canceled",
+              cancelReason: "stopped during delegation",
+              failureRecords: [],
+            });
+            expect(artifact.endedAt).toBeDefined();
+            expect(artifact.primaryFailure).toBeUndefined();
+          }
+        }
+        const completedChild = await readHarnessRunState(
+          runStatePath(artifactRoot, `${runId}.subagent.1`),
+        );
+        expect(completedChild).toMatchObject({
+          status: "completed",
+          terminalReason: "assistant_completed",
+        });
+        const parent = await readHarnessRunReport(
+          join(artifactRoot, runId, "run-report.json"),
+        );
+        expect(parent.subagentRuns?.map((child) => child.status))
+          .toEqual(["completed", "canceled"]);
+        expect(parent.subagentRuns?.[1]).toMatchObject({
+          childRunId: `${runId}.subagent.2`,
+          runState: {
+            status: "canceled",
+            terminalReason: "canceled",
+            failureCount: 0,
+          },
+        });
+        expect(parent.toolActivity.map((activity) => activity.executionStatus))
+          .toEqual(["completed", "canceled"]);
+        expect(parent.toolOutputs).toHaveLength(1);
+        expect(parentTurns).toBe(2);
+      });
+    });
+
+    it("keeps an unrelated AbortError as a failure when the run signal is not aborted", async () => {
+      await withArtifactRoot(async (artifactRoot) => {
+        const runId = "run-provider-abort-error";
+        const controller = new AbortController();
+        const error = new DOMException(
+          "provider request timed out",
+          "AbortError",
+        );
+        const { loop } = loopAfterOneToolCall(
+          artifactRoot,
+          runId,
+          () => Promise.reject(error),
+        );
+
+        await expect(loop.runPrompt({
+          prompt: "run one command",
+          promptSlotBinding: directCommandSlot,
+          signal: controller.signal,
+        })).rejects.toBe(error);
+
+        const state = await readHarnessRunState(
+          runStatePath(artifactRoot, runId),
+        );
+        expect(state).toMatchObject({
+          status: "failed",
+          terminalReason: "prompt_loop_error",
+          primaryFailure: { detail: "provider request timed out" },
+        });
+        expect(controller.signal.aborted).toBe(false);
+      });
+    });
+
+    for (const outcome of ["throws", "returns"] as const) {
+      it(`retains tool evidence without a failure record when an aborted tool ${outcome}`, async () => {
+        await withArtifactRoot(async (artifactRoot) => {
+          const runId = `run-canceled-tool-${outcome}`;
+          const controller = new AbortController();
+          const reason = new DOMException(
+            "stopped during a tool",
+            "AbortError",
+          );
+          class CanceledToolSandbox extends FakeSandboxRuntime {
+            override runShell(
+              request: SandboxShellRequest,
+            ): Promise<SandboxCommandResult> {
+              if (request.command.includes(CAPABILITY_PROBE_SENTINEL)) {
+                return super.runShell(request);
+              }
+              controller.abort(reason);
+              return outcome === "throws"
+                ? Promise.reject(reason)
+                : Promise.resolve({
+                  stdout: "",
+                  stderr: "bash: stopped-command: command not found",
+                  exitCode: 127,
+                  cfcResult: {
+                    ...mediated(""),
+                    exitCode: {
+                      policy: "observed",
+                      label: { confidentiality: ["public"] },
+                      value: 127,
+                    },
+                  },
+                });
+            }
+          }
+          let modelTurns = 0;
+          const loop = new CfHarnessPromptLoop({
+            engine: new CfHarnessEngine({
+              artifactRoot,
+              runId,
+              model: "test-model",
+              sandboxRuntime: new CanceledToolSandbox(),
+            }),
+            modelClient: {
+              providerId: "test-provider",
+              complete() {
+                modelTurns += 1;
+                return Promise.resolve(bashCallTurn);
+              },
+            },
+          });
+
+          await expect(loop.runPrompt({
+            prompt: "run one command",
+            promptSlotBinding: directCommandSlot,
+            signal: controller.signal,
+          })).rejects.toBe(reason);
+
+          const state = await readHarnessRunState(
+            runStatePath(artifactRoot, runId),
+          );
+          const report = await readHarnessRunReport(
+            join(artifactRoot, runId, "run-report.json"),
+          );
+          for (const artifact of [state, report]) {
+            expect(artifact).toMatchObject({
+              status: "canceled",
+              terminalReason: "canceled",
+              cancelReason: "stopped during a tool",
+              failureRecords: [],
+            });
+            expect(artifact.toolOutputs).toHaveLength(
+              outcome === "returns" ? 1 : 0,
+            );
+          }
+          expect(
+            report.toolActivity.map((activity) => activity.executionStatus),
+          )
+            .toEqual(["canceled"]);
+          expect(modelTurns).toBe(1);
+          if (outcome === "returns") {
+            expect(report.toolActivity[0].resultRef).toEqual(
+              state.toolOutputs[0],
+            );
+            const output = JSON.parse(
+              await Deno.readTextFile(state.toolOutputs[0].artifactPath!),
+            );
+            expect(output).toMatchObject({
+              stderr: "bash: stopped-command: command not found",
+              exitCode: 127,
+            });
+          }
+        });
+      });
+    }
   });
 
   describe("establishHarnessSessionContext()", () => {
@@ -258,7 +538,10 @@ describe("run-lifecycle", () => {
         fabricSessionFactory: () =>
           Promise.resolve(
             {
-              pieces: { getSpace: () => SPACE_DID },
+              pieces: {
+                getSpace: () => SPACE_DID,
+                getSpaceName: () => undefined,
+              },
               // deno-lint-ignore no-explicit-any
             } as any,
           ),

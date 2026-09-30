@@ -1,6 +1,7 @@
 /** Validates opt-in read limits and compares completed interval measurements. */
 
 import type { RuntimeTelemetryMarker } from "@commonfabric/runner";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** Keeps attempt totals separate from reactive-body maxima. */
 export class ReadBudgetMeasurement {
@@ -93,7 +94,7 @@ export type ReadBudgetViolation = {
 };
 
 function record(value: unknown, where: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     throw new Error(`\`${where}\` must be an object`);
   }
   return value as Record<string, unknown>;

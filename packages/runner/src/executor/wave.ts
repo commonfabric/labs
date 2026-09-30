@@ -36,6 +36,7 @@ import {
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  type SessionReadCeiling,
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
@@ -54,11 +55,19 @@ import type {
   StorageTransactionRejected,
   TransactionSealDestination,
   Unit,
+  URI,
+  WaveWithdrawalCause,
 } from "../storage/interface.ts";
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
-import { getTransactionReadActivities } from "../storage/transaction-inspection.ts";
+import {
+  getTransactionReadActivities,
+  hasPendingWriteElision,
+} from "../storage/transaction-inspection.ts";
+
+import { isReadIgnoredForScheduling } from "../storage/reactivity-log.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -166,6 +175,17 @@ export interface WaveRunContext {
    * cardinality-1 posture, and pre-narrowing space-scope runs, which
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
+
+  /** The read ceiling this run's cell and `db.query` reads are bounded by: the
+   * ceiling of the session the run acts as (`scopeKeyIdentity.sessionId`),
+   * read from the memory server's session record at the stamp
+   * (`Server.sessionReadCeiling`) — declared by the client in its signed
+   * `session.open` descriptor, or assigned by the server. The sqlite
+   * builtin meets it with the serving runtime's own option, exactly as it
+   * meets a query's declared ceiling with a runtime's (06-cfc.md, "Runtime
+   * read ceiling"). Absent on a run acting as no session, or as one that
+   * declared none: such a run reads under the runtime's option alone. */
+  readCeiling?: SessionReadCeiling;
 
   /** The capability grant a provisioning run's FOREIGN writes are
    * admitted under (protocol.md §2's server-produced authored row, §2b):
@@ -335,6 +355,30 @@ export function waveRunContextOf(
   return undefined;
 }
 
+/**
+ * A delegated carriage (protocol.md §2b): the acting identity a write crossing
+ * into another space is made for, and the grant it is admitted under.
+ */
+export type DelegatedCarriage = {
+  acting: { user: string; session?: string };
+  capabilityRef: string;
+};
+
+/**
+ * The delegated carriage a run lends a bookkeeping write it triggers after it
+ * is over: the run's settled acting identity and grant, or none for a run that
+ * acted as nobody.
+ */
+export function delegatedCarriageOf(
+  context: WaveRunContext | undefined,
+): DelegatedCarriage | undefined {
+  const acting = context?.acting;
+  const capabilityRef = context?.capabilityRef;
+  return acting !== undefined && capabilityRef !== undefined
+    ? { acting, capabilityRef }
+    : undefined;
+}
+
 // The DURABLE-acceptance settlement of a tx sealed into a wave: the seal
 // resolves the tx's commit() (acceptance into the wave), but the writes
 // become durable only at the wave commit — and a conflict there can
@@ -342,9 +386,20 @@ export function waveRunContextOf(
 // caller whose side effects must wait for durability (the pattern swap's
 // teardown + reinstantiation, §3e) awaits this instead. Attached by the
 // accumulator at seal, same side-table mechanism as the run context.
+type WaveSettlement = Result<
+  Unit,
+  StorageTransactionRejected & {
+    /** This run read a contribution whose optimistic state was withdrawn. */
+    readDependencyWithdrawn?: true;
+
+    /** Why the wave withdrew this transaction's contribution. */
+    waveWithdrawalCause?: WaveWithdrawalCause;
+  }
+>;
+
 const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
-  Promise<Result<Unit, StorageTransactionRejected>>
+  Promise<WaveSettlement>
 >();
 
 const requiresWaveAcceptance = new WeakSet<IStorageTransaction>();
@@ -355,12 +410,13 @@ export function requireWaveAcceptance(tx: IExtendedStorageTransaction): void {
 }
 
 /** The sealed tx's wave settlement: resolves ok when every sealed space
- * promoted or its opted-in local state change was accepted, error when any
+ * promoted or its write-free publication was accepted, error when any
  * withdrew (conflict drop, requeue, abort, abandon). Undefined for a tx
- * outside a wave or with neither sealed writes nor opted-in local state. */
+ * outside a wave or with neither sealed writes, opted-in local state, nor a
+ * derivation's pending-output elision obligation. */
 export function waveSettlementOf(
   tx: IExtendedStorageTransaction,
-): Promise<Result<Unit, StorageTransactionRejected>> | undefined {
+): Promise<WaveSettlement> | undefined {
   return waveSettlements.get(tx);
 }
 
@@ -548,6 +604,19 @@ export interface WaveCommitSink {
     sinceSeq: number,
   ): Promise<ReadonlyArray<readonly string[]>>;
 
+  /**
+   * Whether a commit after `sinceSeq` wrote `doc` that `holder`'s own
+   * derived commits do not account for — §3d's INTRUSION on a document
+   * this tenure derives into. A sink that cannot answer omits it, and the
+   * pure-derivation arm's view check below then stands down.
+   */
+  intrusionSince?(
+    space: MemorySpace,
+    doc: { id: string; scope?: CellScope; scopeKey: string },
+    sinceSeq: number,
+    holder: string | undefined,
+  ): Promise<boolean>;
+
   commitWave(
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>>;
@@ -567,6 +636,8 @@ export interface WaveLease {
 
 /** One sealed action run held by the accumulator. */
 interface WaveContribution {
+  /** Set only by the closure that invalidates reads of withdrawn state. */
+  readDependencyWithdrawn?: true;
   index: number;
   context: WaveRunContext;
 
@@ -584,7 +655,10 @@ interface WaveContribution {
    * derived from withdrawn state is not (§3d). */
   readOnlyReadKeys: Set<string>;
 
-  /** Verdict for an opted-in local state change with no replica writes. */
+  /** Commit dependencies with no scheduling read of the same doc instance. */
+  commitOnlyReadKeys: ReadonlySet<string>;
+
+  /** Verdict for a publication obligation with no replica writes. */
   emptySettlement?: {
     promise: Promise<Result<Unit, StorageTransactionRejected>>;
     resolve: (result: Result<Unit, StorageTransactionRejected>) => void;
@@ -604,6 +678,12 @@ interface WaveContribution {
    * the run actually served, which keys its basis rows (S4 —
    * server-execution v2 stage A). */
   discoveredScope: CellScope;
+
+  /** Per home doc-instance key: the seq the replica's CONFIRMED view
+   * stood at for that instance when this run sealed — the view its
+   * writes rest on, which the wave's own basis can be ahead of
+   * (#viewSeqsAtSeal). */
+  viewSeqs: ReadonlyMap<string, number>;
 }
 
 interface SealedSpaceContribution {
@@ -769,7 +849,7 @@ function seqLessStreamEntryEventIds(operation: Operation): string[] {
     for (const candidate of list) {
       const entry = candidate as { eventId?: unknown; seq?: unknown } | null;
       if (
-        entry !== null && typeof entry === "object" &&
+        isObjectOrArray(entry) &&
         typeof entry.eventId === "string" && entry.seq === undefined
       ) {
         ids.push(entry.eventId);
@@ -1194,6 +1274,18 @@ export class WaveAccumulator
         this.#onUndemandedNarrowing?.();
       }
     }
+    const commitOnlyReadKeys = new Set<string>();
+    if (context !== undefined) {
+      const schedulingReadKeys = new Set<string>();
+      for (const read of getTransactionReadActivities(tx)) {
+        const key = `${read.space}\0${
+          docInstanceKey(read.id, this.#scopeKeyFor(read.scope, context))
+        }`;
+        if (isReadIgnoredForScheduling(read.meta)) commitOnlyReadKeys.add(key);
+        else schedulingReadKeys.add(key);
+      }
+      for (const key of schedulingReadKeys) commitOnlyReadKeys.delete(key);
+    }
     this.#assembly = {
       context,
       spaces: [],
@@ -1203,10 +1295,11 @@ export class WaveAccumulator
       // result write have run.
       discoveredScope,
     };
-    const localAcceptance = requiresWaveAcceptance.has(inner);
+    const localAcceptance = requiresWaveAcceptance.has(inner) ||
+      (context?.kind === "derivation" && hasPendingWriteElision(tx));
     try {
-      // Closing releases the transaction's activity; local-only consequences
-      // need its read identities after the storage no-op has closed.
+      // Closing releases the transaction's activity; write-free publication
+      // obligations need its read identities after the storage no-op has closed.
       const localReads = localAcceptance
         ? [...getTransactionReadActivities(tx)].map(({ space, id, scope }) => ({
           space,
@@ -1227,12 +1320,13 @@ export class WaveAccumulator
         return result;
       }
       // A transaction with nothing to seal (read-only, or all-no-op),
-      // no staged appends, and no opted-in local state contributes nothing,
-      // like commit's empty-transaction fast path, and needs no run context:
-      // the §3d
-      // refusal below guards consequences entering the wave (writes,
-      // staged appends, and local state), and a serving runtime's read probes
-      // (piece structure loads, pattern-identity reads) commit nothing.
+      // no staged appends, and no publication obligation contributes nothing,
+      // like commit's empty-transaction fast path, and needs no run context.
+      // A derivation reusing a pending output carries an acceptance obligation
+      // even when the equal-value write produces no storage operation. The §3d
+      // refusal below guards consequences entering the wave: writes, staged
+      // appends, and write-free publication. A serving runtime's ordinary read
+      // probes (piece structure loads, pattern-identity reads) commit nothing.
       // A tx that sealed NOTHING but STAGED APPENDS — the Phase-3
       // pure-forwarding handler, whose only consequence is a
       // cross-space emit — MINTS a zero-write contribution below (the
@@ -1278,30 +1372,37 @@ export class WaveAccumulator
         ? Promise.withResolvers<Result<Unit, StorageTransactionRejected>>()
         : undefined;
       if (emptySettlement !== undefined) {
-        // A storage no-op has no sealSpaceReads handoff. Its local state
-        // change still depends on the same reads as a written contribution.
+        // A storage no-op has no sealSpaceReads handoff. Its publication
+        // obligation still depends on the same reads as a written contribution.
         for (const read of localReads) {
           this.sealSpaceReads(read.space, [read]);
         }
       }
       this.#sealedTxs.add(tx);
-      this.#contributions.push({
+      const contribution: WaveContribution = {
         index: this.#contributions.length,
         context,
         spaces: assembly.spaces,
         readOnlyReadKeys: assembly.readOnlyReadKeys,
+        commitOnlyReadKeys,
         ...(emptySettlement === undefined ? {} : { emptySettlement }),
         // Copied: a (refused) post-seal enqueue must not be able to
         // mutate the sealed contribution through the shared array.
         outboundAppends: [...pendingAppends],
         discoveredScope: assembly.discoveredScope,
-      });
+        viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+      };
+      this.#contributions.push(contribution);
       waveSettlements.set(
         tx,
-        emptySettlement?.promise ?? Promise.all(
+        (emptySettlement?.promise ?? Promise.all(
           assembly.spaces.map((space) => space.sealed.settled),
-        ).then((settled) =>
+        ).then((settled): Result<Unit, StorageTransactionRejected> =>
           settled.find((outcome) => outcome.error !== undefined) ?? { ok: {} }
+        )).then((outcome): WaveSettlement =>
+          outcome.error !== undefined && contribution.readDependencyWithdrawn
+            ? { error: { ...outcome.error, readDependencyWithdrawn: true } }
+            : outcome
         ),
       );
       return result;
@@ -1624,10 +1725,16 @@ export class WaveAccumulator
     }
   }
 
+  /** Whether the lease tenure this wave sealed under has ended. */
+  get #tenureEnded(): boolean {
+    return this.#lease !== undefined &&
+      !this.#lease.isCurrentTenure(this.#sealedTenure);
+  }
+
   #withdraw(
     contribution: WaveContribution,
     message: string,
-    cause?: "contribution-dropped" | "wave-abandoned",
+    cause?: WaveWithdrawalCause,
   ): void {
     contribution.emptySettlement?.resolve({
       error: {
@@ -1707,25 +1814,7 @@ export class WaveAccumulator
     // consumer; inputs unchanged), so a loop that continued after the
     // abort would advance W over derivations that never re-ran
     // (space-server.ts's lease-lost-abort park).
-    if (
-      this.#lease !== undefined &&
-      !this.#lease.isCurrentTenure(this.#sealedTenure)
-    ) {
-      for (const contribution of this.#contributions) {
-        this.#withdraw(
-          contribution,
-          "lease lost mid-wave; the in-flight wave aborts " +
-            "(serving-loop.md §2)",
-        );
-        outcome.dispositions[contribution.index] =
-          contribution.context.kind === "event-handler"
-            ? { kind: "requeued" }
-            : { kind: "dropped" };
-      }
-      this.#reportRequeuedEvents(outcome, () => true);
-      outcome.aborted = "lease-lost";
-      return outcome;
-    }
+    if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
     if (this.#contributions.length === 0) {
       return outcome;
@@ -1805,6 +1894,52 @@ export class WaveAccumulator
       if ((heads.get(key) ?? 0) > this.#basisSeq) conflicted.add(key);
     }
 
+    /** Whether `key` conflicts FOR this contribution: the doc moved past
+     * the wave's basis, or — for a pure derivation — past the view its own
+     * seal stood on, with an INTRUSION accounting for the difference.
+     *
+     * The basis and that view differ because the basis is the serverSeq
+     * the wave OPENED at, while the runs sealing into it read the
+     * replica's. A seal opens a wave when none is open, so a run that read
+     * before a commit was admitted can seal into a wave opened after it:
+     * the basis counts that commit and the view does not, and the doc's
+     * head then sits AT OR BELOW the basis while the derivation that wrote
+     * it never saw the value there. Committing that write is §3d's
+     * forbidden blind derived write — the shape that erased a user's first
+     * PerUser input under the initialization materializing their scoped
+     * slots.
+     *
+     * The intrusion question is what separates that from this tenure's own
+     * derived commits, which advance a document under runs still in flight
+     * as a matter of course: a view older than the head means nothing when
+     * the loop itself moved it. So a document only this tenure writes
+     * never conflicts here, which is §3d's own reading of a derived
+     * document — there are no other writers on one.
+     *
+     * Dropping costs nothing: the value is re-derivable, and a derivation
+     * that read the doc carries it in its basis rows, so the arrival of
+     * the commit it missed re-runs it through the ordinary dependency
+     * path. Non-re-derivable consequences keep the wave's basis alone —
+     * their conflict arm rebases or requeues rather than dropping, and
+     * requeueing against a seq the replica has not caught up to is the
+     * sustained-traffic livelock §3d forbids. */
+    const conflictsFor = async (
+      contribution: WaveContribution,
+      key: string,
+      doc: { id: string; scope?: CellScope; scopeKey: string },
+    ): Promise<boolean> => {
+      if (conflicted.has(key)) return true;
+      if (contribution.context.kind !== "derivation") return false;
+      const held = contribution.viewSeqs.get(key) ?? 0;
+      if ((heads.get(key) ?? 0) <= held) return false;
+      return await sink.intrusionSince?.(
+        this.#space,
+        doc,
+        held,
+        this.#lease?.holder,
+      ) === true;
+    };
+
     /** The head a contribution observed on a conflicted doc through one of
      * the loop's own direct commits, or `undefined` when the doc moved for
      * some other reason, the contribution was sealed before the commit,
@@ -1852,9 +1987,9 @@ export class WaveAccumulator
         const docs = homeWrites[contribution.index];
         for (const [key, doc] of docs) {
           if (
-            !conflicted.has(key) ||
             droppedDocs[contribution.index].has(key) ||
-            rebasedDocs[contribution.index].has(key)
+            rebasedDocs[contribution.index].has(key) ||
+            !await conflictsFor(contribution, key, doc)
           ) {
             continue;
           }
@@ -2077,6 +2212,9 @@ export class WaveAccumulator
               requeued.add(idx);
             }
           } else {
+            if (readWithdrawn && contribution.context.kind === "derivation") {
+              contribution.readDependencyWithdrawn = true;
+            }
             droppedWhole.add(idx);
             outcome.dependencyDroppedWrites += this.#homeOpCount(
               contribution,
@@ -2161,10 +2299,7 @@ export class WaveAccumulator
       // check): the entry check plus the engine's live-lease row cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
+      if (this.#tenureEnded) {
         this.#abortAfterForeignFailure(outcome);
         outcome.aborted = "lease-lost";
         return outcome;
@@ -2231,25 +2366,7 @@ export class WaveAccumulator
 
       // Tenure re-check before every home attempt (see the foreign-loop
       // note): the resolve loop may have awaited the sink several times.
-      if (
-        this.#lease !== undefined &&
-        !this.#lease.isCurrentTenure(this.#sealedTenure)
-      ) {
-        for (const contribution of this.#contributions) {
-          this.#withdraw(
-            contribution,
-            "lease lost mid-wave; the in-flight wave aborts " +
-              "(serving-loop.md §2)",
-          );
-          outcome.dispositions[contribution.index] =
-            contribution.context.kind === "event-handler"
-              ? { kind: "requeued" }
-              : { kind: "dropped" };
-        }
-        this.#reportRequeuedEvents(outcome, () => true);
-        outcome.aborted = "lease-lost";
-        return outcome;
-      }
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
       const result = await sink.commitWave(batch);
       if (!result.error) {
         this.#settleVerdicts(
@@ -2265,6 +2382,11 @@ export class WaveAccumulator
         outcome.seq = result.ok.seq;
         return outcome;
       }
+      // The memory server refuses a derived commit whose holder no longer
+      // holds the live lease, and the sink's owner ends the tenure when it
+      // sees such a refusal (serving-loop.md §2). A refusal under an ended
+      // tenure is a lease loss, with no conflict to resolve.
+      if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -2409,6 +2531,46 @@ export class WaveAccumulator
       });
     }
     return docs;
+  }
+
+  /**
+   * Where the replica's CONFIRMED view stands on each home doc a sealing
+   * run writes — pending writes excluded, so what it reports is the state
+   * the run's own layer sits on.
+   *
+   * Taken AT SEAL because that is the moment the contribution's writes
+   * are fixed against a view. The wave's basis is the serverSeq it opened
+   * at, which a seal can open after a commit this replica has not taken,
+   * and the commit step runs later still, by which time the frame may
+   * have landed and the replica no longer says what the run derived from.
+   */
+  #viewSeqsAtSeal(
+    spaces: readonly SealedSpaceContribution[],
+    context: WaveRunContext,
+  ): ReadonlyMap<string, number> {
+    const replica = this.#replicaFor(this.#space);
+    const identity = context.scopeKeyIdentity ?? this.#scopeKeyIdentity;
+    const home = spaces.find((space) => space.space === this.#space);
+    const writes = (home?.sealed.commit.operations ?? []).filter((operation) =>
+      operation.op !== "sqlite"
+    );
+    const seqs = new Map<string, number>();
+    for (const operation of writes) {
+      // Two operations on one instance read the same seq, so the second
+      // overwrites the first with what it already held.
+      seqs.set(
+        docInstanceKey(
+          operation.id,
+          this.#scopeKeyFor(operation.scope, context),
+        ),
+        replica.confirmedDocumentSeq(
+          operation.id as URI,
+          operation.scope,
+          identity,
+        ),
+      );
+    }
+    return seqs;
   }
 
   /** M1 (scopes.md §5, §7): a run's scoped addresses resolve against the
@@ -2763,7 +2925,7 @@ export class WaveAccumulator
     // value (payload included) stays SHARED by reference.
     const spineCloneEntryList = (entries: readonly unknown[]): unknown[] =>
       entries.map((entry) =>
-        entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        isObjectNotArray(entry)
           ? { ...(entry as Record<string, unknown>) }
           : entry
       );
@@ -2827,7 +2989,7 @@ export class WaveAccumulator
             consequenced?: boolean;
           } | null;
           if (
-            entry === null || typeof entry !== "object" ||
+            !isObjectOrArray(entry) ||
             typeof entry.eventId !== "string" || entry.seq !== undefined
           ) {
             continue;
@@ -2946,15 +3108,14 @@ export class WaveAccumulator
     actingSession?: string;
     capabilityRef: string;
   } | undefined {
-    return context.acting !== undefined && context.capabilityRef !== undefined
-      ? {
-        actingPrincipal: context.acting.user,
-        ...(context.acting.session !== undefined
-          ? { actingSession: context.acting.session }
-          : {}),
-        capabilityRef: context.capabilityRef,
-      }
-      : undefined;
+    const carriage = delegatedCarriageOf(context);
+    return carriage === undefined ? undefined : {
+      actingPrincipal: carriage.acting.user,
+      ...(carriage.acting.session !== undefined
+        ? { actingSession: carriage.acting.session }
+        : {}),
+      capabilityRef: carriage.capabilityRef,
+    };
   }
 
   /** The foreign-batch grouping key — (space, acting identity, grant).
@@ -3063,7 +3224,9 @@ export class WaveAccumulator
   }
 
   /** Basis rows (§3b) for one surviving contribution: doc-granular
-   * ids + seqs from the sealed commit's read set — confirmed reads carry
+   * ids + seqs from the sealed commit's scheduling-relevant reads. Commit-only
+   * verification stays in the sealed read set for CAS and withdrawal without
+   * making an emitter depend on its destination. Confirmed reads carry
    * their store version; in-wave pending reads share the wave's own
    * commit seq (`seq: null`, filled by the sink). Keyed by the run's
    * TRUE instance key (S4, stage A — see #trueBasisKey). */
@@ -3078,6 +3241,13 @@ export class WaveAccumulator
           read.scope,
           contribution.context,
         );
+        if (
+          contribution.commitOnlyReadKeys.has(
+            `${spaceContribution.space}\0${
+              docInstanceKey(read.id, entityScopeKey)
+            }`,
+          )
+        ) continue;
         rows.set(`${spaceContribution.space} ${read.id} ${entityScopeKey}`, {
           action: context.actionId,
           actionScopeKey,
@@ -3092,6 +3262,13 @@ export class WaveAccumulator
           read.scope,
           contribution.context,
         );
+        if (
+          contribution.commitOnlyReadKeys.has(
+            `${spaceContribution.space}\0${
+              docInstanceKey(read.id, entityScopeKey)
+            }`,
+          )
+        ) continue;
         rows.set(`${spaceContribution.space} ${read.id} ${entityScopeKey}`, {
           action: context.actionId,
           actionScopeKey,
@@ -3145,9 +3322,12 @@ export class WaveAccumulator
             "emitter write this wave withdrew, so no entry exists behind " +
             "this run and nothing re-emits it (events.md §4 — one " +
             "durable entry, one completed run; stage C build W3, (α3))"
-          : "pure derivation dropped: derived from a withdrawn " +
-            "contribution; its own reads re-run it when fresh state " +
-            "lands (serving-loop.md §3d)";
+          : contribution.readDependencyWithdrawn
+          ? "pure derivation dropped: a read depended on a withdrawn " +
+            "contribution; the current scheduled instance re-arms after " +
+            "rollback (serving-loop.md §3d)"
+          : "contribution dropped from the wave commit " +
+            "(serving-loop.md §3d)";
         this.#warnDropped(contribution, message);
         this.#withdraw(contribution, message, "contribution-dropped");
         continue;
@@ -3211,6 +3391,27 @@ export class WaveAccumulator
         contribution.resolveVerdict({ committed: { seq } });
       }
     }
+  }
+
+  /**
+   * Withdraws every contribution because the lease tenure ended before the
+   * home commit landed (serving-loop.md §2's stop-committing MUST).
+   */
+  #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    for (const contribution of this.#contributions) {
+      this.#withdraw(
+        contribution,
+        "lease lost mid-wave; the in-flight wave aborts " +
+          "(serving-loop.md §2)",
+      );
+      outcome.dispositions[contribution.index] =
+        contribution.context.kind === "event-handler"
+          ? { kind: "requeued" }
+          : { kind: "dropped" };
+    }
+    this.#reportRequeuedEvents(outcome, () => true);
+    outcome.aborted = "lease-lost";
+    return outcome;
   }
 
   #abortAfterForeignFailure(outcome: WaveCommitOutcome): void {

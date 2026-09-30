@@ -38,7 +38,7 @@ reference, rather than trusting the schema in front of it.
 | --- | --- |
 | a comment on the **verb itself** | `resultSchema.properties.<verb>.description`, a sibling of the `$ref` naming its event |
 | a comment on an **event field** (what `title` means) | `$defs.<Event>.properties.<field>.description` |
-| a comment on the **event interface** | nowhere — this one does not compile ([#5937](https://github.com/commontoolsinc/labs/issues/5937)) |
+| a comment on the **event interface** | nowhere — this one does not compile ([#5937](https://github.com/commonfabric/labs/issues/5937)) |
 
 `cf piece verbs` and `cf piece call <verb> --help` already load the compiled pattern
 to report what a verb hands back, so both read the prose from the same load.
@@ -81,5 +81,5 @@ older pattern than the source in the checkout.
 <!-- Source links resolve against the repository's default branch, so they
      follow head rather than pinning a revision this document would outlive. -->
 
-[cell]: https://github.com/commontoolsinc/labs/blob/main/packages/runner/src/cell.ts
-[piece-lib]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/lib/piece.ts
+[cell]: https://github.com/commonfabric/labs/blob/main/packages/runner/src/cell.ts
+[piece-lib]: https://github.com/commonfabric/labs/blob/main/packages/cli/lib/piece.ts

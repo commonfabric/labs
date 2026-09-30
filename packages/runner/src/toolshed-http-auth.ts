@@ -3,6 +3,7 @@ import {
   type DIDKey,
   VerifierIdentity,
 } from "@commonfabric/identity";
+import { isDIDKey } from "@commonfabric/identity/did";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   fromBase64url,
@@ -305,7 +306,7 @@ export async function signFirstPartyHttpRequest(params: {
   removeAuthHeaders(headers);
 
   const userDid = params.signer.did();
-  if (!userDid.startsWith("did:key:")) {
+  if (!isDIDKey(userDid)) {
     throw authError("first-party HTTP authentication requires did:key signers");
   }
 
@@ -364,7 +365,7 @@ export async function verifyFirstPartyHttpRequest(params: {
   if (parsedAuth.proofKind !== PROOF_ALGORITHM) {
     throw authError("unsupported first-party proof algorithm");
   }
-  if (!parsedAuth.did.startsWith("did:key:")) {
+  if (!isDIDKey(parsedAuth.did)) {
     throw authError("first-party auth DID must be a did:key");
   }
 

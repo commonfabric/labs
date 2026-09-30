@@ -392,12 +392,13 @@ export const TypeMismatchError = (
 
 /**
  * Rendering options for the two values an inconsistency message compares:
- * arrays, objects, and strings whole, so that a change past the renderer's
- * default limits shows as a difference rather than as two identical
- * renderings.
+ * arrays, buffers, objects, and strings whole, so that a change past the
+ * renderer's default limits shows as a difference rather than as two
+ * identical renderings.
  */
 const INCONSISTENCY_RENDER_OPTIONS: DebugValueOptions = {
   maxArrayLength: Infinity,
+  maxBufferLength: Infinity,
   maxProperties: Infinity,
   maxStringLines: Infinity,
 };
@@ -407,6 +408,7 @@ export const StateInconsistency = (source: {
   expected?: FabricValue;
   actual?: FabricValue;
   space?: MemorySpace;
+  emptyReactiveCommit?: true;
 }): IStorageTransactionInconsistent => {
   const { address, space, expected, actual } = source;
   const message = [
@@ -424,6 +426,9 @@ export const StateInconsistency = (source: {
     name: "StorageTransactionInconsistent",
     message,
     address,
+    ...(source.emptyReactiveCommit
+      ? { emptyReactiveCommit: true as const }
+      : {}),
     from(newSpace: MemorySpace) {
       return StateInconsistency({
         ...source,

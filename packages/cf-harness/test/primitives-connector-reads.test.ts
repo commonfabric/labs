@@ -101,6 +101,7 @@ const LEDGER_TABLES = {
     pending: "integer",
     category_primary: "text",
     iso_currency_code: "text",
+    status: "text",
     deleted: "integer",
     deleted_at: "text",
   }),
@@ -127,8 +128,8 @@ const MAILBOX_TABLES = {
 
 const LEDGER_INSERT = "INSERT INTO rows_plaid_transaction (record_id, " +
   "transaction_id, account_id, date, amount, signed_amount, merchant_name, " +
-  "name, pending, category_primary, iso_currency_code, deleted, deleted_at) " +
-  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "name, pending, category_primary, iso_currency_code, status, deleted, " +
+  "deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const MESSAGE_INSERT = "INSERT INTO messages (id, subject, snippet, " +
   "received_at, sent_at, internal_date, sender_id, deleted_at) " +
@@ -161,6 +162,7 @@ const ledgerRow = (
     0,
     "GENERAL_SERVICES",
     "USD",
+    "posted",
     deleted,
     deleted === 1 ? `${date}T12:00:00Z` : "",
   ],

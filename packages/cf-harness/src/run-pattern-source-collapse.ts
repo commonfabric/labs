@@ -9,6 +9,10 @@ import type {
 const SUPERSEDED_SOURCE_MARKER_PREFIX =
   "[cf-harness: superseded run_pattern source collapsed";
 
+/** Whether source text is a model-context marker for a saved source artifact. */
+export const isCollapsedRunPatternSource = (source: string): boolean =>
+  source.startsWith(SUPERSEDED_SOURCE_MARKER_PREFIX);
+
 interface SupersededSource {
   toolCallId: string;
   attempt: number;
@@ -35,7 +39,7 @@ const runPatternSourceCall = (
   const source = parsed.sourceText;
   if (
     typeof source !== "string" ||
-    source.startsWith(SUPERSEDED_SOURCE_MARKER_PREFIX)
+    isCollapsedRunPatternSource(source)
   ) {
     return undefined;
   }

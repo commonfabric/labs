@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   Engine,
+  joinedBodies,
   Runtime,
   signer,
   StorageManager,
@@ -74,6 +75,43 @@ describe("Engine compile + evaluate", () => {
       program,
     );
     expect(result.main!["default"]).toBe("hello");
+  });
+
+  it("compiles and evaluates a pattern whose module binds `h` at top level", async () => {
+    // The pre-transform's forwarding `h` shim would collide with the authored
+    // `h`, so it is emitted as `__cfHelpersShim`: still a direct function,
+    // which the module-body verifier admits at module scope (a bare
+    // `void __cfHelpers;` use is rejected as top-level executable code).
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            "import { pattern, UI } from 'commonfabric';",
+            "const h = ['a', 'b'];",
+            "export default pattern<{ title: string }>(({ title }) => ({",
+            "  [UI]: <ul title={title}>{h.map((item) => <li>{item}</li>)}</ul>,",
+            "}));",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    const bodies = joinedBodies(graph);
+    expect(bodies).toContain("function __cfHelpersShim(");
+    expect(bodies).not.toContain("function h(");
+
+    const result = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(result.main!["default"]).toBeDefined();
   });
 
   it("compile+evaluate returns the default export pattern", async () => {

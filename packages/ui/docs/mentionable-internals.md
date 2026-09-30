@@ -87,11 +87,12 @@ Both consumers route destinations this way: `cf-code-editor`'s
 `_resolvePieceIds` (cached per index, generation-guarded against late passes)
 and `MentionController`'s `_destinationOf` (per encode and decode).
 
-A row may carry a `shortName` besides its display strings, and a destination
-piece may publish one of its own: the collection's name for the member, read at
-the two ends of one mention. What it is for is in
+A row may carry a `shortName` besides its display strings: the collection's name
+for the member, read at the two ends of one mention. A destination piece may
+publish one of its own, which the editor does not read. What the row's copy is
+for is in
 [`../src/v2/components/cf-code-editor/docs/mention-refs.md`](../src/v2/components/cf-code-editor/docs/mention-refs.md),
-which owns the completion and the pill that read them.
+which owns the completion and the pill that read it.
 
 ## Link Formats
 

@@ -103,7 +103,9 @@ separate prompt milestones to the command worker. A driver calls
 `onCancellationReady` as soon as its `cancel()` method can address the admitted
 prompt. Claude reaches this point before session metadata lookup because its
 pending-prompt record accepts cancellation. ACP and Codex reach it after their
-provider prompt or turn has started.
+provider prompt or turn has started. A Claude desktop start is the exception: it
+reads provider inventory but starts no provider prompt or turn in the connector,
+and never calls `onCancellationReady` or `onSessionActive`.
 
 A driver calls and awaits the asynchronous `onSessionActive` callback only after
 the provider operation has started. This callback refreshes every command target
@@ -113,12 +115,34 @@ refresh finishes.
 
 ### Collection
 
-`collectSource(driver, signal?)` consumes `listSessions()` until `nextCursor` is
-absent. It records an inventory error for a repeated cursor. It also records an
-error before retaining a page that would raise the inventory above 100,000
-summaries. It then calls `readSession()` once for every retained summary. The
-optional signal is checked before and after every provider call. A host still
-stops the driver to interrupt a provider call that does not return on its own.
+`streamSource(driver, signal, retain)` reads one inventory page at a time and
+yields each session snapshot before reading the next. The consumer controls when
+collection advances. Its signal can be a callback returning the current
+cancellation signal. Its `retained` list holds accepted inventory summaries, and
+its `outcome` records read counts, errors, and completeness as the stream is
+consumed. Repeated cursors, duplicate sessions, and the 100,000-listing limit
+use the same rules as the materialized collection.
+
+`collectSource(driver, { signal, retain })` consumes `listSessions()` until
+`nextCursor` is absent. It records an inventory error for a repeated cursor, and
+one per session a later page lists again, which it keeps once. It also records
+an error before keeping a page that would raise the listings, repeats included,
+above 100,000. It then calls `readSession()` once for every listed summary the
+`retain` predicate does not accept. The optional signal is checked before and
+after every provider call. A host still stops the driver to interrupt a provider
+call that does not return on its own.
+
+The optional `retain` predicate sees each inventory summary before the session
+is read. A summary it accepts goes into the result's `retained` list and its
+session is not read; publication keeps that session's graph as it is and its
+row's previews, and refreshes the row's Git context from the checkout the
+summary names, the way a read session's is refreshed. The predicate is the
+host's claim that the published copy is current, and the target checks the claim
+against the index: a retained session with no complete published copy is
+recorded as an error and makes the source's inventory incomplete, and its row,
+where the index holds one, is marked `partial` as a failed read's is.
+`AgentFabricTarget.publishedSessions()` supplies what a host needs to make the
+claim.
 
 The returned `CollectedSource` contains successful snapshots and structured
 errors. Its `complete` field is true only when enumeration completed, every
@@ -159,19 +183,21 @@ initial synchronization.
 
 The target exposes these orchestration methods:
 
-| Method                                    | Behavior                                                                                                |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `beginSessionObservation()`               | Allocates the ordering value that a caller records before it begins a full provider collection.         |
-| `publish(collected, options?)`            | Publishes changed session graphs and replaces both indexes. Returns the number of non-deleted sessions. |
-| `publishHealth(value)`                    | Publishes a host-defined health record under the connector-owned health schema.                         |
-| `subscribeCommands(callback)`             | Subscribes after the exact queue has been bound to its owner and verified writer.                       |
-| `pollCommands()`                          | Pulls commands after the exact queue has been bound to its owner and verified writer.                   |
-| `bindCommandCell(cell, writer)`           | Verifies the exact owner-scoped command queue and applies its owner and verified-writer policy.         |
-| `publishReceipt(receipt)`                 | Publishes one durable receipt cell and updates the bounded receipt index.                               |
-| `readReceipt(commandId)`                  | Reads the deterministic individual receipt cell used as the shared command claim.                       |
-| `refreshSession(driver, nativeSessionId)` | Reads and publishes one session without changing untouched session statuses.                            |
-| `commandCellId()`                         | Returns the command cell ID without the `of:` link prefix.                                              |
-| `receiptCellId()`                         | Returns the receipt-index cell ID without the `of:` link prefix.                                        |
+| Method                                      | Behavior                                                                                                                                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publishedSessions()`                       | Reads the complete index without transcripts and returns each session's driver, update time, lifecycle state, status, and durable desktop-start pairing, by key. |
+| `beginSessionObservation()`                 | Allocates the ordering value that a caller records before it begins a full provider collection.                                                                  |
+| `publish(collected, options?)`              | Publishes changed session graphs and replaces both indexes. Returns the number of non-deleted sessions.                                                          |
+| `publishHealth(value)`                      | Publishes a host-defined health record under the connector-owned health schema.                                                                                  |
+| `subscribeCommands(callback)`               | Subscribes to every bound queue once at least one has been bound to its owner and verified writer; each delivery carries its queue's producer.                   |
+| `pollCommands()`                            | Pulls every bound queue's pending commands without their queues, once at least one has been bound; a diagnostic read.                                            |
+| `bindCommandCell(cell, writer)`             | Verifies the exact owner-scoped command queue and applies its owner and verified-writer policy.                                                                  |
+| `bindProducerCommandCell(producer, writer)` | Creates the deterministic queue for one producer pattern, applies the same policy with that producer's handler as the writer, and returns the cell.              |
+| `publishReceipt(receipt)`                   | Publishes one durable receipt cell and updates the bounded receipt index.                                                                                        |
+| `readReceipt(commandId, producer?)`         | Reads the deterministic individual receipt cell used as the shared command claim, the producer's when one is named.                                              |
+| `refreshSession(driver, nativeSessionId)`   | Reads and publishes one session without changing untouched session statuses.                                                                                     |
+| `commandCellId()`                           | Returns the command cell ID without the `of:` link prefix.                                                                                                       |
+| `receiptCellId()`                           | Returns the receipt-index cell ID without the `of:` link prefix.                                                                                                 |
 
 The optional `publish()` setting `preserveUntouchedStatus` defaults to false.
 Normal full collections should use the default. A targeted refresh should set it
@@ -218,16 +244,20 @@ Commands other than cancellation run in admission order for each source and
 native session. A cancellation admitted after a prompt waits until the driver
 reports that its cancellation method can address that prompt. It then bypasses
 the remaining session queue. If the prompt fails before reaching that milestone,
-the cancellation starts after the prompt has produced its terminal outcome.
+the cancellation starts after the prompt has produced its terminal outcome. A
+headless start follows the same rule. A desktop start never reaches the
+milestone, so a cancellation admitted while its app link is opening waits for
+the start's terminal outcome and cannot interrupt the opener.
 
 The optional receipt callback is an observer. It runs after the receipt is
 durable in every target and the ledger publication marker is clear. A callback
 failure is logged and does not turn a published command receipt back into
 pending work.
 
-The optional command-task failure callback receives command ID, source ID,
-native session ID, and the thrown error as soon as scheduled work fails. It does
-not receive the command payload.
+The optional command-task failure callback receives command ID, the producer
+whose queue delivered it when one did, source ID, native session ID, and the
+thrown error as soon as scheduled work fails. It does not receive the command
+payload.
 
 `recoverUnpublishedReceipts()` changes ledger entries left in flight by a prior
 process to unknown, then publishes every receipt whose publication was not
@@ -365,20 +395,33 @@ prompt. A prompt submitted after the driver stops fails without calling the SDK.
 The final SDK result determines the command status. Cancellation calls
 `interrupt()` only for a query started by this connector instance.
 
-A start runs `query()` with `sessionId` set to the caller-chosen native session
-ID, which must be a UUID, `cwd` set to the directory the start runs in, and
-`title` set to the start's title when it names one, so the session carries its
-title from its first message. A start runs where its source lists: in the
-source's configured `cwd`, and a start naming any other directory fails; a
-source without one runs the start in the directory it names, which is then
-required and made absolute. A start for a session the SDK reports information
-for fails. The driver reads the session information first, so cancellation
-during that lookup behaves as it does for a prompt. The session becomes
-observable, and its first refresh runs, once the SDK has emitted its first
-message. A successful start records the directory for later prompts. A start's
-`mode` is one the driver advertises; it is applied to the first turn and kept
-for later connector-owned prompts, a start that fails keeps no mode, and a mode
-the driver does not advertise makes the start unsupported.
+A start runs where its source lists: in the source's configured `cwd`, and a
+start naming any other directory fails; a source without one runs the start in
+the directory it names, which is then required and made absolute. The native
+session ID must be a UUID.
+
+A headless start runs `query()` with `sessionId` set to that caller-chosen ID,
+`cwd` set to the directory the start runs in, and `title` set to the start's
+title when it names one, so the session carries its title from its first
+message. A start for a session the SDK reports information for fails. The driver
+reads the session information first, so cancellation during that lookup behaves
+as it does for a prompt. The session becomes observable, and its first refresh
+runs, once the SDK has emitted its first message. A successful start records the
+directory for later prompts. Its `mode` is one the driver advertises; it is
+applied to the first turn and kept for later connector-owned prompts, a start
+that fails keeps no mode, and a mode the driver does not advertise makes the
+start unsupported.
+
+A desktop start instead snapshots the complete SDK inventory, records its
+creation-time boundary, and opens `claude://code/new` with the directory and
+prompt. It starts no provider prompt or turn in the connector, calls neither
+command milestone callback, and returns `affectedSession: null` once the opener
+succeeds. The person sends the prompt in the app, which mints a different
+session ID. A later inventory pairs that session with the start only when it was
+absent from the snapshot, has a finite creation time at or after the boundary,
+names the same directory, and opens with the start's prompt. The summary then
+carries the caller-chosen ID as `startedAs`. A desktop start takes no `mode`;
+the app's own permission setting applies.
 
 Mode and model settings are kept in process memory per session. They apply to
 connector-owned prompts. `bypassPermissions` is advertised only when
@@ -470,13 +513,14 @@ with an ACP prefix.
 All top-level causes include the destination `spaceDid` and `ownerDid`. The
 remaining fields are fixed:
 
-| Cell                   | Cause field                              |
-| ---------------------- | ---------------------------------------- |
-| Recent session index   | `agentConnector: "recent-session-index"` |
-| Complete session index | `agentConnector: "all-session-index"`    |
-| Health                 | `agentConnector: "health"`               |
-| Commands               | `agentConnector: "commands"`             |
-| Receipt index          | `agentConnector: "receipts"`             |
+| Cell                   | Cause field                                                |
+| ---------------------- | ---------------------------------------------------------- |
+| Recent session index   | `agentConnector: "recent-session-index"`                   |
+| Complete session index | `agentConnector: "all-session-index"`                      |
+| Health                 | `agentConnector: "health"`                                 |
+| Commands               | `agentConnector: "commands"`                               |
+| Producer commands      | `agentConnector: "commands"` and `producer: <producer ID>` |
+| Receipt index          | `agentConnector: "receipts"`                               |
 
 Session, chunk, and individual receipt causes add their durable identities:
 
@@ -484,15 +528,20 @@ Session, chunk, and individual receipt causes add their durable identities:
 {
   "spaceDid": "did:key:...",
   "ownerDid": "did:key:...",
-  "agentConnector": "session",
+  "agentConnector": "session-version",
   "sourceId": "codex",
-  "nativeSessionId": "session-id"
+  "nativeSessionId": "session-id",
+  "driver": "codex-app-server",
+  "contentHash": "sha256:..."
 }
 ```
 
-Chunk causes use `agentConnector: "session-chunk"` and add `part` and
-`contentHash`. Receipt causes use `agentConnector: "command-receipt"` and add
-`commandId`.
+Manifest causes include the producing `driver` and the complete persisted
+manifest hash as `contentHash`. Chunk causes use
+`agentConnector: "session-chunk"` and add `part` and `contentHash`. Receipt
+causes use `agentConnector: "command-receipt"` and add `commandId`. Readers
+continue to accept the earlier unversioned manifest cause while stored indexes
+migrate.
 
 ### Schema names
 
@@ -509,10 +558,10 @@ Chunk causes use `agentConnector: "session-chunk"` and add `part` and
 | Receipt index      | `commonfabric.agent-connector.command-receipts` |
 | Local ledger       | `commonfabric.agent-connector.command-ledger`   |
 
-The schema names and deterministic causes are not versioned. Future readers must
-remain compatible with stored values and cell identities. New fields must be
-optional because older writers omit fields they do not know. Readers permit
-additional fields while continuing to validate the fields they use.
+Schema names remain stable. Future readers must remain compatible with stored
+values and cell identities. New fields must be optional because older writers
+omit fields they do not know. Readers permit additional fields while continuing
+to validate the fields they use.
 
 ### Session key
 
@@ -571,12 +620,11 @@ rewrites the manifest when a source ID is reconfigured to use another driver,
 even when the provider content hash is unchanged.
 
 The manifest is authoritative for the provider that produced its snapshot. The
-index row repeats `driver` for listing, but it can lag the manifest when a
-publication stops between the manifest and index writes.
-
-The manifest uses a deterministic cause, so rewriting the same session updates
-the same manifest cell. A chunk whose content changes uses a new root and new
-array-child cells.
+index row repeats `driver` for listing. Its link names a manifest version whose
+cause includes the hash of the complete manifest graph. Publication can
+therefore write and release each manifest before the final index commit. If
+publication stops, the retained index still points to its matching immutable
+manifest. New chunks and manifests that were not indexed remain unreachable.
 
 ### Session indexes
 
@@ -590,9 +638,10 @@ Each index records generation time, monotonically increasing generation,
 non-deleted session count, older session count, source status rows, and session
 entries. A session entry includes the producing `driver`, normalized metadata,
 nullable `archived` and `active` lifecycle fields, provider capabilities, up to
-12 recent normalized message previews, a live manifest cell link, content hash,
-and synchronization status. The lifecycle fields describe provider state.
-Synchronization status describes the connector's published copy.
+12 recent normalized message previews, a live manifest cell link, snapshot
+content hash, complete manifest hash, and synchronization status. The lifecycle
+fields describe provider state. Synchronization status describes the connector's
+published copy.
 
 Each index also contains one shallow `checkouts` row per non-deleted worktree.
 The row records its root, current branch, current commit, selected repository
@@ -649,7 +698,7 @@ The publisher assigns one base scope to each stored value:
 | Stored value                | Base `agentConnector` scope            | Additional scope identity                            |
 | --------------------------- | -------------------------------------- | ---------------------------------------------------- |
 | Session event chunk         | `session-events-array-elements`        | `sourceId`, `nativeSessionId`, `part`, `contentHash` |
-| Session manifest            | `session-array-elements`               | `sourceId`, `nativeSessionId`                        |
+| Session manifest            | `session-array-elements`               | `sourceId`, `nativeSessionId`, `manifestHash`        |
 | Recent and complete indexes | `session-index-array-elements`         | None                                                 |
 | Health                      | `health-array-elements`                | None                                                 |
 | Individual command receipt  | `command-receipt-array-elements`       | `commandId`                                          |
@@ -691,14 +740,14 @@ zero-based `duplicate` number after the first occurrence.
 Connector hashes use SHA-256 and the `sha256:` prefix. The hash input describes
 the graph produced by the stable-array planner. It includes the converted root
 value and every deterministic child cell's cause and converted value. Each root
-or child value gets its own cell-to-link and native-to-Fabric conversion. These
-are the same conversion boundaries used when the graph is written.
+or child value gets its own cell-to-link and JS-to-Fabric conversion. These are
+the same conversion boundaries used when the graph is written.
 
 `stableFabricValue()` performs this conversion for both hashing and graph
 writes. It replaces connector-owned cells with complete `FabricLink`s. It then
 captures native plain data as immutable `FabricValue`s. Native `toJSON()`
 methods and property getters run during this capture. Later hashing and writing
-use the captured result, so a mutable native object cannot change between those
+use the captured result, so a mutable JS object cannot change between those
 steps. Shared JavaScript references retain their `FabricValue` semantics and do
 not become path-only links. Circular values and arrays with enumerable named
 properties are rejected at this boundary because they have no supported Fabric
@@ -744,11 +793,17 @@ coordination for each API, space, and owner.
 The callback must finish synchronously and return a plain record. Causes and
 values must be accepted by the Common Fabric cell and value converters.
 
-Session graph publication batches at most ten content-addressed chunk cells per
-transaction and one manifest per transaction. Index cells are committed after
-session graphs. Because changed chunks use new root and child cells, committing
-chunks before a manifest cannot mutate the graph reachable from the prior
-manifest.
+Session graph publication commits one content-addressed chunk at a time and one
+manifest at a time. Index cells are committed after session graphs. Because
+changed chunks and manifests use new root and child cells, publishing them
+cannot mutate the graph reachable from the prior indexes.
+
+`AgentFabricTarget.open()` and `connect()` accept an optional graph-session
+factory. The command-line host supplies a separate reusable runtime through this
+factory and closes its storage session after each provider session. Closing the
+storage session releases every chunk document cached during that publication.
+The next provider session reopens the storage connection on demand. A graph
+session must use the same space and owner as the target.
 
 `readStableCellGraphValue()` synchronizes a root cell and recursively hydrates
 `FabricLink`s. It caches repeated links within one read and synchronizes at most
@@ -820,8 +875,9 @@ currently do not change their behavior based on it. `requestedBy` is retained on
 the parsed command but is not copied to receipts.
 
 The worker rejects a command whose `ownerDid` differs from its configured owner.
-Invalid values are logged and skipped. A command ID already present in the
-ledger or already scheduled in the process is skipped.
+Invalid values are logged and skipped. A command already present in the ledger
+or already scheduled in the process, under its queue-qualified identity, is
+skipped.
 
 Before command processing starts, the host binds the compiled debug handler to
 the deterministic owner-scoped command cell. Binding rejects another cell and
@@ -829,9 +885,21 @@ rejects a populated queue that does not already carry the configured owner's
 confidentiality and integrity labels. The debug pattern receives that protected
 cell as an input; the host never selects a queue from pattern output.
 
+A queue's write policy names exactly one verified handler, so a second pattern
+that sends commands gets a queue of its own: the host binds a producer queue
+under the producer's own cause with that pattern's declared handler as its
+writer, and the worker reads every bound queue, learning each command's queue
+from the subscription. A command's identity is its ID qualified by the queue it
+arrived on, so an ID repeated on another queue names another command with a
+receipt of its own, and a receipt records its `producer`. Within one queue an ID
+names one command: a repeat is the same command delivered again and does not run
+twice, so a producer mints IDs it never reuses. Queues are bound before commands
+are subscribed; binding one while a subscription is live is an error.
+
 ### Receipt
 
-An `AgentSessionCommandReceipt` records command identity, session identity,
+An `AgentSessionCommandReceipt` records command identity, the producer whose
+queue delivered the command (absent for the owner's queue), session identity,
 status, claim and completion times, optional provider operation ID, optional
 error, and optional provider result.
 

@@ -52,3 +52,30 @@ Deno.test("createHarnessCfcPolicySnapshot projects no ceiling from a manifest th
   assertEquals("cfcReadMaxConfidentiality" in snapshot.runManifest, false);
   assertEquals("cfcReadOnExceed" in snapshot.runManifest, false);
 });
+
+Deno.test("createHarnessCfcPolicySnapshot records that the operator allows skill scripts", () => {
+  const snapshot = createHarnessCfcPolicySnapshot({
+    ...base,
+    allowSkillScripts: true,
+  });
+
+  // With the switch on, an empty entry list is what an authorized run looks
+  // like — so a snapshot carrying only the entries would show no
+  // authorization for every script that ran.
+  assertEquals(snapshot.skillScripts, {
+    allowSkillScripts: true,
+    allowedScripts: [],
+  });
+});
+
+Deno.test("createHarnessCfcPolicySnapshot records that the operator allows none", () => {
+  const snapshot = createHarnessCfcPolicySnapshot({
+    ...base,
+    allowedSkillScripts: [{ skill: "agent-browser", path: "scripts/run.ts" }],
+  });
+
+  assertEquals(snapshot.skillScripts, {
+    allowSkillScripts: false,
+    allowedScripts: [{ skill: "agent-browser", path: "scripts/run.ts" }],
+  });
+});

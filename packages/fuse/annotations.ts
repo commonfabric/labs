@@ -3,7 +3,7 @@ import { encodeHex } from "@std/encoding/hex";
 import { CFC_FUSE_ATOM_CLASS, cfcAtom } from "@commonfabric/api/cfc";
 import { sha256 } from "@commonfabric/content-hash";
 import { isLinkRef } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CallableKind } from "./callables.ts";
 
@@ -211,7 +211,7 @@ export function canonicalCfcJsonStringify(value: unknown): string {
   if (value === undefined) {
     return "null";
   }
-  if (value === null || typeof value !== "object") {
+  if (!isObjectOrArray(value)) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
@@ -435,8 +435,7 @@ function labelViewEntriesAt(
 }
 
 function isLeafValue(value: unknown): boolean {
-  return value === null || value === undefined ||
-    typeof value !== "object" || isLinkRef(value);
+  return !isObjectOrArray(value) || isLinkRef(value);
 }
 
 export function cfcDirectoryEntryKind(
@@ -578,7 +577,7 @@ export class CfcProjectionAnnotator {
         continue;
       }
 
-      if (typeof node.value === "object" && node.value !== null) {
+      if (isObjectOrArray(node.value)) {
         if (seen.has(node.value)) {
           contributions.push(labelWithFailClosed(this.labelAt(node.path)));
           continue;

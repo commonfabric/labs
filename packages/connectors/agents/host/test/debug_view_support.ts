@@ -19,12 +19,14 @@ import {
   EmulatedStorageManager,
   type Options,
 } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { fromFileUrl } from "@std/path";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import type { RawDataProvenance } from "../../debug-view/main.tsx";
 import { createBuilder } from "../../../../runner/src/builder/factory.ts";
 import type { Cell } from "../../../../runner/src/builder/types.ts";
+import { commandWriterAuthorization } from "../src/command-authorization.ts";
 import {
-  debugCommandWriterAuthorization,
   defaultDebugPatternLocation,
   protectOwnerDebugResult,
 } from "../src/debug-view.ts";
@@ -99,11 +101,7 @@ export class ObservedServer extends MemoryV2Server.Server {
 
 export function newSharedServer(): ObservedServer {
   return new ObservedServer({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: EMULATED_AUDIENCE },
   });
 }
@@ -167,7 +165,7 @@ export function countSessionRawDataLinks(
 
 export function materializeCell(value: unknown): unknown {
   if (
-    typeof value === "object" && value !== null && "get" in value &&
+    isObjectOrArray(value) && "get" in value &&
     typeof (value as { get?: unknown }).get === "function"
   ) {
     return (value as { get: () => unknown }).get();
@@ -187,7 +185,7 @@ export function renderedNodes(
   visited = new Set<object>(),
 ): RenderedNode[] {
   const materialized = materializeCell(value);
-  if (typeof materialized !== "object" || materialized === null) return result;
+  if (!isObjectOrArray(materialized)) return result;
   if (visited.has(materialized)) return result;
   visited.add(materialized);
   if (Array.isArray(materialized)) {
@@ -208,7 +206,7 @@ export function renderedText(
   if (typeof materialized === "string" || typeof materialized === "number") {
     return String(materialized);
   }
-  if (typeof materialized !== "object" || materialized === null) return "";
+  if (!isObjectOrArray(materialized)) return "";
   if (visited.has(materialized)) return "";
   visited.add(materialized);
   if (Array.isArray(materialized)) {
@@ -410,14 +408,11 @@ export async function deployDebugPiece(
   const pattern = await compileAndSavePattern(manager.runtime, program, {
     space: manager.getSpace(),
   });
-  const commandWriterAuthorization = debugCommandWriterAuthorization(pattern);
-  if (commandWriterAuthorization === undefined) {
+  const writerAuthorization = commandWriterAuthorization(pattern);
+  if (writerAuthorization === undefined) {
     throw new Error("debug command writer authorization is missing");
   }
-  await target.bindCommandCell(
-    target.cells.commands,
-    commandWriterAuthorization,
-  );
+  await target.bindCommandCell(target.cells.commands, writerAuthorization);
   const piece = await manager.create(
     program,
     {

@@ -1433,7 +1433,7 @@ skills belonging to other projects, `ts-sdk-author`, `create-interface-skill`,
 `accessibility-audit`, `performance-audit`, `authoring-typescript` and
 `authoring-patterns` (nvidia, 2 and 1 installs), `reatom-jsx`,
 `jsx-conventions`, `ast-grep-typescript-react`, and —
-**`commontoolsinc/labs/lit-component`, this repository's own skill, 65
+**`commonfabric/labs/lit-component`, this repository's own skill, 65
 installs**.
 
 Two things worth carrying: the query "Common Fabric" retrieves three unrelated
@@ -1629,7 +1629,7 @@ exercise any of the above.
   attempt 2 void.
 - **Registry namespace collision** — a "Common Fabric" query returns three
   unrelated `fabric` skills, and this repository's own
-  `commontoolsinc/labs/lit-component` is published there with 65 installs.
+  `commonfabric/labs/lit-component` is published there with 65 installs.
 
 Block 3 is complete.
 

@@ -1,4 +1,8 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import {
+  type FabricPlainObject,
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 
 // Space grouping — "a user's whole world" from a pile of space DBs.
 //
@@ -25,7 +29,9 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { openSpace, type SpaceDb } from "./db.ts";
 import { linksWithPaths, type LinkWalkBounds } from "./decode.ts";
+import { shortDid } from "./did-display.ts";
 import { candidatesMatching, reconstructDocument } from "./reconstruct.ts";
+import { parseScope } from "./scopes.ts";
 import type { DiscoveredSpace } from "./discover.ts";
 
 export type SpaceRole =
@@ -72,12 +78,10 @@ const SPACE_SIGNAL_WALK: LinkWalkBounds = {
   maxNodes: Number.POSITIVE_INFINITY,
 };
 
-const SESSION_RE = /^session:(did:key:[^:]+):/i;
-
 /** The acting-principal DID embedded in a `session_id`, if present. */
 export function principalFromSession(sessionId: string): string | null {
-  const m = decodeURIComponent(sessionId).match(SESSION_RE);
-  return m ? m[1] : null;
+  const scope = parseScope(sessionId);
+  return scope.kind === "session" ? scope.principal ?? null : null;
 }
 
 /** A space DB's own DID, from its file path (basename minus `.sqlite`). */
@@ -86,8 +90,8 @@ function didFromPath(path: string): string {
 }
 
 /** A home piece's result value carries both `profiles` and `createProfile`. */
-function isHomeResultValue(v: unknown): boolean {
-  return isObjectNotArray(v) &&
+function isHomeResultValue(v: FabricValue): v is FabricPlainObject {
+  return isFabricPlainObject(v) &&
     "profiles" in v && "createProfile" in v;
 }
 
@@ -152,7 +156,7 @@ export function analyzeSpaceSignals(
     if (!isHomeResultValue(value)) continue;
     isHome = true;
     // `profiles` is a link to the profiles cell; follow it and read the array.
-    const profilesField = (value as Record<string, unknown>).profiles;
+    const profilesField = value.profiles;
     const link = linksWithPaths(profilesField, SPACE_SIGNAL_WALK)
       .links[0]?.link;
     if (!link?.id) continue;
@@ -369,9 +373,4 @@ export function groupDiscoveredSpaces(
 
 function roleRank(r: SpaceRole): number {
   return r === "home" ? 0 : r === "profile" ? 1 : r === "main" ? 2 : 3;
-}
-
-function shortDid(did: string): string {
-  const tail = did.startsWith("did:key:") ? did.slice("did:key:".length) : did;
-  return tail.length > 12 ? `${tail.slice(0, 6)}…${tail.slice(-4)}` : tail;
 }

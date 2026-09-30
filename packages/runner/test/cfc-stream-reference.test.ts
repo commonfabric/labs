@@ -21,6 +21,7 @@ import { MAX_EVENT_BACKLOG_PER_STREAM } from "../src/scheduler/constants.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -48,13 +49,13 @@ describe("CFC stream references", () => {
     await storage.close();
   });
 
-  async function selectedStream(version: 1 | 2) {
+  async function selectedStream(version: 1 | 2 | 3) {
     const tx = runtime.edit();
     const stream = runtime.getCell(space, "stream", undefined, tx);
     stream.setRaw({ $stream: true });
     const source = runtime.getCell(space, "selected-stream", undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...source.getAsNormalizedFullLink(), path: [] }, {
       value: { selected: stream.getAsLink() },
       cfc: {
         version,
@@ -65,6 +66,7 @@ describe("CFC stream references", () => {
             path: ["selected"],
             origin: "link",
             observes: "followRef",
+            referenceAcquisition: "complete",
             label: { confidentiality: [secret] },
           }],
         },
@@ -106,7 +108,7 @@ describe("CFC stream references", () => {
 
   for (const held of [false, true]) {
     it(`carries stream selection into a handler with a primitive event (held=${held})`, async () => {
-      const { stream, selected } = await selectedStream(2);
+      const { stream, selected } = await selectedStream(3);
       const acquire = runtime.edit();
       const acquired = held
         ? selected.withTx(acquire).resolveAsCell().withTx(undefined)
@@ -129,7 +131,7 @@ describe("CFC stream references", () => {
   }
 
   it("retains dispatch confidentiality through durable encoding and local cascades", async () => {
-    const { stream, selected } = await selectedStream(2);
+    const { stream, selected } = await selectedStream(3);
     const send = runtime.edit();
     const acquired = selected.withTx(send).resolveAsCell()
       .getAsNormalizedFullLink();
@@ -163,37 +165,49 @@ describe("CFC stream references", () => {
     expect(await result.pull()).toBe(8);
   });
 
-  it("consumes the stream marker's confidentiality on an independently acquired target", async () => {
-    const { stream } = await selectedStream(2);
-    const seed = runtime.edit();
-    seed.writeOrThrow({ ...stream.getAsNormalizedFullLink(), path: [] }, {
-      value: { $stream: true },
-      cfc: {
-        version: 2,
-        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-        labelMap: {
-          version: 1,
-          entries: [{ path: [], label: { confidentiality: [secret] } }],
+  for (const readContent of [false, true]) {
+    it(`carries stream content confidentiality only when the sender reads it (read=${readContent})`, async () => {
+      const { stream } = await selectedStream(3);
+      const seed = runtime.edit();
+      seedStoredEnvelope(
+        seed,
+        { ...stream.getAsNormalizedFullLink(), path: [] },
+        {
+          value: { $stream: true },
+          cfc: {
+            version: 3,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: [secret] } }],
+            },
+          },
         },
-      },
+      );
+      expect((await seed.commit()).ok).toBeDefined();
+      const observed: Array<readonly unknown[]> = [];
+      runtime.scheduler.addEventHandler((tx) => {
+        observed.push(deriveFlowJoin(tx).confidentiality);
+      }, stream.getAsNormalizedFullLink());
+      const sender = runtime.edit();
+      if (readContent) {
+        expect(stream.withTx(sender).getRaw()).toEqual({ $stream: true });
+      }
+      stream.withTx(sender).send(7);
+      expect((await sender.commit()).ok).toBeDefined();
+      await runtime.scheduler.idle();
+      expect(observed).toHaveLength(1);
+      if (readContent) expect(observed[0]).toContainEqual(secret);
+      else expect(observed[0]).toEqual([]);
     });
-    expect((await seed.commit()).ok).toBeDefined();
-    const observed: Array<readonly unknown[]> = [];
-    runtime.scheduler.addEventHandler((tx) => {
-      observed.push(deriveFlowJoin(tx).confidentiality);
-    }, stream.getAsNormalizedFullLink());
-    stream.send(7);
-    await runtime.scheduler.idle();
-    expect(observed).toHaveLength(1);
-    expect(observed[0]).toContainEqual(secret);
-  });
+  }
 
   it("carries a resolved immutable-container stream's selection through dispatch", async () => {
     // The container's acquisition table proves the hop before serialization.
     // Dispatch consumes the resolved stream's identity and sends only the
     // event payload to the handler.
 
-    const { stream, selected } = await selectedStream(2);
+    const { stream, selected } = await selectedStream(3);
     const acquire = runtime.edit();
     const box = runtime.getImmutableCell(
       space,
@@ -224,7 +238,7 @@ describe("CFC stream references", () => {
   });
 
   it("retains a private selection when its event replaces a public backlog entry", async () => {
-    const { stream, selected } = await selectedStream(2);
+    const { stream, selected } = await selectedStream(3);
     const observed: Array<
       { event: number; confidentiality: readonly unknown[] }
     > = [];

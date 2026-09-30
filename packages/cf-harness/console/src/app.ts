@@ -439,7 +439,13 @@ export class ConsoleApp extends LitElement {
       >
         <div class="run-title">${run.title ?? run.runId}</div>
         <div class="run-meta">
-          <span class=${run.status === "failed" ? "bad" : "ok"}>
+          <span
+            class=${run.status === "failed"
+              ? "bad"
+              : run.status === "canceled"
+              ? ""
+              : "ok"}
+          >
             ${run.status}
           </span>
           · ${run.toolCallCount}

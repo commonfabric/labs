@@ -24,8 +24,11 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { defer } from "@commonfabric/utils/defer";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { resolveLink } from "../src/link-resolution.ts";
 import { type JSONSchema, UI } from "../src/builder/types.ts";
+import type { IStorageTransaction } from "../src/storage/interface.ts";
+import { StateInconsistency } from "../src/storage/transaction/attestation.ts";
 
 const signer = await Identity.fromPassphrase(
   "wish failure report write policy",
@@ -107,7 +110,6 @@ describe("wish commit-failure reporting", () => {
   afterEach(async () => {
     await runtime.idle();
     await runtime.dispose();
-    await storageManager.close();
   });
 
   /** Point the space cell's `/secret` at a document carrying a labeled name. */
@@ -213,7 +215,6 @@ describe("wish commit-failure reporting", () => {
     } finally {
       await discovery.runtime.idle();
       await discovery.runtime.dispose();
-      await discovery.manager.close();
     }
 
     await seedWishTarget(runtime, "classified");
@@ -263,7 +264,7 @@ describe("wish commit-failure reporting", () => {
       // Render the reason a commit rejection carries: it arrives as a plain
       // record rather than an Error, and `String()` on it says nothing.
       const line = args.map((arg) =>
-        typeof arg === "object" && arg !== null && "message" in arg
+        isObjectOrArray(arg) && "message" in arg
           ? String((arg as { message: unknown }).message)
           : String(arg)
       ).join(" ");
@@ -331,5 +332,58 @@ describe("wish commit-failure reporting", () => {
     expect(String(value.error)).toMatch(/divergent anyOf|commit-prep/);
     expect(value[UI]).toBeDefined();
     expect(value.result).toEqual({ name: "Bob" });
+  });
+
+  it("retries a transient refusal of the error report and preserves the refused result", async () => {
+    const replica = storageManager.open(space).replica;
+    const commitNative = replica.commitNative!;
+    const stampServerRun = runtime.stampServerRun;
+    const reportTransactions = new WeakSet<IStorageTransaction>();
+    let attempts = 0;
+    let refusals = 0;
+    runtime.stampServerRun = (tx, info) => {
+      stampServerRun.call(runtime, tx, info);
+      if (info.actionId.startsWith("wish/commit-failure-ui/")) {
+        reportTransactions.add(tx.tx);
+      }
+    };
+    replica.commitNative = (native, source, options) => {
+      if (source && reportTransactions.has(source)) {
+        attempts++;
+        if (refusals === 0) {
+          refusals++;
+          // Refuse the first report at the storage boundary. Its fresh
+          // transaction must retry even when no real writer races this test.
+          return Promise.resolve({
+            error: StateInconsistency({
+              address: {
+                id: "of:wish-report",
+                type: "application/json",
+                path: [],
+              },
+            }),
+          });
+        }
+      }
+      return commitNative.call(replica, native, source, options);
+    };
+    try {
+      const { reports, value } = await refusedWishReport(
+        ambiguousWishShapedSchema,
+        true,
+      );
+      expect(refusals).toBe(1);
+      expect(attempts).toBe(2);
+      expect(reports.filter((line) => line.includes("Can't report"))).toEqual(
+        [],
+      );
+      expect(String(value.error)).toMatch(/divergent anyOf|commit-prep/);
+      expect(value[UI]).toBeDefined();
+      expect(value.result).toEqual({ name: "Bob" });
+      expect(value.candidates).toEqual([{ name: "Bob" }]);
+    } finally {
+      replica.commitNative = commitNative;
+      runtime.stampServerRun = stampServerRun;
+    }
   });
 });

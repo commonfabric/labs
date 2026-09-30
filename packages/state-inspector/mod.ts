@@ -7,6 +7,7 @@
 
 export * from "./db.ts";
 export * from "./decode.ts";
+export * from "./did-display.ts";
 export * from "./reconstruct.ts";
 export * from "./model.ts";
 export * from "./queries.ts";

@@ -58,6 +58,7 @@ import {
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
 import { safeStringify } from "../lib/render.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 const userIdentity = await Identity.fromPassphrase("cf-four-ways-user");
 
@@ -209,6 +210,7 @@ describe("read options, four ways", () => {
       // deno-lint-ignore no-explicit-any
     } as any;
     const executed = await executeResolvedCallable(resolution, {}, {
+      sendEvent: sendThroughStandIn,
       invocation: { id: "inv-four-ways", session: "ses:four-ways" },
       selection,
     });
@@ -269,6 +271,7 @@ describe("read options, four ways", () => {
       filePath,
       ["invoke"],
       {
+        sendEvent: sendThroughStandIn,
         stateDir: join(tmpDir, "state"),
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(pieces as any),
@@ -371,7 +374,7 @@ describe("read options, four ways", () => {
     expect(parseEach(rendered)).toEqual({
       "piece get": { $link: `/${id}` },
       "piece call": { $link: `/${id}` },
-      "wish": { $link: `/@${profileSpace}/${id}` },
+      "wish": { $link: `//${profileSpace}/${id}` },
       "exec": { $link: `/${id}` },
     });
     // And the three that share a target space share their bytes, key order

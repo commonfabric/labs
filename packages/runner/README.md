@@ -66,6 +66,30 @@ accounting off leaves cumulative statistics available and stops collecting new
 samples. This control applies to that worker; it does not configure a server or
 another browser's runtime.
 
+## CFC preparation counters
+
+`runtime.getCfcStats()` returns a snapshot of cumulative CFC counters;
+`runtime.resetCfcStats()` clears them. `refusalDetailsRecorded` counts
+structured details recorded by prepare gates. Writer-fit records these only for
+`enforce-strict` refusals; lower modes retain the offending atoms in
+`writer-fit(persist-and-flag)` diagnostics.
+
+`consumedLabelWalks` counts full consumed-label collections, including
+writer-fit attribution, sink-ceiling checks, and host release checks. Writer-fit
+shares one collection across a prepare's refused write paths. Sink and host
+checks may collect on succeeding operations too, so this counter measures work
+rather than rejected commits. Both counters are measurement only and do not
+affect CFC relevance, preparation, or enforcement.
+
+`overlapWildcardQueries` and `overlapConcreteQueries` count label-index queries
+during preparation, split by whether the query path contains `"*"`.
+`authoritativeCoverCalls` counts carried label entries checked against source
+authority, including checks answered from the preparation-local cover cache.
+`flowTemplateContainers` counts container stamps and `flowTemplateEntriesMinted`
+counts their three child templates (`shape`, `value`, and `followRef`). These
+counters measure work before final entry coalescing; they do not count distinct
+persisted entries.
+
 ## Architecture
 
 The Runner has been refactored to eliminate singleton patterns in favor of
@@ -162,6 +186,9 @@ storage:
 - Schemas are based on JSON Schema with extensions for reactivity and references
 - Each Cell has an associated schema that validates its data
 - Schemas can define nested cells with `asCell: ["cell"]`
+- `@commonfabric/runner/scope` exposes the scope predicates, including
+  `isSchemaScope` for the closed `space`, `user`, `session`, and `any`
+  vocabulary.
 - Schema validation happens automatically when setting values
 
 ### Sigil-based Links
@@ -208,6 +235,13 @@ The reactivity system is what makes the Runner dynamic:
 - Fine-grained updates minimize unnecessary recalculations
 
 ### Scheduler
+
+A reactive commit conflict waits for ordered catch-up and scoped recovery pulls
+before the scheduler queues its retry. Output reads excluded from scheduling
+still participate in validation and repair. The pending-commit barrier includes
+recovery; a retired registration or a runtime closing its storage cannot requeue
+the delayed retry. Fresh input changes remain eligible to run while recovery is
+pending.
 
 The scheduler manages the execution order of reactive updates:
 
@@ -515,6 +549,15 @@ runtime.runner.stop(result);
 
 The storage system provides persistence for cells and synchronization across
 clients.
+
+Remote memory connections use native WebSockets in browsers and for plain `ws:`
+URLs. Deno `wss:` connections use the `ws` package through Deno's Node TLS stack
+to avoid the native TLS flush bug tracked in
+[denoland/deno#36862](https://github.com/denoland/deno/issues/36862). This
+backend can be removed once the pinned Deno release includes the upstream fix.
+It uses Fabric's message compression, with WebSocket per-message compression
+disabled. Its send promise waits for local write completion; Fabric's protocol
+replies remain the authority for committed writes.
 
 ```typescript
 import { Runtime } from "@commonfabric/runner";
@@ -869,6 +912,25 @@ components interact:
 This flow happens automatically once set up, allowing developers to focus on
 business logic rather than managing data flow manually.
 
+## Cross-space child source ownership
+
+A cross-space child with a recorded source origin or source revision history
+owns its stored pattern and arguments. Reinstantiating its parent resumes that
+stored state, including owner edits that detached the origin. Untracked nested
+children continue to take their pattern and inputs from the parent.
+
+This independent input ownership starts when the origin or history is recorded.
+A parent release's new literals and bindings do not replace the child's stored
+arguments. Existing links remain reactive to their original targets; moving or
+replacing a parent-internal target does not retarget the child. Preserve those
+targets or explicitly update the child's inputs as its owner, for example with
+`cf piece apply`, using the retained child's input contract.
+
+For a space-scoped child, resume waits for the parent transaction to commit and
+retains the parent demand root across cold loading. Parent teardown cancels only
+the start it owns; a replacement or independently started child keeps running.
+Scoped serving children resume through their per-actor program coordinator.
+
 ## Service Architecture
 
 The Runtime coordinates several core services:
@@ -903,3 +965,13 @@ the requested space for fabric imports but does not replicate closures.
 
 See the project's main contribution guide for details on development workflow,
 testing, and submitting changes.
+
+## Private DID inboxes
+
+`InboxClient` from `@commonfabric/runner/inbox` provides signed generic
+delivery, private recipient reads, and durable deduplication. See
+[DID inboxes](../../docs/features/did-inboxes.md) for the wire contract.
+`ACLManager.grant(did, "READ" | "WRITE")` adds access monotonically inside the
+conflict-retried transaction, preserving existing WRITE or OWNER grants.
+Delivery and access changes are separate operations; callers own their workflow
+and must not replay a grant after an independent revocation.

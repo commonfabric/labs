@@ -26,7 +26,7 @@ Two migration passes preserved authored data and matched rendered content. The
 report separates reduced update reads from graph growth and mixed timings;
 production latency and the historical deployment ratio remain unconfirmed. Q9
 transfers D1/D2 execution to the
-[lazy-materialization fast-follow](../../plans/lazy-materialization-fast-follow.md).
+[lazy-materialization fast-follow](lazy-materialization-fast-follow.md).
 The live poll is untouched.
 
 This tracker executes the design in
@@ -430,7 +430,7 @@ whole-array access and mutable accumulator aliasing; no active checkbox here.
       findings across 413 pattern entries. Publication and review remain visible
       in the dashboard.
 - [x] **D1 — Transfer remaining lazy-materialization execution** to the
-      [separate fast-follow plan](../../plans/lazy-materialization-fast-follow.md),
+      [separate fast-follow plan](lazy-materialization-fast-follow.md),
       as approved in Q9. F1/F2 own handlers; F3/F4 own rollout and flag
       retirement. These behaviors are not implemented by this handoff.
 - [x] **D2 — Transfer conditional remeasurement** to F0/F5 of that plan. Repeat
@@ -473,6 +473,6 @@ and regression surfaces are documented in
 ## Follow-up
 
 The
-[lazy-materialization fast-follow](../../plans/lazy-materialization-fast-follow.md)
+[lazy-materialization fast-follow](lazy-materialization-fast-follow.md)
 owns remaining execution and conditional remeasurement. B3a remains deferred.
 Any live poll update requires separate operator coordination.

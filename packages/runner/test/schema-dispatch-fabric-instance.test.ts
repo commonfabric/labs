@@ -1,5 +1,5 @@
 // fabric-safety (#4527): the schema traversal's special-object handling must
-// distinguish the two direct subclasses of `FabricSpecialObject`. A
+// distinguish the two special-object classes. A
 // `FabricPrimitive` (state in private `#fields`, zero enumerable own-props)
 // is a fully-opaque leaf. A `FabricInstance` — which can have model-visible
 // outgoing references — must fail loudly rather than be silently leafed
@@ -28,11 +28,9 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
-import {
-  FABRIC_SPECIAL_OBJECT_BRAND,
-  type SchemaPathSelector,
-} from "@commonfabric/api";
+import type { SchemaPathSelector } from "@commonfabric/api";
 
+import { FABRIC_SPECIAL_OBJECT_BRAND } from "../src/fabric-special-object-brand.ts";
 import {
   createDefaultTraversalContext,
   type IMemorySpaceValueAttestation,

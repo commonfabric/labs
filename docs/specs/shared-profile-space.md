@@ -146,12 +146,26 @@ The argument MUST be omitted. A *named* `inSpace(spaceName)` derives the space
 DID from `Identity.fromPassphrase("common user").derive(spaceName)` (the
 `createSession` spaceName path) — the name ALONE, ignoring the authenticated
 user — so two users picking the same profile name, or one user creating two
-same-named profiles, collide into a single shared space. The anonymous case
+same-named profiles, collide into a single shared space. That named path
+supports the legacy space names used during development and nothing else, and is
+removed once those development-only spaces have been migrated
+([random space identities](../plans/random-space-identities.md)). The anonymous
+case
 instead derives a fresh DID from the creating handler's frame cause (per-user
 home-space input links + the durable per-event id), so the space is unique per
 user AND per creation event, stable across the cross-space-commit retry. The
-display name is therefore independent of the space identity (it flows only to
-`initialName` and stays editable). The home default pattern's `profile` link is
+display name is therefore independent of the space identity: it flows to
+`initialName`, which the profile shows until a name is stored in the profile's
+`name` cell, and into that cell itself at creation. The cell is initialized
+statically so it keeps its identity — and the name saved in it — across
+releases of the profile pattern; the create handler queues a second step
+(`seedProfileName` in `profile-create.tsx`, addressed by the new entry's
+position in `profiles`) that stores the creation name through `setName`, the
+cell's owner-protected writer, once the profile's docs have loaded, so
+`#profile` readers find the name in storage without running the profile. A profile renamed under
+an earlier release, whose `name` cell was derived from `initialName`, loses
+that saved name once, at its first release under the static initializer, and
+keeps every name saved after. The home default pattern's `profile` link is
 the durable source of truth after creation, and runtime-only `.inSpace`
 annotations are rewritten to the resolved DID during post-run.
 
@@ -209,7 +223,21 @@ type ProfileDefaultPattern = {
   addElement: Stream<AddProfileElementEvent>;
   removeElement: Stream<{ cell: Cell<unknown> }>;
   setBio: Stream<SetProfileBioEvent>;
+  inbox?: ProfileInbox;
+  setInbox: Stream<SetProfileInboxEvent>;
   initialNameApplied: string;
+};
+
+type ShareInboxPiece = {
+  [NAME]?: string;
+};
+
+type ProfileInbox = {
+  piece?: Cell<ShareInboxPiece>;
+};
+
+type SetProfileInboxEvent = {
+  inbox?: Cell<ShareInboxPiece>;
 };
 ```
 
@@ -258,6 +286,35 @@ contain a display label and an `http(s)` URL; unsafe schemes are rejected before
 storage and never render as live anchors. The list is owner-protected and is
 mutated only through `addExternalLink` / `removeExternalLink`.
 
+`inbox` is the owner's share inbox pointer: where other people's daemons
+deliver things shared with the owner. Its one member, `piece`, is a cell link
+to the owner's share inbox piece — the piece whose `receive` stream a sender's
+daemon calls — inside the dedicated inbox space the owner's daemon minted,
+and it names the piece and its space together. Stored, the link is the
+`link@1` sigil the profile's pinned-piece elements also use, so the stored
+pointer reads:
+
+```json
+{ "piece": { "/": { "link@1": { "id": "of:baedreia…", "space": "did:key:z6Mk…", "path": [] } } } }
+```
+
+The link names the piece rather than only its space because an inbox space
+can hold more than one inbox piece (each mint adds one), and a sender that
+picks one by listing the space can pick one the owner's reader never reads.
+It carries no memory host: the inbox lives on the host the profile pointing at
+it lives on, so a reader uses the host it read the profile from. The pointer
+holds no secret — the inbox space's ACL is the gate — and is owner-protected,
+written only through `setInbox`, which takes the link alone (`{ inbox: <link>
+}`) and stores it as `piece`, or nothing (`{}`) to clear the pointer. A
+profile with no inbox holds a pointer without `piece`; a stored profile
+predating the pointer has no `inbox` property.
+
+The link sits under `piece` rather than being the stored value itself because
+a write to a cell whose document root holds a link goes through the link into
+the piece it names, so a pointer stored bare could be set once and never
+re-pointed or cleared; under a key, a new link re-binds the slot and an
+omitted key removes it.
+
 `verifiedIdentities` is an opt-in list of identifiers that Loom observed only
 after a connector successfully authenticated as the profile owner. Each
 assertion has exactly three integrity-covered fields: a namespaced `type`, its
@@ -297,6 +354,19 @@ specified but not implemented here: connectors run in attested cloud
 sandboxes, the assertion says that code hash H observed the login, and verifier
 infrastructure blesses the allowed hashes. That makes the observation
 end-to-end verifiable without hard-coding a closed set of connector providers.
+
+The profile presentation renders every verified assertion, one row each, so a
+type a connector starts publishing reaches the profile without a change there.
+A type the presentation knows by name carries that name — `github.login` reads
+as "GitHub" and links to the GitHub profile — and any other appears under the
+type string itself. A type with no public page, such as `email`, shows its
+value as text rather than a link. The presentation is itself a consumer of the
+list, so it applies the 48-hour freshness window against a clock that ticks
+every five minutes, and hides an assertion it cannot date. Each rendered row
+binds a `cf-cfc-label` badge to the stored assertion's `value`, so the badge
+reports the integrity label the runtime holds for the text beside it, and a
+value that lacks the `loom-verified-external-identity` integrity atom shows as
+unverified.
 
 `elements` is the profile-space analog of favorites and mentionables. Each
 entry points at a piece that lives in the profile space. `tag` stores the

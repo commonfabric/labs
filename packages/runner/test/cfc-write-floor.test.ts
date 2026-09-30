@@ -1,20 +1,26 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import type { CfcCellLinkRefPayload } from "../src/cfc/link-label-view.ts";
 import type { CfcWriteFloorMode, IFCLabel } from "../src/cfc/mod.ts";
+import { recordReferencedArgumentFields } from "../src/cfc/reference-initialization.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-write-floor");
 
@@ -69,20 +75,20 @@ const makeRuntime = (opts: {
       : {}),
   });
 
-// Seed a doc's stored CFC metadata directly via an ungated path-[] full-document
-// write, so linked-content floor verification can resolve its current label.
-const seedLabeledDoc = async (
+// Seed a doc's stored CFC metadata with a path-[] full-document write made
+// inside the runtime's privileged persistence scope, so a later link to it
+// carries the labels. An ordinary write there is recorded as label forgery.
+const seedLabelMap = async (
   runtime: Runtime,
   id: string,
   value: FabricValue,
-  label: IFCLabel,
-  path: string[] = [],
+  entries: { path: string[]; label: IFCLabel }[],
 ): Promise<void> => {
   const seed = runtime.edit();
   const cell = runtime.getCell(signer.did(), id, undefined, seed);
   const docId = cell.getAsNormalizedFullLink().id as URI;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     id: docId,
     type: "application/json",
@@ -92,11 +98,20 @@ const seedLabeledDoc = async (
     cfc: {
       version: 1,
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: { version: 1, entries: [{ path, label }] },
+      labelMap: { version: 1, entries },
     },
   });
   expect((await seed.commit()).ok).toBeDefined();
 };
+
+// Like `seedLabelMap`, with one label at `path`.
+const seedLabeledDoc = (
+  runtime: Runtime,
+  id: string,
+  value: FabricValue,
+  label: IFCLabel,
+  path: string[] = [],
+): Promise<void> => seedLabelMap(runtime, id, value, [{ path, label }]);
 
 describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
   it("rejects an integrity-less write to a floor-declaring path under enforce", async () => {
@@ -116,6 +131,259 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
       expect(String((result.error as Error | undefined)?.message)).toContain(
         "write floor failed",
       );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("credits a nested link floor using the builtin identity recorded for the write", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    try {
+      await seedLabeledDoc(runtime, "builtin-source", { nested: "approved" }, {
+        integrity: [LLM_DERIVED_ATOM],
+      }, ["nested"]);
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "floor-test",
+      });
+      const source = runtime.getCell(
+        signer.did(),
+        "builtin-source",
+        undefined,
+        tx,
+      );
+      const sink = runtime.getCell(signer.did(), "builtin-sink", {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              nested: {
+                type: "string",
+                ifc: { requiredIntegrity: [LLM_DERIVED_ATOM] },
+              },
+            },
+          },
+        },
+      }, tx);
+      sink.set({ out: source });
+      setCfcImplementationIdentity(tx, undefined);
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("credits a nested link floor beside a reader the link's label view carries", async () => {
+    // Legacy mode accepts serialized views. The carried view binds its
+    // reader placeholder at `reader`; the floor
+    // path `approved` takes its credit from the source's own label there.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
+    try {
+      await seedLabelMap(runtime, "reader-source", {
+        reader: "r",
+        approved: "yes",
+      }, [
+        {
+          path: ["reader"],
+          label: {
+            confidentiality: [{
+              type: CFC_ATOM_TYPE.User,
+              subject: signer.did(),
+            }],
+          },
+        },
+        { path: ["approved"], label: { integrity: [ADMIN_ATOM] } },
+      ]);
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "reader-source",
+        undefined,
+        tx,
+      );
+      const link = linkRefFrom<CfcCellLinkRefPayload>({
+        ...linkRefPayload(source.getAsLink()),
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: ["reader"],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { __ctCurrentPrincipal: true },
+              }],
+            },
+          }],
+        },
+      });
+      const sink = runtime.getCell(signer.did(), "reader-sink", {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      }, tx);
+      sink.set({ out: link });
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  // Serialized reader placeholders exercise the legacy derivation path.
+  for (const storedReader of [true, false]) {
+    it(`${storedReader ? "binds" : "refuses"} a carried reader through an object back-reference ${storedReader ? "with" : "without"} an authoritative reader`, async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = makeRuntime({
+        storageManager,
+        cfcWriteFloor: "enforce",
+        cfcFlowLabels: "off",
+      });
+      try {
+        await seedLabelMap(runtime, "reader-cycle", { reader: "r" }, [
+          { path: [], label: { integrity: ["object-proof"] } },
+          {
+            path: ["reader"],
+            label: storedReader
+              ? {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.User,
+                  subject: signer.did(),
+                }],
+              }
+              : { integrity: ["reader-proof"] },
+          },
+        ]);
+        const tx = runtime.edit();
+        const source = runtime.getCell(
+          signer.did(),
+          "reader-cycle",
+          undefined,
+          tx,
+        );
+        const link = linkRefFrom<CfcCellLinkRefPayload>({
+          ...linkRefPayload(source.getAsLink()),
+          cfcLabelView: {
+            version: 1,
+            entries: [{
+              path: ["loop", "reader"],
+              label: {
+                confidentiality: [{
+                  type: CFC_ATOM_TYPE.User,
+                  subject: { __ctCurrentPrincipal: true },
+                }],
+              },
+            }],
+          },
+        });
+        source.key("loop").setRaw(link);
+        tx.recordCfcWritePolicyInput({
+          kind: "link-write",
+          target: { ...source.getAsNormalizedFullLink(), path: ["loop"] },
+          source: source.getAsNormalizedFullLink(),
+          cfcLabelView: linkRefPayload(link).cfcLabelView,
+        });
+        recordReferencedArgumentFields(tx, source.getAsNormalizedFullLink(), [
+          "loop",
+        ]);
+        tx.prepareCfc();
+        const error = (await tx.commit()).error;
+        if (storedReader) {
+          expect(error).toBeUndefined();
+        } else {
+          expect(error?.message).toContain(
+            "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+          );
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
+  it("fails a nested link floor under a link whose label view carries a reader the source does not store", async () => {
+    // In legacy mode the serialized link cannot be derived, so the floor
+    // credits nothing from it,
+    // in agreement with the persisted labels it would have left.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
+    try {
+      await seedLabeledDoc(
+        runtime,
+        "unbound-reader-source",
+        {
+          approved: "yes",
+        },
+        { integrity: [ADMIN_ATOM] },
+        ["approved"],
+      );
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "unbound-reader-source",
+        undefined,
+        tx,
+      );
+      const link = linkRefFrom<CfcCellLinkRefPayload>({
+        ...linkRefPayload(source.getAsLink()),
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: ["reader"],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.User,
+                subject: { __ctCurrentPrincipal: true },
+              }],
+            },
+          }],
+        },
+      });
+      const sink = runtime.getCell(signer.did(), "unbound-reader-sink", {
+        type: "object",
+        properties: {
+          out: {
+            type: "object",
+            properties: {
+              approved: {
+                type: "string",
+                ifc: { requiredIntegrity: [ADMIN_ATOM] },
+              },
+            },
+          },
+        },
+      }, tx);
+      sink.set({ out: link });
+      tx.prepareCfc();
+      const message = (await tx.commit()).error?.message;
+      expect(message).toContain("write floor failed at /out/approved");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -579,14 +847,18 @@ describe("CFC write-side requiredIntegrity floor (D3, §8.12.4.1)", () => {
   });
 
   it("a link whose source is not CFC-relevant still fails the floor", async () => {
-    // The write at /out is a link whose source carries no stored metadata and
+    // In legacy mode the write at /out is a link with no stored metadata and
     // no schema, so nothing marks the link CFC-relevant and no link-write
     // policy input is recorded for it. The floor measures the path with no
     // link contribution at all, crediting only the transaction's flow
-    // integrity, which is empty at the default `cfcFlowLabels` rung, and
+    // integrity, which is empty with `cfcFlowLabels: "off"`, and
     // refuses there.
     const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = makeRuntime({ storageManager, cfcWriteFloor: "enforce" });
+    const runtime = makeRuntime({
+      storageManager,
+      cfcWriteFloor: "enforce",
+      cfcFlowLabels: "off",
+    });
     try {
       const tx = runtime.edit();
       const src = runtime.getCell(

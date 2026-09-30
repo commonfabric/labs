@@ -1,7 +1,9 @@
 import {
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
-  type LLMNativeModelToolId,
+  isLLMNativeModelToolId,
 } from "@commonfabric/llm/types";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+import type { HarnessNativeModelToolId } from "../contracts/native-model-tool.ts";
 import type {
   HarnessAssistantTranscriptMessage,
   HarnessNativeModelToolResult,
@@ -50,7 +52,7 @@ const normalizeTextContent = (
   // has to treat "absent" the same as "null" rather than assume an array.
   if (content === null || content === undefined) return "";
   return content.flatMap((part) =>
-    typeof part === "object" && part !== null && part.type === "text" &&
+    isObjectOrArray(part) && part.type === "text" &&
       typeof part.text === "string"
       ? [part.text]
       : []
@@ -96,8 +98,16 @@ export const toOpenAIChatMessage = async (
 };
 
 const toNativeModelTools = (
-  ids: readonly LLMNativeModelToolId[],
-): OpenAIChatCompletionRequestTool[] => ids.map((id) => ({ type: id }));
+  ids: readonly HarnessNativeModelToolId[],
+): OpenAIChatCompletionRequestTool[] =>
+  ids.map((id) => {
+    if (!isLLMNativeModelToolId(id)) {
+      throw new Error(
+        `openai-compatible-gateway does not support native tool ${id}`,
+      );
+    }
+    return { type: id };
+  });
 
 const createAssistantMessage = (
   response: OpenAIChatCompletionResponse,
@@ -164,7 +174,7 @@ const GATEWAY_RESPONSES_LABEL = "gateway Responses";
  */
 export const usesResponsesApi = (
   model: string,
-  nativeModelToolIds: readonly LLMNativeModelToolId[],
+  nativeModelToolIds: readonly HarnessNativeModelToolId[],
 ): boolean => nativeModelToolIds.length === 0 && model.startsWith("gpt-");
 
 /**
@@ -177,7 +187,7 @@ export const usesResponsesApi = (
  */
 export const assertCompactThresholdSupported = (
   model: string,
-  nativeModelToolIds: readonly LLMNativeModelToolId[],
+  nativeModelToolIds: readonly HarnessNativeModelToolId[],
   compactThreshold: number | undefined,
 ): void => {
   if (compactThreshold === undefined || compactThreshold === 0) return;
@@ -195,13 +205,12 @@ export const assertCompactThresholdSupported = (
  * Chat Completions, so combining them with an OpenAI model would route
  * straight into that 400 with cf-harness's function tools attached.
  *
- * Nothing produces this combination today — the only native-tool profile is
- * `web_search`, which overrides the model to Gemini — so this fails loudly
- * rather than letting a future profile discover it as a provider error.
+ * The gateway's `web_search` profile overrides the model to Gemini. Reject
+ * other combinations before dispatch rather than surfacing a provider error.
  */
 const assertSupportedToolCombination = (
   model: string,
-  nativeModelToolIds: readonly LLMNativeModelToolId[],
+  nativeModelToolIds: readonly HarnessNativeModelToolId[],
 ): void => {
   if (model.startsWith("gpt-") && nativeModelToolIds.length > 0) {
     throw new Error(
@@ -226,7 +235,7 @@ const GPT_5_6_REASONING_EFFORTS = [
 
 const assertReasoningEffortSupported = (
   model: string,
-  nativeModelToolIds: readonly LLMNativeModelToolId[],
+  nativeModelToolIds: readonly HarnessNativeModelToolId[],
   effort: string | undefined,
 ): void => {
   if (effort === undefined) return;
@@ -345,7 +354,7 @@ const responsesInputReachesDiscoveryFloor = (
       remaining -= utf8ByteLengthUpTo(value, remaining);
     } else if (Array.isArray(value)) {
       for (const item of value) pending.push(item);
-    } else if (typeof value === "object" && value !== null) {
+    } else if (isObjectOrArray(value)) {
       for (const [key, child] of Object.entries(value)) {
         remaining -= utf8ByteLengthUpTo(key, remaining);
         if (remaining <= 0) return true;
@@ -413,6 +422,7 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
   async complete(
     request: HarnessModelTurnRequest,
   ): Promise<HarnessModelTurnResult> {
+    toNativeModelTools(request.nativeModelToolIds);
     assertSupportedToolCombination(request.model, request.nativeModelToolIds);
     assertCompactThresholdSupported(
       request.model,

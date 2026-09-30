@@ -33,8 +33,15 @@ import type {
   URI,
 } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectForeignStaleInstances } from "../src/executor/space-server.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { servedCommitDestination } from "./support/served-commits.ts";
+import {
+  ExecutionLeaseCycle,
+  executionLeaseHolder,
+} from "@commonfabric/memory/v2/execution-lease";
 import { ACLManager } from "../src/acl-manager.ts";
 import { wish as wishBuiltin } from "../src/builtins/wish.ts";
 import {
@@ -51,10 +58,14 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
-import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { parseLink } from "../src/link-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+} from "./memory-v2-test-utils.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
@@ -69,17 +80,6 @@ class SharedServerStorageManager extends EmulatedStorageManager {
   }
 }
 
-const newSharedServer = () =>
-  new MemoryV2Server.Server({
-    subscriptionRefreshDelayMs: 0,
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
-
 const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
 const foreignSigner = await Identity.fromPassphrase("cross-space foreign");
@@ -93,6 +93,7 @@ describe("Phase 5 cross-space serving", () => {
   let host: ExecutorHost | undefined;
   let clientManager: SharedServerStorageManager;
   let clientRuntime: Runtime;
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
   let servingRuntime: Runtime | undefined;
   let onServingRuntime: ((runtime: Runtime) => Promise<void>) | undefined;
 
@@ -125,12 +126,24 @@ describe("Phase 5 cross-space serving", () => {
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
     });
 
+  /** Resolves once `activatedSpace` has an ACTIVE tenure — activation
+   * finishes on no admission or session edge of its own. */
+  const activated = (activatedSpace: MemorySpace): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === activatedSpace && entry.outcome === "active"
+    );
+
   beforeEach(() => {
-    server = newSharedServer();
+    server = newSharedServer({
+      subscriptionRefreshDelayMs: 0,
+    });
     servingRuntime = undefined;
     onServingRuntime = undefined;
+    activations = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -193,19 +206,18 @@ describe("Phase 5 cross-space serving", () => {
         "x-space-result",
         compiled.resultSchema,
       );
-      for (let attempt = 0;; attempt++) {
-        await foreignArgument.sync();
-        await result.sync();
-        const tx = runtime.edit();
-        runtime.run(tx, compiled, foreignArgument, result);
-        const committed = await tx.commit();
-        if (committed.error === undefined) break;
-        if (attempt >= 4) {
-          throw new Error(
-            `serving pattern run failed: ${committed.error.message}`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      await foreignArgument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, compiled, foreignArgument, result);
+      const committed = await tx.commit();
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
       }
       await runtime.idle();
     };
@@ -223,14 +235,13 @@ describe("Phase 5 cross-space serving", () => {
       "x-space-result",
       undefined,
     );
-    let observed: number | undefined;
-    const cancel = clientResult.sink((value) => {
-      observed = value?.total;
-    });
+    const cancel = clientResult.sink(() => {});
     try {
-      await waitUntil(
-        () => observed === 101,
-        `first derivation over the foreign input (saw ${observed})`,
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 101,
+        { stuckLabel: "the client's total to reach 101" },
       );
       expect(host.spaceServer(homeSpace)?.active).toBe(true);
 
@@ -244,9 +255,11 @@ describe("Phase 5 cross-space serving", () => {
         const committed = await tx.commit();
         expect(committed.error).toBeUndefined();
       }
-      await waitUntil(
-        () => observed === 102,
-        `re-derivation after the foreign commit (saw ${observed})`,
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 102,
+        { stuckLabel: "the client's total to reach 102" },
       );
     } finally {
       cancel();
@@ -459,18 +472,16 @@ describe("Phase 5 cross-space serving", () => {
     );
     const cancel = demandCell.sink(() => {});
     try {
-      await waitUntil(
-        () =>
-          servingRuntime !== undefined &&
-          host!.spaceServer(homeSpace)?.active === true,
-        "home space activation",
-      );
+      await activated(homeSpace);
+      expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
       const attempts: MemorySpace[] = [];
+      const forcingAttempts = new ArrivalLog<MemorySpace>();
       (serving.storageManager as unknown as {
         ensureSpaceInitialized(space: MemorySpace): Promise<void>;
       }).ensureSpaceInitialized = (space: MemorySpace) => {
         attempts.push(space);
+        forcingAttempts.record(space);
         return Promise.reject(
           new Error("injected genesis-forcing failure (test)"),
         );
@@ -495,19 +506,9 @@ describe("Phase 5 cross-space serving", () => {
       foreignCell.withTx(tx).set({ value: 41 });
       expect((await tx.commit()).error).toBeUndefined();
 
-      // The forcing was attempted and failed; the sink then refused the
-      // creation-granted batch (INV-13 mirror) — the fresh space stays
-      // EMPTY (no genesis, no data).
-      await waitUntil(
-        () => attempts.includes(pSpace),
-        "the commit step attempted the genesis forcing",
-      );
+      // The forcing was attempted and failed.
+      await forcingAttempts.matching((attempted) => attempted === pSpace);
       const pEngine = await server.engineForSpace(pSpace);
-      await waitUntil(
-        () => (host!.spaceServer(homeSpace)?.active ?? false) === true,
-        "home space still active after the failed forcing",
-      );
-      expect(serverSeq(pEngine)).toBe(0);
 
       // Failure isolation: a plain home-space write STILL commits — the
       // loop was not parked by the misdirected provisioning.
@@ -525,10 +526,17 @@ describe("Phase 5 cross-space serving", () => {
       expect((await probeTx.commit()).error).toBeUndefined();
       const homeEngine = await server.engineForSpace(homeSpace);
       const probeId = homeProbe.getAsNormalizedFullLink().id;
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => selectDocHead(homeEngine, { id: probeId, scopeKey: "space" }) > 0,
-        "the home probe write committed after the failed forcing",
       );
+
+      // Read past that admission: the loop carried the refused batch and
+      // then this write, so the sink having refused the creation-granted
+      // batch (INV-13 mirror) — the fresh space EMPTY, no genesis and no
+      // data — is a settled state rather than one these reads raced.
+      expect(host!.spaceServer(homeSpace)?.active ?? false).toBe(true);
+      expect(serverSeq(pEngine)).toBe(0);
     } finally {
       cancel();
     }
@@ -560,12 +568,8 @@ describe("Phase 5 cross-space serving", () => {
     );
     const cancel = demandCell.sink(() => {});
     try {
-      await waitUntil(
-        () =>
-          servingRuntime !== undefined &&
-          host!.spaceServer(homeSpace)?.active === true,
-        "home space activation",
-      );
+      await activated(homeSpace);
+      expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
 
       const pSigner = await Identity.fromPassphrase("b4 loop-forced space");
@@ -627,10 +631,7 @@ describe("Phase 5 cross-space serving", () => {
       expect((await tx.commit()).error).toBeUndefined();
 
       const pEngine = await server.engineForSpace(pSpace);
-      await waitUntil(
-        () => serverSeq(pEngine) >= 2,
-        "genesis + data landed in the creation-granted space",
-      );
+      await awaitAdmitted(server, () => serverSeq(pEngine) >= 2);
       expect(forced).toContain(pSpace);
       // Commit #1 IS the ACL, owner = the acting user, service nowhere.
       expect(
@@ -676,12 +677,8 @@ describe("Phase 5 cross-space serving", () => {
     );
     const cancel = demandCell.sink(() => {});
     try {
-      await waitUntil(
-        () =>
-          servingRuntime !== undefined &&
-          host!.spaceServer(homeSpace)?.active === true,
-        "home space activation",
-      );
+      await activated(homeSpace);
+      expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
       const compiled = await serving.patternManager.compilePattern({
         main: "/sa.tsx",
@@ -731,9 +728,9 @@ describe("Phase 5 cross-space serving", () => {
         homeSpace,
       );
       await serving.patternManager.flushCompileCacheWrites().catch(() => {});
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => host!.stats().foreignWriteRefusals > refusalsBefore,
-        "carriage-less writeback refusal",
       );
       expect(selectDocHead(pEngine, { id: `of:${pSpace}`, scopeKey: "space" }))
         .toBe(1);
@@ -753,10 +750,7 @@ describe("Phase 5 cross-space serving", () => {
         },
       );
       await serving.patternManager.flushCompileCacheWrites();
-      await waitUntil(
-        () => serverSeq(pEngine) > 1,
-        "delegated writeback landed in the provisioned space",
-      );
+      await awaitAdmitted(server, () => serverSeq(pEngine) > 1);
       const meta = pEngine.database.prepare(
         `SELECT class, acting_principal, capability_ref
          FROM "commit" WHERE seq > 1 ORDER BY seq LIMIT 1`,
@@ -787,12 +781,8 @@ describe("Phase 5 cross-space serving", () => {
     );
     const cancel = demandCell.sink(() => {});
     try {
-      await waitUntil(
-        () =>
-          servingRuntime !== undefined &&
-          host!.spaceServer(homeSpace)?.active === true,
-        "home space activation",
-      );
+      await activated(homeSpace);
+      expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
 
       // The pattern OBJECT reaches the serving manager with NO persist it
@@ -870,10 +860,7 @@ describe("Phase 5 cross-space serving", () => {
       });
       await serving.patternManager.flushCompileCacheWrites();
       await serving.patternManager.flushCompileCacheWrites();
-      await waitUntil(
-        () => serverSeq(pEngine) > 1,
-        "healed delegated writeback landed in the provisioned space",
-      );
+      await awaitAdmitted(server, () => serverSeq(pEngine) > 1);
       const meta = pEngine.database.prepare(
         `SELECT class, acting_principal, capability_ref
          FROM "commit" WHERE seq > 1 ORDER BY seq LIMIT 1`,
@@ -923,7 +910,7 @@ describe("Phase 5 cross-space serving", () => {
           operations: [{
             op: "set",
             id: streamDocId,
-            value: { value: { $stream: true } } as never,
+            value: { schema: { asCell: ["stream"] } } as never,
           }],
         },
       });
@@ -935,12 +922,8 @@ describe("Phase 5 cross-space serving", () => {
     );
     const cancel = demandCell.sink(() => {});
     try {
-      await waitUntil(
-        () =>
-          servingRuntime !== undefined &&
-          host!.spaceServer(homeSpace)?.active === true,
-        "home space activation",
-      );
+      await activated(homeSpace);
+      expect(servingRuntime).toBeDefined();
       const serving = servingRuntime!;
 
       // The DIRECT FOREIGN HANDLE shape (a wish-result export's
@@ -951,7 +934,7 @@ describe("Phase 5 cross-space serving", () => {
       const servingStream = serving.getCell<unknown>(
         foreignSpace,
         "xspace-send-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
       await servingStream.sync();
       const homeAnchor = serving.getCell<{ n: number }>(
@@ -1002,11 +985,7 @@ describe("Phase 5 cross-space serving", () => {
           entry.firedAt?.user === aliceSigner.did()
         );
       };
-      await waitUntil(
-        () => deliveredEntries().length > 0,
-        "the outbox-delivered entry with the carried actor",
-        30_000,
-      );
+      await awaitAdmitted(server, () => deliveredEntries().length > 0);
       // EXACTLY ONE delivery (the eventId dedupe holds), carrying the
       // full LT5/LT6 identity: the acting session travels with the
       // acting user.
@@ -1018,11 +997,7 @@ describe("Phase 5 cross-space serving", () => {
       // carries-events arm activates even with no client session) —
       // the single deriver that consequences it (protocol.md §2b's
       // derived-into-foreign FORBIDDEN row stays intact).
-      await waitUntil(
-        () => host!.spaceServer(foreignSpace)?.active === true,
-        "the target space's activation on the delivered append",
-        30_000,
-      );
+      await activated(foreignSpace);
       // A later observation point (post-activation): the delivery is
       // STILL exactly one entry — no duplicate landed behind the first
       // probe.
@@ -1035,11 +1010,7 @@ describe("Phase 5 cross-space serving", () => {
   it("OW31 read posture under enforce: a serving manager reads an OWNER-ONLY home space through the acting-as-owner binding; a non-serving manager as the same identity is denied", async () => {
     const enforceServer = new MemoryV2Server.Server({
       subscriptionRefreshDelayMs: 0,
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       acl: {
         mode: "enforce",
@@ -1310,19 +1281,18 @@ describe("Phase 5 cross-space serving", () => {
         "f1b-result",
         compiled.resultSchema,
       );
-      for (let attempt = 0;; attempt++) {
-        await argument.sync();
-        await result.sync();
-        const tx = runtime.edit();
-        runtime.run(tx, compiled, argument, result);
-        const committed = await tx.commit();
-        if (committed.error === undefined) break;
-        if (attempt >= 4) {
-          throw new Error(
-            `serving pattern run failed: ${committed.error.message}`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      await argument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, compiled, argument, result);
+      const committed = await tx.commit();
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
       }
       await runtime.idle();
     };
@@ -1346,14 +1316,13 @@ describe("Phase 5 cross-space serving", () => {
       "f1b-result",
       undefined,
     );
-    let observed: number | undefined;
-    const cancel = clientResult.sink((value) => {
-      observed = value?.total;
-    });
+    const cancel = clientResult.sink(() => {});
     try {
-      await waitUntil(
-        () => observed === 501,
-        `first derivation (saw ${observed})`,
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 501,
+        { stuckLabel: "the client's total to reach 501" },
       );
       expect(host.spaceServer(homeSpace)?.active).toBe(true);
 
@@ -1395,14 +1364,16 @@ describe("Phase 5 cross-space serving", () => {
         const committed = await tx.commit();
         expect(committed.error).toBeUndefined();
       }
-      await waitUntil(
-        () => observed === 502,
-        `re-derivation after the isolated foreign failure (saw ${observed})`,
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 502,
+        { stuckLabel: "the client's total to reach 502" },
       );
       expect(host.spaceServer(homeSpace)?.active).toBe(true);
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => host!.stats().foreignEngineFailures >= 1,
-        "the isolated failure to be counted",
       );
     } finally {
       cancel();
@@ -1506,6 +1477,19 @@ describe("Phase 5 cross-space serving", () => {
       servingPosture: true,
       experimental: { serverExecution: true },
     });
+    const engine = await server.engineForSpace(homeSpace);
+    const lease = new ExecutionLeaseCycle({
+      engine,
+      space: homeSpace,
+      holder: executionLeaseHolder(serviceSigner.did()),
+    });
+    expect(lease.acquire()).toBe(true);
+    const destination = servedCommitDestination(
+      serving,
+      homeSpace,
+      engine,
+      lease,
+    );
 
     // Seed BOTH users' home spaces: a defaultPattern link with no
     // profiles, so a #profile wish falls to the create surface.
@@ -1524,6 +1508,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         tx,
       );
+      defaultCell.set({ profiles: [] });
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
@@ -1626,6 +1611,7 @@ describe("Phase 5 cross-space serving", () => {
         sessionId: string,
         actionId: string,
       ): Promise<Cell<unknown>> => {
+        serving.installSealDestination(destination);
         const tx = serving.edit();
         stampWaveRunContext(tx, {
           actionId,
@@ -1634,12 +1620,13 @@ describe("Phase 5 cross-space serving", () => {
           acting: { user: principal, session: sessionId },
         });
         sent.length = 0;
-        action(tx);
+        action.action(tx);
         expect(sent.length).toBe(1);
         const state = sent[0].state;
         const sidecar = state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();
         const committed = await tx.commit();
+        serving.clearSealDestination();
         expect(committed.error).toBeUndefined();
         return sidecar;
       };
@@ -1671,13 +1658,11 @@ describe("Phase 5 cross-space serving", () => {
           return undefined;
         }
       };
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () =>
           echoSpaceOf(aliceSidecar) !== undefined &&
           echoSpaceOf(bobSidecar) !== undefined,
-        `both sidecar runs to land (alice: ${echoSpaceOf(aliceSidecar)}, bob: ${
-          echoSpaceOf(bobSidecar)
-        })`,
       );
       expect(echoSpaceOf(aliceSidecar)).toBe(aliceDid);
       expect(echoSpaceOf(bobSidecar)).toBe(bobDid);
@@ -1688,6 +1673,7 @@ describe("Phase 5 cross-space serving", () => {
       await serving.idle();
       await serving.dispose();
       await manager.close();
+      lease.release();
     }
   });
 
@@ -1706,7 +1692,7 @@ describe("Phase 5 cross-space serving", () => {
     // Harness: the F2 test's direct drive above (a serving runtime, the
     // wish node run per demander with stamped txs) plus the run-supply
     // seam `executor-run-supply.test.ts` pins the nested / list-builtin
-    // chains with — a pass-through seal destination whose stamper records
+    // chains with — a seal destination whose stamper records
     // every scheduler run's demanded identity and whose demander resolver
     // knows ONLY the outer (wish parent) root. Real clock: the sidecar's
     // fetch → compile → run continuation must actually land. Derivations
@@ -1727,6 +1713,19 @@ describe("Phase 5 cross-space serving", () => {
       servingPosture: true,
       experimental: { serverExecution: true },
     });
+    const engine = await server.engineForSpace(homeSpace);
+    const lease = new ExecutionLeaseCycle({
+      engine,
+      space: homeSpace,
+      holder: executionLeaseHolder(serviceSigner.did()),
+    });
+    expect(lease.acquire()).toBe(true);
+    const destination = servedCommitDestination(
+      serving,
+      homeSpace,
+      engine,
+      lease,
+    );
 
     // Both users' home spaces: a defaultPattern link with no profiles, so
     // a #profile wish falls to the create surface (the sidecar).
@@ -1745,6 +1744,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         tx,
       );
+      defaultCell.set({ profiles: [] });
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
@@ -1829,7 +1829,14 @@ describe("Phase 5 cross-space serving", () => {
       const stamped: ServerRunInfo[] = [];
       const resolverQueries: string[][] = [];
       serving.installSealDestination(
-        { seal: (tx: IExtendedStorageTransaction) => tx.tx.commit() },
+        {
+          seal: (tx: IExtendedStorageTransaction) =>
+            // Unstamped setup uses the runtime's own storage session. Demanded
+            // runs carry an instance identity into both reads and wave writes.
+            tx.tx.scopeKeyIdentity === undefined
+              ? tx.tx.commit()
+              : destination.seal(tx),
+        },
         {
           runStamper: (tx, info) => {
             stamped.push(info);
@@ -1876,7 +1883,7 @@ describe("Phase 5 cross-space serving", () => {
           acting: { user: principal, session: sessionId },
         });
         sent.length = 0;
-        action(tx);
+        action.action(tx);
         expect(sent.length).toBe(1);
         const sidecar = sent[0].state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();
@@ -1914,26 +1921,21 @@ describe("Phase 5 cross-space serving", () => {
           return false;
         }
       };
-      await waitUntil(
+      await awaitAdmitted(
+        server,
         () => landed(aliceSidecar) && landed(bobSidecar),
-        "both sidecar pieces to instantiate",
       );
       // The DEMAND (serving-loop.md §1's pull-based laziness): the
       // client's read-through of each served surface. The pull runs the
       // sidecar's derivation through the scheduler — the run supply
       // resolves its instances from the demand roots.
       await Promise.all([aliceSidecar.pull(), bobSidecar.pull()]);
-      await waitUntil(
-        () => {
-          const principals = new Set(sidecarPrincipals());
-          return sidecarDerivations().length >= 2 &&
-            (principals.has(undefined) ||
-              (principals.has(aliceDid) && principals.has(bobDid)));
-        },
-        `the sidecar derivations to run (seen ${
-          JSON.stringify(sidecarPrincipals())
-        })`,
-      );
+      await awaitAdmitted(server, () => {
+        const principals = new Set(sidecarPrincipals());
+        return sidecarDerivations().length >= 2 &&
+          (principals.has(undefined) ||
+            (principals.has(aliceDid) && principals.has(bobDid)));
+      });
       await serving.idle();
       const runs = sidecarDerivations();
       const principals = sidecarPrincipals();
@@ -1968,6 +1970,7 @@ describe("Phase 5 cross-space serving", () => {
       serving.clearSealDestination();
       await serving.dispose();
       await manager.close();
+      lease.release();
     }
   });
 
@@ -2046,6 +2049,154 @@ describe("Phase 5 cross-space serving", () => {
       }
     } finally {
       await manager.close();
+    }
+  });
+
+  it("passes foreign scoped cell handles through served events without reading their targets", async () => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, computed, pattern, type Writable, type Stream } from "commonfabric";
+export default pattern<
+  { links: Writable<Writable<unknown>[]> },
+  { add: Stream<{ piece: Writable<unknown> }>; registry: Writable<unknown>[] }
+>(({ links }) => ({
+  registry: computed(() => links.get().map((piece) => piece)),
+  add: action(({ piece }: { piece: Writable<unknown> }) => {
+    links.push(piece);
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ links: unknown[] }>(
+      homeSpace,
+      "foreign-handle-argument",
+    );
+    const result = clientRuntime.getCell<{ add: unknown; registry: unknown[] }>(
+      homeSpace,
+      "foreign-handle-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ links: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit()).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    const target = clientRuntime.getCell(
+      foreignSpace,
+      "foreign-handle-target",
+      undefined,
+      undefined,
+      "user",
+    ).key("nested");
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().some((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    expect(entries().map((entry) => entry.deliveryDeferral)).toEqual([
+      undefined,
+    ]);
+    expect(entries().map((entry) => entry.consequenced)).toEqual([true]);
+    expect(entries().map((entry) => entry.status)).toEqual([undefined]);
+    const stored = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(stored.links).toHaveLength(1);
+    const { space, scope, id, path } = target.getAsNormalizedFullLink();
+    expect(parseLink(stored.links[0])).toMatchObject({
+      space,
+      scope,
+      id,
+      path,
+    });
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 2 &&
+        entries().every((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    expect(entries().map((entry) => entry.consequenced)).toEqual([true, true]);
+    expect(entries().map((entry) => entry.deliveryDeferral)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const repeated = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(repeated.links).toHaveLength(2);
+    for (const link of repeated.links) {
+      expect(parseLink(link)).toMatchObject({ space, scope, id, path });
+    }
+    const registry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(registry).toHaveLength(2);
+    for (const link of registry) {
+      expect(parseLink(link)).toMatchObject({
+        space,
+        scope,
+        id,
+        path,
+      });
+    }
+    const third = clientRuntime.getCell(homeSpace, "later-local-reference");
+    result.key("add").send({ piece: third });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 3 &&
+        entries().every((entry) => entry.consequenced),
+    );
+    await servingRuntime!.idle();
+    const updatedRegistry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(updatedRegistry).toHaveLength(3);
+    const servingManager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const denied = await servingManager.open(foreignSpace).sync(
+        target.getAsNormalizedFullLink().id,
+        { path: [], schema: false },
+        "user",
+      );
+      expect(denied.error?.message).toContain("foreign scoped read refused");
+    } finally {
+      await servingManager.close();
     }
   });
 });

@@ -1,8 +1,8 @@
 # Chapter 11 — The Deployed System, End to End
 
 Every previous chapter examined one layer. This one assembles them: the
-server, the browser app, the headless executor, and the CLI — then re-runs
-Chapter 1's trace with all the machinery visible.
+server, the browser app, and the CLI — then re-runs Chapter 1's trace with
+all the machinery visible.
 
 ## Toolshed: the server
 
@@ -50,35 +50,24 @@ header, and a piece renderer around the runtime:
 - **Routing.** `/{spaceName}` shows the space's default pattern;
   `/{spaceName}/{pieceIdOrSlug}` a specific piece; `/.embed/...` the same
   without shell chrome. Navigation is an event (`cf-navigate`) kept in sync
-  with browser history — and `navigateTo()` from Chapter 5 bottoms out
-  here.
+  with browser history, and `navigateTo()` from Chapter 5 bottoms out here.
+  [Common Fabric URLs](../specs/fabric-urls.md) describes a possible future ASP,
+  namespace, registered-name, DID, and presentation contract. No deployment is
+  planned; this route behavior remains authoritative.
 - **Rendering.** To show a piece, the shell asks the runtime for the
   piece's result cell, takes its `[UI]` VNode tree, and materializes it as
   DOM: `cf-*` tags become the Lit web components of Chapter 4, whose
   reactive slots are bound to cells via sinks. Updates flow cell → sink →
   component re-render; there is no app-level render loop.
 
-## Background execution
-
-The background piece service (`packages/background-piece-service`) is the proof
-that a piece is *not* a UI artifact. It runs as a headless process with an
-operator identity, connects to the same WebSocket endpoint, and maintains a
-registry cell of pieces that asked for background updates (the `bgUpdater`
-convention from Chapter 5; registration
-via the `cf-updater` component or the integrations API). Per space it
-spawns a worker that, on each poll tick (default 60 s), sends an event to
-each registered piece's `bgUpdater` stream — and from there it's just
-Chapter 8: the handler runs, transactions commit, watchers (including any
-open browsers) sync. Same graph, third kind of executor.
-
 ## The CLI, revisited
 
 With the architecture visible, Chapter 6's CLI needs one sentence: `cf` is a
-fourth client — key file instead of passkey, terminal instead of DOM,
-loopback or remote transport — driving the identical runtime. That all four
-executors (shell, toolshed, background service, CLI) are *the same machine
-with different transports* is the architectural payoff of the local/remote
-symmetry noted in Chapter 9.
+third client — key file instead of passkey, terminal instead of DOM,
+loopback or remote transport — driving the identical runtime. That all three
+executors (shell, toolshed, CLI) are *the same machine with different
+transports* is the architectural payoff of the local/remote symmetry noted
+in Chapter 9.
 
 ## The full trace
 
@@ -115,9 +104,8 @@ ran `cf piece link` long ago to feed the list into a dashboard piece.
    state; Alice's session is skipped as origin.
 5. **Remote update** (Ch. 8/11). Bob's worker integrates the upsert into
    his replica; the notification hits his trigger index; the same computeds
-   re-run on his machine; his DOM updates. The dashboard piece — possibly
-   currently being recomputed by the background service rather than any
-   browser — sees the same change the same way.
+   re-run on his machine; his DOM updates. While a client is running the
+   dashboard piece, it sees the same change the same way.
 
 Total pattern-author code involved: one `$checked` binding and two
 `computed()` lines. Everything else — atomicity, conflict detection,

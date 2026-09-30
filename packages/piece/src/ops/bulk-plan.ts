@@ -18,6 +18,7 @@
 
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
  * The canonical spelling of a piece address: the bare tagged-hash form every
@@ -521,7 +522,7 @@ export function deriveRollbackPlan(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isObjectNotArray(value);
 }
 
 function isOptionalString(value: unknown): value is string | undefined {

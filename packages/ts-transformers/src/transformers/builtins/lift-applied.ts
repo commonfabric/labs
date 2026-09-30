@@ -23,6 +23,7 @@ import {
   buildCaptureTypeElements,
   createRegisteredTypeLiteral,
   expressionToTypeNode,
+  getConstructedCellTypeNode,
   typeToTypeNodeWithRegistry,
 } from "../../ast/type-building.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
@@ -356,6 +357,12 @@ function buildResultTypeNode(
   context: TransformationContext,
 ): ts.TypeNode {
   const { factory, checker } = context;
+  const constructedCell = getConstructedCellTypeNode(
+    expression,
+    checker,
+    context.state.typeRegistry,
+  );
+  if (constructedCell) return constructedCell;
 
   // Try to get the type of the result expression
   // Use getTypeAtLocationWithFallback to handle synthetic nodes that may have
@@ -382,6 +389,7 @@ function buildResultTypeNode(
       checker,
       factory,
       sourceFile: context.sourceFile,
+      state: context.state,
     },
     context.state.typeRegistry,
   );

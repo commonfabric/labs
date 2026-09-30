@@ -4,6 +4,7 @@ import {
   assertGreater,
   assertStringIncludes,
 } from "@std/assert";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -27,10 +28,10 @@ function schemaPropertyNames(schema: unknown): Set<string> {
       for (const element of node) visit(element);
       return;
     }
-    if (typeof node !== "object" || node === null) return;
+    if (!isObjectOrArray(node)) return;
     const record = node as Record<string, unknown>;
     const properties = record.properties;
-    if (typeof properties === "object" && properties !== null) {
+    if (isObjectOrArray(properties)) {
       for (const key of Object.keys(properties)) names.add(key);
     }
     for (const value of Object.values(record)) visit(value);
@@ -52,7 +53,7 @@ function hasUndefinedMember(schema: unknown): boolean {
       for (const element of node) visit(element);
       return;
     }
-    if (typeof node !== "object" || node === null) return;
+    if (!isObjectOrArray(node)) return;
     const record = node as Record<string, unknown>;
     const type = record.type;
     if (type === "undefined") found = true;

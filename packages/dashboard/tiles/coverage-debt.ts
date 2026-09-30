@@ -7,13 +7,14 @@
  * are catching up with the code or falling behind it. A median rather than the
  * distance between the ends of the window: the series has steps in it, because
  * a change to what the metric counts moves the whole level in a single day, and
- * one such day cannot carry a median. The chart shows every day of the longer
- * window, with the days the median rests on picked out.
+ * one such day cannot carry a median. The chart spans the longer window and
+ * highlights the days used for the median. Those days' values set the vertical
+ * scale.
  *
  * Amber means that median is a rise. Half the days in the window have to have
  * risen for it to be one, so a day that added debt says nothing on its own. The
  * tile never turns red: nothing about coverage is a thing to act on at 2am, and
- * a red that nobody can act on costs the wall the color.
+ * a red that nobody can act on costs the dashboard the color.
  *
  * Following the dashboard's values (README.md): it reports on the system. The
  * number is the repository's, never a package's owner's and never a person's,
@@ -22,19 +23,13 @@
 
 import type { Status, Tile, TileView } from "../types.ts";
 import {
-  type CoverageDebtGitHub,
   type CoverageDebtSample,
+  type CoverageDebtSource,
   CoverageDebtStore,
+  liveCoverageDebtSource,
   refreshCoverageDebt,
 } from "../coverage-debt-history.ts";
-import {
-  friendlyError,
-  github,
-  githubDownload,
-  groupDigits,
-  median,
-  sparkline,
-} from "../lib.ts";
+import { friendlyError, groupDigits, median, sparkline } from "../lib.ts";
 import { CHART_HIGHLIGHT, CHART_LINE } from "../theme.ts";
 
 /** Days of history the tile charts. */
@@ -59,10 +54,11 @@ export const COVERAGE_STALE_DAYS = 5;
 
 /**
  * How often the tile looks for a landing. The figure it reports cannot exist
- * sooner than about twelve minutes after a commit lands, because that is when
- * the `main` run's Coverage Check finishes and uploads it, and commits land
- * about that often. So five minutes tracks the number about as closely as the
- * number can be known, and a refresh that finds nothing new costs one request.
+ * until the `main` run for a landed commit has finished and the relay has
+ * stored that run's coverage measurements, which takes longer than this, so
+ * five minutes tracks the number about as closely as the number can be known.
+ * A refresh that finds nothing new costs a listing for each of today and
+ * yesterday.
  */
 export const COVERAGE_REFRESH_MS = 5 * 60_000;
 
@@ -108,7 +104,7 @@ export function medianDailyChange(
  * inside `band` is flat, and says so rather than reporting a rate the
  * measurement cannot tell from nothing. The unit is the headline's, which sits
  * directly above: repeating it here is what pushes the window off the end of
- * the line at the width the wall lays a tile out at.
+ * the line at the width the dashboard lays a tile out at.
  */
 export function dailyChangeLabel(change: number, band: number): string {
   if (Math.abs(change) <= band) return "flat";
@@ -133,7 +129,6 @@ export function coverageDebtView(
   samples: readonly CoverageDebtSample[],
   now: number,
 ): TileView {
-  const label = "coverage debt";
   const newest = samples[samples.length - 1];
   // At the boundary the day itself is one of the days nothing measured: a
   // newest sample of five days ago leaves the four days after it and today
@@ -141,7 +136,6 @@ export function coverageDebtView(
   const staleAfter = todayAt(now) - COVERAGE_STALE_DAYS * DAY_MS;
   if (newest !== undefined && startOf(newest.day) <= staleAfter) {
     return {
-      label,
       status: "unknown",
       value: "—",
       sub: `no measurement since ${newest.day}`,
@@ -150,7 +144,6 @@ export function coverageDebtView(
   const trend = trendWindow(samples, now);
   if (trend.length < COVERAGE_MIN_DAYS) {
     return {
-      label,
       status: "unknown",
       value: "—",
       sub: samples.length === 0
@@ -168,7 +161,6 @@ export function coverageDebtView(
   // uncovered lines, not files and not a percentage.
   const headline = `${groupDigits(lines)} lines`;
   return {
-    label,
     status,
     value: headline,
     valueLabel: headline,
@@ -177,11 +169,7 @@ export function coverageDebtView(
     extra: sparkline(
       samples.map((sample) => sample.uncoveredLines),
       CHART_LINE,
-      // Brighten the days the median rests on, and keep the whole window in
-      // view (scaleAll): a change in what the metric counts leaves a step
-      // behind, and scaling to the recent days alone would push everything
-      // before that step off the chart.
-      { count: trend.length, color: CHART_HIGHLIGHT, scaleAll: true },
+      { count: trend.length, color: CHART_HIGHLIGHT },
       true,
       dayPositions(samples),
     ),
@@ -189,42 +177,34 @@ export function coverageDebtView(
   };
 }
 
-/** Builds the tile against a store, a clock and a GitHub client. */
+/** Builds the tile against a history file, a clock and the record store. */
 export function makeCoverageDebt(
   options: {
-    github?: CoverageDebtGitHub;
+    source?: CoverageDebtSource;
     store?: CoverageDebtStore;
     now?: () => number;
   } = {},
 ): Tile {
-  const client: CoverageDebtGitHub = options.github ??
-    { json: github, download: githubDownload };
+  const source = options.source ?? liveCoverageDebtSource();
   let store = options.store;
   return {
-    id: "coverage-debt",
+    label: "labs coverage debt",
     intervalMs: COVERAGE_REFRESH_MS,
-    async collect(ctx): Promise<TileView> {
-      const label = "coverage debt";
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) {
-        return { label, status: "unknown", value: "—", sub: "set GH_TOKEN" };
-      }
+    async collect(): Promise<TileView> {
       store ??= new CoverageDebtStore();
       const now = options.now?.() ?? Date.now();
       const history = await refreshCoverageDebt({
-        token,
         days: COVERAGE_WINDOW_DAYS,
         now,
-        github: client,
+        source,
         store,
       });
       if (history.samples.length === 0 && history.error !== undefined) {
         const message = history.error instanceof Error
           ? history.error.message
           : String(history.error);
-        console.error("coverage debt: could not read main runs:", message);
+        console.error("coverage debt: could not read the store:", message);
         return {
-          label,
           status: "unknown",
           value: "—",
           sub: friendlyError(message),

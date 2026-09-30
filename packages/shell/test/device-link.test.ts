@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
@@ -99,6 +100,30 @@ describe("looksLikeDeviceLink", () => {
   });
 });
 
+/** Origin of the fake documents the location stand-ins describe. */
+const ORIGIN = "https://shell.test";
+
+/**
+ * A `history.replaceState` stand-in: it resolves its argument against the
+ * document URL as a browser does, refuses a cross-origin result with a
+ * `SecurityError`, and records what the address bar would then hold. Modeling
+ * the origin check is what lets a test see a scrub a browser would refuse; it
+ * models nothing else about a history, the session entry included.
+ */
+function fakeReplaceState(documentHref: string, replaced: string[]) {
+  return (_state: unknown, _title: string, url: string) => {
+    const resolved = new URL(url, documentHref);
+    if (resolved.origin !== new URL(documentHref).origin) {
+      throw new DOMException(
+        `A history state object with URL '${resolved.href}' cannot be created ` +
+          `in a document with origin '${new URL(documentHref).origin}'.`,
+        "SecurityError",
+      );
+    }
+    replaced.push(resolved.href);
+  };
+}
+
 describe("consumeDeviceLinkFragment", () => {
   // Minimal stand-ins: the real ones are read straight off globalThis.
   function withLocation(
@@ -107,19 +132,16 @@ describe("consumeDeviceLinkFragment", () => {
     search = "",
   ) {
     const replaced: string[] = [];
+    const href = ORIGIN + pathname + search + hash;
     const originalLocation = globalThis.location;
     const originalHistory = globalThis.history;
     Object.defineProperty(globalThis, "location", {
-      value: { hash, pathname, search },
+      value: { hash, pathname, search, href },
       configurable: true,
       writable: true,
     });
     Object.defineProperty(globalThis, "history", {
-      value: {
-        replaceState: (_s: unknown, _t: string, url: string) => {
-          replaced.push(url);
-        },
-      },
+      value: { replaceState: fakeReplaceState(href, replaced) },
       configurable: true,
       writable: true,
     });
@@ -146,7 +168,7 @@ describe("consumeDeviceLinkFragment", () => {
         kind: "entropy",
         entropy,
       });
-      assertEquals(ctx.replaced, ["/loom-jun-12/home"]);
+      assertEquals(ctx.replaced, [ORIGIN + "/loom-jun-12/home"]);
     } finally {
       ctx.restore();
     }
@@ -163,7 +185,33 @@ describe("consumeDeviceLinkFragment", () => {
     );
     try {
       consumeDeviceLinkFragment();
-      assertEquals(ctx.replaced, ["/loom-jun-12/home?ref=qr"]);
+      assertEquals(ctx.replaced, [ORIGIN + "/loom-jun-12/home?ref=qr"]);
+    } finally {
+      ctx.restore();
+    }
+  });
+
+  it("removes the fragment from a path beginning `//`, keeping path and query", () => {
+    // `replaceState` resolves what it is handed as a relative reference, and a
+    // path beginning `//` is a protocol-relative URL there:
+    // `//loom-jun-12/top/42` resolves to `https://loom-jun-12/top/42`, which a
+    // browser refuses as cross-origin. The scrub has to reach the address bar
+    // on such a path, or the secret stays there for a bookmark or a tab-sync to
+    // capture — and `consumeDeviceLinkFragment` catches the refusal, so a
+    // failure to reach it is silent.
+    const ctx = withLocation(
+      "#k=" + toBase64Url(ZERO_ENTROPY),
+      "//loom-jun-12/top/42",
+      "?ref=qr",
+    );
+    try {
+      expect(consumeDeviceLinkFragment()).toEqual({
+        kind: "entropy",
+        entropy: ZERO_ENTROPY,
+      });
+      expect(ctx.replaced).toEqual([
+        ORIGIN + "//loom-jun-12/top/42?ref=qr",
+      ]);
     } finally {
       ctx.restore();
     }
@@ -176,7 +224,7 @@ describe("consumeDeviceLinkFragment", () => {
       // documented "refresh once and rescan" recovery cannot work and the
       // failure has to be surfaced rather than booting as if nothing happened.
       assertEquals(consumeDeviceLinkFragment(), { kind: "malformed" });
-      assertEquals(ctx.replaced, ["/loom-jun-12/home"]);
+      assertEquals(ctx.replaced, [ORIGIN + "/loom-jun-12/home"]);
     } finally {
       ctx.restore();
     }
@@ -207,7 +255,7 @@ describe("consumeDeviceLinkFragment", () => {
       assertEquals(consumeDeviceLinkFragment(), { kind: "absent" });
       assertEquals(
         ctx.replaced,
-        ["/loom-jun-12/home"],
+        [ORIGIN + "/loom-jun-12/home"],
         "must scrub even framed",
       );
     } finally {
@@ -965,6 +1013,7 @@ describe("scrub failure is survivable", () => {
         hash: "#k=" + toBase64Url(ZERO_ENTROPY),
         pathname: "/p",
         search: "",
+        href: ORIGIN + "/p#k=" + toBase64Url(ZERO_ENTROPY),
       },
       configurable: true,
       writable: true,
@@ -1003,6 +1052,7 @@ describe("scrub failure is survivable", () => {
         hash: "#k=" + toBase64Url(ZERO_ENTROPY),
         pathname: "/p",
         search: "",
+        href: ORIGIN + "/p#k=" + toBase64Url(ZERO_ENTROPY),
       },
       configurable: true,
       writable: true,

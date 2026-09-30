@@ -37,6 +37,12 @@ export interface AgentSessionCommandReceipt {
   commandId: string;
   sourceId: string;
   nativeSessionId: string;
+  /**
+   * The producer whose queue delivered the command; absent for a command
+   * from the owner's queue. Part of the command's identity: an ID repeated
+   * on another queue names another command.
+   */
+  producer?: string;
   status:
     | "pending"
     | "in-flight"
@@ -57,14 +63,26 @@ export interface CommandTarget {
   refreshSession(driver: AgentDriver, nativeSessionId: string): Promise<void>;
   readReceipt?(
     commandId: string,
+    producer?: string,
   ): Promise<AgentSessionCommandReceipt | undefined>;
 }
 
 export interface CommandTaskFailure {
   commandId: string;
+  producer?: string;
   sourceId: string;
   nativeSessionId: string;
   error: unknown;
+}
+
+/**
+ * A command's identity: its ID qualified by the queue it arrived on. The
+ * owner's queue contributes nothing, so a receipt from it keeps the plain
+ * ID; a producer's queue prefixes the producer, separated by the one byte
+ * neither part can contain.
+ */
+export function commandIdentity(commandId: string, producer?: string): string {
+  return producer === undefined ? commandId : `${producer}\u0000${commandId}`;
 }
 
 interface PromptAdmission {
@@ -165,6 +183,10 @@ export function parseCommandReceipt(
   if (typeof value.status !== "string" || !RECEIPT_STATUSES.has(value.status)) {
     throw new Error(`${context} status is invalid: ${commandId}`);
   }
+  const producer = optionalReceiptString(value.producer, "producer", context);
+  if (producer !== undefined && normalizeSourceId(producer) !== producer) {
+    throw new Error(`${context} producer is not normalized: ${commandId}`);
+  }
   const claimedAt = optionalReceiptTimestamp(
     value.claimedAt,
     "claimedAt",
@@ -203,6 +225,7 @@ export function parseCommandReceipt(
     ownerDid: value.ownerDid,
     commandId,
     sourceId: value.sourceId,
+    ...(producer === undefined ? {} : { producer }),
     nativeSessionId: value.nativeSessionId,
     status: value.status as AgentSessionCommandReceipt["status"],
     ...(claimedAt ? { claimedAt } : {}),
@@ -306,6 +329,7 @@ function parseCommand(value: unknown, ownerDid: string): AgentSessionCommand {
 
 function receiptFromResult(
   command: AgentSessionCommand,
+  producer: string | undefined,
   claimedAt: string,
   result: CommandExecutionResult,
 ): AgentSessionCommandReceipt {
@@ -315,6 +339,7 @@ function receiptFromResult(
     commandId: command.id,
     sourceId: command.sourceId,
     nativeSessionId: command.nativeSessionId,
+    ...(producer === undefined ? {} : { producer }),
     status: result.status,
     claimedAt,
     completedAt: new Date().toISOString(),
@@ -375,13 +400,25 @@ export class CommandWorker {
     }
   }
 
-  handle(values: unknown[]): Promise<void> {
-    const task = this.#handleQueue.then(() => this.#handleSerial(values));
+  /**
+   * Admits the commands one queue delivered. `producer` names the queue: a
+   * producer's ID, or `undefined` for the owner's queue. It qualifies each
+   * command's identity, so an ID a producer reuses across restarts is the
+   * same command delivered again, while the same ID on another queue is
+   * another command.
+   */
+  handle(values: unknown[], producer?: string): Promise<void> {
+    const task = this.#handleQueue.then(() =>
+      this.#handleSerial(values, producer)
+    );
     this.#handleQueue = task.catch(() => undefined);
     return task;
   }
 
-  async #handleSerial(values: unknown[]): Promise<void> {
+  async #handleSerial(
+    values: unknown[],
+    producer: string | undefined,
+  ): Promise<void> {
     for (const value of values) {
       let command: AgentSessionCommand;
       try {
@@ -390,12 +427,16 @@ export class CommandWorker {
         console.error(`[agents-connector] invalid command: ${error}`);
         continue;
       }
+      const identity = commandIdentity(command.id, producer);
       if (
-        this.#ledger.get(command.id) ||
-        this.#scheduledCommandIds.has(command.id)
+        this.#ledger.get(command.id, producer) ||
+        this.#scheduledCommandIds.has(identity)
       ) continue;
       try {
-        const existing = await this.#readPublishedReceipt(command.id);
+        const existing = await this.#readPublishedReceipt(
+          command.id,
+          producer,
+        );
         if (existing) {
           if (
             existing.sourceId !== command.sourceId ||
@@ -426,13 +467,13 @@ export class CommandWorker {
         }
       } catch (error) {
         this.#taskFailures.push(error);
-        this.#notifyTaskFailure(command, error);
+        this.#notifyTaskFailure(command, producer, error);
         console.error(
           `[agents-connector] command ownership check failed command=${command.id}: ${error}`,
         );
         continue;
       }
-      this.#scheduledCommandIds.add(command.id);
+      this.#scheduledCommandIds.add(identity);
       const key = sessionKey(command.sourceId, command.nativeSessionId);
       let promptAdmission: PromptAdmission | undefined;
       if (command.type === "prompt" || command.type === "start") {
@@ -453,21 +494,23 @@ export class CommandWorker {
       const precedingPrompt = this.#promptAdmissions.get(key)?.[0];
       const task = command.type === "cancel"
         ? (precedingPrompt?.ready ?? Promise.resolve()).then(() =>
-          this.#execute(command)
+          this.#execute(command, producer)
         )
         : (this.#sessionQueues.get(key) ?? Promise.resolve())
           .catch(() => undefined)
-          .then(() => this.#execute(command, promptAdmission?.markReady));
+          .then(() =>
+            this.#execute(command, producer, promptAdmission?.markReady)
+          );
       if (command.type !== "cancel") this.#sessionQueues.set(key, task);
       this.#activeTasks.add(task);
       task.catch((error) => {
         this.#taskFailures.push(error);
-        this.#notifyTaskFailure(command, error);
+        this.#notifyTaskFailure(command, producer, error);
         console.error(
           `[agents-connector] command failed command=${command.id}: ${error}`,
         );
       }).finally(() => {
-        this.#scheduledCommandIds.delete(command.id);
+        this.#scheduledCommandIds.delete(identity);
         this.#activeTasks.delete(task);
         if (
           command.type !== "cancel" && this.#sessionQueues.get(key) === task
@@ -491,11 +534,12 @@ export class CommandWorker {
 
   async #readPublishedReceipt(
     commandId: string,
+    producer: string | undefined,
   ): Promise<AgentSessionCommandReceipt | undefined> {
     let found: AgentSessionCommandReceipt | undefined;
     for (const target of this.#targets) {
       if (!target.readReceipt) continue;
-      const receipt = await target.readReceipt(commandId);
+      const receipt = await target.readReceipt(commandId, producer);
       if (!receipt) continue;
       if (found && hashFabricValue(found) !== hashFabricValue(receipt)) {
         throw new Error(
@@ -518,11 +562,13 @@ export class CommandWorker {
 
   #notifyTaskFailure(
     command: AgentSessionCommand,
+    producer: string | undefined,
     error: unknown,
   ): void {
     try {
       this.#onTaskFailure?.({
         commandId: command.id,
+        ...(producer === undefined ? {} : { producer }),
         sourceId: command.sourceId,
         nativeSessionId: command.nativeSessionId,
         error,
@@ -536,6 +582,7 @@ export class CommandWorker {
 
   async #execute(
     command: AgentSessionCommand,
+    producer: string | undefined,
     markCancellationReady?: () => void,
   ): Promise<void> {
     const claimedAt = new Date().toISOString();
@@ -545,6 +592,7 @@ export class CommandWorker {
       commandId: command.id,
       sourceId: command.sourceId,
       nativeSessionId: command.nativeSessionId,
+      ...(producer === undefined ? {} : { producer }),
       status: "in-flight",
       claimedAt,
     };
@@ -609,7 +657,7 @@ export class CommandWorker {
         retryable: true,
       },
     };
-    const terminal = receiptFromResult(command, claimedAt, result);
+    const terminal = receiptFromResult(command, producer, claimedAt, result);
     await this.#ledger.put(terminal);
     let publicationFailed = false;
     let publicationError: unknown;
@@ -619,15 +667,20 @@ export class CommandWorker {
       publicationFailed = true;
       publicationError = error;
     }
+    // The command's own session is refreshed unless the driver named
+    // another, or none: a desktop start opens the app and the person sends
+    // the prompt, so no session exists to read yet, and reading the one the
+    // command named would fail the refresh.
+    const affected = result.affectedSession === undefined
+      ? command.nativeSessionId
+      : result.affectedSession;
     if (
-      driver &&
+      driver && affected !== null &&
       (result.status === "succeeded" || command.type === "prompt" ||
         command.type === "start")
     ) {
       await Promise.allSettled(
-        this.#targets.map((target) =>
-          target.refreshSession(driver, command.nativeSessionId)
-        ),
+        this.#targets.map((target) => target.refreshSession(driver, affected)),
       );
     }
     if (publicationFailed) throw publicationError;
@@ -660,6 +713,11 @@ export class CommandWorker {
         const cwd = optionalString(command.payload.cwd, "start cwd");
         const title = optionalString(command.payload.title, "start title", 512);
         const mode = optionalString(command.payload.mode, "start mode", 128);
+        const surface = optionalString(
+          command.payload.surface,
+          "start surface",
+          32,
+        );
         return driver.startSession(
           command.nativeSessionId,
           {
@@ -671,6 +729,7 @@ export class CommandWorker {
             ...(cwd !== undefined ? { cwd } : {}),
             ...(title !== undefined ? { title } : {}),
             ...(mode !== undefined ? { mode } : {}),
+            ...(surface !== undefined ? { surface } : {}),
           },
           {
             force: command.force,
@@ -712,7 +771,7 @@ export class CommandWorker {
     receipt: AgentSessionCommandReceipt,
   ): Promise<void> {
     await this.#publishReceipt(receipt);
-    await this.#ledger.markPublished(receipt.commandId);
+    await this.#ledger.markPublished(receipt.commandId, receipt.producer);
     try {
       await this.#onReceipt?.(receipt);
     } catch (error) {

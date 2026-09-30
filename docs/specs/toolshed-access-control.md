@@ -23,6 +23,7 @@ These routes require a first-party HTTP request proof:
 - `POST /api/agent-tools/web-read`
 - `POST /api/sandbox/exec`
 - `POST /api/ingest-channels/{mint,list,rotate,revoke}`
+- `POST /api/inbox/{enable,status,send,list,get,acknowledge}`
 
 The first three were selected because first-party code calls them through the
 fetch builtins, and each route spends server-held or local runtime authority.
@@ -45,9 +46,13 @@ The protected routes do not expose wildcard CORS. Same-origin shell calls do not
 need CORS. Cross-origin callers must not get a credentialed wildcard surface for
 these routes.
 
+The [DID inbox](../features/did-inboxes.md) routes authenticate each sender and
+restrict private reads and acknowledgments to the recipient signer. They are
+not in the pattern fetch signer allowlist.
+
 ## Request Proof Format
 
-The implementation uses a CommonTools-specific first-party request proof. It
+The implementation uses a CommonFabric-specific first-party request proof. It
 does not use the RFC 9421 header names or vocabulary. This keeps the local
 format separate from a future RFC 9421 implementation.
 

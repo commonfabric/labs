@@ -217,10 +217,10 @@ Expected implementation and test files:
 
 ### WP1.3 — Make every Fabric operation see the same factory state
 
-- [ ] Update `packages/data-model/src/native-conversion.ts` so admitted
+- [ ] Update `packages/data-model/src/convertible-js.ts` so admitted
   factories are recognized through `tryFactoryState()`, and unbranded functions
   remain invalid. Codec dispatch remains the serialization layer's job.
-- [ ] Update `packages/data-model/src/validity-check.ts` and compatibility
+- [ ] Update `packages/data-model/src/types/validation.ts` and compatibility
   guards so `FabricFactory` is the only valid function-shaped `FabricValue`.
 - [ ] Update `packages/data-model/src/deep-freeze.ts` to seal/freeze canonical
   state and then freeze the callable. Factory handling must precede the current
@@ -231,7 +231,7 @@ Expected implementation and test files:
 - [ ] Update `packages/data-model/src/valueEqual.ts` to compare canonical codec
   state rather than function identity, before any same-reference shortcut that
   could accidentally admit an arbitrary function.
-- [ ] Update `packages/data-model/src/value-hash.ts` to hash the `Factory@1` tag
+- [ ] Update `packages/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
   and recursively hashed canonical state.
 - [ ] Ensure all of these paths call the shared state/codec visitor rather than
   independently enumerating hidden fields.
@@ -241,15 +241,15 @@ Expected implementation and test files:
 
 Focused tests:
 
-- `packages/data-model/test/native-conversion.test.ts`
-- `packages/data-model/test/validity-check.test.ts`
+- `packages/data-model/test/convertible-js.test.ts`
+- `packages/data-model/test/types/validation.test.ts`
 - `packages/data-model/test/deep-freeze.test.ts`
 - `packages/data-model/test/cloneIfNecessary.test.ts`
 - `packages/data-model/test/cloneForMutation.test.ts`
 - `packages/data-model/test/shallowMutableClone.test.ts`
 - `packages/data-model/test/value-clone.test.ts`
 - `packages/data-model/test/valueEqual.test.ts`
-- `packages/data-model/test/value-hash.test.ts`
+- `packages/data-model/test/value-hash/impl.test.ts`
 
 Each suite must cover all three factory kinds, nested factory state, independent
 but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
@@ -886,8 +886,6 @@ original pattern with `entries`.
 
 - [ ] Migrate `packages/patterns/cfc-agent-prompt-injection-demo/main.tsx`.
 - [ ] Migrate `packages/patterns/deep-research.tsx`.
-- [ ] Migrate `packages/patterns/google/core/gmail-importer.tsx`.
-- [ ] Migrate `packages/patterns/google/core/google-calendar-importer.tsx`.
 - [ ] Migrate `packages/patterns/notes/note.tsx`.
 - [ ] Migrate `packages/patterns/shopping-list.tsx`.
 - [ ] Migrate the affected files under `packages/patterns/system/`, including

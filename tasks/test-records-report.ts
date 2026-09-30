@@ -11,8 +11,17 @@
  *
  * --gate turns the over-60-seconds report into an exit status, the ratchet
  * the design document describes; it stays advisory until the violator list
- * is short enough for someone to flip the flag in CI.
+ * is short enough for someone to flip the flag in CI. It exits 3 rather
+ * than 1 for a window that was not read in full, which is a ratchet that
+ * could not check rather than one that failed.
+ *
+ * A day of the store holds tens of thousands of objects, so a whole-day
+ * read is tens of thousands of requests and a transient network failure
+ * among them is ordinary. One object that cannot be read is named, counted,
+ * and left out; the report covers the rest.
  */
+
+import { pooledMap } from "@std/async/pool";
 
 import {
   type AliasResolver,
@@ -24,6 +33,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { isLaneMeasurement } from "./lane-measurement.ts";
 import { ciSubmissionsPrefix, storeBucket } from "./test-records-config.ts";
 
 /** A test's aggregate over the report window. */
@@ -32,6 +42,8 @@ export interface IdentityAggregate {
   runs: number;
   failures: number;
   skips: number;
+
+  /** The worst duration among the identity's passing executions. */
   maxDurationMs: number;
 }
 
@@ -51,9 +63,23 @@ export function formatIdentity(key: string): string {
 }
 
 /**
- * Aggregates every record of every report by identity. Identities are
- * resolved through the alias file as of each report's own start day, so a
- * renamed test's history aggregates under its current name.
+ * Aggregates every record of a run by identity, leaving out the lane's
+ * measurements of itself. Identities are resolved through the alias file
+ * as of each report's own start day, so a renamed test's history
+ * aggregates under its current name.
+ *
+ * A lane's own measurements are not test surfaces: nothing enumerates
+ * them and no lane can be asked to run one, so an aggregate over them
+ * counts runs of nothing. Their figures are not durations either — one
+ * sums what a batch's own tests took and another counts the units it
+ * opened — so summing them alongside a test's duration reports a number
+ * that means nothing.
+ *
+ * The duration is taken from passing executions alone. A failure ended
+ * where the failure was reached, and where a wait's safety net ended it,
+ * the figure is that net's bound rather than anything about the test.
+ * The run, failure and skip counts read every record, which is what
+ * those counters are for.
  */
 export function aggregate(
   reports: readonly StoredReport[],
@@ -65,6 +91,7 @@ export function aggregate(
       ? datePartition(report.context.startedAt)
       : undefined;
     for (const record of report.records) {
+      if (isLaneMeasurement(record.test)) continue;
       const test = aliases !== undefined && day !== undefined
         ? aliases.resolve(record.test, day)
         : record.test;
@@ -77,6 +104,7 @@ export function aggregate(
       entry.runs++;
       if (record.outcome === "fail") entry.failures++;
       if (record.outcome === "skip") entry.skips++;
+      if (record.outcome !== "pass") continue;
       entry.maxDurationMs = Math.max(entry.maxDurationMs, record.durationMs);
     }
   }
@@ -130,7 +158,10 @@ export function churnFamilies(
     .sort((a, b) => b.members - a.members);
 }
 
-/** Identities whose worst CI duration crossed the sixty-second rule. */
+/**
+ * Identities whose worst passing CI duration crossed the sixty-second
+ * rule.
+ */
 export function overSixtySeconds(
   byIdentity: ReadonlyMap<string, IdentityAggregate>,
 ): IdentityAggregate[] {
@@ -162,43 +193,97 @@ export interface ReportOptions {
   now?: number;
 }
 
+/** How many objects are read at once. */
+const READ_CONCURRENCY = 16;
+
+/** How many of the objects that could not be read are named. */
+const NAMED_FAILURES = 50;
+
 /**
- * Reads the window, prints the reports, and returns whether the
- * sixty-second ratchet failed.
+ * Reads the window, prints the reports, and returns the status the
+ * command exits with.
+ *
+ * Without `--gate` that is always 0. With it, 1 says the ratchet failed,
+ * because a test crossed the sixty-second rule and there is work to do.
+ * 3 says the ratchet could not check, because the window was read without
+ * some of its objects; a run that is both exits 1, since a violation
+ * found is work to do whatever else went unread. 2 belongs to a malformed
+ * command line, which `parseReportArgs` reports.
+ *
+ * A day that cannot be listed and an object that cannot be read are each
+ * left out rather than ending the run. Every such day is named on the
+ * standard error stream, as are the first `NAMED_FAILURES` such objects,
+ * after which one line says the rest are not named. The printed report
+ * counts the objects it could not read, however many were named, and the
+ * days it could not list, whose objects it has no count of. Every figure
+ * under those counts is over the objects that were read.
  */
-export async function runReport(options: ReportOptions): Promise<boolean> {
+export async function runReport(options: ReportOptions): Promise<number> {
   const { bucket, prefix, days } = options;
   const names: string[] = [];
+  let unlistedDays = 0;
   for (const day of recentDatePrefixes(days, options.now)) {
     const listOptions: Parameters<typeof listObjects>[0] = {
       bucket,
       prefix: `${prefix}/v1/${day}/`,
     };
     if (options.fetchImpl !== undefined) listOptions.fetch = options.fetchImpl;
-    names.push(...await listObjects(listOptions));
+    try {
+      // Appended rather than spread: `push(...names)` makes every name
+      // of a day's listing a separate argument, and V8 caps how many
+      // arguments one call takes where nothing caps a day's partition.
+      for (const name of await listObjects(listOptions)) names.push(name);
+    } catch (error) {
+      unlistedDays++;
+      console.warn(`listing \`${day}\` failed: ${error}`);
+    }
   }
   console.log(
     `${names.length} object(s) under ${prefix} in the last ${days} day(s).`,
   );
-  const reports: StoredReport[] = [];
-  let forkReports = 0;
-  for (const objectName of names) {
+  if (unlistedDays > 0) {
+    console.log(
+      `${unlistedDays} day(s) could not be listed, so an unknown number of ` +
+        "objects are missing from that count.",
+    );
+  }
+  let unread = 0;
+  const readOne = async (
+    objectName: string,
+  ): Promise<StoredReport | undefined> => {
     const readOptions: Parameters<typeof readObject>[0] = {
       bucket,
       objectName,
     };
     if (options.fetchImpl !== undefined) readOptions.fetch = options.fetchImpl;
-    const report = await readObject(readOptions);
-    // Fork-authored reports never feed decisions — this report's numbers
-    // and its ratchet gate among them (docs/specs/test-records.md).
-    if (report.context?.ci?.fork === true) {
-      forkReports++;
-      continue;
+    try {
+      return await readObject(readOptions);
+    } catch (error) {
+      unread++;
+      if (unread <= NAMED_FAILURES) {
+        console.warn(`leaving \`${objectName}\` out: ${error}`);
+      } else if (unread === NAMED_FAILURES + 1) {
+        console.warn(
+          `objects left out past the first ${NAMED_FAILURES} are not named.`,
+        );
+      }
+      return undefined;
     }
-    reports.push(report);
-  }
-  if (forkReports > 0) {
-    console.log(`${forkReports} fork-authored object(s) excluded.`);
+  };
+  const reports =
+    (await Array.fromAsync(pooledMap(READ_CONCURRENCY, names, readOne)))
+      .filter((report) => report !== undefined);
+  const incomplete = unread > 0 || unlistedDays > 0;
+  console.log(
+    `${reports.length} object(s) read, ${unread} could not be read.`,
+  );
+  if (incomplete) {
+    console.log(
+      "Every figure below is over the objects that were read. A collision " +
+        "or a slow test in an object that was left out is missing from " +
+        "them, and an identity whose other runs were left out reads as a " +
+        "one-run member of a churn family.",
+    );
   }
   const runs = new Set(
     reports.map((report) => report.context?.ci?.workflowRunId ?? ""),
@@ -237,14 +322,22 @@ export async function runReport(options: ReportOptions): Promise<boolean> {
     );
   }
 
-  if (options.gate && slow.length > 0) {
+  if (!options.gate) return 0;
+  if (slow.length > 0) {
     console.error(
       `\n${slow.length} test(s) exceed the sixty-second rule; the ratchet ` +
         "fails.",
     );
-    return true;
   }
-  return false;
+  if (incomplete) {
+    console.error(
+      "\nThe window was not read in full, so nothing here says whether the " +
+        "part that was left out is under sixty seconds; the ratchet could " +
+        "not check it.",
+    );
+  }
+  if (slow.length > 0) return 1;
+  return incomplete ? 3 : 0;
 }
 
 /** Parses the command line; undefined means a malformed one. */
@@ -275,13 +368,13 @@ export function parseReportArgs(
 async function main(): Promise<void> {
   const parsed = parseReportArgs(Deno.args);
   if (parsed === undefined) Deno.exit(2);
-  const gateFailed = await runReport({
+  const status = await runReport({
     days: parsed.days,
     gate: parsed.gate,
     bucket: storeBucket(),
     prefix: ciSubmissionsPrefix(),
   });
-  if (gateFailed) Deno.exit(1);
+  if (status !== 0) Deno.exit(status);
 }
 
 if (import.meta.main) {

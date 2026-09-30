@@ -32,9 +32,12 @@ unreachable.
 
 **The chain has a weak first link.** Reaching a piece, a verb, or a cell path
 needs a space, `--space` is required on every command that reads one, and
-`--space` completes to space DIDs discovered from local stores — while the
-value a caller types is a space name. A name derives its DID one way, so a
-discovered DID can never produce the name that made it.
+`--space` completes to space DIDs discovered from local stores while a caller
+often knows a Home-space display label instead. A DID does not reveal that
+personal label. The dormant
+[Common Fabric URL registry](../specs/fabric-urls.md) concept describes a
+different possible public naming source, but no deployment is planned and this
+completion plan does not depend on it.
 
 **A live provider is exercised in one place only.** The unit tests cover the
 pure shaping functions and assert that a slot with no fabric context degrades
@@ -388,9 +391,9 @@ for no measured gain, so the two calls stay.
 
 `--space` takes a space name or a DID, is required on every command that reads a
 space, and has no environment fallback. Completion offers DIDs discovered from
-local memory-v2 stores. A name derives its DID one way, so the discovered DID is
-never the name that produced it, and a caller who works in names gets candidates
-they cannot use.
+local memory-v2 stores. Registered names are independent records, so the
+discovered DID cannot reconstruct them. A caller who works in names therefore
+gets candidates they can use but may not recognize.
 
 Discovery is also positional: `candidateRoots` walks up from the working
 directory looking for a store, so completion offers spaces in a checkout that
@@ -581,10 +584,10 @@ that reads state is exercised — the four that reach a fabric, the one that
 reads local stores, the one that reads the environment, and the pattern-file
 glob — at one of the slots it answers. The rest of the table hands the shell a
 constant directive that a fabric cannot change, and those are asserted one by
-one — kind and glob — in `test/completion-providers.test.ts`, over a set that
-file derives from the tree rather than remembers: a slot handing the shell a
-directive that no case pins fails there. Item 19 adds the other half: whether a
-slot has an entry at all.
+one — kind and glob — in `test/completion-providers.serial.test.ts`, over a set
+that file derives from the tree rather than remembers: a slot handing the shell
+a directive that no case pins fails there. Item 19 adds the other half: whether
+a slot has an entry at all.
 
 `--space` is the one whose candidates depend on the machine, since it reads
 what is on disk. That step reads `cf inspect spaces`' exit status as well as

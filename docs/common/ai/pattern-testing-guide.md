@@ -231,6 +231,13 @@ key). A clean run is part of the contract — a passing test that logs errors
 hides real failures (this is how a production CFC commit-rejection shipped
 behind green tests).
 
+One runtime warning is worth knowing by name. `[logger:schema-view] …
+(key: unselected-key-read)` means a lift read a field its input schema does not
+select, and got `undefined` for a field the data holds. The schema is narrower
+than the code: written by hand that way, or shrunk past a read the analysis that
+derives it did not see. See
+[lazy cell materialization](../../features/lazy-cell-materialization.md#reading-a-key-the-schema-does-not-select).
+
 If a test intentionally provokes errors or warnings, opt out explicitly on the
 returned descriptor — each flag covers only its own level:
 

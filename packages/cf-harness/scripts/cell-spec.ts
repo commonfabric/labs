@@ -13,6 +13,7 @@
  * asserted and is not reported as satisfied.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { ConsolePolicyReport } from "../console/policy.ts";
 
 /**
@@ -122,7 +123,7 @@ const stringList = (
  * indistinguishable from a passing check in every artifact the batch writes.
  */
 export const parseCellSpec = (input: unknown): CellSpec => {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+  if (!isObjectNotArray(input)) {
     throw new Error("a cell spec must be a JSON object");
   }
   const raw = input as Record<string, unknown>;

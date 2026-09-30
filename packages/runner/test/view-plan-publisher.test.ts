@@ -167,9 +167,10 @@ describe("view plan publisher", () => {
   });
 
   it("incorporates a handler's new observations without repeating the UI walk", async () => {
-    const stream = fixture.runtime.getCell(space, "click", undefined);
+    const stream = fixture.runtime.getCell<unknown>(space, "click", {
+      asCell: ["stream"],
+    });
     await fixture.runtime.editWithRetry((tx) => {
-      stream.withTx(tx).set({ $stream: true });
       fixture.root.withTx(tx).set({
         $UI: {
           type: "vnode",
@@ -282,7 +283,9 @@ describe("view plan publisher", () => {
   });
   it("publishes a handler's first observation before the initial consumer snapshot", async () => {
     fixture.observations.restore();
-    const stream = fixture.runtime.getCell(space, "first event", undefined);
+    const stream = fixture.runtime.getCell<unknown>(space, "first event", {
+      asCell: ["stream"],
+    });
     const handler: EventHandler = Object.assign(() => {}, {
       viewPiece: fixture.root.getAsNormalizedFullLink(),
       viewNodeId: "first-handler",
@@ -293,7 +296,6 @@ describe("view plan publisher", () => {
     );
     try {
       await fixture.runtime.editWithRetry((tx) => {
-        stream.withTx(tx).set({ $stream: true });
         fixture.root.withTx(tx).set({
           $UI: {
             type: "vnode",
@@ -332,7 +334,9 @@ describe("view plan publisher", () => {
 
   it("selects each guarded handler's observations and prunes them after viewer departure", async () => {
     fixture.observations.restore();
-    const stream = fixture.runtime.getCell(space, "guarded event", undefined);
+    const stream = fixture.runtime.getCell<unknown>(space, "guarded event", {
+      asCell: ["stream"],
+    });
     const choice = fixture.runtime.getCell<string>(space, "selected handler", {
       type: "string",
     });
@@ -358,7 +362,6 @@ describe("view plan publisher", () => {
     try {
       await fixture.runtime.editWithRetry((tx) => {
         choice.withTx(tx).set("first");
-        stream.withTx(tx).set({ $stream: true });
         fixture.root.withTx(tx).set({
           $UI: {
             type: "vnode",

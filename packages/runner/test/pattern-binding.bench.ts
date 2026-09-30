@@ -14,7 +14,7 @@ import type { NormalizedFullLink } from "../src/link-types.ts";
 import type { FabricExecValue, JSONSchema } from "../src/builder/types.ts";
 
 // A notebook-ish argument schema: notes[] of records with a few fields. Real
-// UI bindings alias into argument.notes[i].<field>, so scopedLinkForPath walks
+// UI bindings alias into argument.notes[i].<field>, so linkForPath walks
 // this schema per path key per alias.
 const ARG_SCHEMA: JSONSchema = {
   type: "object",

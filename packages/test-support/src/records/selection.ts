@@ -1,6 +1,6 @@
 /**
  * The test-selection manifest: what the publisher writes, what a lane
- * reads to decide what to run, and what the wall reads to show what
+ * reads to decide what to run, and what the dashboard reads to show what
  * selection is doing. It holds every identity the store knows, what each
  * is worth, what each costs, what was withheld and why, and a reference
  * packing into lanes.
@@ -15,6 +15,7 @@
  * artifact.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { type TestIdentity, testIdentityKey } from "./schema.ts";
 
 /** The inputs behind one identity's score, as a manifest records them. */
@@ -32,8 +33,123 @@ export interface ScoreInputs {
   churn: number;
 }
 
-/** The version a reader understands; anything else is treated as absent. */
-export const MANIFEST_SCHEMA_VERSION = 1;
+/**
+ * The newest shape a reader here knows how to read. A stored body says
+ * which shape it was written in, and a reader reads anything at or under
+ * this. A body above it is treated as absent, because a reader that does
+ * not know a field cannot know what obeying the rest would mean.
+ *
+ * Most of the reading forward is done field by field and asks this
+ * nothing: a field a body does not carry has a defined reading, and
+ * bodies of several shapes stand under one number. What this is for is
+ * the change that cannot be read that way, where the same field means
+ * different things on either side of it and a reader has to know which.
+ * Raise it for one of those, and read the shape below it by this number.
+ *
+ * What a raise costs is every reader deployed below it: such a reader
+ * passes over each manifest written in the new shape, and once
+ * `MANIFESTS_LOOKED_BACK` of them stand in front of the newest one it
+ * can read it has none at all, which for a lane means running the whole
+ * corpus. A branch that has not rebased past the raise is the reader in
+ * that position, so the stretch over which one exists is what the
+ * publisher's cadence and that figure between them decide.
+ *
+ * It asks nothing of the store, in either direction. `SELECTION_AREA`
+ * names the area both a manifest and the publisher's aggregate are
+ * written under and does not move with this; a stored body under this
+ * number is read forward; and the publisher passes over a stored
+ * aggregate above it for the newest one behind that it can read. No
+ * change to this number calls for a bootstrap, which would throw away
+ * the history the stored aggregates hold.
+ *
+ * Lowering it asks one thing of an operator, and only where the number
+ * it is lowered from stood for longer than the publisher's window: the
+ * aggregates written above the new number are then the whole of what
+ * that window reaches, and a run has to be dispatched with a window wide
+ * enough to reach one below them. The publisher's refusal says that the
+ * states behind are out of its reach; which window reaches one of them
+ * comes from listing the area, since the refusal names the day the run
+ * stopped at rather than a day a readable state was written on.
+ */
+export const MANIFEST_SCHEMA_VERSION = 2;
+
+/**
+ * The shape in which a suite's fit gained the figure for what one more
+ * of its units costs a batch already running others. A fit written
+ * before it carries no such figure and charged nothing per unit; one
+ * written in this shape carries it, so a body of this shape without it
+ * is one this reader cannot read rather than one it reads forward.
+ */
+const UNIT_OVERHEAD_SINCE = 2;
+
+/**
+ * The segment naming the area the selection store writes under.
+ *
+ * It does not move when the schema does. The area holds the publisher's
+ * rolling aggregate, which is where every catch a test has ever been
+ * credited with lives, and an area that moved with the schema would
+ * leave that behind: the publisher would have no aggregate to carry
+ * forward and would stop and ask for a bootstrap, which an operator runs
+ * by hand and which reads only as far back as its window. Between the
+ * two, nothing publishes, and a consumer with no manifest runs the whole
+ * corpus.
+ *
+ * The publisher's identity holds create and not delete or overwrite, so
+ * what is already stored stays in the area it was written under, which
+ * is the one this names.
+ */
+export const SELECTION_AREA = "v1";
+
+/**
+ * How far back a reader looks for a body written in a shape it knows.
+ *
+ * Every reader uses this one figure. A reader looking back further than
+ * another would obey a manifest the other passed over, and two readers
+ * obeying different manifests is what the whole store is arranged to
+ * avoid: a dashboard would then report a figure no pull request obeys.
+ *
+ * The publisher's walk back through stored aggregates is bounded by the
+ * days its run reads instead. There is one such reader, so there is no
+ * second one for it to agree with, and what decides how far back it may
+ * go is which records are there to fold over the gap.
+ */
+export const MANIFESTS_LOOKED_BACK = 8;
+
+/**
+ * The shape a stored body declares, when it declares one at all. It says
+ * whether a body a reader cannot read is one from further ahead than the
+ * reader or one that is simply not a manifest, which are different
+ * enough to be reported differently.
+ *
+ * It takes a parsed value rather than the text, so that a reader asking
+ * both this and `parseManifest` about one body parses it once. A body is
+ * the whole corpus.
+ */
+export function declaredSchema(value: unknown): number | undefined {
+  // The shape has to be the body's own. A body inheriting one from a
+  // polluted prototype declares nothing, and reading it as a declaration
+  // would have a reader pass over an object that is not a manifest.
+  if (!isRecord(value) || !Object.hasOwn(value, "schema")) return undefined;
+  const schema = value.schema;
+  return typeof schema === "number" && Number.isInteger(schema) && schema > 0
+    ? schema
+    : undefined;
+}
+
+/**
+ * Whether a body says it was written in a shape from further ahead than
+ * this reader, which is the one reason to pass over it and read the one
+ * before it instead.
+ *
+ * Every reader asks this rather than comparing a declared shape against
+ * a bound of its own, so that what counts as too far ahead is answered
+ * in one place and a reader passing over a body and a validator refusing
+ * it cannot come to disagree.
+ */
+export function writtenAhead(value: unknown): boolean {
+  const schema = declaredSchema(value);
+  return schema !== undefined && schema > MANIFEST_SCHEMA_VERSION;
+}
 
 /** One selectable identity, with everything selection needs to know. */
 export interface ManifestEntry {
@@ -84,12 +200,6 @@ export interface ManifestEntry {
    * same corpus with replacement forever.
    */
   lastRun?: string;
-
-  /**
-   * Whether it has been shown to pass as the only test in its unit. Until
-   * it has, its siblings are not skipped and the unit is what runs.
-   */
-  independent?: boolean;
 }
 
 /**
@@ -138,16 +248,60 @@ export interface UnschedulableEntry {
   cost: number;
 }
 
+/**
+ * What one suite's batches were fitted to cost beyond what its tests take:
+ * the intercept, charged once per lane holding the suite; the slope on
+ * what its own tests take; and what one more of its units costs a batch
+ * already running others. What the suite's processes spend before their
+ * units begin is spread through these three.
+ */
+export interface SuiteFit {
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+
+  /**
+   * The same suite fitted with its processes' setup measured and taken
+   * out, where some batch started a process that marks when its units
+   * begin. A reader that knows it charges it in place of the three figures
+   * beside it, which stay what a reader that does not know it charges.
+   */
+  process?: ProcessFit;
+}
+
+/** What a suite costs where what its processes spend on setup is measured. */
+export interface ProcessFit {
+  /**
+   * Seconds each process a lane starts for the suite spends before its
+   * units begin, charged each time a lane starts one.
+   */
+  setup: number;
+
+  /**
+   * Seconds charged once per lane holding the suite, for what its batches
+   * spent beyond their setup, their tests, and their units.
+   */
+  overhead: number;
+  correction: number;
+  unitOverhead: number;
+}
+
 /** The fitted numbers a lane's own timing records produced. */
 export interface Calibration {
   /** Seconds each capability's setup takes. */
   setupCost: Record<string, number>;
 
-  /** Per suite: the intercept and slope fitted from planned against actual. */
-  suites: Record<string, { overhead: number; correction: number }>;
+  /** Per suite, what its batches run without coverage cost. */
+  suites: Record<string, SuiteFit>;
 
-  /** Per invocation unit: what running it at all costs before any test. */
-  unitOverhead: Record<string, number>;
+  /**
+   * Per suite, what its batches run with coverage on cost, which is
+   * fitted apart because instrumenting a run costs it time and how much
+   * is a property of the suite. A suite no lane has run with coverage on
+   * has no entry, and a manifest carrying no map at all is read as
+   * having no such suite.
+   */
+  suitesWithCoverage?: Record<string, SuiteFit>;
 
   /** Seconds a lane spends outside its batches. */
   prologue: number;
@@ -181,7 +335,7 @@ export interface CoverageBaseline {
   commit: string;
 
   /**
-   * When the run that measured it was created, ISO 8601. It decides one
+   * When the run that measured it started, ISO 8601. It decides one
    * thing: a publisher keeps a baseline while it is younger than the
    * window a manifest covers, and drops it once it is older than that.
    * Which baseline a comparison takes is decided by the order of their
@@ -190,6 +344,90 @@ export interface CoverageBaseline {
   createdAt: string;
 
   uncoveredLines: number;
+}
+
+/**
+ * How one suite's charges compared with what its batches spent, over the
+ * cost window, and what its charges came to in this manifest.
+ */
+export interface SuiteHealth {
+  /**
+   * Seconds a lane pays before it runs anything of the suite: its
+   * overhead, one unit's charge, the setup of the process its unit runs
+   * in where it names one, and the setup of every capability it needs.
+   */
+  fixed: number;
+
+  /** How many of its identities cost more than any lane can hold. */
+  tooLong: number;
+
+  /** Batches of it that recorded what the packer charged for them. */
+  batches: number;
+
+  /**
+   * What those batches spent over what they were charged, at the middle
+   * batch and at the ninetieth percentile. Absent where no batch
+   * recorded a charge.
+   */
+  ratio?: { median: number; p90: number };
+}
+
+/** A suite's charges in the manifest before the one carrying them. */
+export interface PreviousSuiteHealth {
+  fixed: number;
+  tooLong: number;
+}
+
+/**
+ * Whether the cost model a manifest carries still describes what lanes
+ * spend, from the lanes' own measurements over the cost window and from
+ * the manifest before it.
+ *
+ * Nothing obeys this. A manifest carrying none, or one this reader cannot
+ * read, is read as carrying none, rather than being refused: the packing
+ * does not depend on it.
+ */
+export interface CalibrationHealth {
+  /** Per suite, by suite identifier. */
+  suites: Record<string, SuiteHealth>;
+
+  /** Lanes that recorded their work whole, and how many ran long. */
+  lanes: {
+    /** Lanes that recorded their work, their projection and their bound. */
+    observed: number;
+
+    /** How many of those ran past their bound. */
+    pastBound: number;
+
+    /** How many of those the packer projected to finish inside it. */
+    projectedInside: number;
+
+    /** How many of those ran past it all the same. */
+    overran: number;
+  };
+
+  /**
+   * The same suites' charges in the manifest before this one, where the
+   * publisher could read one.
+   */
+  previous?: {
+    generatedAt: string;
+    suites: Record<string, PreviousSuiteHealth>;
+  };
+
+  /**
+   * The count of tests too long for any lane that this manifest's count is
+   * judged against, where there is a manifest before it: that manifest's
+   * count, or, while that count stood reported as grown, the count it was
+   * judged against.
+   */
+  tooLongBaseline?: number;
+
+  /**
+   * What the publisher found broken in the model, one sentence each,
+   * naming the suite and the figure. Empty for a model that holds.
+   */
+  alarms: string[];
 }
 
 /** One publisher run's whole output. */
@@ -222,6 +460,9 @@ export interface Manifest {
   known: { count: number; digest: string };
 
   coverageBaselines: CoverageBaseline[];
+
+  /** Absent from a manifest whose publisher did not measure it. */
+  health?: CalibrationHealth;
 }
 
 /**
@@ -249,7 +490,7 @@ export function digestIdentities(keys: Iterable<string>): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isObjectNotArray(value);
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -328,11 +569,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   ) {
     return undefined;
   }
-  if (
-    value.independent !== undefined && typeof value.independent !== "boolean"
-  ) {
-    return undefined;
-  }
   if (value.lastRun !== undefined && !isNonEmptyString(value.lastRun)) {
     return undefined;
   }
@@ -351,7 +587,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
     repeats: value.repeats,
   };
   if (value.lastRun !== undefined) entry.lastRun = value.lastRun;
-  if (value.independent !== undefined) entry.independent = value.independent;
   if (evidence !== undefined) entry.flakeEvidence = evidence;
   return entry;
 }
@@ -429,7 +664,10 @@ function parseUnschedulable(value: unknown): UnschedulableEntry | undefined {
   return { test, suite: value.suite, cost: value.cost };
 }
 
-function parseCalibration(value: unknown): Calibration | undefined {
+function parseCalibration(
+  value: unknown,
+  schema: number,
+): Calibration | undefined {
   if (!isRecord(value)) return undefined;
   const numbers = (raw: unknown): Record<string, number> | undefined => {
     if (!isRecord(raw)) return undefined;
@@ -441,25 +679,73 @@ function parseCalibration(value: unknown): Calibration | undefined {
     return out;
   };
   const setupCost = numbers(value.setupCost);
-  const unitOverhead = numbers(value.unitOverhead);
-  if (setupCost === undefined || unitOverhead === undefined) return undefined;
-  if (!isRecord(value.suites)) return undefined;
+  if (setupCost === undefined) return undefined;
   if (!isFiniteNumber(value.prologue) || value.prologue < 0) return undefined;
-  const suites: Calibration["suites"] = {};
-  for (const [suite, fitted] of Object.entries(value.suites)) {
-    if (!isRecord(fitted)) return undefined;
+  const suites = parseFits(value.suites, schema);
+  if (suites === undefined) return undefined;
+  if (value.suitesWithCoverage === undefined) {
+    return { setupCost, suites, prologue: value.prologue };
+  }
+  const suitesWithCoverage = parseFits(value.suitesWithCoverage, schema);
+  if (suitesWithCoverage === undefined) return undefined;
+  return { setupCost, suites, suitesWithCoverage, prologue: value.prologue };
+}
+
+/** Reads a map of suites to their fits, failing whole if any fails. */
+function parseFits(
+  value: unknown,
+  schema: number,
+): Record<string, SuiteFit> | undefined {
+  return parseSuites(value, (fitted) => {
     if (
       !isFiniteNumber(fitted.overhead) || fitted.overhead < 0 ||
       !isFiniteNumber(fitted.correction) || fitted.correction <= 0
     ) {
       return undefined;
     }
-    suites[suite] = {
+    // Absent from a fit written before the figure existed, where it
+    // reads as the nothing per unit such a fit charged. Absent from one
+    // written since is a body this reader cannot read, and reading that
+    // as nothing would hide it while the packer under-charged every unit
+    // a lane opens.
+    //
+    // A body of the earlier shape carries a map of its own beside the
+    // suites, keyed by invocation unit. It is dropped rather than read
+    // here: nothing ever wrote an entry into one, and a suite is the
+    // grain a batch's timing supports.
+    const carried = fitted.unitOverhead;
+    const unitOverhead = carried === undefined && schema < UNIT_OVERHEAD_SINCE
+      ? 0
+      : carried;
+    if (!isFiniteNumber(unitOverhead) || unitOverhead < 0) return undefined;
+    const process = fitted.process === undefined
+      ? undefined
+      : parseProcessFit(fitted.process);
+    if (fitted.process !== undefined && process === undefined) {
+      return undefined;
+    }
+    return {
       overhead: fitted.overhead,
       correction: fitted.correction,
+      unitOverhead,
+      ...(process === undefined ? {} : { process }),
     };
+  });
+}
+
+/** Reads a suite's process fit, or `undefined` for one it cannot read. */
+function parseProcessFit(value: unknown): ProcessFit | undefined {
+  if (!isRecord(value)) return undefined;
+  const { setup, overhead, correction, unitOverhead } = value;
+  if (
+    !isFiniteNumber(setup) || setup < 0 ||
+    !isFiniteNumber(overhead) || overhead < 0 ||
+    !isFiniteNumber(correction) || correction <= 0 ||
+    !isFiniteNumber(unitOverhead) || unitOverhead < 0
+  ) {
+    return undefined;
   }
-  return { setupCost, suites, unitOverhead, prologue: value.prologue };
+  return { setup, overhead, correction, unitOverhead };
 }
 
 function parseLane(value: unknown): LanePlan | undefined {
@@ -505,6 +791,105 @@ function parseBaseline(value: unknown): CoverageBaseline | undefined {
   };
 }
 
+/** Whether a value is a count: a finite whole number of nothing or more. */
+function isCount(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
+/** Whether a value is a number of seconds, or a ratio of two of them. */
+function isAmount(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+/** Reads a map of suites through a parser, failing whole if any fails. */
+function parseSuites<T>(
+  value: unknown,
+  parse: (raw: Record<string, unknown>) => T | undefined,
+): Record<string, T> | undefined {
+  if (!isRecord(value)) return undefined;
+  const suites: Record<string, T> = {};
+  for (const [suite, raw] of Object.entries(value)) {
+    const parsed = isRecord(raw) ? parse(raw) : undefined;
+    if (parsed === undefined) return undefined;
+    suites[suite] = parsed;
+  }
+  return suites;
+}
+
+/** Reads a suite's charges in the manifest before, or `undefined`. */
+function parsePreviousSuite(
+  value: Record<string, unknown>,
+): PreviousSuiteHealth | undefined {
+  if (!isAmount(value.fixed) || !isCount(value.tooLong)) return undefined;
+  return { fixed: value.fixed, tooLong: value.tooLong };
+}
+
+/** Reads one suite's health figures, or `undefined`. */
+function parseSuiteHealth(
+  value: Record<string, unknown>,
+): SuiteHealth | undefined {
+  const charges = parsePreviousSuite(value);
+  if (charges === undefined || !isCount(value.batches)) return undefined;
+  if (value.ratio === undefined) {
+    return { ...charges, batches: value.batches };
+  }
+  const ratio = value.ratio;
+  if (!isRecord(ratio) || !isAmount(ratio.median) || !isAmount(ratio.p90)) {
+    return undefined;
+  }
+  return {
+    ...charges,
+    batches: value.batches,
+    ratio: { median: ratio.median, p90: ratio.p90 },
+  };
+}
+
+/**
+ * Reads a manifest's health, or returns `undefined` where it carries none
+ * this reader can read. A field this reader does not know is dropped.
+ */
+function parseHealth(value: unknown): CalibrationHealth | undefined {
+  if (!isRecord(value) || !isRecord(value.lanes)) return undefined;
+  const suites = parseSuites(value.suites, parseSuiteHealth);
+  const { observed, pastBound, projectedInside, overran } = value.lanes;
+  if (
+    suites === undefined || !isCount(observed) || !isCount(pastBound) ||
+    !isCount(projectedInside) || !isCount(overran) ||
+    // Lanes past their bound and lanes projected inside it are among the
+    // lanes observed, and lanes that overran are among both.
+    pastBound > observed || projectedInside > observed ||
+    overran > pastBound || overran > projectedInside
+  ) {
+    return undefined;
+  }
+  const alarms = value.alarms;
+  if (
+    !Array.isArray(alarms) ||
+    !alarms.every((alarm): alarm is string => typeof alarm === "string")
+  ) {
+    return undefined;
+  }
+  const baseline = value.tooLongBaseline;
+  if (baseline !== undefined && !isCount(baseline)) return undefined;
+  const health: CalibrationHealth = {
+    suites,
+    lanes: { observed, pastBound, projectedInside, overran },
+    ...(baseline === undefined ? {} : { tooLongBaseline: baseline }),
+    alarms,
+  };
+  if (value.previous === undefined) return health;
+  const previous = value.previous;
+  if (!isRecord(previous) || !isTimestamp(previous.generatedAt)) {
+    return undefined;
+  }
+  const before = parseSuites(previous.suites, parsePreviousSuite);
+  if (before === undefined) return undefined;
+  return {
+    ...health,
+    previous: { generatedAt: previous.generatedAt, suites: before },
+  };
+}
+
 /** Maps a list through a parser, failing whole if any element fails. */
 function parseAll<T>(
   value: unknown,
@@ -522,8 +907,10 @@ function parseAll<T>(
 
 /**
  * Validates a manifest whole. Returns undefined for anything that is not
- * one of this schema version, including a newer one: a reader that does
- * not know a field cannot know what obeying the rest would mean.
+ * a manifest this reader knows a shape for, which is one declaring a
+ * schema at or under `MANIFEST_SCHEMA_VERSION`. An older one is read
+ * forward field by field. A newer one is refused, because a reader that
+ * does not know a field cannot know what obeying the rest would mean.
  */
 export function parseManifest(value: unknown): Manifest | undefined {
   if (typeof value === "string") {
@@ -534,7 +921,8 @@ export function parseManifest(value: unknown): Manifest | undefined {
     }
   }
   if (!isRecord(value)) return undefined;
-  if (value.schema !== MANIFEST_SCHEMA_VERSION) return undefined;
+  const schema = declaredSchema(value);
+  if (schema === undefined || writtenAhead(value)) return undefined;
   if (
     !isTimestamp(value.generatedAt) || !isNonEmptyString(value.seed) ||
     !isNonEmptyString(value.commit) || !isFiniteNumber(value.runs) ||
@@ -542,7 +930,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
   ) {
     return undefined;
   }
-  const calibration = parseCalibration(value.calibration);
+  const calibration = parseCalibration(value.calibration, schema);
   const entries = parseAll(value.entries, parseEntry);
   const withheld = parseWithheldEntries(value.withheld);
   const unavailable = parseAll(value.unavailable, parseUnavailable);
@@ -572,6 +960,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     if (seen.has(key)) return undefined;
     seen.add(key);
   }
+  const health = parseHealth(value.health);
   return {
     schema: MANIFEST_SCHEMA_VERSION,
     generatedAt: value.generatedAt,
@@ -587,6 +976,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     lanes,
     known: { count: value.known.count, digest: value.known.digest },
     coverageBaselines,
+    ...(health === undefined ? {} : { health }),
   };
 }
 

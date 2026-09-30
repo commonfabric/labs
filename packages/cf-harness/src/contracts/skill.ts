@@ -112,6 +112,7 @@ export type HarnessSkillScriptExecutionErrorCode =
   | "skill_activations_missing"
   | "skill_not_found"
   | "skill_not_activated"
+  | "script_not_mounted"
   | "script_path_invalid"
   | "script_not_allowlisted"
   | "script_not_indexed"
@@ -149,6 +150,24 @@ export interface HarnessSkillScriptExecution {
   digestMatchesRegistry?: boolean;
   registrySizeBytes?: number;
   observedSizeBytes?: number;
+
+  /**
+   * Where an acquired script came from, absent for a registry skill's.
+   *
+   * An acquired script is executed through the same machinery a registry
+   * script is, so the record has to say which it was: the registry fields
+   * above name a run-start snapshot this script was never in, and a reader
+   * that found them set would take an acquisition for a skill the operator
+   * had installed. Never set beside them.
+   *
+   * Present once the run has resolved which acquisition the pin names, which
+   * every executed script and every refusal after that point carries. A
+   * refusal that could not get that far — a pin this run acquired nothing at,
+   * or one it holds no handle to — has the pin in `skillName` and no
+   * acquisition, because there is none to name.
+   */
+  acquisition?: HarnessSkillAcquisition;
+
   exitCode?: number;
   diagnostics: HarnessSkillDiagnostic[];
   error?: HarnessSkillScriptExecutionError;
@@ -284,6 +303,66 @@ export interface HarnessSkillActivation {
    * say — where there is no external source to name.
    */
   acquisition?: HarnessSkillAcquisition;
+}
+
+export const HARNESS_ACQUIRED_SKILLS_TYPE = "cf-harness.acquired-skills";
+
+/**
+ * One script of an acquired skill, materialized on the host so a run can
+ * execute it.
+ *
+ * `valueDigest` is taken at acquisition, over the bytes the pinned commit
+ * served, and it is what an execution re-checks the file against — the same
+ * pin a registry script gets from the run-start registry snapshot. A file
+ * changed on the host between acquisition and execution refuses.
+ */
+export interface HarnessAcquiredSkillScript {
+  /** Path relative to the skill root, as an allowlist entry names it. */
+  path: string;
+
+  /** Where the host holds the bytes. */
+  hostPath: string;
+
+  /** The same file, as the sandbox that may run it sees it. */
+  sandboxPath: string;
+
+  valueDigest: string;
+  sizeBytes: number;
+}
+
+/**
+ * The scripts one acquisition materialized, under the pin they came from.
+ *
+ * The pin is the allowlist key's skill field, so what an operator allowlisted
+ * and what a run resolves are the same string. The host root is mounted
+ * read-only, and only into the sandbox of a run that holds the skill's handle:
+ * the parent that planned the acquisition never holds the skill's bytes, and
+ * that is the property the demo rests on.
+ */
+export interface HarnessAcquiredSkill {
+  /** Discovery id, in `owner/repo/slug` form. */
+  registryId: string;
+
+  commitSha: string;
+
+  /** `registryId@commitSha`, which is what an allowlist entry names. */
+  pin: string;
+
+  /** The host directory holding this acquisition's `scripts/`. */
+  hostRoot: string;
+
+  /** The same directory, as a run that mounts it sees it. */
+  sandboxRoot: string;
+
+  scripts: HarnessAcquiredSkillScript[];
+}
+
+/** Every skill this run acquired scripts for. */
+export interface HarnessAcquiredSkills {
+  type: typeof HARNESS_ACQUIRED_SKILLS_TYPE;
+  version: 1;
+  generatedAt: string;
+  skills: HarnessAcquiredSkill[];
 }
 
 export interface HarnessSkillActivations {

@@ -1,51 +1,22 @@
+export { fabricAwareEqual, valueEqual, valueEqualByWalk } from "@/comparison";
+
 export {
   deepFreeze,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
 } from "./deep-freeze.ts";
 
-export { fabricAwareEqual } from "./fabricAwareEqual.ts";
-
-export type * from "./interface.ts";
+export * from "./interface.ts";
 
 export {
-  FabricInstance,
-  FabricPrimitive,
-  FabricSpecialObject,
-} from "./interface.ts";
-
-export {
-  fabricFromNativeValue,
-  isValidFabricConvertibleValue,
-  nativeFromFabricValue,
+  convertibleJsFromFabricValue,
+  fabricFromConvertibleJsValue,
+  isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
-  shallowFabricFromNativeObjectElseUndefined,
-  shallowFabricFromNativeValue,
-} from "./native-conversion.ts";
-
-export { refuseFabricInstance } from "./refuseFabricInstance.ts";
-
-export {
-  isFabricArray,
-  isFabricContainerValue,
-  isFabricObjectOrArray,
-  isFabricPlainContainer,
-  isFabricPlainObject,
-  isFabricSpecialObject,
-  isKeyableObjectNotArray,
-  isKeyableObjectOrArray,
-  isWalkableObjectNotArray,
-  isWalkableObjectOrArray,
-} from "./type-check.ts";
-
-export {
-  assertValidFabricValueLayer,
-  isValidFabricNativeObject,
-  isValidFabricPlainObject,
-  isValidFabricValue,
-  isValidFabricValueLayer,
-} from "./validity-check.ts";
+  shallowFabricFromConvertibleJsObjectElseUndefined,
+  shallowFabricFromConvertibleJsValue,
+} from "./convertible-js.ts";
 
 export {
   cloneForMutation,
@@ -57,35 +28,24 @@ export {
   type CloneOptions,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
+  missingContainerIsArray,
+  type PathTrace,
   shallowMutableClone,
+  tracePath,
 } from "./value-clone.ts";
 
+// Not `@/value-debug`, which names late-bound forwarders: the package should
+// export the renderers themselves, and naming them here is what loads them.
 export {
+  debugStr,
   toCompactDebugString,
   toDebugKindString,
   toIndentedDebugString,
+  toLongQuotedDebugString,
+  toShortQuotedDebugString,
   toStructuredDebugValue,
-} from "./value-debug.ts";
+} from "@/value-debug/index.ts";
 
-export { hashOf, hashStringOf, taggedHashStringOf } from "./value-hash.ts";
+export * from "@/value-hash";
 
-export {
-  FABRIC_PRIMITIVE_VALUE_TAGS,
-  FABRIC_VALUE_TAGS,
-  type FabricPrimitiveValueTag,
-  type FabricValueTag,
-  JS_TYPE_VALUE_TAGS,
-  jsTagFromValue,
-  type JsTypeValueTag,
-  PRIMITIVE_VALUE_TAGS,
-  type PrimitiveValueTag,
-  tagFromFabricPrimitive,
-  tagFromFabricPrimitiveElseNull,
-  tagFromFabricValue,
-  tagFromFabricValueElseNull,
-  tagFromNativeValueElseNull,
-  VALUE_TAGS,
-  type ValueTag,
-} from "./value-tags.ts";
-
-export { valueEqual } from "./valueEqual.ts";
+export * from "@/types";

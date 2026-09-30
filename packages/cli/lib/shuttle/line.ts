@@ -32,7 +32,7 @@
 /**
  * The characters shuttle's line grammar spends on structure rather than on
  * data: the pipe, the local-program escape, the two redirection operators,
- * the `#` a wish target and an argument suffix are written with, and the `%`
+ * the `#` a wish target and a member are written with, and the `%`
  * a numbered handle is (`docs/plans/shuttle/grammar.md`).
  *
  * A value holding one of these is printed quoted wherever in the value it
@@ -46,8 +46,8 @@
  * reference grammar rather than by the split, and a quote reaches no reading
  * (`docs/plans/shuttle/grammar.md`), so quoting them would change nothing a
  * reading does and would cost the bare printing of every address. A value
- * whose own characters a reading would take is named by a reference instead,
- * which reads none of them.
+ * whose own characters a reading would take is named behind the `.` head
+ * instead, which reads none of them.
  */
 export const RESERVED_CHARACTERS = "!#%<>|";
 

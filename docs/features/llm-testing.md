@@ -233,4 +233,6 @@ cd packages/runner && deno task test
 - [TESTING.md](../development/TESTING.md) — running the suites and the general unit and
   integration test structure.
 - [COVERAGE.md](../development/COVERAGE.md) — how the runtime coverage these tests produce feeds
-  the coverage-debt gate.
+  the coverage trend. Of `packages/llm`, `packages/toolshed` and
+  `packages/runner`, only `packages/llm` carries a measured set, so only its
+  tests feed the measured-set gate.

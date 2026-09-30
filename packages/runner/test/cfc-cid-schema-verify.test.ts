@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ensureSchemaDocument,
   loadSchemaDocument,
@@ -85,7 +86,7 @@ const fakeTxOverDocuments = (
     readOrThrow: (target: { id: string; path?: readonly string[] }) => {
       let value: unknown = documents[target.id];
       for (const segment of target.path ?? []) {
-        if (value === null || typeof value !== "object") return undefined;
+        if (!isObjectOrArray(value)) return undefined;
         value = (value as Record<string, unknown>)[segment];
       }
       return value;
@@ -262,7 +263,7 @@ describe("stored CFC envelope gathering", () => {
       fakeTxOverDocuments({
         "of:doc": {
           cfc: {
-            version: 3,
+            version: 4,
             schemaHash: "whatever-format-that-year-uses",
             labelMap: { version: 1, entries: [] },
           },

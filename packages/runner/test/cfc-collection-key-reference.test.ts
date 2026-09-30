@@ -9,6 +9,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -43,10 +44,13 @@ describe("collection key reference confidentiality", () => {
     const install = runtime.edit();
     const selected = runtime.getCell(space, "selected", undefined, install);
     writeSeedEnvelopeDoc(install, space);
-    install.writeOrThrow({ ...selected.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(install, {
+      ...selected.getAsNormalizedFullLink(),
+      path: [],
+    }, {
       value: target.withTx(undefined).getAsLink(),
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
@@ -54,6 +58,7 @@ describe("collection key reference confidentiality", () => {
             path: [],
             origin: "link",
             observes: "followRef",
+            referenceAcquisition: "complete",
             label: { confidentiality: ["private-key-selection"] },
           }],
         },

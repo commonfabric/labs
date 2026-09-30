@@ -7,10 +7,12 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { enrollRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
+import { getTopFrame } from "../src/builder/pattern.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -62,7 +64,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     } as JSONSchema);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value: { secret: "s3cr3t" },
       cfc: {
         version: 1,
@@ -360,6 +362,41 @@ describe("runtime-owned-store enrollment wiring", () => {
       tx.prepareCfc();
       return await tx.commit();
     };
+
+    it("puts each element in a document of its own with no handler or lift running", async () => {
+      // What splits the element out is the id source `Cell.set` takes from
+      // the frame its cell was made in. The `Runtime` constructor pushes a
+      // frame that only disposal pops, so a cell made while a runtime is
+      // alive carries one and every such write splits. Each write in this
+      // describe is made from test code with neither a handler nor a lift
+      // around it, and this reads the split they all rest on.
+
+      const result = await startListPiece("wiring-anchor-plain");
+      const tx = runtime.edit();
+
+      // `withTx()` and `key()` each build a fresh cell, so the frame on top
+      // here is the one the written cell captures: the runtime's own, being
+      // neither a lift's nor a handler's.
+      const frame = getTopFrame();
+      expect(frame).toBeDefined();
+      expect(frame?.frameKind).toBeUndefined();
+
+      // deno-lint-ignore no-explicit-any
+      const items = (result.withTx(tx) as any).key("items");
+      items.set([{ note: "first" }, { note: "second" }]);
+
+      const stored = items.getRaw({ lastNode: "value" }) as unknown[];
+      const ids = stored.map((entry) => parseLink(entry, items)?.id);
+      expect(ids).toEqual([expect.any(String), expect.any(String)]);
+      expect(ids[0]).not.toBe(ids[1]);
+      // `parseLink` resolves a path-relative link against the base it is
+      // given, so an element stored as a link back into the list's own
+      // document would answer with the list's id. Excluding it is what makes
+      // this a separate document rather than a separate address.
+      const container = items.getAsNormalizedFullLink().id;
+      expect(ids).not.toContain(container);
+      expect((await tx.commit()).error).toBeUndefined();
+    });
 
     it("declares on the child the anchoring write mints", async () => {
       await seedSecret("anchor-append-source", "anchor-append");

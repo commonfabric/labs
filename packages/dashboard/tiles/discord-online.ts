@@ -12,6 +12,7 @@
  * with 4014.
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Status, Tile, TileView } from "../types.ts";
 import { escapeHtml, multiSparkline, thin } from "../lib.ts";
 import { dashboardCacheFile } from "../history-files.ts";
@@ -22,6 +23,11 @@ const SNAPSHOT_TIMEOUT_MS = 12_000;
 
 // Intents: GUILDS (1) | GUILD_MEMBERS (2) | GUILD_PRESENCES (256).
 const INTENTS = 259;
+
+// What the identify frame calls this client, which Discord records against the
+// connection. It names one client among the several a bot token can carry, and
+// nothing here reads it back.
+const CLIENT_NAME = "commonfabric-dashboard";
 
 // Online members carrying either exact role name are counted as team. "Team
 // Member" is the former name of the "Team" role.
@@ -41,7 +47,7 @@ type Point = { t: number; team: number; visitors: number };
 const history: Point[] = [];
 
 const isPoint = (p: unknown): p is Point =>
-  typeof p === "object" && p !== null &&
+  isObjectOrArray(p) &&
   typeof (p as Point).t === "number" &&
   typeof (p as Point).team === "number" &&
   typeof (p as Point).visitors === "number";
@@ -186,7 +192,11 @@ function takeSnapshot(token: string, guildId: string): Promise<Snapshot | null> 
           d: {
             token,
             intents: INTENTS,
-            properties: { os: "linux", browser: "fabric-wall", device: "fabric-wall" },
+            properties: {
+              os: "linux",
+              browser: CLIENT_NAME,
+              device: CLIENT_NAME,
+            },
           },
         }));
         return;
@@ -215,18 +225,16 @@ function takeSnapshot(token: string, guildId: string): Promise<Snapshot | null> 
 }
 
 export const discordOnline: Tile = {
-  id: "discord-online",
+  label: "discord online",
   // A fresh gateway connect per poll; keep this well above the snapshot timeout.
   // The bot needs the privileged Server Members and Presence intents enabled in
   // the Discord developer portal.
   intervalMs: 300_000,
   async collect(ctx): Promise<TileView> {
-    const label = "discord online";
     const token = ctx.env("DISCORD_BOT_TOKEN");
     const guildId = ctx.env("DISCORD_GUILD_ID");
     if (!token || !guildId) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "set DISCORD_BOT_TOKEN + DISCORD_GUILD_ID (presences + members intents)",
@@ -238,12 +246,11 @@ export const discordOnline: Tile = {
       snap = await takeSnapshot(token, guildId);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      return { label, status: "unknown" as Status, value: "—", sub: escapeHtml(reason).slice(0, 80) };
+      return { status: "unknown" as Status, value: "—", sub: escapeHtml(reason).slice(0, 80) };
     }
 
     if (!snap) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub:
@@ -281,7 +288,6 @@ export const discordOnline: Tile = {
       : `<p class="sub" title="team ${snap.team} + visitors ${snap.visitors}">${swatch(teamSeries.color)} team ${snap.team} + ${swatch(visitorSeries.color)} visitors ${snap.visitors}</p>`;
 
     return {
-      label,
       status: "good",
       value: String(snap.online),
       extra: subline + chart,

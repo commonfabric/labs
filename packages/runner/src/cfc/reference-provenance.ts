@@ -4,13 +4,19 @@
  * acquisition authority. Target content labels are resolved independently.
  */
 
+import type { CfcAtom } from "@commonfabric/api/cfc";
+import { meetInputWitnesses } from "./input-witness.ts";
 import { deepFreeze } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { ScopeCapAtDepth } from "../link-types.ts";
 import { type CfcConfClause, clausesEqual } from "./clause.ts";
-import type { CfcLabelView } from "./label-view-core.ts";
+import {
+  type CfcLabelView,
+  cfcLabelViewOriginSpaces,
+  withCfcLabelViewOrigins,
+} from "./label-view-core.ts";
 import type { CfcAddress } from "./types.ts";
 
 /** The complete binding whose identity was acquired by the runtime. */
@@ -22,6 +28,10 @@ export type CfcReferenceBinding = CfcAddress & {
 export type CfcReferenceProvenance = {
   readonly binding: CfcReferenceBinding;
   readonly confidentiality: readonly CfcConfClause[];
+  /** Historical evidence for the reference selection, never target contents. */
+  readonly selectionWitnesses?: readonly CfcAtom[];
+  /** Trusted spaces whose manifests explain retained policy clauses. */
+  readonly originSpaces?: readonly string[];
   readonly scopeCaps?: readonly ScopeCapAtDepth[];
 };
 
@@ -29,6 +39,9 @@ export type CfcReferenceProvenance = {
 export type CfcReferenceObservation = {
   readonly target: CfcReferenceBinding;
   readonly confidentiality: readonly CfcConfClause[];
+  /** Historical evidence for the reference selection, never target contents. */
+  readonly selectionWitnesses?: readonly CfcAtom[];
+  readonly originSpaces?: readonly string[];
   readonly purpose: "identity" | "dereference";
   readonly journalIndex: number;
 };
@@ -36,9 +49,12 @@ export type CfcReferenceObservation = {
 const carriers = new WeakMap<object, () => CfcReferenceProvenance>();
 const carrierViews = new WeakMap<object, () => CfcLabelView | undefined>();
 const views = new WeakMap<object, readonly CfcConfClause[]>();
+const selectionWitnesses = new WeakMap<object, readonly CfcAtom[]>();
+const attestedObservations = new WeakSet<CfcReferenceObservation>();
 
 /** Shared empty restriction list for views without recorded reference history. */
 const emptyConfidentiality: readonly CfcConfClause[] = Object.freeze([]);
+const emptySelectionWitnesses: readonly CfcAtom[] = Object.freeze([]);
 
 /** Registers a runtime-owned carrier; this mint stays package-internal. */
 export function registerCfcReferenceCarrier(
@@ -115,6 +131,28 @@ export function cfcReferenceConfidentialityForView(
     : views.get(view) ?? emptyConfidentiality;
 }
 
+/** Reads authenticated evidence for the selections retained by a live view. */
+export function cfcReferenceSelectionWitnessesForView(
+  view: CfcLabelView | undefined,
+): readonly CfcAtom[] {
+  return view === undefined
+    ? emptySelectionWitnesses
+    : selectionWitnesses.get(view) ?? emptySelectionWitnesses;
+}
+
+/** Meets selection evidence over the confidential acquisitions being joined. */
+export function joinCfcReferenceSelectionWitnesses(
+  sources: readonly (CfcLabelView | undefined)[],
+): readonly CfcAtom[] {
+  let common: readonly CfcAtom[] | undefined;
+  for (const view of sources) {
+    if (cfcReferenceConfidentialityForView(view).length === 0) continue;
+    const held = cfcReferenceSelectionWitnessesForView(view);
+    common = common === undefined ? held : meetInputWitnesses(common, held);
+  }
+  return common ?? [];
+}
+
 /**
  * Carries runtime-derived reference restrictions through a view transformation.
  * A reference entry keeps the view present when a descendant slice has no
@@ -123,6 +161,7 @@ export function cfcReferenceConfidentialityForView(
 export function withCfcReferenceConfidentiality(
   view: CfcLabelView | undefined,
   confidentiality: readonly CfcConfClause[],
+  witnesses: readonly CfcAtom[] = [],
 ): CfcLabelView | undefined {
   if (confidentiality.length === 0) return view;
   const referenceEntry = {
@@ -139,10 +178,13 @@ export function withCfcReferenceConfidentiality(
   const covered = confidentiality.every((clause) =>
     existing.some((candidate) => clausesEqual(candidate, clause))
   );
-  const result: CfcLabelView = covered && view !== undefined ? view : {
-    version: 1,
-    entries: [...(view?.entries ?? []), referenceEntry],
-  };
+  const result: CfcLabelView = covered && view !== undefined &&
+      deepEqual(cfcReferenceSelectionWitnessesForView(view), witnesses)
+    ? view
+    : {
+      version: 1,
+      entries: [...(view?.entries ?? []), referenceEntry],
+    };
   const retained = [...cfcReferenceConfidentialityForView(view)];
   for (const clause of confidentiality) {
     if (!retained.some((candidate) => clausesEqual(candidate, clause))) {
@@ -150,7 +192,8 @@ export function withCfcReferenceConfidentiality(
     }
   }
   views.set(result, deepFreeze(retained));
-  return result;
+  selectionWitnesses.set(result, deepFreeze([...witnesses]));
+  return withCfcLabelViewOrigins(result, cfcLabelViewOriginSpaces(view));
 }
 
 /** Joins retained reference restrictions from independently derived views. */
@@ -168,6 +211,24 @@ export function joinCfcReferenceConfidentiality(
   return joined;
 }
 
+/** Reads selection evidence only from a runtime-recorded observation receipt. */
+export function cfcReferenceObservationSelectionWitnesses(
+  observation: CfcReferenceObservation,
+): readonly CfcAtom[] {
+  return attestedObservations.has(observation)
+    ? observation.selectionWitnesses ?? emptySelectionWitnesses
+    : emptySelectionWitnesses;
+}
+
+/** Reads policy origins only from a runtime-recorded observation receipt. */
+export function cfcReferenceObservationOriginSpaces(
+  observation: CfcReferenceObservation,
+): readonly string[] | undefined {
+  return attestedObservations.has(observation)
+    ? observation.originSpaces
+    : undefined;
+}
+
 /** Records retained reference restrictions at an application observation. */
 export function recordCfcReferenceObservation(
   tx: IExtendedStorageTransaction,
@@ -175,8 +236,7 @@ export function recordCfcReferenceObservation(
   purpose: CfcReferenceObservation["purpose"],
 ): void {
   if (
-    provenance === undefined || provenance.confidentiality.length === 0 ||
-    tx.getCfcState().enforcementMode === "disabled"
+    provenance === undefined || provenance.confidentiality.length === 0
   ) return;
   const clock = tx.currentActivityIndex?.();
   let index = (clock ?? 0) - 1;
@@ -188,10 +248,16 @@ export function recordCfcReferenceObservation(
       index = Math.max(index, write.journalIndex);
     }
   }
-  tx.recordCfcReferenceObservation({
+  const observation: CfcReferenceObservation = {
     target: provenance.binding,
     confidentiality: provenance.confidentiality,
+    selectionWitnesses: provenance.selectionWitnesses ?? [],
+    ...(provenance.originSpaces !== undefined && {
+      originSpaces: provenance.originSpaces,
+    }),
     purpose,
     journalIndex: index + 0.5,
-  });
+  };
+  attestedObservations.add(observation);
+  tx.recordCfcReferenceObservation(observation);
 }

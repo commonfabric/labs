@@ -1,3 +1,5 @@
+import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
+
 /**
  * Canonical tags for value types, in `<Type>@<Version>` form. This is collected
  * here for ease of reference. It is in the form of a frozen `const` to help
@@ -24,27 +26,9 @@ export const CODEC_TYPE_TAGS = Object.freeze(
     /** Constant representing JavaScript type `undefined`. */
     Undefined: "Undefined@1",
 
-    // Tags for the built-in "primitive" `FabricPrimitive` classes. These tags
-    // are for wire formats for which instances of (one or more of) these
-    // classes do not have protocol-specific forms.
-
-    /** Constant for class `FabricBytes`. */
-    Bytes: "Bytes@1",
-
-    /** Constant for class `FabricEpochDay`. */
-    EpochDay: "EpochDay@1",
-
-    /** Constant for class `FabricEpochNsec`. */
-    EpochNsec: "EpochNsec@1",
-
-    /** Constant for class `FabricHash`. */
-    Hash: "Hash@1",
-
-    /** Constant for class `FabricKeyPair`. */
-    KeyPair: "KeyPair@1",
-
-    /** Constant for class `FabricRegExp`. */
-    RegExp: "RegExp@1",
+    // Tags for the built-in "primitive" `FabricPrimitive` classes, which are
+    // defined beside those classes.
+    ...FABRIC_PRIMITIVE_CODEC_TYPE_TAGS,
 
     // Tags for the primary versions built-in non-primitive `FabricInstance`
     // classes, specifically the tags used to _encode_ instances from a live

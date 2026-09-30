@@ -1,6 +1,6 @@
 /**
  * Reduction of a JSON Schema to the part of it that is STRUCTURE: property
- * names, types, nesting, required-ness, and array/object composition. The
+ * names, types, recognized scopes, nesting, required-ness, and composition. The
  * result is what `describe_handle` may disclose about a referent whose schema
  * the harness did not write.
  *
@@ -31,7 +31,9 @@
  */
 
 import type { JSONSchema, JSONSchemaTypes } from "@commonfabric/api";
-import { FABRIC_PRIMITIVE_SCHEMA_TYPES } from "@commonfabric/api";
+import { FABRIC_PRIMITIVE_SCHEMA_TYPES } from "@commonfabric/data-model/fabric-primitives";
+import { isSchemaScope } from "@commonfabric/runner/scope";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
  * The `type` vocabulary passed through. A closed set, so a `type` cannot be
@@ -105,8 +107,7 @@ const referenceTokenName = (token: string): string | undefined =>
 
 const isSchemaRecord = (
   schema: JSONSchema,
-): schema is Exclude<JSONSchema, boolean> =>
-  typeof schema === "object" && schema !== null && !Array.isArray(schema);
+): schema is Exclude<JSONSchema, boolean> => isObjectNotArray(schema);
 
 /** Structural keywords whose value is a single subschema. */
 const SUBSCHEMA_KEYS = [
@@ -330,6 +331,10 @@ const reduceSchema = (
     const format = source.format;
     if (typeof format === "string" && DISCLOSABLE_FORMATS.has(format)) {
       shape.format = format;
+    }
+
+    if (isSchemaScope(source.scope)) {
+      shape.scope = source.scope;
     }
 
     for (const key of SUBSCHEMA_KEYS) {

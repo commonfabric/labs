@@ -107,8 +107,6 @@ const usagePath = (org: string, year: number, month: number) =>
 const monthKey = (year: number, month0: number) =>
   `${year}-${String(month0 + 1).padStart(2, "0")}`;
 
-const LABEL = "github spend";
-
 export const GITHUB_LAG_DAYS = 2;
 // How far back a source's newest row may sit before the tile stops reading the
 // source. GitHub reports within a day or two of a day ending, so four days
@@ -417,7 +415,6 @@ function minutesView(
     ? "warn"
     : "good";
   return {
-    label: LABEL,
     status,
     value: `${spend.paid} paid min`,
     sub: `${spend.used} / ${spend.included} min · MTD`,
@@ -434,14 +431,12 @@ function unavailableMessage(error: unknown): string {
 }
 
 export const githubCiSpend: Tile = {
-  id: "github-ci-spend",
+  label: "github spend",
   intervalMs: 3_600_000,
   async collect(ctx): Promise<TileView> {
-    const label = LABEL;
     const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
     if (!token) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "set GH_TOKEN (needs org billing read)",
@@ -494,7 +489,6 @@ export const githubCiSpend: Tile = {
 
       return {
         ...drill,
-        label,
         status,
         value,
         valueLabel: value,
@@ -505,7 +499,6 @@ export const githubCiSpend: Tile = {
     } catch (error) {
       return {
         ...drill,
-        label,
         status: "unknown",
         value: "—",
         sub: unavailableMessage(error),

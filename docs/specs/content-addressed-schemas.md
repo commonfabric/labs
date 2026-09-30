@@ -29,7 +29,7 @@ stores each module's text as one, and its records link to them.
 
 ## Last Updated
 
-2026-09-10
+2026-09-25
 
 ## Motivation
 
@@ -158,6 +158,18 @@ content the `cid:` namespace holds, and the larger.
 A record written before code documents existed holds its code inline as a
 string, and readers accept both forms. Nothing rewrites an existing record;
 only new writes use a code document.
+
+### Label documents
+
+A label document is a `cid:` document whose value is one canonical CFC
+label, named by a version-2 CFC envelope's `labelMap` entry in place of the
+label itself. It is the third kind of content the namespace holds, under the
+same identity check (the general content hash of its value), the same
+immutability and space-scope rules, and the same write-side and read-side
+delivery guarantees, with the traversal's `cfc` seam loading each one beside
+the envelope's schema document.
+[content-addressed-cfc-labels.md](content-addressed-cfc-labels.md) is the
+design.
 
 ### Decomposition
 
@@ -316,6 +328,9 @@ with a grammar of exactly two forms:
 - **Reference**: a single-member `{ "$ref": "cid:<hash>" }` root, the
   `#/$defs/<name>` fragment form included.
 
+An omitted member or `undefined` means no schema metadata. A member holding
+`null` is malformed and is refused at the same write and read boundaries.
+
 ```jsonc
 {
   "value": { "items": [] },
@@ -431,6 +446,26 @@ a mismatched document is rejected and never enters the registry. Because
 external refs are hash-covered content, verifying each document
 individually verifies the whole closure against the root reference.
 
+Every walk over a closure is one implementation:
+`walkSchemaDocumentClosure` in `@commonfabric/data-model-schema`
+(`schema-closure.ts`), whose `verifySchemaDocument` is the identity check
+above. The walk owns the worklist, the dedupe, the verification of a
+stored value, and the following of a verified document's own refs. A
+site supplies where a document comes from and what a miss means, and
+nothing else: the commit boundary resolves a hash against the commit's
+own sets and then the store and refuses the commit on a miss; result
+assembly and selector validation read through the query's manager at
+its seq and fail the query; the traversal reads through the transaction
+so the dependency is recorded, reports an absent document on the
+missing-target channel, and lets the schema select nothing; the replica
+resolves against the arriving frame before its store; the transaction
+and the registry walk the realm registry, staging a document or
+memoizing completeness. A site that already holds a document verified —
+the registry, or a cache keyed by the document's version — hands it over
+as verified and the walk follows it without re-hashing; a site that
+holds a document and everything behind it settles the hash, and the walk
+stops there.
+
 The same identity check is the class test. `cid:` holds more document
 classes than schema documents — blobs among them — and a delivery site
 cannot name the class of a directly pulled document, so a document is a
@@ -439,13 +474,18 @@ value. Anything that passes is byte-for-byte usable as the schema
 document that id names; anything else is another class, not a rejection
 to warn about.
 
-Content-addressed documents are immutable at the commit boundary: the
-server rejects a `delete` or `patch` of any `cid:` document, whatever
-its class, and rejects a `set` that is neither the first installation
-nor content-identical to the stored document (canonical value equality,
-which compares special objects by content hash) — conflicting sets of one id
-within a single commit included — because a deleted or altered
-dependency would invalidate every document referencing it. An
+Content-addressed documents are immutable at the commit boundary:
+`set` is the only operation the server admits against a `cid:` id,
+whatever the document's class, and it rejects a `set` that is neither
+the first installation nor content-identical to the stored document
+(canonical value equality, which compares special objects by content
+hash) — conflicting sets of one id within a single commit included —
+because a deleted or altered dependency would invalidate every document
+referencing it. Admitting one operation rather than naming the ones it
+refuses is what makes an operation added to the protocol refused at this
+boundary until someone decides otherwise: `delete`, `patch`, `apply-op`
+and `release-op-field` are each refused today without the rule naming
+them. An
 idempotent re-`set` of the same content is how writers install closures
 and stays legal — and it applies as a semantic no-op: the immutability
 comparison proves the content unchanged, so the engine writes no
@@ -499,11 +539,20 @@ external closure is complete.
 
 ### Space boundaries
 
+A link's schema belongs to the space holding the link declaration. When a
+document in space A links to a document in space B, the schema's `cid:`
+references resolve in A, including their transitive closure. Before carrying
+that schema into B, traversal and link resolution recompose it into a
+self-contained schema. Path narrowing, target queries, and derived Cell
+handles therefore do not require B to hold A's schema documents. A schema
+declared by a link inside B resolves in B when that next link is followed.
+
 A schema document's value is space-free: content addressing makes the
 bytes identical wherever they are stored, so the realm-wide registry
 shares one verified object across spaces, and using a shared value can
-never produce a wrong answer. Which space a document EXISTS in matters in
-exactly two guarantees, both about delivery rather than about values:
+never produce a wrong answer. Document residency determines where a missing
+closure is loaded, as described above. Two delivery guarantees keep those
+documents available alongside their declarations:
 
 - **The write-side guarantee.** The client that replaces an inline schema
   with a reference created the obligation, so it discharges it: the
@@ -534,7 +583,7 @@ exactly two guarantees, both about delivery rather than about values:
   results are cached per document version, so in steady state a version
   is scanned once however many sessions or refreshes deliver it.
   Traversal keeps its own gate where a schema enters it — the selector
-  and a link: a schema whose closure the space does not hold selects
+  and a link: a schema whose closure the declaring space does not hold selects
   nothing, since selecting by an uncollectable schema would produce a
   result whose shape the receiving client could never reproduce from
   what arrives.
@@ -622,18 +671,36 @@ delivery and traversal split the work in two layers:
 - **Traversal** loads the closure where a schema enters it — the selector
   and a link — because resolution during the traversal needs the
   documents at hand, and its availability gate (a schema whose closure
-  the space does not hold selects nothing) lives on the same reads.
+  the declaring space does not hold selects nothing) lives on the same reads.
   Traversal does not recurse into `cid:` documents.
-- **Result assembly** owns delivery: it scans every complete document the
-  query delivers — link positions and the `schema` metadata member —
-  verifies each referenced closure against the space's
-  own store, and joins it to the delivered set and watch set — failing
-  the query on a hole. A refresh revalidates the established delivery
-  state too, so a corrupted dependency fails even under an unchanged
-  referrer. An assembly failure means the patch shape that escapes
-  commit-time validation (see Resolution), out-of-band tampering, or a
-  store predating that validation — never a transient condition, since
-  the commit boundary validates every closure it collects and preserves
+- **Result assembly** owns delivery: it scans every complete document
+  the query delivers — link positions and the `schema` metadata member —
+  verifies each referenced closure against the space's own store, and
+  joins it to the delivered set and watch set — failing the query on a
+  hole. An assembly over a graph the session already holds — a refresh,
+  or an added watch that extends the graph — walks only the closures of
+  the documents it delivers, and stops at a schema document only when
+  all three hold: it is not delivered in this pass, the graph's scan of
+  it records its own hash, and the graph's entities hold it at the
+  scanned version. The entities record a version only after
+  verification: the assembly that recorded it verified the document and
+  its whole closure against this store before recording either, and the
+  commit boundary never replaces or removes an installed `cid:`
+  document, so an established reference cannot come to resolve
+  differently through the store's API. A schema document an assembly
+  tracked before failing was never recorded in the entities, so it is
+  not established, and the next assembly that reaches it verifies and
+  delivers it. A delivered document's previous version contributes its
+  references as well, so a `cid:` document arriving at a new version is
+  checked against the hash it verified as. What such an assembly does
+  not re-read is a closure document altered out of band beneath an
+  unchanged referrer; an evaluation that builds its graph afresh — the
+  first watch on a branch, or a full re-evaluation — reads that closure
+  from the store and fails on it, unless the evaluation cache answers
+  it. An assembly failure means the patch shape that escapes commit-time
+  validation (see Resolution), out-of-band tampering, or a store
+  predating that validation — never a transient condition, since the
+  commit boundary validates every closure it collects and preserves
   every installed document. A
   request-shaped evaluation (watch installation, an initial query)
   answers its caller with the diagnostic as a QueryError; the fan-out
@@ -693,7 +760,8 @@ playbook:
   handle references that nothing yet writes. The three memory walkers learn
   reference-only schema positions in the same change.
 - **Phase 0.5 — commit-boundary enforcement.** `cid:` immutability
-  (no delete, patch, or differing re-set) and commit-time closure
+  (`set` the only admitted operation, and no differing re-set) and
+  commit-time closure
   validation (every collected reference — all but the one patch shape
   documented under Resolution — is backed, in the commit or the space's
   store, by content that verifies against its id, transitively), landed

@@ -207,8 +207,8 @@ resolving `scope` against its identity. The vocabulary:
   is a node-level topology relation (one node writes all instances of
   its declared surface, C11b), so the edge between a user-scoped-declared
   writer and a reader running as any principal holds; the N-run loop
-  resubscribes ONCE to the UNION of its instance logs (a per-run
-  resubscribe kept only the last instance's reads); instance-precise
+  resubscribes to the UNION of its instance logs after each instance,
+  keeping earlier reads watched while later instances run; instance-precise
   dirtiness across the name-keyed fan-in is stage B's B7 (O(N) re-runs
   per input change, equality cutoffs absorbing siblings — recorded, not
   a correctness need).

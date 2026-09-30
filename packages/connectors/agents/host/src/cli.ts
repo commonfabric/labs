@@ -93,6 +93,7 @@ export async function runAgentsHostCli(
         space: options.space,
         sources: config.sources,
         checkoutRoots: config.checkoutRoots,
+        commandProducers: config.commandProducers,
         debugView: options.debugView,
         acceptCommands: !options.once,
         signal: startupAbort.signal,
@@ -125,6 +126,11 @@ export async function runAgentsHostCli(
     dependencies.log(`Command ledger: ${running.ledgerPath}`);
     if (running.debugPieceId) {
       dependencies.log(`Debug view piece: ${running.debugPieceId}`);
+    }
+    for (const producer of running.commandProducers) {
+      dependencies.log(
+        `Command producer ${producer.id}: ${producer.commandCellId} (piece ${producer.piece})`,
+      );
     }
 
     if (options.once) {

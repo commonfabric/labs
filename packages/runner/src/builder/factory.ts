@@ -3,9 +3,9 @@
  */
 
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
-  FabricSpecialObject,
   toCompactDebugString,
   toIndentedDebugString,
   valueEqual,
@@ -16,12 +16,9 @@ import {
   FabricLink,
 } from "@commonfabric/data-model/fabric-instances";
 import {
-  FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
-  FabricRegExp,
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  fabricPrimitiveClassesByName,
+  isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
 import {
   all as rowLabelAll,
@@ -38,6 +35,7 @@ import {
 import { cfLink, table } from "@commonfabric/memory/sqlite/schema";
 
 import { cellConstructorFactory } from "../cell.ts";
+import { renderCellReference } from "../cell-reference.ts";
 import { getEntityId } from "../create-ref.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { freezeVerifiedPlainData } from "../sandbox/plain-data.ts";
@@ -46,6 +44,7 @@ import {
   type UnsafeHostTrust,
 } from "../unsafe-host-trust.ts";
 import {
+  agent,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -106,15 +105,13 @@ import {
   TILE_UI,
   TYPE,
   UI,
+  VIEWS,
   WebhookConfigSchema,
 } from "./types.ts";
 import {
   CFC_CANONICAL_ALIAS_NAMES,
   FABRIC_INSTANCE_PLUS_BRAND,
   FABRIC_PRIMITIVE_BRAND,
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-  FABRIC_SPECIAL_OBJECT_BRAND,
-  isFabricPrimitiveSchemaType,
   MERGEABLE_OP_METHODS,
 } from "@commonfabric/api";
 
@@ -224,8 +221,10 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     llmDialog,
     generateObject,
     generateText,
+    agent,
     fetchBinary,
     cellFromUrl,
+    renderCellReference,
     fetchText,
     fetchJson,
     fetchJsonUnchecked,
@@ -309,6 +308,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     CHIP_UI,
     FS,
     TESTS,
+    VIEWS,
 
     // Schema utilities
     schema: runtimeSchema,
@@ -317,13 +317,15 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     AuthSchema,
     WebhookConfigSchema,
 
+    // The schema `type` vocabulary of the primitive classes, which
+    // `@commonfabric/api` declares and the data model implements.
+    FABRIC_PRIMITIVE_SCHEMA_TYPES,
+    isFabricPrimitiveSchemaType,
+
     // The names `@commonfabric/api` both declares and implements, passed
     // through so a pattern that imports one reads the value rather than
     // `undefined`: the sandbox resolves `commonfabric` to this object, not to
     // that module.
-    FABRIC_PRIMITIVE_SCHEMA_TYPES,
-    isFabricPrimitiveSchemaType,
-    FABRIC_SPECIAL_OBJECT_BRAND,
     FABRIC_INSTANCE_PLUS_BRAND,
     FABRIC_PRIMITIVE_BRAND,
     MERGEABLE_OP_METHODS,
@@ -335,26 +337,23 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     UiPromptSlot,
     UiDisclosure,
 
-    // `FabricSpecialObject` classes -- runtime values backing the type
+    // The special-object classes -- runtime values backing the type
     // declarations in data-model/src/api.ts. Enables `new FabricEpochNsec(...)`
-    // and `instanceof` checks in patterns. `FabricSpecialObject` is abstract;
-    // it is bound for `instanceof` only. Listed in declaration order, so this
-    // list and those declarations can be compared directly.
-    FabricSpecialObject,
+    // and `instanceof` checks in patterns. `FabricInstance` and
+    // `FabricPrimitive` are abstract; they are bound for `instanceof` only.
+    // The concrete primitive classes arrive under the names `api.ts` declares
+    // them by.
     FabricInstance,
     FabricPrimitive,
-    FabricEpochNsec,
-    FabricEpochDay,
-    FabricHash,
+    ...fabricPrimitiveClassesByName(),
     FabricLink,
-    FabricBytes,
-    FabricRegExp,
-    FabricKeyPair,
     FabricError,
 
-    // Debug stringifiers (helpers exposed for pattern code)
+    // Debug stringifiers, and the tag that composes a message around one
+    // (helpers exposed for pattern code)
     toCompactDebugString,
     toIndentedDebugString,
+    debugStr,
 
     // Value comparison helper exposed for pattern code
     valueEqual,

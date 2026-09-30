@@ -20,6 +20,7 @@ import {
   PiecesController,
 } from "@commonfabric/piece/ops";
 import { decomposeSchema, Runtime } from "@commonfabric/runner";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { registerSchemaDocument } from "../runner/src/schema-registry.ts";
 import {
@@ -153,10 +154,7 @@ class SinkableCell {
   get() {
     let current = this.#root._value;
     for (const segment of this.#path) {
-      if (
-        typeof current !== "object" || current === null ||
-        Array.isArray(current)
-      ) {
+      if (!isObjectNotArray(current)) {
         return undefined;
       }
       current = (current as Record<string, unknown>)[segment];
@@ -2000,10 +1998,7 @@ describe("cell-bridge", () => {
               set: (value: unknown, path?: (string | number)[]) => {
                 if (path?.length === 1 && typeof path[0] === "string") {
                   resultValue = { ...resultValue, [path[0]]: value };
-                } else if (
-                  typeof value === "object" && value !== null &&
-                  !Array.isArray(value)
-                ) {
+                } else if (isObjectNotArray(value)) {
                   resultValue = value as Record<string, unknown>;
                 }
                 return Promise.resolve();
@@ -2087,10 +2082,7 @@ describe("cell-bridge", () => {
           const getAtPath = (path?: (string | number)[]) => {
             let current: unknown = resultValue;
             for (const segment of path ?? []) {
-              if (
-                typeof current !== "object" || current === null ||
-                Array.isArray(current)
-              ) {
+              if (!isObjectNotArray(current)) {
                 return undefined;
               }
               current = (current as Record<string, unknown>)[String(segment)];
@@ -2107,8 +2099,7 @@ describe("cell-bridge", () => {
             for (const segment of path.slice(0, -1)) {
               const key = String(segment);
               const child = current[key];
-              const cloned = typeof child === "object" && child !== null &&
-                  !Array.isArray(child)
+              const cloned = isObjectNotArray(child)
                 ? { ...(child as Record<string, unknown>) }
                 : {};
               current[key] = cloned;
@@ -3112,7 +3103,7 @@ describe("cell-bridge", () => {
                 symbol: "default",
                 source: {
                   ref: `cf:pattern:${"A".repeat(43)}`,
-                  repository: "https://github.com/commontoolsinc/labs",
+                  repository: "https://github.com/commonfabric/labs",
                   entry: "/notes/note.tsx",
                 },
               }),
@@ -3144,7 +3135,7 @@ describe("cell-bridge", () => {
             symbol: "default",
             source: {
               ref: `cf:pattern:${"A".repeat(43)}`,
-              repository: "https://github.com/commontoolsinc/labs",
+              repository: "https://github.com/commonfabric/labs",
               entry: "/notes/note.tsx",
             },
           });
@@ -3381,7 +3372,7 @@ describe("cell-bridge", () => {
           const handlerCell: FakeCell = {
             schema: { type: "object" },
             get: () => handlerLink,
-            getRaw: () => ({ $stream: true }),
+            getRaw: () => undefined,
             asSchemaFromLinks() {
               return this;
             },
@@ -3483,7 +3474,7 @@ describe("cell-bridge", () => {
           const streamCell = (schema: unknown): FakeCell => ({
             schema: schema as FakeCell["schema"],
             get: () => handlerLink,
-            getRaw: () => ({ $stream: true }),
+            getRaw: () => undefined,
             asSchemaFromLinks() {
               return this;
             },
@@ -3667,18 +3658,20 @@ describe("cell-bridge", () => {
         });
 
         it("labels void handlers as no-arg callables in `.handlers`", async () => {
+          // The stream's document holds no value: the result schema's
+          // declaration is all that says `onAddContact` is a handler.
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec");
           const state = buildTestSpace(bridge, "home", []);
 
           const onAddContactCell = makeCell(
-            { $stream: true },
+            undefined,
             { asCell: ["stream"] },
             {},
             { isStream: true },
           );
           const resultCell = makeCell(
-            { onAddContact: { $stream: true } },
+            {},
             {
               type: "object",
               properties: {
@@ -3697,7 +3690,7 @@ describe("cell-bridge", () => {
             },
             result: {
               getCell: () => Promise.resolve(resultCell),
-              get: () => Promise.resolve({ onAddContact: { $stream: true } }),
+              get: () => Promise.resolve({}),
             },
           };
 
@@ -5103,7 +5096,7 @@ describe("cell-bridge", () => {
             symbol: "default",
             source: {
               ref: `cf:pattern:${"A".repeat(43)}`,
-              repository: "https://github.com/commontoolsinc/labs",
+              repository: "https://github.com/commonfabric/labs",
               entry: "/notes/note.tsx",
             },
           };
@@ -5142,7 +5135,7 @@ describe("cell-bridge", () => {
             symbol: "default",
             source: {
               ref: `cf:pattern:${"B".repeat(43)}`,
-              repository: "https://github.com/commontoolsinc/labs",
+              repository: "https://github.com/commonfabric/labs",
               entry: "/notes/note.tsx",
             },
           };
@@ -5171,7 +5164,7 @@ describe("cell-bridge", () => {
             ...patternRef,
             source: {
               ...patternRef.source,
-              repository: "https://github.com/commontoolsinc/another-repo",
+              repository: "https://github.com/commonfabric/another-repo",
             },
           };
           const repositoryRefreshed = defer();
@@ -5747,8 +5740,11 @@ describe("cell-bridge", () => {
               );
             }
 
-            override registerSpaceHost(): boolean {
-              return false;
+            override registerSpaceHostDetailed() {
+              return {
+                accepted: false,
+                reason: "no-remote-resolution",
+              } as const;
             }
           }
 

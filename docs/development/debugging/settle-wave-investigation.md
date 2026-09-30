@@ -250,6 +250,38 @@ pieces, views that materialize many previews, broad root-state cells rewritten
 wholesale), and compare small versus large spaces before blaming the action
 body itself.
 
+## Equivalence Checks
+
+The scheduler maintains two structures incrementally rather than recomputing
+them, and each one can fall out of step with the definition it implements. A
+structure that has drifted does not report anything: the trigger index stops
+waking a subscriber, or a node never becomes live, and the interface shows a
+stale value. Each structure therefore has a switch that turns on an assertion
+comparing it against that definition on every mutation, so drift throws at the
+mutation that caused it.
+
+The trigger index checks itself, under `ENV=test`, which the runner's own test
+task sets. On every registration and removal it asserts that the path trie in
+`packages/runner/src/scheduler/entity-triggers.ts` holds what the per-action
+record beside it holds, under `arraysOverlap()`, and throws naming the write
+path and the paths the two disagree on. Nothing needs turning on to get that,
+and nothing turns it off: a lane that does not set `ENV=test`, which is every
+lane outside the runner, `cf-harness`, `llm`, and `toolshed` suites, does not
+carry the check. The profile scripts run through `deno run` and so measure
+without it.
+
+Liveness is checked on request rather than always. With
+`SCHEDULER_LIVENESS_EQUIVALENCE=1`, every exit from the four liveness mutators
+in `packages/runner/src/scheduler/dependency-graph.ts` asserts that the
+incrementally maintained refcounts equal a full rebuild from the demand roots,
+throwing with the mutation site and the drifted nodes. It is off by default
+because it rebuilds the whole graph per mutation. Run the runner suite under it
+after changing liveness maintenance, registration ordering, or edge derivation:
+
+```bash
+cd packages/runner && ENV=test SCHEDULER_LIVENESS_EQUIVALENCE=1 deno task test
+```
+
 ## Source Paths Worth Checking First
 
 Start with these locations when traces or logs point to worker churn:
@@ -258,8 +290,8 @@ Start with these locations when traces or logs point to worker churn:
   and the public diagnosis API; `packages/runner/src/scheduler/` holds the
   settle loop (`settle.ts`, `execution.ts`, `work-oracle.ts`), event dispatch
   (`events.ts`), action execution/resubscribe timing (`run.ts`), and trigger
-  matching (`invalidation.ts`, `trigger-index.ts`, `scheduling-writes.ts`,
-  `dependency-graph.ts`)
+  matching (`invalidation.ts`, `trigger-index.ts`, `entity-triggers.ts`,
+  `scheduling-writes.ts`, `dependency-graph.ts`)
 - `packages/runtime-client/src/backends/web-worker/index.ts` — worker message
   entrypoint — and `runtime-processor.ts` — console-facing scheduler IPC
 - `packages/runner/src/storage/cache.ts` — socket event dispatch

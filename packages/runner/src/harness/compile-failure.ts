@@ -19,6 +19,8 @@
 // and revoked proxies included, so neither call needs a guard. A duplicated
 // module graph can only cause a missed classification, which safely fails
 // toward retrying.
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
 const deterministicCompileFailures = new WeakSet<object>();
 
 // An allocation failure is a function of heap pressure, not of the verified
@@ -44,7 +46,7 @@ function isAllocationFailure(error: object): boolean {
 /** Mark and return a failure that will recur for the same verified bytes. */
 export function markDeterministicCompileFailure<T>(error: T): T {
   if (
-    typeof error === "object" && error !== null && !isAllocationFailure(error)
+    isObjectOrArray(error) && !isAllocationFailure(error)
   ) {
     deterministicCompileFailures.add(error);
   }
@@ -58,6 +60,6 @@ export function deterministicCompileError(message: string): Error {
 
 /** True only for throwables stamped by this module. */
 export function isDeterministicCompileFailure(error: unknown): boolean {
-  return typeof error === "object" && error !== null &&
+  return isObjectOrArray(error) &&
     deterministicCompileFailures.has(error);
 }

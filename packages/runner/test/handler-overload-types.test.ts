@@ -28,15 +28,8 @@ import type {
   HandlerState,
   Stream,
 } from "@commonfabric/api";
+import type { Equal, MustBeTrue, Same } from "@commonfabric/utils/types";
 import { handler } from "../src/builder/module.ts";
-
-type MustBeTrue<T extends true> = T;
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-
-/** Identity equality — distinguishes readonly modifiers, which assignability
- * (and therefore `Same`) ignores. */
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends
-  (<T>() => T extends Y ? 1 : 2) ? true : false;
 
 interface AddTopic {
   title: string;

@@ -7,6 +7,7 @@ import type {
   IFCLabel,
 } from "@commonfabric/runner/cfc";
 import { mergeCfcLabelViews } from "@commonfabric/runner/cfc";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import {
@@ -59,8 +60,7 @@ export type EditFileToolOutput =
 export const isEditFileToolSuccessOutput = (
   output: unknown,
 ): output is EditFileToolSuccessOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "outputId" in output &&
   typeof output.outputId === "string" &&
   "path" in output &&

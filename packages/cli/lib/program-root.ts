@@ -1,5 +1,6 @@
 import { dirname, join } from "@std/path";
 import { parse } from "@std/jsonc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
  * Infer the root directory for resolving a test pattern's relative imports:
@@ -48,8 +49,7 @@ export function inferProgramRoot(entryPath: string): string | undefined {
 function declaresPackageName(text: string): boolean {
   try {
     const config = parse(text);
-    return config !== null && typeof config === "object" &&
-      !Array.isArray(config) &&
+    return isObjectNotArray(config) &&
       typeof (config as { name?: unknown }).name === "string";
   } catch {
     // An unparseable config cannot declare a name; the walk moves on rather

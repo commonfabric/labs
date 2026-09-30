@@ -1,13 +1,14 @@
 /**
  * Contract tests for frozen-object safety.
  *
- * `fabricFromNativeValueModern()` deep-freezes all stored objects at commit
+ * `fabricFromConvertibleJsValue()` deep-freezes all stored objects at commit
  * time. Code paths that read these frozen objects from storage must clone
  * before mutating.
  *
  * The writeOrThrow tests use a two-transaction pattern to exercise the real
  * freeze:
- * - tx1: write data and commit (fabricFromNativeValue freezes the objects)
+ * - tx1: write data and commit (fabricFromConvertibleJsValue freezes the
+ *   objects)
  * - tx2: read the frozen data and exercise the code path under test
  *
  * The remaining tests verify the defensive cloning contracts directly: that
@@ -45,7 +46,7 @@ describe("frozen-object safety contracts", () => {
 
     it("writes through a frozen parent when intermediate path is missing", async () => {
       // tx1: write {value: {existing: "data"}} and commit. The commit
-      // freezes the value object via fabricFromNativeValueModern.
+      // freezes the value object via fabricFromConvertibleJsValue.
       const tx1 = runtime.edit();
       tx1.writeOrThrow({
         space,

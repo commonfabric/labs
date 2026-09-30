@@ -6,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { Cell } from "../src/cell.ts";
 import { ENTITY_URI_SCHEMES } from "../src/entity-kind.ts";
@@ -18,7 +19,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
 
@@ -364,8 +365,8 @@ class RewritingStorageManager extends StorageManager {
       ),
     );
   }
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed() {
+    return { accepted: false, reason: "no-remote-resolution" } as const;
   }
 }
 
@@ -452,14 +453,7 @@ describe("list builtin resume container defer", () => {
     sm2Hold = undefined;
     heldDeliveries = [];
     withheldDocIds.clear();
-    server = new MemoryV2Server.Server({
-      authorizeSessionOpen(message) {
-        const principal = (message.authorization as { principal?: unknown })
-          ?.principal;
-        return typeof principal === "string" ? principal : undefined;
-      },
-      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-    });
+    server = newSharedServer();
     sm1 = RewritingStorageManager.make(signer, server, {
       redirectSends: true,
       onWithheldCommitOp: (n) => redirected += n,
@@ -690,7 +684,7 @@ describe("list builtin resume container defer", () => {
       for (const entry of value) collectReferencedIds(entry, into);
       return;
     }
-    if (value !== null && typeof value === "object") {
+    if (isObjectOrArray(value)) {
       for (const entry of Object.values(value as Record<string, unknown>)) {
         collectReferencedIds(entry, into);
       }
@@ -710,7 +704,7 @@ describe("list builtin resume container defer", () => {
       }
       return value.some((entry) => containsPrimitiveArray(entry, slots));
     }
-    if (value !== null && typeof value === "object") {
+    if (isObjectOrArray(value)) {
       return Object.values(value as Record<string, unknown>).some((entry) =>
         containsPrimitiveArray(entry, slots)
       );
@@ -768,7 +762,7 @@ describe("list builtin resume container defer", () => {
   // carries a `value` field, does; the resume's setup writes do not.
   function writesAggregateValue(op: any): boolean {
     if (op?.op === "set") {
-      return op.value !== null && typeof op.value === "object" &&
+      return isObjectOrArray(op.value) &&
         "value" in op.value;
     }
     if (Array.isArray(op?.patches)) {

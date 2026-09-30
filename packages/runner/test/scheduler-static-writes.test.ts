@@ -2,12 +2,6 @@ import {
   getLogger,
   getLoggerCountsBreakdown,
 } from "@commonfabric/utils/logger";
-import { spy } from "@std/testing/mock";
-import {
-  hasDependentPath,
-  hasInvalidUpstream,
-} from "../src/scheduler/dependency-graph.ts";
-import { NodeRegistry } from "../src/scheduler/node-record.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { forEachOverlappingWriter } from "../src/scheduler/scheduling-writes.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
@@ -721,7 +715,7 @@ describe("static write surface demand", () => {
   });
 });
 
-describe("dependency graph reachability", () => {
+describe("overlapping writers", () => {
   it("stops overlapping-writer scans early for recursive and shallow reads", () => {
     const first: Action = function firstOverlappingWriter() {};
     const second: Action = function secondOverlappingWriter() {};
@@ -757,56 +751,5 @@ describe("dependency graph reachability", () => {
       );
       expect(visited).toEqual([first]);
     }
-  });
-
-  it("handles a 20k-deep cyclic graph without recursive stack growth", () => {
-    const depth = 20_000;
-    const actions = Array.from(
-      { length: depth + 1 },
-      () => (() => {}) as Action,
-    );
-    const unreachable = (() => {}) as Action;
-    const dependents = new WeakMap<Action, Set<Action>>();
-
-    for (let index = 0; index < depth; index++) {
-      dependents.set(actions[index], new Set([actions[index + 1]]));
-    }
-    dependents.set(actions[depth], new Set([actions[depth / 2]]));
-
-    expect(hasDependentPath(dependents, actions[0], actions[depth])).toBe(true);
-    expect(hasDependentPath(dependents, actions[0], unreachable)).toBe(false);
-  });
-
-  it("visits shared descendants once when checking many invalid upstream candidates", () => {
-    const nodes = new NodeRegistry();
-    const roots = Array.from({ length: 32 }, () => (() => {}) as Action);
-    const shared = Array.from({ length: 32 }, () => (() => {}) as Action);
-    const target = (() => {}) as Action;
-    const dependents = new WeakMap<Action, Set<Action>>();
-    for (const root of roots) {
-      nodes.register(root, "computation");
-      dependents.set(root, new Set([shared[0]]));
-    }
-    for (let index = 0; index < shared.length - 1; index++) {
-      dependents.set(shared[index], new Set([shared[index + 1]]));
-    }
-    dependents.set(shared.at(-1)!, new Set([shared[0]]));
-    using reads = spy(dependents, "get");
-    expect(hasInvalidUpstream({ nodes, dependents }, target)).toBe(false);
-    expect(reads.calls.length).toBeLessThanOrEqual(
-      roots.length + shared.length,
-    );
-
-    const lastRootTarget = (() => {}) as Action;
-    dependents.get(roots.at(-1)!)!.add(lastRootTarget);
-    expect(hasInvalidUpstream({ nodes, dependents }, lastRootTarget)).toBe(
-      true,
-    );
-    dependents.get(shared.at(-1)!)!.add(target);
-    expect(hasInvalidUpstream({ nodes, dependents }, target)).toBe(true);
-    for (const root of roots) nodes.setStatus(root, "clean");
-    nodes.register(target, "computation");
-    dependents.set(target, new Set([shared[0]]));
-    expect(hasInvalidUpstream({ nodes, dependents }, target)).toBe(false);
   });
 });

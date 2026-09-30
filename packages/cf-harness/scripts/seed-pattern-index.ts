@@ -37,6 +37,7 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   createHarnessPatternIndexClientFactory,
   type PatternIndexClient,
@@ -235,10 +236,9 @@ export const parseGenerations = (
   // chain by its position, and a run reading it would name a prior generation
   // for an atom called `0`.
   if (
-    typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
+    !isObjectNotArray(parsed) ||
     typeof record.note !== "string" ||
-    typeof record.atoms !== "object" || record.atoms === null ||
-    Array.isArray(record.atoms)
+    !isObjectNotArray(record.atoms)
   ) {
     throw new Error(`${path} holds no {note, atoms} record`);
   }

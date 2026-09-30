@@ -1,9 +1,9 @@
 /**
  * A `Set` as a `FabricInstance`, which is at present only half a value.
  *
- * Native conversion is the part that works: a frozen form is produced on
- * request, an already-frozen one is passed through rather than rebuilt, and a
- * mutable form is copied only when what it holds is frozen.
+ * Convertible-JS conversion is the part that works: a frozen form is produced
+ * on request, an already-frozen one is passed through rather than rebuilt, and
+ * a mutable form is copied only when what it holds is frozen.
  *
  * The freeze protocols and the codec throw as unimplemented stubs, and these
  * cases assert that throwing on purpose. A gap that is asserted is recorded; a
@@ -13,17 +13,16 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricInstance, type FabricValue } from "@/interface.ts";
 import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { FabricSet } from "@/fabric-instances/FabricSet.ts";
+  deepFreeze,
+  FabricInstance,
+  type FabricValue,
+  isValidDeepFrozenFabricValue,
+} from "@";
+import { CODEC, CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricSet } from "@/fabric-instances";
 import { FrozenSet } from "@/frozen-builtins.ts";
-import { deepFreeze, isValidDeepFrozenFabricValue } from "@/deep-freeze.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricSet", () => {

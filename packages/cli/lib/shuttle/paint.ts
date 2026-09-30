@@ -1,6 +1,6 @@
 /**
- * What a terminal has to be sent to show the line being typed, to end it, and
- * to put a line above it.
+ * What a terminal has to be sent to show the line being typed, to end it, to
+ * put a line above it, and to take the screen for a full-screen frame.
  *
  * A line being edited is redrawn where it stands, so a terminal is told where
  * the last drawing put the cursor as well as what to draw. That bookkeeping is
@@ -32,7 +32,7 @@
 
 import { unicodeWidth } from "@std/cli/unicode-width";
 
-import { CSI, ESC } from "../view/ansi.ts";
+import { CSI, ESC, term } from "../view/ansi.ts";
 import { wrapped } from "./page.ts";
 import { escapeControlCharacters } from "./place.ts";
 
@@ -133,6 +133,98 @@ export function above(painted: PaintedLine, text: string): string {
     "\r\n",
     repaint(NOTHING_PAINTED, painted),
   ].join("");
+}
+
+/**
+ * Returns what to send to take the screen over for a frame.
+ *
+ * The frame is drawn on the terminal's alternate screen, which is what keeps
+ * the transcript append-only: what a run has written scrolls nowhere while a
+ * frame is up, and giving the screen back puts the transcript on screen
+ * exactly as the frame found it. Nothing shuttle draws in a frame can
+ * therefore rewrite a line that has already scrolled past.
+ *
+ * The cursor is hidden as the screen is taken, and each drawing decides for
+ * itself where it goes from there ({@link cursorIn}). It starts hidden because
+ * a frame is read until something is being typed at it, and a cursor sitting
+ * at whatever column the last row's drawing ended in reads as a place a person
+ * could type.
+ */
+export function takingScreen(): string {
+  return `${term.enterAltScreen}${term.hideCursor}`;
+}
+
+/**
+ * Returns what to send after a frame's rows to put the cursor where `at` says,
+ * or to hide it where nothing is being typed at the frame.
+ *
+ * It is sent with every drawing rather than only when it changes, because a
+ * drawing positions each row from the top and leaves the cursor wherever the
+ * last of them ended: where the cursor goes is therefore a property of the
+ * drawing rather than a state between them, and one sent once would be undone
+ * by the next repaint.
+ *
+ * Showing it comes after the move, so the cursor never appears at the place
+ * the rows left it on the way to the place it belongs.
+ */
+export function cursorIn(
+  at: { readonly row: number; readonly column: number } | undefined,
+): string {
+  return at === undefined
+    ? term.hideCursor
+    : `${term.moveTo(at.row, at.column)}${term.showCursor}`;
+}
+
+/**
+ * Returns what to send to draw `rows` as the whole of the frame, one row of
+ * the terminal each from the top.
+ *
+ * Each row is positioned and cleared before it is written rather than the
+ * screen being cleared first, so a redraw replaces what is there instead of
+ * blanking it and drawing again — which is what a reader sees as a flicker.
+ *
+ * Line wrapping is off for the drawing and back on after it. A row filling the
+ * terminal's last column exactly would otherwise carry the cursor onto the
+ * next line, and on the last row of the screen that scrolls the frame up by
+ * one; every row is positioned from the top, so nothing here needs the wrap.
+ *
+ * Every row is held to {@link escapeControlCharacters} on the way out, which
+ * is the treatment {@link above} gives the line it writes and for the same
+ * reason: a frame is composed from what a cell holds, which is data a user
+ * program authored and no door of shuttle's has held. A sequence written
+ * through would reach the terminal as an instruction rather than as text, and
+ * could move the cursor off the row it was given, clear the screen, or draw
+ * over the frame around it. The holding is here, at the terminal itself, so
+ * that no composer of a row can be the one that forgot; a glyph is not a
+ * character a terminal acts on, so a row already held arrives unchanged.
+ *
+ * The positioning and the clear are composed after it, which is what keeps
+ * them the frame's own: they are this function's instructions to the terminal
+ * rather than anything a row said.
+ */
+export function screenOf(rows: readonly string[]): string {
+  return [
+    `${CSI}?7l`,
+    ...rows.map((row, index) =>
+      `${term.moveTo(index + 1, 1)}${term.clearLine}${
+        escapeControlCharacters(row)
+      }`
+    ),
+    `${CSI}?7h`,
+  ].join("");
+}
+
+/**
+ * Returns what to send to give the screen back, which restores what was on it
+ * before the frame took it.
+ *
+ * What was drawn under the frame is not drawn again here. The prompt is what
+ * decides where the next line goes, and it draws it as an ordinary first
+ * drawing — the alternate screen having left the cursor wherever the
+ * transcript ended.
+ */
+export function givingScreen(): string {
+  return `${term.showCursor}${term.leaveAltScreen}`;
 }
 
 /**

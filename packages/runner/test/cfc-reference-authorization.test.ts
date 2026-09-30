@@ -36,6 +36,7 @@ import {
 } from "../src/traverse.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -81,7 +82,7 @@ describe("cfc-reference-authorization", () => {
     const target = holderRuntime.getCell(space, targetCause);
     const seed = holderRuntime.edit();
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       ...target.getAsNormalizedFullLink(),
       path: [],
     }, {
@@ -122,10 +123,13 @@ describe("cfc-reference-authorization", () => {
       meta: { ...authorizationRead, ...internalVerifierRead },
     })).toEqual({ type: "string" });
     const holder = holderRuntime.getCell(space, holderCause);
-    tx.writeValueOrThrow(holder.getAsNormalizedFullLink(), target.getAsLink());
+    holder.withTx(tx).set(target);
     const prepared = tx.prepareCfc();
     expect(typeof prepared).toBe("string");
-    expect(tx.tx.getNativeCommit?.(space)?.operations.map((op) => op.id))
+    expect(
+      tx.tx.getNativeCommit?.(space)?.operations.map((op) => op.id)
+        .filter((id) => !id.startsWith("cid:")),
+    )
       .toEqual([holder.getAsNormalizedFullLink().id]);
     return { tx, holder, targetAddress, prepared };
   };
@@ -209,7 +213,7 @@ describe("cfc-reference-authorization", () => {
     const cause = "pending-reference-evidence";
     const target = holderRuntime.getCell(space, cause);
     const seed = holderRuntime.edit();
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       ...target.getAsNormalizedFullLink(),
       path: [],
     }, {
@@ -413,7 +417,7 @@ describe("cfc-reference-authorization", () => {
     const list = holderRuntime.getCell<string[]>(space, cause);
     const address = list.getAsNormalizedFullLink();
     const seed = holderRuntime.edit();
-    seed.writeOrThrow({ ...address, path: [] }, {
+    seedStoredEnvelope(seed, { ...address, path: [] }, {
       value: ["seed"],
       cfc: targetMetadata("original"),
     });
@@ -474,7 +478,7 @@ describe("cfc-reference-authorization", () => {
     const tx = holderRuntime.edit();
     const address = holderRuntime.getCell(space, targetCause)
       .getAsNormalizedFullLink();
-    expect(readStoredCfcMetadata(tx, address, { authorization: false }))
+    expect(readStoredCfcMetadata(tx, address, { meta: internalVerifierRead }))
       .toEqual(targetMetadata("original"));
     const replica = holderStorage.open(space).replica as SpaceReplica;
     const reads = replica.accessForTestingOnly.buildReads(tx.tx, 100);

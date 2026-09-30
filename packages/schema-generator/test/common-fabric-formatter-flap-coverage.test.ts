@@ -70,8 +70,6 @@ describe("Common Fabric formatter flap coverage", () => {
       // that schema is `true` there is no object to carry it on, so the scope
       // becomes the whole schema.
       const code = `
-        type PerUser<T> = T;
-
         interface SchemaRoot {
           anything: PerUser<any>;
         }

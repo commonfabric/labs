@@ -1,7 +1,4 @@
 import {
-  FABRIC_INSTANCE_PLUS_BRAND,
-  FABRIC_PRIMITIVE_BRAND,
-  FABRIC_SPECIAL_OBJECT_BRAND,
   type MutableJSONSchema,
   type MutableJSONSchemaObj,
 } from "@commonfabric/api";
@@ -21,6 +18,8 @@ import {
   cloneSchemaDefinition,
   getNativeTypeSchema,
   getPropertyNameText,
+  instantiatedPropertyType,
+  instantiatedValueType,
   isFunctionLike,
   safeGetPropertyType,
 } from "../type-utils.ts";
@@ -32,6 +31,9 @@ import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
+import { unwrapTypeParentheses } from "../typescript/type-node.ts";
+import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
+import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -47,7 +49,7 @@ const logger = getLogger("schema-generator.object", {
  *
  * Returns the schema definition for the wrapper if detected, undefined otherwise.
  */
-function getWrapperSchemaFromCallable(
+export function getWrapperSchemaFromCallable(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): MutableJSONSchemaObj | undefined {
@@ -111,22 +113,19 @@ function typeNodeExplicitlyDeclaresProperty(
   checker?: ts.TypeChecker,
 ): boolean {
   if (!typeNode) return false;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return typeNodeExplicitlyDeclaresProperty(typeNode.type, propName, checker);
-  }
-
-  if (ts.isUnionTypeNode(typeNode)) {
-    return typeNode.types.some((member) =>
+  if (ts.isUnionTypeNode(node)) {
+    return node.types.some((member) =>
       typeNodeExplicitlyDeclaresProperty(member, propName, checker)
     );
   }
 
-  if (!ts.isTypeLiteralNode(typeNode)) {
+  if (!ts.isTypeLiteralNode(node)) {
     return false;
   }
 
-  return typeNode.members.some((member) =>
+  return node.members.some((member) =>
     (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
     !!member.name &&
     getPropertyNameText(member.name, checker) === propName
@@ -139,13 +138,10 @@ function getExplicitPropertyTypeNode(
   checker?: ts.TypeChecker,
 ): ts.TypeNode | undefined {
   if (!typeNode) return undefined;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getExplicitPropertyTypeNode(typeNode.type, propName, checker);
-  }
-
-  if (ts.isUnionTypeNode(typeNode)) {
-    for (const member of typeNode.types) {
+  if (ts.isUnionTypeNode(node)) {
+    for (const member of node.types) {
       const nested = getExplicitPropertyTypeNode(member, propName, checker);
       if (nested) {
         return nested;
@@ -154,11 +150,11 @@ function getExplicitPropertyTypeNode(
     return undefined;
   }
 
-  if (!ts.isTypeLiteralNode(typeNode)) {
+  if (!ts.isTypeLiteralNode(node)) {
     return undefined;
   }
 
-  for (const member of typeNode.members) {
+  for (const member of node.members) {
     if (
       (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
       !!member.name &&
@@ -175,18 +171,13 @@ function isExplicitPropertyShapeTypeNode(
   typeNode: ts.TypeNode | undefined,
 ): boolean {
   if (!typeNode) return false;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return isExplicitPropertyShapeTypeNode(typeNode.type);
+  if (ts.isUnionTypeNode(node)) {
+    return node.types.some((member) => isExplicitPropertyShapeTypeNode(member));
   }
 
-  if (ts.isUnionTypeNode(typeNode)) {
-    return typeNode.types.some((member) =>
-      isExplicitPropertyShapeTypeNode(member)
-    );
-  }
-
-  return ts.isTypeLiteralNode(typeNode);
+  return ts.isTypeLiteralNode(node);
 }
 
 function shouldSkipInternalProperty(
@@ -195,18 +186,6 @@ function shouldSkipInternalProperty(
   context: GenerationContext,
 ): boolean {
   if (propName.startsWith("__@")) {
-    return true;
-  }
-
-  // The `FabricSpecialObject`, `FabricPrimitive`, and `FabricInstancePlus`
-  // nominal brands exist only in the type system -- no runtime value carries
-  // any of the keys, so none may appear in a schema's `properties` or
-  // `required`.
-  if (
-    (propName === FABRIC_SPECIAL_OBJECT_BRAND) ||
-    (propName === FABRIC_PRIMITIVE_BRAND) ||
-    (propName === FABRIC_INSTANCE_PLUS_BRAND)
-  ) {
     return true;
   }
 
@@ -226,29 +205,6 @@ function shouldSkipInternalProperty(
     context.typeNode,
     propName,
     context.typeChecker,
-  );
-}
-
-/**
- * `FabricExecPlainObject` is used as a compile-time constraint on internal
- * execution graph types. Its inherited index signature does not describe
- * authored data accepted by a pattern, so it must not become a JSON Schema
- * `additionalProperties` declaration. The name is a type alias, so a base
- * declared through it resolves to the aliased type and carries the alias as
- * its alias symbol; that is what identifies it.
- */
-function hasFabricExecPlainObjectBase(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): boolean {
-  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
-
-  const objectType = type as ts.ObjectType;
-  if ((objectType.objectFlags & ts.ObjectFlags.Interface) === 0) return false;
-
-  return (checker.getBaseTypes(type as ts.InterfaceType) ?? []).some((base) =>
-    (base.aliasSymbol ?? base.getSymbol())?.getName() ===
-      "FabricExecPlainObject"
   );
 }
 
@@ -297,8 +253,15 @@ export class ObjectFormatter implements TypeFormatter {
     );
 
     const props = checker.getPropertiesOfType(type);
+    // A CFC metadata carrier a mapped type folded into the object is a
+    // label, not a member: no value holds it.
+    let carrier: ts.Symbol | undefined;
     for (const prop of props) {
       const propName = prop.getName();
+      if (propName === CFC_CARRIER_PROPERTY) {
+        carrier = prop;
+        continue;
+      }
 
       let propTypeNode = getExplicitPropertyTypeNode(
         context.typeNode,
@@ -383,6 +346,7 @@ export class ObjectFormatter implements TypeFormatter {
         resolvedPropType,
         context,
         propTypeNode,
+        instantiatedPropertyType(context.instantiatedAs, propName, checker),
       );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
@@ -415,14 +379,13 @@ export class ObjectFormatter implements TypeFormatter {
     // Handle string/number index signatures → additionalProperties with description
     const stringIndex = checker.getIndexTypeOfType(type, ts.IndexKind.String);
     const numberIndex = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
-    const chosenIndex = hasFabricExecPlainObjectBase(type, checker)
-      ? undefined
-      : stringIndex ?? numberIndex;
+    const chosenIndex = stringIndex ?? numberIndex;
     if (chosenIndex) {
       const apSchema = this.#schemaGenerator.formatChildType(
         chosenIndex,
         context,
         undefined,
+        instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations
       const sym = type.getSymbol?.();
@@ -462,7 +425,14 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    return schema;
+    const labels = carrier &&
+      this.#schemaGenerator.labelsCarriedBy(carrier, context);
+    return labels
+      ? labels.reduce<MutableJSONSchema>(
+        (labelled, label) => withIfcLabels(labelled, label),
+        schema,
+      )
+      : schema;
   }
 
   #lookupBuiltInSchema(

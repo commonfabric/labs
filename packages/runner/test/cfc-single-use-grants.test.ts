@@ -38,11 +38,15 @@ import {
   EmulatedStorageManager,
   StorageManager,
 } from "../src/storage/cache.deno.ts";
-import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import {
+  ExtendedStorageTransaction,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import {
   isCfcEnforcementRejection,
   isPermanentRejection,
 } from "../src/storage/rejection.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-single-use-grants");
 
@@ -215,7 +219,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
     const seed = runtime.edit();
     const target = runtime.getCell(signer.did(), id, undefined, seed);
     const targetId = target.getAsNormalizedFullLink().id;
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space: signer.did(),
       scope: "space",
       id: targetId,
@@ -307,7 +311,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
     overrides: Record<string, unknown> = {},
   ): Promise<{ space: string; id: string }> => {
     const tx = runtime.edit();
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: "cfc-grant-writer",
     });
@@ -510,7 +514,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
         const receiptId = cfcGrantConsumedReceiptId(grantId);
         // Seed a receipt as another release would have committed it.
         const seed = runtime.edit();
-        seed.setCfcImplementationIdentity({
+        setCfcImplementationIdentity(seed, {
           kind: "builtin",
           builtinId: "cfc-grant-writer",
         });
@@ -1269,7 +1273,7 @@ describe("CFC single-use grants (§2.2 single-use releases)", () => {
           expect(state.status).toBe("invalidated");
           if (state.status === "invalidated") {
             expect(state.reasons.join(" ")).toContain(
-              `unprivileged write to protected cfc path ${receiptId}`,
+              `unprivileged write to protected runtime surface ${receiptId}`,
             );
           }
           const result = await tx.commit();

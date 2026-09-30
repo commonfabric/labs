@@ -414,7 +414,11 @@ function shallowEqual(
   return valueEqual(before, after);
 }
 
-function comparePaths(
+/**
+ * Orders two paths, a path ahead of every path it is a prefix of, and
+ * otherwise by the first component the two disagree on.
+ */
+export function comparePaths(
   a: readonly MemoryAddressPathComponent[],
   b: readonly MemoryAddressPathComponent[],
 ): number {

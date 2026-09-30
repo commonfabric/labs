@@ -19,7 +19,10 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
-import { isOpaqueReference } from "../src/back-to-cell.ts";
+import {
+  cellOfOpaqueReference,
+  isOpaqueReference,
+} from "../src/back-to-cell.ts";
 import { areLinksSame, parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -101,6 +104,16 @@ describe("unknown-reference materialization", () => {
       expect(Object.keys(r.element as object)).toEqual([]);
       expect((r.element as { field?: string }).field).toBeUndefined();
       expect((r.property as { field?: string }).field).toBeUndefined();
+    });
+
+    it("names the cell it was read from, and nothing else names one", () => {
+      const r = holding(true);
+      const named = cellOfOpaqueReference(r.element);
+      expect(named).toBeDefined();
+      expect(areLinksSame(named!, r.inner, undefined, true, tx, runtime))
+        .toBe(true);
+      expect(cellOfOpaqueReference({ field: "secret" })).toBeUndefined();
+      expect(cellOfOpaqueReference("secret")).toBeUndefined();
     });
 
     it("writes back as a link, not an inline copy", () => {

@@ -3,6 +3,21 @@ import type {
   LoomComposeToolInput,
   LoomReadToolInput,
 } from "./tools/loom-authoring.ts";
+import type {
+  LoomCalendarListInput,
+  LoomContextInput,
+  LoomPageDiscoverInput,
+  LoomPageTargetInput,
+  LoomPeopleInput,
+  LoomProfileInput,
+  LoomSearchInput,
+} from "./loom-retrieval.ts";
+import type { JSONSchema } from "@commonfabric/api";
+import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
+import type {
+  SubmitResultInput,
+  SubmitResultOutput,
+} from "./tools/submit-result.ts";
 import {
   dirname,
   join as joinHostPath,
@@ -11,12 +26,18 @@ import {
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   type CfcConfClause,
   type CfcLabelView,
   type CfcPostureReport,
+  type IFCLabel,
   inheritedCfcPostureReport,
+  mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
+import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -36,19 +57,33 @@ import {
   type HarnessDocsCorpus,
   loadHarnessDocsCorpus,
 } from "./docs-corpus/corpus.ts";
-import type { HarnessExploreQueryRunner } from "./docs-corpus/explore.ts";
+import type { HarnessResearchRunner } from "./research/runner.ts";
 import type { HarnessToolContext } from "./tools/types.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import {
+  type HarnessResearchHandleValue,
+  type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
+} from "./contracts/research.ts";
+import {
   createHarnessCfcInvocationContext,
+  createHarnessPromptSlotInfluenceLabels,
   type HarnessCfcInvocationContext,
   type HarnessCfcInvocationInputLabelPath,
   type HarnessCfcInvocationOperation,
   summarizeCfcInvocationRunManifest,
 } from "./contracts/cfc-invocation-context.ts";
-import type { HarnessCfcModelContextObservationInput } from "./contracts/cfc-model-context.ts";
+import {
+  createHarnessCfcModelContextInputLabels,
+  type HarnessCfcModelContext,
+  type HarnessCfcModelContextObservationInput,
+} from "./contracts/cfc-model-context.ts";
 import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.ts";
-import type { HarnessHandleTable } from "./contracts/handle-table.ts";
+import type {
+  HarnessDocumentReferentDraft,
+  HarnessHandleReferentDraft,
+  HarnessHandleTable,
+} from "./contracts/handle-table.ts";
 import {
   createHarnessPolicyDecisionRecord,
   type HarnessPolicyDecisionRecord,
@@ -61,7 +96,11 @@ import {
 import type { PromptSlotBinding } from "./contracts/prompt-slot.ts";
 import { harnessCredentialOwnersEqual } from "./contracts/run-manifest.ts";
 import type { HarnessRunReport } from "./contracts/run-report.ts";
+import { HARNESS_ACQUIRED_SKILLS_TYPE } from "./contracts/skill.ts";
 import type {
+  HarnessAcquiredSkill,
+  HarnessAcquiredSkills,
+  HarnessAcquiredSkillScript,
   HarnessSkillAcquisition,
   HarnessSkillActivations,
   HarnessSkillRegistry,
@@ -97,12 +136,15 @@ import {
 import {
   cacheHarnessFabricSessionFactory,
   createHarnessFabricSessionFactory,
+  type HarnessFabricSession,
   type HarnessFabricSessionFactory,
 } from "./fabric-session.ts";
 import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
+  mergeHarnessHandleTables,
   mintAddressHandle,
+  mintReferentHandle,
 } from "./handle-table.ts";
 import {
   cacheHarnessPatternIndexClientFactory,
@@ -125,6 +167,10 @@ import {
 } from "./skills-sh/search-client.ts";
 import type { HandleValueResolutionContext } from "./tools/handle-values.ts";
 import type {
+  ResolvePieceToolInput,
+  ResolvePieceToolOutput,
+} from "./tools/resolve-piece.ts";
+import type {
   HarnessConnectorGrantSpec,
   HarnessWellKnownGrant,
 } from "./contracts/well-known-grants.ts";
@@ -138,6 +184,8 @@ import type {
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
 import { mintInputCellHandles } from "./input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
+import { resolvePieceAddress } from "@commonfabric/piece";
 import type {
   HarnessPatternRef,
   HarnessPatternRefSpec,
@@ -145,14 +193,18 @@ import type {
 import { resolvePatternRefs } from "./pattern-refs.ts";
 import {
   addHarnessDocsQueryFailures,
+  addHarnessResearchFailures,
   appendHarnessCfcModelContextObservations,
   appendHarnessFailureRecord,
+  appendHarnessResearchRun,
   appendToHarnessRunState,
   createHarnessRunState,
+  type HarnessOpeningResearch,
   type HarnessRunState,
   type HarnessRunTerminalReason,
   isTerminalHarnessRunStatus,
   patchHarnessRunState,
+  setHarnessOpeningResearch,
   setHarnessRunStatus,
   setHarnessSubagentRun,
 } from "./run-state.ts";
@@ -162,6 +214,13 @@ import {
   resolveDockerRunscSandboxConfig,
 } from "./sandbox/docker-runsc.ts";
 import {
+  assertRunscCfcPolicyForMode,
+  resolveRunscSandboxConfig,
+  type RunscNetworkMode,
+  type RunscSandboxConfig,
+  RunscSandboxRuntime,
+} from "./sandbox/runsc.ts";
+import {
   DenoProcessRunner,
   type ProcessRunner,
 } from "./sandbox/process-runner.ts";
@@ -169,7 +228,12 @@ import type {
   DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
   SandboxRuntime,
+  SandboxRuntimeMountDescription,
 } from "./sandbox/types.ts";
+import {
+  ACQUIRED_SKILL_MOUNT_PATH,
+  AcquiredSkillDirectoryReadableError,
+} from "./skills/acquired-skill-mount.ts";
 import { type BashToolInput, type BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
@@ -187,6 +251,7 @@ import {
   type EditFileToolInput,
   type EditFileToolOutput,
 } from "./tools/edit-file.ts";
+import type { FinishTaskInput, FinishTaskOutput } from "./tools/finish-task.ts";
 import {
   type ReadFileToolInput,
   type ReadFileToolOutput,
@@ -200,6 +265,12 @@ import type {
   RecordFeedbackToolOutput,
 } from "./tools/record-feedback.ts";
 import { getBuiltinTool } from "./tools/registry.ts";
+import type {
+  ReadPieceSourceToolInput,
+  ReadPieceSourceToolOutput,
+  RevisePieceToolInput,
+  RevisePieceToolOutput,
+} from "./tools/piece-source.ts";
 import {
   type RunPatternToolInput,
   type RunPatternToolOutput,
@@ -221,9 +292,9 @@ import type {
   SearchSkillsToolOutput,
 } from "./tools/search-skills.ts";
 import {
-  type QueryDocsToolInput,
-  type QueryDocsToolOutput,
-} from "./tools/query-docs.ts";
+  type ResearchToolInput,
+  type ResearchToolOutput,
+} from "./tools/research.ts";
 import {
   type ViewImageToolInput,
   type ViewImageToolOutput,
@@ -249,16 +320,29 @@ export interface BuiltinToolInputMap {
   write_file: WriteFileToolInput;
   delegate_task: DelegateTaskToolInput;
   run_pattern: RunPatternToolInput;
+  read_piece_source: ReadPieceSourceToolInput;
+  revise_piece: RevisePieceToolInput;
   assign_slug: AssignSlugToolInput;
+  resolve_piece: ResolvePieceToolInput;
   describe_handle: DescribeHandleToolInput;
+  finish_task: FinishTaskInput;
   search_patterns: SearchPatternsToolInput;
   record_feedback: RecordFeedbackToolInput;
   search_skills: SearchSkillsToolInput;
   acquire_skill: AcquireSkillToolInput;
-  query_docs: QueryDocsToolInput;
+  research: ResearchToolInput;
   loom_compose: LoomComposeToolInput;
   loom_inspect: LoomReadToolInput;
   loom_authoring_context: LoomReadToolInput;
+  loom_search: LoomSearchInput;
+  loom_page_discover: LoomPageDiscoverInput;
+  loom_page_inspect: LoomPageTargetInput;
+  loom_page_read: LoomPageTargetInput;
+  loom_people: LoomPeopleInput;
+  loom_calendar_list: LoomCalendarListInput;
+  loom_context: LoomContextInput;
+  loom_profile: LoomProfileInput;
+  submit_result: SubmitResultInput;
 }
 
 export interface BuiltinToolOutputMap {
@@ -273,35 +357,82 @@ export interface BuiltinToolOutputMap {
   write_file: WriteFileToolOutput;
   delegate_task: DelegateTaskToolOutput;
   run_pattern: RunPatternToolOutput;
+  read_piece_source: ReadPieceSourceToolOutput;
+  revise_piece: RevisePieceToolOutput;
   assign_slug: AssignSlugToolOutput;
+  resolve_piece: ResolvePieceToolOutput;
   describe_handle: DescribeHandleToolOutput;
+  finish_task: FinishTaskOutput;
   search_patterns: SearchPatternsToolOutput;
   record_feedback: RecordFeedbackToolOutput;
   search_skills: SearchSkillsToolOutput;
   acquire_skill: AcquireSkillToolOutput;
-  query_docs: QueryDocsToolOutput;
+  research: ResearchToolOutput;
   loom_compose: LoomAuthoringToolOutput;
   loom_inspect: LoomAuthoringToolOutput;
   loom_authoring_context: LoomAuthoringToolOutput;
+  loom_search: LoomRetrievalToolOutput;
+  loom_page_discover: LoomRetrievalToolOutput;
+  loom_page_inspect: LoomRetrievalToolOutput;
+  loom_page_read: LoomRetrievalToolOutput;
+  loom_people: LoomRetrievalToolOutput;
+  loom_calendar_list: LoomRetrievalToolOutput;
+  loom_context: LoomRetrievalToolOutput;
+  loom_profile: LoomRetrievalToolOutput;
+  submit_result: SubmitResultOutput;
 }
 
 interface ToolOutputWithId {
   outputId: string;
 }
 
+/** A structured-result schema and the host path its JSON file is kept at. */
+export interface HarnessStructuredResultTarget {
+  schema: JSONSchema;
+  path: string;
+}
+
 export interface CreateHarnessEngineOptions
   extends ResolveHarnessConfigOptions {
   runId?: string;
   runState?: HarnessRunState;
+
+  /**
+   * The acquired skills this run may execute scripts of, handed to a child by
+   * its delegating parent. A child receives the one its `skillHandle` names
+   * and no other: a run holds the scripts of the skill it was given.
+   */
+  acquiredSkills?: HarnessAcquiredSkills;
+
   lineage?: HarnessSubagentLineage;
   subagentResumeContext?: HarnessSubagentResumeContext;
   workspaceHostPath?: string;
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+  /**
+   * Which sandbox the engine builds when none is injected: `docker` (the
+   * default) drives Docker with the runsc-cfc runtime; `runsc` runs runsc
+   * directly, with no Docker, and honours tool-call sessions.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  /** runsc runtime: the rootfs a bundle names. */
+  sandboxRootfs?: string;
+  /** runsc runtime: CFC policy file; `--cfc` is passed exactly when set. */
+  sandboxCfcPolicy?: string;
+  /** runsc runtime: the binary, default `runsc` on PATH. */
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
   sandboxRuntime?: SandboxRuntime;
+  /**
+   * Whether an injected `sandboxRuntime` is this engine's to close when the
+   * run ends. Off by default: an injected runtime is usually shared (a child
+   * handed its parent's), and closing it under the other holder ends their
+   * sessions too. A runtime the engine builds itself is always its own.
+   */
+  ownsSandboxRuntime?: boolean;
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -313,6 +444,9 @@ export interface CreateHarnessEngineOptions
    * of the parent tool surface.
    */
   fabricSessionFactory?: HarnessFabricSessionFactory;
+
+  /** Receives the lazy session so its host can own the runtime's lifetime. */
+  onFabricSessionCreated?: (session: HarnessFabricSession) => void;
 
   /**
    * The posture record of the run whose fabric session `fabricSessionFactory`
@@ -326,6 +460,18 @@ export interface CreateHarnessEngineOptions
    * it.
    */
   inheritedFabricSessionPosture?: CfcPostureReport;
+
+  /**
+   * Parent research retained verbatim for a delegated child. These are
+   * admitted kits and host-confirmed records, not the private read transcript.
+   */
+  inheritedResearchRuns?: readonly HarnessResearchRunSummary[];
+
+  /** Root user goal retained across follow-up questions and delegated tasks. */
+  researchGoal?: string;
+
+  /** Parent model-context labels retained by a newly delegated child. */
+  inheritedCfcModelContext?: HarnessCfcModelContext;
 
   /**
    * Injection seam for the render gate's probe runtime, mirroring
@@ -367,9 +513,18 @@ export interface CreateHarnessEngineOptions
   taskText?: string;
 
   /**
-   * Operator input cells to mint handles for at run start; see
-   * `establishInputCells`. Requires a fabric session — the cells live in
-   * its space.
+   * The structured result this run ends on: the schema it is validated
+   * against and the host path of the JSON file that holds it. Configured, the
+   * run offers `submit_result`, which writes that file host-side; the model
+   * writing the file itself stays a second way to the same place. A subagent
+   * run takes none: the result is the root run's to return.
+   */
+  structuredResult?: HarnessStructuredResultTarget;
+
+  /**
+   * Host-supplied attachments or session-retained targets to mint handles for
+   * at run start; see `establishInputCells`. Requires a fabric session — the
+   * cells live in its space.
    */
   inputCells?: readonly HarnessInputCellSpec[];
 
@@ -408,8 +563,7 @@ export interface BuiltinToolInvocationResult<
 }
 
 const isToolOutputWithId = (value: unknown): value is ToolOutputWithId =>
-  typeof value === "object" &&
-  value !== null &&
+  isObjectOrArray(value) &&
   "outputId" in value &&
   typeof value.outputId === "string";
 
@@ -515,6 +669,17 @@ export class CfHarnessEngine {
 
   #runState: HarnessRunState;
   #outputSequence: number;
+
+  /**
+   * The highest CFC invocation-context sequence handed out. Read beside the
+   * recorded contexts when the next is numbered, so two contexts prepared at
+   * once are numbered apart even though neither is recorded yet.
+   */
+  #lastCfcInvocationSequence = 0;
+
+  /** The last run-state write asked for, which the next one waits behind. */
+  #runStatePersistence: Promise<unknown> = Promise.resolve();
+
   readonly #now: () => string;
   readonly #fabricSessionFactory?: HarnessFabricSessionFactory;
   readonly #openProbeRuntime?: HarnessToolContext["openProbeRuntime"];
@@ -523,15 +688,21 @@ export class CfHarnessEngine {
   readonly #skillsShAcquisitionClientFactory?:
     HarnessSkillsShAcquisitionClientFactory;
   #docsCorpus?: Promise<HarnessDocsCorpus>;
-  #exploreQueryRunner?: HarnessExploreQueryRunner;
+  #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #structuredResult?: HarnessStructuredResultTarget;
+  #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
   readonly #connectorGrants: readonly HarnessConnectorGrantSpec[];
   readonly #patternRefs: readonly HarnessPatternRefSpec[];
   readonly #spaceDbPath?: string;
   readonly #hostMounts: readonly HostSandboxMount[];
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
+  /** The runsc configuration this engine built, when it built one. */
+  readonly #ownedNativeConfig?: RunscSandboxConfig;
+  #sandboxClosed = false;
+  readonly #ownsSandbox: boolean;
   readonly #resumedRun: boolean;
   #runModelBound: boolean;
   #cfcTransportChecked = false;
@@ -694,9 +865,14 @@ export class CfHarnessEngine {
       (this.config.fabricSession !== undefined
         ? createHarnessFabricSessionFactory(this.config.fabricSession)
         : undefined);
+    const onFabricSessionCreated = options.onFabricSessionCreated;
     this.#fabricSessionFactory = fabricSessionFactory === undefined
       ? undefined
-      : cacheHarnessFabricSessionFactory(fabricSessionFactory);
+      : cacheHarnessFabricSessionFactory(async () => {
+        const session = await fabricSessionFactory();
+        onFabricSessionCreated?.(session);
+        return session;
+      });
     // The index client loads the fabric identity from disk to sign with, so
     // it is built lazily and cached for the run on the same terms.
     const patternIndexClientFactory = options.patternIndexClientFactory ??
@@ -733,11 +909,33 @@ export class CfHarnessEngine {
           skillsShAcquisitionClientFactory,
         );
     this.#taskText = options.taskText;
+    const recordedStructuredResult = options.runState?.structuredResult;
+    if (
+      recordedStructuredResult !== undefined &&
+      options.structuredResult !== undefined &&
+      !deepEqual(recordedStructuredResult, options.structuredResult)
+    ) {
+      throw harnessResumeRefusal(
+        "resumed run structured-result configuration does not match the recorded configuration",
+      );
+    }
+    this.#structuredResult = options.lineage === undefined &&
+        options.runState?.lineage === undefined
+      ? structuredClone(recordedStructuredResult ?? options.structuredResult)
+      : undefined;
     this.#inputCells = options.inputCells ?? [];
     this.#connectorGrants = options.connectorGrants ?? [];
     this.#patternRefs = options.patternRefs ?? [];
     this.#spaceDbPath = options.spaceDbPath;
-    const sandboxConfig = options.sandboxRuntime === undefined
+    const useRunsc = options.sandboxRuntime === undefined &&
+      options.sandboxRuntimeKind === "runsc";
+    // Under the runsc runtime no docker configuration describes this run,
+    // whatever `config.sandbox` holds: the mounts below come from the runsc
+    // configuration, so host-backed tools resolve against the sandbox that
+    // actually executes.
+    const sandboxConfig = useRunsc
+      ? undefined
+      : options.sandboxRuntime === undefined
       ? resolveSandboxConfig(this.config, {
         workspaceHostPath: options.workspaceHostPath,
         sandboxImage: options.sandboxImage,
@@ -751,31 +949,56 @@ export class CfHarnessEngine {
     // enforce-mode sandbox work — capability probes or tools — whose sandbox
     // lacks the CFC sidecar transports (the check fires at run start, not
     // construction — see #assertCfcTransportReady).
-    // Only when the engine constructs the runtime itself: an injected
+    // Only when the engine constructs the docker runtime itself: an injected
     // sandboxRuntime is the thing that actually executes and carries its own
     // enforcement guarantees, while `sandboxConfig` in that branch is the
     // unused resolved config and may describe a different sandbox entirely.
-    this.#ownedRunscConfig = options.sandboxRuntime === undefined
+    // The runsc runtime carries the CFC transport on descriptors it opens
+    // itself, so it has no registration to check.
+    this.#ownedRunscConfig = options.sandboxRuntime === undefined && !useRunsc
       ? sandboxConfig
       : undefined;
     this.hostProcessRunner = options.processRunner ?? new DenoProcessRunner();
+    const runscConfig = useRunsc
+      ? resolveRunscSandboxConfig({
+        workspaceHostPath: options.workspaceHostPath ??
+          this.config.sandbox?.workspaceHostPath ??
+          (() => {
+            throw new Error("runsc sandbox needs a workspaceHostPath");
+          })(),
+        rootfs: options.sandboxRootfs,
+        runscBinary: options.sandboxRunscBinary,
+        cfcPolicyPath: options.sandboxCfcPolicy,
+        networkMode: options.sandboxRunscNetworkMode,
+        additionalMounts: options.additionalMounts,
+        runId,
+        homeDir: Deno.env.get("HOME"),
+      })
+      : undefined;
+    this.#ownedNativeConfig = runscConfig;
+    this.#ownsSandbox = options.sandboxRuntime === undefined ||
+      options.ownsSandboxRuntime === true;
     this.sandbox = options.sandboxRuntime ??
-      new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner);
+      (runscConfig !== undefined
+        ? new RunscSandboxRuntime(runscConfig, options.processRunner)
+        : new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner));
     this.workspaceHostPath = sandboxConfig?.workspaceHostPath ??
+      runscConfig?.workspaceHostPath ??
       options.workspaceHostPath;
     this.workspaceMountPath = normalizeSandboxRoot(
       sandboxConfig?.workspaceMountPath ??
         this.sandbox.defaultWorkingDirectory(),
     );
-    this.#hostMounts = sandboxConfig !== undefined
+    const mountSource = sandboxConfig ?? runscConfig;
+    this.#hostMounts = mountSource !== undefined
       ? [
         {
           kind: "workspace",
-          hostPath: sandboxConfig.workspaceHostPath,
-          sandboxPath: sandboxConfig.workspaceMountPath,
+          hostPath: mountSource.workspaceHostPath,
+          sandboxPath: mountSource.workspaceMountPath,
           readOnly: false,
         },
-        ...sandboxConfig.additionalMounts.map((mount) => ({
+        ...mountSource.additionalMounts.map((mount) => ({
           kind: mount.kind,
           ...(mount.kind === "host-bind" ? { name: mount.name } : {}),
           hostPath: mount.hostPath,
@@ -872,12 +1095,10 @@ export class CfHarnessEngine {
     // either record win silently. A run resumed without a session keeps its
     // record as history (no runtime exists for it to contradict). A LEGACY
     // record — one that never captured a posture — stays absent rather than
-    // being backfilled, and stays frozen as history: resuming such a run
-    // with plain session dials is allowed (the flags may simply restate the
-    // original invocation, which the record predates), but resuming it under
-    // the named posture bundle is refused — no legacy run can have run the
-    // bundle, so that resume would execute enforcement the artifacts cannot
-    // attest.
+    // being backfilled. Resuming one under the named posture bundle is
+    // refused, because no legacy run can have run the bundle and that resume
+    // would execute enforcement the artifacts cannot attest. Resuming one
+    // under a session that names no bundle proceeds.
     if (options.runState !== undefined && fabricSessionCfc !== undefined) {
       const recorded = options.runState.fabricSessionCfc;
       if (recorded === undefined) {
@@ -981,10 +1202,23 @@ export class CfHarnessEngine {
         credentialOwner: this.config.credentialOwner,
         harnessHomeIdentity: this.config.harnessHomeIdentity,
         artifactRoot: this.artifactStore?.runRoot,
+        ...(this.#structuredResult !== undefined
+          ? { structuredResult: this.#structuredResult }
+          : {}),
         runManifest: this.config.runManifest,
         runManifestPath: this.config.runManifestPath,
         docsCorpus: this.config.docsCorpus,
+        researchGoal: options.researchGoal ?? options.taskText,
+        ...(options.inheritedResearchRuns !== undefined
+          ? { researchRuns: [...options.inheritedResearchRuns] }
+          : {}),
+        ...(options.inheritedCfcModelContext !== undefined
+          ? { cfcModelContext: options.inheritedCfcModelContext }
+          : {}),
         skillsRoot: this.config.skillsRootRecord,
+        ...(options.acquiredSkills !== undefined
+          ? { acquiredSkills: options.acquiredSkills }
+          : {}),
         lineage: options.lineage,
         now: this.#now(),
       });
@@ -1023,6 +1257,30 @@ export class CfHarnessEngine {
    */
   get spaceDbPath(): string | undefined {
     return this.#spaceDbPath;
+  }
+
+  /**
+   * The sandbox configuration this engine built its own runtime from, absent
+   * when the runtime was handed in.
+   *
+   * A caller that wants a sandbox differing from this run's — a child that
+   * mounts something its parent does not — needs the configuration rather than
+   * the runtime, and needs to know it may build one at all: where the runtime
+   * was injected, that object is the thing that executes and a configuration
+   * beside it describes something else.
+   */
+  get ownedSandboxConfig(): DockerRunscSandboxConfig | undefined {
+    return this.#ownedRunscConfig;
+  }
+
+  /**
+   * The runsc counterpart of {@link ownedSandboxConfig}: the configuration
+   * the engine built its direct runsc runtime from, or `undefined` when the
+   * runtime is docker or was handed in. Every child of a run that has one
+   * builds its own runtime from it; see `childSandboxOptions()`.
+   */
+  get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
+    return this.#ownedNativeConfig;
   }
 
   /**
@@ -1115,7 +1373,7 @@ export class CfHarnessEngine {
     return this.#skillsShSearchClientFactory;
   }
 
-  /** Whether this run configures a documentation corpus for `query_docs`. */
+  /** Whether this run configures a documentation corpus for research. */
   get docsCorpusAvailable(): boolean {
     return (this.docsCorpus?.roots ?? []).length > 0;
   }
@@ -1144,12 +1402,30 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Gives this run a way to answer a documentation question. The model belongs
-   * to the prompt loop, so the loop supplies the runner and the engine carries
-   * it to the tool.
+   * Gives this run a bounded Common Fabric research loop. The model belongs to
+   * the prompt loop, so the loop supplies the runner and the engine carries it
+   * to the tool.
    */
-  setExploreQueryRunner(runner: HarnessExploreQueryRunner): void {
-    this.#exploreQueryRunner = runner;
+  setResearchRunner(runner: HarnessResearchRunner): void {
+    this.#researchRunner = runner;
+  }
+
+  /** Whether this engine was restored from an existing run-state artifact. */
+  get resumedRun(): boolean {
+    return this.#resumedRun;
+  }
+
+  /** Persists the root driver's opening-research checkpoint. */
+  async recordOpeningResearch(
+    openingResearch: HarnessOpeningResearch,
+  ): Promise<HarnessRunState> {
+    this.#runState = setHarnessOpeningResearch(
+      this.#runState,
+      openingResearch,
+      this.#now(),
+    );
+    await this.persistRunState();
+    return this.getRunState();
   }
 
   /** Whether this run can acquire a pinned external skill. */
@@ -1189,13 +1465,32 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Counts documentation queries this run could not get an answer for, its
-   * descendants' included. A `query_docs` failure is a normal tool error to
-   * the model that asked, so without this a docs-blind run leaves no trace in
-   * the one place an operator reads.
+   * Counts legacy documentation-query failures retained by resumed run state.
+   * New calls use {@link recordResearchFailures}; this method remains so a
+   * parent can roll up an older child's durable count without rewriting it.
    */
   recordDocsQueryFailures(count: number): HarnessRunState {
     this.#runState = addHarnessDocsQueryFailures(
+      this.#runState,
+      count,
+      this.#now(),
+    );
+    return this.getRunState();
+  }
+
+  /** Retains one admitted implementation kit for resume and delegation. */
+  recordResearchRun(run: HarnessResearchRunSummary): HarnessRunState {
+    this.#runState = appendHarnessResearchRun(
+      this.#runState,
+      run,
+      this.#now(),
+    );
+    return this.getRunState();
+  }
+
+  /** Counts bounded research calls that returned no kit. */
+  recordResearchFailures(count: number): HarnessRunState {
+    this.#runState = addHarnessResearchFailures(
       this.#runState,
       count,
       this.#now(),
@@ -1229,6 +1524,31 @@ export class CfHarnessEngine {
   }
 
   /**
+   * Releases what the sandbox keeps alive between calls, where the runtime is
+   * this engine's to close: the direct runsc runtime's sessions, and any of
+   * its containers still in flight. Every terminal transition calls this
+   * before it writes the outcome. It does nothing for a runtime this engine
+   * was handed without ownership, for a runtime with nothing to release, and
+   * on a second call. A close that throws is logged, and the run still ends
+   * with the outcome it was given.
+   */
+  async #closeSandbox(): Promise<void> {
+    if (this.#sandboxClosed || !this.#ownsSandbox) {
+      return;
+    }
+    this.#sandboxClosed = true;
+    try {
+      await this.sandbox.close?.();
+    } catch (error) {
+      console.error(
+        `cf-harness: sandbox close failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Ends the run as `completed` for `terminalReason`, persisted. A run has
    * one outcome and its driver writes it once, and the labels its space
    * holds for the cells it touched land in that same write; see
@@ -1239,6 +1559,7 @@ export class CfHarnessEngine {
   async completeRun(
     terminalReason: HarnessRunTerminalReason,
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = await this.#withCellLabels(
       setHarnessRunStatus(this.#runState, "completed", now, terminalReason),
@@ -1261,6 +1582,7 @@ export class CfHarnessEngine {
     error?: unknown,
     options: Omit<ClassifyHarnessRunErrorOptions, "at"> = {},
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     if (error !== undefined) {
       this.#runState = appendHarnessFailureRecord(
@@ -1271,6 +1593,27 @@ export class CfHarnessEngine {
     }
     this.#runState = await this.#withCellLabels(
       setHarnessRunStatus(this.#runState, "failed", now, terminalReason),
+      now,
+    );
+    await this.persistRunState();
+    return this.getRunState();
+  }
+
+  /**
+   * Ends the run as `canceled`, retaining the driver's reason and the labels
+   * of the cells it touched. Cancellation adds no failure record.
+   *
+   * @throws Error when the run already has its outcome.
+   */
+  async cancelRun(reason: string): Promise<HarnessRunState> {
+    await this.#closeSandbox();
+    const now = this.#now();
+    this.#runState = await this.#withCellLabels(
+      patchHarnessRunState(
+        setHarnessRunStatus(this.#runState, "canceled", now, "canceled"),
+        { cancelReason: reason },
+        now,
+      ),
       now,
     );
     await this.persistRunState();
@@ -1368,15 +1711,27 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Records `table` as the run's handle table and persists the run state.
+   * Records the entries and referents of `table` into the run's handle table
+   * and persists the run state. A caller mints on the table it read and
+   * records what it got back, and two callers whose calls overlap both read
+   * the table before either recorded; folding each result in, rather than
+   * replacing the table with it, keeps both their additions.
    *
-   * @throws Error when `table` is not a well-formed version-1 handle table.
+   * @throws Error when `table`, or the merged table, is not a well-formed
+   * version-1 handle table — which is how two overlapping mints that drew the
+   * same token for different addresses surface — or when the two tables
+   * cannot merge.
    */
   async recordHandleTable(table: HarnessHandleTable): Promise<void> {
     assertValidHarnessHandleTable(table);
+    const current = this.handleTable;
+    const merged = current === undefined
+      ? table
+      : mergeHarnessHandleTables(current, table);
+    assertValidHarnessHandleTable(merged);
     this.#runState = patchHarnessRunState(
       this.#runState,
-      { handleTable: structuredClone(table) },
+      { handleTable: structuredClone(merged) },
       this.#now(),
     );
     await this.persistRunState();
@@ -1401,8 +1756,87 @@ export class CfHarnessEngine {
     return minted.token;
   }
 
+  /** Whether this run was configured with a structured-result schema. */
+  get structuredResultAvailable(): boolean {
+    return this.#structuredResult !== undefined;
+  }
+
+  /**
+   * Helper for `submit_result`, which writes a validated result to the
+   * configured file, replacing whatever an earlier submission left.
+   */
+  async #recordStructuredResult(
+    value: unknown,
+  ): Promise<{ replaced: boolean }> {
+    const { path } = this.#structuredResult!;
+    let replaced = this.#structuredResultRecorded;
+    if (!replaced) {
+      try {
+        await Deno.stat(path);
+        replaced = true;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
+    }
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeTextFile(path, `${JSON.stringify(value, null, 2)}\n`);
+    this.#structuredResultRecorded = true;
+    return { replaced };
+  }
+
+  /**
+   * Mints and records a handle for content a tool observed that is not a
+   * cell, so a result naming the token can link a document minted from it.
+   */
+  async mintReferentHandle(
+    referent: HarnessDocumentReferentDraft,
+  ): Promise<string> {
+    return await this.#mintReferent({ kind: "document", ...referent });
+  }
+
+  /**
+   * Mints and records the handle for an admitted research kit, under the
+   * kit's own label. This is the one path that mints a research referent, and
+   * the research tool's admission is the one caller: a value that is not a
+   * research handle's content is refused rather than held as one.
+   *
+   * @throws Error when `value` is not the content of a research handle.
+   */
+  async mintResearchHandle(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
+  ): Promise<string> {
+    if (!isHarnessResearchHandleValue(value)) {
+      throw new Error("a research handle holds an admitted kit's projection");
+    }
+    return await this.#mintReferent({
+      kind: "research",
+      source: "research",
+      labelSource: "research",
+      value: value as unknown as FabricValue,
+      label,
+    });
+  }
+
+  async #mintReferent(referent: HarnessHandleReferentDraft): Promise<string> {
+    const minted = await mintReferentHandle(
+      this.handleTable ?? createHarnessHandleTable(this.#runState.runId),
+      referent,
+    );
+    await this.recordHandleTable(minted.table);
+    return minted.token;
+  }
+
   async persistRunState(): Promise<string | undefined> {
-    return await this.artifactStore?.persistRunState(this.#runState);
+    // Writes go out in the order they were asked for, each carrying the run
+    // state as it stands when its turn comes. Two overlapping delegations
+    // persist the same run, and a write that finished first would otherwise
+    // be renamed over by an older snapshot finishing second.
+    const write = this.#runStatePersistence.then(() =>
+      this.artifactStore?.persistRunState(this.#runState)
+    );
+    this.#runStatePersistence = write.catch(() => {});
+    return await write;
   }
 
   /**
@@ -1460,15 +1894,16 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Establishes the run's operator input cells: mints a token for each
-   * `--input-cell` reference into the handle table, records the cells in
-   * run state, and returns them. Idempotent across resume, like the
-   * well-known grants: cells already recorded are returned as they stand.
+   * Establishes the run's input cells: mints tokens for host-supplied attachments
+   * or session-retained targets, records them in run state, and returns them.
+   * Idempotent across resume, like the well-known grants: cells already recorded
+   * are returned as they stand.
    *
-   * Unlike a grant, an input cell is explicit operator configuration, so
-   * failure is closed and loud rather than tolerated: cells configured on a
-   * run with no fabric session, a reference that does not parse, and a
-   * reference targeting another space all throw before anything is recorded.
+   * An input cell names a task target, so failure is closed and loud rather
+   * than tolerated: cells configured on a
+   * run with no fabric session, a reference that does not parse, a reference
+   * targeting an unadmitted space, and a named piece address whose slug this
+   * space does not hold all throw before anything is recorded.
    */
   async establishInputCells(): Promise<HarnessInputCell[]> {
     if (this.#runState.inputCells !== undefined) {
@@ -1488,6 +1923,17 @@ export class CfHarnessEngine {
       this.#runState.runId,
       this.#inputCells,
       session.pieces.getSpace(),
+      {
+        // The space by NAME, which is the vocabulary a named address speaks;
+        // the mint checks references against the DID beside it. A space
+        // configured by `did:key` has no name, and an address naming a space
+        // is then refused rather than assumed to mean this one.
+        ...(session.pieces.getSpaceName() !== undefined
+          ? { spaceName: session.pieces.getSpaceName() }
+          : {}),
+        resolvePiece: (slug) => resolvePieceAddress(session.pieces, slug),
+        foreignSpaces: session.foreignSpaces,
+      },
     );
     await this.recordHandleTable(minted.table);
     this.#runState = patchHarnessRunState(
@@ -1624,6 +2070,106 @@ export class CfHarnessEngine {
     return skillScriptExecutionsPath;
   }
 
+  /**
+   * Writes one acquired skill's scripts where a run that holds its handle can
+   * execute them, and records where they went.
+   *
+   * The bytes land at `<artifactRoot>/.acquired-skills/<runId>/<commitSha>/
+   * <slug>` — under the artifact root's one non-run directory, inside no run
+   * root — and the check here is what makes that mean something:
+   * `acquire_skill` runs in the PARENT, so a script the parent's sandbox can
+   * reach is a script the planner can read — the one property the
+   * hostile-skill receipt rests on.
+   * Every mount is asked, the workspace and each `--host-mount` alike, because
+   * an operator mount over the artifact tree is the same hole as an artifact
+   * root inside the workspace. A covering mount refuses, named.
+   *
+   * The digest recorded here is the one taken at acquisition, over the bytes
+   * the pinned commit served, and it is what an execution re-checks the file
+   * against — the pin a registry script gets from the run-start snapshot.
+   *
+   * @throws AcquiredSkillDirectoryReadableError when a mount of this run's
+   * sandbox covers the directory.
+   * @throws Error when the run can write nowhere, or the write fails.
+   */
+  async materializeAcquiredSkill(
+    options: {
+      registryId: string;
+      commitSha: string;
+      scripts: readonly {
+        path: string;
+        bytes: Uint8Array;
+        valueDigest: string;
+      }[];
+    },
+  ): Promise<HarnessAcquiredSkill> {
+    const store = this.artifactStore;
+    if (
+      store?.acquiredSkillsDir === undefined ||
+      store.writeAcquiredSkillScript === undefined
+    ) {
+      throw new Error(
+        "acquiring a skill's scripts requires a run that can write artifacts",
+      );
+    }
+    const covering = this.#hostMountCovering(store.acquiredSkillsDir);
+    if (covering !== undefined) {
+      throw new AcquiredSkillDirectoryReadableError(
+        `the acquired-skills directory is inside this run's ${
+          covering.name ?? covering.kind
+        } mount (${covering.hostPath} at ${covering.sandboxPath}), so a script written there would be readable by the run that acquires it`,
+      );
+    }
+    const slug = options.registryId.split("/").at(-1) ?? options.registryId;
+    // Keyed by the commit first: one commit is one tree, and the slug beneath
+    // it separates two skills acquired from the same one.
+    const relativeDir = `${options.commitSha}/${slug}`;
+    const scripts: HarnessAcquiredSkillScript[] = [];
+    for (const script of options.scripts) {
+      const hostPath = await store.writeAcquiredSkillScript(
+        relativeDir,
+        script.path,
+        script.bytes,
+      );
+      scripts.push({
+        path: script.path,
+        hostPath,
+        sandboxPath: `${ACQUIRED_SKILL_MOUNT_PATH}/${script.path}`,
+        valueDigest: script.valueDigest,
+        sizeBytes: script.bytes.byteLength,
+      });
+    }
+    const acquired: HarnessAcquiredSkill = {
+      registryId: options.registryId,
+      commitSha: options.commitSha,
+      pin: `${options.registryId}@${options.commitSha}`,
+      hostRoot: joinHostPath(store.acquiredSkillsDir, relativeDir),
+      sandboxRoot: ACQUIRED_SKILL_MOUNT_PATH,
+      scripts,
+    };
+    const generatedAt = this.#now();
+    const acquiredSkills: HarnessAcquiredSkills = {
+      type: HARNESS_ACQUIRED_SKILLS_TYPE,
+      version: 1,
+      generatedAt,
+      skills: [
+        ...(this.#runState.acquiredSkills?.skills ?? []).filter((skill) =>
+          skill.pin !== acquired.pin
+        ),
+        acquired,
+      ],
+    };
+    const acquiredSkillsPath = await this.artifactStore
+      ?.persistAcquiredSkills?.(acquiredSkills);
+    this.#runState = patchHarnessRunState(
+      this.#runState,
+      { acquiredSkills, acquiredSkillsPath },
+      generatedAt,
+    );
+    await this.persistRunState();
+    return acquired;
+  }
+
   nextToolOutputId(toolId: string): ToolOutputId {
     this.#outputSequence += 1;
     return `${this.#runState.runId}:${toolId}:${this.#outputSequence}` as ToolOutputId;
@@ -1652,6 +2198,7 @@ export class CfHarnessEngine {
     if (isTerminalHarnessRunStatus(this.#runState.status)) {
       return this.getRunState();
     }
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = appendHarnessFailureRecord(
       this.#runState,
@@ -1755,7 +2302,7 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Helper for `completeRun()` and `failRun()`, which reads the run's space
+   * Helper for the terminal run transitions, which reads the run's space
    * for what it holds about the cells the run touched and returns `state`
    * with the answer recorded on it and written beside the run.
    *
@@ -1829,13 +2376,24 @@ export class CfHarnessEngine {
    * wiring. Idempotent so the cost is paid once per run.
    */
   #assertCfcTransportReady(): void {
-    if (this.#cfcTransportChecked || this.#ownedRunscConfig === undefined) {
+    if (this.#cfcTransportChecked) {
       return;
     }
-    assertDockerRunscCfcTransportForMode(
-      this.#runState.cfcEnforcementMode,
-      this.#ownedRunscConfig,
-    );
+    if (this.#ownedRunscConfig !== undefined) {
+      assertDockerRunscCfcTransportForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedRunscConfig,
+      );
+    } else if (this.#ownedNativeConfig !== undefined) {
+      // The same floor for the direct runtime: no policy means no `--cfc`,
+      // so an enforcing run would execute unmediated and deny afterwards.
+      assertRunscCfcPolicyForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedNativeConfig,
+      );
+    } else {
+      return;
+    }
     this.#cfcTransportChecked = true;
   }
 
@@ -1901,9 +2459,11 @@ export class CfHarnessEngine {
    * Runs one builtin tool and records its output on the run. A tool call is
    * one step of a run, not the run: the run's status is the driver's to
    * write, and this touches neither it nor `endedAt`. A tool that throws is
-   * recorded as a failure and rethrown for the driver to end the run on.
+   * recorded as a failure and rethrown for the driver to end the run on, unless
+   * the owning run was aborted. Cancellation retains any returned output but
+   * adds no failure record.
    *
-   * @throws Error from the tool, after the failure is recorded.
+   * @throws Error from the tool.
    */
   async invokeBuiltinTool<TToolId extends BuiltinToolId>(
     toolId: TToolId,
@@ -1921,8 +2481,11 @@ export class CfHarnessEngine {
         this.#createToolContext(options.signal),
         input,
       ) as BuiltinToolOutputMap[TToolId];
-      return await this.recordBuiltinToolOutput(toolId, input, output);
+      return await this.recordBuiltinToolOutput(toolId, input, output, options);
     } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
       const failureTime = this.#now();
       this.#runState = appendHarnessFailureRecord(
         this.#runState,
@@ -1942,6 +2505,7 @@ export class CfHarnessEngine {
     toolId: TToolId,
     input: BuiltinToolInputMap[TToolId],
     output: BuiltinToolOutputMap[TToolId],
+    options: { signal?: AbortSignal } = {},
   ): Promise<BuiltinToolInvocationResult<TToolId>> {
     if (!isToolOutputWithId(output)) {
       throw new Error(`builtin tool did not return an outputId: ${toolId}`);
@@ -1964,13 +2528,15 @@ export class CfHarnessEngine {
       resultRef,
       completionTime,
     );
-    const failure = classifyBuiltinToolFailure(
-      toolId,
-      input,
-      output,
-      completionTime,
-      this.#runState.capabilitySnapshot,
-    );
+    const failure = options.signal?.aborted
+      ? undefined
+      : classifyBuiltinToolFailure(
+        toolId,
+        input,
+        output,
+        completionTime,
+        this.#runState.capabilitySnapshot,
+      );
     if (failure !== undefined) {
       this.#runState = appendHarnessFailureRecord(
         this.#runState,
@@ -2026,6 +2592,38 @@ export class CfHarnessEngine {
 
   #resolveHostRootPath(path: string): string {
     return normalizeHostPath(this.#resolveHostMount(path).mount.hostPath);
+  }
+
+  /**
+   * The sandbox mount covering `path`, or `undefined` when no mount of this
+   * run's sandbox does.
+   *
+   * What a run can read is what it mounts, so this is the question "could this
+   * run see a file here?" asked of a host path. `acquire_skill` asks it of the
+   * directory it is about to write a skill's scripts into: the parent that
+   * plans an acquisition must not be able to read the bytes, and a mount over
+   * that directory is the one way it could.
+   *
+   * Asked of the sandbox that would do the reading, through its own
+   * `describe()`, rather than of `#hostMounts`. The two are the same list for
+   * a run whose sandbox this engine built, and they are not for a run handed a
+   * runtime: there `#hostMounts` comes from a configuration that "may describe
+   * a different sandbox entirely" — empty, when none was given at all — and a
+   * question about what a container can read, answered from a configuration
+   * that container was not built from, fails open. It is also the source
+   * `resolveAcquiredSkillScript` asks at execution, so the boundary is one
+   * predicate over one list rather than two that agree while the runtime is
+   * the one the config describes.
+   *
+   * A mount with no host path covers nothing: it is backed by something other
+   * than a directory of this filesystem, so no path of ours is inside it.
+   */
+  #hostMountCovering(path: string): SandboxRuntimeMountDescription | undefined {
+    const hostPath = normalizeHostPath(path);
+    return this.sandbox.describe().cfc?.mounts?.find((mount) =>
+      mount.hostPath !== undefined &&
+      isHostPathWithinRoot(normalizeHostPath(mount.hostPath), hostPath)
+    );
   }
 
   #hostPathToWorkspacePath(path: string): string | undefined {
@@ -2196,8 +2794,22 @@ export class CfHarnessEngine {
       readonly HarnessCfcInvocationInputLabelPath[];
   }): Promise<HarnessCfcInvocationContext> {
     const now = this.#now();
+    // Taken before the await: two invocations prepared at once would
+    // otherwise both count the contexts recorded so far and share a number,
+    // and the audit keys contexts by sequence. The recorded side is the
+    // highest number recorded, not the count: a number reserved for a context
+    // that was never recorded leaves a gap, and a resumed run counting from
+    // the length would hand out a number already in use.
+    const sequence = Math.max(
+      0,
+      ...(this.#runState.cfcInvocationContexts ?? []).map((context) =>
+        context.sequence
+      ),
+      this.#lastCfcInvocationSequence,
+    ) + 1;
+    this.#lastCfcInvocationSequence = sequence;
     const invocation = await createHarnessCfcInvocationContext({
-      sequence: (this.#runState.cfcInvocationContexts ?? []).length + 1,
+      sequence,
       runId: this.#runState.runId,
       createdAt: now,
       toolId: options.toolId,
@@ -2250,7 +2862,33 @@ export class CfHarnessEngine {
     return invocation;
   }
 
+  #researchTaskCfcLabel(): IFCLabel | undefined {
+    const paths: readonly HarnessCfcInvocationInputLabelPath[] = [[
+      "args",
+      "task",
+    ]];
+    const view = mergeCfcLabelViews([
+      createHarnessPromptSlotInfluenceLabels({
+        promptSlot: this.#runState.promptSlotBinding,
+        runManifest: summarizeCfcInvocationRunManifest(
+          this.#runState.runManifest,
+          this.#runState.runManifestPath,
+        ),
+        paths,
+      }),
+      createHarnessCfcModelContextInputLabels({
+        modelContext: this.#runState.cfcModelContext,
+        paths,
+      }),
+    ]);
+    return view?.entries.reduce<IFCLabel | undefined>(
+      (label, entry) => mergeLabel(label, entry.label),
+      undefined,
+    );
+  }
+
   #createToolContext(signal?: AbortSignal) {
+    const researchTaskCfcLabel = this.#researchTaskCfcLabel();
     return {
       runId: this.#runState.runId,
       cfcEnforcementMode: this.#runState.cfcEnforcementMode,
@@ -2259,6 +2897,7 @@ export class CfHarnessEngine {
       ...(signal !== undefined ? { signal } : {}),
       skillRegistry: this.#runState.skillRegistry,
       skillActivations: this.#runState.skillActivations,
+      allowSkillScripts: this.config.allowSkillScripts,
       allowedSkillScripts: this.config.allowedSkillScripts,
       skillScriptExecutionTarget: this.config.skillScriptExecutionTarget,
       browserAccess: this.config.browserAccess,
@@ -2289,9 +2928,38 @@ export class CfHarnessEngine {
       ...(this.docsCorpusAvailable
         ? { getDocsCorpus: () => this.getDocsCorpus() }
         : {}),
-      ...(this.#exploreQueryRunner !== undefined
-        ? { runExploreQuery: this.#exploreQueryRunner }
+      ...(this.#researchRunner !== undefined
+        ? { runResearch: this.#researchRunner }
         : {}),
+      researchRuns: this.#runState.researchRuns ?? [],
+      researchGoal: this.#runState.researchGoal,
+      wellKnownGrants: this.#runState.wellKnownGrants ?? [],
+      ...(researchTaskCfcLabel !== undefined
+        ? {
+          researchTaskCfcLabel,
+          // A research task and any other model-authored argument have the
+          // same provenance, so they carry the same label.
+          toolInputCfcLabel: researchTaskCfcLabel,
+        }
+        : {}),
+      patternRefs: this.#runState.patternRefs ?? [],
+      inputCells: this.#runState.inputCells ?? [],
+      recordAssignedPiece: (piece: HarnessAssignedPiece) => {
+        this.#runState = patchHarnessRunState(this.#runState, {
+          assignedPieces: [
+            ...(this.#runState.assignedPieces ?? []).filter((existing) =>
+              existing.ref !== piece.ref
+            ),
+            structuredClone(piece),
+          ],
+        }, this.#now());
+      },
+      recordResearchRun: (run: HarnessResearchRunSummary) => {
+        this.recordResearchRun(run);
+      },
+      recordResearchFailure: () => {
+        this.recordResearchFailures(1);
+      },
       ...(this.#skillsShSearchClientFactory !== undefined
         ? { getSkillsShSearchClient: this.#skillsShSearchClientFactory }
         : {}),
@@ -2308,6 +2976,27 @@ export class CfHarnessEngine {
       sandbox: this.sandbox,
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
+      loomRetrieval: this.config.loomRetrieval,
+      mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
+        this.mintReferentHandle(referent),
+      mintResearchHandle: (
+        value: HarnessResearchHandleValue,
+        label: IFCLabel,
+      ) => this.mintResearchHandle(value, label),
+      ...(this.#structuredResult !== undefined
+        ? {
+          structuredResult: {
+            schema: this.#structuredResult.schema,
+            record: (value: unknown) => this.#recordStructuredResult(value),
+          },
+        }
+        : {}),
+      ...(this.config.fabricSession?.cfcReadMaxConfidentiality !== undefined
+        ? {
+          cfcReadMaxConfidentiality:
+            this.config.fabricSession.cfcReadMaxConfidentiality,
+        }
+        : {}),
       resolvePath: (path: string) =>
         this.sandbox.resolvePath(path, this.#runState.currentDir),
       resolveHostPath: (path: string) => this.#resolveHostPath(path),
@@ -2351,6 +3040,18 @@ export class CfHarnessEngine {
       ) => {
         await this.recordSkillScriptExecution(execution);
       },
+      ...(this.artifactStore?.writeAcquiredSkillScript !== undefined
+        ? {
+          materializeAcquiredSkill: (
+            options: Parameters<
+              CfHarnessEngine["materializeAcquiredSkill"]
+            >[0],
+          ) => this.materializeAcquiredSkill(options),
+        }
+        : {}),
+      ...(this.#runState.acquiredSkills !== undefined
+        ? { acquiredSkills: this.#runState.acquiredSkills.skills }
+        : {}),
       createCfcInvocationContext: (options: {
         toolId: string;
         toolOutputId?: ToolOutputId;

@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { getLogger } from "@commonfabric/utils/logger";
 import { CompilerStackLoadError } from "@commonfabric/runner";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   ClientNotificationType,
@@ -63,6 +64,7 @@ describe("web-worker-console-bridge", () => {
         await import("@/backends/web-worker/index.ts");
         expect(posted).toContainEqual({
           type: TransportNotificationType.WorkerReady,
+          lifetimeLock: expect.any(String),
         });
 
         const consoleMessages = () =>
@@ -175,7 +177,7 @@ describe("web-worker-console-bridge", () => {
         await dispatch({ msgId: 4, data: { type: "not-a-real-type" } });
         const errorResponse = posted.find(
           (m): m is { msgId: number; error: string } =>
-            typeof m === "object" && m !== null && "error" in m,
+            isObjectOrArray(m) && "error" in m,
         );
         expect(errorResponse?.msgId).toBe(4);
         expect(typeof errorResponse?.error).toBe("string");

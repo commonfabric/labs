@@ -4,6 +4,10 @@ import {
   internPathSelector,
   REJECTING_SELECTOR,
 } from "@commonfabric/data-model-schema";
+import {
+  collectExternalSchemaRefHashes,
+  containsExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import { hashStringOf } from "@commonfabric/data-model";
 import type { MIME } from "@commonfabric/memory/interface";
 import type {
@@ -14,8 +18,6 @@ import type {
 
 import { pruneCfcSchemaDefinitions } from "../cfc/schema-refs.ts";
 import {
-  collectExternalSchemaRefHashes,
-  containsExternalSchemaRef,
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,

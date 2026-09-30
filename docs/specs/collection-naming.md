@@ -219,6 +219,11 @@ segment, so adding a field to an item's schema cannot change what an existing
 name resolves to. The collection segment is always written, and compression
 belongs to prose, which has a sigil and a round-trip check.
 
+The shell does not yet resolve nested collection addresses such as
+`<space>/top/42/comments/7`. It reads one member after a collection's name and
+refuses an address carrying segments past that member, naming them, so the
+address above states the design rather than one that opens today.
+
 ## Resolution scope
 
 A name resolves through a scope chain, innermost first:
@@ -389,7 +394,7 @@ A renderer may prefer the compact form for a collection that offers one. None
 offers it yet, so the flag a collection declares eligibility with — `compact` —
 is reserved: setting it states that this collection's member names hold no
 hyphen, and nothing reads the statement
-([#6986](https://github.com/commontoolsinc/labs/issues/6986)).
+([#6986](https://github.com/commonfabric/labs/issues/6986)).
 
 ## Rendering
 
@@ -437,14 +442,16 @@ calls the member; it settles nothing about which collection a reference
 addresses, which stays the reading context's question.
 
 A renderer that shows a published name in place of a round trip takes that limit
-on, and one does. The editor's mention pill shows whatever name a mention's
-destination publishes — whichever collection assigned it, and whatever
-collection the reader is reading through — so a destination named by another
-collection contributes a number that reads as this one's
-([#6985](https://github.com/commontoolsinc/labs/issues/6985)). The round trip
-above is what removes it: take the name from the destination's row in the
-collection the reader is reading through, found by identity, and show none when
-there is no such row.
+on. The editor's mention pill makes its name a round trip through the universe
+the editor completes mentions from. It shows a name only where the mention's
+destination is a row of that universe, found by identity, and the name it shows
+is that row's rather than anything the destination publishes. So a shown name is
+one a `#` query in the same editor offers back for the same destination, as far
+as that query's grammar reaches: the sigil takes digits, so a collection naming
+its members in words has those names shown on a pill but not offered by the
+query. Widening that is a question for the query grammar rather than for the
+renderer, which shows what the row carries either way. A destination the
+universe does not list shows no name, whatever it publishes.
 
 ### Two modes, chosen by destination
 
@@ -588,20 +595,32 @@ the part that says which member, so a resolver handed the address on its own
 has nothing to walk with.
 
 **4. Walk segments in the URL layer.** Built for the shell's page URLs.
+Identity routes preserve the target scope and JSON Pointer keys through the
+cell-reference grammar. A route containing a piece id and pointer path opens
+that nested view-bearing cell in its target space; navigation does not rebind
+the address to the current space or replace it with a root-piece slug.
+The URL carries a nonempty pointer path as a JSON string array in `cellPath` so
+spaces, punctuation, empty keys, and dot segments survive URL parsing. This
+query cannot accompany a slug, another `cellPath`, or a path after the id.
 `urlToAppView` (`packages/navigation/src/view.ts`) reads the segment after a
 slug as the member name and carries it in the view, which serializes back to
-`<space>/<collection>/<member>`. It reads a leading `@` on the first segment as
-the mark on the space, so the fully qualified reference and the page URL are
-one address written two ways: the mark is what a reference carries and is no
-part of the space, so the shell opens `/@<space>/top/42` and settles on
-`/<space>/top/42`. Resolution is a separate worker round trip, `slug:resolve`
+`<space>/<collection>/<member>`. It walks no further: segments past the member
+are carried in the view as written, and the shell refuses such an address by
+naming them, as [Items contain collections](#items-contain-collections) records.
+It reads a path that opens with `//` the way the cell reference grammar writes a
+fully qualified reference, so that reference and the page URL are one address
+written two ways: the second slash is what a reference carries and is no part of
+the space, so the shell opens `//<space>/top/42`, the reference its header
+offers, and settles on `/<space>/top/42`. A leading `@` on the first segment
+marks the space as well, and the shell opens `/@<space>/top/42` the same way.
+Resolution is a separate worker round trip, `slug:resolve`
 (`packages/runtime-client/src/backends/runtime-processor.ts`), which hands the
 reference to the runner's walk and answers with the piece and whatever the walk
 did not spend. A name with no member after it is a different question of the
 same slug — which piece is this name inside — and `resolveSlugTargetInPiece`
 answers it directly, so `<space>/top` opens the piece holding the collection.
-The slug grammar in `packages/runner/src/slugs.ts` does not change, and a
-member answers to it too.
+The slug grammar in `packages/runner/src/slugs.ts` does not change, and a member
+answers to it too.
 
 Where the walk lives is what that split settles. `parseFabricUrl`
 (`packages/runner/src/fabric-url.ts`) is deliberately pure and synchronous, and
@@ -726,11 +745,35 @@ in `NamingDeclaration` (`packages/patterns/collection-naming/naming.ts`) — and
 resolver reading it could verify that a binding and its target agree and report
 a mismatch. Nothing reads the declaration: no collection sets `name`, no
 resolver compares one, and member resolution
-(`packages/runner/src/slug-resolution.ts`) is a map lookup that consults neither
-the declared grammar nor the policy. Making one consumer real is
-[#6986](https://github.com/commontoolsinc/labs/issues/6986), whose natural first
-consumer is that check, with a name assigned onto a collection written into the
-declaration.
+(`packages/runner/src/slug-resolution.ts`) reads no part of it. Making one
+consumer real is [#6986](https://github.com/commonfabric/labs/issues/6986),
+whose natural first consumer is that check, with a name assigned onto a
+collection written into the declaration.
+
+**Whether member resolution applies a collection's grammar.** It applies no
+member-name grammar
+([#6994](https://github.com/commonfabric/labs/issues/6994)):
+`resolveSlugReference` (`packages/runner/src/slug-resolution.ts`) looks the
+segment after a collection's name up as a key of that collection's map. The
+allocator's grammar lives in the collection's library, as `isMemberName` in
+`packages/patterns/collection-naming/naming.ts`. So a key the allocator would
+never issue still resolves: `top/007` resolves to whatever piece a writer stored
+under the key `007`, while the names table publishes no row for it.
+
+The resolver does not hardcode that grammar because the two sit at opposite ends
+of the pace layers in `AGENTS.md`: the decimal grammar belongs to the
+collection's library, in `packages/patterns` at the top, and the resolver sits
+in `runner`, at the foundation. Hardcoded, it would also refuse the members of
+any collection that names them some other way, such as `docs/getting-started` in
+"Names resolve through collections". Applying each collection's own grammar
+would take reading it from the collection's `naming` declaration. Nothing reads
+that declaration today (the question above,
+[#6986](https://github.com/commonfabric/labs/issues/6986)), and it carries no
+complete grammar predicate to test a key against. Its fields are `name`,
+`policy`, and `compact`, and only the last says anything about a member name at
+all — the eligibility rule in "The compact form" above — which rules one
+character out rather than saying what a name is. That route is open, not
+planned.
 
 **Whether a collection accepting names from people** reuses the space-level
 claim path or needs its own.

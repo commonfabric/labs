@@ -1,8 +1,13 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
-import type { CapabilityParamSummary } from "../src/core/mod.ts";
+import {
+  type CapabilityParamSummary,
+  CrossStageState,
+  TransformationContext,
+} from "../src/core/mod.ts";
 import {
   applyCapabilityDefaultsToTypeNode,
   applyShrinkAndWrap,
@@ -10,6 +15,7 @@ import {
   isCellLikeTypeNode,
   isSqliteTypeNode,
   isStreamTypeNode,
+  overlayContractCapabilities,
   preservedWrapperFor,
   printTypeNode,
   wrapTypeNodeWithCapability,
@@ -83,6 +89,7 @@ function hasQualifiedRef(node: ts.Node, left: string, right: string): boolean {
 }
 
 function createProgram(source: string): {
+  program: ts.Program;
   sourceFile: ts.SourceFile;
   checker: ts.TypeChecker;
 } {
@@ -114,7 +121,7 @@ function createProgram(source: string): {
   host.getNewLine = () => "\n";
 
   const program = ts.createProgram([fileName], compilerOptions, host);
-  return { sourceFile, checker: program.getTypeChecker() };
+  return { program, sourceFile, checker: program.getTypeChecker() };
 }
 
 function createProgramWithFiles(
@@ -220,6 +227,66 @@ function createParamSummary(
     ...summary,
   };
 }
+
+describe("overlayContractCapabilities()", () => {
+  it("returns a reference to an alias whose type holds no cell as written", () => {
+    const { sourceFile, checker } = createProgram(`
+      type Profile = { name: string };
+      type Event = { x: Profile };
+    `);
+    const alias = findTypeAlias(sourceFile, "Event");
+
+    const result = overlayContractCapabilities(
+      alias.type,
+      checker.getTypeAtLocation(alias.type),
+      createParamSummary({
+        capability: "readonly",
+        readPaths: [["x", "name"]],
+      }),
+      checker,
+      ts.factory,
+      sourceFile,
+    );
+
+    expect(result).toBe(alias.type);
+  });
+});
+
+describe("applyShrinkAndWrap()", () => {
+  it("records a node printed for a value read whole as printed from its type", () => {
+    // A synthetic base node sends the shrink to the value's type, and a value
+    // read whole is that type's print.
+
+    const { program, sourceFile, checker } = createProgram(`
+      type Item = { title: string; extra: any };
+    `);
+    const type = checker.getTypeAtLocation(
+      findTypeAlias(sourceFile, "Item").type,
+    );
+    const state = new CrossStageState();
+    const context = new TransformationContext({
+      program,
+      sourceFile,
+      tsContext: { factory: ts.factory } as ts.TransformationContext,
+      options: { state },
+    });
+
+    const result = applyShrinkAndWrap(
+      createParamSummary({ readPaths: [[]] }),
+      ts.factory.createTypeReferenceNode("Item"),
+      type,
+      false,
+      checker,
+      sourceFile,
+      ts.factory,
+      "full",
+      "opaque",
+      context,
+    );
+
+    expect(state.printedFrom(result)).toBe(type);
+  });
+});
 
 Deno.test("applyShrinkAndWrap preserves tuple roots for length-only synthetic shrinking", () => {
   const { sourceFile, checker } = createProgram(`
@@ -1133,10 +1200,13 @@ Deno.test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
 });
 
 Deno.test("applyShrinkAndWrap preserves a parenthesized capture while narrowing cell capability", () => {
-  const { sourceFile, checker } = createProgram(`
-    interface Cell<T> { get(): T; }
-    type Input = ({ value: Cell<{ count: number }>; other: string });
-  `);
+  const { sourceFile, checker } = createProgramWithFiles({
+    "/commonfabric.d.ts": "export interface Cell<T> { get(): T; }",
+    "/test.ts": `
+      import type { Cell } from "commonfabric";
+      type Input = ({ value: Cell<{ count: number }>; other: string });
+    `,
+  });
   const alias = findTypeAlias(sourceFile, "Input");
   const result = applyShrinkAndWrap(
     createParamSummary({ wildcard: true, readPaths: [["value"]] }),

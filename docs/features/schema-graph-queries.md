@@ -20,16 +20,17 @@ for the graph query, and everything that query needs comes from one place:
 `@commonfabric/runner/graph-query`.
 
 `memory` reaches `runner` for one other thing, and reaches it by relative path
-rather than through a package export. Both `query.ts` and `v2/engine.ts` import
-`schema-decompose.ts` and `schema-walk.ts`, which decompose a content-addressed
-schema. `query.ts` adds `schema-registry.ts` on top of those. `engine.ts` takes
-the `JSONSchema` type from `builder/types.ts`, where `@commonfabric/api` exports
-the same type and would cost that file nothing.
+rather than through a package export: `query.ts` imports `schema-registry.ts`,
+the realm-wide registry of verified schema documents that result assembly
+registers into. The vocabulary of content-addressed schema references — the
+reference form and its scan, the grammar of the `schema` metadata member, the
+subschema walk, and the walk over a document's `$ref` closure — lives in
+`@commonfabric/data-model-schema`, below both packages, and `query.ts` and
+`v2/engine.ts` take it from there.
 
-Content-addressed schemas are a different subject from graph traversal, and they
-are what is left to fold in — by exporting the schema-document registry, or by
-moving it below both packages. The traversal seam described below is already
-narrow.
+The registry is a different subject from graph traversal, and it is what is
+left to fold in — by exporting it, or by moving it below both packages. The
+traversal seam described below is already narrow.
 
 The graph-query module holds the driver: it takes documents from wherever the
 caller keeps them, walks them under a schema, and records what it reached.
@@ -94,18 +95,17 @@ write can still answer with what that document used to reach.
 The edge is one import statement, but the module behind it is not a leaf.
 `runner/src/graph-query.ts` imports `traverse.ts` and the extended storage
 transaction, and those reach `cell.ts`, which reaches the runtime and its
-builtins. Loading `packages/memory/v2/server.ts` therefore loads 395 modules and
-163,000 lines, 234 of those modules from `runner` and the rest reached through
+builtins. Loading `packages/memory/v2/server.ts` therefore loads 459 modules and
+210,000 lines, 267 of those modules from `runner` and the rest reached through
 it — `js-compiler`, `llm`, and `html` among the packages that arrive this way.
-Counting dynamic imports as well takes it to 527 modules.
+Counting dynamic imports as well takes it to 596 modules.
 
-The transactional core carries the same weight, and not because of this seam.
-`packages/memory/v2/engine.ts` reaches 381 modules, 233 of them `runner`,
-because it decomposes content-addressed schemas with runner's
-`schema-decompose.ts` and `schema-walk.ts`. So there is no runner-free storage
-core to extract: what is left below the runtime is the protocol vocabulary and
-the codecs, `packages/memory/v2.ts` at 83 modules and its SQLite surface at 92,
-neither of which is a working store.
+The transactional core does not: `packages/memory/v2/engine.ts` reaches 124
+modules and 35,000 lines, none of them from `runner`, since the
+content-addressed schema vocabulary it validates commits with sits in
+`@commonfabric/data-model-schema`. The engine is a runner-free store; what the
+runtime's weight attaches to is the query and delivery layer above it, through
+the seam this document describes.
 
 Those figures are the static closure over value imports, which
 `deno info --json <entry>` reports: walk `dependencies[].code` from the root,

@@ -24,7 +24,6 @@ import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { RequestType } from "@/protocol/mod.ts";
-import { createCellRef, getCell } from "@/backends/utils.ts";
 import { buildProcessor } from "./build-processor.ts";
 
 const signer = await Identity.fromPassphrase("runtime-client slug resolve");
@@ -107,8 +106,16 @@ describe("handleSlugResolve()", () => {
 
   it("returns the member a reference names, spending the segment", async () => {
     const response = await resolve("top", "2");
-    expect(response).toEqual({
-      piece: { cell: { id: idOf(item2), space, scope: "space", path: [] } },
+    expect(response).toMatchObject({
+      piece: {
+        cell: {
+          id: idOf(item2),
+          space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: expect.any(String),
+        },
+      },
       pathAfter: [],
     });
   });
@@ -118,16 +125,32 @@ describe("handleSlugResolve()", () => {
     // and a page URL names a piece to render, so that piece is what the
     // shell opens — at its root, not at the collection.
     const response = await resolve("top");
-    expect(response).toEqual({
-      piece: { cell: { id: idOf(board), space, scope: "space", path: [] } },
+    expect(response).toMatchObject({
+      piece: {
+        cell: {
+          id: idOf(board),
+          space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: expect.any(String),
+        },
+      },
       pathAfter: [],
     });
   });
 
   it("returns the piece a slug names at its root", async () => {
     const response = await resolve("board");
-    expect(response).toEqual({
-      piece: { cell: { id: idOf(board), space, scope: "space", path: [] } },
+    expect(response).toMatchObject({
+      piece: {
+        cell: {
+          id: idOf(board),
+          space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: expect.any(String),
+        },
+      },
       pathAfter: [],
     });
   });
@@ -139,8 +162,16 @@ describe("handleSlugResolve()", () => {
     // piece is the same either way, and only this says whether the address
     // that reached it included the segment.
     const response = await resolve("board", "2");
-    expect(response).toEqual({
-      piece: { cell: { id: idOf(board), space, scope: "space", path: [] } },
+    expect(response).toMatchObject({
+      piece: {
+        cell: {
+          id: idOf(board),
+          space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: expect.any(String),
+        },
+      },
       pathAfter: ["2"],
     });
   });
@@ -196,15 +227,9 @@ describe("handleSlugResolve()", () => {
     // would see instead is not measured, and this case claims nothing about
     // it. The two cases above are about the slug document, which the shell
     // never opens; neither is evidence about this.
-    const shellCell = getCell(
-      runtime,
-      createCellRef(
-        runtime.getCell(
-          space,
-          entityRefFromString(slugIdForSpace(space, "top")),
-        ),
-        undefined,
-      ),
+    const shellCell = runtime.getCell(
+      space,
+      entityRefFromString(slugIdForSpace(space, "top")),
     );
     const slugDocument = runtime.getCellFromEntityId(
       space,
@@ -319,8 +344,16 @@ describe("handleSlugResolve()", () => {
       member: "2",
     });
 
-    expect(response).toEqual({
-      piece: { cell: { id: idOf(item2), space, scope: "space", path: [] } },
+    expect(response).toMatchObject({
+      piece: {
+        cell: {
+          id: idOf(item2),
+          space,
+          scope: "space",
+          path: [],
+          cfcReferenceToken: expect.any(String),
+        },
+      },
       pathAfter: [],
     });
   });

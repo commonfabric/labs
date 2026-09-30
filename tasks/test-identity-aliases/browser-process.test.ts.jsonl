@@ -1,0 +1,1 @@
+{"date":"2026-09-11","from":{"k":"unit","s":"integration","n":"browser-process > stopBrowserProcess() > ends a running process with `SIGTERM`"},"to":{"k":"unit","s":"integration","n":"browser-process > stopBrowserProcess() > ends a running process with `SIGKILL`"}}

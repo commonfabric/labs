@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { parseLink } from "../../runner/src/link-utils.ts";
 
 import { Identity } from "@commonfabric/identity";
 import { KeepAsCell, Runtime } from "@commonfabric/runner";
@@ -155,7 +157,10 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
         ) {
           return liveValue;
         }
-        return this;
+        const raw = this.#parentCell?.getRawUntyped()?.[this.#propKey!] ??
+          liveValue;
+        const link = parseLink(raw);
+        return link?.id && link.space ? runtime.getCellFromLink(link) : this;
       }
 
       getAsNormalizedFullLink() {
@@ -1020,21 +1025,17 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
             bindingOp.cellRef.id,
             bindingCell.getAsNormalizedFullLink().id,
           );
-          assertEquals(
-            cfcLabelViewForCell(runtime.getCellFromLink(bindingOp.cellRef)),
-            {
-              version: 1,
-              entries: [{
-                path: [],
-                label: {
-                  integrity: [{
-                    kind: "authored-by",
-                    subject: "alice",
-                  }],
-                },
-              }],
-            },
+          const view = cfcLabelViewForCell(
+            runtime.getCellFromLink(bindingOp.cellRef),
           );
+          expect(
+            view?.entries.filter((entry) => entry.observes !== "followRef"),
+          ).toEqual([{
+            path: [],
+            label: { integrity: [{ kind: "authored-by", subject: "alice" }] },
+          }]);
+          expect(view?.entries.some((entry) => entry.observes === "followRef"))
+            .toBe(true);
         } finally {
           cancel();
         }
@@ -1527,10 +1528,9 @@ Deno.test(
       const streamCell = runtime.getCell<unknown>(
         signer.did(),
         "static-event-stream",
-        undefined,
+        { asCell: ["stream"] },
         tx,
       );
-      streamCell.setRaw({ $stream: true });
 
       const eventTargetCell = runtime.getCell<unknown>(
         signer.did(),
@@ -1540,13 +1540,21 @@ Deno.test(
       );
       eventTargetCell.set(streamCell as never);
 
+      const output = runtime.getCell<number>(
+        signer.did(),
+        "render-event-output",
+        undefined,
+        tx,
+      );
+      output.set(0);
       await tx.commit();
       tx = runtime.edit();
 
       let eventSeen: unknown;
       runtime.scheduler.addEventHandler(
-        (_handlerTx, event) => {
+        (handlerTx, event) => {
           eventSeen = event;
+          output.withTx(handlerTx).set(1);
         },
         streamCell.getAsNormalizedFullLink(),
       );
@@ -1573,6 +1581,7 @@ Deno.test(
           | undefined;
         assertEquals(setEventOp !== undefined, true);
 
+        assertEquals(output.get(), 0);
         reconciler.dispatchEvent(
           setEventOp!.handlerId,
           { type: "click" },
@@ -1580,6 +1589,7 @@ Deno.test(
 
         await runtime.idle();
         assertEquals(eventSeen, { type: "click" });
+        assertEquals(output.get(), 1);
       } finally {
         cancel();
       }

@@ -327,9 +327,10 @@ export function navigateTo(
   /** The flag-ON CLIENT half (speculation.md §2's optimistic enactment):
    * navigation is reversible, so the speculative run still enacts —
    * through the post-commit effect the overlay destination allowlists —
-   * carrying the deterministic NONCE so the effects channel records the
-   * enactment and the authoritative intent converges on it instead of
-   * re-enacting (protocol.md §5; T2.Q7). */
+   * carrying the deterministic NONCE the effects channel arbitrates.
+   * The channel records this enactment and converges the authoritative
+   * intent on it, or — when that intent arrived and enacted first —
+   * stands this one down (protocol.md §5; T2.Q7). */
   function optimisticNavigate(
     tx: IExtendedStorageTransaction,
     target: Cell<any>,
@@ -408,9 +409,10 @@ export function navigateTo(
       // navigates. An effect whose work simply does not happen has nothing to
       // record.
       // The convergence key (protocol.md §5): the overlay destination
-      // BEGINS it on the effects channel before this flush's callback
-      // runs, and the channel acks the authoritative intent without
-      // re-enacting.
+      // hands this flush to the effects channel, which records the
+      // nonce before the flush's callback runs and acks the
+      // authoritative intent without re-enacting — or, holding the
+      // nonce already, runs this flush not at all.
       nonce,
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;

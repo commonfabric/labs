@@ -29,6 +29,7 @@ import {
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -66,10 +67,10 @@ describe("CFC reference confidentiality", () => {
     const cell = runtime.getCell(space, cause, undefined, tx);
     const link = cell.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...link, path: [] }, {
+    seedStoredEnvelope(tx, { ...link, path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -100,6 +101,7 @@ describe("CFC reference confidentiality", () => {
       path: ["nested"],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: ["nested-selection"] },
     }]);
     const redirect = await seed(
@@ -109,6 +111,7 @@ describe("CFC reference confidentiality", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [secret] },
       }],
     );
@@ -137,6 +140,7 @@ describe("CFC reference confidentiality", () => {
       label: { confidentiality: [secret] },
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
     }]);
     const tx = runtime.edit();
     expect(selected.withTx(tx).get()).toBe("public constant");
@@ -150,6 +154,7 @@ describe("CFC reference confidentiality", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [secret] },
     }]);
     const tx = runtime.edit();
@@ -165,6 +170,7 @@ describe("CFC reference confidentiality", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [secret] },
     }]);
     const acquire = runtime.edit();
@@ -196,6 +202,7 @@ describe("CFC reference confidentiality", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [secret] },
     }]);
     const acquire = runtime.edit();
@@ -227,6 +234,7 @@ describe("CFC reference confidentiality", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: [secret] },
     }]);
     const acquire = runtime.edit();
@@ -418,6 +426,7 @@ describe("CFC reference confidentiality", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: { confidentiality: ["secret"] },
     }]);
     const acquire = runtime.edit();
@@ -555,6 +564,7 @@ describe("CFC reference confidentiality", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [secret] },
       }]);
       const acquire = runtime.edit();
@@ -620,12 +630,14 @@ describe("CFC reference confidentiality", () => {
       label: { confidentiality: [targetSecret] },
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
     }]);
     const outer = await seed("chain-outer", inner.getAsLink(), [{
       path: [],
       label: { confidentiality: [secret] },
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
     }]);
     const tx = runtime.edit();
     expect(outer.withTx(tx).get()).toBe("public");

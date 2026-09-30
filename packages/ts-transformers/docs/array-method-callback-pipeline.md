@@ -89,14 +89,19 @@ That function does, in order:
 4. `ts.visitNode(callback.body, visitor)` — recurses into the body before the
    per-callback expression-site lowering runs. Nested array-methods in the body
    get transformed during this recursion (depth-first).
-5. `createPatternCallWithParams` synthesizes the new shape:
+5. `expandCapturedObjectSpreads`
+   (`src/closures/utils/captured-object-spread.ts`) writes out a spread of a
+   captured `const` object literal with static keys as the properties it copies,
+   read through the capture with `.key(...)`. Inside the new pattern a capture
+   is an opaque reference, which has no keys to spread.
+6. `createPatternCallWithParams` synthesizes the new shape:
    `array.mapWithPattern(pattern((destructured) => …), capturesObj)`.
-6. `rewriteArrayMethodCallbackExpressionSites` (called from `createPattern…` via
+7. `rewriteArrayMethodCallbackExpressionSites` (called from `createPattern…` via
    the strategy's `rewriteTransformedBody` option) runs over the transformed
    body to decide which expressions need lift-applied reactive wrapping and
    which can pass through.
 
-The output of step 5 is a `pattern((destructured) => …)` call wrapping the
+The output of step 6 is a `pattern((destructured) => …)` call wrapping the
 original body. The destructured parameter is one of two shapes depending on how
 step 3 decided to surface the element binding.
 

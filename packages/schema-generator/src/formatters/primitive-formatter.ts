@@ -1,5 +1,8 @@
 import ts from "typescript";
-import type { MutableJSONSchema } from "@commonfabric/api";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import { TypeWithInternals } from "../type-utils.ts";
 
@@ -104,8 +107,11 @@ export class PrimitiveFormatter implements TypeFormatter {
       return { type: "undefined" };
     }
     if (flags & ts.TypeFlags.Void) {
-      // Keep resolved `void` types aligned with `VoidKeyword` handling.
-      return { asCell: ["opaque"] };
+      // A `void` value is present but never read, so it carries the opaque
+      // cell marker; the origin tells it from a cell that carries the same.
+      const schema: MutableJSONSchemaObj = { asCell: ["opaque"] };
+      context.schemaOrigins?.set(schema, { kind: "void" });
+      return schema;
     }
     if (flags & ts.TypeFlags.Never) {
       // never: return false to reject all values

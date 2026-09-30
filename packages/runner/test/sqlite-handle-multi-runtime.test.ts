@@ -21,9 +21,11 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { SqliteTableSchemas } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { createCell } from "../src/cell.ts";
 import { isSigilLink } from "../src/link-utils.ts";
@@ -129,6 +131,9 @@ function runPattern(runtime: Runtime) {
   const tx = runtime.edit();
   const resultCell = runtime.getCell(space, RESULT_CAUSE, undefined, tx);
   runtime.run(tx, pattern, { tables: makeTables(cf) }, resultCell);
+  // The handle and the query are computations: a reader has to demand
+  // them, and the runtime's disposal ends the subscription.
+  resultCell.sink(() => {});
   const commit = tx.commit();
   return { resultCell, commit };
 }
@@ -143,7 +148,7 @@ function collectSigilLinks(value: unknown, out: unknown[] = []): unknown[] {
     for (const v of value) collectSigilLinks(v, out);
     return out;
   }
-  if (value !== null && typeof value === "object") {
+  if (isObjectOrArray(value)) {
     for (const v of Object.values(value)) collectSigilLinks(v, out);
     return out;
   }
@@ -217,6 +222,73 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     expect(collectSigilLinks(afterExec)).toEqual([]);
   });
 
+  it("a second runtime keeps a sparse array in a column's stored confidentiality atom when its declaration omits the label", async () => {
+    const atom = () => ({
+      type: "custom-policy",
+      parameters: new Array<string>(1),
+    });
+    const { commonfabric: cfA } = createTrustedBuilder(runtimeA);
+    const declared = (labeled: boolean) => ({
+      items: cfA.table({
+        id: "integer primary key",
+        tag: labeled
+          ? { type: "integer", ifc: { confidentiality: [atom()] } }
+          : { type: "integer" },
+      }),
+    });
+    const pattern = (cf: typeof cfA) =>
+      cf.pattern<{ tables: SqliteTableSchemas }>(({ tables }) => ({
+        db: cf.sqliteDatabase({ tables }),
+      }));
+    const cause = "sqlite-sparse-atom";
+    const tablesCause = "sqlite-sparse-atom-tables";
+
+    const tx = runtimeA.edit();
+    const tables = runtimeA.getCell<unknown>(space, tablesCause, undefined, tx);
+    tx.writeValueOrThrow(
+      tables.getAsNormalizedFullLink(),
+      declared(true) as unknown as FabricValue,
+    );
+    const resultCell = runtimeA.getCell(space, cause, undefined, tx);
+    runtimeA.run(tx, pattern(cfA), { tables }, resultCell);
+    resultCell.sink(() => {});
+    expect((await tx.commit()).error).toBeUndefined();
+    await runtimeA.settled();
+    const redeclare = runtimeA.edit();
+    redeclare.writeValueOrThrow(
+      tables.getAsNormalizedFullLink(),
+      declared(false) as unknown as FabricValue,
+    );
+    expect((await redeclare.commit()).error).toBeUndefined();
+    await runtimeA.storageManager.synced();
+
+    // The init that merges a declaration into the stored handle runs once per
+    // runtime, so the re-declaration is read by a second one.
+    runtimeB = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+    });
+    const { commonfabric: cfB } = createTrustedBuilder(runtimeB);
+    const resultCellB = runtimeB.getCell(space, cause, undefined);
+    await runtimeB.runSynced(resultCellB, pattern(cfB));
+    // A reader demands the handle, so the second runtime runs its init.
+    resultCellB.sink(() => {});
+    await runtimeB.settled();
+    await runtimeB.storageManager.synced();
+
+    const handle = resultCellB.key("db").resolveAsCell().getRawUntyped() as {
+      tables: Record<string, {
+        properties: Record<string, {
+          ifc?: { confidentiality?: { parameters: unknown[] }[] };
+        }>;
+      }>;
+    };
+    const parameters = handle.tables.items.properties.tag.ifc!
+      .confidentiality![0].parameters;
+    expect(parameters.length).toBe(1);
+    expect(Object.hasOwn(parameters, 0)).toBe(false);
+  });
+
   it("a second runtime adopts the settled shared query instead of re-issuing", async () => {
     const a = runPattern(runtimeA);
     await a.commit;
@@ -279,5 +351,78 @@ describe("sqlite handle across runtimes (rule term lists)", () => {
     expect(settledA.requestHash).toBe(hashA);
     expect(settledA.pending).toBe(false);
     expect(settledA.error).toBeUndefined();
+  });
+
+  it("a second runtime recovers a pending query left by a stopped runtime", async () => {
+    const a = runPattern(runtimeA);
+    await a.commit;
+    const qCellA = a.resultCell.key("q").resolveAsCell();
+    const initial = await waitForCellValue<QueryState>(
+      runtimeA,
+      qCellA,
+      (value) => value?.pending === false,
+    );
+    expect(typeof initial.requestHash).toBe("string");
+
+    const providerA = runtimeA.storageManager.open(space) as unknown as {
+      sqliteQuery: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalA = providerA.sqliteQuery.bind(providerA);
+    let resumeA: (() => Promise<void>) | undefined;
+    providerA.sqliteQuery = (...args) =>
+      new Promise((resolve, reject) => {
+        resumeA = async () => {
+          try {
+            resolve(await originalA(...args));
+          } catch (error) {
+            reject(error);
+          }
+        };
+      });
+    await seedDbFile(runtimeA, a.resultCell);
+    const pending = await waitForCellValue<QueryState>(
+      runtimeA,
+      qCellA,
+      (value) =>
+        value?.pending === true && value.requestHash !== initial.requestHash,
+    );
+    expect(typeof pending.requestHash).toBe("string");
+    await runtimeA.patternManager.flushCompileCacheWrites();
+    await runtimeA.storageManager.synced();
+    runtimeA.scheduler.dispose();
+
+    runtimeB = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+    });
+    const providerB = runtimeB.storageManager.open(space) as unknown as {
+      sqliteQuery: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalB = providerB.sqliteQuery.bind(providerB);
+    let issuesFromB = 0;
+    providerB.sqliteQuery = (...args) => {
+      issuesFromB++;
+      return originalB(...args);
+    };
+
+    const { commonfabric: cfB } = createTrustedBuilder(runtimeB);
+    const resultCellB = runtimeB.getCell(space, RESULT_CAUSE, undefined);
+    const cancelResultSink = resultCellB.sink(() => {});
+    await runtimeB.runSynced(resultCellB, makePattern(cfB));
+    const qCellB = resultCellB.key("q").resolveAsCell();
+    const recovered = await waitForCellValue<QueryState>(
+      runtimeB,
+      qCellB,
+      (value) => value?.pending === false,
+    );
+
+    expect(issuesFromB).toBe(1);
+    expect(recovered.pending).toBe(false);
+    expect(recovered.requestHash).toBe(pending.requestHash);
+    expect(recovered.error).toBeUndefined();
+    cancelResultSink();
+    expect(resumeA).toBeDefined();
+    await resumeA!();
+    await runtimeA.settled();
   });
 });

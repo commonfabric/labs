@@ -11,16 +11,25 @@ import {
   type LoomAuthoredObservation,
 } from "../src/loom-authoring.ts";
 import { join } from "@std/path";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type {
-  HarnessChatEventEnvelope,
-  HarnessChatStructuredEvent,
+import {
+  type HarnessChatEventEnvelope,
+  type HarnessChatStructuredEvent,
+  harnessChatTurnElapsedMs,
+  type HarnessChatTurnStatus,
 } from "../src/contracts/interactive-chat.ts";
+import {
+  type HarnessTaskOutcome,
+  readHarnessTaskOutcome,
+} from "../src/contracts/task-outcome.ts";
 import type {
   HarnessToolCall,
   HarnessToolTranscriptMessage,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
+import type { HarnessModelUsage } from "../src/model/client.ts";
+import { readHarnessModelUsage } from "../src/model/usage.ts";
 
 /** A named piece a completed console turn made openable. */
 export interface ConsoleTurnResultPiece {
@@ -35,7 +44,13 @@ export interface ConsoleTurnResultPiece {
 }
 
 /** The stable result an external console caller reads for a completed turn. */
-export interface ConsoleTurnResult {
+export type ConsoleTurnResult = HarnessTaskOutcome & {
+  /** Durable conversation to which a follow-up task belongs. */
+  sessionId: string;
+
+  /** Whether the session currently accepts another turn. */
+  continuable: boolean;
+
   /** Verified compositions from this turn only, including explicit replays. */
   looms: readonly Pick<
     LoomAuthoredObservation,
@@ -51,9 +66,15 @@ export interface ConsoleTurnResult {
   /** The space this console is configured against. */
   spaceName: string;
 
-  /** Last assistant text, or an empty string when the turn ended on a tool. */
+  /** Human-readable answer, question, or reason the task cannot proceed. */
   finalText: string;
-}
+
+  /** Reported usage for this turn, including research and delegated calls. */
+  usage?: HarnessModelUsage;
+
+  /** Wall time from the durable turn's start to its terminal event. */
+  elapsedMs?: number;
+};
 
 /** The console's completed SSE event with its external result attached. */
 export type ConsoleTurnCompletedEvent =
@@ -78,6 +99,12 @@ export type ConsoleChatEventEnvelope =
 
 /** Inputs which identify one turn's durable result. */
 export interface ReadConsoleTurnResultOptions {
+  /** Owning session from the chat service, never inferred from prose. */
+  sessionId: string;
+
+  /** Current availability reported by that session. */
+  continuable: boolean;
+
   /** Originating Loom from the durable turn input. */
   originLoomId?: string;
 
@@ -89,6 +116,9 @@ export interface ReadConsoleTurnResultOptions {
 
   /** Space this console is configured against. */
   spaceName: string;
+
+  /** Durable turn timestamps; absent when only legacy run artifacts are held. */
+  timing?: Pick<HarnessChatTurnStatus, "startedAt" | "endedAt">;
 }
 
 /** Characters the artifact store admits in one run directory name. */
@@ -99,7 +129,7 @@ const isTranscriptMessage = (
   value: unknown,
 ): value is HarnessTranscriptMessage => {
   if (
-    typeof value !== "object" || value === null || !("role" in value) ||
+    !isObjectOrArray(value) || !("role" in value) ||
     !("content" in value) || typeof value.content !== "string"
   ) {
     return false;
@@ -119,6 +149,8 @@ interface TurnRunArtifacts {
   transcript: readonly HarnessTranscriptMessage[];
   currentTranscriptIndexes: ReadonlySet<number>;
   finalText: string;
+  taskOutcome: HarnessTaskOutcome;
+  usage?: HarnessModelUsage;
 }
 
 /** The first two occurrences suffice to establish uniqueness at any prefix. */
@@ -166,7 +198,7 @@ const callArguments = (
   }
   try {
     const value: unknown = JSON.parse(match.call.function.arguments);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
+    return isObjectNotArray(value)
       ? value as Record<string, unknown>
       : undefined;
   } catch {
@@ -182,7 +214,7 @@ const currentTranscriptIndex = (
   value: unknown,
 ): number | "malformed" | undefined => {
   if (
-    typeof value !== "object" || value === null ||
+    !isObjectOrArray(value) ||
     !("kind" in value) || value.kind !== "transcript_message"
   ) {
     return undefined;
@@ -228,13 +260,19 @@ const readTurnRunArtifacts = async (
     if (
       !Array.isArray(transcriptValue) ||
       !transcriptValue.every(isTranscriptMessage) ||
-      typeof reportValue !== "object" || reportValue === null ||
+      !isObjectOrArray(reportValue) ||
       !("timeline" in reportValue) || !Array.isArray(reportValue.timeline) ||
       !("finalAssistantText" in reportValue) ||
       typeof reportValue.finalAssistantText !== "string"
     ) {
       return undefined;
     }
+    const taskOutcome = readHarnessTaskOutcome(
+      Object.hasOwn(reportValue, "taskOutcome")
+        ? (reportValue as Record<string, unknown>).taskOutcome
+        : undefined,
+    );
+    if (taskOutcome === undefined) return undefined;
     const currentTranscriptIndexes = new Set<number>();
     for (const entry of reportValue.timeline) {
       const index = currentTranscriptIndex(entry);
@@ -252,6 +290,14 @@ const readTurnRunArtifacts = async (
       transcript: transcriptValue,
       currentTranscriptIndexes,
       finalText: reportValue.finalAssistantText,
+      taskOutcome,
+      usage: readHarnessModelUsage(
+        "totalUsage" in reportValue
+          ? reportValue.totalUsage
+          : "usage" in reportValue
+          ? reportValue.usage
+          : undefined,
+      ),
     };
   } catch {
     return undefined;
@@ -272,7 +318,7 @@ const pieceFromAssignSlug = (
     return undefined;
   }
   if (
-    typeof output !== "object" || output === null ||
+    !isObjectOrArray(output) ||
     !("status" in output) || output.status !== "ok" ||
     !("slug" in output) || typeof output.slug !== "string" ||
     !("url" in output) || typeof output.url !== "string"
@@ -299,6 +345,10 @@ export const readConsoleTurnResult = async (
   if (artifacts === undefined) {
     return undefined;
   }
+  const elapsedMs = harnessChatTurnElapsedMs(
+    options.timing?.startedAt,
+    options.timing?.endedAt,
+  );
   const calls = indexCalls(artifacts);
   const membership = new Map<
     string,
@@ -340,6 +390,9 @@ export const readConsoleTurnResult = async (
     }
   });
   return {
+    ...artifacts.taskOutcome,
+    sessionId: options.sessionId,
+    continuable: options.continuable,
     ...(options.originLoomId !== undefined
       ? { originLoomId: options.originLoomId }
       : {}),
@@ -364,5 +417,7 @@ export const readConsoleTurnResult = async (
     }),
     spaceName: options.spaceName,
     finalText: artifacts.finalText,
+    ...(artifacts.usage === undefined ? {} : { usage: artifacts.usage }),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
   };
 };

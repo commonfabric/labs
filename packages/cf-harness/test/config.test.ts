@@ -105,7 +105,7 @@ Deno.test("resolveCfcEnforcementMode ignores malformed in-memory run manifest mo
     cfc: { enforcementMode: "bogus" as CfcEnforcementMode },
   };
   // A mode nothing parses contributes nothing: the resolution is the one the
-  // same manifest gets naming no mode at all, and the source is `default`.
+  // same manifest gets naming no mode at all.
   assertEquals(
     resolveCfcEnforcementMode({ runManifest: malformed }),
     resolveCfcEnforcementMode({ runManifest: manifest }),

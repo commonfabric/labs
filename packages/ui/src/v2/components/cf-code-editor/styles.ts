@@ -275,7 +275,7 @@ export const styles = css`
   /* Table styling - line-based approach */
   :host([mode="prose"]) .cm-prose-table-row {
     display: grid !important;
-    grid-template-columns: repeat(var(--table-cols, 3), 1fr);
+    grid-template-columns: repeat(var(--table-cols, 3), minmax(0, 1fr));
     border-left: 1px solid
       var(--cf-code-editor-color-neutral-200, hsl(0, 0%, 88%));
     border-right: 1px solid
@@ -287,12 +287,18 @@ export const styles = css`
   :host([mode="prose"]) .cm-prose-table-header {
     border-top: 1px solid
       var(--cf-code-editor-color-neutral-200, hsl(0, 0%, 88%));
-    background-color: var(--cf-code-editor-color-neutral-50, hsl(0, 0%, 97%));
+    background-color: var(--cf-theme-color-surface, #f2f3f6);
+    color: var(--cf-theme-color-text, #111827);
     font-weight: 600;
   }
 
   :host([mode="prose"]) .cm-prose-table-cell {
     padding: 0.35em 0.75em;
+  }
+
+  /* Hidden delimiters and their caret buffers must not occupy grid cells. */
+  :host([mode="prose"]) .cm-prose-table-row > :not(.cm-prose-table-cell) {
+    display: none;
   }
 
   :host([mode="prose"]) .cm-prose-table-separator {
@@ -334,7 +340,7 @@ export const styles = css`
     );
   }
 
-  /* The member name a mention's destination publishes, beside its label.
+  /* What the mention universe calls a destination, beside its label.
     Generated content, because the document's own text is the label alone:
     a reference's spelling is computed where it is read and never stored. */
   .cm-mention-ref-pill[data-short-name]::after {

@@ -11,10 +11,13 @@ import type {
   PatternIndexSearchResult,
 } from "../src/pattern-index/client.ts";
 
-/** One event type counted against a pattern. */
+/** One event type counted against a pattern, attributed where known. */
 export interface PatternEventBadge {
   eventType: string;
   count: number;
+
+  /** Author DID; absent for the portion the index leaves unattributed. */
+  did?: string;
 }
 
 /**
@@ -31,17 +34,31 @@ export const patternsByScore = (
   );
 
 /**
- * A pattern's counted events as badges, by type. A type counted zero times is
- * left out: the badge row says what happened to this pattern, and an index
- * that grows a new event type should not widen every row with it.
+ * Returns a pattern's event counts by type and author, with any unattributed
+ * remainder kept separate. Counts come from the listing, never the bounded,
+ * caller-scoped event stream. Zero counts produce no badge.
  */
 export const eventBadges = (
   events: Readonly<Record<string, number>> | undefined,
+  eventAuthors: PatternIndexListedPattern["eventAuthors"] = {},
 ): readonly PatternEventBadge[] =>
   Object.entries(events ?? {})
     .filter(([, count]) => count > 0)
-    .map(([eventType, count]) => ({ eventType, count }))
-    .sort((left, right) => left.eventType.localeCompare(right.eventType));
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([eventType, count]) => {
+      const authors = Object.entries(eventAuthors[eventType] ?? {})
+        .filter(([did, count]) => did !== "" && count > 0)
+        .sort(([left], [right]) => left.localeCompare(right));
+      const attributed = authors.reduce((sum, [, count]) => sum + count, 0);
+      // An inconsistent breakdown cannot attribute the total reliably.
+      if (attributed > count) return [{ eventType, count }];
+      return [
+        ...authors.map(([did, count]) => ({ eventType, count, did })),
+        ...(attributed < count
+          ? [{ eventType, count: count - attributed }]
+          : []),
+      ];
+    });
 
 /**
  * The events a filter box leaves showing. The needle is matched against every

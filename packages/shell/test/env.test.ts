@@ -49,33 +49,20 @@ Deno.test({
 });
 
 Deno.test({
-  name: "shell env rejects a non-WebSocket presence service URL",
+  name: "shell env preserves the agent builtin rollback override",
   permissions: { read: true },
   async fn() {
-    await expect(withPatchedGlobals({
+    const off = await withPatchedGlobals({
       $API_URL: "http://shell.test/",
-      $PRESENCE_URL: "https://presence.test",
-    }, importFreshEnvModule)).rejects.toThrow("WebSocket URL");
-  },
-});
-
-Deno.test({
-  name: "shell env reads the optional presence service URL",
-  permissions: { read: true },
-  async fn() {
-    const configured = await withPatchedGlobals({
-      $API_URL: "http://shell.test/",
-      $PRESENCE_URL: "wss://presence.test/socket",
+      $EXPERIMENTAL_AGENT_BUILTIN: "false",
     }, importFreshEnvModule);
-    expect(configured.PRESENCE_URL?.href).toBe(
-      "wss://presence.test/socket",
-    );
+    expect(off.EXPERIMENTAL.agentBuiltin).toBe(false);
 
-    const disabled = await withPatchedGlobals({
+    const unset = await withPatchedGlobals({
       $API_URL: "http://shell.test/",
-      $PRESENCE_URL: undefined,
+      $EXPERIMENTAL_AGENT_BUILTIN: undefined,
     }, importFreshEnvModule);
-    expect(disabled.PRESENCE_URL).toBeUndefined();
+    expect(unset.EXPERIMENTAL.agentBuiltin).toBeUndefined();
   },
 });
 

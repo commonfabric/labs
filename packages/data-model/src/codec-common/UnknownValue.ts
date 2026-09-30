@@ -5,14 +5,13 @@ import {
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
+} from "@/fabric-bases";
 import {
   CODEC,
   type LiveEnvironment,
   type NonterminalCodec,
 } from "@/codec-interface/interface.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { ProblematicStateError } from "./ProblematicStateError.ts";
 
@@ -118,6 +117,8 @@ export class UnknownValue extends BaseFabricInstance {
 
       /** @inheritDoc */
       encode(value: UnknownValue, _env: LiveEnvironment): FabricValue {
+        // The preserved state is all this value holds, and it is an external
+        // reference rather than internal state, so it is returned as itself.
         return value.state;
       }
 
@@ -132,12 +133,13 @@ export class UnknownValue extends BaseFabricInstance {
       decode(
         typeTag: string,
         state: FabricValue,
-        env: LiveEnvironment,
+        _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
+        // The state is an external reference, as `encode()` treats it, so it
+        // is kept as it is.
         const result = new UnknownValue(typeTag, state);
-        // Honor `shouldDeepFreeze`: produce the type's correct deep-frozen
-        // form via its `[DEEP_FREEZE]` member (recursing through `deepFreeze`).
-        return env.shouldDeepFreeze ? deepFreeze(result) : result;
+        return mutable ? result : Object.freeze(result);
       }
     })(),
   );

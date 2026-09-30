@@ -13,8 +13,8 @@
 //   instance's empty one), and writes her per-user consequence with the
 //   typed value (pre-stage-A: consequenced with zero writes);
 // - the resubscribe path is instance-aware: after both instances ran,
-//   BOB's input change wakes the node (the N-run loop resubscribes once
-//   to the UNION of the instance logs — pre-stage-A the last instance's
+//   BOB's input change wakes the node (the N-run loop resubscribes after
+//   each instance to the UNION of its logs — pre-stage-A the last instance's
 //   subscription replaced the others);
 // - S4 (basis rows keyed by the FULL instance address): a demand stamp
 //   broader or narrower than the run's discovered instance leaves no
@@ -26,6 +26,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitReplica,
+} from "./support/serving-waits.ts";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   resolveScopeKey,
@@ -43,7 +48,6 @@ import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
 
 /** The serving runtime's storage manager, with the serving-loop suite's
  * settle-gate seam: while `settleGate` is set, the loop's settle hangs
@@ -165,6 +169,8 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
   let runtimes: Runtime[];
   let servingRuntime: Runtime | undefined;
   let servingManager: GatedStorageManager | undefined;
+  let sessions: MemoryV2Server.SessionRegistry;
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
 
   const newHost = (
     policy: ConstructorParameters<typeof ExecutorHost>[0]["policy"] = {},
@@ -196,19 +202,32 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000, ...policy },
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
     });
 
+  /** Resolves once `activatedSpace` has an ACTIVE tenure — activation
+   * finishes on no admission or session edge of its own. */
+  const activated = (activatedSpace: MemorySpace): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === activatedSpace && entry.outcome === "active"
+    );
+
   beforeEach(() => {
-    // A short detached-session TTL: the true-R7 test needs an ephemeral
-    // typer's session (and its watches — demand) to prune promptly.
+    // The registry is the test's own: a detached session lingers for the
+    // TTL and its watches are still DEMAND, and the true-R7 test needs
+    // an ephemeral typer's session GONE. Owning the registry lets it
+    // remove that session outright instead of waiting the window out.
+    sessions = new MemoryV2Server.SessionRegistry({ ttlMs: 250 });
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
-      sessionTtlMs: 250,
+      sessions,
     });
     managers = [];
     runtimes = [];
     servingRuntime = undefined;
     servingManager = undefined;
+    activations = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -305,20 +324,14 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       ...bobResult.getAsNormalizedFullLink(),
       scope: options.bobScope,
     }).sync();
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitUntil(
-      () => {
-        const demanded = host!.spaceServer(space)?.demandedIdentitiesOf(
-          resultId,
-        ) ?? [];
-        return demanded.some((i) => i.principal === aliceSigner.did()) &&
-          demanded.some((i) => i.principal === bobSigner.did());
-      },
-      "both demanders in the registry",
-    );
+    await activated(space);
+    await awaitAdmitted(server, () => {
+      const demanded = host!.spaceServer(space)?.demandedIdentitiesOf(
+        resultId,
+      ) ?? [];
+      return demanded.some((i) => i.principal === aliceSigner.did()) &&
+        demanded.some((i) => i.principal === bobSigner.did());
+    });
 
     // Divergent per-user drafts, written THROUGH the argument schema so
     // the PerUser slot narrows into each writer's own instance. Each is
@@ -360,11 +373,11 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     await bob.storageManager.synced();
     const aliceKey = resolveScopeKey("user", { principal: aliceSigner.did() });
     const bobKey = resolveScopeKey("user", { principal: bobSigner.did() });
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"A"') &&
         instanceHolds(engine, bobKey, '"B"'),
-      "both per-user drafts to land in their own instances",
     );
 
     return {
@@ -398,15 +411,11 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     // ITS OWN input's echo. Pre-stage-A both instance runs read the one
     // scope-NAME-keyed local doc — the service instance's (empty)
     // draft — and wrote "echo:" under both keys.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      () =>
-        "each instance's echo of its own draft (alice: " +
-        `${instanceHolds(engine, aliceKey, '"echo:A"')}, bob: ${
-          instanceHolds(engine, bobKey, '"echo:B"')
-        })`,
     );
     // Never the sibling's value, never the collapsed empty one.
     expect(instanceHolds(engine, aliceKey, '"echo:B"')).toBe(false);
@@ -445,9 +454,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     // Let the derivations settle first (the save reads the same draft
     // instance the echo run already loaded — and the handler must read
     // it correctly whether or not a prior load happened).
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A"'),
-      "alice's echo before the save",
     );
 
     const before = Engine.serverSeq(engine);
@@ -456,21 +465,15 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     await alice.idle();
     await alice.storageManager.synced();
 
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the save event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return (value?.entries?.length ?? 0) >= 1 &&
-          value!.entries!.every((entry) => entry.consequenced === true);
-      },
-      "the save event to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return (value?.entries?.length ?? 0) >= 1 &&
+        value!.entries!.every((entry) => entry.consequenced === true);
+    });
     const entries =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
         .entries!;
@@ -480,9 +483,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     // THE R7 ARBITRATION: the consequence exists, under Alice's instance,
     // with the value she typed — the handler read HER draft, not the
     // service instance's empty one (which writes nothing).
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"saved:A"'),
-      "alice's saved consequence under her instance",
     );
     // Under HER instance exactly: the arg doc's user instance holds both
     // her draft and the typed consequence; the space slot holds the
@@ -505,9 +508,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     expect(consequenceRows.length).toBeGreaterThanOrEqual(1);
     // And the per-user derivation over the SAVED slot re-derived for
     // Alice from her new instance value.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"saved-echo:saved:A"'),
-      "alice's saved-echo derived from her consequence",
     );
     setup.cancel();
   });
@@ -596,23 +599,22 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       typed.key("saved").withTx(tx).set("");
       expect((await tx.commit()).error).toBeUndefined();
       await creator.storageManager.synced();
+      const creatorSession = manager.id;
       await creator.dispose();
       await manager.close();
+      // Detaching only starts the resume window; the watch stays DEMAND
+      // until the registry prunes it. Remove it outright.
+      sessions.remove(space, creatorSession);
     }
     const aliceKey = resolveScopeKey("user", { principal: aliceSigner.did() });
     const bobKey = resolveScopeKey("user", { principal: bobSigner.did() });
     expect(instanceHolds(engine, aliceKey, '"A"')).toBe(true);
-    // A closed connection's sessions DETACH and linger for the registry
-    // TTL (the resume window) — and a lingering session's watches are
-    // still DEMAND. This suite's server uses a short TTL; wait it out so
-    // no watch of Alice's exists when the host activates.
-    await waitUntil(
-      () =>
-        !server.watchedRootsForSpace(space, {
-          excludePrincipal: serviceSigner.did(),
-        }).some((root) => root.identity?.principal === aliceSigner.did()),
-      "alice's ephemeral session to prune from the registry",
-    );
+    // No watch of Alice's exists when the host activates.
+    expect(
+      server.watchedRootsForSpace(space, {
+        excludePrincipal: serviceSigner.did(),
+      }).some((root) => root.identity?.principal === aliceSigner.did()),
+    ).toBe(false);
 
     // NOW the host; Bob's client demands the piece (the root watch).
     host = newHost();
@@ -624,16 +626,12 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     );
     await bobResult.sync();
     const cancel = bobResult.sink(() => {});
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
+    await activated(space);
     // The served constant derivations land (the piece is served)…
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, "space", '"echo:const"'),
-      "the served constant derivation",
     );
-    await new Promise((resolve) => setTimeout(resolve, 200));
     // …and the serving replica has NOT loaded Alice's instance of the
     // argument doc — THE PRECONDITION that makes this the true R7 shape
     // (no watch of Alice's exists for any walk to follow).
@@ -673,21 +671,15 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
         await manager.close();
       }
     }
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the save event append to land",
-    );
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return (value?.entries?.length ?? 0) >= 1 &&
-          value!.entries!.every((entry) => entry.consequenced === true);
-      },
-      "the save event to consequence",
-    );
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      return (value?.entries?.length ?? 0) >= 1 &&
+        value!.entries!.every((entry) => entry.consequenced === true);
+    });
     const entries =
       (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
         .entries!;
@@ -696,13 +688,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     // THE R7 ARBITRATION under the true shape: the handler read HER
     // draft — loaded by its own actor-identity presync/preflight — and
     // wrote the typed consequence under her instance.
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"saved:A"'),
-      () =>
-        "alice's saved consequence under her instance; rows now: " +
-        JSON.stringify([...rowsUnder(engine, aliceKey).entries()]) +
-        "; entry: " + JSON.stringify(entries[0]),
-      10_000,
     );
     expect(rowsUnder(engine, aliceKey).get(argId)).toEqual({
       draft: "A",
@@ -718,11 +706,11 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       names: { arg: "ika-resub-arg", result: "ika-resub-result" },
     });
     const { engine, aliceKey, bobKey, bob, typedBobArg } = setup;
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      "both instances derived once",
     );
     // Both instances ran; whichever ran LAST holds the subscription
     // under the pre-stage-A "last instance wins" replacement. Change the
@@ -735,9 +723,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     }
     await bob.idle();
     await bob.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, bobKey, '"echo:B2"'),
-      "bob's instance to re-derive from his changed draft",
     );
     expect(instanceHolds(engine, aliceKey, '"echo:B2"')).toBe(false);
     {
@@ -747,9 +735,9 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     }
     await setup.alice.idle();
     await setup.alice.storageManager.synced();
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A2"'),
-      "alice's instance to re-derive from her changed draft",
     );
     expect(instanceHolds(engine, bobKey, '"echo:A2"')).toBe(false);
     setup.cancel();
@@ -764,11 +752,11 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       hostPolicy: { renewIntervalMs: 600_000, flushDeadlineMs: 3_000 },
     });
     const { engine, aliceKey, bobKey, alice, argId, typedAliceArg } = setup;
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      "both instances derived once",
     );
     const spaceServer = host!.spaceServer(space)!;
     const replica = servingRuntime!.storageManager.open(space).replica;
@@ -841,21 +829,18 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     // keyed. Pre-fix the lapse cleared the exemption for the session's
     // life; the replica kept "A" and every later per-user run of Alice
     // read a stale draft — silently.
-    await waitUntil(
+    await awaitReplica(
+      servingManager!,
       () => readDraft({ principal: aliceSigner.did() }) === "A-blip",
-      () =>
-        `the withheld write to reach the serving replica (reads ${
-          readDraft({ principal: aliceSigner.did() })
-        })`,
     );
     // Release the held cycle: Alice's instance re-derives from the
     // re-delivered draft (the served per-user run reads the CURRENT
     // instance).
     gate.resolve();
     servingManager!.settleGate = undefined;
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () => instanceHolds(engine, aliceKey, '"echo:A-blip"'),
-      "alice's instance to re-derive from the re-delivered draft",
     );
     // Bob's instance and Alice's key never crossed: the re-arm named
     // instances, it did not collapse them; the loop kept serving.
@@ -871,19 +856,16 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       names: { arg: "ika-s4-arg", result: "ika-s4-result" },
     });
     const { engine, aliceKey, bobKey } = setup;
-    await waitUntil(
+    await awaitAdmitted(
+      server,
       () =>
         instanceHolds(engine, aliceKey, '"echo:A"') &&
         instanceHolds(engine, bobKey, '"echo:B"'),
-      "both instances derived",
     );
-    await waitUntil(
-      () => {
-        const keys = basisKeys(engine);
-        return keys.has(aliceKey) && keys.has(bobKey) && keys.has("space");
-      },
-      () => `basis keys ${[...basisKeys(engine)].join(", ")}`,
-    );
+    await awaitAdmitted(server, () => {
+      const keys = basisKeys(engine);
+      return keys.has(aliceKey) && keys.has(bobKey) && keys.has("space");
+    });
     const keys = basisKeys(engine);
     // Bob demanded through a SESSION-scoped watch: his runs are STAMPED
     // `session:<bob>:<s>`, but every node he ran discovered `user` (the

@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { defer } from "@commonfabric/utils/defer";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
@@ -29,6 +30,140 @@ const valueSchema = {
 // resolves, so the retry never ran and the refused first output stood in for
 // the computation's answer.
 describe("scheduler-owed retries run past the node's freshness gates", () => {
+  for (const gate of ["debounce", "throttle"] as const) {
+    it(`completes a one-shot pull after a builtin's wait with ${gate}`, async () => {
+      const storageManager = EmulatedStorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const attempted = defer<void>();
+      const confirmed = defer<void>();
+      let ready = false;
+      let cancel: (() => void) | undefined;
+      try {
+        const derived = runtime.getCell(space, "confirmed-output", valueSchema);
+        const action: Action = (tx) => {
+          if (!ready) {
+            tx.addVerdictCallback(() => attempted.resolve());
+            return;
+          }
+          derived.withTx(tx).set({ value: 42 });
+        };
+        Object.assign(action, { writes: [derived.getAsNormalizedFullLink()] });
+        cancel = runtime.scheduler.subscribe(action, {
+          [gate]: 60_000,
+        });
+        storageManager.trackUntilSettled(confirmed.promise.then(() => {
+          ready = true;
+          runtime.scheduler.invalidateAction(action, { retry: true });
+        }));
+        const result = derived.pull();
+        await attempted.promise;
+        confirmed.resolve();
+        expect((await result)?.value).toBe(42);
+      } finally {
+        confirmed.resolve();
+        cancel?.();
+        await runtime.dispose();
+      }
+    });
+  }
+
+  for (const isEffect of [false, true]) {
+    for (const interleaved of [false, true]) {
+      it(`keeps a one-shot retry eligible until it runs (effect=${isEffect}, interleaved=${interleaved})`, async () => {
+        const storageManager = EmulatedStorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        const attempted = defer<void>();
+        const confirmed = defer<void>();
+        let ready = false;
+        let cancel: (() => void) | undefined;
+        try {
+          const derived = runtime.getCell(
+            space,
+            "interleaved-output",
+            valueSchema,
+          );
+          const action: Action = (tx) => {
+            if (!ready) {
+              tx.addVerdictCallback(() => attempted.resolve());
+              return;
+            }
+            derived.withTx(tx).set({ value: 42 });
+          };
+          Object.assign(action, {
+            writes: [derived.getAsNormalizedFullLink()],
+          });
+          cancel = runtime.scheduler.subscribe(action, { isEffect });
+          storageManager.trackUntilSettled(confirmed.promise.then(() => {
+            ready = true;
+            runtime.scheduler.invalidateAction(action, { retry: true });
+            if (interleaved) runtime.scheduler.invalidateAction(action);
+          }));
+          const result = derived.pull();
+          await attempted.promise;
+          runtime.scheduler.setDebounce(action, 60_000);
+          const releasedAt = performance.now();
+          confirmed.resolve();
+          expect((await result)?.value).toBe(42);
+          expect(performance.now() - releasedAt).toBeLessThan(60_000);
+          runtime.scheduler.invalidateAction(action);
+          expect(
+            runtime.scheduler.accessForTestingOnly.gates.hasActiveDebounceTimer(
+              action,
+            ),
+          )
+            .toBe(true);
+        } finally {
+          confirmed.resolve();
+          cancel?.();
+          await runtime.dispose();
+        }
+      });
+    }
+  }
+
+  it("preserves a retry requested during a run through that run's completion", async () => {
+    const storageManager = EmulatedStorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const started = defer<void>();
+    const release = defer<void>();
+    let runs = 0;
+    let cancel: (() => void) | undefined;
+    try {
+      const derived = runtime.getCell(space, "during-run-retry", valueSchema);
+      const action: Action = async (tx) => {
+        if (++runs === 1) {
+          started.resolve();
+          await release.promise;
+          return;
+        }
+        derived.withTx(tx).set({ value: 42 });
+      };
+      Object.assign(action, { writes: [derived.getAsNormalizedFullLink()] });
+      cancel = runtime.scheduler.subscribe(action);
+      const result = derived.pull();
+      await started.promise;
+      runtime.scheduler.setThrottle(action, 60_000);
+      runtime.scheduler.invalidateAction(action, { retry: true });
+      const releasedAt = performance.now();
+      release.resolve();
+      expect((await result)?.value).toBe(42);
+      expect(performance.now() - releasedAt).toBeLessThan(60_000);
+    } finally {
+      release.resolve();
+      cancel?.();
+      await runtime.dispose();
+    }
+  });
+
   /**
    * A writer settles `source` server-side; a cold reader registers a
    * debounced or throttled computation deriving from it, demanded once by a

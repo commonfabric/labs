@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { NAME } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   CFProfileBadge,
   profileDisplayFromValue,
@@ -76,7 +77,7 @@ function bindingsOfTemplateWith(
   node: unknown,
   marker: string,
 ): unknown[] | undefined {
-  if (node === null || typeof node !== "object") return undefined;
+  if (!isObjectOrArray(node)) return undefined;
   if (Array.isArray(node)) {
     for (const child of node) {
       const found = bindingsOfTemplateWith(child, marker);

@@ -6,7 +6,7 @@
  * the resolution; this contract is what run state persists.
  */
 
-import type { TrustedPatternRecord } from "../tools/search-patterns.ts";
+import type { TrustedPatternRecord } from "./trusted-pattern.ts";
 
 /** One pattern reference as the caller supplied it, before any resolution. */
 export interface HarnessPatternRefSpec {

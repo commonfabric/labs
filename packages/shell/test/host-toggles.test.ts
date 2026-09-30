@@ -106,12 +106,15 @@ describe("isPatternCoverageEnabled", () => {
 });
 
 describe("runtimeHostFlags", () => {
-  it("defaults every flag to false", () => {
+  it("reads the render ceiling on and every other flag off when nothing is persisted", () => {
+    // The render ceiling's key records an opt-out rather than an opt-in, so
+    // a profile that has stored nothing has the ceiling.
+
     const h = setup();
     try {
       expect(runtimeHostFlags()).toEqual({
         forwardWorkerConsole: false,
-        cfcRenderCeiling: false,
+        cfcRenderCeiling: true,
         patternCoverage: false,
         concurrentWatchRefresh: false,
       });
@@ -126,28 +129,28 @@ describe("runtimeHostFlags", () => {
       h.storage.map.set("forwardWorkerConsole", "true");
       expect(runtimeHostFlags()).toEqual({
         forwardWorkerConsole: true,
-        cfcRenderCeiling: false,
+        cfcRenderCeiling: true,
         patternCoverage: false,
         concurrentWatchRefresh: false,
       });
-      h.storage.map.set("cfcRenderCeiling", "true");
+      h.storage.map.set("cfcRenderCeiling", "false");
       expect(runtimeHostFlags()).toEqual({
         forwardWorkerConsole: true,
-        cfcRenderCeiling: true,
+        cfcRenderCeiling: false,
         patternCoverage: false,
         concurrentWatchRefresh: false,
       });
       h.storage.map.set("patternCoverage", "true");
       expect(runtimeHostFlags()).toEqual({
         forwardWorkerConsole: true,
-        cfcRenderCeiling: true,
+        cfcRenderCeiling: false,
         patternCoverage: true,
         concurrentWatchRefresh: false,
       });
       h.storage.map.set("concurrentWatchRefresh", "true");
       expect(runtimeHostFlags()).toEqual({
         forwardWorkerConsole: true,
-        cfcRenderCeiling: true,
+        cfcRenderCeiling: false,
         patternCoverage: true,
         concurrentWatchRefresh: true,
       });

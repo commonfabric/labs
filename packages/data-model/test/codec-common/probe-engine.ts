@@ -9,19 +9,20 @@
 // tagged form is a class instead, so "walked" and "not walked" are visibly
 // different things.
 
-import type { FabricValue } from "@/interface.ts";
-import { BaseCodecEngine } from "@/codec-common/BaseCodecEngine.ts";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import type {
-  CodecForFormat,
-  LiveEnvironment,
-  WireFormat,
-} from "@/codec-interface/interface.ts";
-import { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
-import { BaseDecodeAct } from "@/codec-common/BaseDecodeAct.ts";
-import { BaseEncodeAct } from "@/codec-common/BaseEncodeAct.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import type { FabricValue } from "@";
+import {
+  BaseCodecEngine,
+  BaseDecodeAct,
+  BaseEncodeAct,
+  BaseNonterminalCodec,
+  BaseTerminalCodec,
+  type CodecForFormat,
+  CodecRegistry,
+  type LiveEnvironment,
+  ProblematicValue,
+  type WireFormat,
+} from "@/codec-common";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * This format's tagged form. A class, so that it cannot be mistaken for a
@@ -402,7 +403,7 @@ export class ProbeDecodeAct extends BaseDecodeAct<ProbeValue> {
 
   /** @inheritDoc */
   override decodeValue(data: ProbeValue): FabricValue {
-    if ((data === null) || (typeof data !== "object")) {
+    if (!isObjectOrArray(data)) {
       return data as FabricValue;
     }
 
@@ -456,6 +457,18 @@ export class ProbeEngine extends BaseCodecEngine<
   }
 }
 
+/** The primitive types the probe registry makes self-representing. */
+const SELF_REP_TYPE_NAMES = [
+  "null",
+  "boolean",
+  "number",
+  "string",
+  "bigint",
+] as const;
+
+/** One of {@link SELF_REP_TYPE_NAMES}. */
+type SelfRepTypeName = typeof SELF_REP_TYPE_NAMES[number];
+
 /**
  * This format, as a `CodecRegistry` needs one. Its symbol is its own: nothing
  * binds a codec under it, since every codec here is registered directly.
@@ -466,13 +479,15 @@ const PROBE_FORMAT: WireFormat<ProbeValue> = Object.freeze({
 
 /**
  * Builds an engine over a registry carrying the three codecs above, plus the
- * self-representing primitives a walk needs to get anywhere.
+ * self-representing primitives a walk needs to get anywhere, less any that
+ * `omitSelfRep` names.
  */
 export function newProbeEngine(
   options?: {
     lenient?: boolean;
     record?: HostRecord;
     extraCodecs?: readonly CodecForFormat<ProbeValue>[];
+    omitSelfRep?: readonly SelfRepTypeName[];
   },
 ): {
   engine: ProbeEngine;
@@ -493,8 +508,10 @@ export function newProbeEngine(
   registry.register(new ThrowingCodec());
   registry.register(new RejectingCodec());
   registry.register(new RefusingCodec());
-  for (const t of ["null", "boolean", "number", "string", "bigint"] as const) {
-    registry.registerSelfRep(t);
+  for (const t of SELF_REP_TYPE_NAMES) {
+    if (!options?.omitSelfRep?.includes(t)) {
+      registry.registerSelfRep(t);
+    }
   }
   for (const codec of options?.extraCodecs ?? []) {
     registry.register(codec);

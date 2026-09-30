@@ -82,6 +82,9 @@ export class XPieceList extends LitElement {
   @property({ attribute: false })
   accessor pieces: PieceItem[] = [];
 
+  @property({ type: Boolean })
+  accessor loading = false;
+
   @property({ attribute: false })
   accessor activePieceId: string | undefined = undefined;
 
@@ -106,6 +109,11 @@ export class XPieceList extends LitElement {
   }
 
   override render() {
+    if (this.loading) {
+      return html`
+        <span class="empty" role="status">Loading pieces…</span>
+      `;
+    }
     if (this.pieces.length === 0) {
       return html`
         <span class="empty">No pieces found</span>

@@ -388,19 +388,26 @@ export class Engine extends EventTarget {
   }
 
   /**
-   * Resolve a `ProgramResolver` into a program: the entry, the closure its
-   * imports reach, and the data files its source declares by reading them.
+   * Resolves a `ProgramResolver` into a program: the entry, each supplied
+   * source root and their import closures, and the declared data files.
    *
    * This is how a program is assembled from a source of truth — a directory, a
    * web address, the fabric — so it is where a declaration in the source is
    * acted on. Re-resolving a program the engine already holds goes through
    * `#resolveModules()`, which follows imports and nothing else.
    */
-  async resolve(program: ProgramResolver): Promise<RuntimeProgram> {
-    return await attachDeclaredDataFiles(
-      await this.#resolveModules(program),
-      program,
-    );
+  async resolve(
+    program: ProgramResolver,
+    options: { sourceRoots?: readonly string[] } = {},
+  ): Promise<RuntimeProgram> {
+    const roots = [...new Set(options.sourceRoots ?? [])];
+    const resolved = roots.length === 0
+      ? await this.#resolveModules(program)
+      : {
+        ...await this.#resolveWithSourceRoots(program, roots),
+        sourceRoots: roots,
+      };
+    return await attachDeclaredDataFiles(resolved, program);
   }
 
   /** Resolve the module closure an entry's imports reach. */
@@ -915,19 +922,21 @@ export class Engine extends EventTarget {
   }
 
   /**
-   * PROTOTYPE (cfcheck #2): type-check + SES-verify many authored programs in a
-   * SINGLE TypeScript program.
+   * Type-check and SES-verify many authored programs as a SINGLE TypeScript
+   * program.
    *
    * Each program is resolved with the runtime `.d.ts` type environment injected
    * exactly as {@link compileToRecordGraph} does (pretransform → resolve), then
-   * every resolved file is unioned and compiled as roots of one `ts.Program`.
-   * The expensive lib/API parse+bind+typecheck is therefore paid ONCE for the
-   * whole batch instead of once per program — the amortization the per-pattern
-   * cfcheck path (≈330 separate programs) throws away.
+   * every resolved file is unioned and compiled as roots of one `ts.Program`,
+   * so the lib/API parse and bind is paid once for the whole batch rather than
+   * once per program.
    *
    * Returns the batch's transformer/type diagnostics rather than throwing, so a
-   * caller can attribute failures. NOT wired into anything yet; measures the
-   * ceiling and surfaces cross-program hazards (e.g. duplicate `declare global`).
+   * caller can attribute failures, along with `durations`: the milliseconds the
+   * run spent on each program's own files, against the `main` that program was
+   * given under. Every file carries the `/<id>` prefix of the one program it
+   * came from, so the cost divides among them with nothing shared between two;
+   * what the sum leaves out is the program-wide parse and bind.
    */
   async typeCheckBatch(
     programs: RuntimeProgram[],
@@ -936,11 +945,17 @@ export class Engine extends EventTarget {
     patternCount: number;
     fileCount: number;
     diagnostics: readonly { file?: string; message: string }[];
+    durations: ReadonlyMap<string, number>;
   }> {
     // Nothing to check (e.g. an empty CI shard, or every program failed to
     // resolve upstream) — there is no entry to compile, so return cleanly.
     if (programs.length === 0) {
-      return { patternCount: 0, fileCount: 0, diagnostics: [] };
+      return {
+        patternCount: 0,
+        fileCount: 0,
+        diagnostics: [],
+        durations: new Map(),
+      };
     }
 
     // Pretransform parses before the compiler internals are awaited.
@@ -973,7 +988,11 @@ export class Engine extends EventTarget {
     };
 
     const { compiler } = await this.#getCompilerInternals();
-    const { modules, diagnostics: compileDiagnostics } = compiler
+    const {
+      modules,
+      diagnostics: compileDiagnostics,
+      durations: fileDurations,
+    } = compiler
       .compileToModulesCollecting(merged, {
         runtimeModules: Engine.runtimeModuleNames(),
         beforeTransformers: runTransform
@@ -1009,9 +1028,11 @@ export class Engine extends EventTarget {
     // (verifyCompiledModuleBody); compileToModules does not, so the batch must
     // run it explicitly or it would silently lose cfcheck's SES coverage. Body
     // verification is per-body AST work (no type-checking), so it stays cheap.
+    const verified = new Map<string, number>();
     if (runTransform) {
       for (const [name, body] of modules) {
         if (name.endsWith(".d.ts")) continue;
+        const at = performance.now();
         try {
           verifyCompiledModuleBody(body.js, name);
         } catch (error) {
@@ -1020,6 +1041,26 @@ export class Engine extends EventTarget {
             message: error instanceof Error ? error.message : String(error),
           });
         }
+        verified.set(name, (verified.get(name) ?? 0) + performance.now() - at);
+      }
+    }
+
+    // A file's `/<id>` prefix is the first path segment of its name, so the
+    // program it belongs to is one lookup rather than a scan of the batch.
+    // The injected `cfc.ts` helper carries no prefix and belongs to none of
+    // them, which is why an unmatched name is passed over. Verifying a body
+    // is per-file work like checking and emitting one, so it is charged
+    // alongside them rather than left in what the sum does not reach.
+    const mainById = new Map(
+      batchIds.map((id, index) => [`/${id}`, programs[index]!.main]),
+    );
+    const durations = new Map<string, number>();
+    for (const spent of [fileDurations, verified]) {
+      for (const [name, ms] of spent) {
+        const cut = name.indexOf("/", 1);
+        const main = cut === -1 ? undefined : mainById.get(name.slice(0, cut));
+        if (main === undefined) continue;
+        durations.set(main, (durations.get(main) ?? 0) + ms);
       }
     }
 
@@ -1027,6 +1068,7 @@ export class Engine extends EventTarget {
       patternCount: programs.length,
       fileCount: unioned.size,
       diagnostics,
+      durations,
     };
   }
 

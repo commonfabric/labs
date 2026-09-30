@@ -1,12 +1,62 @@
+import {
+  CFC_ATOM_TYPE,
+  type CfcModulePolicyRefAtom,
+} from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { type AtomPattern, isAtomVarPlaceholder } from "./atom-pattern.ts";
+import {
+  type AtomPattern,
+  isAtomPattern,
+  isAtomVarPlaceholder,
+} from "./atom-pattern.ts";
+import { isCfcFieldCommitment } from "./label-representation.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";
 
 export const cfcPolicyManifestDocId = (
   policyDigest: string,
 ): `of:${string}` => `${CFC_POLICY_MANIFEST_ID_PREFIX}${policyDigest}`;
+
+const MODULE_POLICY_REF_KEYS = new Set([
+  "type",
+  "policyRefKind",
+  "moduleIdentity",
+  "symbol",
+  "policyDigest",
+  "subject",
+]);
+
+/** A complete module-policy reference, with nothing missing or extra. */
+export const isExactModulePolicyRef = (
+  value: unknown,
+): value is CfcModulePolicyRefAtom => {
+  if (!isObjectNotArray(value)) return false;
+  if (
+    value.type !== CFC_ATOM_TYPE.Policy || value.policyRefKind !== "module" ||
+    typeof value.moduleIdentity !== "string" ||
+    value.moduleIdentity.length === 0 || typeof value.symbol !== "string" ||
+    value.symbol.length === 0 || typeof value.policyDigest !== "string" ||
+    value.policyDigest.length === 0 ||
+    !(
+      (typeof value.subject === "string" && value.subject.length > 0) ||
+      isCfcFieldCommitment(value.subject)
+    )
+  ) {
+    return false;
+  }
+  // The six fields must be the atom's own enumerable data properties and its
+  // only keys, so an inherited, accessor or hidden field cannot pass.
+  const ownKeys = Reflect.ownKeys(value);
+  return ownKeys.length === MODULE_POLICY_REF_KEYS.size &&
+    ownKeys.every((key) => {
+      if (typeof key !== "string" || !MODULE_POLICY_REF_KEYS.has(key)) {
+        return false;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor !== undefined && descriptor.enumerable === true &&
+        "value" in descriptor;
+    });
+};
 
 /**
  * Policy records + exchange rules (spec §4.3/§4.4, Epic B2 of
@@ -273,6 +323,11 @@ const validatePatternArray = (
         `cfcPolicyRecords: ${where} contains an undefined pattern`,
       );
     }
+    if (!isAtomPattern(pattern)) {
+      throw new Error(
+        `cfcPolicyRecords: ${where} contains a pattern that is not a \`FabricValue\``,
+      );
+    }
   }
   return value as readonly AtomPattern[];
 };
@@ -283,7 +338,8 @@ const isThisPolicyPattern = (value: unknown): boolean =>
 
 const isThisPolicyFieldPattern = (value: unknown): boolean =>
   isPlainRecord(value) && Object.keys(value).length === 1 &&
-  value.thisPolicyField === "subject";
+  (value.thisPolicyField === "subject" ||
+    value.thisPolicyField === "moduleIdentity");
 
 const validateTemplatePattern = (
   value: unknown,
@@ -353,10 +409,10 @@ const collectPatternVariables = (
  * policyState guard that names no grant pattern gates nothing — an authoring
  * error a policy author must see, not a vacuously-satisfied guard.
  */
-const validatePolicyStateGuards = (value: unknown, where: string): void => {
-  if (!Array.isArray(value)) {
-    throw new Error(`cfcPolicyRecords: ${where} must be an array`);
-  }
+const validatePolicyStateGuards = (
+  value: readonly AtomPattern[],
+  where: string,
+): void => {
   if (value.length === 0) {
     throw new Error(
       `cfcPolicyRecords: ${where} must name at least one grant pattern`,
@@ -408,6 +464,11 @@ const validateExchangeRule = (
       `cfcPolicyRecords: ${ruleWhere} needs an appliesTo pattern`,
     );
   }
+  if (!isAtomPattern(appliesTo)) {
+    throw new Error(
+      `cfcPolicyRecords: ${ruleWhere} appliesTo is not a \`FabricValue\``,
+    );
+  }
   if (preCondition !== undefined) {
     if (!isPlainRecord(preCondition)) {
       throw new Error(
@@ -427,9 +488,10 @@ const validateExchangeRule = (
     }
     const policyState = (preCondition as Record<string, unknown>).policyState;
     if (policyState !== undefined) {
+      const guardWhere = `${ruleWhere} preCondition.policyState`;
       validatePolicyStateGuards(
-        policyState,
-        `${ruleWhere} preCondition.policyState`,
+        validatePatternArray(policyState, guardWhere),
+        guardWhere,
       );
     }
   }
@@ -784,10 +846,24 @@ export const buildCfcPolicyArtifactManifest = (
   });
 };
 
+/**
+ * The artifacts {@link validateCfcPolicyArtifactManifest} has returned. Each is
+ * deep-frozen, so one handed back for validation again is still exactly what
+ * passed, and is returned without recomputing its digest. The display
+ * boundary validates the same kept artifact on every render. The set is
+ * process-global, shared by every runtime in the process; that is sound
+ * because membership says only that validation produced this exact frozen
+ * object, which no runtime can change, and a `WeakSet` retains nothing.
+ */
+const validatedArtifacts = new WeakSet<PolicyArtifactManifestV1>();
+
 /** Trusted-ingestion validation for a transported manifest envelope. */
 export const validateCfcPolicyArtifactManifest = (
   input: unknown,
 ): PolicyArtifactManifestV1 => {
+  if (validatedArtifacts.has(input as PolicyArtifactManifestV1)) {
+    return input as PolicyArtifactManifestV1;
+  }
   if (!isPlainRecord(input)) {
     throw new Error("cfcPolicyManifest: envelope must be an object");
   }
@@ -807,6 +883,7 @@ export const validateCfcPolicyArtifactManifest = (
       `cfcPolicyManifest: policyDigest mismatch (expected ${built.policyDigest})`,
     );
   }
+  validatedArtifacts.add(built);
   return built;
 };
 

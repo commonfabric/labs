@@ -64,7 +64,7 @@ tests but does not run them.
   "symbol": "default",
   "source": {
     "ref": "cf:pattern:<content-hash>",
-    "repository": "https://github.com/commontoolsinc/labs",
+    "repository": "https://github.com/commonfabric/labs",
     "entry": "/packages/patterns/annotation.tsx"
   }
 }

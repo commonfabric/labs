@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import {
+  MANIFEST_SCHEMA_VERSION,
   sampleEntry,
   sampleManifest,
   serializeManifest,
@@ -15,15 +16,18 @@ import {
   generatedAtOf,
   LANE_BUDGET_FALLBACK_SECONDS,
   laneBudgetOf,
-  type ManifestReader,
+  ManifestSchemaError,
   newestManifest,
+  TEST_SELECTION_PREFIX,
 } from "./test-selection-manifest.ts";
+import { manifestPrefix } from "../../tasks/test-selection/store.ts";
+import type { TestSelectionSource } from "./test-selection-history.ts";
 import { makeTestFlakes } from "./tiles/test-flakes.ts";
 import { makeTestSelection } from "./tiles/test-selection.ts";
-import { TEST_SELECTION_PATH } from "./test-selection-page.ts";
+import { HEALTH_SECTION_ID, TEST_SELECTION_PATH } from "./test-selection-page.ts";
 import type { Ctx } from "./types.ts";
 
-const PREFIX = "labs/test-selection/v1";
+const PREFIX = TEST_SELECTION_PREFIX.replace(/\/$/, "");
 
 /**
  * A store answering one listing and the objects it named. Bodies are the
@@ -82,6 +86,164 @@ Deno.test("newestManifest reports a body that is not a manifest", async () => {
     Error,
     "not a manifest",
   );
+});
+
+Deno.test("the reader looks where the publisher writes", () => {
+  // Two spellings of the area would part company the first time either
+  // moved, and what that produces is a reader listing objects that are
+  // all refused: a fault where a figure should be.
+  assertEquals(`${manifestPrefix(() => undefined)}/`, TEST_SELECTION_PREFIX);
+});
+
+Deno.test("a version ahead is named even where its shape dropped a field", async () => {
+  // A later shape may drop a field this reader requires, as the
+  // calibration has already lost one. Deciding from the body's declared
+  // version holds there; offering the body under this reader's own
+  // version does not, because the validator then refuses it over the
+  // missing field and the version goes unreported.
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  const ahead = MANIFEST_SCHEMA_VERSION + 1;
+  const error = await assertRejects(
+    () =>
+      newestManifest({
+        fetchImpl: storeOf({
+          [name]: JSON.stringify({
+            ...sampleManifest({}),
+            schema: ahead,
+            calibration: { setupCost: {}, suites: {} },
+          }),
+        }),
+      }),
+    ManifestSchemaError,
+  );
+  assertStringIncludes(error.reason, `schema ${ahead}`);
+});
+
+Deno.test("a broken body of a shape this reader does read is a plain fault", async () => {
+  // The reader reads earlier shapes, so an earlier one it cannot parse is
+  // a broken object rather than one from further ahead. Naming its shape
+  // would say the dashboard cannot read that shape, which is false, and would
+  // have the dashboard stop fetching an object it should read again.
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  const error = await assertRejects(
+    () =>
+      newestManifest({
+        fetchImpl: storeOf({
+          [name]: JSON.stringify({
+            ...sampleManifest({}),
+            schema: MANIFEST_SCHEMA_VERSION - 1,
+            entries: "not a list of entries",
+          }),
+        }),
+      }),
+    Error,
+    "not a manifest",
+  );
+  assertEquals(error instanceof ManifestSchemaError, false);
+});
+
+Deno.test("a broken body of this reader's own version is a plain fault", async () => {
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  const error = await assertRejects(
+    () =>
+      newestManifest({
+        fetchImpl: storeOf({
+          [name]: JSON.stringify({
+            ...sampleManifest({}),
+            entries: "not a list of entries",
+          }),
+        }),
+      }),
+    Error,
+    "not a manifest",
+  );
+  assertEquals(error instanceof ManifestSchemaError, false);
+});
+
+Deno.test("newestManifest names a version it cannot read", async () => {
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  const later = MANIFEST_SCHEMA_VERSION + 1;
+  const error = await assertRejects(
+    () =>
+      newestManifest({
+        fetchImpl: storeOf({
+          [name]: JSON.stringify({
+            ...sampleManifest({}),
+            schema: later,
+          }),
+        }),
+      }),
+    ManifestSchemaError,
+  );
+  assertStringIncludes(error.message, name);
+  assertEquals(
+    error.reason,
+    `store holds schema ${later}, this dashboard reads ${MANIFEST_SCHEMA_VERSION}`,
+  );
+});
+
+Deno.test("a tile and the page name a schema rather than saying nothing useful", async () => {
+  const error = new ManifestSchemaError("a.json.gz", 1);
+  const source: TestSelectionSource = {
+    latest: () => Promise.reject(error),
+    history: () => Promise.resolve({ samples: [], errors: [] }),
+  };
+  for (
+    const tile of [
+      makeTestFlakes({ source }),
+      makeTestSelection({ source }),
+    ]
+  ) {
+    const view = await tile.collect(CTX);
+    assertEquals(view.value, "—");
+    assertEquals(view.sub, error.reason);
+  }
+  const route = makeTestSelection({ source }).routes?.find((r) =>
+    r.path === TEST_SELECTION_PATH
+  );
+  assertExists(route);
+  const url = new URL(`http://dashboard${TEST_SELECTION_PATH}`);
+  const body = await (await route.handler(new Request(url), url)).text();
+  assertStringIncludes(body, error.reason);
+  assertEquals(body.includes("temporarily unavailable"), false);
+});
+
+Deno.test("a body that is not an object declares no version", async () => {
+  // A body is untrusted input, and JSON has values that are not objects.
+  // Neither of these declares a version, and asking one whether it owns a
+  // field is a question only an object answers.
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  for (const body of ["null", "42", '"a string"']) {
+    const error = await assertRejects(
+      () => newestManifest({ fetchImpl: storeOf({ [name]: body }) }),
+      Error,
+      "not a manifest",
+    );
+    assertEquals(error instanceof ManifestSchemaError, false);
+  }
+});
+
+Deno.test("a version inherited from the prototype is not a declared one", async () => {
+  // A body declares a version in its own field or not at all. Reading an
+  // inherited one would refuse an object that is no manifest at all, and
+  // refuse it for the life of the process.
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
+  // deno-lint-ignore no-explicit-any
+  (Object.prototype as any).schema = MANIFEST_SCHEMA_VERSION + 1;
+  try {
+    const error = await assertRejects(
+      () =>
+        newestManifest({
+          fetchImpl: storeOf({ [name]: JSON.stringify({ not: "a manifest" }) }),
+        }),
+      Error,
+      "not a manifest",
+    );
+    assertEquals(error instanceof ManifestSchemaError, false);
+  } finally {
+    // deno-lint-ignore no-explicit-any
+    delete (Object.prototype as any).schema;
+  }
 });
 
 Deno.test("newestManifest reports nothing when the store holds none", async () => {
@@ -155,20 +317,26 @@ const CTX: Ctx = {
 /** A reader over a store holding one manifest under a fixed name. */
 function reading(
   manifest: Parameters<typeof serializeManifest>[0],
-): ManifestReader {
+): TestSelectionSource {
   const fetchImpl = storeOf({
     [`${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`]:
       serializeManifest(manifest),
   });
-  return () => newestManifest({ fetchImpl });
+  return {
+    latest: () => newestManifest({ fetchImpl }),
+    history: () => Promise.resolve({ samples: [], errors: [] }),
+  };
 }
 
 Deno.test("both test tiles are unknown when there is no manifest", async () => {
-  const empty: ManifestReader = () => Promise.resolve(undefined);
+  const empty: TestSelectionSource = {
+    latest: () => Promise.resolve(undefined),
+    history: () => Promise.resolve({ samples: [], errors: [] }),
+  };
   for (
     const tile of [
-      makeTestFlakes({ read: empty }),
-      makeTestSelection({ read: empty }),
+      makeTestFlakes({ source: empty }),
+      makeTestSelection({ source: empty }),
     ]
   ) {
     const view = await tile.collect(CTX);
@@ -179,7 +347,7 @@ Deno.test("both test tiles are unknown when there is no manifest", async () => {
 
 Deno.test("the flake tile is green when nothing is withheld as flaky", async () => {
   const tile = makeTestFlakes({
-    read: reading(sampleManifest()),
+    source: reading(sampleManifest()),
     now: () => Date.parse("2026-08-20T00:30:00.000Z"),
   });
   const view = await tile.collect(CTX);
@@ -200,13 +368,13 @@ Deno.test("the flake tile counts what selection held back, and points at them", 
     withheld: [{ test: noisy.test, suite: noisy.suite, reason: "flaky" }],
   });
   const view = await makeTestFlakes({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T04:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "warn");
   assertEquals(view.value, "1 flaky test");
   assertEquals(view.sub, `${FLAKE_WINDOW_FALLBACK_DAYS} days of runs · 4h old`);
-  // The count is the whole tile: no name reaches it to be cut in half.
+  // A source with no history adds no chart or test names to the tile.
   assertEquals(view.extra, undefined);
   assertEquals(view.href, "/test-selection#flaky");
   assertEquals(view.hint, "flakes ↗");
@@ -227,7 +395,7 @@ Deno.test("the selection tile says what share of the corpus would run", async ()
     }],
   });
   const view = await makeTestSelection({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "good");
@@ -239,7 +407,7 @@ Deno.test("the selection tile says what share of the corpus would run", async ()
 
 Deno.test("the selection tile goes amber once the manifest has gone stale", async () => {
   const view = await makeTestSelection({
-    read: reading(sampleManifest()),
+    source: reading(sampleManifest()),
     now: () => Date.parse("2026-08-21T04:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "warn");
@@ -270,7 +438,7 @@ Deno.test("the selection tile goes red when a lane is past its budget", async ()
     }],
   });
   const view = await makeTestSelection({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "bad");
@@ -294,7 +462,7 @@ Deno.test("the selection tile goes amber while a test is too long for any lane",
     }],
   });
   const view = await makeTestSelection({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "warn");
@@ -317,7 +485,7 @@ Deno.test("the selection tile counts every test no lane can hold", async () => {
     ],
   });
   const view = await makeTestSelection({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "warn");
@@ -337,18 +505,58 @@ Deno.test("a lane past its budget outranks the tests no lane can hold", async ()
     }],
   });
   const view = await makeTestSelection({
-    read: reading(manifest),
+    source: reading(manifest),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "bad");
   assertEquals(view.sub, `fullest lane 400s of ${LANE_BUDGET_FALLBACK_SECONDS}s`);
 });
 
+Deno.test("the selection tile goes red when the publisher found the cost model broken", async () => {
+  const heavy = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 400 });
+  const manifest = sampleManifest({
+    entries: [heavy],
+    lanes: [{
+      lane: 1,
+      projectedSeconds: 400,
+      batches: [{ suite: heavy.suite, identities: [JSON.stringify(heavy.test)] }],
+    }],
+    health: {
+      suites: { "pattern-unit": { fixed: 351, tooLong: 181, batches: 0 } },
+      lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+      alarms: ["pattern-unit: a lane pays 5m51s before it runs any of it"],
+    },
+  });
+  const view = await makeTestSelection({
+    source: reading(manifest),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "bad");
+  // Ahead of the overrun, which a broken model is the likelier cause of.
+  assertEquals(view.sub, "cost model broken: 1 alarm");
+  assertEquals(view.href, `${TEST_SELECTION_PATH}#${HEALTH_SECTION_ID}`);
+});
+
+Deno.test("the selection tile stays green for a cost model that holds", async () => {
+  const view = await makeTestSelection({
+    source: reading(sampleManifest({
+      health: {
+        suites: {},
+        lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+        alarms: [],
+      },
+    })),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "good");
+  assertEquals(view.href, TEST_SELECTION_PATH);
+});
+
 Deno.test("the selection tile serves the page both tiles link to", async () => {
-  const tile = makeTestSelection({ read: reading(sampleManifest()) });
+  const tile = makeTestSelection({ source: reading(sampleManifest()) });
   const route = tile.routes?.find((r) => r.path === TEST_SELECTION_PATH);
   assertExists(route);
-  const url = new URL(`http://wall${TEST_SELECTION_PATH}`);
+  const url = new URL(`http://dashboard${TEST_SELECTION_PATH}`);
   const response = await route.handler(new Request(url), url);
   assertEquals(
     response.headers.get("content-type"),
@@ -358,21 +566,24 @@ Deno.test("the selection tile serves the page both tiles link to", async () => {
 });
 
 Deno.test("both tiles link into the page the route serves", async () => {
-  const read = reading(sampleManifest());
-  const flakes = await makeTestFlakes({ read }).collect(CTX);
-  const selection = await makeTestSelection({ read }).collect(CTX);
+  const source = reading(sampleManifest());
+  const flakes = await makeTestFlakes({ source }).collect(CTX);
+  const selection = await makeTestSelection({ source }).collect(CTX);
   assertEquals(selection.href, TEST_SELECTION_PATH);
   assertEquals(flakes.href?.split("#")[0], TEST_SELECTION_PATH);
 });
 
-Deno.test("a tile lets a store failure through, for the wall to gray it", async () => {
-  // The wall turns a collection that throws into a gray tile carrying the
+Deno.test("a tile lets a store failure through, for the dashboard to gray it", async () => {
+  // The dashboard turns a collection that throws into a gray tile carrying the
   // reason, which is what separates an unreadable store from an empty one.
-  const failing: ManifestReader = () => Promise.reject(new Error("no network"));
+  const failing: TestSelectionSource = {
+    latest: () => Promise.reject(new Error("no network")),
+    history: () => Promise.reject(new Error("no network")),
+  };
   for (
     const tile of [
-      makeTestFlakes({ read: failing }),
-      makeTestSelection({ read: failing }),
+      makeTestFlakes({ source: failing }),
+      makeTestSelection({ source: failing }),
     ]
   ) {
     await assertRejects(() => tile.collect(CTX), Error, "no network");
@@ -381,11 +592,14 @@ Deno.test("a tile lets a store failure through, for the wall to gray it", async 
 
 Deno.test("the page says a store could not be read, rather than that it is empty", async () => {
   const tile = makeTestSelection({
-    read: () => Promise.reject(new Error("no network")),
+    source: {
+      latest: () => Promise.reject(new Error("no network")),
+      history: () => Promise.reject(new Error("no network")),
+    },
   });
   const route = tile.routes?.find((r) => r.path === TEST_SELECTION_PATH);
   assertExists(route);
-  const url = new URL(`http://wall${TEST_SELECTION_PATH}`);
+  const url = new URL(`http://dashboard${TEST_SELECTION_PATH}`);
   const response = await route.handler(new Request(url), url);
   assertEquals(response.status, 503);
   const body = await response.text();

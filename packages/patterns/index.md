@@ -1,7 +1,7 @@
 # Common Patterns
 
 Prefix the URLs with
-`https://raw.githubusercontent.com/commontoolsinc/labs/refs/heads/main/packages/patterns/`
+`https://raw.githubusercontent.com/commonfabric/labs/refs/heads/main/packages/patterns/`
 
 ---
 
@@ -110,16 +110,20 @@ profile roster — every participant's cross-space profile badge), `self.tsx`,
 `self-improving-classifier.tsx`, `shopping-list.tsx`, `store-mapper.tsx`,
 `text-swapper.tsx`.
 
-App and integration directories: `activity-log/`, `agent/`, `airtable/`,
-`auth/`, `base/`, `battleship/`, `budget-tracker/`, `calendar/`, `card-piles/`,
-`collection-naming/` (the member-naming library and the board that exercises it;
-the library is the reference, the board is a demo), `contacts/`, `cozy-poll/`,
-`examples/`, `experimental/` (explicitly unhardened explorations), `file-share/`
-(a minimal file-sharing example: bytes go to the blob store, cells hold
-descriptors), `google/` (the `core/` tree; `google/WIP/` is legacy),
+App and integration directories: `activity-log/`, `agent/`, `base/`,
+`battleship/`, `book-recommendations/`, `budget-tracker/`, `calendar/`,
+`card-piles/`, `collection-naming/` (the member-naming library and the board
+that exercises it; the library is the reference, the board is a demo),
+`contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
+explorations), `fabrichat/` (a group chat among real profiles whose messages are
+written only through a reviewed send surface), `file-share/` (a minimal
+file-sharing example: bytes go to the blob store, cells hold descriptors),
 `habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
-`project-list/`, `router/`, `scoped-group-chat/`, `scoped-user-directory/`,
-`scrabble/`, `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
+`project-list/`, [`recommend-a-book/`](recommend-a-book/README.md) (personal
+reading shelf and private visitor recommendations), `router/`,
+`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`, `shared-note/` (a
+shared Markdown document whose live cursors carry each viewer's profile name),
+`shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
 `weekly-calendar/`.
 
 Connector-owned patterns live with their connector families: the
@@ -153,11 +157,13 @@ itself. Two groups sit outside the marker's reach and are fixture anyway:
 
 The remaining legacy patterns each carry the legacy marker:
 
+- `collaborative-note/` — a minimal co-presence note, superseded by
+  `shared-note/`, which adds an editable title, an embeddable view, and notices
+  for editing and live-cursor failures.
 - `factory-outputs/` and its support file `vehicles.ts` — machine-generated
   pattern-factory outputs, kept with their eval scores and never intended as
   style references. `parking-coordinator/main.tsx` is also a live integration
   and capability-gate fixture, which is why it stays.
-- `google/WIP/` — parked work that never graduated into `google/core/`.
 
 The registry/`MODULE_METADATA` composition system — `record/`, `record.tsx`, its
 backup and icon companions, `container-protocol.ts`, and the two dozen attribute
@@ -244,10 +250,14 @@ themselves, declared through a narrow row schema of summary scalars, so a row's
 address IS its topic's and a survey and the follow-up read name one document.
 `addTopic` returns the piece it created, so a caller addresses a new topic
 straight from the create. The board owns a member namespace through
-`collection-naming/naming.ts`: `addTopic` allocates the next decimal name in the
-same transaction as the append, each topic reads its own name out of the board's
-names table and publishes it as `shortName`, and `backfillNames` names what the
-board held before it numbered anything. Topics reference each other by CELL: the
+`collection-naming/naming.ts`: `addTopic` allocates the next decimal number and
+passes it into the topic it creates, in the same transaction as the append; each
+topic stores that number and publishes it as `shortName`, reading nothing of its
+board to report it; and `backfillNames` numbers what the board held before it
+numbered anything, asking each such topic to store its number through the
+topic's own `recordName`. Every surface that shows a number reads the one a
+topic publishes — the header badge, the card, the survey row, and the mention
+universe row a `#42` query matches. Topics reference each other by CELL: the
 board derives the whole graph once by scanning what each topic points at with
 `equals`, and each topic reads its own inbound edges out of that pivot.
 Demonstrates: reading-list-style piece-in-list composition, profile-native
@@ -270,10 +280,10 @@ interface TopicsInput {
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the three wirings addTopic gives a child:
-// mentionable (the @-mention universe for the body editor), boardCrossrefs
-// (the reference pivot), and boardNames (the names table it reads its own
-// number out of).
+// TopicInput additionally takes the two wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor) and boardCrossrefs
+// (the reference pivot) — plus shortName, the number the create allocated,
+// which the topic stores and reports.
 ```
 
 ### Output Schema
@@ -289,14 +299,15 @@ interface TopicsOutput {
   index: TopicIndexRow[];
   // { topic, mentionedBy } per topic — the reference graph, derived once here
   crossrefs: TopicCrossrefRow[];
-  // The namespace, the table every topic reads its name out of, and the
-  // policy the names are held to
+  // The namespace, the reverse lookup a caller reads a topic's number out of
+  // by identity, and the policy the numbers are held to
   names: Default<NamesMap, {}>;
   namesTable: NamesTableRow[];
   naming: NamingDeclaration;
-  // Returns { topic, name } — the piece it created and the name it allocated
+  // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Names every unnamed member in filing order; idempotent
+  // Numbers every member the namespace lacks and asks each unnumbered topic to
+  // store its number; returns { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;
 }
@@ -307,9 +318,11 @@ interface TopicsOutput {
 A single #topic piece: the durable object the tracker's list holds. Body edits
 go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
 the concurrent-edit window small); comments and links are mergeable appends.
-Reads the board's name for itself out of `boardNames` by identity, publishes it
-as `shortName`, and renders it as a badge beside the title; a topic wired to no
-board shows none. Use from `topics/main.tsx` via `navigateTo()`, or standalone.
+Stores the number its board calls it by as its own input and publishes it as
+`shortName`, rendering it as a badge beside the title. A topic nobody has
+numbered stores none and publishes none. `recordName` is how a number reaches a
+topic the board did not pass one to at create. Use from `topics/main.tsx` via
+`navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge
@@ -944,37 +957,37 @@ interface Output {
 }
 ```
 
-## `collaborative-note/main.tsx`
+## `shared-note/main.tsx`
 
-A minimal multiplayer note built on `cf-code-editor`. The note body is durable
-per-space state synchronized through Memory's operation protocol. Names, carets,
-and selections travel separately as ephemeral co-presence data. Each viewer
-selects or creates a Fabric profile with `wish({ query: "#profile" })`; the
-editor uses that profile's `#profileName` field as its participant label. The
-host provides the WebSocket endpoint, while `cf-code-editor` derives an opaque
-room identifier from the shared note field.
+A shared Markdown document built on `cf-code-editor` in collaborative prose
+mode. The title and body are durable per-space state; body edits synchronize
+through Memory's operation protocol. Names, carets, and selections travel
+separately as ephemeral co-presence data over each viewer's memory connection.
+Each viewer selects or creates a Fabric profile with
+`wish({ query: "#profile" })`, and the editor uses that profile's `#profileName`
+field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
+so the note embeds in other surfaces, and editing or live-cursor failures show
+as notices above the editor.
 
-**Keywords:** multiplayer, collaborative editor, note, profile, wish,
+**Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror
 
 ### Input Schema
 
 ```ts
-interface CollaborativeNoteInput {
-  note?: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
+interface SharedNoteInput {
+  title?: PerSpace<string | Default<"Untitled note">>;
+  content?: PerSpace<string | Default<"">>;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface CollaborativeNoteOutput {
-  note: PerSpace<
-    string | Default<"# Collaborative note\n\nStart writing together.">
-  >;
-  participantName: string;
+interface SharedNoteOutput {
+  title: PerSpace<string>;
+  content: PerSpace<string>;
+  participantName: PerUser<string>;
 }
 ```
 

@@ -1,25 +1,20 @@
 /**
  * The shared population the value-dispatch cross-checks run over.
  *
- * `tagFromNativeValueElseNull()` names what a value already is,
- * `isValidFabricNativeObject()` decides a subset of that answer by a narrower
- * route, `isValidFabricValueLayer()` decides membership,
+ * `tagOfConvertibleJsValueElseNull()` names what a value already is,
+ * `isValidFabricConvertibleJsObject()` decides a subset of that answer by a
+ * narrower route, `isValidFabricValueLayer()` decides membership,
  * `assertValidFabricValueLayer()` answers that last question in the form that
- * carries a reason, and `shallowFabricFromNativeValue()` asks
- * `shallowFabricFromNativeObjectElseUndefined()` and then that vet in turn --
- * so each is worth checking against the others rather than only against a
- * hand-picked case. This carries one entry per arm of the dispatch those
+ * carries a reason, and `shallowFabricFromConvertibleJsValue()` asks
+ * `shallowFabricFromConvertibleJsObjectElseUndefined()` and then that vet in
+ * turn -- so each is worth checking against the others rather than only against
+ * a hand-picked case. This carries one entry per arm of the dispatch those
  * functions make, plus the shapes each arm accepts and refuses; an entry
  * dropped from here is an arm the cross-checks stop reaching.
  */
 
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+import { FabricError } from "@/fabric-instances";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 
 /** A class with no fabric representation, wanted here by name. */
 export class PlainClass {}
@@ -106,19 +101,11 @@ export const LAYER_CORPUS: ReadonlyArray<[string, unknown]> = [
   ["a null-prototype object", Object.assign(Object.create(null), { a: 1 })],
   ["a class instance", new PlainClass()],
   ["a class instance with a forged `constructor`", forgedConstructorInstance()],
-  ["a `FabricBytes`", new FabricBytes(new Uint8Array([1]))],
-  ["a `FabricEpochNsec`", new FabricEpochNsec(0n)],
-  ["a `FabricEpochDay`", new FabricEpochDay(0n)],
-  ["a `FabricRegExp`", new FabricRegExp(/a/)],
-  ["a `FabricHash`", new FabricHash(new Uint8Array(32), "fid1")],
-  [
-    "a `FabricKeyPair`",
-    new FabricKeyPair(
-      "ExampleAlgorithm",
-      new Uint8Array([1]),
-      new Uint8Array([2]),
-    ),
-  ],
+  // One entry per concrete primitive class, from the examples the classes'
+  // own package keeps complete, so that no class goes uncarried here.
+  ...Object.entries(FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY).map((
+    [name, [example]],
+  ): [string, unknown] => [`a \`${name}\``, example]),
   ["a `FabricError`", FabricError.fromNativeError(new Error("x"))],
   ["a `Date`", new Date(1234)],
   ["a `Uint8Array`", new Uint8Array([1, 2, 3])],

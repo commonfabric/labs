@@ -7,6 +7,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -53,7 +54,7 @@ describe("collection index confidentiality", () => {
             seed,
           );
           writeSeedEnvelopeDoc(seed, signer.did());
-          seed.writeOrThrow(rows.getAsNormalizedFullLink(), {
+          seedStoredEnvelope(seed, rows.getAsNormalizedFullLink(), {
             value: [{ title: "First", category: initialCategory }],
             cfc: {
               version: 1,

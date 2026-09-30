@@ -36,6 +36,7 @@ import type { Cell } from "../src/cell.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import type { Action, ErrorWithContext } from "../src/scheduler.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-max-enforcement-posture");
 
@@ -80,7 +81,7 @@ const seedSource = async (
     tx,
   );
   const sourceId = source.getAsNormalizedFullLink().id;
-  tx.writeOrThrow({
+  seedStoredEnvelope(tx, {
     space: signer.did(),
     scope: "space",
     id: sourceId,
@@ -208,7 +209,7 @@ describe("max-enforcement CFC posture as one system", () => {
         .filter(([, governance]) => "ungated" in governance)
         .map(([sink]) => sink);
       expect(ungated.sort()).toEqual(
-        ["generateObject", "generateText", "llm", "llmDialog"],
+        ["generateObject", "generateText", "llm", "llmDialog", "sqliteQuery"],
       );
     });
 

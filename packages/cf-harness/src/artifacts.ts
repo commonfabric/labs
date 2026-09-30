@@ -15,6 +15,7 @@ import { createHarnessPolicyEvent } from "./contracts/policy.ts";
 import type { HarnessRunManifest } from "./contracts/run-manifest.ts";
 import type { HarnessRunReport } from "./contracts/run-report.ts";
 import type {
+  HarnessAcquiredSkills,
   HarnessSkillActivations,
   HarnessSkillRegistry,
   HarnessSkillResourceReads,
@@ -34,10 +35,24 @@ const sanitizeArtifactName = (input: string): string =>
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/**
+ * The one directory under an artifact root that is not a run's.
+ *
+ * Acquired scripts sit under it, one subdirectory per run, so that they are
+ * inside no run root at all — the property `acquiredSkillsDir` rests on. A run
+ * may not be named this, or its own artifacts would be that directory.
+ */
+const ACQUIRED_SKILLS_SEGMENT = ".acquired-skills";
+
 const assertValidRunId = (runId: string): string => {
   if (!RUN_ID_PATTERN.test(runId) || runId === "." || runId === "..") {
     throw new Error(
       "runId must be a simple path segment containing only letters, numbers, dots, underscores, or hyphens",
+    );
+  }
+  if (runId === ACQUIRED_SKILLS_SEGMENT) {
+    throw new Error(
+      `runId must not be ${ACQUIRED_SKILLS_SEGMENT}, which names the artifact root's acquired-scripts directory`,
     );
   }
   return runId;
@@ -94,6 +109,24 @@ export interface HarnessArtifactStore {
    */
   readonly imageAttachmentSnapshotDir?: string;
 
+  /**
+   * Host directory holding the scripts this run acquired, under the artifact
+   * root's one non-run directory rather than inside any run root.
+   *
+   * Held apart from the run root BECAUSE of CT-2117, not despite it: the
+   * artifact tree is not a confidentiality boundary — `bash` does not reserve
+   * it the way the file tools do — and `acquire_skill` runs in the PARENT, so
+   * a script written under the parent's run root is a script the planner can
+   * read wherever that tree is reachable. That is the one property the
+   * hostile-skill receipt rests on.
+   *
+   * Sitting outside the run roots buys the lifecycle and not the boundary: it
+   * is created with the run and removed with it, and what keeps the parent out
+   * is that no mount of the parent's sandbox covers it. The acquisition checks
+   * that rather than assuming it, and refuses where it does not hold.
+   */
+  readonly acquiredSkillsDir?: string;
+
   persistRunState(state: HarnessRunState): Promise<string>;
   persistTranscript(
     transcript: readonly HarnessTranscriptMessage[],
@@ -133,6 +166,29 @@ export interface HarnessArtifactStore {
   persistSkillScriptExecutions?(
     executions: HarnessSkillScriptExecutions,
   ): Promise<string>;
+
+  /**
+   * Records which skills this run acquired scripts for, and where their bytes
+   * sit. A store that cannot write it omits it, and the run acquires no
+   * script rather than acquiring one it cannot say the location of.
+   */
+  persistAcquiredSkills?(
+    skills: HarnessAcquiredSkills,
+  ): Promise<string>;
+
+  /**
+   * Writes one acquired script into {@link acquiredSkillsDir} under
+   * `relativeDir`, and returns the host path it landed at.
+   *
+   * Takes bytes, since what lands here is re-read and compared against the
+   * digest the acquisition took over the bytes the pinned commit served.
+   */
+  writeAcquiredSkillScript?(
+    relativeDir: string,
+    path: string,
+    bytes: Uint8Array,
+  ): Promise<string>;
+
   persistToolOutput(
     toolId: string,
     outputId: ToolOutputId,
@@ -149,11 +205,22 @@ export class FileSystemHarnessArtifactStore implements HarnessArtifactStore {
   readonly artifactRoot: string;
   readonly runRoot: string;
   readonly imageAttachmentSnapshotDir: string;
+  readonly acquiredSkillsDir: string;
 
   constructor(options: FileSystemHarnessArtifactStoreOptions) {
     this.artifactRoot = resolve(options.artifactRoot);
-    this.runRoot = join(this.artifactRoot, assertValidRunId(options.runId));
+    const runId = assertValidRunId(options.runId);
+    this.runRoot = join(this.artifactRoot, runId);
     this.imageAttachmentSnapshotDir = join(this.runRoot, "image-attachments");
+    // Under the artifact root's one non-run directory rather than under the
+    // run root: same lifecycle, and inside no run's artifacts — not this
+    // run's, and not another run's, which a `<runId>.acquired-skills` sibling
+    // would be for a run named `<runId>.acquired-skills`.
+    this.acquiredSkillsDir = join(
+      this.artifactRoot,
+      ACQUIRED_SKILLS_SEGMENT,
+      runId,
+    );
   }
 
   async persistRunState(state: HarnessRunState): Promise<string> {
@@ -186,9 +253,14 @@ export class FileSystemHarnessArtifactStore implements HarnessArtifactStore {
       }
     }
     const omissions = createHarnessTranscriptOmissions(transcript, previous);
-    const hasToolResult = transcript.some((message) => message.role === "tool");
+    const hasResultProvenance = transcript.some((message) =>
+      message.role === "tool" ||
+      (message.role === "user" &&
+        message.toolResultProvenance !== undefined)
+    );
     if (
-      previous !== undefined || omissions.results.length > 0 || !hasToolResult
+      previous !== undefined || omissions.results.length > 0 ||
+      !hasResultProvenance
     ) {
       await writeJsonFile(omissionsPath, omissions);
     }
@@ -230,6 +302,31 @@ export class FileSystemHarnessArtifactStore implements HarnessArtifactStore {
     const path = join(this.runRoot, "cell-labels.json");
     await writeJsonFile(path, labels);
     return path;
+  }
+
+  async persistAcquiredSkills(
+    skills: HarnessAcquiredSkills,
+  ): Promise<string> {
+    await ensureDir(this.runRoot);
+    const path = join(this.runRoot, "acquired-skills.json");
+    await writeJsonFile(path, skills);
+    return path;
+  }
+
+  async writeAcquiredSkillScript(
+    relativeDir: string,
+    scriptPath: string,
+    bytes: Uint8Array,
+  ): Promise<string> {
+    const target = join(this.acquiredSkillsDir, relativeDir, scriptPath);
+    if (!isPathWithinRoot(resolve(target), resolve(this.acquiredSkillsDir))) {
+      throw new Error(
+        `acquired script path escapes the acquired-skills directory: ${scriptPath}`,
+      );
+    }
+    await ensureDir(dirname(target));
+    await Deno.writeFile(target, bytes);
+    return target;
   }
 
   async persistRunReport(

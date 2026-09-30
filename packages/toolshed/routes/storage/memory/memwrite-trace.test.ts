@@ -137,6 +137,7 @@ describe("memwrite-trace", () => {
       // value the hasher can't encode (here, a function) yields a sentinel
       // rather than an exception that would abort the rest of the commit's ops.
       const line = formatMemWriteTrace(
+        // @ts-expect-error A function is not a `FabricValue`.
         { op: "set", id: "i", scope: "space", value: { fn: () => {} } },
         1,
         false,

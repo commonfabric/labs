@@ -12,20 +12,23 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { defer } from "@commonfabric/utils/defer";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 
-import type { FabricValue } from "@/interface.ts";
-import { REALM_CODEC } from "@/codec-interface/interface.ts";
-import { BaseTerminalCodec } from "@/codec-interface/index.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
+import type { FabricValue } from "@";
 import {
+  BaseTerminalCodec,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicStateError,
+  ProblematicValue,
+  REALM_CODEC,
+  UnknownValue,
+} from "@/codec-common";
+import {
+  RealmCodecEngine,
   type RealmCodecValue,
   type RealmEncodedValue,
   type RealmTaggedValue,
-} from "@/codec-realm/interface.ts";
-import { RealmCodecEngine } from "@/codec-realm/RealmCodecEngine.ts";
+} from "@/codec-realm";
 import { RealmDecodeAct } from "@/codec-realm/RealmDecodeAct.ts";
 import { RealmEncodeAct } from "@/codec-realm/RealmEncodeAct.ts";
 import {
@@ -34,13 +37,19 @@ import {
   newDefaultRealmCodecEngine,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
+import { FabricError } from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  FabricRegExp,
+  FabricUnavailable,
+  UNAVAILABLE_SYNCING,
+} from "@/fabric-primitives";
 import type { EchoReport } from "./realm-echo-worker.ts";
 
 /**
@@ -79,7 +88,7 @@ function stateOf(encoded: RealmEncodedValue): RealmCodecValue {
 /**
  * Encodes `value`, sends it to a real `Worker`, and returns what that worker
  * made of it. Waits on the worker's own message rather than polling, and
- * terminates it however the wait ends.
+ * terminates it however the wait ends, settling once it has been torn down.
  */
 async function crossRealm(value: FabricValue): Promise<EchoReport> {
   const worker = new Worker(
@@ -91,11 +100,14 @@ async function crossRealm(value: FabricValue): Promise<EchoReport> {
   worker.onmessage = (ev) => report.resolve(ev.data as EchoReport);
   worker.onerror = (ev) => report.reject(new Error(ev.message));
 
+  let lifetimeLock: string | undefined;
   try {
     worker.postMessage(realmFromFabricValue(value));
-    return await report.promise;
+    const echoed = await report.promise;
+    lifetimeLock = echoed.lifetimeLock;
+    return echoed;
   } finally {
-    worker.terminate();
+    await terminateWorker(worker, lifetimeLock);
   }
 }
 
@@ -256,6 +268,15 @@ describe("RealmCodecEngine", () => {
         .toThrow(/no applicable codec/);
       expect(() => realmFromFabricValue(Symbol() as FabricValue))
         .toThrow(/no applicable codec/);
+    });
+
+    it("throws when given a null-prototype object, rather than passing it along as a record", () => {
+      const nullProto = Object.assign(Object.create(null), { a: 1 });
+
+      expect(() => realmFromFabricValue(nullProto))
+        .toThrow("Cannot encode null-prototype object");
+      expect(() => realmFromFabricValue({ nested: nullProto }))
+        .toThrow("Cannot encode null-prototype object");
     });
 
     it("does not hand out the bytes an encoded `FabricBytes` holds", () => {
@@ -1102,14 +1123,73 @@ describe("RealmCodecEngine", () => {
     });
   });
 
+  describe("`mutable` constructor option", () => {
+    /** An engine over the default registry that decodes mutable. */
+    const mutableEngine = new RealmCodecEngine({
+      registry: createDefaultRealmRegistry(),
+      mutable: true,
+    });
+
+    it("is `false` by default, and `true` when given", () => {
+      expect(newDefaultRealmCodecEngine().mutable).toBe(false);
+      expect(mutableEngine.mutable).toBe(true);
+    });
+
+    it("hands back what it retains unfrozen, and by identity", () => {
+      const inner = { c: "two" };
+      const data = { a: tagged("EpochNsec@1", 7n), b: inner };
+      const decoded = mutableEngine.decode(wire(data)) as Record<
+        string,
+        unknown
+      >;
+
+      expect(Object.isFrozen(decoded)).toBe(false);
+      expect(decoded.b).toBe(inner);
+      expect(Object.isFrozen(inner)).toBe(false);
+    });
+
+    it("copies what it would retain when that arrived frozen", () => {
+      // A decode in the realm that built its argument can be handed a frozen
+      // container, which a mutable decode cannot hand back as it stands.
+
+      const inner = Object.freeze({ c: "two" });
+      // deno-lint-ignore no-sparse-arrays
+      const holey = Object.freeze([1, , 3]);
+      const decoded = mutableEngine.decode(
+        wire(Object.freeze({ b: inner, h: holey })),
+      ) as { b: object; h: unknown[] };
+
+      expect(Object.isFrozen(decoded)).toBe(false);
+      expect(decoded.b).not.toBe(inner);
+      expect(decoded.b).toEqual(inner);
+      expect(Object.isFrozen(decoded.b)).toBe(false);
+      expect(Object.isFrozen(decoded.h)).toBe(false);
+      expect(decoded.h.length).toBe(3);
+      expect(1 in decoded.h).toBe(false);
+    });
+
+    it("leaves an instance it decodes mutable", () => {
+      const decoded = mutableEngine.decode(
+        realmFromFabricValue(FabricError.fromNativeError(new Error("boom"))),
+      );
+
+      expect(decoded).toBeInstanceOf(FabricError);
+      expect(Object.isFrozen(decoded)).toBe(false);
+    });
+  });
+
   describe("across a real realm boundary", () => {
     it("decodes each class on the far side", async () => {
       const report = await crossRealm({
         bytes: new FabricBytes(new Uint8Array([1, 2, 250])),
         nsec: new FabricEpochNsec(1234567890123456789n),
         days: new FabricEpochDay(20_000n),
+        span: new FabricDurationNsec(-31_556_952_000_000_000_001n),
+        daySpan: new FabricDurationDay(-9_007_199_254_740_993n),
         hash: new FabricHash(new Uint8Array([9, 8, 7]), "fid1"),
         regexp: new FabricRegExp(/ab+c/gi),
+        unavailable: new FabricUnavailable("error", "general", "boom"),
+        prefab: UNAVAILABLE_SYNCING,
       });
 
       expect(report.ok).toBe(true);
@@ -1119,8 +1199,12 @@ describe("RealmCodecEngine", () => {
         bytes: "FabricBytes",
         nsec: "FabricEpochNsec",
         days: "FabricEpochDay",
+        span: "FabricDurationNsec",
+        daySpan: "FabricDurationDay",
         hash: "FabricHash",
         regexp: "FabricRegExp",
+        unavailable: "FabricUnavailable",
+        prefab: "FabricUnavailable",
       });
       // Content as well as class. A transposed field or a dropped value would
       // leave every `classes` entry correct, so the class check alone cannot
@@ -1128,9 +1212,16 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.bytes).toEqual([1, 2, 250]);
       expect(report.facts?.nsec).toBe(1234567890123456789n);
       expect(report.facts?.days).toBe(20_000n);
+      expect(report.facts?.span).toBe(-31_556_952_000_000_000_001n);
+      expect(report.facts?.daySpan).toBe(-9_007_199_254_740_993n);
       expect(report.facts?.hashTag).toBe("fid1");
       expect(report.facts?.hashBytes).toEqual([9, 8, 7]);
       expect(report.facts?.regexpParts).toEqual(["es2025", "ab+c", "gi"]);
+      expect(report.facts?.unavailableParts)
+        .toEqual(["error", "general", "boom"]);
+      // The far realm has its own prefab, and a message-less reason decodes to
+      // it there as it does here.
+      expect(report.facts?.prefabIsThatRealmsPrefab).toBe(true);
     });
 
     it("carries what a plain `postMessage()` would lose or mangle", async () => {
@@ -1191,6 +1282,19 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.lookalikeIsArray).toBe(true);
       expect(report.facts?.lookalikeTag).toBe("EpochDay@1");
       expect(report.classes?.lookalike).toBe("Array");
+    });
+
+    it("carries lone surrogates in strings, property names, and symbol keys", async () => {
+      const report = await crossRealm({
+        loneString: "a\ud800b",
+        loneKey: { "\udc00": 1 },
+        loneSym: Symbol.for("\udbff"),
+      });
+
+      expect(report.ok).toBe(true);
+      expect(report.facts?.loneString).toBe("a\ud800b");
+      expect(report.facts?.loneKeys).toEqual(["\udc00"]);
+      expect(report.facts?.loneSymKey).toBe("\udbff");
     });
 
     it("carries a `FabricKeyPair`'s handles across as live `CryptoKey`s", async () => {
@@ -1272,8 +1376,11 @@ describe("RealmCodecEngine", () => {
         ["FabricBytes", FabricBytes],
         ["FabricEpochNsec", FabricEpochNsec],
         ["FabricEpochDay", FabricEpochDay],
+        ["FabricDurationNsec", FabricDurationNsec],
+        ["FabricDurationDay", FabricDurationDay],
         ["FabricHash", FabricHash],
         ["FabricRegExp", FabricRegExp],
+        ["FabricUnavailable", FabricUnavailable],
       ] as const
     ) {
       it(`declares \`${name}\` terminal`, () => {

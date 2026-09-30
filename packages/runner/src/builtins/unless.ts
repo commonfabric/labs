@@ -6,6 +6,7 @@ import { ownedCell } from "./runtime-owned-store.ts";
 import { resolveCellReference } from "./resolve-cell-reference.ts";
 import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
 import type { RawNodeCause } from "../module.ts";
+import { ContextualFlowControl } from "../cfc.ts";
 
 /**
  * unless(condition, fallback) - || semantics
@@ -40,11 +41,13 @@ export function unless(
 
     // || semantics: if truthy, return condition; if falsy, return fallback
     const selected = inputsWithLog.key(condition ? "condition" : "fallback");
-    const serializedRef = resolveCellReference(runtime, tx, selected).getAsLink(
-      {
-        base: result,
-      },
-    );
+    const resolved = resolveCellReference(runtime, tx, selected);
+    const serializedRef = resolved.getAsLink({
+      base: result,
+      includeSchema: ContextualFlowControl.declaresStream(
+        resolved.getAsNormalizedFullLink().schema,
+      ),
+    });
 
     resultWithLog.setRawUntyped(serializedRef);
   };

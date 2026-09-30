@@ -14,7 +14,13 @@ import {
   type Tile,
   type TileView,
 } from "../types.ts";
-import { concDot, escapeHtml, landingHref } from "../lib.ts";
+import {
+  concDot,
+  escapeHtml,
+  humanDuration,
+  landingHref,
+  runDurationMs,
+} from "../lib.ts";
 import {
   CI_WORKFLOW,
   LOOM_CI_WORKFLOW,
@@ -35,19 +41,8 @@ const utcFallback = (iso: string): string => {
 const repoOf = (run: Run): string => run.repo ?? REPO;
 
 function runDuration(run: Run): string | null {
-  if (run.status !== "completed") return null;
-  const start = Date.parse(run.run_started_at);
-  const end = Date.parse(run.updated_at);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return null;
-  }
-  const seconds = Math.round((end - start) / 1_000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  const ran = runDurationMs(run);
+  return ran === undefined ? null : humanDuration(ran);
 }
 
 export function commitGanttHref(run: Run, candidates: Run[]): string | null {
@@ -84,25 +79,25 @@ export function commitGanttHref(run: Run, candidates: Run[]): string | null {
   return `/ci-gantt?${parameters}`;
 }
 
+const sources = [
+  runSource(REPO, CI_WORKFLOW, "main"),
+  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+];
+
 export const recentRuns: Tile = {
-  id: "recent-runs",
+  label: "recent main runs",
   intervalMs: 30_000,
   wide: true,
-  runSources: [
-    runSource(REPO, CI_WORKFLOW),
-    runSource(LOOM_REPO, LOOM_CI_WORKFLOW),
-  ],
+  runSources: sources,
   async collect(ctx): Promise<TileView> {
     // Two shared bases (labs + loom), merged newest-first and cut to the most
     // recent RECENT_DISPLAY across both.
-    const [labs, loom] = await Promise.all([
-      ctx.runsFor(REPO, CI_WORKFLOW),
-      ctx.runsFor(LOOM_REPO, LOOM_CI_WORKFLOW),
-    ]);
-    const allRuns = [...labs, ...loom]
-      .sort((a, b) =>
-        Date.parse(b.run_started_at) - Date.parse(a.run_started_at)
-      );
+    const snapshots = await Promise.all(
+      sources.map((source) => ctx.runsFor(source)),
+    );
+    const allRuns = snapshots.flat().sort((a, b) =>
+      Date.parse(b.run_started_at) - Date.parse(a.run_started_at)
+    );
     const runs = allRuns.slice(0, RECENT_DISPLAY);
 
     const completedOutcomes = [...runs].filter((r) =>
@@ -152,10 +147,11 @@ export const recentRuns: Tile = {
     }).join("") ||
       `<div class="ev"><span class="dot gray"></span><span>waiting for first poll…</span></div>`;
 
+    const count = `${runs.length} in window`;
     return {
-      label: `recent main runs · ${runs.length} in window`,
       status,
-      extra: `<div class="evscroll">${rows}</div>`,
+      aside: `<span class="hfacet" title="${count}">${count}</span>`,
+      extra: `<div class="evscroll" data-focus-key="runs">${rows}</div>`,
     };
   },
 };

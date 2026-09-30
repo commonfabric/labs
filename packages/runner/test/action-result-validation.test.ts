@@ -172,7 +172,7 @@ describe("validateAndCheckReactives", () => {
       );
     });
 
-    it("accepts materializable special and native objects", () => {
+    it("accepts materializable special and JS objects", () => {
       expect(
         validateAndCheckReactives(
           new FabricBytes(new Uint8Array([1, 2, 3])),
@@ -234,7 +234,7 @@ describe("validateAndCheckReactives", () => {
       );
     });
 
-    it("rejects class instances without native conversion", () => {
+    it("rejects class instances without convertible-JS conversion", () => {
       class Unsupported {}
       expect(() => validateAndCheckReactives({ value: new Unsupported() }))
         .toThrow(/Action returned a Unsupported at path "value"/);

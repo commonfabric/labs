@@ -6,10 +6,11 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
 
-import { RuntimeClient } from "@/runtime-client.ts";
+import { RuntimeClient, type RuntimeClientOptions } from "@/runtime-client.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import { NotificationType, RequestType } from "@/protocol/mod.ts";
 import type {
+  InitializationData,
   IPCClientMessage,
   IPCClientNotification,
   IPCRemoteMessage,
@@ -52,6 +53,25 @@ class CapturingTransport extends EventEmitter<RuntimeTransportEvents>
 
 describe("initialize-init-data", () => {
   describe("RuntimeClient.initialize InitializationData wiring", () => {
+    it("reports the trust snapshot actor used by the worker", async () => {
+      const identity = await Identity.fromPassphrase("init-acting-signer");
+      const actor = await Identity.fromPassphrase("init-acting-actor");
+      const client = await RuntimeClient.initialize(
+        new CapturingTransport(),
+        {
+          apiUrl: new URL("http://toolshed.test"),
+          identity,
+          spaceDid: identity.did(),
+          trustSnapshot: { id: "delegated", actingPrincipal: actor.did() },
+        },
+      );
+      try {
+        expect(client.actingPrincipalDid()).toBe(actor.did());
+      } finally {
+        await client.dispose();
+      }
+    });
+
     it("captures a copy, leaving the sender's own message untouched", () => {
       // The clone in the middle of the round trip is load-bearing and easy to
       // drop: an encode and a decode alone hand back the sender's own object
@@ -70,58 +90,77 @@ describe("initialize-init-data", () => {
       expect(Object.isFrozen(original)).toBe(false);
     });
 
-    it("forwards patternCoverage into the worker InitializationData", async () => {
-      // The flag is set on RuntimeClientOptions but the hand-built
-      // InitializationData literal must copy it, or the worker is built without
-      // a coverage collector and the integration jobs collect nothing.
-      const identity = await Identity.fromPassphrase("init-data coverage test");
-      const transport = new CapturingTransport();
+    it("carries every option through to the worker `InitializationData`", async () => {
+      // The literal in `RuntimeClient.initialize` is held to naming every
+      // `InitializationData` key by a `satisfies` clause, which a field
+      // assigned `undefined` satisfies as readily as a forwarded one. This
+      // case is what pins each key to the host's own value. `Required` holds
+      // the fixture to setting every option, so a field added to the options
+      // type lands in the test and in the literal together.
+      //
+      // The page's settings are options too, and are the ones that stay
+      // behind: the client keeps them and the worker is sent none.
 
-      await RuntimeClient.initialize(transport, {
+      const identity = await Identity.fromPassphrase("init-data forwarding");
+      const spaceIdentity = await Identity.fromPassphrase(
+        "init-data forwarding space",
+      );
+      const transport = new CapturingTransport();
+      const options = {
         apiUrl: new URL("http://toolshed.test"),
+        spaceHostMap: { "did:key:zSpace": "https://shard.test" },
         identity,
+        spaceIdentity,
         spaceDid: identity.did(),
-        experimental: {},
+        spaceName: "forwarding-space",
+        experimental: { modernCellRep: true, agentBuiltin: false },
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+        cfcReadMaxConfidentiality: ["did:key:zOwner"],
+        cfcReadOnExceed: "skip",
+        cfcTrustConfig: {
+          delegations: [{
+            delegator: "*",
+            verifier: "did:web:forwarding.example",
+            concepts: ["https://commonfabric.org/cfc/concepts/forwarding"],
+          }],
+        },
+        renderDeclassificationPolicy: "deny",
+        renderConfidentialityCeiling: { caveatKinds: ["forwarding"] },
+        trustSnapshot: { id: "forwarding-snapshot" },
+        forwardWorkerConsole: true,
         patternCoverage: true,
-      });
-
-      const init = transport.sent.find(
-        (m): m is IPCClientMessage =>
-          "msgId" in m && m.data?.type === RequestType.Initialize,
-      );
-      expect(init).toBeDefined();
-      const data = (init as { data: { data: { patternCoverage?: boolean } } })
-        .data.data;
-      expect(data.patternCoverage).toBe(true);
-    });
-
-    it("forwards concurrentWatchRefresh into the worker InitializationData", async () => {
-      // Same silent-drop hazard as patternCoverage: the flag is set on
-      // RuntimeClientOptions but the hand-built InitializationData literal must
-      // copy it, or the worker opens storage with the default single-flight
-      // settings and the dogfood toggle has no effect.
-      const identity = await Identity.fromPassphrase(
-        "init-data concurrent-watch-refresh test",
-      );
-      const transport = new CapturingTransport();
-
-      await RuntimeClient.initialize(transport, {
-        apiUrl: new URL("http://toolshed.test"),
-        identity,
-        spaceDid: identity.did(),
-        experimental: {},
         concurrentWatchRefresh: true,
-      });
+        awaitHealth: true,
+        iframeOuterFrameUrl: "/outer-frame",
+      } satisfies Required<RuntimeClientOptions>;
+
+      const client = await RuntimeClient.initialize(transport, options);
 
       const init = transport.sent.find(
         (m): m is IPCClientMessage =>
           "msgId" in m && m.data?.type === RequestType.Initialize,
       );
       expect(init).toBeDefined();
-      const data =
-        (init as { data: { data: { concurrentWatchRefresh?: boolean } } })
-          .data.data;
-      expect(data.concurrentWatchRefresh).toBe(true);
+      const data = (init as { data: { data: InitializationData } }).data.data;
+      // The three fields initialization transforms are compared against what
+      // it makes of them; the rest against the option they came from.
+      const { identity: sent, spaceIdentity: sentSpace, ...carried } = data;
+      const {
+        identity: _identity,
+        spaceIdentity: _spaceIdentity,
+        apiUrl: _apiUrl,
+        iframeOuterFrameUrl: pageSetting,
+        ...expected
+      } = options;
+      expect(carried).toEqual({
+        ...expected,
+        apiUrl: options.apiUrl.toString(),
+      });
+      expect(sent).toEqual(identity.keyPair);
+      expect(sentSpace).toEqual(spaceIdentity.keyPair);
+      expect("iframeOuterFrameUrl" in data).toBe(false);
+      expect(client.iframeOuterFrameUrl()).toBe(pageSetting);
     });
   });
 

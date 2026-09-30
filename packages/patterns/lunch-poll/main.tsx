@@ -59,12 +59,15 @@
  * (`nowTick`): the runtime's shared per-space clock, coarsened to five
  * minutes, written immediately on subscribe (and refreshed on reload), then
  * advanced on aligned boundaries — so an open tab rolls to the new day at
- * midnight on its own. It reads null until the wish resolves (shown as an
- * empty vote view and a placeholder date) and stays null on pre-#4740
- * runtimes, where the vote and visit handlers no-op rather than read an
- * ambient clock the runtime may not provide. The day boundary is the
- * runtime's local timezone (the viewer's, in the browser); two viewers in
- * different timezones can see different vote sets around midnight.
+ * midnight on its own. An instant in the `clock` input takes the wish's place
+ * wherever the clock is read, which is how a test puts the poll at a moment it
+ * chooses; production supplies none. The clock reads null until the wish
+ * resolves (shown as an empty vote view and a placeholder date) and stays null
+ * on pre-#4740 runtimes, where the vote and visit handlers no-op rather than
+ * read an ambient clock the runtime may not provide. Null is the only reading
+ * that means unresolved: every instant is a day, epoch included. The day
+ * boundary is the runtime's local timezone (the viewer's, in the browser); two
+ * viewers in different timezones can see different vote sets around midnight.
  */
 
 import {
@@ -89,7 +92,7 @@ import {
 import PollOptionCard from "./poll-option-card.tsx";
 import ParticipantIdentityCard from "./participant-identity-card.tsx";
 import { safeImageUrl } from "./generated-art.tsx";
-import { memoBy } from "./voter-memo.ts";
+import { indexBy } from "./voter-index.ts";
 
 /**
  * The minimal profile shape this pattern reads: the stable identity cell for
@@ -147,6 +150,20 @@ export interface PollHost {
 }
 
 export const DEFAULT_HOST: PollHost = {};
+
+/**
+ * The clock override, object-wrapped so that "no instant" is the absence of a
+ * field rather than a number standing for it. Every number is a valid instant,
+ * so a bare number input would need one of them to mean "unset".
+ */
+export interface ClockOverride {
+  /** The instant the poll reads as now, in milliseconds since the epoch. */
+  readonly at?: number;
+}
+
+export const DEFAULT_CLOCK: ClockOverride = {};
+
+export type ClockValue = ClockOverride | Default<typeof DEFAULT_CLOCK>;
 
 /**
  * The viewer-identity override, claimed through the `overrideViewer` stream.
@@ -798,7 +815,7 @@ const castVote = handler<CastVoteEvent, {
   // wish resolves (and always on pre-#4740 runtimes, which also show no
   // votes): voting no-ops rather than reading an ambient clock.
   const now = nowTick;
-  if (!now) return;
+  if (typeof now !== "number") return;
   // My vote for this option has a deterministic address, so this reads and
   // edits just that one vote — never the whole list. Clicking the current
   // color toggles the vote off; any other color sets it.
@@ -927,7 +944,7 @@ const logVisit = handler<LogVisitEvent, {
     // the wish is still unresolved (null `nowTick`) the board shows no votes,
     // so the snapshot stays empty for that window too.
     const nowRef = nowTick;
-    const nowDay = nowRef ? dayKeyOf(nowRef) : null;
+    const nowDay = typeof nowRef === "number" ? dayKeyOf(nowRef) : null;
     const titleById = new Map(options.get().map((o) => [o.id, o.title]));
     const voteSnapshot: VoteSnapshot[] = [];
     for (const v of votes.get()) {
@@ -1019,31 +1036,16 @@ interface OptionTally {
 }
 
 /**
- * The key a voter's cell is looked up under, so that a lookup made for one of
- * a voter's votes serves the rest. The key is a hint, not an identity: it is
- * built from the entity id and path alone, and two profile cells in different
- * spaces or scopes can share one. A remembered answer is served only to a
- * voter whose link equals the one it was computed for; other voters under the
- * same key are kept apart.
+ * The key a roster row and a vote's voter are indexed under, so a vote reaches
+ * its row without searching the roster. The key is a hint, not an identity: it
+ * is built from the entity id and path alone, so two profile cells in
+ * different spaces or scopes can share one, and the `equals` comparison the
+ * lookup makes is what tells them apart.
  */
 const voterKey = (voter: LunchProfileCell): string | undefined => {
   const id = getEntityId(voter);
   return id === undefined ? undefined : entityRefToString(id);
 };
-
-/**
- * Remembers `compute(voter)` per voter, so a voter who cast several votes is
- * looked up once. A hit is a remembered voter whose link equals this one, not
- * merely one whose key matches.
- */
-const memoByVoter = <T,>(
-  compute: (voter: LunchProfileCell) => T,
-): (voter: LunchProfileCell) => T =>
-  memoBy(
-    voterKey,
-    (remembered, voter) => remembered.equalLinks(voter),
-    compute,
-  );
 
 /** Maintains linked vote groups for per-option tally consumers. */
 const indexVotesByOption = pattern<
@@ -1064,9 +1066,11 @@ const tallyOption = (
   viewer: LunchProfile | LunchProfileCell | undefined,
 ): OptionTally => {
   // A vote carries its voter's identity, so the display name and swatch color
-  // are looked up from the roster by comparison. A voter who has left the
-  // roster still tallies; they just render without a name. The roster is read
-  // once per option, and repeated voters share identity comparisons.
+  // are looked up from the roster by comparison. The roster is read once per
+  // option and indexed by voter key, so a vote whose voter is on the roster
+  // costs the comparisons its key narrows to. A voter who has left the roster
+  // still tallies: their key names no row, so the lookup compares the whole
+  // roster and they render without a name.
   const roster = users.map((u) => {
     const profile = u.profile;
     return {
@@ -1077,16 +1081,20 @@ const tallyOption = (
   });
   const participantNames = roster.map((u) => u.name);
   const initialsByName = getInitialsByName(participantNames);
-  const rosterEntryOf = memoByVoter((voter) =>
-    roster.find((u) => u.profile !== undefined && equals(u.profile, voter))
+  const rosterEntryOf = indexBy(
+    roster,
+    (u) => u.profile === undefined ? undefined : voterKey(u.profile),
+    voterKey,
+    (u, voter) => u.profile !== undefined && equals(u.profile, voter),
   );
   const rosterOf = (
     voter: LunchProfileCell | undefined,
   ): (typeof roster)[number] | undefined =>
     voter === undefined ? undefined : rosterEntryOf(voter);
-  const viewerIs = memoByVoter((voter) => equals(voter, viewer));
+  // One comparison per vote. The poll addresses a vote by its voter and
+  // option, so a voter holds at most one vote in the group tallied here.
   const isSelf = (voter: LunchProfileCell | undefined): boolean =>
-    viewer !== undefined && voter !== undefined && viewerIs(voter);
+    viewer !== undefined && voter !== undefined && equals(voter, viewer);
   let green = 0;
   let yellow = 0;
   let red = 0;
@@ -1162,6 +1170,20 @@ export interface CozyPollInput {
   // internal form drafts, declared as local per-session cells in the pattern
   // body (parking-coordinator idiom).
   visits?: PerSpace<HistoryEntry[] | Default<[]>>;
+
+  /**
+   * Allocation site for the clock override. Leave this absent outside a test:
+   * an instant written here replaces the `#now/300` wish everywhere the poll
+   * reads the clock, which fixes the day the poll shows and the day every
+   * later vote and visit is stamped with, for every viewer of that poll, until
+   * it is cleared. A runner-owned timer writes that wish on aligned five-minute
+   * boundaries, which a pattern body cannot make happen, so a test that needs
+   * the poll at a chosen instant, or at two instants one tick apart, writes
+   * them here. Per space rather than per user, because the day a poll runs on
+   * is one day for everyone looking at it. Production leaves it absent and the
+   * wish rules.
+   */
+  clock?: PerSpace<ClockValue>;
 }
 
 export interface CozyPollOutput {
@@ -1241,6 +1263,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       host,
       viewer,
       visits,
+      clock,
     },
   ) => {
     // Internal per-session form drafts — local to each browser session,
@@ -1263,8 +1286,11 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // pre-#4740 runtimes, which lack `#now` — and every downstream read
     // guards that window (an empty vote view, a placeholder date, and vote /
     // visit handlers that no-op).
+    // The `clock` input stands in front of the wish so a test can put the poll
+    // at a chosen instant. It carries no instant in production, and the wish
+    // rules there.
     const nowTickWish = wish<number>({ query: "#now/300" });
-    const nowTick = computed(() => nowTickWish.result ?? null);
+    const nowTick = computed(() => clock.at ?? nowTickWish.result ?? null);
     // Two-step confirmation for destructive actions. Stores the optionId
     // pending remove-confirm (null or undefined = nothing pending). Same idiom as
     // parking-coordinator's `removePersonConfirmTarget`.
@@ -1404,10 +1430,17 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Current-day filter: the UI only shows votes cast on the current day
     // (local calendar), per the shared tick. While `#now/300` is still
     // resolving, the day key reads "" and the current-day vote set is empty.
-    const todayKey = computed(() => (nowTick ? dayKeyOf(nowTick) : ""));
+    // The filter is keyed on the day, so a tick that advances within one day
+    // leaves the key equal and the vote set is not recomputed. Keying it on the
+    // tick itself would rescan every vote every five minutes.
+    const todayKey = computed(() =>
+      typeof nowTick === "number" ? dayKeyOf(nowTick) : ""
+    );
+    // The scan reads the day key rather than the tick, so it runs when the
+    // day changes rather than on every tick within a day.
     const todaysVotes = computed(() => {
-      if (!nowTick) return EMPTY_VOTES;
-      const key = dayKeyOf(nowTick);
+      const key = todayKey;
+      if (!key) return EMPTY_VOTES;
       return votes.filter((v) =>
         typeof v.castAt === "number" && dayKeyOf(v.castAt) === key
       );
@@ -1509,7 +1542,9 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                     const u = userCount ?? 0;
                     const o = optionCount ?? 0;
                     const v = todayVoteCount ?? 0;
-                    const todayLabel = nowTick ? dayLabelOf(nowTick) : "…";
+                    const todayLabel = typeof nowTick === "number"
+                      ? dayLabelOf(nowTick)
+                      : "…";
                     const admin = hostName;
                     const joined = isJoined;
                     const amAdmin = isAdmin;

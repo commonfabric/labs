@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { defer } from "@commonfabric/utils/defer";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   type Cell,
@@ -15,16 +16,42 @@ import {
   setPieceReconciliation,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
+import { watchMetaReads } from "../../runner/test/support/watch-meta-reads.ts";
 import {
   readPieceSourceRevision,
   readPieceSourceState,
   reconcilePieceSource,
 } from "../src/ops/piece-origin.ts";
-import type { PieceController } from "../src/ops/piece-controller.ts";
+import { PieceController } from "../src/ops/piece-controller.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 
 const signer = await Identity.fromPassphrase("piece source lifecycle");
+
+/**
+ * Runs the fixture module `fixture` in a worker of its own, and returns the
+ * outcome it posts once that worker has been torn down.
+ */
+async function fixtureOutcome<T>(fixture: string): Promise<T> {
+  const worker = new Worker(
+    new URL(`./fixtures/${fixture}`, import.meta.url).href,
+    { type: "module" },
+  );
+  const posted = defer<T & { lifetimeLock: string | undefined }>();
+  worker.onmessage = (event) => posted.resolve(event.data);
+  worker.onerror = (event) =>
+    posted.reject(event.error ?? new Error(event.message));
+
+  let lifetimeLock: string | undefined;
+  try {
+    const outcome = await posted.promise;
+    lifetimeLock = outcome.lifetimeLock;
+    return outcome;
+  } finally {
+    await terminateWorker(worker, lifetimeLock);
+  }
+}
 
 function versionProgram(version: string): RuntimeProgram {
   return {
@@ -224,43 +251,21 @@ describe("piece source lifecycle", () => {
   }
 
   it("preloads source verification before creating a piece", async () => {
-    const worker = new Worker(
-      new URL(
-        "./fixtures/piece-source-compiler-preload.ts",
-        import.meta.url,
-      ).href,
-      { type: "module" },
-    );
-    const result = await new Promise<{
+    const result = await fixtureOutcome<{
       history?: string[];
       error?: string;
-    }>((resolve, reject) => {
-      worker.onmessage = (event) => resolve(event.data);
-      worker.onerror = (event) =>
-        reject(event.error ?? new Error(event.message));
-    }).finally(() => worker.terminate());
+    }>("piece-source-compiler-preload.ts");
 
     expect(result.error).toBeUndefined();
     expect(result.history).toEqual(["create"]);
   });
 
   it("preloads source verification before an unavailable-baseline transition", async () => {
-    const worker = new Worker(
-      new URL(
-        "./fixtures/piece-source-transition-compiler-preload.ts",
-        import.meta.url,
-      ).href,
-      { type: "module" },
-    );
-    const result = await new Promise<{
+    const result = await fixtureOutcome<{
       baseline?: string;
       history?: string[];
       error?: string;
-    }>((resolve, reject) => {
-      worker.onmessage = (event) => resolve(event.data);
-      worker.onerror = (event) =>
-        reject(event.error ?? new Error(event.message));
-    }).finally(() => worker.terminate());
+    }>("piece-source-transition-compiler-preload.ts");
 
     expect(result.error).toBeUndefined();
     expect(result.baseline).toBe("unavailable");
@@ -785,6 +790,304 @@ describe("piece source lifecycle", () => {
       ).rejects.toThrow("source commit rejected");
     } finally {
       runtime.editWithRetry = editWithRetry;
+    }
+  });
+
+  it("applies a compiled nullable literal widening while retaining its stored argument", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { pattern } from "commonfabric";
+          export default pattern<{ state: ${stateType} }, { active: boolean }>(
+            ({ state }) => ({ active: state !== null }),
+          );
+        `,
+      }],
+    });
+    for (
+      const [stateType, value] of [
+        ["null", null],
+        ['"open" | null', null],
+        ['"open" | null', "open"],
+      ] as const
+    ) {
+      const previous = program(stateType);
+      const piece = await pieces.create(previous, { input: { state: value } });
+      await piece.setPattern(program('"open" | "closed" | null'));
+      expect(await piece.input.get(["state"])).toBe(value);
+      expect(await piece.result.get(["active"])).toBe(value !== null);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(previous)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies compiled boolean argument widening while retaining both stored values", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { pattern } from "commonfabric";
+          export default pattern<{ state: ${stateType} }, { active: boolean }>(
+            ({ state }) => ({ active: state === true }),
+          );
+        `,
+      }],
+    });
+    const narrower = program("boolean");
+    const wider = program('boolean | "auto"');
+    for (const value of [false, true]) {
+      const piece = await pieces.create(narrower, { input: { state: value } });
+      await piece.setPattern(wider);
+      expect(await piece.input.get(["state"])).toBe(value);
+      expect(await piece.result.get(["active"])).toBe(value);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(narrower)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies compiled boolean result narrowing and refuses its reverse", async () => {
+    const program = (stateType: string, value: boolean): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { pattern } from "commonfabric";
+          export default pattern<{ seed: number }, { state: ${stateType} }>(
+            () => ({ state: ${value} }),
+          );
+        `,
+      }],
+    });
+    for (const value of [false, true]) {
+      const wider = program('boolean | "auto"', value);
+      const piece = await pieces.create(wider, { input: { seed: 42 } });
+      await piece.setPattern(program("boolean", value));
+      expect(await piece.input.get(["seed"])).toBe(42);
+      expect(await piece.result.get(["state"])).toBe(value);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(wider)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies compiled boolean anyOf argument widening while retaining both stored values", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Cell, pattern } from "commonfabric";
+          export default pattern<{ state: ${stateType} }, { active: boolean }>(
+            () => ({ active: true }),
+          );
+        `,
+      }],
+    });
+    const narrower = program("Cell<boolean> | number");
+    const wider = program('Cell<boolean | "auto"> | number');
+    for (const source of [narrower, wider]) {
+      const compiled = await runtime.patternManager.compilePattern(source, {
+        space: pieces.getSpace(),
+      });
+      expect(compiled.argumentSchema).toMatchObject({
+        properties: { state: { anyOf: expect.any(Array) } },
+      });
+    }
+    for (const value of [false, true]) {
+      const piece = await pieces.create(narrower, { input: { state: value } });
+      await piece.setPattern(wider);
+      expect(await piece.input.get(["state"])).toBe(value);
+      expect(await piece.result.get(["active"])).toBe(true);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(narrower)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies compiled boolean anyOf result narrowing and refuses its reverse", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Cell, pattern } from "commonfabric";
+          export default pattern<{ flag: Cell<boolean> }, { state: ${stateType} }>(
+            ({ flag }) => ({ state: flag }),
+          );
+        `,
+      }],
+    });
+    const narrower = program("Cell<boolean> | number");
+    const wider = program('Cell<boolean | "auto"> | number');
+    for (const source of [narrower, wider]) {
+      const compiled = await runtime.patternManager.compilePattern(source, {
+        space: pieces.getSpace(),
+      });
+      expect(compiled.resultSchema).toMatchObject({
+        properties: { state: { anyOf: expect.any(Array) } },
+      });
+    }
+    // The result flows a boolean through the narrowed branch itself, so each
+    // stored value witnesses the narrowing rather than the untouched number
+    // branch.
+    for (const value of [false, true]) {
+      const piece = await pieces.create(wider, { input: { flag: value } });
+      await piece.setPattern(narrower);
+      expect(await piece.input.get(["flag"])).toBe(value);
+      expect(await piece.result.get(["state"])).toBe(value);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(wider)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies compiled boolean widening that retains its default", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Default, pattern } from "commonfabric";
+          export default pattern<{ state?: ${stateType} }, { active: boolean }>(
+            ({ state }) => ({ active: state === true }),
+          );
+        `,
+      }],
+    });
+    const narrower = program("Default<boolean, false>");
+    const wider = program('Default<boolean | "auto", false>');
+    for (const value of [false, true]) {
+      const piece = await pieces.create(narrower, { input: { state: value } });
+      await piece.setPattern(wider);
+      expect(await piece.input.get(["state"])).toBe(value);
+      expect(await piece.result.get(["active"])).toBe(value);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(narrower)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+    // A widening that also moves the default stays refused.
+    const piece = await pieces.create(narrower, { input: { state: true } });
+    await expect(piece.setPattern(program('Default<boolean | "auto", "auto">')))
+      .rejects.toThrow("Pattern schemas are not backward compatible");
+  });
+
+  it("applies a compiled union widening that retains a mixed-enum cell branch", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Cell, pattern } from "commonfabric";
+          export default pattern<{ state?: ${stateType} }, { active: boolean }>(
+            ({ state }) => ({ active: state !== undefined }),
+          );
+        `,
+      }],
+    });
+    const previous = program('Cell<"open" | "closed" | null> | number');
+    for (
+      const wider of [
+        'Cell<"open" | "closed" | "archived" | null> | number',
+        'Cell<"open" | "closed" | null> | number | boolean',
+      ]
+    ) {
+      const piece = await pieces.create(previous, { input: { state: 42 } });
+      await piece.setPattern(program(wider));
+      expect(await piece.input.get(["state"])).toBe(42);
+      expect(await piece.result.get(["active"])).toBe(true);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(previous)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies argument widening through a nested union retaining its default", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Cell, type Default, pattern } from "commonfabric";
+          export default pattern<{ state?: ${stateType} }, { active: boolean }>(
+            ({ state }) => ({ active: state !== undefined }),
+          );
+        `,
+      }],
+    });
+    const narrower = program(
+      'Cell<Default<"open" | "closed" | null, "open"> | number> | string',
+    );
+    for (
+      const stateType of [
+        'Cell<Default<"open" | "closed" | null, "open"> | number> | string | boolean',
+        'Cell<Default<"open" | "closed" | "archived" | null, "open"> | number> | string',
+      ]
+    ) {
+      const piece = await pieces.create(narrower, {
+        input: { state: "ready" },
+      });
+      await piece.setPattern(program(stateType));
+      expect(await piece.input.get(["state"])).toBe("ready");
+      expect(await piece.result.get(["active"])).toBe(true);
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(narrower)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
+    }
+  });
+
+  it("applies result narrowing through a nested union retaining its default", async () => {
+    const program = (stateType: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { type Cell, type Default, pattern } from "commonfabric";
+          export default pattern<{ seed: number }, { state: ${stateType} }>(
+            () => ({ state: "ready" }),
+          );
+        `,
+      }],
+    });
+    const narrower = program(
+      'Cell<Default<"open" | "closed" | null, "open"> | number> | string',
+    );
+    for (
+      const stateType of [
+        'Cell<Default<"open" | "closed" | null, "open"> | number> | string | boolean',
+        'Cell<Default<"open" | "closed" | "archived" | null, "open"> | number> | string',
+      ]
+    ) {
+      const wider = program(stateType);
+      const piece = await pieces.create(wider, { input: { seed: 42 } });
+      await piece.setPattern(narrower);
+      expect(await piece.input.get(["seed"])).toBe(42);
+      expect(await piece.result.get(["state"])).toBe("ready");
+      const state = await readPieceSourceState(runtime, piece.getCell());
+      expect(state.history.at(-1)?.operation).toBe("edit");
+      await expect(piece.setPattern(wider)).rejects.toThrow(
+        "Pattern schemas are not backward compatible",
+      );
     }
   });
 
@@ -1352,16 +1655,17 @@ describe("piece source lifecycle", () => {
       .history.find((entry) =>
         (entry.origin?.recorded ?? entry.origin?.url) === origin
       )!;
-    const argument = pieces.getArgument(piece.getCell());
+    const argument = patchableCell(pieces.getArgument(piece.getCell()));
     const getArgument = pieces.getArgument;
-    const getRaw = argument.getRaw;
+    const getRawUntyped = argument.getRawUntyped;
     pieces.getArgument = (() => argument) as typeof pieces.getArgument;
-    argument.getRaw = (() => {
+    // `getRaw()` reads through `getRawUntyped()`, so this reaches both.
+    argument.getRawUntyped = (() => {
       return {
         value: 4,
         mode: linkRefFrom({ path: "not an array" } as never),
       };
-    }) as typeof argument.getRaw;
+    }) as typeof argument.getRawUntyped;
     webSources["/api/patterns/malformed-link.tsx"] = optionalModeProgram(2);
 
     try {
@@ -1374,7 +1678,7 @@ describe("piece source lifecycle", () => {
         expect(result.prepared.review?.argumentEvidence).toBeDefined();
       }
     } finally {
-      argument.getRaw = getRaw;
+      argument.getRawUntyped = getRawUntyped;
       pieces.getArgument = getArgument;
     }
   });
@@ -1784,10 +2088,6 @@ describe("piece source lifecycle", () => {
     };
     const syncPattern = pieces.syncPattern;
     const runSyncedWithCommit = runtime.runSyncedWithCommit.bind(runtime);
-    const cellPrototype = Object.getPrototypeOf(piece.getCell()) as {
-      getMetaRaw: (field: string, options?: unknown) => unknown;
-    };
-    const getMetaRaw = cellPrototype.getMetaRaw;
     let receiptIssued = false;
     let sourceHistoryReadsAfterReceipt = 0;
     mutablePieces.syncPattern = () => {
@@ -1801,15 +2101,14 @@ describe("piece source lifecycle", () => {
       receiptIssued = true;
       return result;
     }) as typeof runtime.runSyncedWithCommit;
-    cellPrototype.getMetaRaw = function (field, options) {
-      if (receiptIssued && field === "pieceSourceHistory") {
+    const unwatch = watchMetaReads("pieceSourceHistory", () => {
+      if (receiptIssued) {
         sourceHistoryReadsAfterReceipt++;
         throw new Error(
           "the commit receipt must not be verified by rereading source history",
         );
       }
-      return getMetaRaw.call(this, field, options);
-    };
+    });
     try {
       const result = await piece.changeSource({
         kind: "restore",
@@ -1825,7 +2124,7 @@ describe("piece source lifecycle", () => {
     } finally {
       mutablePieces.syncPattern = syncPattern;
       runtime.runSyncedWithCommit = runSyncedWithCommit;
-      cellPrototype.getMetaRaw = getMetaRaw;
+      unwatch();
     }
 
     // Read after the guard has proved the restore itself did not.
@@ -1837,9 +2136,10 @@ describe("piece source lifecycle", () => {
   });
 
   it("reports a committed detach after a concurrent refresh fails", async () => {
-    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    const created = await pieces.create(versionProgram("v1"), { input: {} });
+    const cell = patchableCell(created.getCell());
+    const piece = new PieceController(pieces, cell);
     await stampOrigin(piece, "system:detach-refresh.tsx");
-    const cell = piece.getCell();
     const mutableCell = cell as unknown as { sync: typeof cell.sync };
     const originalSync = cell.sync.bind(cell);
     const originalEditWithRetry = runtime.editWithRetry.bind(runtime);
@@ -1849,23 +2149,18 @@ describe("piece source lifecycle", () => {
     // Only awaited, never read: this test is about what the newer edit does
     // to the detach beside it, not about what it returns.
     let newerEdit: Promise<unknown> | undefined;
-    const cellPrototype = Object.getPrototypeOf(cell) as {
-      getMetaRaw: (field: string, options?: unknown) => unknown;
-    };
-    const getMetaRaw = cellPrototype.getMetaRaw;
     // Armed at the refresh failure: from there to the verdict is exactly
     // where a read-back would run.
     let refreshFailed = false;
     let sourceHistoryReadsAfterFailure = 0;
-    cellPrototype.getMetaRaw = function (field, options) {
-      if (refreshFailed && field === "pieceSourceHistory") {
+    const unwatch = watchMetaReads("pieceSourceHistory", () => {
+      if (refreshFailed) {
         sourceHistoryReadsAfterFailure++;
         throw new Error(
           "a committed detach must not be verified by rereading source history",
         );
       }
-      return getMetaRaw.call(this, field, options);
-    };
+    });
 
     runtime.editWithRetry = (async (action, maxRetries) => {
       const result = await originalEditWithRetry(action, maxRetries);
@@ -1898,7 +2193,7 @@ describe("piece source lifecycle", () => {
       mutableCell.sync = originalSync;
       runtime.editWithRetry = originalEditWithRetry;
       refreshFailed = false;
-      cellPrototype.getMetaRaw = getMetaRaw;
+      unwatch();
       releaseHeldSync.resolve();
     }
     await newerEdit;

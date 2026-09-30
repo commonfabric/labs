@@ -6,6 +6,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { PreparedSourceUpdate } from "../src/pattern-manager.ts";
@@ -31,6 +32,7 @@ import {
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
 } from "../src/runner.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 await ensureCompilerStack();
 
@@ -71,7 +73,7 @@ const seedLabeledSource = async (
     properties: { secret: { type: "string" } },
   }).getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, space);
-  seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+  seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
     value: { secret: "s3cr3t" },
     cfc: {
       version: 1,
@@ -123,6 +125,58 @@ const protectedSchema = {
   },
   required: ["value"],
 } as unknown as JSONSchema;
+
+/**
+ * A two-module program whose entry binds `name` to its own `setName`. `root`
+ * is the directory the authored tree is grounded at, so the same tree can be
+ * compiled as `/api/patterns/app/main.tsx` and as
+ * `/packages/patterns/app/main.tsx`.
+ */
+const writerProgram = (version: string, root = ""): RuntimeProgram => ({
+  main: `${root}/app/main.tsx`,
+  files: [
+    {
+      name: `${root}/app/main.tsx`,
+      contents: [
+        "/// <cts-enable />",
+        "import {",
+        "  handler,",
+        "  pattern,",
+        "  type Stream,",
+        "  Writable,",
+        "  WriteAuthorizedBy,",
+        '} from "commonfabric";',
+        'import { revision } from "../shared/revision.ts";',
+        "",
+        "const setName = handler<",
+        "  { name: string },",
+        "  { name: Writable<string> }",
+        ">((event, state) => {",
+        '  state.name.set(revision + ":" + event.name);',
+        "});",
+        "",
+        "// Declared, so the result document's own schema carries the claim",
+        "// at `/name`, the way a profile's result schema carries its",
+        "// owner-protected fields.",
+        "type Output = {",
+        "  name: WriteAuthorizedBy<string, typeof setName>;",
+        "  setName: Stream<{ name: string }>;",
+        "};",
+        "",
+        "export default pattern<{ seed?: string }, Output>(() => {",
+        "  const name = new Writable<",
+        "    WriteAuthorizedBy<string, typeof setName>",
+        '  >("initial").for("name");',
+        "  return { name, setName: setName({ name }) };",
+        "});",
+      ].join("\n"),
+    },
+    {
+      name: `${root}/shared/revision.ts`,
+      contents: `export const revision = ${JSON.stringify(version)};`,
+    },
+  ],
+});
 
 describe("module identity delegation", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -479,6 +533,152 @@ describe("module identity delegation", () => {
     expect(delegations.has("new")).toBe(false);
   });
 
+  it("matches the entry pair, and the modules under the substituted root, when the successor spells the same tree under another root", () => {
+    // One authored tree compiled twice: served over HTTP as
+    // `/api/patterns/...`, and from a checkout grounded at the repository
+    // root as `/packages/patterns/...`. The update names the two entries,
+    // and the root each entry sits under is what carries every other
+    // module across. A module outside that root keeps matching by its own
+    // name.
+    const previous = new Map<string, SourceDoc>([
+      ["old-entry", {
+        kind: "source",
+        code: "export {};",
+        filename: "/api/patterns/system/profile-home.tsx",
+        imports: [],
+        delegatedModuleIdentities: ["ancestor-entry"],
+      }],
+      ["old-shared", {
+        kind: "source",
+        code: "export {};",
+        filename: "/api/patterns/shared/revision.ts",
+        imports: [],
+      }],
+      ["old-mounted", {
+        kind: "source",
+        code: "export {};",
+        filename: "/cf-mount/dep/util.ts",
+        imports: [],
+      }],
+    ]);
+    const next: CacheableModule[] = [
+      {
+        identity: "new-entry",
+        filename: "/packages/patterns/system/profile-home.tsx",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+      {
+        identity: "new-shared",
+        filename: "/packages/patterns/shared/revision.ts",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+      {
+        identity: "new-mounted",
+        filename: "/cf-mount/dep/util.ts",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+    ];
+
+    const delegations = deriveModuleDelegations(previous, next, {
+      previous: "old-entry",
+      next: "new-entry",
+    });
+    expect(delegations.get("new-entry")).toEqual(
+      new Set(["ancestor-entry", "old-entry"]),
+    );
+    expect(delegations.get("new-shared")).toEqual(new Set(["old-shared"]));
+    expect(delegations.get("new-mounted")).toEqual(new Set(["old-mounted"]));
+  });
+
+  it("matches a renamed entry to the entry it replaces, and nothing else across the rename", () => {
+    // The update itself says which entry succeeds which, so the entry pair
+    // matches whatever the two are called. With no root the two names
+    // share, no other module is carried across on the entries' account.
+    const previous = new Map<string, SourceDoc>([
+      ["old-entry", {
+        kind: "source",
+        code: "export {};",
+        filename: "/a/old-main.tsx",
+        imports: [],
+      }],
+      ["old-shared", {
+        kind: "source",
+        code: "export {};",
+        filename: "/a/shared.ts",
+        imports: [],
+      }],
+    ]);
+    const delegations = deriveModuleDelegations(previous, [
+      {
+        identity: "new-entry",
+        filename: "/b/new-main.tsx",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+      {
+        identity: "new-shared",
+        filename: "/b/shared.ts",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+    ], { previous: "old-entry", next: "new-entry" });
+    expect(delegations.get("new-entry")).toEqual(new Set(["old-entry"]));
+    expect(delegations.has("new-shared")).toBe(false);
+  });
+
+  it("skips a module the substituted root would match ambiguously", () => {
+    // The predecessor closure holds the shared module under both roots, so
+    // the successor's one copy has two candidates; that is the same
+    // ambiguity a duplicate canonical name is, and it fails closed the same
+    // way.
+    const previous = new Map<string, SourceDoc>([
+      ["old-entry", {
+        kind: "source",
+        code: "export {};",
+        filename: "/api/patterns/main.tsx",
+        imports: [],
+      }],
+      ["old-shared-served", {
+        kind: "source",
+        code: "export {};",
+        filename: "/api/patterns/shared.ts",
+        imports: [],
+      }],
+      ["old-shared-checkout", {
+        kind: "source",
+        code: "export {};",
+        filename: "/packages/patterns/shared.ts",
+        imports: [],
+      }],
+    ]);
+    const delegations = deriveModuleDelegations(previous, [
+      {
+        identity: "new-entry",
+        filename: "/packages/patterns/main.tsx",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+      {
+        identity: "new-shared",
+        filename: "/packages/patterns/shared.ts",
+        source: "export {};",
+        js: "export {};",
+        imports: [],
+      },
+    ], { previous: "old-entry", next: "new-entry" });
+    expect(delegations.get("new-entry")).toEqual(new Set(["old-entry"]));
+    expect(delegations.has("new-shared")).toBe(false);
+  });
+
   it("does not trust delegation metadata without compiler integrity", async () => {
     const oldIdentity = computeModuleHashes(moduleProgram("old")).get(
       "/writer.ts",
@@ -517,7 +717,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -539,7 +739,7 @@ describe("module identity delegation", () => {
       .toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -574,7 +774,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -585,7 +785,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -606,7 +806,7 @@ describe("module identity delegation", () => {
     expect(closure?.get(successor.identity)).toBeDefined();
 
     const allowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -620,7 +820,7 @@ describe("module identity delegation", () => {
     // Resolver-dependent source-file spelling is diagnostic once the
     // successor's authenticated delegation has established module authority.
     const differentFileAllowed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/resolver-prefix/writer.ts",
@@ -634,7 +834,7 @@ describe("module identity delegation", () => {
     // Delegation grants only module authority; it must not relax which binding
     // inside that module may write the protected field.
     const wrongPathDenied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -646,6 +846,104 @@ describe("module identity delegation", () => {
       "writeAuthorizedBy failed",
     );
     expect(protectedCell.get()).toEqual({ value: "different-file" });
+  });
+
+  it("refuses a successor writing through its own labeled schema until its delegation loads", async () => {
+    // The successor's schema restates the binding, which its own identity
+    // stamps, or restates only a label. Either way the field answers to the
+    // binding the document stores, stamped by the predecessor, so only the
+    // successor's loaded delegation lets it write.
+
+    const oldIdentity = computeModuleHashes(moduleProgram("old")).get(
+      "/writer.ts",
+    )!;
+    const successor = moduleFor(moduleProgram("new"));
+    const sourceTx = runtime.edit();
+    writeSourceDocs(
+      runtime,
+      space,
+      [successor],
+      successor.identity,
+      sourceTx,
+      new Map([[successor.identity, new Set([oldIdentity])]]),
+    );
+    runtime.prepareTxForCommit(sourceTx);
+    expect((await sourceTx.commit()).error).toBeUndefined();
+
+    const id = "module-delegation-labeled-successor";
+    const seed = await runtime.editWithRetry((tx) => {
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: oldIdentity,
+        sourceFile: "/writer.ts",
+        bindingPath: ["setValue"],
+      });
+      runtime.getCell(space, id, protectedSchema, tx).set({ value: "seed" });
+    });
+    expect(seed.error).toBeUndefined();
+
+    const label = { confidentiality: ["successor-label"] };
+    const restatesBinding = {
+      type: "object",
+      properties: {
+        value: {
+          type: "string",
+          ifc: {
+            ...label,
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "/writer.ts", path: ["setValue"] },
+            },
+          },
+        },
+      },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const labelOnly = {
+      type: "object",
+      properties: { value: { type: "string", ifc: label } },
+      required: ["value"],
+    } as unknown as JSONSchema;
+    const successorWrite = (schema: JSONSchema, value: string) =>
+      runtime.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, {
+          kind: "verified",
+          moduleIdentity: successor.identity,
+          sourceFile: "/writer.ts",
+          bindingPath: ["setValue"],
+        });
+        runtime.getCell(space, id, schema, tx).set({ value });
+      }, 0);
+
+    for (const schema of [restatesBinding, labelOnly]) {
+      const denied = await successorWrite(schema, "before-load");
+      expect(denied.error?.message).toContain("writeAuthorizedBy failed");
+    }
+    expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+      value: "seed",
+    });
+
+    const loadTx = runtime.edit();
+    const closure = await loadVerifiedSourceClosure(
+      runtime,
+      space,
+      successor.identity,
+      loadTx,
+    );
+    loadTx.abort?.("module-delegation source load complete");
+    expect(closure?.get(successor.identity)).toBeDefined();
+
+    for (
+      const [schema, value] of [[restatesBinding, "restated"], [
+        labelOnly,
+        "label-only",
+      ]] as const
+    ) {
+      const allowed = await successorWrite(schema, value);
+      expect(allowed.error).toBeUndefined();
+      expect(runtime.getCell(space, id, protectedSchema).get()).toEqual({
+        value,
+      });
+    }
   });
 
   it("does not import module authority from another space", async () => {
@@ -696,7 +994,7 @@ describe("module identity delegation", () => {
       protectedSchema,
     );
     const seed = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: oldIdentity,
         sourceFile: "/writer.ts",
@@ -707,7 +1005,7 @@ describe("module identity delegation", () => {
     expect(seed.error).toBeUndefined();
 
     const denied = await runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "verified",
         moduleIdentity: successor.identity,
         sourceFile: "/writer.ts",
@@ -856,43 +1154,6 @@ describe("module identity delegation", () => {
     // the piece's new pattern from memory, without the closure load that
     // would register v2's grant from v1. Events queue in the runtime that
     // sends them, so the observer's own handler run is what is checked.
-    const writerProgram = (version: string): RuntimeProgram => ({
-      main: "/app/main.tsx",
-      files: [
-        {
-          name: "/app/main.tsx",
-          contents: [
-            "/// <cts-enable />",
-            "import {",
-            "  handler,",
-            "  pattern,",
-            "  Writable,",
-            "  WriteAuthorizedBy,",
-            '} from "commonfabric";',
-            'import { revision } from "../shared/revision.ts";',
-            "",
-            "const setName = handler<",
-            "  { name: string },",
-            "  { name: Writable<string> }",
-            ">((event, state) => {",
-            '  state.name.set(revision + ":" + event.name);',
-            "});",
-            "",
-            "export default pattern<{ seed?: string }>(() => {",
-            "  const name = new Writable<",
-            "    WriteAuthorizedBy<string, typeof setName>",
-            '  >("initial").for("name");',
-            "  return { name, setName: setName({ name }) };",
-            "});",
-          ].join("\n"),
-        },
-        {
-          name: "/shared/revision.ts",
-          contents: `export const revision = ${JSON.stringify(version)};`,
-        },
-      ],
-    });
-
     let observer: Runtime;
     let v2: Pattern;
     let piece: Cell<any>;
@@ -1161,4 +1422,70 @@ describe("module identity delegation", () => {
       }
     });
   }
+  describe("a successor compiled under another root", () => {
+    // The piece runs the tree as the toolshed serves it, under
+    // `/api/patterns`; the update supplies the same tree from a checkout
+    // grounded at the repository root, under `/packages/patterns`. Every
+    // module spells differently and so has a different identity, and the
+    // successor's claims re-present each protected binding under its own
+    // stamp. The update has to commit, and the successor has to be able to
+    // write the field its predecessor stamped.
+    const servedRoot = "/api/patterns";
+    const checkoutRoot = "/packages/patterns";
+
+    let v2: Pattern;
+    let piece: Cell<any>;
+
+    beforeEach(async () => {
+      const v1 = await runtime.patternManager.compilePattern(
+        writerProgram("v1", servedRoot),
+        { space },
+      );
+      v2 = await runtime.patternManager.compilePattern(
+        writerProgram("v2", checkoutRoot),
+        { space },
+      );
+      piece = runtime.getCell(
+        space,
+        "module-delegation-rerooted-piece",
+        v1.resultSchema,
+      );
+      await runtime.runSynced(piece, v1, {});
+    });
+
+    const setName = async (name: string): Promise<unknown> => {
+      await runtime.editWithRetry((tx) =>
+        piece.key("setName").withTx(tx).send({ name })
+      );
+      await runtime.idle();
+      return await piece.key("name").pull();
+    };
+
+    it("commits the update and lets the successor write the field its predecessor stamped", async () => {
+      expect(await setName("before")).toBe("v1:before");
+
+      const expected = getPieceSourceSnapshot(
+        piece,
+        runtime.runner.sessionPatternPointerFor(piece),
+      )!;
+      const transition: PieceSourceTransition = {
+        revisionId: crypto.randomUUID(),
+        baseline: await preparePieceSourceTransitionBaseline(
+          runtime,
+          piece,
+          expected,
+        ),
+        timestamp: Date.now(),
+        operation: "edit",
+        origin: null,
+        expected,
+      };
+      await runtime.runSynced(piece, v2, {}, {
+        expectedPatternIdentity: expected.pattern,
+        pieceSourceTransition: transition,
+      });
+
+      expect(await setName("after")).toBe("v2:after");
+    });
+  });
 });

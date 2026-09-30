@@ -31,13 +31,12 @@
 //   consequences, a chain with NO acting session, and an acting
 //   session NOT connected to the computing space (LT3) all raise the
 //   runtime error, write no intent anywhere, and the charging wave
-//   settles; the refusal asserts sit behind deterministic
-//   kick-and-await-W barriers (OW26 root-caused and discharged in
-//   Phase 6: the recorded "wedge" was the reverted barriers' target
-//   arithmetic racing the loop's own derived echoes, plus an
-//   unrelated-doc input that never re-dirtied the thrower — the OW26
-//   pin test races inputs into the failure window and asserts the
-//   charged/settled/W-advances posture directly);
+//   settles; the refusal asserts sit behind the await-W barrier (OW26
+//   root-caused and discharged in Phase 6: the recorded "wedge" was the
+//   reverted barriers' target arithmetic racing the loop's own derived
+//   echoes, plus an unrelated-doc input that never re-dirtied the
+//   thrower — the OW26 pin test races inputs into the failure window
+//   and asserts the charged/settled/W-advances posture directly);
 // - enactment failure leaves the intent UN-ACKED (protocol.md §5's
 //   enact-then-ack ordering): the ack follows enactment SUCCESS, a
 //   failed enactment retracts the enacted-nonce record, and the entry
@@ -45,10 +44,21 @@
 // - an ISOLATED intent-seal failure requeues the owning event: the
 //   event is never consequenced-clean, and the re-drain re-issues the
 //   intent exactly once.
+//
+// Every wait here resolves on an event, never on a poll
+// (docs/development/waiting-in-tests.md). Three of them carry the file:
+// `settleServing` for anything the serving loop owes a fire or a
+// delegated append, `awaitReplica` for what only a push to a client
+// reports (an intent's arrival, a retirement), and a `defer()` resolved
+// from a callback the test already registers — a navigate callback, a
+// scheduler `onError`, the seal injector, the settle gate — for
+// everything client-side.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
@@ -65,8 +75,11 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { WaveAccumulator, waveRunContextOf } from "../src/executor/wave.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitOnDelivery } from "./support/wait-on-delivery.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import {
+  ArrivalLog,
+  awaitReplica,
+  settleServing as settleServingIn,
+} from "./support/serving-waits.ts";
 
 /** The settle-gate seam (see executor-events-down.test.ts): holds the
  * serving loop's settle so a test can dispose a client INSIDE the
@@ -81,10 +94,15 @@ class GatedStorageManager extends EmulatedStorageManager {
 
   settleGate: Promise<void> | undefined;
   settleGateWhen: (() => boolean) | undefined;
+  /** Resolves the first time a settle is actually held — the moment
+   * `settleGateWhen` selected. The event a test waits on to know the
+   * wave it armed the gate for has reached the gate. */
+  readonly settleGateEntered = defer<void>();
 
   override async inputSynced(): Promise<void> {
     await super.inputSynced();
     if (this.settleGate !== undefined && (this.settleGateWhen?.() ?? true)) {
+      this.settleGateEntered.resolve();
       await this.settleGate;
     }
   }
@@ -101,31 +119,45 @@ const sidecarIdsIn = (engine: Engine.Engine): string[] =>
     `SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'`,
   ).all() as Array<{ id: string }>).map((row) => row.id);
 
-/** The highest AUTHORED seq that wrote `docId` — the only seq class a
- * kick-and-await-W barrier may target (protocol.md §4: settled for a
- * client = W ≥ seq of its own AUTHORED commit). Deriving the target
- * from `Engine.serverSeq` instead is the OW26 trap: the loop's own
- * derived wave echoes ride the same counter, coverage never claims a
- * trailing echo on a quiet space (the advance is input-driven and
- * `#drainFeed` skips self-echoes), so a barrier that raced one froze
- * "deterministically" — the recorded wedge, root-caused Phase 6. */
-const authoredSeqOf = (engine: Engine.Engine, docId: string): number => {
-  const commits = Engine.selectCommitsSince(engine, {
-    fromSeq: 0,
-    limit: 1000,
-  });
-  let seq = 0;
-  for (const commit of commits) {
-    const commitClass = (commit as { commitClass?: string }).commitClass ??
-      (commit as { class?: string }).class;
-    if (commitClass !== "authored") continue;
-    if (
-      (commit.writes as Array<{ id: string }>).some((w) => w.id === docId)
-    ) {
-      seq = Math.max(seq, commit.seq);
-    }
+/** The event entries stored at one stream-events sidecar doc. */
+const streamEntriesIn = (
+  engine: Engine.Engine,
+  sidecarId: string,
+): NonNullable<StreamEventsDocValue["entries"]> =>
+  (Engine.read(engine, { id: sidecarId })?.value as
+    | StreamEventsDocValue
+    | undefined)?.entries ?? [];
+
+/** The counter a NAVIGATE_PATTERN handler increments, read from the
+ * ENGINE (0 when the doc has no value yet). */
+const handlerCounterIn = (engine: Engine.Engine, docId: string): number =>
+  (Engine.read(engine, { id: docId })?.value as { value?: number })?.value ?? 0;
+
+/** This file's binding of the shared settle barrier, over its own space. */
+const settleServing = (
+  engine: Engine.Engine,
+  runtime: Runtime,
+): Promise<number> => settleServingIn(engine, runtime, space);
+
+/** What a navigate callback recorded: every enacted target, and a
+ * promise per arrival. */
+class NavigationLog extends ArrivalLog<string> {
+  get targets(): string[] {
+    return this.entries;
   }
-  return seq;
+}
+
+/** The served run's error charges (`scheduler.onError`), with a promise
+ * that resolves on the first charge matching `pattern`. */
+const servedErrorLog = (pattern: RegExp) => {
+  const charges = new ArrivalLog<string>();
+  const matches = (text: string) => pattern.test(text);
+  return {
+    record: (error: unknown) => charges.record(String(error)),
+    /** Resolves on the first charge matching `pattern`. */
+    matched: charges.matching(matches),
+    matchCount: (): number => charges.count(matches),
+  };
 };
 
 /** The stored effects instance of one (principal, sessionId) — read
@@ -147,6 +179,35 @@ const intentsOf = (
 ): EffectIntentEntry[] => {
   const value = effectsInstanceOf(engine, principal, sessionId);
   return Array.isArray(value.entries) ? value.entries : [];
+};
+
+/** Whether one (principal, session) instance of the effects doc EXISTS
+ * at the store. Only the server's intent write or that session's own ack
+ * mints one, so its presence separates "drained after a full lifecycle"
+ * from "never touched". */
+const effectsInstanceExists = (
+  engine: Engine.Engine,
+  principal: string,
+  sessionId: string,
+): boolean =>
+  (engine.database.prepare(
+    `SELECT COUNT(*) AS n FROM head WHERE id = :id AND scope_key = :key`,
+  ).get({
+    id: SERVER_EXECUTION_EFFECTS_DOC_ID,
+    key: resolvePrincipalSessionKey(principal, sessionId),
+  }) as { n: number }).n > 0;
+
+/** The end of an intent's lifecycle at one instance: the instance was
+ * minted, and the retiring wave has drained it — entries AND marks. */
+const retiredInstance = (
+  engine: Engine.Engine,
+  principal: string,
+  sessionId: string,
+): boolean => {
+  if (!effectsInstanceExists(engine, principal, sessionId)) return false;
+  const value = effectsInstanceOf(engine, principal, sessionId);
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  return entries.length === 0 && Object.keys(value.acks ?? {}).length === 0;
 };
 
 /** A handler that returns navigateTo(TargetPage) — the canonical split
@@ -205,7 +266,9 @@ describe("Phase 4 client-effect channel", () => {
   let clientRuntime: Runtime;
   let extraManagers: EmulatedStorageManager[];
   let extraRuntimes: Runtime[];
-  let servingManager: GatedStorageManager | undefined;
+  /** Resolved by `createRuntime` with the serving runtime's manager: the
+   * construction hook is the event that says the serving side is up. */
+  let servingManagerUp: Deferred<GatedStorageManager>;
 
   const newHost = (
     policy?: ConstructorParameters<typeof ExecutorHost>[0]["policy"],
@@ -231,7 +294,7 @@ describe("Phase 4 client-effect channel", () => {
             serverExecution: true,
           },
         });
-        servingManager = manager;
+        servingManagerUp.resolve(manager);
         onRuntime?.(runtime);
         return {
           runtime,
@@ -248,7 +311,7 @@ describe("Phase 4 client-effect channel", () => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     extraManagers = [];
     extraRuntimes = [];
-    servingManager = undefined;
+    servingManagerUp = defer<GatedStorageManager>();
   });
 
   afterEach(async () => {
@@ -264,7 +327,7 @@ describe("Phase 4 client-effect channel", () => {
   const openClient = (
     signer: Identity = aliceSigner,
     options: {
-      navigations?: string[];
+      navigations?: NavigationLog;
       sessionId?: string;
 
       /** Custom navigate callback (wins over `navigations`) — the
@@ -291,7 +354,7 @@ describe("Phase 4 client-effect channel", () => {
         : options.navigations !== undefined
         ? {
           navigateCallback: (target) => {
-            options.navigations!.push(target.getAsNormalizedFullLink().id);
+            options.navigations!.record(target.getAsNormalizedFullLink().id);
           },
         }
         : {}),
@@ -334,52 +397,6 @@ describe("Phase 4 client-effect channel", () => {
     return { compiled, argument, result };
   };
 
-  /** The deterministic kick-and-await-W barrier (Phase 6, OW26's owed
-   * replacement for the bounded refusal-test drains): commit a fresh
-   * authored write and wait until the space's watermark covers ITS OWN
-   * authored seq — the settled contract exactly as a client uses it.
-   * The Phase-4 fixer built and reverted this barrier with
-   * `Engine.serverSeq`-derived targets; that arithmetic races the
-   * loop's own derived echo (see `authoredSeqOf`) and was the recorded
-   * OW26 "wedge". With authored-seq targets the barrier is safe — the
-   * probe sweep found no genuine contract stall at any input offset. */
-  const settleAnotherWaveFamily = async (
-    engine: Engine.Engine,
-    kickName: string,
-  ): Promise<void> => {
-    const kick = clientRuntime.getCell<{ n: number }>(
-      space,
-      kickName,
-      undefined,
-    );
-    await kick.sync();
-    const tx = clientRuntime.edit();
-    kick.withTx(tx).set({ n: Date.now() });
-    expect((await tx.commit()).error).toBeUndefined();
-    const kickDocId = kick.getAsNormalizedFullLink().id;
-    const kickSeq = authoredSeqOf(engine, kickDocId);
-    // Regression armor for the OW26 trap arithmetic: wait for the
-    // serving loop's trailing derived echo to land BEFORE computing
-    // the barrier target. Pre-echo, `serverSeq`-degraded arithmetic
-    // is correct BY ACCIDENT (serverSeq still equals the kick's own
-    // authored seq at that instant), which left the degradation green
-    // across the whole suite; with the echo landed, wrong-class
-    // arithmetic targets the echo seq — which coverage never claims
-    // on a quiet space — and the wait below times out red.
-    await waitUntil(
-      () => Engine.serverSeq(engine) > kickSeq,
-      `the trailing derived echo after the ${kickName} kick (seq ${kickSeq})`,
-    );
-    // Recomputed AFTER the echo: a no-op for correct (authored-class)
-    // arithmetic — the authored seq is stable — and the read that
-    // turns a serverSeq regression deterministically red.
-    const target = authoredSeqOf(engine, kickDocId);
-    await waitUntil(
-      () => (host!.spaceServer(space)?.watermark ?? 0) >= target,
-      `the watermark to cover the ${kickName} barrier kick (seq ${target})`,
-    );
-  };
-
   it("the served intent (T2 hops 1–4): fire → wave computes navigateTo → the §5 entry lands in the FIRING session's instance, issuedIn stamped, annotations addressing + acting", async () => {
     // HEADLESS (no navigate callback): the §5 entry these assertions
     // read stays unacked and durable. A client that CAN enact acks the
@@ -407,17 +424,10 @@ describe("Phase 4 client-effect channel", () => {
     await clientRuntime.storageManager.synced();
 
     const sessionId = clientManager.id;
-    // The wait wakes on the client's own delivery of the effects doc —
-    // the intent write fans out to the firing session — and reads the
-    // ENGINE, which holds the entry before any delivery of it.
-    await waitOnDelivery({
-      manager: clientManager,
-      wants: (_space, id, scope) =>
-        id === SERVER_EXECUTION_EFFECTS_DOC_ID && scope === "session",
-      predicate: () =>
-        intentsOf(engine, aliceSigner.did(), sessionId).length === 1,
-      label: "the intent to land in alice's session instance",
-    });
+    // Past the settle barrier the fire's wave has committed everything it
+    // owes, so the intent is either there or missing — never pending.
+    await settleServing(engine, clientRuntime);
+    expect(intentsOf(engine, aliceSigner.did(), sessionId).length).toBe(1);
     const [intent] = intentsOf(engine, aliceSigner.did(), sessionId);
 
     // T2.Q2: the §5 shape — nonce, kind navigate, a target link,
@@ -431,16 +441,9 @@ describe("Phase 4 client-effect channel", () => {
     ).get({ seq: intent.issuedIn }) as { class: string } | undefined;
     expect(issuedRow?.class).toBe("derived");
 
-    // The handler's consequence is visible whenever the entry is: the
-    // handler contribution seals before the intent tx it feeds, a wave
-    // batch applies in one store transaction (commitWave's contract),
-    // and the per-event fold withdraws the intent tx with a withdrawn
-    // handler contribution (the requeue tests pin both directions) —
-    // so the entry's visibility carries the consequence's.
-    const argumentDoc = Engine.read(engine, {
-      id: argument.getAsNormalizedFullLink().id,
-    });
-    expect((argumentDoc?.value as { value?: number })?.value).toBe(1);
+    // The handler's own consequence landed too (same wave family).
+    expect(handlerCounterIn(engine, argument.getAsNormalizedFullLink().id))
+      .toBe(1);
 
     // T2.Q1 + protocol §1: the intent write's annotation carries the
     // ADDRESSING (alice's session scope key) AND the acting identity
@@ -507,21 +510,15 @@ describe("Phase 4 client-effect channel", () => {
 
     const aliceSession = clientManager.id;
     const bobSession = bob.manager.id;
-    await waitUntil(
-      () => intentsOf(engine, aliceSigner.did(), aliceSession).length === 1,
-      "alice's multi-hop intent to land in HER instance",
-    );
+    await settleServing(engine, clientRuntime);
+    expect(intentsOf(engine, aliceSigner.did(), aliceSession).length).toBe(1);
     expect(intentsOf(engine, bobSigner.did(), bobSession).length).toBe(0);
 
     // Bob clicks his own: his intent lands in HIS instance; alice
     // still holds exactly hers.
     bobResult.key("first").send({});
-    await bob.runtime.idle();
-    await bob.runtime.storageManager.synced();
-    await waitUntil(
-      () => intentsOf(engine, bobSigner.did(), bobSession).length === 1,
-      "bob's intent to land in HIS instance",
-    );
+    await settleServing(engine, bob.runtime);
+    expect(intentsOf(engine, bobSigner.did(), bobSession).length).toBe(1);
     expect(intentsOf(engine, aliceSigner.did(), aliceSession).length).toBe(
       1,
     );
@@ -534,7 +531,7 @@ describe("Phase 4 client-effect channel", () => {
   });
 
   it("the client half (T2 hops 5–6): optimistic enactment converges by nonce (ONE navigation), the authored ack lands and is counted, and the next wave retires the entry with addressing-only annotations", async () => {
-    const navigations: string[] = [];
+    const navigations = new NavigationLog();
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
       aliceSigner,
       { navigations },
@@ -553,42 +550,34 @@ describe("Phase 4 client-effect channel", () => {
     result.key("go").send({});
 
     const sessionId = clientManager.id;
-    // The full lifecycle, in order: the intent LANDS in alice's
-    // instance… (transient-tolerant: intent → ack → retire can outrun
-    // the poll, so a drained-but-PRESENT instance with the ack counted
-    // is also completion — the sx2 gate's rule).
+    // The full lifecycle, in order. The client ENACTS (the callback is
+    // the event)…
+    await navigations.reached(1);
+    // …it ACKS — an authored write of its own mark, tracked async work,
+    // so draining the runtime and flushing its manager makes the ack
+    // durable at the store…
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    // …and the next wave RETIRES the acked entry, draining entries AND
+    // marks at an instance the intent write had already minted. That
+    // write comes back to this client as an ordinary push, which is the
+    // event the wait sleeps on; the watermark says nothing about
+    // retirement, which is the SpaceServer's own bookkeeping.
     let sampledNonce: string | undefined;
-    await waitUntil(
-      () => {
-        const intents = intentsOf(engine, aliceSigner.did(), sessionId);
-        if (intents.length === 1) {
-          sampledNonce = intents[0].nonce;
-          return true;
-        }
-        const value = effectsInstanceOf(engine, aliceSigner.did(), sessionId);
-        return Object.keys(value).length > 0 &&
-          (host!.stats().effectAcks ?? 0) >= 1;
-      },
-      "the intent to land",
-    );
-    // …then the client acks and the next wave RETIRES the acked entry
-    // (the instance drains — entries AND marks).
-    await waitUntil(
-      () => {
-        const value = effectsInstanceOf(engine, aliceSigner.did(), sessionId);
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0;
-      },
-      "the ack to land and the entry to retire",
-    );
+    await awaitReplica(clientManager, () => {
+      const intents = intentsOf(engine, aliceSigner.did(), sessionId);
+      if (intents.length === 1) sampledNonce = intents[0].nonce;
+      return retiredInstance(engine, aliceSigner.did(), sessionId);
+    });
     // The enacted-nonce record converged: exactly ONE distinct nonce
     // was ever recorded this life — the optimistic record and the
     // authoritative intent shared it (a divergent pair records two).
     // UNCONDITIONAL (independent review NOTE-e): the count witnesses
-    // convergence even when the poll never sampled the transient
+    // nonce AGREEMENT even when the wait never sampled the transient
     // intent; the sampled equality below is the opportunistic
-    // stronger half.
+    // stronger half. It does not witness a single enactment — the
+    // record is a set, so two enactments of one nonce leave the count
+    // at one. The navigation count below is what holds that.
     expect(clientRuntime.effectsChannel?.enactedNonceCount).toBe(1);
     if (sampledNonce !== undefined) {
       expect(clientRuntime.effectsChannel?.hasEnacted(sampledNonce)).toBe(
@@ -599,9 +588,10 @@ describe("Phase 4 client-effect channel", () => {
     // Exactly ONE navigation: the optimistic enactment carried the same
     // nonce the authoritative intent arrived with — the channel
     // converged instead of re-enacting (T2.Q7), and retirement did not
-    // resurrect anything.
-    await clientRuntime.idle();
-    expect(navigations.length).toBe(1);
+    // resurrect anything. A resurrected entry would ride a wave, so the
+    // settle barrier is ordered after any second enactment.
+    await settleServing(engine, clientRuntime);
+    expect(navigations.targets.length).toBe(1);
 
     // The ack was counted (serving-loop.md §7's effectAcks — the
     // amplification metric's exclusion).
@@ -642,7 +632,7 @@ describe("Phase 4 client-effect channel", () => {
     // tagged attempt-minted), and the authoritative intent is the ONE
     // navigation. Before the fix: two navigations, two distinct
     // targets, per click.
-    const navigations: string[] = [];
+    const navigations = new NavigationLog();
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
       aliceSigner,
       { navigations },
@@ -659,35 +649,28 @@ describe("Phase 4 client-effect channel", () => {
 
     host = newHost();
     result.key("first").send({});
-    // BOUNDED waits only past this point: at the pre-fix HEAD this
-    // journey does not merely double-navigate — the client runtime
-    // LIVELOCKS (idle() never resolves; the serving side starves into
-    // repeated lease-renewal failures), so an unbounded idle()/synced()
-    // await here wedges the whole suite instead of failing.
 
     const sessionId = clientManager.id;
-    // The authoritative intent lands, alice's channel enacts + acks,
-    // and the next wave retires it (transient-tolerant, as in the
-    // client-half test: a drained instance after at least one
-    // navigation is completion too).
-    await waitUntil(
-      () => {
-        if (navigations.length === 0) return false;
-        const value = effectsInstanceOf(engine, aliceSigner.did(), sessionId);
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0 &&
-          (host!.stats().effectAcks ?? 0) >= 1;
-      },
-      "the cascade intent to land, enact, ack, and retire",
+    // The authoritative intent lands and alice's channel enacts it…
+    await navigations.reached(1);
+    // …acks it…
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    // …and the next wave retires the acked entry.
+    await awaitReplica(
+      clientManager,
+      () => retiredInstance(engine, aliceSigner.did(), sessionId),
     );
-    // Let any straggler enactment (the double-navigation defect) land
-    // before counting — a fixed drain, never idle() (see above).
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(host!.stats().effectAcks).toBeGreaterThanOrEqual(1);
+    // A straggler enactment — the double-navigation defect — follows a
+    // second intent delivery, which follows a wave; the settle barrier
+    // is ordered after both, and draining the runtime is ordered after
+    // the callback a delivery would have run.
+    await settleServing(engine, clientRuntime);
 
     // EXACTLY one navigation, one distinct target (the acceptance).
-    expect(navigations.length).toBe(1);
-    expect(new Set(navigations).size).toBe(1);
+    expect(navigations.targets.length).toBe(1);
+    expect(new Set(navigations.targets).size).toBe(1);
 
     cancelDemand();
   });
@@ -735,33 +718,35 @@ describe("Phase 4 client-effect channel", () => {
       kick.withTx(tx).set({ n: 1 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => servingManager !== undefined,
-      "the serving runtime to come up",
-    );
+    const serving = await servingManagerUp.promise;
     const gate = Promise.withResolvers<void>();
-    servingManager!.settleGate = gate.promise;
-    servingManager!.settleGateWhen = () => sidecarIdsIn(engine).length > 0;
+    serving.settleGate = gate.promise;
+    // Hold the settle of the wave that DRAINED the event, not whichever
+    // settle happens to be running when the append lands: the count
+    // rises at queue time, and the settle that follows it is the one
+    // that runs the handler, the deferred start, the builtin and the
+    // intent seal.
+    serving.settleGateWhen = () => (host!.stats().events.processed ?? 0) >= 1;
     try {
       result.key("go").send({});
-      // The event's append is durable — the gate predicate is armed, so
-      // the wave that drains it holds open at its settle while the
-      // handler has already run and the intent tx has sealed into it.
-      await waitUntil(
-        () => sidecarIdsIn(engine).length === 1,
-        "the fired append to land",
+      // The event's append is durable once the firing runtime has
+      // drained and its manager has flushed — the gate predicate is
+      // armed, so the wave that drains the event holds open at its
+      // settle.
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+      expect(sidecarIdsIn(engine).length).toBe(1);
+      // The held wave reached its settle, which is where the drain RAN
+      // (events.processed counts at queue time; the settle then runs the
+      // handler, the deferred start, the builtin, and the intent seal to
+      // quiescence BEFORE the gated input barrier) — without this the
+      // intrusion below can land as ordinary next-wave input and no
+      // conflict ever happens (a vacuously green schedule).
+      await withStuckNet(
+        serving.settleGateEntered.promise,
+        "a settle to reach the armed gate",
       );
-      // The drain RAN inside the held wave (events.processed counts at
-      // queue time; the settle then runs the handler, the deferred
-      // start, the builtin, and the intent seal to quiescence BEFORE
-      // the gated input barrier) — without this the intrusion below
-      // can land as ordinary next-wave input and no conflict ever
-      // happens (a vacuously green schedule).
-      await waitUntil(
-        () => (host!.stats().events.processed ?? 0) >= 1,
-        "the held wave to drain the event",
-      );
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(host!.stats().events.processed).toBeGreaterThanOrEqual(1);
 
       // The mid-wave intrusion: an authored whole-doc set of the
       // argument doc the handler writes (`value.set(get() + 1)`). A
@@ -786,49 +771,36 @@ describe("Phase 4 client-effect channel", () => {
     } finally {
       // ALWAYS release (a throw above with the gate still armed would
       // wedge afterEach's host.close() behind the held settle).
-      servingManager!.settleGate = undefined;
-      servingManager!.settleGateWhen = undefined;
+      serving.settleGate = undefined;
+      serving.settleGateWhen = undefined;
       gate.resolve();
     }
 
-    // The REQUEUE ENGAGED (the deterministic schedule witness): the
-    // wave-2 re-drain queues the event again, so the processed count
-    // reaches 2 — without a conflict it stays 1 and this times out (a
-    // schedule failure, distinct from the defect under test).
-    await waitUntil(
-      () => (host!.stats().events.processed ?? 0) >= 2,
-      "the requeued event to re-drain in wave 2",
-    );
-    // The handler re-ran OVER the intrusion: 100 + 1.
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) === 101;
-      },
-      "the wave-2 re-run to land the handler consequence over the intrusion",
+    // The wave-2 re-run re-issues the intent, into an instance this
+    // session's manager watches: its push is the event.
+    const sessionId = clientManager.id;
+    await awaitReplica(
+      clientManager,
+      () => intentsOf(engine, aliceSigner.did(), sessionId).length >= 1,
     );
 
-    // The re-issued intent lands (alice is headless here, so nothing
-    // acks it and the entry persists — stable to read).
-    const sessionId = clientManager.id;
-    await waitUntil(
-      () => intentsOf(engine, aliceSigner.did(), sessionId).length === 1,
-      "the wave-2 re-run to re-issue the intent",
-      15_000,
-    );
-    // Exactly once: the engine's stored-nonce dedupe absorbs any
-    // further re-append; give the loop a settle window and re-count.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // The REQUEUE ENGAGED (the deterministic schedule witness): the
+    // wave-2 re-drain queues the event again, so the processed count
+    // reaches 2 — without a conflict it stays 1.
+    expect(host!.stats().events.processed).toBeGreaterThanOrEqual(2);
+    // The handler re-ran OVER the intrusion: 100 + 1.
+    expect(handlerCounterIn(engine, argument.getAsNormalizedFullLink().id))
+      .toBe(101);
+
+    // Exactly once: the store's nonce dedupe absorbs any further
+    // re-append, and the settle barrier is ordered after the wave one
+    // would have ridden.
+    await settleServing(engine, clientRuntime);
     expect(intentsOf(engine, aliceSigner.did(), sessionId).length).toBe(1);
     // The event consequenced exactly once too (wave 2's mark).
-    const sidecarId = sidecarIdsIn(engine)[0];
-    const stored = (Engine.read(engine, { id: sidecarId })?.value ??
-      {}) as StreamEventsDocValue;
     expect(
-      (stored.entries ?? []).filter((entry) => entry?.consequenced === true)
-        .length,
+      streamEntriesIn(engine, sidecarIdsIn(engine)[0])
+        .filter((entry) => entry?.consequenced === true).length,
     ).toBe(1);
 
     cancelDemand();
@@ -851,6 +823,7 @@ describe("Phase 4 client-effect channel", () => {
     // one-shot) lands the intent exactly once — the store-owned
     // idempotency M2 established.
     const realSeal = WaveAccumulator.prototype.seal;
+    const sealFailureInjected = defer<void>();
     let injected = 0;
     WaveAccumulator.prototype.seal = function (
       tx: Parameters<typeof realSeal>[0],
@@ -862,6 +835,7 @@ describe("Phase 4 client-effect channel", () => {
         )
       ) {
         injected += 1;
+        sealFailureInjected.resolve();
         return Promise.resolve({
           error: {
             name: "StorageTransactionAborted",
@@ -889,34 +863,32 @@ describe("Phase 4 client-effect channel", () => {
       host = newHost();
       result.key("go").send({});
       // The injector fired: the first intent seal failed in isolation.
-      await waitUntil(() => injected === 1, "the injected seal failure");
-      // The requeue engages: the event re-drains (processed reaches 2).
-      await waitUntil(
-        () => (host!.stats().events.processed ?? 0) >= 2,
-        "the requeued event to re-drain",
-      );
-      // The re-issued intent lands exactly once (headless client:
-      // nothing acks it, so the entry is stable to read).
+      await sealFailureInjected.promise;
+      // The re-drain re-runs handler and builtin, and the second seal
+      // lands the intent — which reaches this session's replica as a
+      // push. The watermark is not the wait here: the wave that
+      // requeued the event still committed, and its advance covers the
+      // fire's own authored seq.
       const sessionId = clientManager.id;
-      await waitUntil(
-        () => intentsOf(engine, aliceSigner.did(), sessionId).length === 1,
-        "the re-drain to re-issue the intent",
+      await awaitReplica(
+        clientManager,
+        () => intentsOf(engine, aliceSigner.did(), sessionId).length >= 1,
       );
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // The requeue engaged: the event re-drained (processed reaches 2).
+      expect(host!.stats().events.processed).toBeGreaterThanOrEqual(2);
+      // Exactly once: the store's nonce dedupe absorbs any further
+      // re-append, and the settle barrier is ordered after the wave one
+      // would have ridden.
+      await settleServing(engine, clientRuntime);
       expect(intentsOf(engine, aliceSigner.did(), sessionId).length).toBe(1);
       // The handler's consequence landed exactly once NET (the requeue
       // withdrew the first attempt's writes with the intent).
-      const doc = Engine.read(engine, {
-        id: argument.getAsNormalizedFullLink().id,
-      });
-      expect((doc?.value as { value?: number })?.value).toBe(1);
+      expect(handlerCounterIn(engine, argument.getAsNormalizedFullLink().id))
+        .toBe(1);
       // The event consequenced exactly once (wave 2's mark).
-      const sidecarId = sidecarIdsIn(engine)[0];
-      const stored = (Engine.read(engine, { id: sidecarId })?.value ??
-        {}) as StreamEventsDocValue;
       expect(
-        (stored.entries ?? []).filter((entry) => entry?.consequenced === true)
-          .length,
+        streamEntriesIn(engine, sidecarIdsIn(engine)[0])
+          .filter((entry) => entry?.consequenced === true).length,
       ).toBe(1);
       // The failure was counted (§7's servedIntentSealFailures).
       expect(host!.stats().servedIntentSealFailures).toBe(1);
@@ -938,7 +910,7 @@ describe("Phase 4 client-effect channel", () => {
     // the resume token: the registry refuses a token-less re-open by
     // design. That adapter is the OW20-adjacent follow-up; this test
     // pins the channel's half of the journey.)
-    const firstLife: string[] = [];
+    const firstLife = new NavigationLog();
     const pinnedSession = crypto.randomUUID();
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
       aliceSigner,
@@ -972,34 +944,31 @@ describe("Phase 4 client-effect channel", () => {
     // stays OPEN while the first runtime life optimistically enacts and
     // is then disposed — the intent commits only after the reload, so
     // no ack can precede it (the deterministic LT8 window).
-    await waitUntil(
-      () => servingManager !== undefined,
-      "the serving runtime to come up",
-    );
+    const serving = await servingManagerUp.promise;
     const gate = Promise.withResolvers<void>();
-    servingManager!.settleGate = gate.promise;
-    servingManager!.settleGateWhen = () => sidecarIdsIn(engine).length > 0;
+    serving.settleGate = gate.promise;
+    serving.settleGateWhen = () => sidecarIdsIn(engine).length > 0;
 
     result.key("go").send({});
     // The OPTIMISTIC enactment (speculation.md §2) fires client-side
     // while the authoritative wave is held open.
-    await waitUntil(
-      () => firstLife.length === 1,
-      "the optimistic enactment in the first life",
-    );
+    await firstLife.reached(1);
     cancelDemand();
     // RELOAD before intent-and-ack: dispose the RUNTIME (the overlay,
     // the channel, and the enacted-nonce record die with it — LT8's
     // reload-wiped overlay); `closeStorage: false` keeps the manager
     // and its session alive for the second life. Then release the wave.
     await clientRuntime.dispose({ closeStorage: false });
-    servingManager!.settleGate = undefined;
-    servingManager!.settleGateWhen = undefined;
+    serving.settleGate = undefined;
+    serving.settleGateWhen = undefined;
     gate.resolve();
 
-    await waitUntil(
+    // The released wave commits the intent, which reaches the session's
+    // still-open manager as a push — the runtime is gone, the manager
+    // and its subscription are not.
+    await awaitReplica(
+      clientManager,
       () => intentsOf(engine, aliceSigner.did(), pinnedSession).length === 1,
-      "the intent to commit after the reload",
     );
 
     // Life 2: a fresh Runtime over the persisted session — fresh
@@ -1007,41 +976,30 @@ describe("Phase 4 client-effect channel", () => {
     // construction sweep covers the already-open space), re-reads the
     // unacked intent, and RE-ENACTS — LT8's accepted window — then
     // acks once; the next wave retires once.
-    const secondLife: string[] = [];
+    const secondLife = new NavigationLog();
     clientRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: clientManager,
       experimental: { serverExecution: true },
       navigateCallback: (target) => {
-        secondLife.push(target.getAsNormalizedFullLink().id);
+        secondLife.record(target.getAsNormalizedFullLink().id);
       },
     });
 
-    await waitUntil(
-      () => secondLife.length === 1,
-      "the second life to re-enact the unacked intent",
-    );
-    await waitUntil(
-      () => {
-        const value = effectsInstanceOf(
-          engine,
-          aliceSigner.did(),
-          pinnedSession,
-        );
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0;
-      },
-      "the ack to land and the entry to retire",
+    await secondLife.reached(1);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitReplica(
+      clientManager,
+      () => retiredInstance(engine, aliceSigner.did(), pinnedSession),
     );
 
     // Exactly-once per nonce WITHIN each life; the re-enactment took a
-    // reload (LT8's bound: enactments ≤ 1 + reloads). No further
-    // navigation after retirement.
-    await clientRuntime.idle();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(firstLife.length).toBe(1);
-    expect(secondLife.length).toBe(1);
+    // reload (LT8's bound: enactments ≤ 1 + reloads). A navigation after
+    // retirement would follow a further delivery, and so a further wave.
+    await settleServing(engine, clientRuntime);
+    expect(firstLife.targets.length).toBe(1);
+    expect(secondLife.targets.length).toBe(1);
   });
 
   it("optimistic-flush failure retracts the record (owner P1-1): a throwing navigateCallback yields NO ack for the failed enactment — the authoritative delivery re-enacts and only then acks", async () => {
@@ -1055,7 +1013,8 @@ describe("Phase 4 client-effect channel", () => {
     // flush retracts the enacted-nonce record, so the authoritative
     // delivery re-enacts (the callback has recovered) and the ack
     // follows the SUCCESSFUL enactment.
-    const navigations: string[] = [];
+    const navigations = new NavigationLog();
+    const flushFailed = defer<void>();
     let failuresRemaining = 1;
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
       aliceSigner,
@@ -1063,9 +1022,10 @@ describe("Phase 4 client-effect channel", () => {
         navigate: (target) => {
           if (failuresRemaining > 0) {
             failuresRemaining -= 1;
+            flushFailed.resolve();
             throw new Error("enactment failed (test-injected)");
           }
-          navigations.push(target.getAsNormalizedFullLink().id);
+          navigations.record(target.getAsNormalizedFullLink().id);
         },
       },
     ));
@@ -1081,29 +1041,20 @@ describe("Phase 4 client-effect channel", () => {
     host = newHost();
     result.key("go").send({});
     // The optimistic flush consumes the injected failure...
-    await waitUntil(
-      () => failuresRemaining === 0,
-      "the optimistic flush to fail",
-    );
+    await flushFailed.promise;
     // ...the authoritative intent lands on the channel, is re-enacted
     // (the callback now works), acked, and retired — exactly ONE
     // successful navigation end to end.
-    await waitUntil(
-      () => navigations.length === 1,
-      "the authoritative delivery to re-enact after the failed flush",
-    );
+    await navigations.reached(1);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
     const sessionId = clientManager.id;
-    await waitUntil(
-      () => {
-        const value = effectsInstanceOf(engine, aliceSigner.did(), sessionId);
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0;
-      },
-      "the ack to follow the successful enactment and the entry to retire",
+    await awaitReplica(
+      clientManager,
+      () => retiredInstance(engine, aliceSigner.did(), sessionId),
     );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(navigations.length).toBe(1);
+    await settleServing(engine, clientRuntime);
+    expect(navigations.targets.length).toBe(1);
 
     cancelDemand();
   });
@@ -1141,14 +1092,13 @@ describe("Phase 4 client-effect channel", () => {
 
     host = newHost();
     result.key("go").send({});
-    await waitUntil(
-      () => intentsOf(engine, aliceSigner.did(), pinnedSession).length === 1,
-      "the intent to land unacked (headless first life)",
-    );
+    await settleServing(engine, clientRuntime);
+    expect(intentsOf(engine, aliceSigner.did(), pinnedSession).length).toBe(1);
     cancelDemand();
 
     // Life 2 over the same session: a callback that fails once.
-    const navigations: string[] = [];
+    const navigations = new NavigationLog();
+    const reReadFailed = defer<void>();
     let failuresRemaining = 1;
     await clientRuntime.dispose({ closeStorage: false });
     clientRuntime = new Runtime({
@@ -1158,26 +1108,27 @@ describe("Phase 4 client-effect channel", () => {
       navigateCallback: (target) => {
         if (failuresRemaining > 0) {
           failuresRemaining -= 1;
+          reReadFailed.resolve();
           throw new Error("enactment failed (test-injected)");
         }
-        navigations.push(target.getAsNormalizedFullLink().id);
+        navigations.record(target.getAsNormalizedFullLink().id);
       },
     });
     // The resubscribe re-read enacts and FAILS.
-    await waitUntil(
-      () => failuresRemaining === 0,
-      "the second life's re-read enactment to fail",
-    );
-    // The entry survives UN-ACKED: nothing acked a failed enactment,
-    // so no retirement can consume it (bounded settle, then the
-    // store's truth).
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await reReadFailed.promise;
+    // The entry survives UN-ACKED. The thing being ruled out is an ack:
+    // it would be this runtime's own tracked async commit, so draining
+    // the runtime and flushing its manager is ordered after one, and the
+    // settle barrier is ordered after the wave a landed ack would have
+    // retired the entry in. With the ack marks empty below, no
+    // retirement was ever owed.
+    await settleServing(engine, clientRuntime);
     {
       const value = effectsInstanceOf(engine, aliceSigner.did(), pinnedSession);
       const entries = Array.isArray(value.entries) ? value.entries : [];
       expect(entries.length).toBe(1);
       expect(Object.keys(value.acks ?? {})).toEqual([]);
-      expect(navigations.length).toBe(0);
+      expect(navigations.targets.length).toBe(0);
     }
     // The retry delivery: an own-instance authored touch (the
     // session's write authority over its own instance) pushes the
@@ -1193,25 +1144,15 @@ describe("Phase 4 client-effect channel", () => {
       }).withTx(tx).set(1);
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => navigations.length === 1,
-      "the retry delivery to enact after the callback recovered",
+    await navigations.reached(1);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitReplica(
+      clientManager,
+      () => retiredInstance(engine, aliceSigner.did(), pinnedSession),
     );
-    await waitUntil(
-      () => {
-        const value = effectsInstanceOf(
-          engine,
-          aliceSigner.did(),
-          pinnedSession,
-        );
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0;
-      },
-      "the ack to land after the successful retry and the entry to retire",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(navigations.length).toBe(1);
+    await settleServing(engine, clientRuntime);
+    expect(navigations.targets.length).toBe(1);
   });
 
   it("the receipt-race divert pin (review MINOR-3): the flag-ON client's navigate-deferred start commits NOTHING authored — zero authored-class commits ever touch the served navigation's target doc", async () => {
@@ -1227,7 +1168,7 @@ describe("Phase 4 client-effect channel", () => {
     // derived-class); with it neutralized, the client's deferred start
     // ALWAYS commits the result pattern's docs authored — win or lose
     // the race — and the count goes positive.
-    const navigations: string[] = [];
+    const navigations = new NavigationLog();
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
       aliceSigner,
       { navigations },
@@ -1244,47 +1185,21 @@ describe("Phase 4 client-effect channel", () => {
     host = newHost();
     result.key("go").send({});
     const sessionId = clientManager.id;
-    let target: string | undefined;
-    // PRE-EXISTING FLAKE FIX (found by W3.1's full-suite gate;
-    // attribution: red 1/10 at the PRE-S1 base e386a01be under load,
-    // same timeout — not an S1 behavior change): this poll raced the
-    // DESIGNED enact→ack→retire pipeline. The client channel enacts
-    // the pushed intent immediately, acks (an authored commit), and
-    // the next wave RETIRES the entry — the entry's engine lifetime is
-    // one push round trip plus one wave (~30–80 ms), so a 20-ms poll
-    // sometimes never observes the live entry. The intent's engine
-    // OBSERVABLE is therefore either the live entry, or the RETIRED
-    // state: the effects doc's session instance EXISTS (only the
-    // server's intent write creates it) with the entry list already
-    // pruned and the enactment recorded. The optimistic (speculative)
-    // enactment alone must NOT satisfy the wait — it fires before any
-    // server work — hence the instance-head witness, and the target's
-    // served-create is separately awaited below either way.
-    const effectsInstanceExists = () =>
-      (engine.database.prepare(
-        `SELECT COUNT(*) AS n FROM head WHERE id = :id AND scope_key = :key`,
-      ).get({
-        id: SERVER_EXECUTION_EFFECTS_DOC_ID,
-        key: resolvePrincipalSessionKey(aliceSigner.did(), sessionId),
-      }) as { n: number }).n > 0;
-    await waitUntil(
-      () => {
-        const intents = intentsOf(engine, aliceSigner.did(), sessionId);
-        if (intents.length === 1) {
-          target = String(intents[0].args?.target?.id ?? "");
-          return true;
-        }
-        if (navigations.length >= 1 && effectsInstanceExists()) {
-          target = navigations[0];
-          return true;
-        }
-        return false;
-      },
-      "the served intent to land (live entry, or retired with the " +
-        "instance minted and the enactment recorded)",
-    );
-    await clientRuntime.idle();
-    await clientRuntime.storageManager.synced();
+    // The enact→ack→retire pipeline is designed to be fast: the entry's
+    // engine lifetime is one push round trip plus one wave, so reading
+    // the live entry is not something to wait for. Wait for the
+    // enactment instead — the callback names the target the client
+    // navigated to, and the converged nonce makes that the served
+    // intent's target — and then for the settle barrier, which is
+    // ordered after the wave that wrote both the intent and the
+    // target's served create. The optimistic enactment alone would not
+    // do: it fires before any server work.
+    await navigations.reached(1);
+    await settleServing(engine, clientRuntime);
+    expect(
+      effectsInstanceExists(engine, aliceSigner.did(), sessionId),
+    ).toBe(true);
+    const target = navigations.targets[0];
 
     // THE STAMP WITNESS (deterministic): the client half diverted
     // exactly TWO event-handler-kind seals — the handler's speculative
@@ -1299,23 +1214,18 @@ describe("Phase 4 client-effect channel", () => {
     expect(clientRuntime.speculationOverlay?.eventEchoSealCount).toBe(2);
 
     // Non-vacuity: the target doc EXISTS, created server-side
-    // (derived-class revisions present)… — awaited, not point-read:
-    // when the wait above observed the RETIRED state via the enacted
-    // navigation, the optimistic enactment can precede the serving
-    // side's own create by a beat (same flake-fix as above).
-    const readTargetRevisions = () =>
-      engine.database.prepare(
-        `SELECT c.class AS class, COUNT(*) AS n
+    // (derived-class revisions present). The settle barrier already
+    // covered the wave that created it — the optimistic enactment can
+    // precede that create by a beat, and the barrier is what waits it
+    // out.
+    const targetRevisions = engine.database.prepare(
+      `SELECT c.class AS class, COUNT(*) AS n
        FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
        WHERE r.id = :id GROUP BY c.class`,
-      ).all({ id: target }) as Array<{ class: string; n: number }>;
-    await waitUntil(
-      () =>
-        readTargetRevisions().filter((row) => row.class === "derived")
-          .length > 0,
-      "the target's served (derived-class) create to land",
-    );
-    const targetRevisions = readTargetRevisions();
+    ).all({ id: target }) as Array<{ class: string; n: number }>;
+    expect(
+      targetRevisions.filter((row) => row.class === "derived").length,
+    ).toBeGreaterThan(0);
     // …and NOT ONE of its revisions rode an authored-class commit: the
     // client's navigate-deferred start diverted (protocol.md §1's
     // "client commits nothing but intent" posture) — the belt over the
@@ -1336,8 +1246,8 @@ describe("Phase 4 client-effect channel", () => {
     // channel must not enact s1's intent (no navigation) and must not
     // ack it (an ack is an authored write into the ACKER's OWN
     // instance — a stray s2 ack would materialize s2's instance).
-    const s1Navigations: string[] = [];
-    const s2Navigations: string[] = [];
+    const s1Navigations = new NavigationLog();
+    const s2Navigations = new NavigationLog();
     const s1Session = crypto.randomUUID();
     const s2Session = crypto.randomUUID();
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
@@ -1374,60 +1284,34 @@ describe("Phase 4 client-effect channel", () => {
     host = newHost();
     // s1 clicks: intent → s1's instance; s1 enacts + acks; retirement.
     result.key("go").send({});
-    await waitUntil(
-      () => {
-        if (s1Navigations.length === 0) return false;
-        const value = effectsInstanceOf(engine, aliceSigner.did(), s1Session);
-        const entries = Array.isArray(value.entries) ? value.entries : [];
-        const acks = value.acks ?? {};
-        return entries.length === 0 && Object.keys(acks).length === 0;
-      },
-      "s1's intent to land, enact, ack, and retire",
+    await s1Navigations.reached(1);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitReplica(
+      clientManager,
+      () => retiredInstance(engine, aliceSigner.did(), s1Session),
     );
-    await s2.runtime.idle();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // A stray s2 enactment would be s2's own tracked async work, and a
+    // stray s2 ack an authored commit of its own; draining s2 and
+    // settling the space is ordered after both.
+    await settleServing(engine, s2.runtime);
 
     // The twin: s2 never navigated, never recorded an enactment, and
     // its OWN instance was never materialized by a stray ack.
-    expect(s2Navigations.length).toBe(0);
+    expect(s2Navigations.targets.length).toBe(0);
     expect(s2.runtime.effectsChannel?.enactedNonceCount).toBe(0);
     const s2Value = effectsInstanceOf(engine, aliceSigner.did(), s2Session);
     expect(Array.isArray(s2Value.entries) ? s2Value.entries : []).toEqual([]);
     expect(Object.keys(s2Value.acks ?? {})).toEqual([]);
 
     // Liveness (the twin is not vacuous): s2's OWN fire navigates on
-    // s2 and lands in s2's instance lifecycle. The serving drain can
-    // transiently DEFER a fresh append behind a lagging sidecar view
-    // (the pre-existing event-view-lag arm; its retry is input-driven
-    // and re-syncs per attempt), and this space is otherwise quiet —
-    // so nudge the loop with benign authored kicks while waiting, the
-    // same recovery any real space gets from ambient traffic.
+    // s2 and lands in s2's instance lifecycle.
     s2Result.key("go").send({});
-    {
-      const kick = clientRuntime.getCell<{ n: number }>(
-        space,
-        "twin-drain-kick",
-        undefined,
-      );
-      await kick.sync();
-      const deadline = Date.now() + 20_000;
-      let nudges = 0;
-      while (s2Navigations.length === 0) {
-        if (Date.now() > deadline) {
-          throw new Error("timed out waiting for s2's own fire to enact");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        if (s2Navigations.length === 0 && nudges < 8) {
-          nudges += 1;
-          const tx = clientRuntime.edit();
-          kick.withTx(tx).set({ n: nudges });
-          await tx.commit();
-        }
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    // …and s1 stayed at exactly its own single navigation.
-    expect(s1Navigations.length).toBe(1);
+    await s2Navigations.reached(1);
+    // …and s1 stayed at exactly its own single navigation: a second one
+    // would follow a second delivery, and so a further wave.
+    await settleServing(engine, clientRuntime);
+    expect(s1Navigations.targets.length).toBe(1);
 
     cancelDemand();
   });
@@ -1496,11 +1380,9 @@ describe("Phase 4 client-effect channel", () => {
 
     // Capture served-run errors from construction (before any wave):
     // the §4 error must be CHARGED to the run, not merely logged.
-    const servedErrors: unknown[] = [];
+    const servedErrors = servedErrorLog(/no firing-event context/);
     host = newHost(undefined, (runtime) => {
-      runtime.scheduler.onError((error) => {
-        servedErrors.push(error);
-      });
+      runtime.scheduler.onError(servedErrors.record);
     });
     // Kick the serving side (activation + demand): an authored write.
     {
@@ -1515,28 +1397,14 @@ describe("Phase 4 client-effect channel", () => {
       expect((await tx.commit()).error).toBeUndefined();
     }
     // The §4 runtime error is raised and charged to the served run.
-    await waitUntil(
-      () =>
-        servedErrors.some((error) =>
-          /no firing-event context/.test(String(error))
-        ),
-      "the builtins.md §4 no-context error to be charged to the run",
-    );
-    // The charging wave settles (the watermark advances past the
-    // kick): the throw did not wedge the wave that raised it.
-    await waitUntil(
-      () => (host!.spaceServer(space)?.watermark ?? 0) > 0,
-      "the serving loop to settle the kick",
-    );
-    // The deterministic kick-and-await-W barrier (OW26 RETIRED the
-    // bounded 300 ms drain, Phase 6): a fresh authored wave family
-    // settles — W covers its own authored seq — before the absence
-    // assert, so a late intent write could not hide behind a fixed
-    // window. Safe now that the barrier targets AUTHORED seqs; the
-    // reverted Phase-4 barriers froze on `serverSeq`-derived targets
-    // that included the loop's own derived echoes (the recorded
-    // "wedge", root-caused Phase 6 — see authoredSeqOf).
-    await settleAnotherWaveFamily(engine, "noctx-barrier");
+    await servedErrors.matched;
+    // The charging wave settles: the throw did not wedge the wave that
+    // raised it, and W covers the kick's own authored seq — so a late
+    // intent write has no window left to land in before the absence
+    // assert below reads the store.
+    const settledSeq = await settleServing(engine, clientRuntime);
+    expect(host!.spaceServer(space)?.watermark ?? 0)
+      .toBeGreaterThanOrEqual(settledSeq);
     const instances = engine.database.prepare(
       `SELECT scope_key FROM head WHERE id = :id AND op != 'delete'`,
     ).all({ id: SERVER_EXECUTION_EFFECTS_DOC_ID }) as Array<
@@ -1622,11 +1490,9 @@ describe("Phase 4 client-effect channel", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    const servedErrors: unknown[] = [];
+    const servedErrors = servedErrorLog(/no firing-event context/);
     host = newHost(undefined, (runtime) => {
-      runtime.scheduler.onError((error) => {
-        servedErrors.push(error);
-      });
+      runtime.scheduler.onError(servedErrors.record);
     });
     // Kick the serving side (activation + demand): an authored write.
     const kick = clientRuntime.getCell<{ n: number }>(
@@ -1641,19 +1507,12 @@ describe("Phase 4 client-effect channel", () => {
       expect((await tx.commit()).error).toBeUndefined();
     }
     // The §4 error is raised and charged to the served run…
-    await waitUntil(
-      () =>
-        servedErrors.some((error) =>
-          /no firing-event context/.test(String(error))
-        ),
-      "the builtins.md §4 no-context error to be charged to the run",
-    );
+    await servedErrors.matched;
     // …the charging wave settles (the baseline: the charging wave
     // itself never wedged)…
-    await waitUntil(
-      () => (host!.spaceServer(space)?.watermark ?? 0) > 0,
-      "the serving loop to settle the kick",
-    );
+    const chargedSeq = await settleServing(engine, clientRuntime);
+    expect(host!.spaceServer(space)?.watermark ?? 0)
+      .toBeGreaterThanOrEqual(chargedSeq);
     // …then an input DIRTIES the demanded effect itself (a new target
     // link), forcing the erroring re-run whose failure window the next
     // input races…
@@ -1680,33 +1539,15 @@ describe("Phase 4 client-effect channel", () => {
     // The settled contract, with the CORRECT arithmetic: W must cover
     // the racing input's own AUTHORED seq (never `Engine.serverSeq`,
     // which the loop's derived echoes inflate — the recorded freeze).
-    const racedSeq = authoredSeqOf(engine, kick.getAsNormalizedFullLink().id);
-    // Wait for the trailing echo BEFORE the barrier read (the same
-    // regression armor as `settleAnotherWaveFamily`): pre-echo, a
-    // serverSeq degradation reads correct-by-accident and the pin
-    // would stay green against the exact arithmetic it exists to pin.
-    await waitUntil(
-      () => Engine.serverSeq(engine) > racedSeq,
-      "the trailing derived echo after the racing input",
-    );
-    const racedTarget = authoredSeqOf(
-      engine,
-      kick.getAsNormalizedFullLink().id,
-    );
-    await waitUntil(
-      () => (host!.spaceServer(space)?.watermark ?? 0) >= racedTarget,
-      "the watermark to cover the input racing the failure window",
-      15_000,
-    );
+    const racedSeq = await settleServing(engine, clientRuntime);
+    expect(Engine.commitClassOfSeq(engine, racedSeq)).toBe("authored");
+    expect(host!.spaceServer(space)?.watermark ?? 0)
+      .toBeGreaterThanOrEqual(racedSeq);
     // The erroring-derivation posture, not silence: the re-armed
     // demanded effect's re-run is CHARGED again (the recorded "no
     // further charge" came from an unrelated-doc input that never
     // re-dirtied the thrower — a re-pointed target does).
-    expect(
-      servedErrors.filter((error) =>
-        /no firing-event context/.test(String(error))
-      ).length,
-    ).toBeGreaterThanOrEqual(2);
+    expect(servedErrors.matchCount()).toBeGreaterThanOrEqual(2);
     // And no intent leaked from any of the erroring runs.
     const instances = engine.database.prepare(
       `SELECT scope_key FROM head WHERE id = :id AND op != 'delete'`,
@@ -1740,23 +1581,18 @@ describe("Phase 4 client-effect channel", () => {
     host = newHost();
     // Prime: a real fire so the sidecar and stream link exist.
     result.key("go").send({});
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the primed append to land",
-    );
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    expect(sidecarIdsIn(engine).length).toBe(1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0]?.consequenced === true;
-      },
-      "the primed event to consequence",
+    // The primed event consequences: the serving side stamps the mark
+    // on the sidecar doc this session already holds, so the push that
+    // carries it is the event to wait on.
+    await awaitReplica(
+      clientManager,
+      () => streamEntriesIn(engine, sidecarId)[0]?.consequenced === true,
     );
-    const primed =
-      (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
-        .entries![0];
+    const primed = streamEntriesIn(engine, sidecarId)[0];
     const intentsBefore =
       intentsOf(engine, aliceSigner.did(), clientManager.id).length;
 
@@ -1777,23 +1613,18 @@ describe("Phase 4 client-effect channel", () => {
     });
 
     // The handler's own consequence still lands (value += 1) — the
-    // refusal is the BUILTIN's, not the event's.
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) >= 2;
-      },
-      "the sessionless event's handler consequence to land",
+    // refusal is the BUILTIN's, not the event's. An intent write would
+    // have ridden the same wave commit, so once the consequence is at
+    // the store the absence below is a real absence; the settle barrier
+    // then covers any later wave.
+    await awaitReplica(
+      clientManager,
+      () =>
+        handlerCounterIn(engine, argument.getAsNormalizedFullLink().id) >= 2,
     );
-    // The deterministic kick-and-await-W barrier (OW26 RETIRED the
-    // bounded 300 ms drain, Phase 6), then assert: no NEW intent
-    // anywhere — not in alice's instance, not in a service-keyed one.
-    // The Phase-4 attempt froze ~1-in-4 on `serverSeq`-derived targets
-    // racing the wave echo; authored-seq targets are safe (see the
-    // no-context test).
-    await settleAnotherWaveFamily(engine, "sessionless-barrier");
+    await settleServing(engine, clientRuntime);
+    // No NEW intent anywhere — not in alice's instance, not in a
+    // service-keyed one.
     expect(
       intentsOf(engine, aliceSigner.did(), clientManager.id).length,
     ).toBe(intentsBefore);
@@ -1825,23 +1656,18 @@ describe("Phase 4 client-effect channel", () => {
 
     host = newHost();
     result.key("go").send({});
-    await waitUntil(
-      () => sidecarIdsIn(engine).length === 1,
-      "the primed append to land",
-    );
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    expect(sidecarIdsIn(engine).length).toBe(1);
     const sidecarId = sidecarIdsIn(engine)[0];
-    await waitUntil(
-      () => {
-        const value = Engine.read(engine, { id: sidecarId })?.value as
-          | StreamEventsDocValue
-          | undefined;
-        return value?.entries?.[0]?.consequenced === true;
-      },
-      "the primed event to consequence",
+    // The primed event consequences: the serving side stamps the mark
+    // on the sidecar doc this session already holds, so the push that
+    // carries it is the event to wait on.
+    await awaitReplica(
+      clientManager,
+      () => streamEntriesIn(engine, sidecarId)[0]?.consequenced === true,
     );
-    const primed =
-      (Engine.read(engine, { id: sidecarId })?.value as StreamEventsDocValue)
-        .entries![0];
+    const primed = streamEntriesIn(engine, sidecarId)[0];
 
     // A delegated append carrying a session that never connected to
     // THIS space (the cross-space delivery shape): the acting session
@@ -1859,18 +1685,15 @@ describe("Phase 4 client-effect channel", () => {
       localSeq: 999_201,
     });
 
-    await waitUntil(
-      () => {
-        const doc = Engine.read(engine, {
-          id: argument.getAsNormalizedFullLink().id,
-        });
-        return ((doc?.value as { value?: number })?.value ?? 0) >= 2;
-      },
-      "the LT3 event's handler consequence to land",
+    // The handler's consequence lands, and an intent write would have
+    // ridden the same wave commit; the settle barrier then covers any
+    // later wave.
+    await awaitReplica(
+      clientManager,
+      () =>
+        handlerCounterIn(engine, argument.getAsNormalizedFullLink().id) >= 2,
     );
-    // The deterministic kick-and-await-W barrier (OW26 RETIRED the
-    // bounded 300 ms drain, Phase 6; see the sessionless test above).
-    await settleAnotherWaveFamily(engine, "lt3-barrier");
+    await settleServing(engine, clientRuntime);
     expect(
       intentsOf(
         engine,

@@ -9,6 +9,7 @@ import type {
   RuntimeClient,
   SpaceAclView,
 } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   CFPieceMenu,
   formatPieceValue,
@@ -72,7 +73,7 @@ function liveRegionText(menu: CFPieceMenu): string {
       for (const child of node) visit(child);
       return;
     }
-    if (node === null || typeof node !== "object") return;
+    if (!isObjectOrArray(node)) return;
     const template = node as {
       strings?: readonly string[];
       values?: unknown[];
@@ -130,7 +131,7 @@ function templateForTestId(
       for (const child of node) visit(child);
       return;
     }
-    if (node === null || typeof node !== "object") return;
+    if (!isObjectOrArray(node)) return;
     const template = node as {
       strings?: readonly string[];
       values?: unknown[];
@@ -204,7 +205,7 @@ function eventHandler(
       for (const child of node) visit(child);
       return;
     }
-    if (node === null || typeof node !== "object") return;
+    if (!isObjectOrArray(node)) return;
     const template = node as {
       strings?: readonly string[];
       values?: unknown[];
@@ -402,7 +403,7 @@ function entryTemplate(
       for (const child of node) visit(child);
       return;
     }
-    if (node === null || typeof node !== "object") return;
+    if (!isObjectOrArray(node)) return;
     const template = node as {
       strings?: readonly string[];
       values?: unknown[];
@@ -445,7 +446,7 @@ function subjectOf(menu: CFPieceMenu): unknown {
       }
       return undefined;
     }
-    if (node === null || typeof node !== "object") return undefined;
+    if (!isObjectOrArray(node)) return undefined;
     const template = node as {
       strings?: readonly string[];
       values?: unknown[];
@@ -3756,17 +3757,18 @@ describe("the actions panel", () => {
     expect(rendered).toContain("argument");
   });
 
-  it("offers a declared stream even when its value is a raw marker", async () => {
-    // A schema-less read can leave `{$stream:true}` in place of a handle;
-    // the parent declaration is the trusted signal, so the action derives
-    // its address from the parent cell instead.
+  it("offers a declared stream even when its value is not a handle", async () => {
+    // A schema-less read leaves whatever the document holds in place of a
+    // handle, and a stream's document holds nothing; the parent declaration
+    // is the trusted signal, so the action derives its address from the
+    // parent cell instead.
     const piece = statefulPiece({
       pieceSchema: {
         type: "object",
         properties: { go: { asCell: ["stream"] } },
       },
     });
-    await piece.cell.set({ go: { $stream: true } });
+    await piece.cell.set({ go: {} });
     const menu = openMenu(piece.cell);
     await menu.showPanel("actions");
 
@@ -3781,7 +3783,7 @@ describe("the actions panel", () => {
     expect((sends[0].cell as CellRef).path).toEqual(["go"]);
   });
 
-  it("never offers a raw marker the schema does not declare", async () => {
+  it("never offers the retired stream sentinel at an undeclared key", async () => {
     const piece = statefulPiece();
     await piece.cell.set({ mystery: { $stream: true } });
     const menu = openMenu(piece.cell);

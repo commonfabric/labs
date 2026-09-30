@@ -90,8 +90,8 @@ from an owned setup transaction that commits to storage, and since a
 wave's withdrawable acceptance cannot supply that, its setup transaction
 commits directly to the store as the serving loop's own derived-class
 commit, outside the wave (serving-loop.md §3e). Every other client of
-the piece controller — the shell, the background piece service — keeps
-the client-side shape until its own migration.)*
+the piece controller, such as the shell, keeps the client-side shape
+until its own migration.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic
@@ -194,7 +194,22 @@ Stated normatively, with anchors. Today every transaction
 comes from ONE client, so identity rides the ENVELOPE: the session
 carries the user principal and session id — established once, at
 session open, never sent per commit — and scoped writes inside the
-transaction name only the scope KIND (`scope: "user"`). It is the
+transaction name only the scope KIND (`scope: "user"`). The session
+carries one more thing established at open: its READ CEILING
+(`SessionDescriptor.readCeiling`, signed into the `session.open`
+invocation; memory-v2 04-protocol.md §4.1.2), the confidentiality
+bound every `db.query` served AS that session reads under — the
+client runtime's `cfcReadMaxConfidentiality`, which under this flag
+cannot bound queries where it sits because the serving runtime
+performs them. The memory server records it on the session (fresh
+per open; a resume re-declares it) and a server-assigned ceiling
+lands in the same record; the SpaceServer stamps it onto every run
+served as the session (serving-loop.md §3c) and the served query
+reads under it (sqlite-builtin 06-cfc.md, "Runtime read ceiling").
+A client with a ceiling REQUIRES the `sessionReadCeiling` protocol
+flag of the server it opens against: an older server would accept
+the descriptor and serve every query unbounded, so the client refuses
+to open the session. It is the
 memory server that maps kind → concrete `scope_key` at admission,
 derived from the session that had the commit (the shared
 `resolveScopeKey` in `packages/memory/v2.ts` — the wire-shape module
@@ -526,9 +541,10 @@ them). v2 keeps that invariant and adds the class discipline:
 | --- | --- |
 | read a foreign doc | free — logged read + server-internal wake (§3b). *Mechanism (OW31, RULED 2026-08-18/19, BUILT — retires the Phase-7 OWNER posture): the serving runtime's loopback sessions carry a session-level delegated READ binding (`actingAs: "space-owner"`, signed into the session.open descriptor), admitted only for the memory ACL's DELEGATING class — under the flag the co-hosted process identity (`memoryAclPrincipalsFor`), OFF the flag empty; the operator's OWNER-class `serviceDids` list is verbatim on both arms and the process identity is never in it by default. The memory server resolves the binding ITSELF from the space's ACL — the ruled "ACL can be read with service identity" — and the session's READ-class capability decisions (session.open, queries, watches) then run as the space's OWNER: the user whose space it is, `session.open` on an owner-only home space included. WRITE/OWNER-class requirements keep resolving against the ENVELOPE principal, so the binding grants no session-plane write path (served writes ride this table's delegated carriage; the observe-mode canary counts any residual); a delegating principal may not initialize a genesis; revocation judges the acting user, so an ownership change revokes the bound session and the next mount re-resolves. Spaces with no valid concrete-owner ACL bind nothing (fresh → authenticated READ, populated-legacy → the compat arm, malformed → fail closed). Trust footing: LT5's — the co-hosted process is already trusted for carried actor claims on the write plane; the binding ATTRIBUTES reads that were previously ambient under the blanket. If this posture proves wrong live, the ruling's own escape hatch is a flagged follow-up, never a quiet re-widening — verification-coverage.md OW31.* |
 | derive FROM foreign state | home derivation reading foreign inputs; result commits HOME |
-| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** |
+| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** apart from the provisioning and bookkeeping writes the rows below sanction |
 | `derived` commit into a foreign space | FORBIDDEN — SpaceServer(B) is B's only deriver; A never derives into B |
 | provision a foreign/new space (`.inSpace`) | authored-class, foreign-first split at the wave commit step — see below |
+| bookkeeping write a served run triggers, made after the run is over, into a space its actor owns or was granted (compile-cache and program writeback, the `agent` effect's index entry) | the same foreign batch, under the triggering run's delegated carriage passed explicitly — serving-loop.md §3d |
 | client authored writes to several spaces | unchanged from today: separate per-space commits, per-space ACL + CAS |
 
 The event append crosses as an ordinary `authored` commit under the
@@ -818,14 +834,20 @@ Session-scoped, server-computed, client-enacted effects (README §3.7).
   bounded by per-wave retirement, and the session-lifetime GC
   (below) covers abandoned instances.
 - Exactly-once enactment per nonce is the CLIENT's duty (it may enact
-  optimistically from speculation, then reconcile by nonce — navigation
-  is reversible). Nonce reconciliation covers only the intent-ARRIVES
-  case: when the authoritative run computes no intent for an
-  optimistically enacted navigation (branch divergence on a speculative
-  read), the enactment STANDS un-reconciled — ruled PUNT (owner,
-  2026-08-27; register OW45) — and consumers must be robust to it.
-  Reload between intent and ack: on resubscribe the
-  client sees unacked intents and enacts them; nonces make re-enactment
+  optimistically from speculation, then reconcile by nonce —
+  navigation is reversible). Reconciliation holds in either order. An
+  intent that arrives, and begins enacting, before the client's own
+  speculative run seals records the nonce, and that run's optimistic
+  enactment converges on the record rather than enacting a second
+  time. An enactment still in flight is awaited rather than assumed,
+  since its failure retracts the record and the caller that found it
+  must then enact. Nonce reconciliation covers only the
+  intent-ARRIVES case: when the authoritative run computes no intent
+  for an optimistically enacted navigation (branch divergence on a
+  speculative read), the enactment STANDS un-reconciled — ruled PUNT
+  (owner, 2026-08-27; register OW45) — and consumers must be robust
+  to it. Reload between intent and ack: on resubscribe the client
+  sees unacked intents and enacts them; nonces make re-enactment
   detectable. The reload × optimistic-enactment window MAY re-enact
   a nonce — the enacted-nonce record lives in the reload-wiped
   overlay — and that is ACCEPTED for reversible effects, which

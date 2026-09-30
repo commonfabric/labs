@@ -3,8 +3,9 @@
  * before the pattern is contributed to the index.
  *
  * Recording and surfacing are separate: a pattern that fails this gate is
- * still published in full and still resolves for `getPattern` and for a
- * `cf:pattern:` import. What the gate decides is whether search offers it.
+ * still queued for publication in full. Once the index accepts it, it
+ * resolves for `getPattern` and for a `cf:pattern:` import. What the gate
+ * decides is whether to request that search offer it.
  *
  * ## What it certifies, and what it cannot
  *
@@ -58,7 +59,7 @@
  * ## Why the verdict is a closed enumeration
  *
  * Nothing derived from the rendered DOM crosses to the model. What crosses is
- * a `PatternPublicationStatus`, a `PatternPublicationReason`, one constant
+ * the `queued` status, a `PatternPublicationReason`, one constant
  * message drawn from `PATTERN_PUBLICATION_MESSAGES`, and a boolean about the
  * synthetic instance — every one of them pinned to a fixed set, which is the
  * `schemaAllowsRawString` rule applied by construction rather than checked.
@@ -90,31 +91,23 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /**
- * What a run's authored pattern was told about its contribution to the index.
- *
- * Recording a pattern and surfacing it in search are separate things. Every
- * pattern that ran is recorded in full: `getPattern` returns it and a
- * `cf:pattern:` import resolves it, whatever the gate found. `discoverable`
- * means deliberate seeding was enabled and the render gate passed, or there
- * was no `$UI` for it to read. `recorded` is the ordinary default and is also
- * the outcome whenever the gate found a defect or could reach no verdict.
- *
- * Nothing here is destructive: a wrong call costs an entry its discoverability
- * and a field flip restores it, where a refused publication could not be
- * recovered at all. The run itself succeeds under both — a publication has
- * never been allowed to bear on the run that authored it.
+ * The requested discoverability of a publication, before the index receives
+ * it. `discoverable` requests search visibility; `recorded` requests a record
+ * without search visibility. The render gate permits the former when it
+ * passes or there is no `$UI`, and publication policy may restrict it to the
+ * latter. Neither value confirms that the index accepted the publication.
  */
 export type PatternPublicationStatus = "discoverable" | "recorded";
 
 /**
- * Why a publication landed in its status, as a fixed set of codes.
+ * Why a publication requests its discoverability, as a fixed set of codes.
  *
  * This is the whole of what the gate tells the model, and it is a closed
- * enumeration on purpose — see `patternPublicationReport` for why nothing
+ * enumeration on purpose — see the module comment for why nothing
  * derived from the rendered DOM may join it.
  */
 export type PatternPublicationReason =
-  /** The run was recorded without asking search to surface it. */
+  /** The run requests a record without asking search to surface it. */
   | "recorded-automatically"
   /** The probe rendered element content carrying no default-`toString` text. */
   | "ui-rendered"
@@ -151,9 +144,8 @@ export type PatternPublicationReason =
   | "superseded";
 
 /**
- * What the gate learned, in full. Only `status`, `reason` and
- * `syntheticInputsComplete` reach the tool result; `html` goes only to the
- * run artifact — see the module comment on what that does and does not mean.
+ * What the gate learned, in full. `status` controls requested discoverability;
+ * the tool reports `queued` with the reason and `syntheticInputsComplete`.
  */
 export interface PatternRenderVerdict {
   readonly status: PatternPublicationStatus;
@@ -201,19 +193,19 @@ export const PATTERN_PUBLICATION_MESSAGES: Readonly<
   Record<PatternPublicationReason, string>
 > = {
   "recorded-automatically":
-    "recorded in the pattern index but NOT offered to search. Automatic publication records the run; discoverability is earned from later evidence.",
+    "queued for recording in the pattern index without requesting search discoverability; publication is not confirmed. Discoverability is earned from later evidence.",
   "ui-rendered":
-    "published to the pattern index and offered to search. Its $UI was rendered host-side against a synthetic instance of its own argument schema and produced text with no default-toString in it. That is all this certifies — not that the component works.",
+    "queued for publication to the pattern index with search discoverability requested; publication is not confirmed. Its $UI was rendered host-side against a synthetic instance of its own argument schema and produced text with no default-toString in it. That is all this certifies — not that the component works.",
   "no-ui":
-    "published to the pattern index and offered to search. It declares no $UI, so the render check does not apply to it.",
+    "queued for publication to the pattern index with search discoverability requested; publication is not confirmed. It declares no $UI, so the render check does not apply to it.",
   "ui-default-tostring":
-    "recorded in the pattern index but NOT offered to search. Rendering its $UI host-side produced text of the form [object Object] — a value reaching the DOM through Object.prototype.toString rather than through a read. Indexing a reactive row by a reactive key is the usual cause: the index expression yields a proxy, and stringifying a proxy gives exactly this. Read the value out (a derive or a lift over the row and the key) and run it again to have the fixed version offered. The render itself is not retained anywhere. For a pattern whose view is a function of its arguments it can be reproduced — the synthetic instance is deterministic and the index records the program — and for a pattern that reads the space it cannot, since that state is not recorded. Either way the verdict above is what is kept.",
+    "queued for recording in the pattern index without requesting search discoverability; publication is not confirmed. Rendering its $UI host-side produced text of the form [object Object] — a value reaching the DOM through Object.prototype.toString rather than through a read. Indexing a reactive row by a reactive key is the usual cause: the index expression yields a proxy, and stringifying a proxy gives exactly this. Read the value out (a derive or a lift over the row and the key) and run it again to check the fixed version. The render itself is not retained anywhere. For a pattern whose view is a function of its arguments it can be reproduced once publication succeeds — the synthetic instance is deterministic and the index holds the program — and for a pattern that reads the space it cannot, since that state is not recorded. Either way the verdict above is what is kept.",
   "ui-rendered-empty":
-    "recorded in the pattern index but NOT offered to search: its $UI rendered a tree carrying no text and no attributes at all, against a synthetic instance of its own argument schema. That is an absence of evidence rather than a defect found — an empty-state list renders this way too — so the entry is uncertified rather than condemned.",
+    "queued for recording in the pattern index without requesting search discoverability; publication is not confirmed. Its $UI rendered a tree carrying no text and no attributes at all, against a synthetic instance of its own argument schema. That is an absence of evidence rather than a defect found — an empty-state list renders this way too — so the entry is uncertified rather than condemned.",
   "probe-failed":
-    "recorded in the pattern index but NOT offered to search: a second instance of the pattern, built from synthetic inputs, could not be started, did not settle, or errored while rendering, so nothing was rendered and nothing was checked. The entry is uncertified rather than condemned.",
+    "queued for recording in the pattern index without requesting search discoverability; publication is not confirmed. A second instance of the pattern, built from synthetic inputs, could not be started, did not settle, or errored while rendering, so nothing was rendered and nothing was checked. The entry is uncertified rather than condemned.",
   "superseded":
-    "recorded in the pattern index but NOT offered to search: a later iteration in this session published under the same description and hashtags, and that one is the session's retained candidate. Iterating no longer leaves a candidate behind per attempt.",
+    "queued for recording in the pattern index without requesting search discoverability; publication is not confirmed. A later iteration in this session was staged under the same description and hashtags, and that one is the session's retained candidate.",
 };
 
 /**

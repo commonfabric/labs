@@ -4,14 +4,13 @@ import type {
   NonterminalCodec,
   TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import { toCompactDebugString } from "@/value-debug.ts";
+import { debugStr, toCompactDebugString } from "@/value-debug";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { UnknownValue } from "./UnknownValue.ts";
 import type { FabricValue } from "@/interface.ts";
 import { BaseCodecAct } from "./BaseCodecAct.ts";
 import { ProblematicStateError } from "./ProblematicStateError.ts";
 import { ProblematicValue } from "./ProblematicValue.ts";
-import { quotedDebugString } from "./quotedDebugString.ts";
 
 /**
  * The state of one act of decoding: what {@link BaseCodecAct} holds, plus how
@@ -139,8 +138,8 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
     if (this.config.lenient && (e instanceof ProblematicStateError)) {
       // The error renders itself rather than being taken apart and rebuilt:
       // it already holds the three facts, normalized the way this class would
-      // normalize them, and hands back a deep-frozen value.
-      return e.asProblematicValue();
+      // normalize them, and freezes what it hands back as this act asks.
+      return e.asProblematicValue(this.config.mutable);
     }
 
     // Rethrown rather than rebuilt, strictly: the refusal already names its
@@ -168,6 +167,7 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
    *   what it cannot keep.
    * @param error What is wrong with it, phrased to stand on its own -- it is
    *   the whole of the message when this raises.
+   * @returns The report, deep-frozen unless this act is mutable.
    * @throws If this act is not lenient.
    */
   reportMalformed(
@@ -179,7 +179,9 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       throw new ProblematicStateError(wireTypeTag, state, error);
     }
 
-    return deepFreeze(new ProblematicValue(wireTypeTag, state, error));
+    return this.#settleFrozenness(
+      new ProblematicValue(wireTypeTag, state, error),
+    );
   }
 
   /**
@@ -213,9 +215,9 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
    * whatever a format found in tag position, of whatever type, and a subclass
    * is not expected to know what a tag may look like.
    *
-   * Frozen-ness contract: every value returned from here is deep-frozen, so
-   * callers do not each have to freeze, and a caller need not ask which arm
-   * produced what it was handed.
+   * Frozen-ness contract: every value returned from here is deep-frozen, or
+   * built mutable when this act is mutable, so callers do not each have to
+   * freeze, and a caller need not ask which arm produced what it was handed.
    *
    * Three of the arms below walk the state again -- a nonterminal codec's, an
    * unknown tag's, and a malformed tag's -- and each runs that walk on this
@@ -236,7 +238,7 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       return this.reportMalformed(
         tag,
         this.decodeValue(rawState),
-        `tagged value has a malformed tag: ${quotedDebugString(tag)}`,
+        debugStr`tagged value has a malformed tag: $quote${tag}`,
       );
     }
 
@@ -245,7 +247,9 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
     if (matched === undefined) {
       // A tag this registry does not carry, kept in the unknown form so that
       // it round-trips.
-      return deepFreeze(new UnknownValue(tag, this.decodeValue(rawState)));
+      return this.#settleFrozenness(
+        new UnknownValue(tag, this.decodeValue(rawState)),
+      );
     }
 
     // A terminal codec takes the state exactly as it arrived; a nonterminal
@@ -278,12 +282,19 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
         );
       }
 
+      const mutable = this.config.mutable;
       decoded = terminal
-        ? (matched as TerminalCodec<Encoded>).decode(tag, rawState, this.env)
+        ? (matched as TerminalCodec<Encoded>).decode(
+          tag,
+          rawState,
+          this.env,
+          mutable,
+        )
         : (matched as NonterminalCodec).decode(
           tag,
           state as FabricValue,
           this.env,
+          mutable,
         );
     } catch (e: any) {
       if (!this.config.lenient) {
@@ -324,10 +335,29 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       throw new ProblematicStateError(tag, decoded.state, decoded.error);
     }
 
-    // A codec's `decode()` promises deep-frozen results rather than relying on
-    // every caller to freeze. That covers the codec's own product -- a
-    // `FabricPrimitive` is already frozen, making it an O(1) cache hit -- and
-    // the lenient fallback above alike.
-    return deepFreeze(decoded);
+    // A codec's `decode()` freezes only the value it builds, so the deep freeze
+    // here is what makes the result deep-frozen as a whole, and known to be.
+    // That covers the codec's own product -- a `FabricPrimitive` is already
+    // frozen, making it an O(1) cache hit -- and the lenient fallback above
+    // alike.
+    return this.#settleFrozenness(decoded);
+  }
+
+  /**
+   * Freezes a container this act built, at its own layer, unless this act is
+   * mutable, and returns it. The layers beneath were settled as they were
+   * built, which is what makes one layer enough.
+   */
+  protected freezeUnlessMutable<T extends object>(container: T): T {
+    return this.config.mutable ? container : Object.freeze(container);
+  }
+
+  /**
+   * Returns `value` deep-frozen, or as it stands when this act is mutable.
+   * What a mutable act returns is left as its builder left it, which for a
+   * codec's product is mutable because the codec was asked for that.
+   */
+  #settleFrozenness(value: FabricValue): FabricValue {
+    return this.config.mutable ? value : deepFreeze(value);
   }
 }

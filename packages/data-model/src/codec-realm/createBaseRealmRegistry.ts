@@ -1,6 +1,5 @@
-import { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
+import { CodecRegistry, SymbolCodec } from "@/codec-common";
 import { REALM_FORMAT, type RealmCodecValue } from "./interface.ts";
-import { SymbolCodec } from "@/codec-common/SymbolCodec.ts";
 
 /**
  * Creates a registry holding this format's determination about JavaScript's

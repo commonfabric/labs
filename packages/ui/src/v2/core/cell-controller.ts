@@ -5,6 +5,7 @@ import {
   isCellHandle,
   type JSONSchema,
 } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   InputTimingController,
   type InputTimingOptions,
@@ -529,11 +530,7 @@ function sameCellDoc(a: CellRef, b: CellRef): boolean {
 function deepValueEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (a instanceof CellHandle || b instanceof CellHandle) return false;
-  if (
-    a === null || b === null || typeof a !== "object" || typeof b !== "object"
-  ) {
-    return false;
-  }
+  if (!isObjectOrArray(a) || !isObjectOrArray(b)) return false;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
       return false;

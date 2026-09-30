@@ -1,5 +1,5 @@
 /**
- * Contract shapes of the documentation corpus `query_docs` answers out of, and
+ * Contract shapes of the documentation corpus `research` inspects, and
  * the integrity endorsement that says where a piece of it came from.
  *
  * The endorsement is the whole trust story of this corpus. Operator-provisioned
@@ -64,6 +64,12 @@ export interface HarnessDocsCorpusSection {
    * the text above a file's first heading.
    */
   heading: string;
+
+  /** Document's first top-level heading, when retained by the corpus loader. */
+  documentTitle?: string;
+
+  /** Ancestor headings followed by this section's heading. */
+  headingPath?: readonly string[];
 
   text: string;
 

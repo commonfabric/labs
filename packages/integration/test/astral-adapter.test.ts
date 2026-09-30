@@ -1009,7 +1009,7 @@ Deno.test("retained selector state reconciles displaced observers", async () => 
   }
 });
 
-Deno.test("Page preserves Common Tools behavior on published Astral", async () => {
+Deno.test("Page preserves Common Fabric behavior on published Astral", async () => {
   const browser = await Browser.launch({ timeout: 10_000 });
   const page = await browser.newPage();
   const astralPage = page.astralPage;

@@ -346,15 +346,12 @@ describe("Cell with Optional Link", () => {
   describe("Stream cells with optional links", () => {
     it("should handle streams created through CellImpl", () => {
       // Create a stream cell
-      const streamCell = runtime.getCell(
+      const streamCell = runtime.getCell<unknown>(
         space,
         "test-stream",
-        undefined,
+        { asCell: ["stream"] },
         tx,
       );
-
-      // Set it to a stream value
-      streamCell.setRaw({ $stream: true });
 
       const receivedEvents: any[] = [];
       streamCell.sink((event: any) => {

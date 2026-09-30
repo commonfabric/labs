@@ -87,8 +87,8 @@ class TestController {
     return { ok: this.harness.tests.length };
   }
 
-  async runNext() {
-    return { ok: await this.harness.runNext() };
+  async runAt(index) {
+    return { ok: await this.harness.runAt(index) };
   }
 
   onGlobalError(e) {
@@ -105,7 +105,6 @@ class TestHarness {
     // which this file cannot import.
     this.testTimeout = Number(params.get("testTimeout")) || 40_000;
     this.tests = [];
-    this.currentTest = 0;
     this.loadError = null;
     this._ready = false;
   }
@@ -142,10 +141,11 @@ class TestHarness {
     this.tests.push(new Test(name, fn, el, this.testTimeout));
   }
 
-  async runNext() {
-    const test = this.tests[this.currentTest++];
+  // The driver chooses which test runs next, and in what order; a file's
+  // tests are numbered here in the order they registered.
+  async runAt(index) {
+    const test = this.tests[index];
     if (!test) {
-      // No more tests to run
       return null;
     }
     return await test.run();

@@ -178,5 +178,5 @@ and pending tiers) are documented in the
 [tcb]: #tcb-trusted-computing-base
 [ucan]: #ucan-user-controlled-authorization-network
 [vdom]: #vdom-virtual-dom
-[memory protocol]: https://github.com/commontoolsinc/RFC/blob/main/rfc/memory.md
+[memory protocol]: https://github.com/commonfabric/RFC/blob/main/rfc/memory.md
 [did:key]: https://w3c-ccg.github.io/did-key-spec

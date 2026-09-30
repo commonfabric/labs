@@ -94,7 +94,11 @@ currency. The existing overlay and retirement rules below still apply.
   identity — a session-blind recomputation would misread "inputs
   changed" for every such node.
 - `navigate-to`: may enact optimistically (protocol.md §5) — navigation
-  is reversible. The overlay records the nonce it acted on. When the
+  is reversible. The overlay records the nonce it acted on, and stands
+  aside when that nonce is already recorded: the authoritative intent
+  reached the channel and enacted before this speculative run sealed,
+  which is the ordering whenever the served round trip beats the
+  client's own run of the same handler. When the
   AUTHORITATIVE run's branch computes NO navigation (a speculative read
   diverged — the 2026-08-27 r06/r09 root cause, register OW45), the
   optimistic enactment STANDS: ruled PUNT (owner, 2026-08-27) — the
@@ -151,16 +155,13 @@ currency. The existing overlay and retirement rules below still apply.
   > being retriggered when any of the reads so far change (just like a
   > regular call), and the output being `undefined`.
 
-  — owner (Berni), 2026-08-21. Two clauses, both RULED and built, each
-  except as its text notes:
+  — owner (Berni), 2026-08-21. Two clauses, both RULED and built:
 
   1. **The unresolved read refuses.** Link resolution marks a dead-end
      behind a followed hop (`pendingHopDoc`); the lazy read path
      throws `UnresolvedInputError` (a `SchemaMismatchError` subclass,
      so the action-run boundary's existing "argument did not resolve"
-     disposal treats it identically, except that a refusal a
-     synchronous body throws leaves the previous result standing until
-     the fix clause 2 points at lands — §4's reconciliation is
+     disposal treats it identically — §4's reconciliation is
      unchanged). This applies ONLY when the reader's schema declares
      NO default: a declared default is the stated absent value and
      still flows (the `get() ?? fallback` idiom, and a computed that
@@ -184,17 +185,13 @@ currency. The existing overlay and retirement rules below still apply.
      population audit).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
-     it) and the run's transaction aborts with it as the reason — the
-     same non-event disposal, re-triggering on the reads so far. Today
-     that holds for an asynchronous body's rejection; a refusal a
-     synchronous body throws reaches the runner's catch before its
-     `postRun` is assigned, so the previous result stands, and the fix
-     is the one the [design plan's Stage
-     5](../../plans/lazy-cell-materialization.md) names. A pattern
-     body cannot yet MINT the error itself (it is runner-internal; a
-     pattern-facing refusal export is a flagged API question with the
-     owner), so the built coverage is the read-propagation path — the
-     OW51 shape — with the deliberate body-throw awaiting that export.
+     it) and produces an undefined result through the ordinary result
+     path — the same non-event disposal, re-triggering on the reads so far. A
+     pattern body cannot yet MINT the error itself (it is
+     runner-internal; a pattern-facing refusal export is a flagged API
+     question with the owner), so the built coverage is the
+     read-propagation path — the OW51 shape — with the deliberate
+     body-throw awaiting that export.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
@@ -449,8 +446,9 @@ on the next cover). The elision posture above is unchanged: no rewrite
 means the doc's seq stays BELOW the floor, and the predicate is never
 consulted. **A content-addressed doc the store holds witnesses at ANY cover seq
 (#6304, 2026-08-25): its stored envelope is immutable — admission
-refuses a `cid:` delete or patch outright, and a `cid:` set unless
-the whole stored envelope, metadata included, is value-equal;
+refuses every operation but `set` against a `cid:` id outright, and a
+`cid:` set unless the whole stored envelope, metadata included, is
+value-equal;
 identical rewrites are elided — so its cover never advances and the
 floor comparison can never pass for it. The witness rests on that
 commit-boundary immutability: a metadata-write carve-out for `cid:`
@@ -653,9 +651,15 @@ handlers its graph installed, so the next send to one of those
 streams finds no handler and the scheduler drops the event. A list
 that grows by handler sends stops growing, one send at a time, with
 no error anywhere near the send. Reading durably is what keeps that
-commit exportable. The mark covers only the transaction the runner
-mints for itself; a start handed a caller's transaction keeps that
-caller's read semantics.
+commit exportable. The mark covers a transaction the runner mints
+for itself; a start handed a caller's transaction keeps that
+caller's read semantics. A start that waits for a piece's
+execution family mints a SECOND transaction once that family
+lands, and that one carries the mark when the transaction it
+continues did — the view the start read before the wait is the
+view it commits against after. Without it a standing echo over
+the child's argument enters the authored commit's basis, and the
+refusal above takes the child's registration with it.
 
 One retirement wake completes the ruling's "fix infinitely stuck
 things" half (§4's evaluation detail): a sweep that runs while an

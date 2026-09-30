@@ -9,9 +9,9 @@
  *
  * The rest is what may be shared and what must be rebuilt. A value already in
  * the requested state comes back as it is unless a copy was forced,
- * inherently immutable values are never copied at all, and a null prototype is
- * canonicalized rather than carried through, not being a shape the value type
- * admits.
+ * inherently immutable values are never copied at all, and a null-prototype
+ * object, not being a shape the value type admits, is refused rather than
+ * copied into a record it is not.
  *
  * Cycles are detected on the deep paths, and the subclass matrix asks the same
  * questions of every concrete class rather than trusting one to stand in for
@@ -24,25 +24,19 @@ import { expect } from "@std/expect";
 import {
   cloneIfNecessary,
   type CloneOptions,
-  isValidFabricValue,
-} from "@/index.ts";
-import type { FabricValue } from "@/index.ts";
-import { isDeepFrozen, isValidDeepFrozenFabricValue } from "@/deep-freeze.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricSet } from "@/fabric-instances/FabricSet.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import {
   FabricInstance,
   FabricPrimitive,
-  FabricSpecialObject,
-} from "@/interface.ts";
+  type FabricSpecialObject,
+  type FabricValue,
+  isDeepFrozen,
+  isValidDeepFrozenFabricValue,
+} from "@";
+import { FabricError } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
+import {
+  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+} from "@/for-testing-only.ts";
 
 describe("cloneIfNecessary()", () => {
   describe(`error cases`, () => {
@@ -337,12 +331,10 @@ describe("cloneIfNecessary()", () => {
     });
   });
 
-  describe(`\`null\` prototype canonicalization`, () => {
-    // A null-prototype object is not a `FabricValue`, so none can arrive here
-    // by any validating route. Should one reach this function anyway, the
-    // clone leaves in the shape a `FabricPlainObject` has -- the same
-    // answer the array case gives an `Array` subclass -- rather than
-    // propagating a shape the model has no representation for.
+  describe(`null-prototype objects`, () => {
+    // A null-prototype object is not a `FabricValue`, so none can arrive by
+    // any validating route. Should one reach this function anyway, it is
+    // refused rather than copied into a record it is not.
 
     function nullProto(
       fields: Record<string, unknown>,
@@ -361,38 +353,22 @@ describe("cloneIfNecessary()", () => {
         ["shallow and unfrozen", { frozen: false, deep: false }],
       ] as const
     ) {
-      it(`re-roots a null-prototype object, ${label}`, () => {
+      it(`throws for a null-prototype object, ${label}`, () => {
         const value = nullProto({ a: 1, b: "two" });
-        const result = cloneIfNecessary(
-          value as FabricValue,
-          opts as CloneOptions | undefined,
-        ) as Record<string, unknown>;
 
-        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-        expect(result.a).toBe(1);
-        expect(result.b).toBe("two");
-        expect(Object.isFrozen(result)).toBe(opts?.frozen !== false);
+        expect(() =>
+          cloneIfNecessary(
+            value as FabricValue,
+            opts as CloneOptions | undefined,
+          )
+        ).toThrow("Cannot clone");
       });
     }
 
-    it("re-roots a nested null-prototype object on a deep clone", () => {
+    it("throws for a nested null-prototype object on a deep clone", () => {
       const value = { child: nullProto({ v: 42 }) };
-      const result = cloneIfNecessary(value as FabricValue) as {
-        child: Record<string, unknown>;
-      };
-
-      expect(Object.getPrototypeOf(result.child)).toBe(Object.prototype);
-      expect(result.child.v).toBe(42);
-    });
-
-    it("produces a value `isValidFabricValue()` accepts", () => {
-      // The point of canonicalizing: what comes out is a member of the type,
-      // where the input was not.
-
-      const value = nullProto({ a: 1 });
-      expect(isValidFabricValue(value)).toBe(false);
-      expect(isValidFabricValue(cloneIfNecessary(value as FabricValue))).toBe(
-        true,
+      expect(() => cloneIfNecessary(value as FabricValue)).toThrow(
+        "Cannot clone",
       );
     });
   });
@@ -558,66 +534,35 @@ describe("cloneIfNecessary()", () => {
     readonly deepCloneImplemented: boolean;
   };
 
+  /**
+   * The `FabricInstance` classes whose `deepClone()` is more than a throwing
+   * stub. A class absent from here is expected to throw, so one that gains an
+   * implementation fails its cases until it is named.
+   */
+  const DEEP_CLONE_IMPLEMENTED: ReadonlySet<string> = new Set([
+    "FabricError",
+    "FabricLink",
+  ]);
+
   const subclassCases: readonly SubclassCase[] = [
-    // `FabricInstance` with full protocol coverage.
-    {
-      name: "FabricError",
-      factory: () => FabricError.fromNativeError(new Error("test")),
-      deepCloneImplemented: true,
-    },
-    {
-      name: "ProblematicValue",
-      factory: () => new ProblematicValue("Foo@1", "state-data", "boom"),
+    // `FabricInstance` subclasses, one case per class, from the makers the
+    // classes' own package keeps complete.
+    ...Object.entries(FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY).map((
+      [name, [factory]],
+    ): SubclassCase => ({
+      name,
+      factory,
+      deepCloneImplemented: DEEP_CLONE_IMPLEMENTED.has(name),
+    })),
+    // `FabricPrimitive` subclasses (intrinsically immutable), one case per
+    // class, from the examples the classes' own package keeps complete.
+    ...Object.entries(FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY).map((
+      [name, [example]],
+    ): SubclassCase => ({
+      name,
+      factory: () => example,
       deepCloneImplemented: false,
-    },
-    {
-      name: "UnknownValue",
-      factory: () => new UnknownValue("Foo@1", "state-data"),
-      deepCloneImplemented: false,
-    },
-    // `FabricInstance` with all-protocol stubs (only shallow works).
-    {
-      name: "FabricMap",
-      factory: () =>
-        new FabricMap(
-          new Map<FabricValue, FabricValue>([[
-            "k",
-            1,
-          ]]),
-        ),
-      deepCloneImplemented: false,
-    },
-    {
-      name: "FabricSet",
-      factory: () => new FabricSet(new Set<FabricValue>([1])),
-      deepCloneImplemented: false,
-    },
-    // `FabricPrimitive` subclasses (intrinsically immutable).
-    {
-      name: "FabricBytes",
-      factory: () => new FabricBytes(new Uint8Array([1, 2, 3])),
-      deepCloneImplemented: false,
-    },
-    {
-      name: "FabricRegExp",
-      factory: () => new FabricRegExp(/abc/g),
-      deepCloneImplemented: false,
-    },
-    {
-      name: "FabricEpochNsec",
-      factory: () => new FabricEpochNsec(1234567890n),
-      deepCloneImplemented: false,
-    },
-    {
-      name: "FabricEpochDay",
-      factory: () => new FabricEpochDay(42n),
-      deepCloneImplemented: false,
-    },
-    {
-      name: "FabricHash",
-      factory: () => new FabricHash(new Uint8Array([1, 2, 3, 4]), "fid1"),
-      deepCloneImplemented: false,
-    },
+    })),
   ];
 
   /**

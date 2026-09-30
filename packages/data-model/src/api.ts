@@ -2,8 +2,8 @@
  * Pattern-visible declarations for the fabric value type system, and for the
  * options of the debug renderers over it, in the form that `@commonfabric/api`
  * re-exports to patterns. Everything here is an interface, a type, or a
- * `declare const`, except for the three brand-key constants, so the module's
- * only runtime footprint is those constants.
+ * `declare`, except for the brand constants, so the module's only runtime
+ * footprint is those constants.
  *
  * The canonical implementations live in this module's siblings --
  * `interface.ts`, `fabric-primitives/FabricHash.ts`,
@@ -18,7 +18,9 @@
  *
  * Every concrete `FabricPrimitive` subclass needs an instanceof-capable
  * declaration here, that being an interface, a constructor interface, and a
- * `declare const` combining the two.
+ * `declare const` combining the two. The interface narrows `.schemaType` to
+ * the one name its class reports, and the interface is a member of
+ * `ConcreteFabricPrimitive`.
  *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
@@ -32,6 +34,32 @@
  * re-exports them to patterns. Every other module in this package takes them
  * from `interface.ts`.
  */
+
+//
+// Brand symbols
+//
+
+/**
+ * The nominal brand of `FabricInstancePlus`, and so of `FabricInstance`, whose
+ * type in a declaration is the `PlusType` the instance may hold: an interned
+ * symbol, so that every realm and every copy of this module agree on its
+ * value, and so that the member it keys can never be mistaken for data -- a
+ * symbol-keyed member has no place in a schema. A runtime instance never
+ * carries the key.
+ */
+export const FABRIC_INSTANCE_PLUS_BRAND = Symbol.for(
+  "@commonfabric/FabricInstancePlus",
+);
+
+/**
+ * The nominal brand of `FabricPrimitive`: an interned symbol, so that every
+ * realm and every copy of this module agree on its value, and so that the
+ * member it keys can never be mistaken for data -- a symbol-keyed member has
+ * no place in a schema. A runtime instance never carries the key.
+ */
+export const FABRIC_PRIMITIVE_BRAND = Symbol.for(
+  "@commonfabric/FabricPrimitive",
+);
 
 //
 // `FabricValue` and the types defined directly from it
@@ -109,16 +137,7 @@
  * deep-frozen proofs by root identity without re-validating; a value that
  * violates it can corrupt data-model invariants, as any broken contract can.
  */
-export type FabricValue =
-  | bigint
-  | boolean
-  | null
-  | number
-  | string
-  | symbol
-  | undefined
-  | FabricPrimitive
-  | FabricContainerValue;
+export type FabricValue = FabricValuePlus<never>;
 
 /**
  * The container types that are part of `FabricValue`. Note that
@@ -126,13 +145,10 @@ export type FabricValue =
  * (`FabricInstance`) and a non-container type (`FabricPrimitive`), and the
  * latter is _not_ part of this type.
  */
-export type FabricContainerValue =
-  | FabricArray
-  | FabricInstance
-  | FabricPlainObject;
+export type FabricContainerValue = FabricContainerValuePlus<never>;
 
 /** Read-only array of `FabricValue`s. */
-export interface FabricArray extends ReadonlyArray<FabricValue> {}
+export type FabricArray = FabricArrayPlus<never>;
 
 /**
  * Read-only object/record of `FabricValue`s.
@@ -142,83 +158,108 @@ export interface FabricArray extends ReadonlyArray<FabricValue> {}
  * contractually forbidden from defining one, even though there is no way to say
  * that requirement in TypeScript.
  */
-export interface FabricPlainObject
-  extends Readonly<Record<string, FabricValue>> {}
+export type FabricPlainObject = FabricPlainObjectPlus<never>;
+
+/**
+ * The two kinds of `FabricValue` beyond the JavaScript built-ins, as one type.
+ * The two differ along one axis: whether the data model treats an instance as
+ * a primitive. A `FabricPrimitive` is treated the way a built-in `string` or
+ * `number` is; a `FabricInstance` is treated the way an `object` is. What
+ * follows from that, and what a caller sees of it, is that a `FabricInstance`
+ * may hold and expose arbitrary outgoing `FabricValue` references, and a
+ * `FabricPrimitive` may not. `isFabricSpecialObject()` narrows to this type
+ * with one check.
+ *
+ * As part of the overall `FabricValue` contract, no instance of either class
+ * exposes any enumerable own property; all interaction with an instance is via
+ * its concrete class's instance members, and in particular an object-spread
+ * (`{ ...instance }`) on an instance always yields an empty object (`{}`).
+ */
+export type FabricSpecialObject = FabricSpecialObjectPlus<never>;
 
 /** A `FabricValue` other than `null` or `undefined`. */
 export type NonNullableFabricValue = NonNullable<FabricValue>;
 
 //
-// `FabricSpecialObject` and its two direct subclasses
+// `FabricValuePlus` type and most of its direct component types
+//
+// `FabricValue` is the baseline type used throughout the `data-model`, but in
+// terms of implementation, it is defined in terms of `FabricValuePlus` and not
+// the other way around. This section includes everything included in the type
+// except the two `FabricSpecialObject` classes.
 //
 
 /**
- * The nominal brand key declared on `FabricSpecialObject`. It exists only in
- * the type system — a runtime instance never carries the key; `instanceof
- * FabricSpecialObject` is its runtime form. Schema `required` presence
- * checks must therefore treat this key as satisfied by any
- * `FabricSpecialObject` rather than probing for it with `in`.
- */
-export const FABRIC_SPECIAL_OBJECT_BRAND = "@commonfabric/FabricSpecialObject";
-
-/**
- * Common base class for `FabricInstance` and `FabricPrimitive`, which are the
- * only two kinds of `FabricValue` beyond the JavaScript built-ins. The two
- * differ along one axis: whether the data model treats an instance as a
- * primitive. A `FabricPrimitive` is treated the way a built-in `string` or
- * `number` is; a `FabricInstance` is treated the way an `object` is. What
- * follows from that, and what a caller sees of it, is that a `FabricInstance`
- * may hold and expose arbitrary outgoing `FabricValue` references, and a
- * `FabricPrimitive` may not. Enables a single `instanceof` check for any
- * value known to be a `FabricValue`.
+ * Type which is equivalent to `FabricValue`, except that it is compatible with
+ * one additional type, the `PlusType`: This type is a union of `FabricValue`,
+ * `PlusType`, and the containers -- arrays, plain objects, and instances --
+ * whose contents may recursively include this type.
  *
- * As part of the overall `FabricValue` contract, no concrete instance of this
- * class exposes any enumerable own property; all interaction with an instance
- * is via its concrete class's instance members, and in particular an
- * object-spread (`{ ...instance }`) on an instance always yields an empty
- * object (`{}`).
- *
- * The `@commonfabric/FabricSpecialObject` member is a nominal brand with no
- * runtime existence — see the canonical declaration in
- * `data-model/src/interface.ts` for why it is a well-known string key and not
- * a `unique symbol`. The two declarations must agree exactly.
+ * **Note:** `FabricValuePlus<never>` is the same type as `FabricValue` itself.
  */
-export interface FabricSpecialObject {
-  readonly "@commonfabric/FabricSpecialObject": true;
-}
-
-export interface FabricSpecialObjectConstructor {
-  prototype: FabricSpecialObject;
-}
-
-export declare const FabricSpecialObject:
-  & FabricSpecialObjectConstructor
-  & (abstract new (...args: any) => FabricSpecialObject);
+export type FabricValuePlus<PlusType> =
+  | bigint
+  | boolean
+  | null
+  | number
+  | string
+  | symbol
+  | undefined
+  | FabricPrimitive
+  | FabricContainerValuePlus<PlusType>
+  | PlusType;
 
 /**
- * The nominal brand key declared on `FabricPrimitive`. As with
- * `FABRIC_SPECIAL_OBJECT_BRAND`, a runtime instance never carries the key, so
- * a schema derived from the type leaves it out.
+ * The container types that are part of `FabricValuePlus`.
  */
-export const FABRIC_PRIMITIVE_BRAND = "@commonfabric/FabricPrimitive";
+export type FabricContainerValuePlus<PlusType> =
+  | FabricArrayPlus<PlusType>
+  | FabricInstancePlus<PlusType>
+  | FabricPlainObjectPlus<PlusType>;
+
+/** Read-only array of `FabricValuePlus`es. */
+export type FabricArrayPlus<PlusType> = ReadonlyArray<
+  FabricValuePlus<PlusType>
+>;
+
+/** Read-only object/record of `FabricValuePlus`es. */
+export type FabricPlainObjectPlus<PlusType> = {
+  readonly [key: string]: FabricValuePlus<PlusType>;
+};
 
 /**
- * Abstract base class for the `FabricValue`s that participate in the fabric
- * protocol as primitives. An instance is always frozen, passes through the
- * native conversions unchanged, and holds no arbitrary outgoing `FabricValue`
- * reference. `FabricSpecialObject` says how this differs from
- * `FabricInstance`.
+ * A `FabricSpecialObject` whose instance variant includes a `PlusType`.
  */
-export interface FabricPrimitive extends FabricSpecialObject {
+export type FabricSpecialObjectPlus<PlusType> =
+  | FabricPrimitive
+  | FabricInstancePlus<PlusType>;
+
+//
+// `FabricSpecialObject`: the two special-object classes and their union
+//
+
+/**
+ * The `FabricValue`s that participate in the fabric protocol as primitives. An
+ * instance is always frozen, passes through the convertible-JS conversions
+ * unchanged, and holds no arbitrary outgoing `FabricValue` reference.
+ * `FabricSpecialObject` says how this differs from `FabricInstance`.
+ */
+export interface FabricPrimitive {
   /**
    * The nominal brand that tells a `FabricPrimitive` from a `FabricInstance`
-   * in the type system. The `FabricSpecialObject` brand alone leaves this
-   * type structurally empty, which would make every `FabricInstance` a
-   * `FabricPrimitive` as well; this member is what refuses that. It exists
-   * only in the type system, as that brand does. `FABRIC_PRIMITIVE_BRAND` is
-   * the key.
+   * and from every other object, in the type system. Without it this type is
+   * structurally empty, and every object would satisfy it, and through it
+   * `FabricValue`. It exists only in the type system: a runtime instance never
+   * carries the key.
    */
-  readonly "@commonfabric/FabricPrimitive": true;
+  readonly [FABRIC_PRIMITIVE_BRAND]: true;
+
+  /**
+   * Name of this instance's class in the schema `type` vocabulary: the `type`
+   * a schema names to admit this value by its class. Every instance of a class
+   * reports the same name, which need not be the name of the class.
+   */
+  readonly schemaType: FabricPrimitiveSchemaType;
 }
 
 export interface FabricPrimitiveConstructor {
@@ -230,21 +271,17 @@ export declare const FabricPrimitive:
   & (abstract new (...args: any) => FabricPrimitive);
 
 /**
- * Abstract base class for the `FabricValue`s that participate in the fabric
- * protocol as non-primitives. An instance may hold and expose arbitrary
- * outgoing `FabricValue` references, and is mutable until frozen.
- * `FabricSpecialObject` says how this differs from `FabricPrimitive`.
+ * Like `FabricInstance`, except that the instance's state may refer to
+ * `PlusType` values instead of _just_ `FabricValue`s.
  */
-export interface FabricInstance extends FabricSpecialObject {
+export interface FabricInstancePlus<PlusType> {
   /**
-   * The nominal brand that carries a `FabricInstancePlus`'s `PlusType`. It
-   * exists only in the type system, as the `FabricSpecialObject` brand does,
-   * and is `never` here: an instance of this type holds only `FabricValue`s,
-   * which is what makes it a `FabricInstancePlus<never>`, and what keeps a
-   * `FabricInstancePlus` of any other `PlusType` from being taken for one.
-   * `FABRIC_INSTANCE_PLUS_BRAND` is the key.
+   * The nominal brand that tells an instance from any other object with the
+   * two clone methods, in the type system, and whose type is the `PlusType`
+   * the instance may hold. It exists only in the type system: a runtime
+   * instance never carries the key.
    */
-  readonly "@commonfabric/FabricInstancePlus"?: never;
+  readonly [FABRIC_INSTANCE_PLUS_BRAND]: PlusType;
 
   /**
    * Returns a new deep clone of this instance with equivalent data but no
@@ -254,11 +291,19 @@ export interface FabricInstance extends FabricSpecialObject {
    * false`, produces a deeply-mutable instance with no visible shared
    * reference structure with the original.
    */
-  deepClone(frozen: boolean): FabricInstance;
+  deepClone(frozen: boolean): FabricInstancePlus<PlusType>;
 
   /** Returns a shallow clone of this instance with the requested frozenness. */
-  shallowClone(frozen: boolean): FabricInstance;
+  shallowClone(frozen: boolean): FabricInstancePlus<PlusType>;
 }
+
+/**
+ * The `FabricValue`s that participate in the fabric protocol as non-primitives.
+ * An instance may hold and expose arbitrary outgoing `FabricValue` references,
+ * and is mutable until frozen. `FabricSpecialObject` says how this differs
+ * from `FabricPrimitive`.
+ */
+export type FabricInstance = FabricInstancePlus<never>;
 
 export interface FabricInstanceConstructor {
   prototype: FabricInstance;
@@ -269,67 +314,6 @@ export declare const FabricInstance:
   & (abstract new (...args: any) => FabricInstance);
 
 //
-// `FabricValuePlus` and related types
-//
-
-/**
- * The nominal brand key declared on `FabricInstance` and `FabricInstancePlus`,
- * whose type in a declaration is the `PlusType` the instance may hold. As with
- * `FABRIC_SPECIAL_OBJECT_BRAND`, a runtime instance never carries the key, so
- * a schema derived from either type leaves it out.
- */
-export const FABRIC_INSTANCE_PLUS_BRAND = "@commonfabric/FabricInstancePlus";
-
-/**
- * Type which is equivalent to `FabricValue`, except that it is compatible with
- * one additional type, the `PlusType`: This type is a union of `FabricValue`,
- * `PlusType`, and the containers -- arrays, plain objects, and instances --
- * whose contents may recursively include this type.
- *
- * **Note:** `FabricValuePlus<never>` is the same type as `FabricValue` itself.
- */
-export type FabricValuePlus<PlusType> =
-  | FabricValue
-  | PlusType
-  | FabricContainerValuePlus<PlusType>;
-
-/**
- * The container types that are part of `FabricValuePlus`.
- */
-export type FabricContainerValuePlus<PlusType> =
-  | FabricArrayPlus<PlusType>
-  | FabricInstancePlus<PlusType>
-  | FabricPlainObjectPlus<PlusType>;
-
-/** Read-only array of `FabricValuePlus`es. */
-export interface FabricArrayPlus<PlusType>
-  extends ReadonlyArray<FabricValuePlus<PlusType>> {}
-
-/** Read-only object/record of `FabricValuePlus`es. */
-export interface FabricPlainObjectPlus<PlusType>
-  extends Readonly<Record<string, FabricValuePlus<PlusType>>> {}
-
-/**
- * Like `FabricInstance`, except that the instance may hold `PlusType` values
- * where a `FabricInstance` holds only `FabricValue`s. A `FabricInstance` is a
- * `FabricInstancePlus<never>`, and is assignable to this type at any
- * `PlusType`; the reverse holds only at `never`.
- */
-export interface FabricInstancePlus<PlusType> extends FabricSpecialObject {
-  /**
-   * The nominal brand that carries `PlusType`. It exists only in the type
-   * system; the same-named member of `FabricInstance` says how.
-   */
-  readonly "@commonfabric/FabricInstancePlus"?: PlusType;
-
-  /** Like `FabricInstance.deepClone()`, but returning this type. */
-  deepClone(frozen: boolean): FabricInstancePlus<PlusType>;
-
-  /** Like `FabricInstance.shallowClone()`, but returning this type. */
-  shallowClone(frozen: boolean): FabricInstancePlus<PlusType>;
-}
-
-//
 // Concrete `FabricPrimitive` classes
 //
 
@@ -338,6 +322,9 @@ export interface FabricInstancePlus<PlusType> extends FabricSpecialObject {
  * `sliceBuffer()`, or `copyInto()`.
  */
 export interface FabricBytes extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricBytes";
+
   readonly length: number;
   slice(start?: number, end?: number): Uint8Array<ArrayBuffer>;
   sliceBuffer(start?: number, end?: number): ArrayBuffer;
@@ -352,10 +339,49 @@ export interface FabricBytesConstructor {
 export declare const FabricBytes: FabricBytesConstructor;
 
 /**
+ * Temporal type representing a span of time, as a count of days. Wraps a
+ * `bigint` value.
+ */
+export interface FabricDurationDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationDay";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationDayConstructor {
+  new (value: bigint): FabricDurationDay;
+  prototype: FabricDurationDay;
+}
+
+export declare const FabricDurationDay: FabricDurationDayConstructor;
+
+/**
+ * Temporal type representing a span of time, as a count of nanoseconds. Wraps
+ * a `bigint` value.
+ */
+export interface FabricDurationNsec extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationNsec";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationNsecConstructor {
+  new (value: bigint): FabricDurationNsec;
+  prototype: FabricDurationNsec;
+}
+
+export declare const FabricDurationNsec: FabricDurationNsecConstructor;
+
+/**
  * Temporal type representing a particular day, as a count of days from the
  * POSIX Epoch. Wraps a `bigint` value.
  */
 export interface FabricEpochDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricEpochDay";
+
   readonly value: bigint;
 }
 
@@ -371,6 +397,9 @@ export declare const FabricEpochDay: FabricEpochDayConstructor;
  * Wraps a `bigint` value.
  */
 export interface FabricEpochNsec extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricEpochNsec";
+
   readonly value: bigint;
 }
 
@@ -385,6 +414,9 @@ export declare const FabricEpochNsec: FabricEpochNsecConstructor;
  * A content-addressed identifier: a hash digest paired with an algorithm tag.
  */
 export interface FabricHash extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricHash";
+
   readonly tag: string;
   readonly bytes: Uint8Array;
   readonly length: number;
@@ -412,6 +444,9 @@ export declare const FabricHash: FabricHashConstructor;
  * throws.
  */
 export interface FabricKeyPair extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricKeyPair";
+
   readonly algorithm: string;
   readonly hasMaterial: boolean;
 
@@ -452,18 +487,21 @@ export declare const FabricKeyPair: FabricKeyPairConstructor;
  * An immutable regular expression.
  *
  * The pattern is held as a flavor / source / flags triple rather than as a
- * native `RegExp`, so that flavors with no native representation can still be
- * carried. `value` reconstitutes a native `RegExp` where one exists.
+ * JS `RegExp`, so that flavors with no JS representation can still be
+ * carried. `value` reconstitutes a JS `RegExp` where one exists.
  */
 export interface FabricRegExp extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricRegExp";
+
   readonly source: string;
   readonly flags: string;
   readonly flavor: string;
 
   /**
-   * A fresh native `RegExp` equivalent to this value, returned anew on each
+   * A fresh JS `RegExp` equivalent to this value, returned anew on each
    * call so the internal instance is never aliased out. Throws for a flavor
-   * with no native `RegExp` representation.
+   * with no JS `RegExp` representation.
    */
   readonly value: RegExp;
 }
@@ -476,6 +514,131 @@ export interface FabricRegExpConstructor {
 
 export declare const FabricRegExp: FabricRegExpConstructor;
 
+/**
+ * Why a `FabricUnavailable` stands where data would otherwise be. The two
+ * transient reasons say the data is on its way; `error` says producing it
+ * failed, and is the one reason that carries a kind and a message.
+ */
+export type UnavailableReason = "pending" | "syncing" | "error";
+
+/**
+ * The kinds of failure a `FabricUnavailable` with reason `error` sorts into.
+ * `general` is the kind for a failure none of the others describes.
+ */
+export type UnavailableErrorKind =
+  | "general"
+  | "schemaMismatch"
+  | "invalidInput"
+  | "network"
+  | "decode"
+  | "compile"
+  | "provider"
+  | "sync";
+
+/**
+ * A marker standing in for data that is not available, saying why. It holds
+ * no data of its own: the reason, and for the `error` reason the kind of
+ * error and a message, are the whole of what it says. Only the `error` reason
+ * carries a kind, and it always does; only the `error` reason may carry a
+ * message, and `errorMessage` supplies one for its kind when none was given.
+ * For the other two reasons every error member is `null`.
+ */
+export interface FabricUnavailable extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricUnavailable";
+
+  /** Why the data is unavailable. */
+  readonly reason: UnavailableReason;
+
+  /** The kind of error, when the reason is `error`; `null` otherwise. */
+  readonly errorKind: UnavailableErrorKind | null;
+
+  /**
+   * The message, when the reason is `error`: the one given at construction,
+   * or the kind's default when none was. `null` for a transient reason.
+   */
+  readonly errorMessage: string | null;
+
+  /**
+   * The message as given at construction, with no default supplied: `null`
+   * for a transient reason, and for an `error` whose message is its kind's
+   * default or was never given.
+   */
+  readonly rawErrorMessage: string | null;
+
+  /** Whether the reason is `pending`. */
+  isPending(): boolean;
+
+  /** Whether the reason is `syncing`. */
+  isSyncing(): boolean;
+
+  /**
+   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
+   * to the non-`null` values the `error` reason always carries.
+   */
+  isError(): this is {
+    readonly errorKind: UnavailableErrorKind;
+    readonly errorMessage: string;
+  };
+
+  /**
+   * Whether the data is on its way rather than failed: `true` for the
+   * `pending` and `syncing` reasons, `false` for `error` whatever its kind.
+   */
+  isTransient(): boolean;
+}
+
+export interface FabricUnavailableConstructor {
+  new (
+    reason: UnavailableReason,
+    errorKind?: UnavailableErrorKind | null,
+    errorMessage?: string | null,
+  ): FabricUnavailable;
+  prototype: FabricUnavailable;
+}
+
+export declare const FabricUnavailable: FabricUnavailableConstructor;
+
+//
+// The `FabricPrimitive` schema `type` vocabulary
+//
+
+/**
+ * Union of the concrete `FabricPrimitive` classes this module declares. Every
+ * type that ranges over those classes is derived from this one.
+ */
+export type ConcreteFabricPrimitive =
+  | FabricBytes
+  | FabricDurationDay
+  | FabricDurationNsec
+  | FabricEpochDay
+  | FabricEpochNsec
+  | FabricHash
+  | FabricKeyPair
+  | FabricRegExp
+  | FabricUnavailable;
+
+/**
+ * One of the `FabricPrimitive` validation types -- a non-standard addition to
+ * the JSON Schema `type` vocabulary. Each name identifies a concrete
+ * `FabricPrimitive` class, being the name its instances report as
+ * `.schemaType`, and a value matches by prototype (`instanceof`), not by
+ * structure. `"object"` also accepts these values -- every `FabricPrimitive`
+ * is a subtype of `"object"` the way an `"integer"` value satisfies a
+ * `"number"` schema -- so schemas that do not use this vocabulary admit them
+ * all the same.
+ */
+export type FabricPrimitiveSchemaType = ConcreteFabricPrimitive["schemaType"];
+
+/** Every `FabricPrimitiveSchemaType`, one entry per concrete class. */
+export declare const FABRIC_PRIMITIVE_SCHEMA_TYPES:
+  readonly FabricPrimitiveSchemaType[];
+
+/** Whether the given schema type names a `FabricPrimitive` class. */
+export declare function isFabricPrimitiveSchemaType(
+  type: string,
+): type is FabricPrimitiveSchemaType;
+
 //
 // Concrete `FabricInstance` classes
 //
@@ -486,7 +649,7 @@ export declare const FabricRegExp: FabricRegExpConstructor;
  * whose keys must not collide with the slot names.
  */
 export type FabricErrorState = {
-  /** Constructor name of the originating native `Error` (e.g. `"TypeError"`). */
+  /** Constructor name of the originating JS `Error` (e.g. `"TypeError"`). */
   readonly type: string;
 
   /** The `.name` property. Omit to mean "same as `type`". */
@@ -536,8 +699,8 @@ export interface FromNativeErrorOptions {
   /**
    * Converter applied to the error's `cause` and to each of its custom
    * enumerable properties, whose result is what the instance holds. When
-   * absent, a value that is already a valid `FabricValue` is held as it
-   * stands, and anything else is converted the way `fabricFromNativeValue()`
+   * absent, a value that is already a valid `FabricValue` is held as it stands,
+   * and anything else is converted the way `fabricFromConvertibleJsValue()`
    * converts it, without freezing.
    */
   readonly convert?: (value: unknown) => FabricValue;
@@ -590,8 +753,10 @@ export interface DebugValueOptions {
    * Maximum depth of result nesting: a positive integer, or `Infinity` for as
    * deep as the conversion allows. An item which would require further
    * nesting is instead converted into a form suggestive of the elided
-   * information. When absent, the depth is ten levels. A large value is capped;
-   * there is no guarantee about the _actual_ possible maximum depth.
+   * information. The contents of a `FabricPrimitive` are nested to this depth
+   * in their own right, whatever the depth of the `FabricPrimitive` itself.
+   * When absent, the depth is ten levels. A large value is capped; there is no
+   * guarantee about the _actual_ possible maximum depth.
    */
   readonly maxDepth?: number;
 
@@ -600,10 +765,21 @@ export interface DebugValueOptions {
    * integer, or `Infinity` for as many as the conversion allows. An array
    * with more elements than this has only the elements at indices below the
    * limit converted, and in place of the rest a form suggestive of the
-   * elision, which includes the array's actual length. When absent, the limit
-   * is one hundred. A large value is capped.
+   * elision, which includes the array's actual length. This applies to an
+   * array within the contents of a `FabricPrimitive` too. When absent, the
+   * limit is one hundred. A large value is capped.
    */
   readonly maxArrayLength?: number;
+
+  /**
+   * Maximum number of bytes of a buffer which are rendered: a positive
+   * integer, or `Infinity` for as many as the rendering allows. A buffer is
+   * what holds the bytes of a `FabricPrimitive`, such as those of a
+   * `FabricBytes`. One with more bytes than this has only that many rendered,
+   * and after them a note of the elision, which includes the buffer's actual
+   * length. When absent, the limit is two hundred. A large value is capped.
+   */
+  readonly maxBufferLength?: number;
 
   /**
    * Maximum number of properties of an object which are represented: a

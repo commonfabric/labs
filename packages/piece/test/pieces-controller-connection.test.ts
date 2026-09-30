@@ -87,7 +87,7 @@ describe("pieces-controller", () => {
           }
         });
 
-        it("hands the read ceiling and its mode to the runtime it builds", async () => {
+        it("builds the runtime under the posture it is given rather than the one the deployment declares", async () => {
           const originalHealthCheck = Runtime.prototype.healthCheck;
           let created: Runtime | undefined;
           Runtime.prototype.healthCheck = function () {
@@ -98,18 +98,57 @@ describe("pieces-controller", () => {
             await expect(PiecesController.initialize({
               apiUrl,
               identity,
-              space: "read-ceiling-forwarded",
-              cfcReadMaxConfidentiality: [identity.did()],
-              cfcReadOnExceed: "skip",
+              space: "posture-given",
+              experimental: { serverExecution: false },
             })).rejects.toThrow(
               'Could not connect to "http://toolshed.test/".',
             );
-            expect(created?.cfcReadMaxConfidentiality).toEqual([
-              identity.did(),
-            ]);
-            expect(created?.cfcReadOnExceed).toBe("skip");
+            expect(created?.experimental.serverExecution).toBe(false);
+            // The posture was the caller's, so the deployment was not asked
+            // for one; with the health probe stubbed, nothing was requested.
+            expect(requested).toEqual([]);
           } finally {
             Runtime.prototype.healthCheck = originalHealthCheck;
+          }
+        });
+
+        describe("the read ceiling", () => {
+          // Stated per arm: on the OFF arm the controller's own runtime
+          // issues the session's queries under the ceiling, and on the ON
+          // arm the runtime hands it to its sessions for the space server's
+          // runtime to serve under. Either way the runtime the controller
+          // builds holds it.
+
+          for (const serverExecution of [false, true]) {
+            it(`hands the read ceiling and its mode to the runtime it builds with serverExecution ${serverExecution}`, async () => {
+              const originalHealthCheck = Runtime.prototype.healthCheck;
+              let created: Runtime | undefined;
+              Runtime.prototype.healthCheck = function () {
+                created = this;
+                return Promise.resolve(false);
+              };
+              try {
+                await expect(PiecesController.initialize({
+                  apiUrl,
+                  identity,
+                  space: "read-ceiling-forwarded",
+                  experimental: { serverExecution },
+                  cfcReadMaxConfidentiality: [identity.did()],
+                  cfcReadOnExceed: "skip",
+                })).rejects.toThrow(
+                  'Could not connect to "http://toolshed.test/".',
+                );
+                expect(created?.experimental.serverExecution).toBe(
+                  serverExecution,
+                );
+                expect(created?.cfcReadMaxConfidentiality).toEqual([
+                  identity.did(),
+                ]);
+                expect(created?.cfcReadOnExceed).toBe("skip");
+              } finally {
+                Runtime.prototype.healthCheck = originalHealthCheck;
+              }
+            });
           }
         });
 

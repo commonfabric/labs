@@ -36,12 +36,14 @@ import {
   FragmentWriter,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
+import {
+  shuffledPaths,
+  shuffleNotice,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 import { internSchema } from "@commonfabric/data-model-schema";
-import {
-  toCompactDebugString,
-  toDebugKindString,
-} from "@commonfabric/data-model";
+import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -67,7 +69,11 @@ import type {
   SettleStats,
   Stream,
 } from "@commonfabric/runner";
-import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  type CfcEnforcementMode,
+  type CfcFlowLabelsMode,
+  resetCfcDenialAnnouncements,
+} from "@commonfabric/runner/cfc";
 import {
   type CDFPoint,
   clearTimingMeasures,
@@ -83,10 +89,10 @@ import {
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
 } from "@commonfabric/utils/logger";
-import { timeout } from "@commonfabric/utils/sleep";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
+import { printCfcDenials, warningsCountCfcDenial } from "./cfc-denials.ts";
 import {
   evaluateReadBudget,
   parseReadBudgets,
@@ -111,7 +117,14 @@ import {
   runMultiUserTestPattern,
 } from "./multi-user-test-runner.ts";
 import { inferProgramRoot } from "./program-root.ts";
-import { buildActionEvent } from "./trusted-test-event.ts";
+import { buildActionEvent } from "./trusted-action-event.ts";
+
+/**
+ * How many idle-then-sync rounds a step's settle performs before it gives up
+ * on the runtime converging. A round that resolves at once ends the loop, so
+ * the cap is reached only by a graph that keeps scheduling work.
+ */
+const MAX_SETTLE_ROUNDS = 20;
 
 const phaseLogger = getLogger("test-runner-phase", {
   enabled: false,
@@ -348,7 +361,12 @@ export interface TestRunResult {
 }
 
 export interface TestRunnerOptions {
-  timeout?: number;
+  /**
+   * Compile the file's program and run nothing: no steps, no coverage
+   * written, no multi-user participants started. What the run leaves behind
+   * is the compile byte cache. `compileTestPatterns()` is the caller.
+   */
+  compileOnly?: boolean;
   verbose?: boolean;
   /** Disables diagnostic replay for timing measurements. */
   noIdempotencyCheck?: boolean;
@@ -377,6 +395,12 @@ export interface TestRunnerOptions {
 
   /** Override CFC enforcement mode for the test runtime. */
   cfcEnforcementMode?: CfcEnforcementMode;
+
+  /** Override flow-label propagation for every test runtime. */
+  cfcFlowLabels?: CfcFlowLabelsMode;
+
+  /** Print each CFC denial, with the inputs behind it, as it happens. */
+  cfcDenials?: boolean;
 
   /** Shared compiled-module-byte cache for direct harness compiles. */
   moduleByteCache?: ModuleByteCache;
@@ -444,6 +468,12 @@ export interface TestRunnerOptions {
     identity: Identity;
     storageManager: RuntimeOptions["storageManager"];
 
+    /** Waits for host-owned work, such as an external agent, before test steps run. */
+    beforeAssertions?: (
+      runtime: Runtime,
+      result: Cell<unknown>,
+    ) => Promise<void>;
+
     /**
      * Cause for the test pattern's result cell, pinning its entity id.
      *
@@ -452,6 +482,12 @@ export interface TestRunnerOptions {
      * differs every run can never be addressed again.
      */
     resultCause?: unknown;
+
+    /** The API origin serving the caller's remote storage and agent runs. */
+    apiUrl?: URL;
+
+    /** Keeps a caller-provisioned home pattern and its registered services. */
+    preserveDefaultPattern?: boolean;
 
     /** Records every pattern the run materializes; see the vintage capture. */
     onPatternInstantiated?: PatternInstantiationObserver;
@@ -588,12 +624,18 @@ function matchesTimingPrefix(name: string, prefixes: string[]): boolean {
   );
 }
 
-function printLoggerStats(
+/** Prints timing and call-count summaries, using absolute or baseline deltas. */
+export function printLoggerStats(
   elapsedMs: number,
   useDelta: boolean,
   label?: string,
   statsInclude: string[] = [],
 ): void {
+  statsInclude = [
+    "cfc",
+    "extended-storage-transaction/prepareCfc",
+    ...statsInclude,
+  ];
   const counts = useDelta ? getGlobalLogCountDeltas() : getGlobalLogCounts();
   const dp = useDelta ? "Δ" : "";
   const labelStr = label ? ` | ${label}:` : ":";
@@ -642,6 +684,20 @@ function printLoggerStats(
           max: timing.max,
         });
       }
+    }
+  }
+
+  // Zero rows distinguish a phase that did no CFC work from a missing probe.
+  for (
+    const name of [
+      "extended-storage-transaction/prepareCfc",
+      "cfc/deriveFlowJoin",
+      "cfc/collectConsumedLabel",
+      "cfc/preparedDigestFor",
+    ]
+  ) {
+    if (!entries.some((entry) => entry.name === name)) {
+      entries.push({ name, n: 0, total: 0, avg: 0, p50: 0, p95: 0, max: 0 });
     }
   }
 
@@ -1055,7 +1111,12 @@ export async function runTestPattern(
   testPath: string,
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
-  const TIMEOUT = options.timeout ?? 60000;
+  // A denial logs its warning once per kind, and a denial's warning is what
+  // fails a file that does not allow for one, so each file starts with every
+  // kind unannounced. Otherwise a second file denied the same way would log
+  // nothing, and pass.
+  resetCfcDenialAnnouncements();
+
   // The effective import root: an explicit `root` wins; otherwise the nearest
   // package root above the test file, so imports that span the package (shared
   // helpers, sibling patterns) resolve without a flag. When neither exists the
@@ -1128,8 +1189,9 @@ export async function runTestPattern(
   // We can't read it until after compile, so the injected fetch closes over a
   // late-populated `fetchMockEntries` and falls through to the real fetch until
   // (and unless) the test declares mocks. Driving the in-flight fetchJson to
-  // completion is the harness's existing job — a `{ settle: true }` step (or any
-  // action's settle) calls `runtime.settled()`, which awaits the fetch chain.
+  // completion is the harness's existing job — the assertion whose read starts
+  // it, a `{ settle: true }` step, and any action's settle all wait on
+  // `runtime.settled()`, which awaits the fetch chain.
   const realFetch = globalThis.fetch.bind(globalThis);
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
@@ -1138,12 +1200,9 @@ export async function runTestPattern(
     ["runTestPattern", "runtime"],
     () =>
       // `runtimePresets.patternTest` carries the shared first-party posture
-      // (CT-1814): the enforce-explicit CFC pin lives in the preset core, so
-      // pattern tests act as a regression net for CFC without this site
-      // restating the production default. Params below are this harness's
-      // declared deltas.
+      // (CT-1814). Params below are this harness's declared deltas.
       new Runtime(runtimePresets.patternTest({
-        apiUrl: new URL(import.meta.url),
+        apiUrl: options.storageHost?.apiUrl ?? new URL(import.meta.url),
         storageManager,
         experimental: experimentalOptionsFromEnv(Deno.env.get),
         moduleByteCache: options.moduleByteCache ??
@@ -1151,9 +1210,13 @@ export async function runTestPattern(
         // Inject a fetch that honors test-declared `fetchMocks` (scoped to this
         // runtime; no process-global mutation).
         fetch: mockFetch,
-        // Tests that need a laxer mode than the shared pin opt out per test.
+        // Tests that need a different mode than the harness posture opt in
+        // per test.
         ...(options.cfcEnforcementMode !== undefined
           ? { cfcEnforcementMode: options.cfcEnforcementMode }
+          : {}),
+        ...(options.cfcFlowLabels !== undefined
+          ? { cfcFlowLabels: options.cfcFlowLabels }
           : {}),
         ...(options.storageHost?.onPatternInstantiated !== undefined
           ? { onPatternInstantiated: options.storageHost.onPatternInstantiated }
@@ -1171,6 +1234,9 @@ export async function runTestPattern(
           }
         },
       })),
+  );
+  console.log(
+    `  CFC posture: enforcement=${runtime.cfcEnforcementMode} flowLabels=${runtime.cfcFlowLabels}`,
   );
   if (!options.noIdempotencyCheck) runtime.enableIdempotencyCheck();
   else if (options.verbose) {
@@ -1215,10 +1281,24 @@ export async function runTestPattern(
       console.log(line);
     }
   };
+  const printStepTimings = (label: string, started: number) => {
+    const duration = performance.now() - started;
+    if (options.verbose && duration >= (options.statsThreshold ?? 5000)) {
+      printLoggerStats(
+        performance.now() - startTime,
+        true,
+        `${label} took ${fmtMs(duration)}`,
+        options.statsInclude,
+      );
+    }
+  };
   if (readCost !== undefined) {
     runtime.scheduler.setReadStatsEnabled(true);
   }
   runtime.telemetry.addEventListener("telemetry", onReadCost);
+  const stopPrintingDenials = options.cfcDenials
+    ? printCfcDenials((line) => console.log(`    ${line}`))
+    : undefined;
   // Channel 1: capture pattern-code console.error / console.warn calls that
   // flow through the scheduler's harness console event.  The handler must
   // return args unchanged so the call still appears in the host console.
@@ -1271,10 +1351,22 @@ export async function runTestPattern(
       // path does (`patternFromEvaluation`). Without registration, anonymous
       // map/filter/flatMap ops fall back to a defer-corrupted embedded graph and a
       // grandchild derived-internal output throws at bind time (CT-1811).
+      // The closure is written into the test's space, as deploying the test
+      // would write it, so that a pattern the test instantiates with
+      // `inSpace()` can be replicated from it into its own space. A
+      // compile-only run instantiates nothing here, and neither does a
+      // multi-user test, whose participants run in workers of their own; so
+      // neither writes anything, a caller-supplied store included.
       () =>
-        runtime.patternManager.compileAndRegisterModules(program, {
-          patternCoverage,
-        }),
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          { patternCoverage },
+          options.compileOnly ? undefined : {
+            space,
+            when: (result) =>
+              multiUserDescriptorMeta(result.main?.default) === undefined,
+          },
+        ),
     );
     const { main } = evalResult;
 
@@ -1285,11 +1377,30 @@ export async function runTestPattern(
     }
 
     // Read the test's opt-in fetch mocks now (after compile, before the run):
-    // a fetchJson with a non-empty URL fires during the initial settle, so the
-    // entries must be in place before `runtime.run(...)` below. `main` is the
+    // a fetchJson with a non-empty URL fires as soon as something reads its
+    // result, which the pattern's own graph can do during the initial settle,
+    // so the entries must be in place before `runtime.run(...)` below. `main` is the
     // module namespace, so a named `fetchMocks` export is reachable.
     fetchMockEntries = readFetchMocks(main);
     readBudgets = parseReadBudgets(main.readBudgets);
+
+    // A compile-only run ends here: the program's modules are in the byte
+    // cache, which is all it was asked for. Nothing ran, so there is no
+    // coverage to write, and a multi-user descriptor's participants are not
+    // started, since they compile this same program from that cache.
+    if (options.compileOnly) {
+      writeLocalPatternCoverage = false;
+      return {
+        path: testPath,
+        results: [],
+        totalDurationMs: performance.now() - startTime,
+        navigations: [],
+        runtimeErrors: [],
+        nonIdempotent: [],
+        consoleErrors: [],
+        consoleWarnings: [],
+      };
+    }
 
     // Multi-user tests export a descriptor ({ setup?, participants }) as the
     // default export. They run in worker-isolated runtimes against a shared
@@ -1327,6 +1438,11 @@ export async function runTestPattern(
     // create a minimal equivalent so patterns that use wish("#default") to
     // access the piece registry and related space services work correctly.
     await withPhase(["runTestPattern", "defaultPatternSetup"], async () => {
+      if (options.storageHost?.preserveDefaultPattern === true) {
+        const home = runtime.getHomeSpaceCell();
+        await home.sync();
+        if (home.get()?.defaultPattern !== undefined) return;
+      }
       const setupTx = runtime.edit();
       const spaceCell = runtime.getCell(space, space, undefined, setupTx);
       const defaultPatternCell = runtime.getCell(
@@ -1337,13 +1453,12 @@ export async function runTestPattern(
       );
       const pieceRegistry = (defaultPatternCell as any).key("pieceRegistry");
       pieceRegistry.set([]);
-      const addPiece = runtime.getCell(
+      const addPiece = runtime.getCell<unknown>(
         space,
         "test-default-add-piece",
-        undefined,
+        { asCell: ["stream"] },
         setupTx,
       );
-      addPiece.setRaw({ $stream: true });
       (defaultPatternCell as any).key("addPiece").set(addPiece);
       const testPieceRegistrationCount = (defaultPatternCell as any).key(
         "testPieceRegistrationCount",
@@ -1439,6 +1554,8 @@ export async function runTestPattern(
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
 
+    await options.storageHost?.beforeAssertions?.(runtime, patternResult);
+
     // 4. Get the tests array from pattern output (the reserved [TESTS] key)
     const testsCell = await withPhase(
       ["runTestPattern", "testsCell"],
@@ -1503,60 +1620,47 @@ export async function runTestPattern(
     }
 
     let settlementFailed = false;
-    const settleRuntime = async (
-      stepIndex: number,
-      stepLabel: string,
-      maxSettle = 20,
-    ): Promise<void> => {
+    const settleRuntime = async (stepLabel: string): Promise<void> => {
       await withPhase(
         ["runTestPattern", "step", stepLabel, "settle"],
-        () =>
-          Promise.race([
-            (async () => {
-              for (let settle = 0; settle < maxSettle; settle++) {
-                const iterStart = performance.now();
-                await withPhase(
-                  [
-                    "runTestPattern",
-                    "step",
-                    stepLabel,
-                    "settle",
-                    `iter-${settle}`,
-                    "idle",
-                  ],
-                  () => runtime.idle(),
-                );
-                await withPhase(
-                  [
-                    "runTestPattern",
-                    "step",
-                    stepLabel,
-                    "settle",
-                    `iter-${settle}`,
-                    "synced",
-                  ],
-                  () => storageManager.synced(),
-                );
-                const totalMs = performance.now() - iterStart;
-                if (options.verbose && totalMs > 1) {
-                  console.log(
-                    `      settle[${settle}]: ${fmtMs(totalMs)}`,
-                  );
-                }
-                // If both resolved nearly instantly, the system is settled.
-                // synced() has ~1ms of overhead even when idle, so use 2ms.
-                if (settle > 0 && totalMs < 2) break;
-              }
-              await withPhase(
-                ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
-                () => runtime.idle(),
-              );
-            })(),
-            timeout(
-              TIMEOUT,
-              `Action at index ${stepIndex} timed out after ${TIMEOUT}ms`,
-            ),
-          ]),
+        async () => {
+          for (let settle = 0; settle < MAX_SETTLE_ROUNDS; settle++) {
+            const iterStart = performance.now();
+            await withPhase(
+              [
+                "runTestPattern",
+                "step",
+                stepLabel,
+                "settle",
+                `iter-${settle}`,
+                "idle",
+              ],
+              () => runtime.idle(),
+            );
+            await withPhase(
+              [
+                "runTestPattern",
+                "step",
+                stepLabel,
+                "settle",
+                `iter-${settle}`,
+                "synced",
+              ],
+              () => storageManager.synced(),
+            );
+            const totalMs = performance.now() - iterStart;
+            if (options.verbose && totalMs > 1) {
+              console.log(`      settle[${settle}]: ${fmtMs(totalMs)}`);
+            }
+            // If both resolved nearly instantly, the system is settled.
+            // synced() has ~1ms of overhead even when idle, so use 2ms.
+            if (settle > 0 && totalMs < 2) break;
+          }
+          await withPhase(
+            ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
+            () => runtime.idle(),
+          );
+        },
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1565,20 +1669,15 @@ export async function runTestPattern(
 
     // Explicit `{ settle: true }` test step: in addition to the light per-action
     // settle above, wait for ALL in-flight async builtin work — the sqlite query
-    // RPC + result writeback, fetch / llm calls — via `runtime.settled()`. A test
-    // that asserts on an async-builtin result (e.g. a `db.query`) inserts this
-    // before the assertion so it never reads a half-settled `{ pending: true }`.
+    // RPC + result writeback, fetch / llm calls — via `runtime.settled()`. Only
+    // work something has already read is in flight; a built-in nothing has read
+    // yet has not started, and the assertion that first reads it waits for it
+    // on its own. The step is for a point the author names — before an action
+    // that must see the work of an earlier one landed, say.
     const settleFully = async (stepIndex: number): Promise<void> => {
       await withPhase(
         ["runTestPattern", "step", `settle_${stepIndex}`, "settled"],
-        () =>
-          Promise.race([
-            runtime.settled(),
-            timeout(
-              TIMEOUT,
-              `Settle step at index ${stepIndex} timed out after ${TIMEOUT}ms`,
-            ),
-          ]),
+        () => runtime.settled(),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1653,13 +1752,14 @@ export async function runTestPattern(
         // in-flight async builtin I/O — sqlite query RPC + writeback, fetch / llm)
         // before the next step. A test inserts this before an assertion that reads
         // an async-builtin result so it never observes a half-settled state. The
-        // step is transparent — it produces no result. A settle timeout propagates
-        // to the outer handler and fails the whole run (a stuck settle is fatal).
+        // step is transparent: it produces no result. A settlement error
+        // propagates to the outer handler and fails the whole run.
         if (isSettle) {
           try {
             if (!stepValue.skip) await settleFully(i);
           } finally {
             printReadCost(`settle_${i}`, itemStart);
+            printStepTimings(`settle_${i}`, itemStart);
           }
           continue;
         }
@@ -1673,9 +1773,13 @@ export async function runTestPattern(
           const renderName = `render_${renderCount}`;
           try {
             if (!stepValue.skip) {
-              await materializeTestVDOM(
-                stepCell.key("render") as Cell<unknown>,
-                () => settleRuntime(i, renderName, 20),
+              await withPhase(
+                ["runTestPattern", "step", renderName, "materialize"],
+                () =>
+                  materializeTestVDOM(
+                    stepCell.key("render") as Cell<unknown>,
+                    () => settleRuntime(renderName),
+                  ),
               );
               if (options.verbose) console.log(`  ◇ ${renderName}`);
             } else if (options.verbose) {
@@ -1683,6 +1787,7 @@ export async function runTestPattern(
             }
           } finally {
             printReadCost(renderName, itemStart);
+            printStepTimings(renderName, itemStart);
           }
           continue;
         }
@@ -1690,8 +1795,8 @@ export async function runTestPattern(
         if (!isAction && !isAssertion) {
           throw new Error(
             `Test step at index ${i} must have an 'action', 'assertion', ` +
-              `'render', 'settle', 'label', or 'await' key. Got: ${
-                toCompactDebugString(Object.keys(stepCell.get() as object))
+              debugStr`'render', 'settle', 'label', or 'await' key. Got: $quote,long${
+                Object.keys(stepCell.get() as object)
               }`,
           );
         }
@@ -1772,7 +1877,7 @@ export async function runTestPattern(
           // resolve quickly (< 1ms), indicating quiescence. Max iterations
           // as a safety net against infinite loops.
           try {
-            await settleRuntime(i, actionName, 20);
+            await settleRuntime(actionName);
           } catch (err) {
             results.push({
               name: actionName,
@@ -1930,13 +2035,13 @@ export async function runTestPattern(
           let passed = false;
           let error: string | undefined;
 
+          const assertionCell = () =>
+            stepCell.key("assertion") as Cell<unknown>;
           const evaluateAssertion = async (): Promise<
             { passed: boolean; error?: string }
           > => {
-            // Get the assertion cell via .key()
             try {
-              const assertCell = stepCell.key("assertion") as Cell<unknown>;
-              const value = await assertCell.pull();
+              const value = await assertionCell().pull();
               // An `assert(...)` assertion carries the operands recorded while
               // the condition ran, so a failure names them and their values.
               return assertionOutcome(value);
@@ -1950,31 +2055,30 @@ export async function runTestPattern(
             }
           };
 
-          ({ passed, error } = await withPhase(
-            ["runTestPattern", "step", assertionName, "evaluate"],
-            () => evaluateAssertion(),
-          ));
-
-          if (!passed && lastActionIndex !== null) {
-            try {
-              for (let retry = 0; retry < 3 && !passed; retry++) {
-                await new Promise((resolve) => setTimeout(resolve, 0));
-                await settleRuntime(i, assertionName, 6);
-                ({ passed, error } = await withPhase(
-                  [
-                    "runTestPattern",
-                    "step",
-                    assertionName,
-                    `retry-${retry + 1}`,
-                    "evaluate",
-                  ],
-                  () => evaluateAssertion(),
-                ));
-              }
-            } catch (err) {
-              passed = false;
-              error = err instanceof Error ? err.message : String(err);
-            }
+          // An asynchronous built-in — a fetch, a model call, a query — is a
+          // computation that runs only while something demands its result, so
+          // demanding the assertion is what starts one. Hold that demand while
+          // waiting for the work it set going, which is what keeps the
+          // built-in's cascade alive long enough to reach the assertion, and
+          // read once. With nothing in flight the wait returns at once. The
+          // read is the only one, so a value arriving after it is reported as
+          // a failure rather than waited out.
+          let releaseDemand: (() => void) | undefined;
+          try {
+            releaseDemand = assertionCell().sink(() => {});
+            await withPhase(
+              ["runTestPattern", "step", assertionName, "asyncWork"],
+              () => runtime.settled(),
+            );
+            ({ passed, error } = await withPhase(
+              ["runTestPattern", "step", assertionName, "evaluate"],
+              () => evaluateAssertion(),
+            ));
+          } catch (err) {
+            passed = false;
+            error = err instanceof Error ? err.message : String(err);
+          } finally {
+            releaseDemand?.();
           }
 
           results.push({
@@ -2176,6 +2280,7 @@ export async function runTestPattern(
     };
   } finally {
     runtime.telemetry.removeEventListener("telemetry", onReadCost);
+    stopPrintingDenials?.();
     if (
       patternCoverage && options.patternCoverageDir &&
       writeLocalPatternCoverage
@@ -2206,46 +2311,14 @@ export async function runTestPattern(
     consoleCaptureActive = false;
     continuousUiCancel?.();
     continuousUiCancel = undefined;
-    // Tear the whole runtime down, not just its engine: that is what stops it
-    // WRITING (`Runtime.dispose`'s JSDoc has the mechanism). It matters here
-    // because a caller-supplied store outlives this call and gets READ — the
-    // vintage capture snapshots it — so a runtime still able to commit would
-    // make the snapshot a race rather than a record. `closeStorage` keeps that
-    // store the CALLER's to close.
-    //
-    // Bounded the same way every other await in this function is (the step
-    // settles at `settleRuntime`), and for the same reason: a pattern under
-    // test is untrusted code that may never quiesce, and `scheduler.idle()` —
-    // which `dispose()` awaits — never resolves for a system that genuinely
-    // never settles. Unbounded, one such pattern turns "this file reports a
-    // timeout" into "`cf test` hangs with no output", since `runTests` has no
-    // per-file guard. Firing early is safe here in a way it is not elsewhere:
-    // it only skips the rest of a teardown in a process that is moving on.
-    //
-    // A teardown that does not complete is RAISED, on both paths. It says the
-    // runtime never quiesced, which is a fact about the pattern under test —
-    // reporting it only to stderr would let `cf test` exit 0 on a run whose
-    // writer was still going, and a caller that supplied its own store is worse
-    // off still, since it is about to read what that writer wrote. Raising also
-    // keeps the pre-existing contract: `storageManager.close()` used to sit here
-    // unguarded, so a failing teardown already failed the file.
-    //
-    // Logged BEFORE it is raised because throwing from a `finally` discards the
-    // result this function was about to return, including any step failures.
-    // The exit code is right either way; the log is what keeps the diagnosis.
-    //
-    // Losing the race ABANDONS the dispose rather than cancelling it:
-    // `settled()` takes no abort signal, so the drain runs on in the background
-    // and the steps after it never happen. Acceptable because the only path
-    // that reaches it has already failed, and a capture's temp store and server
-    // are torn down by `captureVintage`'s own `finally`.
+    // Await disposal before returning so the runtime has stopped writing when
+    // a caller reads its store. A caller-supplied store stays open. Log failures
+    // before raising them: a throw from `finally` replaces the pending result,
+    // which may already contain step failures.
     const teardown = withPhase(
       ["runTestPattern", "cleanup", "runtimeDispose"],
       () =>
-        Promise.race([
-          runtime.dispose({ closeStorage: options.storageHost === undefined }),
-          timeout(TIMEOUT, `Runtime teardown timed out after ${TIMEOUT}ms`),
-        ]),
+        runtime.dispose({ closeStorage: options.storageHost === undefined }),
     );
     await teardown.catch((error) => {
       console.error(
@@ -2254,6 +2327,47 @@ export async function runTestPattern(
       throw error;
     });
   }
+}
+
+/**
+ * Compiles each file's program the way `runTests()` would, and runs none of
+ * them. What it leaves behind is the compile byte cache: with
+ * `CF_COMPILE_CACHE_FILE` set, every module the files reach is in that file
+ * once the process exits, so a later run of the same files compiles nothing.
+ * Returns the files whose compile failed. Each of those is reported again,
+ * with its error, by the run that tests it; this pass only says which.
+ * `compileOne` is the per-file run, `runTestPattern` unless a test supplies
+ * a stand-in.
+ */
+export async function compileTestPatterns(
+  paths: readonly string[],
+  options: TestRunnerOptions = {},
+  compileOne: typeof runTestPattern = runTestPattern,
+): Promise<{ compiled: number; failed: string[] }> {
+  const failed: string[] = [];
+  const started = performance.now();
+  for (const testPath of paths) {
+    let error: string | undefined;
+    try {
+      error = (await compileOne(testPath, { ...options, compileOnly: true }))
+        .error;
+    } catch (caught) {
+      error = formatError(caught);
+    }
+    if (error === undefined) {
+      console.log(`  compiled ${basename(testPath)}`);
+    } else {
+      failed.push(testPath);
+      console.log(`  ✗ ${basename(testPath)}: ${error}`);
+    }
+  }
+  const compiled = paths.length - failed.length;
+  console.log(
+    `\n${compiled} compiled, ${failed.length} failed (${
+      Math.round(performance.now() - started)
+    }ms)`,
+  );
+  return { compiled, failed };
 }
 
 /**
@@ -2308,7 +2422,15 @@ export async function runTests(
       durationMs: Math.round(durationMs),
     });
 
-  for (const testPath of paths) {
+  // Files run in the order the seed puts them in, so a file that leans
+  // on another file having run fails rather than passing quietly. The
+  // steps inside a file keep their order: a pattern test states its
+  // expectations as a sequence, each one about the state the step before
+  // it left, so their order is the test rather than an accident of it.
+  const seed = shuffleSeed();
+  console.log(shuffleNotice(seed));
+
+  for (const testPath of shuffledPaths(paths, seed)) {
     console.log(`\n${basename(testPath)}`);
     const failedBefore = totalFailed;
     const fileStarted = performance.now();
@@ -2465,6 +2587,16 @@ export async function runTests(
               ? msg.slice(0, 120) + "..."
               : msg;
             console.log(`    ${truncated}`);
+          }
+          // The `cfc` logger names each kind of denial once and keeps the
+          // reasons at debug, so say where the reasons are.
+          if (
+            !options.cfcDenials &&
+            warningsCountCfcDenial(result.consoleWarnings)
+          ) {
+            console.log(
+              "    Run again with `--cfc-denials` to see what CFC denied, and why.",
+            );
           }
         }
       }

@@ -23,6 +23,9 @@ import { expect } from "@std/expect";
 
 import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { findInternedSchema } from "@commonfabric/data-model-schema";
+import {
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import { Identity } from "@commonfabric/identity";
 import {
   addMockResponse,
@@ -42,7 +45,6 @@ import { cfcLabelViewForResolvedCellWithStatus } from "../src/cfc/label-view.ts"
 import type { CfcFlowLabelsMode } from "../src/cfc/types.ts";
 import { LLMDialogResultSchema } from "../src/builtins/llm-schemas.ts";
 import { Runtime } from "../src/runtime.ts";
-import { parseExternalSchemaRef } from "../src/schema-decompose.ts";
 import { waitForLlmMessages } from "./support/llm-result.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 

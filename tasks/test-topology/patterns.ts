@@ -11,6 +11,7 @@
  */
 
 import * as path from "@std/path";
+import { patternTestListLine } from "../integration.ts";
 import { PATTERN_TREES } from "../pattern-files.ts";
 import { SERVER_EXECUTION_ON_SKIPS } from "../server-execution-on-skips.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
@@ -80,9 +81,6 @@ async function patternIntegrationSuites(
   const packageDir = "packages/patterns";
   const files = await filesIn(root, `${packageDir}/integration`);
   const flags = [
-    // `packages/patterns/integration` is one of the paths the type check
-    // owns, so checking it again here is the same work a second time.
-    "--no-check",
     "-A",
     "--v8-flags=--max-old-space-size=4096",
     "--trace-leaks",
@@ -122,7 +120,7 @@ async function patternIntegrationSuites(
         env,
         junit,
         files: defaultLane.enabled
-          ? files.filter((file) => !on.whole.has(file))
+          ? files.filter((file) => !on.excluded.has(file))
           : files,
         unavailable: defaultLane.enabled ? on.unavailable : [],
       }],
@@ -146,7 +144,7 @@ async function patternIntegrationSuites(
         },
         junit,
         files: oppositeLane.enabled
-          ? files.filter((file) => !on.whole.has(file))
+          ? files.filter((file) => !on.excluded.has(file))
           : files,
         unavailable: oppositeLane.enabled ? on.unavailable : [],
       }],
@@ -193,6 +191,10 @@ function patternReloadSuite(): Suite {
     needs: ["deno", "local-dev-servers", "browser"],
     units: [unit],
     unavailable: [],
+    // The task always runs the same directory, and it starts the local
+    // development stack around that run. A lane runs the whole suite or none of
+    // it.
+    whole: [unit],
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "integration" || record.test.s !== "patterns") {
@@ -241,6 +243,11 @@ async function patternUnitSuite(root: string): Promise<Suite> {
     needs: ["deno", "cf", "compile-cache"],
     units,
     unavailable: [],
+    // Each file is one identity, so a unit holds nothing to leave out.
+    whole: units,
+    // Every file runs in one pool, which marks its units as begun before it
+    // compiles their programs.
+    processes: new Map(units.map((unit) => [unit, "pool"])),
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "pattern" || record.test.s !== "patterns") {
@@ -251,13 +258,13 @@ async function patternUnitSuite(root: string): Promise<Suite> {
         : undefined;
     },
     async command(requests, context): Promise<Invocation[]> {
-      const files = requests
-        .map((request) => request.unit)
-        .filter((unit) => known.has(unit));
-      if (files.length === 0) return [];
+      const lines = requests
+        .filter((request) => known.has(request.unit))
+        .map((request) => patternTestListLine(request.unit, request.cost));
+      if (lines.length === 0) return [];
       const listPath = path.join(context.outputDir, "pattern-unit.files");
       await Deno.mkdir(context.outputDir, { recursive: true });
-      await Deno.writeTextFile(listPath, `${files.join("\n")}\n`);
+      await Deno.writeTextFile(listPath, `${lines.join("\n")}\n`);
       return [{
         command: [
           Deno.execPath(),
@@ -269,6 +276,7 @@ async function patternUnitSuite(root: string): Promise<Suite> {
         ],
         cwd: context.root,
         env: coverageEnv(context, "pattern-unit"),
+        process: "pool",
       }];
     },
   };

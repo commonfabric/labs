@@ -14,6 +14,7 @@ import {
   normalize,
   readBuildInfoFrom,
 } from "@commonfabric/utils/build-info";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import env from "@/env.ts";
 
 export { type BuildInfo, normalize, readBuildInfoFrom };
@@ -49,7 +50,7 @@ export function readShellServerExecutionDefineFrom(
   } catch {
     return null;
   }
-  if (typeof parsed !== "object" || parsed === null) return null;
+  if (!isObjectOrArray(parsed)) return null;
   const value = (parsed as { shellServerExecutionDefine?: unknown })
     .shellServerExecutionDefine;
   return typeof value === "string" ? normalize(value) : null;

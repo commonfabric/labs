@@ -287,6 +287,72 @@ describe("scoped-default-writable", () => {
     });
   }
 
+  for (const compound of [false, true]) {
+    it(`keeps ${compound ? "compound" : "direct"} materialized mutations on their selected instance`, async () => {
+      const raw = runtime.getCell<{ count: number; values: number[] }>(
+        space,
+        "materialized-mutations",
+      );
+      const seed = runtime.edit();
+      raw.withTx(seed).set({ count: 1, values: [2] });
+      expect((await seed.commit()).error).toBeUndefined();
+      const projection = {
+        type: "object",
+        properties: {
+          count: { type: "number" },
+          values: { type: "array", items: { type: "number" } },
+        },
+        asCell: [{ kind: "cell", scope: "user" }],
+      } as const;
+      const held = raw.asSchema<Cell<{ count: number; values: number[] }>>(
+        compound
+          ? {
+            ...projection,
+            properties: undefined,
+            allOf: [
+              { type: "object", properties: { count: { type: "number" } } },
+              {
+                type: "object",
+                properties: {
+                  values: { type: "array", items: { type: "number" } },
+                },
+              },
+            ],
+          }
+          : projection,
+      ).get();
+      expect(held.getAsNormalizedFullLink().scope).toBe("space");
+      const write = runtime.edit();
+      held.withTx(write).key("count").set(3);
+      held.withTx(write).key("values").push(4);
+      held.withTx(write).key("values").addUnique(5);
+      expect((await write.commit()).error).toBeUndefined();
+      expect(raw.get()).toEqual({ count: 3, values: [2, 4, 5] });
+      expect(
+        runtime.getCell(
+          space,
+          "materialized-mutations",
+          undefined,
+          undefined,
+          "user",
+        ).getRaw(),
+      ).toBeUndefined();
+      const replace = runtime.edit();
+      held.withTx(replace).set({ count: 6, values: [7] });
+      expect((await replace.commit()).error).toBeUndefined();
+      expect(raw.get()).toEqual({ count: 6, values: [7] });
+      expect(
+        runtime.getCell(
+          space,
+          "materialized-mutations",
+          undefined,
+          undefined,
+          "user",
+        ).getRaw(),
+      ).toBeUndefined();
+    });
+  }
+
   it("preserves an unresolved ancestor target until its document arrives", async () => {
     const target = runtime.getCell<Record<string, unknown>>(space, "pending");
     const raw = runtime.getCell<Record<string, unknown>>(space, "pending-link");

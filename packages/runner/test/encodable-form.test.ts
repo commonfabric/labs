@@ -17,10 +17,12 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { fabricFromNativeValue } from "@commonfabric/data-model";
+import type { FabricExecPlainObject, FabricExecValue } from "@commonfabric/api";
+import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   encodableFormOf,
@@ -38,8 +40,20 @@ const space = signer.did();
  * The walk under test, with the copy callback ignored -- what a caller that
  * only wants the replacement passes. The callback has its own cases below.
  */
-function flatten<T>(value: T): T {
+function flatten(value: unknown): unknown {
   return replaceArtifacts(value, () => {});
+}
+
+/**
+ * The walk over a container whose result a case reads members of. A container
+ * comes back as one, which this checks rather than assumes.
+ */
+function flattenContainer(value: object): Record<string, unknown> {
+  const result = flatten(value);
+  if (!isObjectOrArray(result)) {
+    throw new Error("the walk turned a container into something else");
+  }
+  return result;
 }
 
 /** Builds an artifact of the shape `builder/module.ts` produces. */
@@ -71,7 +85,7 @@ describe("encodable-form", () => {
 
       it("returns a value carrying a sparse hole by identity", () => {
         const value = [1, , 3];
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result).toBe(value);
         expect(1 in result).toBe(false);
       });
@@ -224,14 +238,14 @@ describe("encodable-form", () => {
       it("shares the subtrees it did not have to rebuild", () => {
         const untouched = { c: 3 };
         const value = { a: artifact({ flat: true }), b: untouched };
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result).not.toBe(value);
         expect(result.b).toBe(untouched);
       });
 
       it("preserves a hole in an array it rebuilds", () => {
         const value = [artifact({ flat: true }), , 3];
-        const result = flatten(value);
+        const result = flattenContainer(value);
         expect(result[0]).toEqual({ flat: true });
         expect(1 in result).toBe(false);
         expect(result[2]).toBe(3);
@@ -245,7 +259,7 @@ describe("encodable-form", () => {
             return { serialized: true };
           },
         };
-        const result = flatten({
+        const result = flattenContainer({
           first: shared,
           second: shared,
         });
@@ -256,7 +270,7 @@ describe("encodable-form", () => {
 
       it("makes the result representable as a `FabricValue`", () => {
         const value = { tools: { send: { handler: artifact({ ok: true }) } } };
-        expect(fabricFromNativeValue(flatten(value)))
+        expect(fabricFromConvertibleJsValue(flatten(value)))
           .toEqual({ tools: { send: { handler: { ok: true } } } });
       });
 
@@ -267,10 +281,10 @@ describe("encodable-form", () => {
         // of the form the artifact serializes to, key order included.
         const value = { tools: { send: { handler: artifact({ ok: true }) } } };
         const inline = { tools: { send: { handler: { ok: true } } } };
-        expect(dataUriFromValue(fabricFromNativeValue(
+        expect(dataUriFromValue(fabricFromConvertibleJsValue(
           flatten(value),
         )))
-          .toBe(dataUriFromValue(fabricFromNativeValue(inline)));
+          .toBe(dataUriFromValue(fabricFromConvertibleJsValue(inline)));
       });
 
       it("is the only route by which an artifact becomes representable", () => {
@@ -279,7 +293,7 @@ describe("encodable-form", () => {
         // nothing about. So flattening is load-bearing rather than an
         // optimization, and skipping it is a loud rejection.
         const value = { tools: { send: { handler: artifact({ ok: true }) } } };
-        expect(() => fabricFromNativeValue(value))
+        expect(() => fabricFromConvertibleJsValue(value))
           .toThrow(/Not representable as a `FabricValue`: function/);
       });
     });
@@ -299,7 +313,7 @@ describe("encodable-form", () => {
         // record has no function-valued member, and that is what the walk keys
         // on; without it this value would reach the invoke and throw.
         const value = { toEncodableForm: 1 };
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a plain object carrying an own `toJSON` alone", () => {
@@ -307,7 +321,7 @@ describe("encodable-form", () => {
         // object bearing one is ordinary data as far as this is concerned, and
         // what becomes of it is the conversion's to decide.
         const value = { secret: "internal", toJSON: () => ({ exposed: true }) };
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a class instance with a prototype serializer alone", () => {
@@ -317,7 +331,7 @@ describe("encodable-form", () => {
           }
         }
         const value = new Serializable();
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a class instance with an own serializer alone", () => {
@@ -325,7 +339,7 @@ describe("encodable-form", () => {
         const value = Object.assign(new Bare(), {
           toEncodableForm: () => "replaced",
         });
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a null-prototype record alone", () => {
@@ -333,14 +347,14 @@ describe("encodable-form", () => {
           Object.create(null),
           { toEncodableForm: () => "replaced" },
         );
-        expect(flatten({ value }).value).toBe(value);
+        expect(flattenContainer({ value }).value).toBe(value);
       });
 
       it("leaves a cycle for the conversion to reject", () => {
         const value: Record<string, unknown> = { a: 1 };
         value.self = value;
         expect(flatten(value)).toBe(value);
-        expect(() => fabricFromNativeValue(value)).toThrow(/circular/);
+        expect(() => fabricFromConvertibleJsValue(value)).toThrow(/circular/);
       });
     });
 
@@ -481,6 +495,31 @@ describe("encodable-form", () => {
         const { seen } = copies({ first: shared, second: shared });
         expect(seen.filter((c) => c.original === shared).length).toBe(1);
       });
+    });
+  });
+
+  describe("replaceArtifacts() typing", () => {
+    it("types a `FabricExecPlainObject` argument as one in its result, and a `FabricExecValue` as a `FabricExecValue`", () => {
+      // Asserted when the file is type-checked: the carrier is never called.
+      // A record is copied rather than replaced, so the narrower overload
+      // holds; a `FabricExecValue` argument is promised a `FabricExecValue`
+      // and nothing narrower.
+
+      function carrier(record: FabricExecPlainObject, value: FabricExecValue) {
+        const fromRecord: FabricExecPlainObject = replaceArtifacts(
+          record,
+          () => {},
+        );
+        const asExecValue: FabricExecValue = replaceArtifacts(value, () => {});
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const fromValue: FabricExecPlainObject = replaceArtifacts(
+          value,
+          () => {},
+        );
+        return { fromRecord, asExecValue, fromValue };
+      }
+
+      expect(typeof carrier).toBe("function");
     });
   });
 
@@ -709,7 +748,7 @@ describe("encodable-form", () => {
     });
   });
 
-  describe("a query result holding a stream marker", () => {
+  describe("a query result holding a stream", () => {
     let runtime: Runtime;
     let storageManager: ReturnType<typeof StorageManager.emulate>;
     let tx: IExtendedStorageTransaction;
@@ -731,7 +770,7 @@ describe("encodable-form", () => {
 
     it("encodes a stream member as the link naming the cell", () => {
       // A query result is not uniformly a leaf to the walk. Reading a member
-      // that holds a stream marker yields a `Cell`, which has no fabric
+      // declared a stream yields a `Cell`, which has no fabric
       // representation of its own and reaches the conversion only as the link
       // naming it. So a caller that goes on to serialize what it gets back
       // reads into a query result rather than claiming it with `isLeaf`.
@@ -744,7 +783,13 @@ describe("encodable-form", () => {
         undefined,
         tx,
       );
-      cell.set({ handler: { $stream: true }, other: 1 });
+      const handler = runtime.getCell<unknown>(
+        space,
+        "encodable-form-stream",
+        { asCell: ["stream"] },
+        tx,
+      );
+      cell.set({ handler, other: 1 });
       const view = cell.get() as unknown as {
         handler: { toSigilLinkOrNull(): unknown };
       };

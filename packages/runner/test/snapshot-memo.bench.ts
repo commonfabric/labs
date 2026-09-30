@@ -10,6 +10,7 @@ import { machineryRead } from "../src/storage/reactivity-log.ts";
 import { benchDiagnostic } from "./bench-diagnostics.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -23,7 +24,7 @@ const seed = runtime.edit();
 const address = runtime.getCell(signer.did(), "labeled-source", undefined, seed)
   .getAsNormalizedFullLink();
 writeSeedEnvelopeDoc(seed, signer.did());
-seed.writeOrThrow({ ...address, path: [] }, {
+seedStoredEnvelope(seed, { ...address, path: [] }, {
   value: "source",
   cfc: {
     version: 1,

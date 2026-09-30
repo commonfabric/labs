@@ -1,7 +1,8 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { preloadArgument } from "@commonfabric/test-support/records";
+import { shuffledPaths } from "@commonfabric/test-support/shuffle";
 import {
   buildFilteredTestArgs,
   chooseGeneratedPortOffset,
@@ -9,51 +10,103 @@ import {
   GENERATED_PORT_OFFSET_RANGE,
   integrationTestDir,
   offsetPorts,
+  patternTestListLine,
+  patternTestStartOrder,
+  precompilePatternTests,
+  readPatternTestList,
   runFilteredIntegration,
   runPackageIntegration,
   selectIntegrationTestFiles,
   selectPatternTestFiles,
   startServers,
 } from "./integration.ts";
+import { PATTERN_TREES } from "./pattern-files.ts";
 
-Deno.test("selectPatternTestFiles assigns every file by stable FNV-1a hash", () => {
-  const files = [
-    "packages/patterns/notes/note.test.tsx",
-    "packages/patterns/notes/notebook.test.tsx",
-    "packages/patterns/dice.test.tsx",
-    "packages/patterns/shopping-list.test.tsx",
-    "packages/patterns/lunch-poll/main.test.tsx",
-    "packages/patterns/lunch-poll/multi-user.test.tsx",
-  ];
-
-  const expected = [
-    [
-      "packages/patterns/lunch-poll/multi-user.test.tsx",
-      "packages/patterns/notes/note.test.tsx",
-    ],
-    ["packages/patterns/shopping-list.test.tsx"],
-    ["packages/patterns/lunch-poll/main.test.tsx"],
+Deno.test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
+  assertEquals(
+    selectPatternTestFiles([
+      "packages\\patterns\\notes\\note.test.tsx",
+      "packages/patterns/dice.test.tsx",
+    ]),
     [
       "packages/patterns/dice.test.tsx",
-      "packages/patterns/notes/notebook.test.tsx",
+      "packages/patterns/notes/note.test.tsx",
     ],
-  ];
+  );
+});
 
+Deno.test("readPatternTestList reads each path and the cost written after it", () => {
+  const text = [
+    patternTestListLine("packages/patterns/dice.test.tsx", 12.5),
+    "",
+    patternTestListLine("packages\\patterns\\notes\\note.test.tsx"),
+    patternTestListLine("packages/patterns/chat.test.tsx", 0),
+  ].join("\n") + "\n";
+  const { files, costs } = readPatternTestList(text);
+  assertEquals(files, [
+    "packages/patterns/dice.test.tsx",
+    "packages/patterns/notes/note.test.tsx",
+    "packages/patterns/chat.test.tsx",
+  ]);
+  assertEquals([...costs], [
+    ["packages/patterns/dice.test.tsx", 12.5],
+    ["packages/patterns/chat.test.tsx", 0],
+  ]);
+});
+
+Deno.test("readPatternTestList refuses a line whose cost is not a number of seconds", () => {
   for (
-    const paths of [
-      files,
-      files.map((file) => file.replaceAll("/", "\\")),
+    const line of [
+      "dice.test.tsx\tslow",
+      "dice.test.tsx\t-1",
+      "dice.test.tsx\t4\t5",
     ]
   ) {
-    assertEquals(
-      Array.from(
-        { length: 4 },
-        (_, index) =>
-          selectPatternTestFiles(paths, { index: index + 1, total: 4 }),
-      ),
-      expected,
+    assertThrows(
+      () => readPatternTestList(line),
+      Error,
+      "Malformed pattern test list line",
     );
   }
+});
+
+Deno.test("patternTestStartOrder starts the costliest files first and unpriced ones before them", () => {
+  const costs = new Map([
+    ["a.test.tsx", 5],
+    ["b.test.tsx", 300],
+    ["c.test.tsx", 40],
+  ]);
+  const files = ["a.test.tsx", "b.test.tsx", "c.test.tsx", "d.test.tsx"];
+  for (const seed of [1, 20260928]) {
+    assertEquals(patternTestStartOrder(files, costs, seed), [
+      "d.test.tsx",
+      "b.test.tsx",
+      "c.test.tsx",
+      "a.test.tsx",
+    ]);
+  }
+});
+
+Deno.test("patternTestStartOrder puts files of equal cost in the seed's order, not the path's", () => {
+  const tied = Array.from({ length: 8 }, (_, at) => `tied-${at}.test.tsx`);
+  const files = ["long.test.tsx", ...tied];
+  const costs = new Map<string, number>([
+    ["long.test.tsx", 100],
+    ...tied.map((file) => [file, 10] as [string, number]),
+  ]);
+  const orders = new Set<string>();
+  for (let seed = 1; seed <= 5; seed++) {
+    const order = patternTestStartOrder(files, costs, seed);
+    assertEquals(order[0], "long.test.tsx");
+    assertEquals(
+      order.slice(1),
+      shuffledPaths(files, seed).filter((file) => file !== "long.test.tsx"),
+    );
+    orders.add(order.join());
+  }
+  // Five seeds give more than one order, so the ties are not left in the
+  // order the paths sort in.
+  assert(orders.size > 1);
 });
 
 Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {
@@ -168,7 +221,13 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
 Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", () => {
   assertEquals(
     buildFilteredTestArgs("runner", "integration", ["a.test.ts", "b.test.ts"]),
-    ["test", "-A", "./integration/a.test.ts", "./integration/b.test.ts"],
+    [
+      "test",
+      "--no-check",
+      "-A",
+      "./integration/a.test.ts",
+      "./integration/b.test.ts",
+    ],
   );
 });
 
@@ -177,6 +236,7 @@ Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
     buildFilteredTestArgs("patterns", "integration", ["home-profile.test.ts"]),
     [
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -194,6 +254,7 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
     ),
     [
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",
@@ -207,6 +268,7 @@ Deno.test("buildFilteredTestArgs adds a junit path when a junit dir is given", (
     buildFilteredTestArgs("shell", "integration", ["a.test.ts"], "out/junit"),
     [
       "test",
+      "--no-check",
       "-A",
       "--junit-path=out/junit/shell.xml",
       preloadArgument(),
@@ -262,6 +324,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
     assertEquals(captured?.cmd, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
@@ -295,6 +358,7 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
     assertEquals(captured, [
       "deno",
       "test",
+      "--no-check",
       "-A",
       "--trace-leaks",
       "--parallel",
@@ -420,4 +484,113 @@ Deno.test("every recorded blocked port is one fetch refuses", async () => {
     }
   }
   assertEquals(stillBlocked, ports.blockedPorts);
+});
+
+// The precompile pass, driven with a stand-in for the command runner: what it
+// asks to run, and how a group that fails or cannot spawn is reported.
+
+type Ran = Awaited<
+  ReturnType<NonNullable<Parameters<typeof precompilePatternTests>[4]>>
+>;
+
+const PRECOMPILE_ROOT = "/repo";
+const PATTERN_FILES = "abcdefghijkl".split("").map((name) =>
+  `packages/patterns/${name}/main.test.tsx`
+);
+const CONNECTOR_FILE = `${PATTERN_TREES[1].directory}/main.test.tsx`;
+
+async function precompileCapturing(
+  run: (argv: string[]) => Promise<Ran>,
+): Promise<{ argvs: string[][]; logged: string[] }> {
+  const argvs: string[][] = [];
+  const logged: string[] = [];
+  const previousLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    await precompilePatternTests(
+      ["cf"],
+      PRECOMPILE_ROOT,
+      [...PATTERN_FILES, CONNECTOR_FILE],
+      5,
+      (argv) => {
+        argvs.push(argv);
+        return run(argv);
+      },
+    );
+  } finally {
+    console.log = previousLog;
+  }
+  return { argvs, logged };
+}
+
+Deno.test("precompilePatternTests cuts the shard into runs of neighbors that share a root", async () => {
+  const { argvs } = await precompileCapturing(() =>
+    Promise.resolve({ success: true, code: 0 })
+  );
+  const groups = argvs.map((argv) => {
+    const root = argv[argv.indexOf("--root") + 1];
+    return { root, files: argv.slice(argv.indexOf("--root") + 2) };
+  });
+  // Thirteen files, five at a time: runs of three, and the lone file of the
+  // other root in a run of its own, never beside the others.
+  assertEquals(
+    groups.map((group) => group.files.length),
+    [3, 3, 3, 3, 1],
+  );
+  assertEquals(
+    groups.map((group) => group.root),
+    [
+      ...Array(4).fill(`${PRECOMPILE_ROOT}/packages/patterns`),
+      PRECOMPILE_ROOT,
+    ],
+  );
+  assertEquals(groups.flatMap((group) => group.files), [
+    ...PATTERN_FILES,
+    CONNECTOR_FILE,
+  ]);
+  for (const argv of argvs) {
+    assertEquals(argv.slice(0, 3), ["cf", "test", "--compile-only"]);
+  }
+});
+
+Deno.test("precompilePatternTests prints a failed group's output and goes on to the rest", async () => {
+  let calls = 0;
+  const { argvs, logged } = await precompileCapturing(() => {
+    calls++;
+    return Promise.resolve(
+      calls === 1
+        ? { success: false, code: 3, stdout: "first\nsecond", stderr: "third" }
+        : { success: true, code: 0 },
+    );
+  });
+  assertEquals(argvs.length, 5);
+  assertEquals(
+    logged.some((line) => line.endsWith("exited 3:")),
+    true,
+  );
+  for (const line of ["   first", "   second", "   third"]) {
+    assertEquals(logged.includes(line), true, line);
+  }
+  assertEquals(
+    logged.some((line) => line.includes("1 group(s) had a failure")),
+    true,
+  );
+});
+
+Deno.test("precompilePatternTests treats a run that cannot spawn as that group's failure", async () => {
+  let calls = 0;
+  const { argvs, logged } = await precompileCapturing(() => {
+    calls++;
+    return calls === 1
+      ? Promise.reject(new Error("no such binary"))
+      : Promise.resolve({ success: true, code: 0 });
+  });
+  assertEquals(argvs.length, 5);
+  assertEquals(
+    logged.some((line) => line.endsWith("exited 127:")),
+    true,
+  );
+  assertEquals(logged.includes("   Error: no such binary"), true);
 });

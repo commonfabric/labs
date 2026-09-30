@@ -7,11 +7,8 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -22,13 +19,13 @@ import {
   REALM_CODEC,
   type TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import type { FabricValue } from "@/interface.ts";
+import { FabricBytes } from "./FabricBytes.ts";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
-} from "@/value-tags.ts";
-import { FabricBytes } from "./FabricBytes.ts";
+} from "./interface.ts";
 
 /**
  * The encoded state of a {@link FabricKeyPair} that holds material: the
@@ -157,6 +154,11 @@ export class FabricKeyPair extends BaseFabricPrimitive {
     return FABRIC_PRIMITIVE_VALUE_TAGS.FabricKeyPair;
   }
 
+  /** @inheritDoc */
+  get schemaType(): "FabricKeyPair" {
+    return "FabricKeyPair";
+  }
+
   /** The algorithm name (e.g. `"Ed25519"`). */
   get algorithm(): string {
     return this.#algorithm;
@@ -242,7 +244,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
 
   static #jsonCodec = Object.freeze(
     new (class KeyPairCodec
-      extends BaseNonterminalCodec<FabricKeyPairMaterialState> {
+      extends BaseNonterminalCodec<never, FabricKeyPairMaterialState> {
       /** Constructs an instance. */
       constructor() {
         super(CODEC_TYPE_TAGS.KeyPair, FabricKeyPair);
@@ -265,11 +267,11 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           );
         }
 
-        return {
+        return Object.freeze({
           algorithm: value.#algorithm,
           publicKey: toUnpaddedBase64url(value.publicKeyBytes.slice()),
           privateKey: toUnpaddedBase64url(value.privateKeyBytes.slice()),
-        };
+        });
       }
 
       /** @inheritDoc */
@@ -285,6 +287,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
         typeTag: string,
         state: FabricKeyPairMaterialState,
         _env: LiveEnvironment,
+        mutable = false,
       ): FabricValue {
         const { algorithm, publicKey, privateKey } = state;
 
@@ -295,10 +298,11 @@ export class FabricKeyPair extends BaseFabricPrimitive {
             new FabricBytes(fromBase64url(privateKey), true),
           );
         } catch (e) {
-          return new ProblematicValue(
+          return ProblematicValue.make(
             typeTag,
             state,
             `KeyPair: ${e instanceof Error ? e.message : String(e)}`,
+            mutable,
           );
         }
       }
@@ -320,17 +324,17 @@ export class FabricKeyPair extends BaseFabricPrimitive {
        */
       encode(value: FabricKeyPair, _env: LiveEnvironment): RealmCodecValue {
         if (!value.hasMaterial) {
-          return {
+          return Object.freeze({
             publicKey: value.#publicKey as CryptoKey,
             privateKey: value.#privateKey as CryptoKey,
-          };
+          });
         }
 
-        return {
+        return Object.freeze({
           algorithm: value.#algorithm,
           publicKey: value.publicKeyBytes.sliceBuffer(),
           privateKey: value.privateKeyBytes.sliceBuffer(),
-        };
+        });
       }
 
       /** @inheritDoc */

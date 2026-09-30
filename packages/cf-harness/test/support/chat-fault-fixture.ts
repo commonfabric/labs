@@ -5,6 +5,7 @@ import type {
   RunHarnessTranscriptOptions,
 } from "../../src/prompt-loop.ts";
 import type { HarnessInteractivePromptLoopFactory } from "../../src/interactive-chat-service.ts";
+import { createHarnessRunState } from "../../src/run-state.ts";
 
 export const TOOL_CALL_IDS = ["call-a", "call-b"] as const;
 
@@ -49,7 +50,7 @@ export const faultingToolLoop = (
   fault: ChatFault,
   options: FaultingToolLoopOptions = {},
 ): HarnessInteractivePromptLoopFactory =>
-() => ({
+(loopOptions) => ({
   runTranscript: async (runOptions: RunHarnessTranscriptOptions) => {
     const assistant = {
       role: "assistant" as const,
@@ -70,6 +71,21 @@ export const faultingToolLoop = (
       };
       transcript.push(message);
       await runOptions.onTranscriptEvent?.({ message, transcript });
+    }
+    if (resultsBeforeFault === TOOL_CALL_IDS.length) {
+      await runOptions.onCheckpoint?.({
+        transcript,
+        runState: createHarnessRunState({
+          runId: loopOptions.runId,
+          currentDir: loopOptions.cwd ?? "/workspace",
+          cfcEnforcementMode: "enforce-explicit",
+          researchGoal: loopOptions.researchGoal,
+          researchRuns: loopOptions.inheritedResearchRuns === undefined
+            ? undefined
+            : [...loopOptions.inheritedResearchRuns],
+          cfcModelContext: loopOptions.inheritedCfcModelContext,
+        }),
+      });
     }
     options.onFault?.();
     if (fault === "interrupt") {

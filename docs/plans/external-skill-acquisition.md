@@ -257,8 +257,9 @@ on names**:
 
 Admitting the scripts is not admitting them to the registry. The acquired tree
 is host-side, nothing is written into the skills root, and whether a script may
-run is decided by the same operator allowlist a registry skill's script answers
-to — the third of the three properties below, unchanged by this.
+run is decided the same way a registry skill's script is — the operator's
+run-wide switch, or an exact entry — the third of the three properties below,
+unchanged by this.
 
 For GitHub commit acquisition, the inventory is the recursive tree API at the
 pinned SHA. A response marked `truncated` refuses with its own reason: an unread
@@ -275,8 +276,10 @@ handle-delivered skill **bypasses the registry entirely**, and
 `run_skill_script` resolves its target by name against the registry
 (`skills.find((skill) => skill.name === name)`) and requires a match against
 the run-start registry digest — so a transient skill has no record for a
-script to resolve through. And `isSkillScriptAllowlisted` returns `false` for
-an absent or empty allowlist, so the operator allowlist defaults to refusing.
+script to resolve through. And the operator decision defaults to
+refusing: `allowSkillScripts` is off unless set, and
+`isSkillScriptAllowlisted` returns `false` for an absent or empty entry list,
+so a run that says neither runs no script.
 The path whitelist is the first of three, and the only one that is about this
 plan rather than inherited.
 
@@ -295,7 +298,7 @@ payload, "which is what makes the mark honest: the mint derives only from this
 metadata, touching zero attacker bytes". The trigger is a module-private
 `WeakMap` keyed by transaction, deliberately not a field on `CfcTxState` and
 not a method on the public transaction surface, because exposing it would be a
-forge oracle — any pattern reaching `cell.tx` could stamp a trusted "arrived
+forge oracle — any code holding the transaction could stamp a trusted "arrived
 via channel X" mark on its own writes. It is documented in
 [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 
@@ -417,8 +420,10 @@ there.
 
 ## What this plan does not do
 
-- It does not execute anything fetched, and it does not extend the operator
-  script allowlist.
+- Acquisition itself executes nothing it fetches, and this plan adds no way for
+  the operator to allow a script: an acquired skill's script runs only where the
+  operator already allows skill scripts, by the same decision a registry
+  skill's script answers to.
 - It does not retire the trusted operator `--skills-root` path.
 - It does not build CT-2068's declassification predicate, and nothing here
   should be taken as a precedent for an integrity fact granting permission.

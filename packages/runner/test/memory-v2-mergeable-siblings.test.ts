@@ -148,18 +148,19 @@ describe("memory-v2-mergeable-siblings", () => {
       expect(operations).toHaveLength(1);
 
       const durable = await read(parentId);
-      expect(durable).toHaveProperty("cfc.version", 2);
+      expect(durable).toHaveProperty("cfc.version", 3);
       expect(durable).toHaveProperty("value.profiles.length", 1);
       const inspect = runtime.edit();
       const metadata = readStoredCfcMetadata(
         inspect,
         parent.getAsNormalizedFullLink(),
       );
-      expect(metadata?.version).toBe(2);
+      expect(metadata?.version).toBe(3);
       expect(
         metadata?.labelMap.entries.some((entry) =>
           entry.path.join("/") === "profiles/0" &&
-          entry.origin === "link" && entry.observes === "followRef"
+          entry.origin === "link" && entry.observes === "followRef" &&
+          entry.referenceAcquisition === "complete"
         ),
       ).toBe(true);
       const acquired = parent.withTx(inspect).key("profiles").key(0)
@@ -168,7 +169,8 @@ describe("memory-v2-mergeable-siblings", () => {
       expect(acquired.get()).toBe("target");
       inspect.abort();
     } finally {
-      await runtime.dispose();
+      await server.flushSessions([space]);
+      await runtime.dispose({ closeStorage: false });
     }
   });
 
@@ -347,9 +349,21 @@ describe("memory-v2-mergeable-siblings", () => {
       write(peer, [], peerValue);
       expect((await peer.commit({ resolveAt: "verdict" })).error)
         .toBeUndefined();
-      expect((await local.commit({ resolveAt: "verdict" })).error?.name).toBe(
-        "ConflictError",
-      );
+      const transact = heldServer.transact.bind(heldServer);
+      const verdict = Promise.withResolvers<
+        Awaited<ReturnType<typeof transact>>
+      >();
+      heldServer.transact = async (...args: Parameters<typeof transact>) => {
+        const result = await transact(...args);
+        verdict.resolve(result);
+        return result;
+      };
+      const commit = local.commit({ resolveAt: "verdict" });
+      expect((await verdict.promise).error?.name).toBe("ConflictError");
+      // Manual fanout publishes the repair only after the server has rejected
+      // the stale absent-base dependency.
+      await heldServer.flushSessions([space]);
+      expect((await commit).error?.name).toBe("ConflictError");
       const reader = EmulatedStorageManager.connectTo(heldServer, {
         as: signer,
       });

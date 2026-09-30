@@ -11,6 +11,9 @@ import {
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import {
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../src/storage/cache.deno.ts";
@@ -19,7 +22,6 @@ import type { SpaceReplica } from "../src/storage/v2.ts";
 import {
   type DecomposedSchema,
   decomposeSchema,
-  parseExternalSchemaRef,
 } from "../src/schema-decompose.ts";
 import {
   isSchemaDocumentClosureComplete,
@@ -33,6 +35,7 @@ import {
 import { resolveSchema } from "../src/schema.ts";
 import { LINK_V1_TAG, type URI } from "../src/sigil-types.ts";
 import { defer } from "@commonfabric/utils/defer";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 describe("schema-doc-sync", () => {
   // Two managers on one shared loopback server model two real sessions: what
@@ -406,7 +409,7 @@ describe("schema-doc-sync", () => {
       sink: (uri: URI, callback: (doc: unknown) => void) => () => void;
     }).sink("of:late-ref-carrier" as URI, (doc: unknown) => {
       if (
-        doc !== undefined && typeof doc === "object" && doc !== null &&
+        isObjectOrArray(doc) &&
         "value" in doc &&
         typeof (doc as { value?: unknown }).value === "object" &&
         (doc as { value: { linked?: unknown } }).value?.linked !== undefined

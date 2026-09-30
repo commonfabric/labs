@@ -29,12 +29,14 @@ import {
   createObject,
   type Environment,
   gzipText,
+  isSeed,
   parseRecordLine,
   readEnv,
   RECORD_SCHEMA_VERSION,
   type RunContext,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ciSubmissionsPrefix,
   REPO,
@@ -60,11 +62,11 @@ export interface RunFacts {
 
 /** Extracts the run facts from a workflow_run event payload. */
 export function runFactsOfPayload(payload: unknown): RunFacts {
-  if (typeof payload !== "object" || payload === null) {
+  if (!isObjectOrArray(payload)) {
     throw new Error("the event payload is not an object");
   }
   const run = (payload as Record<string, unknown>).workflow_run ?? payload;
-  if (typeof run !== "object" || run === null) {
+  if (!isObjectOrArray(run)) {
     throw new Error("the event payload has no workflow_run");
   }
   const raw = run as Record<string, unknown>;
@@ -93,7 +95,8 @@ export function runFactsOfPayload(payload: unknown): RunFacts {
     headSha,
     runStartedAt,
     // Fork when the repositories provably differ; a payload without both
-    // names reads as a fork, so decision consumers err toward exclusion.
+    // names reads as a fork, so a run this repository cannot place never
+    // stands as a baseline.
     fork: typeof headRepository === "string" &&
         typeof baseRepository === "string"
       ? headRepository !== baseRepository
@@ -135,10 +138,11 @@ interface ArtifactFacts {
   os?: string;
   arch?: string;
   denoVersion?: string;
+  shuffleSeed?: number;
 }
 
 function artifactFactsOf(value: unknown): ArtifactFacts {
-  if (typeof value !== "object" || value === null) return {};
+  if (!isObjectOrArray(value)) return {};
   const raw = value as Record<string, unknown>;
   const facts: ArtifactFacts = {};
   for (
@@ -155,6 +159,7 @@ function artifactFactsOf(value: unknown): ArtifactFacts {
     const v = raw[field];
     if (typeof v === "string" && v.length > 0) facts[field] = v;
   }
+  if (isSeed(raw.shuffleSeed)) facts.shuffleSeed = raw.shuffleSeed;
   return facts;
 }
 
@@ -196,6 +201,9 @@ export function composeCiContext(
     startedAt: run.runStartedAt,
   };
   if (run.headBranch !== undefined) context.branch = run.headBranch;
+  if (artifact.shuffleSeed !== undefined) {
+    context.shuffleSeed = artifact.shuffleSeed;
+  }
   if (artifact.shard !== undefined) context.ci!.shard = artifact.shard;
   if (run.event === "pull_request") {
     context.ci!.headCommit = artifact.headCommit ?? run.headSha;

@@ -9,6 +9,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -143,7 +144,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -178,7 +179,7 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
         space,
         scope: "space",
         id: id as `${string}:${string}`,
-        path: ["value"],
+        path: [],
       },
       schema: { type: "object" },
     });
@@ -524,25 +525,27 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
     );
     const criteriaId = criteria.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, foreignSpace);
-    seed.writeOrThrow(
-      { space: foreignSpace, scope: "space", id: criteriaId, path: [] },
-      {
-        value: { keep: true },
-        cfc: {
+    seedStoredEnvelope(seed, {
+      space: foreignSpace,
+      scope: "space",
+      id: criteriaId,
+      path: [],
+    }, {
+      value: { keep: true },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
           version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
-            version: 1,
-            entries: [
-              {
-                path: [],
-                label: { confidentiality: [residentClause(caveatAtom())] },
-              },
-            ],
-          },
+          entries: [
+            {
+              path: [],
+              label: { confidentiality: [residentClause(caveatAtom())] },
+            },
+          ],
         },
       },
-    );
+    });
     expect((await seed.commit()).ok).toBeDefined();
 
     const tx = rt.edit();
@@ -714,20 +717,24 @@ describe("CFC template metadata population (Stage B): persist-seam mints", () =>
       },
       { value: interned.schema },
     );
-    seed.writeOrThrow({ space, scope: "space", id: seededId, path: [] }, {
-      value: { x: 1 },
-      cfc: {
-        version: 1,
-        schemaHash: interned.taggedHashString,
-        labelMap: {
+    seedStoredEnvelope(
+      seed,
+      { space, scope: "space", id: seededId, path: [] },
+      {
+        value: { x: 1 },
+        cfc: {
           version: 1,
-          entries: [
-            templateEntry([], [], ["stale-tmpl-atom"]),
-            templateEntry([], ["source"], ["stale-tmpl-atom"]),
-          ],
+          schemaHash: interned.taggedHashString,
+          labelMap: {
+            version: 1,
+            entries: [
+              templateEntry([], [], ["stale-tmpl-atom"]),
+              templateEntry([], ["source"], ["stale-tmpl-atom"]),
+            ],
+          },
         },
       },
-    });
+    );
     expect((await seed.commit()).ok).toBeDefined();
     expect(entriesOf(seededId).length).toBe(2);
 

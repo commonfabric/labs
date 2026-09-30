@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessImageAttachment } from "../contracts/image.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { createHarnessImageAttachment } from "../image-attachments.ts";
@@ -35,11 +36,9 @@ export type ViewImageToolOutput =
 export const isViewImageToolSuccessOutput = (
   output: unknown,
 ): output is ViewImageToolSuccessOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "imageAttachment" in output &&
-  typeof output.imageAttachment === "object" &&
-  output.imageAttachment !== null &&
+  isObjectOrArray(output.imageAttachment) &&
   "type" in output.imageAttachment &&
   output.imageAttachment.type === "cf-harness.image-attachment";
 

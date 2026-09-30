@@ -7,6 +7,7 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -55,7 +56,7 @@ const recordSecretWritePolicy = (
       space: signer.did(),
       scope: "space",
       id: id as URI,
-      path: ["value", "secret"],
+      path: ["secret"],
     },
     schemaHash: SECRET_FIELD_SCHEMA.taggedHashString,
     schema: SECRET_FIELD_SCHEMA.schema,
@@ -95,7 +96,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -217,7 +218,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -342,7 +343,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -456,7 +457,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -563,7 +564,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -676,7 +677,7 @@ describe("CFC flow labels (default transition)", () => {
       };
       expect(permuted).not.toEqual(stored.cfc);
       const reseed = runtime.edit();
-      reseed.writeOrThrow({
+      seedStoredEnvelope(reseed, {
         space: signer.did(),
         scope: "space",
         id: targetId,
@@ -734,7 +735,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -831,7 +832,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -910,7 +911,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,
@@ -1018,7 +1019,7 @@ describe("CFC flow labels (default transition)", () => {
         ).getAsLink(),
       ).id!;
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: sourceId,

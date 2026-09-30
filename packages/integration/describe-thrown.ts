@@ -13,9 +13,12 @@
  * that attaches the value as its error's cause adds the full detail, and a
  * caller reporting a failure it does not own has nowhere to defer to.
  */
+
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
 export function describeThrown(error: unknown): string {
   if (error instanceof Error) return error.message || error.name;
-  if (typeof error === "object" && error !== null) {
+  if (isObjectOrArray(error)) {
     const description = (error as { exception?: { description?: unknown } })
       .exception?.description;
     if (typeof description === "string" && description.length > 0) {

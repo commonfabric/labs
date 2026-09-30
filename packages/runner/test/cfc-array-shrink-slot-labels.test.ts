@@ -4,6 +4,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -25,9 +26,9 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
   // entries survive in the labelMap. Any later read/diff of such a slot (e.g. a
   // list growing back) consumes the stale entry as a followRef observation
   // (SC-8) and re-imports the departed member's taint into the reader's flow
-  // join — the echo behind the #4525 probe's A3 step. The diff layer now emits
-  // the same explicit slot deletes the direct `length`-write path always has,
-  // and the flow-clear drops the stale entries like any other covered write.
+  // join. The array diff emits an explicit delete per truncated slot, ahead of
+  // the length write, and the flow-clear drops the stale entries like any
+  // other covered write.
 
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
   let runtime: Runtime | undefined;
@@ -49,7 +50,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({
+    seedStoredEnvelope(seed, {
       space,
       scope: "space",
       id,
@@ -132,30 +133,35 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     // reference writes no longer copy the targets' labels.
     const selections = runtime.edit();
     writeSeedEnvelopeDoc(selections, space);
-    selections.writeOrThrow({
+    seedStoredEnvelope(selections, {
       space,
       scope: "space",
       id: listId,
-      path: ["cfc"],
+      path: [],
     }, {
-      version: 2,
-      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-      labelMap: {
-        version: 1,
-        entries: [
-          {
-            path: ["0"],
-            origin: "link",
-            observes: "followRef",
-            label: { confidentiality: ["alice-secret"] },
-          },
-          {
-            path: ["1"],
-            origin: "link",
-            observes: "followRef",
-            label: { confidentiality: ["bob-secret"] },
-          },
-        ],
+      value: selections.readValueOrThrow(listCell.getAsNormalizedFullLink()),
+      cfc: {
+        version: 3,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [
+            {
+              path: ["0"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: { confidentiality: ["alice-secret"] },
+            },
+            {
+              path: ["1"],
+              origin: "link",
+              observes: "followRef",
+              referenceAcquisition: "complete",
+              label: { confidentiality: ["bob-secret"] },
+            },
+          ],
+        },
       },
     });
     expect((await selections.commit()).ok).toBeDefined();
@@ -167,7 +173,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     // slot 1 itself is not overwritten by any surviving element).
     const shrinkTx = runtime.edit();
     const lc = runtime.getCell(space, "shrink-list", listSchema, shrinkTx);
-    lc.set([el0]);
+    lc.set([lc.get()[0]]);
     expect((await shrinkTx.commit()).ok).toBeDefined();
 
     // Reselecting the surviving identity records the shrink transaction's
@@ -185,7 +191,7 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     const el2 = runtime.getCell(space, "shrink-el-2", undefined, growTx);
     el2.get(); // a content read: carol joins the growing tx's flow join
     const lc2 = runtime.getCell(space, "shrink-list", listSchema, growTx);
-    lc2.set([el0, el2]);
+    lc2.set([lc2.get()[0], el2]);
     expect((await growTx.commit()).ok).toBeDefined();
 
     expect(linkConfidentialityAt(listId, "1").sort()).toEqual([

@@ -1,0 +1,1 @@
+{"date":"2026-09-12","from":{"k":"unit","s":"runner","n":"Pattern Runner - Regressions > should preserve cell references when map truncates with ifElse null values (CT-1158)"},"to":{"k":"unit","s":"runner","n":"Pattern Runner - Regressions > preserves cell references when map truncates with ifElse null values"}}

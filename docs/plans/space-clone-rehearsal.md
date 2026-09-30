@@ -44,7 +44,7 @@ implies another rehearsal — and its Risks section already names the gate:
 commit rates." Today that instruction has no executable form. This document
 decides what to build so it does.
 
-[#4997]: https://github.com/commontoolsinc/labs/pull/4997
+[#4997]: https://github.com/commonfabric/labs/pull/4997
 
 ## Recommendation in one paragraph
 
@@ -461,13 +461,13 @@ live) on PR #5009's review threads; paraphrased.
 - PRs [#4997] (migration-safe legacy Topics; the rehearsal that caught it),
   [#4916] (generated-cell identity versioning), [#4991] (verb contract WS-A),
   [#4950] (Topics workload diagnostics — churn's live-runtime neighbor).
-- The interview: [PR #5009 review threads](https://github.com/commontoolsinc/labs/pull/5009)
+- The interview: [PR #5009 review threads](https://github.com/commonfabric/labs/pull/5009)
   (Wilk; Gideon confirmed live).
 - `docs/history/plans/pattern-verb-contract-implementation.md` — Risks, the
   write-storm gate.
 - `docs/development/LOCAL_DEV_SERVERS.md` — toolshed over a store dir, port
   offsets.
 
-[#4916]: https://github.com/commontoolsinc/labs/pull/4916
-[#4950]: https://github.com/commontoolsinc/labs/pull/4950
-[#4991]: https://github.com/commontoolsinc/labs/pull/4991
+[#4916]: https://github.com/commonfabric/labs/pull/4916
+[#4950]: https://github.com/commonfabric/labs/pull/4950
+[#4991]: https://github.com/commonfabric/labs/pull/4991

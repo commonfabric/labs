@@ -39,6 +39,23 @@ describe("fabric-url", () => {
       });
     });
 
+    it("trims identifier padding while preserving path whitespace", () => {
+      expect(parseFabricUrl(`  of:fid1:${HASH}  `)?.id).toBe(`of:fid1:${HASH}`);
+      expect(parseFabricUrl(`/of:fid1:${HASH}/title `)?.path).toEqual([
+        "title ",
+      ]);
+    });
+
+    it("trims rooted ID padding without trimming path keys", () => {
+      for (const prefix of ["/", `//${SPACE}/`, `/@${SPACE}/`]) {
+        const ref = `${prefix}of:fid1:${HASH}`;
+        expect(parseFabricUrl(`  ${ref}  `)?.id).toBe(`of:fid1:${HASH}`);
+        expect(parseFabricUrl(`${ref}/title `)?.path).toEqual(["title "]);
+        expect(parseFabricUrl(`${ref}/ `)?.path).toEqual([" "]);
+        expect(parseFabricUrl(`${ref}/`)?.path).toEqual([""]);
+      }
+    });
+
     describe("a rooted link", () => {
       it("returns the id", () => {
         expect(parseFabricUrl(`/of:fid1:${HASH}`)).toEqual({
@@ -60,6 +77,20 @@ describe("fabric-url", () => {
         expect(target?.space).toBe(SPACE);
         expect(target?.id).toBe(`of:fid1:${HASH}`);
         expect(target?.path).toEqual(["summary"]);
+      });
+
+      it("reads complete references, members, scopes, and empty path keys", () => {
+        expect(
+          parseFabricUrl(`//${SPACE}/of:fid1:${HASH}#argument@scope=user//`),
+        ).toEqual({
+          space: SPACE,
+          id: `of:fid1:${HASH}`,
+          member: "argument",
+          scope: "user",
+          path: ["", ""],
+        });
+        expect(parseFabricUrl(`/of:fid1:${HASH}/a%2Fb`)?.path).toEqual(["a/b"]);
+        expect(parseFabricUrl(`/of:fid1:${HASH}@owner`)).toBeUndefined();
       });
 
       it("returns undefined for a rooted path naming no id", () => {
@@ -161,6 +192,12 @@ describe("fabric-url", () => {
         // asking about it throws.
         expect(parseFabricUrl(`/of:fid1:${HASH}/%ZZ`)).toBeUndefined();
         expect(parseFabricUrl("%ZZ")).toBeUndefined();
+        expect(
+          parseFabricUrl(`https://fabric.example/${SPACE}/${HASH}/%ZZ`, {
+            hosts: HOSTS,
+          }),
+        )
+          .toBeUndefined();
         expect(
           parseFabricUrl("https://fabric.example/%ZZ/thing", { hosts: HOSTS }),
         )

@@ -231,6 +231,99 @@ function strengthenedProgram(): RuntimeProgram {
   };
 }
 
+/**
+ * A pattern whose result document carries an owner-protected field: `name`
+ * may be written only by the handler `writer` names. `root` is the directory
+ * the authored tree is grounded at, so the same tree compiles as
+ * `/api/patterns/app/main.tsx` and as `/packages/patterns/app/main.tsx`, the
+ * way the shell serves a system pattern and a checkout supplies it.
+ *
+ * `writer` is the name of the handler binding, and so the binding path the
+ * writer claim records. Two programs that differ only in it declare the same
+ * result, with the claim at `/name` naming a different binding.
+ */
+function writerProgram(root: string, writer = "setName"): RuntimeProgram {
+  return {
+    main: `${root}/app/main.tsx`,
+    files: [
+      {
+        name: `${root}/app/main.tsx`,
+        contents: [
+          "/// <cts-enable />",
+          "import {",
+          "  handler,",
+          "  pattern,",
+          "  type Stream,",
+          "  Writable,",
+          "  WriteAuthorizedBy,",
+          "} from 'commonfabric';",
+          "import { revision } from '../shared/revision.ts';",
+          "",
+          `const ${writer} = handler<`,
+          "  { name: string },",
+          "  { name: Writable<string> }",
+          ">((event, state) => {",
+          "  state.name.set(revision + ':' + event.name);",
+          "});",
+          "",
+          "type Output = {",
+          `  name: WriteAuthorizedBy<string, typeof ${writer}>;`,
+          "  setName: Stream<{ name: string }>;",
+          "};",
+          "",
+          "export default pattern<{ seed?: string }, Output>(() => {",
+          "  const name = new Writable<",
+          `    WriteAuthorizedBy<string, typeof ${writer}>`,
+          "  >('initial').for('name');",
+          `  return { name, setName: ${writer}({ name }) };`,
+          "});",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: `${root}/shared/revision.ts`,
+        contents: "export const revision = 'v1';\n",
+      },
+    ],
+  };
+}
+
+/**
+ * A pattern whose result document carries a declared label with no writer
+ * claim: `label` is confidential under `ATOM`. `comment` is source the
+ * projection does not carry, so two revisions differing only in it bind the
+ * same projection to the document; `expression` is what `label` computes,
+ * and changing it re-mints the derived cell the projection links.
+ * `argumentFields` adds optional inputs, which changes the argument schema
+ * the projection's link to `seed` is bound under without changing what the
+ * pattern computes.
+ */
+function labelledResultProgram(
+  comment: string,
+  expression = "seed",
+  argumentFields = "",
+): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        ...CFC_PRELUDE,
+        comment,
+        `interface Args { seed: Confidential<string, Label>; ${argumentFields} }`,
+        "interface Out { label: Confidential<string, Label>; }",
+        "export default pattern<Args, Out>(",
+        "  ({ seed }) => ({",
+        "    [NAME]: 'Compatibility check',",
+        `    label: ${expression},`,
+        "  }),",
+        ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
 describe("setsrc compatibility preflight", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -668,6 +761,198 @@ describe("setsrc compatibility preflight", () => {
       await freshRuntime.dispose();
       await freshStorage.close();
     }
+  });
+
+  describe("the result document's stored writer claims", () => {
+    // The argument cases above merge the envelope stored on the piece's
+    // argument document. The setup transaction merges the envelope stored on
+    // the piece's own document too — the result — and a profile's
+    // owner-protected fields live there. A claim stamped onto that envelope
+    // by the handler that wrote the field meets the candidate's claim at the
+    // same path, and where the two name different bindings the commit is
+    // refused with `writeAuthorizedBy must remain stable`. The verdict has to
+    // come from the check, not from the deploy.
+    //
+    // Every case stamps the stored claim first, by having the bound handler
+    // write the field once: a claim the setup declared but nothing wrote is
+    // unstamped, and an unstamped claim reconciles with anything at its
+    // path, so the merge these cases drive would never run.
+
+    const servedRoot = "/api/patterns";
+    const checkoutRoot = "/packages/patterns";
+
+    const stampedPiece = async (program: RuntimeProgram) => {
+      const piece = await pieces.create(program, { input: {} });
+      await runtime.idle();
+      const result = await piece.result.getCell();
+      result.key("setName").send({ name: "stamped" });
+      await result.pull();
+      expect(
+        await piece.result.get(["name"]),
+        "the bound handler did not write the field, so the stored claim " +
+          "carries no stamp and the cases below have no merge to fail",
+      ).toBe("v1:stamped");
+      return piece;
+    };
+
+    it("reports the stored claim refusing a candidate that binds the field to another handler", async () => {
+      const piece = await stampedPiece(writerProgram(servedRoot));
+      const candidate = writerProgram(servedRoot, "assignName");
+
+      const report = await piece.checkPattern(candidate);
+
+      expect(report.compatible).toBe(false);
+      expect(report.issues.cfc).toBeDefined();
+      // The merge's own words: the same sentence the commit rejection carries.
+      expect(report.issues.cfc).toContain(
+        "writeAuthorizedBy must remain stable at /name",
+      );
+
+      // The override bypasses the contract proof, which objects to the
+      // renamed binding on its own, and reaches the enforcement layer: CFC
+      // refuses the commit over the stored claim, which is what the check
+      // reported.
+      const forced = await piece.setPattern(candidate, {
+        dangerouslyAllowIncompatibleSchema: true,
+      }).then(
+        () => undefined,
+        (error: unknown) => (error as { message?: string })?.message,
+      );
+      expect(forced).toContain("CFC enforcement rejected commit");
+      expect(forced).toContain("writeAuthorizedBy must remain stable at /name");
+    });
+
+    it("clears the same tree compiled under another root, which the apply commits", async () => {
+      // The production shape: the piece runs the tree the shell served under
+      // `/api/patterns`, and the update supplies it from a checkout under
+      // `/packages/patterns`. The contract proof passes, since it compares
+      // neither the file spelling nor the module hash. The stored claim and
+      // the candidate's are both stamped, each naming its module
+      // content-addressed, and two stamps reconcile without comparing their
+      // spellings, so the merge accepts the candidate and the update commits.
+      // The check has to judge the candidate's born-stamped claim as the
+      // merge does: a preflight that read it as unstamped would demand the
+      // spelling correspondence and refuse an update the deploy accepts.
+      const piece = await stampedPiece(writerProgram(servedRoot));
+      const candidate = writerProgram(checkoutRoot);
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.issues.cfc).toBe(undefined);
+      expect(report.compatible).toBe(true);
+
+      await piece.setPattern(candidate);
+      await runtime.idle();
+      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
+        report.candidate.identity,
+      );
+    });
+  });
+
+  describe("the result projection setup would keep", () => {
+    // Setup writes the result projection only where the candidate's differs
+    // from the stored one, and the schema input the commit merges rides that
+    // write. So a candidate whose projection is unchanged takes no result
+    // merge at commit, whatever the stored envelope holds, and the check has
+    // to ask setup's question before it merges that envelope in dry run — or
+    // an implementation-only update over a partially migrated piece is
+    // refused by the check and committed by the apply.
+    //
+    // The fixture widens the stored result envelope past what the pattern
+    // declares, as the argument fixture above does, and writes the stored
+    // projection back unchanged under the wider schema, so the envelope and
+    // the projection can move independently of each other.
+
+    const pieceWithWidenedResultEnvelope = async () => {
+      const piece = await pieces.create(labelledResultProgram(""), {
+        input: { seed: "hello" },
+      });
+      await runtime.idle();
+      const cell = piece.getCell();
+      const projection = JSON.stringify(cell.getRaw());
+      const { error } = await runtime.editWithRetry((tx) => {
+        cell.withTx(tx).asSchema({
+          type: "object",
+          properties: {
+            label: {
+              type: "string",
+              ifc: { confidentiality: [DECLARED_ATOM, EXTRA_ATOM] },
+            },
+          },
+        } as never).set(cell.getRaw() as never);
+      });
+      expect(
+        error?.message,
+        "the fixture could not widen the stored result envelope, so the " +
+          "cases below have no merge to fail",
+      ).toBeUndefined();
+      await runtime.idle();
+      expect(
+        JSON.stringify(cell.getRaw()),
+        "the fixture changed the stored projection, so setup would rewrite " +
+          "it and the cases below would not reach the elided write",
+      ).toBe(projection);
+      return piece;
+    };
+
+    it("clears a candidate whose projection setup would keep, which the apply commits", async () => {
+      const piece = await pieceWithWidenedResultEnvelope();
+      const candidate = labelledResultProgram(
+        "// a revision the projection does not carry",
+      );
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.issues.cfc).toBe(undefined);
+      expect(report.compatible).toBe(true);
+
+      await piece.setPattern(candidate);
+      await runtime.idle();
+      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
+        report.candidate.identity,
+      );
+    });
+
+    it("clears a candidate that only adds an optional input, which the apply commits", async () => {
+      // `label: seed` binds the projection to the argument document, and
+      // setup re-points that link at the candidate's argument schema before
+      // it compares projections. The link carries the result schema at its
+      // own path, not the argument schema, so a candidate adding an optional
+      // input leaves the projection as it was: setup writes nothing, the
+      // commit merges nothing, and the check has to agree even over an
+      // envelope the candidate's result schema could not merge with.
+      const piece = await pieceWithWidenedResultEnvelope();
+      const candidate = labelledResultProgram("", "seed", "extra?: string;");
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.issues.cfc).toBe(undefined);
+      expect(report.compatible).toBe(true);
+
+      await piece.setPattern(candidate);
+      await runtime.idle();
+      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
+        report.candidate.identity,
+      );
+    });
+
+    it("refuses a candidate whose projection setup would rewrite over an envelope it cannot merge", async () => {
+      // The control: re-minting the derived cell changes the projection, so
+      // setup writes it, the commit merges the result schema, and the widened
+      // envelope refuses the narrower declared label at both ends.
+      const piece = await pieceWithWidenedResultEnvelope();
+      const candidate = labelledResultProgram("", "`seen:${seed}`");
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.compatible).toBe(false);
+      expect(report.issues.cfc).toContain(
+        "confidentiality cannot be weakened at /label",
+      );
+
+      const applied = await piece.setPattern(candidate).then(
+        () => undefined,
+        (error: unknown) => (error as { message?: string })?.message,
+      );
+      expect(applied).toContain("CFC enforcement rejected commit");
+      expect(applied).toContain("confidentiality cannot be weakened at /label");
+    });
   });
 
   it("still lets the dangerous override through", async () => {

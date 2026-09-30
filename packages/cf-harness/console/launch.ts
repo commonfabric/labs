@@ -10,14 +10,22 @@
  *     --fabric-api-url http://localhost:8000 --store <dir>
  *
  * The console needs an identity, a space, a toolshed URL, the store that
- * toolshed serves, and the two `runsc-cfc` sidecar directories the sandbox's
- * mediation moves over. An operator transcribing those by hand gets a console
- * that starts cleanly and is wrong: a store keyed to a superseded labs pin
- * reads as "no data at cell", and sidecar directories no registered runtime
- * writes drop every input label in silence. So each value is derived from the
- * record that decides it, tagged with where it came from, and printed once
- * before the server binds. Anything that cannot be derived is a named flag
- * whose absence is an error naming it, never a default nobody chose.
+ * toolshed serves, and, on the Docker driver, the two `runsc-cfc` sidecar
+ * directories the sandbox's mediation moves over. An operator transcribing
+ * those by hand gets a console that starts cleanly and is wrong: a store keyed
+ * to a superseded labs pin reads as "no data at cell", and sidecar directories
+ * no registered runtime writes drop every input label in silence. So each
+ * value is derived from the record that decides it, tagged with where it came
+ * from, and printed once before the server binds. Anything that cannot be
+ * derived is a named flag whose absence is an error naming it, never a default
+ * nobody chose.
+ *
+ * Which driver the console's sandbox runs on is read from the environment,
+ * through the derivation every cf-harness entrypoint shares, and the server
+ * reads the same variables the same way. A console on the direct runsc driver
+ * reads no Docker runtime table and needs no sidecar directory; the launch
+ * prints the `runsc` binary, rootfs and CFC policy the environment named in
+ * their place.
  *
  * A loom instance is one source among several rather than the shape of this
  * module: `--instance` reads the identity, space and toolshed URL off that
@@ -31,16 +39,44 @@
  * and routes are in [`README.md`](README.md); the operator procedure is in
  * [`../docs/WEAVER.md`](../docs/WEAVER.md).
  */
+import { isDID } from "@commonfabric/identity/did";
 import { parseArgs } from "@std/cli/parse-args";
 import { join } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../src/config.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
   DEFAULT_DOCKER_BINARY,
   registeredCfcSidecarHostDirs,
 } from "../src/sandbox/docker-runsc.ts";
+import { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
+import {
+  resolveSandboxRuntimeSelection,
+  RUNSC_BINARY_ENV,
+  RUNSC_CFC_POLICY_ENV,
+  SANDBOX_ROOTFS_ENV,
+  SANDBOX_RUNTIME_ENV,
+  type SandboxRuntimeSelection,
+} from "../src/sandbox/runtime-selection.ts";
+import {
+  connectorGrantLabel,
+  connectorGrantName,
+} from "../src/well-known-grants.ts";
 import { resolveConnectorGrants } from "./connector-grants.ts";
-import { startConsoleServer } from "./server.ts";
+import type {
+  ConsoleHealthFactWithState,
+  ConsoleLaunchHealth,
+  ConsoleObservedLaunchHealth,
+  ConsoleResolvedValue,
+} from "./health.ts";
+import {
+  refuseBatchSandboxFlags,
+  runscWithoutPolicyRefusesTurns,
+  startConsoleServer,
+} from "./server.ts";
+
+export { readDockerRuntimes } from "../src/sandbox/docker-runtimes.ts";
 
 /** The port Weaver's harness-console setting and loom's proxy both address. */
 export const WEAVER_PAIRING_PORT = 8135;
@@ -96,6 +132,7 @@ export const LAUNCHER_OWNED_VARIABLES = [
   "CF_HARNESS_CONNECTOR_GRANTS",
   "CF_HARNESS_PATTERN_INDEX_URL",
   "CF_HARNESS_SKILLS_REGISTRY_URL",
+  "CF_HARNESS_ALLOW_SKILL_SCRIPTS",
   "CF_HARNESS_SPACE_DB",
   "MEMORY_DIR",
 ] as const;
@@ -104,11 +141,7 @@ export const LAUNCHER_OWNED_VARIABLES = [
  * One resolved value, with the record that decided it. `source` is what an
  * operator reads to know which file to edit when a value is wrong.
  */
-export interface ResolvedValue {
-  name: string;
-  value: string;
-  source: string;
-}
+export type ResolvedValue = ConsoleResolvedValue;
 
 /**
  * A loom instance's own records, when the fabric being started is an
@@ -152,6 +185,22 @@ export interface ConsoleLaunchRecords {
   dockerRuntimes?: unknown;
   /** Why `dockerRuntimes` is absent, for error text. */
   dockerRuntimesUnreadable?: string;
+  /**
+   * The sandbox runtime the launch environment selects. Absent, or naming
+   * `docker`, the console runs on the Docker driver.
+   */
+  sandbox?: ConsoleLaunchSandbox;
+}
+
+/** The sandbox runtime a launch's environment selects. */
+export interface ConsoleLaunchSandbox {
+  /** As `resolveSandboxRuntimeSelection` derives it from the environment. */
+  selection: SandboxRuntimeSelection;
+  /**
+   * Whether `CF_HARNESS_RUNSC_CFC_POLICY` named the policy, rather than the
+   * selection finding the default one under `HOME`.
+   */
+  policyNamed: boolean;
 }
 
 /**
@@ -183,6 +232,8 @@ export interface ConsoleLaunchOptions {
   skillsRegistryUrl?: string;
   noPatternIndex?: boolean;
   noSkillsRegistry?: boolean;
+  allowSkillScripts?: boolean;
+  inheritedAllowSkillScripts?: boolean;
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
   posture?: string;
@@ -194,6 +245,9 @@ export interface ConsoleLaunchOptions {
 export interface ConsoleLaunchPlan {
   environment: Record<string, string>;
   resolved: readonly ResolvedValue[];
+
+  /** The same decisions retained for the operator status endpoint. */
+  health: ConsoleLaunchHealth;
 }
 
 /** Source labels the printout uses for a value nothing recorded. */
@@ -217,7 +271,7 @@ const parseJsonRecord = (
       }`,
     );
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isObjectNotArray(parsed)) {
     throw new Error(`\`${path}\` does not hold a JSON object`);
   }
   return parsed as Record<string, unknown>;
@@ -249,9 +303,7 @@ const objectField = (
   key: string,
 ): Record<string, unknown> => {
   const value = record[key];
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  return isObjectNotArray(value) ? value as Record<string, unknown> : {};
 };
 
 /**
@@ -356,7 +408,7 @@ export const resolveConsoleLaunchPlan = (
     "--fabric-api-url",
     "CF_HARNESS_FABRIC_API_URL",
   );
-  if (space.value.startsWith("did:")) {
+  if (isDID(space.value)) {
     throw new Error(
       `the space must be a name rather than a DID: \`assign_slug\` composes ` +
         `a piece's URL from the name, and offers none for ${space.value}`,
@@ -381,6 +433,7 @@ export const resolveConsoleLaunchPlan = (
   // whatever opens the console.
   const connectorGrants: HarnessConnectorGrantSpec[] = [];
   const connectorResolved: ResolvedValue[] = [];
+  const connectorHealth: ConsoleHealthFactWithState[] = [];
   if (instance !== undefined) {
     const resolvedConnectors = resolveConnectorGrants({
       ...(instance.handlesJson !== undefined
@@ -391,46 +444,109 @@ export const resolveConsoleLaunchPlan = (
       piecesJsonPath: instance.piecesJsonPath,
     });
     connectorGrants.push(...resolvedConnectors.grants);
+    const source = "loom connector receipt + pieces.json";
+    const detail = `${instance.handlesJsonPath}; ${instance.piecesJsonPath}`;
+    connectorHealth.push({
+      id: "connectors.inventory",
+      group: "connectors",
+      label: "Connector Inventory",
+      state: instance.handlesJson === undefined ? "unknown" : "ok",
+      value: instance.handlesJson === undefined
+        ? "No injection receipt has been recorded"
+        : `${resolvedConnectors.grants.length} granted; ${resolvedConnectors.unnamed.length} not granted`,
+      source,
+      detail,
+      ...(instance.handlesJson === undefined
+        ? {
+          remedy:
+            "Reconcile the instance's connectors in Loom, then restart the console.",
+        }
+        : {}),
+    });
     for (const grant of resolvedConnectors.grants) {
       connectorResolved.push({
-        name: `grant ${grant.name}`,
+        name: `grant ${connectorGrantLabel(grant)}`,
         value: grant.ref,
         source: `\`${instance.handlesJsonPath}\`, classed by ` +
           `\`${grant.source.piece}\` in \`${instance.piecesJsonPath}\``,
       });
+      connectorHealth.push({
+        id: `connector.granted.${grant.name}`,
+        group: "connectors",
+        label: connectorGrantName(grant.source),
+        state: "ok",
+        value: `granted: ${connectorGrantLabel(grant)}`,
+        source: `${source} (${grant.source.piece})`,
+        detail,
+      });
     }
-    for (const handle of resolvedConnectors.unnamed) {
+    for (const [index, handle] of resolvedConnectors.unnamed.entries()) {
       connectorResolved.push({
-        name: `grant ${handle.connection}`,
+        name: `grant ${connectorGrantName(handle)}`,
         value: `(none: ${handle.reason})`,
         source: `\`${instance.handlesJsonPath}\``,
+      });
+      connectorHealth.push({
+        id: `connector.refused.${index}`,
+        group: "connectors",
+        label: connectorGrantName(handle),
+        state: handle.state,
+        value: "not granted",
+        source: `${source} (${handle.piece})`,
+        detail,
+        reason: handle.reason,
+        remedy: handle.remedy,
       });
     }
   }
 
-  const sidecars = registeredCfcSidecarHostDirs({
-    runtimeName: RUNSC_CFC_RUNTIME,
-    runtimes: records.dockerRuntimes,
-  });
-  const registrationSource = records.dockerRuntimesUnreadable ??
-    `no \`${RUNSC_CFC_RUNTIME}\` runtime \`docker info\` reports names it`;
-  const cfcResultDir = options.cfcResultDir ?? sidecars.resultDir;
-  if (cfcResultDir === undefined) {
-    throw new Error(
-      `no directory is registered for \`--cfc-result-dir\`: ` +
-        `${registrationSource}; set \`--cfc-result-dir\` to the directory ` +
-        `the runtime writes its result sidecars to`,
-    );
-  }
-  const cfcInvocationContextDir = options.cfcInvocationContextDir ??
-    sidecars.invocationContextDir;
-  if (cfcInvocationContextDir === undefined) {
-    throw new Error(
-      `no directory is registered for ` +
-        `\`--cfc-invocation-context-dir\`: ${registrationSource}; set ` +
-        `\`--cfc-invocation-context-dir\` to the directory the runtime ` +
-        `reads invocation contexts from`,
-    );
+  const runsc = records.sandbox?.selection.sandboxRuntimeKind === "runsc"
+    ? records.sandbox
+    : undefined;
+  let cfcResultDir: string | undefined;
+  let cfcInvocationContextDir: string | undefined;
+  if (runsc !== undefined) {
+    // The direct driver carries its CFC transport on descriptors, so a
+    // directory named here would be printed and exported while nothing reads
+    // it.
+    const named = options.cfcResultDir !== undefined
+      ? "--cfc-result-dir"
+      : options.cfcInvocationContextDir !== undefined
+      ? "--cfc-invocation-context-dir"
+      : undefined;
+    if (named !== undefined) {
+      throw new Error(
+        `\`${named}\` names a sidecar directory of the Docker driver, and ` +
+          `\`${SANDBOX_RUNTIME_ENV}\` puts this console on the direct runsc ` +
+          `driver, which reads none; drop the flag, or unset ` +
+          `\`${SANDBOX_RUNTIME_ENV}\` to run on Docker`,
+      );
+    }
+  } else {
+    const sidecars = registeredCfcSidecarHostDirs({
+      runtimeName: RUNSC_CFC_RUNTIME,
+      runtimes: records.dockerRuntimes,
+    });
+    const registrationSource = records.dockerRuntimesUnreadable ??
+      `no \`${RUNSC_CFC_RUNTIME}\` runtime \`docker info\` reports names it`;
+    cfcResultDir = options.cfcResultDir ?? sidecars.resultDir;
+    if (cfcResultDir === undefined) {
+      throw new Error(
+        `no directory is registered for \`--cfc-result-dir\`: ` +
+          `${registrationSource}; set \`--cfc-result-dir\` to the directory ` +
+          `the runtime writes its result sidecars to`,
+      );
+    }
+    cfcInvocationContextDir = options.cfcInvocationContextDir ??
+      sidecars.invocationContextDir;
+    if (cfcInvocationContextDir === undefined) {
+      throw new Error(
+        `no directory is registered for ` +
+          `\`--cfc-invocation-context-dir\`: ${registrationSource}; set ` +
+          `\`--cfc-invocation-context-dir\` to the directory the runtime ` +
+          `reads invocation contexts from`,
+      );
+    }
   }
 
   if (
@@ -471,11 +587,23 @@ export const resolveConsoleLaunchPlan = (
       : `.cf-harness-console-${instance.id}-${port}`);
   const posture = options.posture ?? "max-enforcement";
   const flowLabels = options.flowLabels ?? "persist";
-  const enforcementMode = options.enforcementMode ?? "enforce-explicit";
+  const enforcementMode = options.enforcementMode ??
+    DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE;
 
   const deploymentDefault = "labs deployment default";
   const registrationSourceName =
     `\`${RUNSC_CFC_RUNTIME}\` as \`docker info\` reports it`;
+
+  // The operator's one decision about skill scripts. Nothing about the fabric
+  // implies it, so it is off unless someone says otherwise, and the printout
+  // says which of the two ways they said it.
+  const allowSkillScripts = options.allowSkillScripts === true ||
+    options.inheritedAllowSkillScripts === true;
+  const allowSkillScriptsSource = options.allowSkillScripts === true
+    ? NAMED
+    : options.inheritedAllowSkillScripts === true
+    ? "`CF_HARNESS_ALLOW_SKILL_SCRIPTS`, inherited"
+    : LAUNCHER_DEFAULT;
 
   const resolved: ResolvedValue[] = [
     ...(instance === undefined ? [] : [{
@@ -509,20 +637,22 @@ export const resolveConsoleLaunchPlan = (
       value: storeDirectoryPath(store.value),
       source: store.source,
     },
-    {
-      name: "cfc results",
-      value: cfcResultDir,
-      source: options.cfcResultDir === undefined
-        ? registrationSourceName
-        : NAMED,
-    },
-    {
-      name: "cfc contexts",
-      value: cfcInvocationContextDir,
-      source: options.cfcInvocationContextDir === undefined
-        ? registrationSourceName
-        : NAMED,
-    },
+    ...(runsc !== undefined ? runscResolvedValues(runsc) : [
+      {
+        name: "cfc results",
+        value: cfcResultDir!,
+        source: options.cfcResultDir === undefined
+          ? registrationSourceName
+          : NAMED,
+      },
+      {
+        name: "cfc contexts",
+        value: cfcInvocationContextDir!,
+        source: options.cfcInvocationContextDir === undefined
+          ? registrationSourceName
+          : NAMED,
+      },
+    ]),
     {
       name: "posture",
       value: `${posture}, flow labels ${flowLabels}, ${enforcementMode}`,
@@ -548,6 +678,11 @@ export const resolveConsoleLaunchPlan = (
         ? NAMED
         : deploymentDefault,
     },
+    {
+      name: "skill scripts",
+      value: allowSkillScripts ? "run in the sandbox" : "not run",
+      source: allowSkillScriptsSource,
+    },
     ...connectorResolved,
     {
       name: "proxy",
@@ -565,8 +700,12 @@ export const resolveConsoleLaunchPlan = (
     CF_HARNESS_FABRIC_CFC_POSTURE: posture,
     CF_HARNESS_FABRIC_CFC_FLOW_LABELS: flowLabels,
     CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: enforcementMode,
-    CF_HARNESS_RUNSC_CFC_RESULT_DIR: cfcResultDir,
-    CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: cfcInvocationContextDir,
+    ...(cfcResultDir !== undefined && cfcInvocationContextDir !== undefined
+      ? {
+        CF_HARNESS_RUNSC_CFC_RESULT_DIR: cfcResultDir,
+        CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR: cfcInvocationContextDir,
+      }
+      : {}),
     MEMORY_DIR: storeDirectoryPath(store.value),
     ...(connectorGrants.length > 0
       ? { CF_HARNESS_CONNECTOR_GRANTS: JSON.stringify(connectorGrants) }
@@ -577,9 +716,55 @@ export const resolveConsoleLaunchPlan = (
     ...(skillsRegistryUrl !== undefined
       ? { CF_HARNESS_SKILLS_REGISTRY_URL: skillsRegistryUrl }
       : {}),
+    ...(allowSkillScripts ? { CF_HARNESS_ALLOW_SKILL_SCRIPTS: "1" } : {}),
   };
 
-  return { environment, resolved };
+  return {
+    environment,
+    resolved,
+    health: { resolved, connectors: connectorHealth },
+  };
+};
+
+/**
+ * What a console on the direct runsc driver runs under, each value beside the
+ * variable that named it. These pass through to the console as inherited
+ * rather than being set by the launch, and are printed so the report
+ * accounts for them.
+ */
+const runscResolvedValues = (
+  sandbox: ConsoleLaunchSandbox,
+): ResolvedValue[] => {
+  const { selection } = sandbox;
+  const inherited = (variable: string) => `\`${variable}\`, inherited`;
+  return [{
+    name: "sandbox",
+    value: "runsc",
+    source: inherited(SANDBOX_RUNTIME_ENV),
+  }, {
+    name: "runsc",
+    value: selection.sandboxRunscBinary ?? "`runsc`, looked for on `PATH`",
+    source: selection.sandboxRunscBinary !== undefined
+      ? inherited(RUNSC_BINARY_ENV)
+      : "harness default",
+  }, {
+    name: "rootfs",
+    value: selection.sandboxRootfs ?? "(the driver's default)",
+    source: selection.sandboxRootfs !== undefined
+      ? inherited(SANDBOX_ROOTFS_ENV)
+      : "harness default",
+  }, {
+    name: "cfc policy",
+    // The console takes no loop enforcement mode, so its turns run at the
+    // harness default.
+    value: selection.sandboxCfcPolicy ??
+      (runscWithoutPolicyRefusesTurns(DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE)
+        ? `(none: every turn is refused at \`${DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE}\`)`
+        : "(none: `runsc` runs without `--cfc`)"),
+    source: sandbox.policyNamed
+      ? inherited(RUNSC_CFC_POLICY_ENV)
+      : "harness default",
+  }];
 };
 
 /** The lines the launcher prints before the server binds. */
@@ -658,47 +843,6 @@ export const readToolshedStoreDir = async (
   return new TextDecoder().decode(output.stdout).trim();
 };
 
-/**
- * The runtime table `docker info` reports, or the reason it could not be read.
- * The running daemon's table rather than `daemon.json`: a configuration file
- * the daemon has not reloaded names directories nothing writes.
- */
-export const readDockerRuntimes = async (
-  dockerBinary: string,
-): Promise<{ runtimes?: unknown; unreadable?: string }> => {
-  let output: Deno.CommandOutput;
-  try {
-    output = await new Deno.Command(dockerBinary, {
-      args: ["info", "--format", "{{json .Runtimes}}"],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-  } catch (error) {
-    return {
-      unreadable: `\`${dockerBinary} info\` could not be run: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    };
-  }
-  if (!output.success) {
-    return {
-      unreadable: `\`${dockerBinary} info\` exited ${output.code}: ${
-        new TextDecoder().decode(output.stderr).trim()
-      }`,
-    };
-  }
-  try {
-    return { runtimes: JSON.parse(new TextDecoder().decode(output.stdout)) };
-  } catch (error) {
-    return {
-      unreadable: `\`${dockerBinary} info\` reported a runtime table that ` +
-        `does not parse: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-    };
-  }
-};
-
 const positiveInteger = (value: string, flag: string): number => {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -758,9 +902,17 @@ export const prepareConsoleLaunch = async (
       "fabric-cfc-flow-labels",
       "fabric-cfc-enforcement-mode",
     ],
-    boolean: ["no-pattern-index", "no-skills-registry"],
+    boolean: [
+      "no-pattern-index",
+      "no-skills-registry",
+      "allow-skill-scripts",
+    ],
     "--": true,
   });
+  // Before anything is read: the launcher selects the sandbox from the
+  // environment, as the console does, and a selection flag it ignored would
+  // launch a console on a sandbox other than the one it was asked for.
+  refuseBatchSandboxFlags(parsed);
   // A flag present but empty is a value someone typed that did not survive
   // parsing — `--port -1` leaves `port` empty, because `-1` reads as a flag of
   // its own — so it is refused rather than falling through to the default the
@@ -829,13 +981,24 @@ export const prepareConsoleLaunch = async (
   const inheritedSpace = nonEmpty(env.CF_HARNESS_FABRIC_SPACE) ??
     nonEmpty(env.CF_SPACE);
 
-  // Not configurable: the sandbox runs `docker`, so a launcher reading the
-  // runtime table from anything else would print directories the runs never
-  // reach.
-  const docker = await io.readDockerRuntimes();
+  // Read the way the server reads it, from the same environment, so the
+  // launch and the console describe one sandbox.
+  const selection = await resolveSandboxRuntimeSelection(env, {}, {
+    cwd: Deno.cwd(),
+  });
+  // Only the Docker driver has a runtime table to read. Not configurable
+  // there: that sandbox runs `docker`, so a launcher reading the table from
+  // anything else would print directories the runs never reach.
+  const docker = selection.sandboxRuntimeKind === "runsc"
+    ? {}
+    : await io.readDockerRuntimes();
 
   const plan = resolveConsoleLaunchPlan({
     ...(instance !== undefined ? { instance } : {}),
+    sandbox: {
+      selection,
+      policyNamed: nonEmpty(env[RUNSC_CFC_POLICY_ENV]) !== undefined,
+    },
     ...(docker.runtimes !== undefined
       ? { dockerRuntimes: docker.runtimes }
       : {}),
@@ -883,6 +1046,9 @@ export const prepareConsoleLaunch = async (
       : {}),
     noPatternIndex: parsed["no-pattern-index"] === true,
     noSkillsRegistry: parsed["no-skills-registry"] === true,
+    allowSkillScripts: parsed["allow-skill-scripts"] === true,
+    inheritedAllowSkillScripts:
+      nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1",
     ...(flag("cfc-result-dir") !== undefined
       ? { cfcResultDir: flag("cfc-result-dir")! }
       : {}),
@@ -900,7 +1066,27 @@ export const prepareConsoleLaunch = async (
       : {}),
   });
 
-  return { plan, consoleArgs: (parsed["--"] ?? []).map(String) };
+  // The launch prints what it resolved, and this is one of the values it
+  // resolves, so a console argument setting it again would leave that report
+  // describing a console that does something else. Every other server flag
+  // still passes through.
+  const consoleArgs = (parsed["--"] ?? []).map(String);
+  // Both spellings: a boolean flag still parses `--flag=true` and `--flag=1`,
+  // so an exact-token check leaves the enabling form through and the printed
+  // report then describes a console that does something else.
+  const passedThrough = consoleArgs.find((argument) =>
+    argument === "--allow-skill-scripts" ||
+    argument.startsWith("--allow-skill-scripts=")
+  );
+  if (passedThrough !== undefined) {
+    throw new Error(
+      `\`${passedThrough}\` cannot be passed through to the console: ` +
+        `\`--allow-skill-scripts\` is one of the values this launch ` +
+        `resolves and prints, so name it before \`--\` instead`,
+    );
+  }
+
+  return { plan, consoleArgs };
 };
 
 /**
@@ -910,10 +1096,15 @@ export const prepareConsoleLaunch = async (
 export const launchConsole = async (
   args: readonly string[] = Deno.args,
   env: Record<string, string | undefined> = Deno.env.toObject(),
-  serve: (consoleArgs: string[]) => Promise<void> = startConsoleServer,
+  serve: (
+    consoleArgs: string[],
+    health: ConsoleObservedLaunchHealth,
+  ) => Promise<void> = (consoleArgs, health) =>
+    startConsoleServer(consoleArgs, undefined, undefined, health),
   io: ConsoleLaunchIo = REAL_IO,
 ): Promise<void> => {
   const { plan, consoleArgs } = await prepareConsoleLaunch(args, env, io);
+  const health = { ...plan.health, checkedAt: new Date().toISOString() };
 
   console.log("");
   for (const line of consoleLaunchReport(plan)) {
@@ -926,7 +1117,9 @@ export const launchConsole = async (
   for (const [name, value] of Object.entries(plan.environment)) {
     Deno.env.set(name, value);
   }
-  await serve(consoleArgs);
+  // These are the decisions that produced the running console's grants. A
+  // status request reports this observation even if the files later change.
+  await serve(consoleArgs, health);
 };
 
 /**

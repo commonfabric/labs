@@ -6,6 +6,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -33,6 +34,22 @@ const forwardProgram = {
   }],
 };
 
+const expectStrictPosture = (runtime: Runtime) => {
+  expect({
+    enforcement: runtime.cfcEnforcementMode,
+    flow: runtime.cfcFlowLabels,
+    floor: runtime.cfcWriteFloor,
+    triggerGating: runtime.cfcTriggerReadGating,
+    policyEvaluation: runtime.cfcPolicyEvaluation,
+  }).toEqual({
+    enforcement: "enforce-strict",
+    flow: "persist",
+    floor: "enforce",
+    triggerGating: true,
+    policyEvaluation: "enforce",
+  });
+};
+
 describe("Home published profile references", () => {
   it("forwards and resumes a populated profile through Home's reference contract", async () => {
     const signer = await Identity.fromPassphrase("home-published-profile");
@@ -49,6 +66,7 @@ describe("Home published profile references", () => {
       errorHandlers: [(error) => errors.push(error)],
     });
     try {
+      expectStrictPosture(runtime);
       const setup = runtime.edit();
       const profilePattern = await runtime.patternManager.compilePattern({
         main: "/profile-home.tsx",
@@ -75,14 +93,17 @@ describe("Home published profile references", () => {
         seed,
       );
       writeSeedEnvelopeDoc(seed, profileSpace);
-      seed.writeOrThrow({ ...assertion.getAsNormalizedFullLink(), path: [] }, {
+      seedStoredEnvelope(seed, {
+        ...assertion.getAsNormalizedFullLink(),
+        path: [],
+      }, {
         value: {
           type: "github.login",
           value: "ada",
           verifiedAt: "2026-07-15T20:00:00.000Z",
         },
         cfc: {
-          version: 2,
+          version: 3,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: {
             version: 1,
@@ -95,6 +116,7 @@ describe("Home published profile references", () => {
       });
       expect((await seed.commit()).error).toBeUndefined();
       const publish = runtime.edit();
+      profile.withTx(publish).key("setName").send({ name: "Ada" });
       profile.withTx(publish).key("publishVerifiedIdentities").send({
         identities: [assertion.withTx(publish)],
       });
@@ -124,7 +146,7 @@ describe("Home published profile references", () => {
       expect(result.key("defaultProfile").key("name").get()).toBe("Ada");
       const incomingLinks: Array<{
         baseline: string;
-        version: 1 | 2;
+        version: 1 | 2 | 3;
         link: ReturnType<typeof result.getAsNormalizedFullLink>;
       }> = [];
       for (
@@ -139,7 +161,7 @@ describe("Home published profile references", () => {
             import.meta.url,
           ),
         ));
-        for (const version of [1, 2] as const) {
+        for (const version of [1, 2, 3] as const) {
           const seed = runtime.edit();
           const incoming = runtime.getCell(
             space,
@@ -148,27 +170,30 @@ describe("Home published profile references", () => {
             seed,
           );
           writeSeedEnvelopeDoc(seed, space);
-          seed.writeOrThrow(
-            { ...incoming.getAsNormalizedFullLink(), path: [] },
-            {
-              value: {
-                home: result.asSchema(contract.resultSchema).getAsLink(),
-              },
-              cfc: {
-                version,
-                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-                labelMap: {
-                  version: 1,
-                  entries: version === 1 ? [] : [{
+          seedStoredEnvelope(seed, {
+            ...incoming.getAsNormalizedFullLink(),
+            path: [],
+          }, {
+            value: {
+              home: result.asSchema(contract.resultSchema).getAsLink(),
+            },
+            cfc: {
+              version,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: version === 3
+                  ? [{
                     path: ["home"],
                     origin: "link",
                     observes: "followRef",
+                    referenceAcquisition: "complete",
                     label: { confidentiality: [] },
-                  }],
-                },
+                  }]
+                  : [],
               },
             },
-          );
+          });
           expect((await seed.commit()).error).toBeUndefined();
           incomingLinks.push({
             baseline,
@@ -193,6 +218,7 @@ describe("Home published profile references", () => {
         errorHandlers: [(error) => errors.push(error)],
       });
       try {
+        expectStrictPosture(cold);
         const resumed = cold.getCellFromLink(resultLink);
         await resumed.sync();
         expect(await cold.start(resumed)).toBe(true);
@@ -206,7 +232,7 @@ describe("Home published profile references", () => {
           const incoming = cold.getCellFromLink(entry.link);
           await incoming.sync();
           const oldProfile = incoming.key("home", "defaultProfile");
-          if (entry.version === 1) {
+          if (entry.version !== 3) {
             expect(() => oldProfile.key("name").get()).toThrow(
               "Reference acquisition lacks complete legacy provenance",
             );

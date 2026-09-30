@@ -56,8 +56,16 @@ const linkResolutionProbeMarker: unique symbol = Symbol(
   "linkResolutionProbeMarker",
 );
 
+const dereferenceResolutionProbeMarker: unique symbol = Symbol(
+  "dereferenceResolutionProbeMarker",
+);
+
 const mergeableOpReadMarker: unique symbol = Symbol(
   "mergeableOpReadMarker",
+);
+
+const writeDestinationReadMarker: unique symbol = Symbol(
+  "writeDestinationReadMarker",
 );
 
 export const ignoreReadForScheduling: Metadata = {
@@ -103,7 +111,13 @@ export function withAuthorizationReadBasis(
   if (basis === undefined) {
     throw new Error("Authorization read has no commit revision basis");
   }
-  return { ...meta, [authorizationReadBasisMarker]: basis };
+  return {
+    ...meta,
+    [authorizationReadBasisMarker]: {
+      seq: basis.seq,
+      localSeqs: basis.localSeqs,
+    },
+  };
 }
 
 /** Returns the runtime-captured revision basis for required evidence. */
@@ -112,6 +126,26 @@ export function getAuthorizationReadBasis(
 ): CommitReadBasis | undefined {
   return meta?.[authorizationReadBasisMarker] as CommitReadBasis | undefined;
 }
+
+/**
+ * Runtime-owned prepare reads whose internal classification is permanent.
+ * Native journals seal records carrying this exact metadata object and can
+ * omit them from candidate consumed-read scans while retaining the full log.
+ */
+export const stableInternalVerifierRead: Metadata = Object.freeze({
+  ...ignoreReadForScheduling,
+  ...internalVerifierRead,
+});
+
+/**
+ * A pending output reused by a write still needs its publication accepted.
+ * The shared identity selects this commit-only read for wave acceptance and
+ * foreign-space handoff without classifying ordinary verifier probes as writes.
+ */
+export const pendingWriteElisionRead: Metadata = {
+  ...ignoreReadForScheduling,
+  ...internalVerifierRead,
+};
 
 /**
  * Marks the "is there a link here?" probe reads issued by link resolution.
@@ -127,6 +161,16 @@ export const linkResolutionProbe: Metadata = {
 };
 
 /**
+ * Marks a link probe issued inside the resolver that follows links on behalf
+ * of a content read. The probe itself is runtime machinery; the target read is
+ * the observation and is checked independently.
+ */
+export const dereferenceResolutionProbe: Metadata = {
+  ...linkResolutionProbe,
+  [dereferenceResolutionProbeMarker]: true,
+};
+
+/**
  * Marks the reads a mergeable write (push / addUnique / increment / the keyed
  * ops) issues as part of building its own write — the value it reads to compute
  * the change. The commit's read-set builder drops these (and the write-target
@@ -137,6 +181,23 @@ export const linkResolutionProbe: Metadata = {
  */
 export const mergeableOpRead: Metadata = {
   [mergeableOpReadMarker]: true,
+};
+
+/**
+ * Marks the reads the write machinery makes of the region it is about to
+ * write: the stream-marker probe that chooses between an event send and a
+ * stored write, the diff's read of each destination path, and the append's
+ * destination snapshot that supplies storage positions. Each answer
+ * decides how and whether to write, never what is written, and where a
+ * stored link sends the write somewhere else the walk reads that slot again
+ * without this marker. CFC flow-label derivation excludes these from the
+ * transaction's join (spec §18.6.2,
+ * `docs/specs/cfc-write-destination-reads.md`). Scheduling, conflict
+ * detection and the attempted-write record are unaffected, and the same
+ * stream-marker probe made outside the write path carries no marker.
+ */
+export const writeDestinationRead: Metadata = {
+  [writeDestinationReadMarker]: true,
 };
 
 export function isReadIgnoredForScheduling(meta?: Metadata): boolean {
@@ -405,8 +466,24 @@ export function isReadMarkedAsAttemptedWrite(meta?: Metadata): boolean {
   return meta?.[markReadAsAttemptedWriteMarker] === true;
 }
 
+/**
+ * `meta` without the attempted-write mark, for a read a writer makes to find
+ * out where or what to write rather than at the place it writes. Such a read
+ * is not an attempt to write what it reads, and marking it one would make the
+ * commit boundary judge the write against every policy beneath that place.
+ */
+export function withoutAttemptedWriteMark(meta?: Metadata): Metadata {
+  const rest: Metadata = { ...meta };
+  delete rest[markReadAsAttemptedWriteMarker];
+  return rest;
+}
+
 export function isMergeableOpRead(meta?: Metadata): boolean {
   return meta?.[mergeableOpReadMarker] === true;
+}
+
+export function isWriteDestinationRead(meta?: Metadata): boolean {
+  return meta?.[writeDestinationReadMarker] === true;
 }
 
 export function isMutableTransactionReadAllowed(meta?: Metadata): boolean {
@@ -421,6 +498,10 @@ export function isLinkResolutionProbe(meta?: Metadata): boolean {
   return meta?.[linkResolutionProbeMarker] === true;
 }
 
+export function isDereferenceResolutionProbe(meta?: Metadata): boolean {
+  return meta?.[dereferenceResolutionProbeMarker] === true;
+}
+
 const schedulerDependencyReadMarker: unique symbol = Symbol(
   "schedulerDependencyReadMarker",
 );
@@ -431,7 +512,9 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
  * dependencies so the reactivity log covers them for subscriptions, but
  * they are scheduling machinery, not handler consumption (§8.10.1:
  * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation excludes them; the action body's own reads carry the taint.
+ * derivation and the runtime read ceiling exclude them; their materialized
+ * values never enter the handler. The action body's own reads enforce its
+ * ceiling and carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,
@@ -453,23 +536,45 @@ const machineryReadMarker: unique symbol = Symbol(
  * (`sendValueToBinding`), and the list coordinators' container scaffolding
  * (presence probes, slot-identity diffs, `length` during instantiation).
  * Sibling of `schedulerDependencyRead` (§8.10.1: dependency-discovery reads
- * are not consumed inputs) but deliberately NARROWER in effect: flow-label
- * derivation still counts a marked read's ordinary label consumption
- * (link-origin pointer labels, concrete structure/derived entries — exactly
- * what it consumed before templates existed); only runtime-minted `*`-path
- * TEMPLATE consumption is excluded (template-population §3.1/§6). The
- * machinery reading a plumbing container's child paths is the runtime
- * wiring up operations, not an application observing a slot — letting those
- * reads consume membership/slot templates smeared one reconcile's J into
- * the next op's action chain (measured: the phase-B pointwise map suite),
- * which is what kept the generic pure-link mint route disabled in Stage A
- * (the SC-8 remainder).
+ * are not consumed inputs) but deliberately NARROWER in effect, and what it
+ * excludes depends on what the marked read observed. A marked read that
+ * materializes CONTENT still consumes its ordinary labels (link-origin
+ * pointer labels, concrete structure/derived entries — exactly what it
+ * consumed before templates existed); only runtime-minted `*`-path TEMPLATE
+ * consumption is excluded (template-population §3.1/§6). The machinery
+ * reading a plumbing container's child paths is the runtime wiring up
+ * operations, not an application observing a slot — letting those reads
+ * consume membership/slot templates smeared one reconcile's J into the next
+ * op's action chain (measured: the phase-B pointwise map suite), which is
+ * what kept the generic pure-link mint route disabled in Stage A (the SC-8
+ * remainder).
+ *
+ * A marked read that observed only WHICH REFERENCE sits at a slot consumes
+ * nothing at all. §4.6.3's reference-identity row is for a standalone
+ * observation — a read the computation made and did something with — and a
+ * probe under this marker is the runtime moving a reference from one slot to
+ * another. The link write that finishes the move carries the source's label
+ * to the destination slot, so the pointer's protection arrives there
+ * pointwise; joining it into the flow stamp as well spreads it over
+ * everything else the wiring transaction wrote. `forEachFlowObservation` in
+ * `cfc/prepare.ts` skips such a probe alongside the ones a dereference trace
+ * covers.
  *
  * Stamp discipline: mark ONLY scopes whose every read the machinery itself
  * issues — pattern/handler code must never execute inside a marked scope.
  * Over-marking an application observation under-taints (the forbidden
  * direction); a missed machinery read merely leaves residual over-taint
  * (acceptable, additive-safe).
+ *
+ * That discipline is what the reference-identity skip above rests on, and the
+ * skip is what an over-marked scope now costs. A marked scope whose reads the
+ * machinery issues writes the reference onward, and the link write puts the
+ * label at the slot that receives it. A marked scope containing an
+ * application read that computes plain content from WHICH reference sits at a
+ * slot has no such slot to put the label at, so the clause lands nowhere a
+ * content read takes it. Before the skip an over-marked probe still consumed
+ * the pointer label; now it consumes nothing, so a scope whose contents are
+ * not entirely the runtime's own must not carry this marker.
  */
 export const machineryRead: Metadata = {
   [machineryReadMarker]: true,

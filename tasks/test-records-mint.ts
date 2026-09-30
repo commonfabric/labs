@@ -15,7 +15,7 @@
  */
 
 import { join } from "@std/path";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { toLongQuotedDebugString } from "@commonfabric/data-model";
 import { readEnv } from "@commonfabric/test-support/records";
 import {
   isRecipient,
@@ -144,7 +144,7 @@ export async function ensureServiceAccount(
     if (created.status !== 200) {
       throw new Error(
         `creating ${email} failed: HTTP ${created.status} ${
-          toCompactDebugString(created.json, { maxLength: 200 })
+          toLongQuotedDebugString(created.json)
         }`,
       );
     }
@@ -189,7 +189,7 @@ export async function ensurePersonFolder(
   if (created.status !== 200 && created.status !== 409) {
     throw new Error(
       `creating folder ${folder} failed: HTTP ${created.status} ${
-        toCompactDebugString(created.json, { maxLength: 200 })
+        toLongQuotedDebugString(created.json)
       }`,
     );
   }
@@ -232,7 +232,7 @@ export async function ensurePersonFolder(
     if (!isAccountNotVisible(updated.status, updated.json, email)) {
       throw new Error(
         `granting ${role} on ${folder} failed: HTTP ${updated.status} ${
-          toCompactDebugString(updated.json, { maxLength: 200 })
+          toLongQuotedDebugString(updated.json)
         }`,
       );
     }
@@ -309,7 +309,7 @@ export async function mintKey(
   if (minted.status !== 200) {
     throw new Error(
       `minting a key for ${email} failed: HTTP ${minted.status} ${
-        toCompactDebugString(minted.json, { maxLength: 200 })
+        toLongQuotedDebugString(minted.json)
       }`,
     );
   }

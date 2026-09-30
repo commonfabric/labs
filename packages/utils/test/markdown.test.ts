@@ -12,7 +12,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { backtickQuote } from "../src/markdown.ts";
+import { backtickFence, backtickQuote } from "../src/markdown.ts";
 import { parseCodeSpan } from "./parse-code-span.ts";
 
 describe("markdown", () => {
@@ -74,6 +74,25 @@ describe("markdown", () => {
       ) {
         expect(parseCodeSpan(backtickQuote(text))).toBe(text);
       }
+    });
+  });
+
+  describe("backtickFence()", () => {
+    it("wraps text in a pair of three-backtick fence lines", () => {
+      expect(backtickFence("a\nb")).toBe("```\na\nb\n```");
+    });
+
+    it("returns two adjacent fence lines around an empty line for empty text", () => {
+      expect(backtickFence("")).toBe("```\n\n```");
+    });
+
+    it("keeps a fence of three backticks for a shorter run inside", () => {
+      expect(backtickFence("a``b")).toBe("```\na``b\n```");
+    });
+
+    it("uses a longer fence than the longest run inside", () => {
+      expect(backtickFence("a```b")).toBe("````\na```b\n````");
+      expect(backtickFence("`````")).toBe("``````\n`````\n``````");
     });
   });
 });

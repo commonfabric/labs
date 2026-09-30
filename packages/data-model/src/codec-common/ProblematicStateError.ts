@@ -1,5 +1,5 @@
 import type { FabricValue } from "@/interface.ts";
-import { toCompactDebugString } from "@/value-debug.ts";
+import { toCompactDebugString } from "@/value-debug";
 import { toReportableState } from "./toReportableState.ts";
 import { toReportableTag } from "./toReportableTag.ts";
 import { ProblematicValue } from "./ProblematicValue.ts";
@@ -64,14 +64,18 @@ export class ProblematicStateError extends Error {
    * Both classes normalize a tag and a state the same way, so a value from
    * here is comparable with one built directly.
    *
-   * Deep-frozen, because a decode returns one of these and every value a
-   * decode returns is deep-frozen. Freezing here rather than at each call
-   * site is what keeps that from depending on a caller remembering.
+   * Deep-frozen unless `mutable`, because a decode returns one of these, and
+   * what a decode returns is deep-frozen unless it was asked to be mutable.
+   * Freezing here rather than at each call site is what keeps that from
+   * depending on a caller remembering.
    */
-  asProblematicValue(): ProblematicValue {
-    return deepFreeze(
-      new ProblematicValue(this.wireTypeTag, this.state, this.message),
+  asProblematicValue(mutable = false): ProblematicValue {
+    const result = new ProblematicValue(
+      this.wireTypeTag,
+      this.state,
+      this.message,
     );
+    return mutable ? result : deepFreeze(result);
   }
 
   //

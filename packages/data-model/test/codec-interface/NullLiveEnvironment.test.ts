@@ -13,10 +13,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import {
-  NULL_LIVE_ENVIRONMENT,
-  NullLiveEnvironment,
-} from "@/codec-interface/NullLiveEnvironment.ts";
+import { NULL_LIVE_ENVIRONMENT, NullLiveEnvironment } from "@/codec-common";
 
 describe("NullLiveEnvironment", () => {
   describe("NULL_LIVE_ENVIRONMENT", () => {
@@ -53,15 +50,11 @@ describe("NullLiveEnvironment", () => {
     it("is frozen (cannot have `getCell()` replaced)", () => {
       expect(Object.isFrozen(NULL_LIVE_ENVIRONMENT)).toBe(true);
     });
-
-    it("reports `shouldDeepFreeze` as `true` (the safe default, mirrors `cloneIfNecessary()` frozen)", () => {
-      expect(NULL_LIVE_ENVIRONMENT.shouldDeepFreeze).toBe(true);
-    });
   });
 
   describe("`NullLiveEnvironment` (exported class)", () => {
     it("throws the expected default message (default ctor)", () => {
-      const ctx = new NullLiveEnvironment(true);
+      const ctx = new NullLiveEnvironment();
       expect(() =>
         ctx.getCell({ id: "of:bafyDEFAULT", path: [], space: "did:key:z1" })
       ).toThrow(
@@ -69,29 +62,11 @@ describe("NullLiveEnvironment", () => {
       );
     });
 
-    it("correctly passes `shouldDeepFreeze` to the superclass", () => {
-      expect(new NullLiveEnvironment(false).shouldDeepFreeze).toBe(
-        false,
-      );
-      expect(new NullLiveEnvironment(true).shouldDeepFreeze).toBe(true);
-    });
-
     it("parameterizes only the after-colon clause via the `getCellMessage` arg", () => {
-      const ctx = new NullLiveEnvironment(true, "custom");
+      const ctx = new NullLiveEnvironment("custom");
       expect(() =>
         ctx.getCell({ id: "of:bafyCUSTOM", path: [], space: "did:key:z1" })
       ).toThrow("Cannot decode cell reference `of:bafyCUSTOM`: custom");
-    });
-
-    it("correctly accepts the two-argument form", () => {
-      const ctx = new NullLiveEnvironment(false, "deep-clone path.");
-      expect(ctx.shouldDeepFreeze).toBe(false);
-      expect(() =>
-        ctx.getCell({ id: "of:bafyX", path: [], space: "did:key:z1" })
-      )
-        .toThrow(
-          "Cannot decode cell reference `of:bafyX`: deep-clone path.",
-        );
     });
   });
 });

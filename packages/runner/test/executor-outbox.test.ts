@@ -1252,26 +1252,20 @@ describe("stage G outbox + sqlite discharge", () => {
   // The sqliteQuery memo decision (B1's fix, serving-loop.md §4/§6)
   //
 
-  it("sqliteQuery memo decision: a settled result is a hit, a bare claim never is; an orphaned claim re-issues ONLY under the serving posture", () => {
+  it("sqliteQuery memo decision: a settled result is a hit, local work dedupes, and an orphaned claim re-issues", () => {
     // No stored key: issue (the ordinary miss).
     expect(sqliteQueryMemoDecision({
       stored: undefined,
       hash: "h1",
       inFlightHere: false,
-      servedRun: true,
+      speculativeRun: false,
     })).toBe("issue");
     // Settled (result or error landed): the §4 hit — both arms.
     expect(sqliteQueryMemoDecision({
       stored: { pending: false, requestHash: "h1" },
       hash: "h1",
       inFlightHere: false,
-      servedRun: true,
-    })).toBe("hit");
-    expect(sqliteQueryMemoDecision({
-      stored: { pending: false, requestHash: "h1" },
-      hash: "h1",
-      inFlightHere: false,
-      servedRun: false,
+      speculativeRun: false,
     })).toBe("hit");
     // A pending claim with the RPC in flight HERE: dedupe (§4's one
     // outstanding effect per key).
@@ -1279,32 +1273,30 @@ describe("stage G outbox + sqlite discharge", () => {
       stored: { pending: true, requestHash: "h1" },
       hash: "h1",
       inFlightHere: true,
-      servedRun: true,
+      speculativeRun: false,
     })).toBe("dedupe");
-    // An ORPHANED claim (pending, nothing in flight here): under the
-    // serving posture the effect was dropped after its wave committed
-    // (park/crash/discard) and nothing else will ever re-issue —
-    // re-issue heals the wedge (§6 step 3's re-miss, restored for the
-    // one builtin whose key commits ahead of its result). The OFF arm
-    // keeps today's committed-state dedupe byte for byte.
+    // A pending claim with no local owner may belong to a stopped or concurrent
+    // runtime. A non-speculative read safely reissues under the hash guard.
     expect(sqliteQueryMemoDecision({
       stored: { pending: true, requestHash: "h1" },
       hash: "h1",
       inFlightHere: false,
-      servedRun: true,
+      speculativeRun: false,
     })).toBe("issue");
+    // Speculative derivations cannot enact SQLite effects, so their pending
+    // view is not evidence that a recoverable effect was abandoned.
     expect(sqliteQueryMemoDecision({
       stored: { pending: true, requestHash: "h1" },
       hash: "h1",
       inFlightHere: false,
-      servedRun: false,
+      speculativeRun: true,
     })).toBe("dedupe");
     // A different stored key always re-issues (input-driven retry).
     expect(sqliteQueryMemoDecision({
       stored: { pending: false, requestHash: "old" },
       hash: "h1",
       inFlightHere: false,
-      servedRun: false,
+      speculativeRun: true,
     })).toBe("issue");
   });
 

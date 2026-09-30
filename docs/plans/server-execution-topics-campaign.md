@@ -35,14 +35,14 @@ belongs with its PR; large artifacts need hashes and retrieval instructions.
 
 | Order | Recommendation | Decision and invariant | Review surface |
 | --- | --- | --- | --- |
-| A | 5: caller demand | Apply the durable schema before selecting the current-list index; preserve created topics, citation targets, and the explicit full-demand stress workload. Reuse landed CLI discovery improvements. | [#7231](https://github.com/commontoolsinc/labs/pull/7231) |
-| B | 3: event visibility | Use event-driven replica application before deferral, retaining event identity/index validation, arrival order, deduplication, durable consequences, and watermark bounds. | [#7232](https://github.com/commontoolsinc/labs/pull/7232) |
-| C | 1: terminal confirmation | Remove redundant intermediate syncs while retaining owning-result traversal, complete scoped addresses, leases, creation-race rearming, cancellation, and settle coverage. This PR depends on B. | [#7234](https://github.com/commontoolsinc/labs/pull/7234) |
-| D | 2: watch maintenance | Stage incremental ownership and graph updates before transactional publication. Retain rollback, overlap, scoped and operation interests, absent-target arrival, and retirement. | [#7251](https://github.com/commontoolsinc/labs/pull/7251) |
-| E | 4: sidecar source | Share bounded raw-source work while preserving fresh identity resolution, destination-space closure persistence, per-piece reconciliation, owner origins, invalidation, retry, and disposal. | [#7274](https://github.com/commontoolsinc/labs/pull/7274) |
-| F | 6: deadline and grace | Retain both constants. Document input bypass, burst coalescing, timer/pass attribution, and the deadline's multi-user consequence-visibility role. Keep the evidence disposition and runtime-emission proof current with its prerequisite. | [#7296](https://github.com/commontoolsinc/labs/pull/7296) |
+| A | 5: caller demand | Apply the durable schema before selecting the current-list index; preserve created topics, citation targets, and the explicit full-demand stress workload. Reuse landed CLI discovery improvements. | [#7231](https://github.com/commonfabric/labs/pull/7231) |
+| B | 3: event visibility | Use event-driven replica application before deferral, retaining event identity/index validation, arrival order, deduplication, durable consequences, and watermark bounds. | [#7232](https://github.com/commonfabric/labs/pull/7232) |
+| C | 1: terminal confirmation | Remove redundant intermediate syncs while retaining owning-result traversal, complete scoped addresses, leases, creation-race rearming, cancellation, and settle coverage. This PR depends on B. | [#7234](https://github.com/commonfabric/labs/pull/7234) |
+| D | 2: watch maintenance | Stage incremental ownership and graph updates before transactional publication. Retain rollback, overlap, scoped and operation interests, absent-target arrival, and retirement. | [#7251](https://github.com/commonfabric/labs/pull/7251) |
+| E | 4: sidecar source | Share bounded raw-source work while preserving fresh identity resolution, destination-space closure persistence, per-piece reconciliation, owner origins, invalidation, retry, and disposal. | [#7274](https://github.com/commonfabric/labs/pull/7274) |
+| F | 6: deadline and grace | Retain both constants. Document input bypass, burst coalescing, timer/pass attribution, and the deadline's multi-user consequence-visibility role. Keep the evidence disposition and runtime-emission proof current with its prerequisite. | [#7296](https://github.com/commonfabric/labs/pull/7296) |
 
-The [shared prerequisite](https://github.com/commontoolsinc/labs/pull/7229)
+The [shared prerequisite](https://github.com/commonfabric/labs/pull/7229)
 contains the baseline tools and evidence. Its identity-commit fixtures use
 content-derived IDs so content admission succeeds before testing elision and
 staleness. All PR statuses must be refreshed before delivery; an earlier green

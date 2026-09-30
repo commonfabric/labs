@@ -1,3 +1,5 @@
+import { isDID } from "@commonfabric/identity/did";
+
 import type { Cell } from "./cell.ts";
 import type { Runtime } from "./runtime.ts";
 import type { MemorySpace } from "./storage/interface.ts";
@@ -11,8 +13,6 @@ import {
   SlugResolutionError,
 } from "./slug-resolution.ts";
 import { getPatternIdentityRef } from "./runner.ts";
-
-const DID_RE = /^did:[a-z0-9]+:.+$/;
 
 export interface FabricChaseResult {
   entryIdentity: string;
@@ -69,7 +69,7 @@ function resolveRefSpace(
   compilingSpace: MemorySpace,
 ): MemorySpace {
   if (refSpace === undefined) return compilingSpace;
-  if (DID_RE.test(refSpace)) return refSpace as MemorySpace;
+  if (isDID(refSpace)) return refSpace;
   throw new Error(
     "space names are currently unsupported; resolve the name to a DID first",
   );

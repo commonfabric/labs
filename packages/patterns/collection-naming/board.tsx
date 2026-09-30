@@ -1,12 +1,13 @@
 /**
  * The exemplar collection: a board of items that owns a member namespace.
- * `addItem` allocates the next name and appends the item in one write, so the
- * created item is reachable at `names[<n>]` the moment it exists;
- * `backfillNames` names, in filing order, whatever the board held before it
- * numbered anything. The board publishes its index — the items themselves,
- * through the scalars a survey reads and each item's own name — the names
- * table its items read their names from, and the declaration a consumer
- * learns the naming policy from.
+ * `addItem` allocates the next name, creates the item holding it, and appends
+ * the item in one write, so the created item is reachable at `names[<n>]` and
+ * carries its own name the moment it exists; `backfillNames` names, in filing
+ * order, whatever the board held before it numbered anything. The board
+ * publishes its index — the items themselves, through the scalars a survey
+ * reads and each item's own name — the names table that gives a member its
+ * name by identity, and the declaration a consumer learns the naming policy
+ * from.
  */
 
 import {
@@ -23,8 +24,8 @@ import {
 import Item from "./item.tsx";
 import { mentionableIndex, type MentionableRow } from "./mentionable.ts";
 import {
-  assignName,
   backfillNames,
+  createNamed,
   type NamesMap,
   namesTable,
   type NamesTableRow,
@@ -54,8 +55,7 @@ export interface ItemIndexRow {
   createdAt: number;
 
   /**
-   * The board's name for the item, as the item reads it out of the board's
-   * names table.
+   * The board's name for the item, as the item stores it.
    *
    * OPTIONAL rather than defaulted, which is what the compatibility proof
    * accepts: a defaulted property moves the demand's defaults below an array
@@ -66,13 +66,14 @@ export interface ItemIndexRow {
    * refuses is the other pairing, a required row against an optional
    * publication; `ItemOutput.shortName` in `item.tsx` states it in full.
    *
-   * An item whose lookup has produced no value — one created a moment ago, or
-   * one from before the board numbered anything — is absent here rather than
-   * blank, and the array reads whole around it. That is the bound on what the
-   * spelling buys: it is about the READ. `cf piece setsrc` refuses a member
-   * demand that gains any property at all — optional included — over a board
-   * whose stored members do not publish it, because the schema recorded on
-   * the retained link to each member is unconstrained at that path.
+   * An item whose input holds no name — one filed before the board passed a
+   * name in at create, or one filed past `addItem`, which includes every
+   * member a backfill names — is absent here rather than blank, and the array
+   * reads whole around it. That is the bound on what the spelling buys: it is
+   * about the READ. `cf piece setsrc` refuses a member demand that gains any
+   * property at all — optional included — over a board whose stored members
+   * do not publish it, because the schema recorded on the retained link to
+   * each member is unconstrained at that path.
    */
   shortName?: string;
 }
@@ -121,8 +122,8 @@ export interface AddItemResult {
   /**
    * The item this call created — the piece itself, declared through the
    * index's row schema so the default readback is bounded. Its `shortName`
-   * is the item's own lookup and may not have produced a value when this
-   * returns; `name` beside it is the one to read.
+   * is what the item publishes; `name` beside it is the allocation itself,
+   * which a caller reads without depending on the item.
    */
   item: ItemIndexRow;
 
@@ -179,9 +180,9 @@ export interface BoardOutput {
   names: Default<NamesMap, {}>;
 
   /**
-   * The names table, one row per named member, which every item the board
-   * creates reads its own name from. Published so an item composed outside
-   * `addItem` can be wired to the same table.
+   * The names table, one row per named member: what `nameOf` reads to find
+   * the name the board gives a member by identity, including a member whose
+   * own `shortName` is absent.
    */
   namesTable: NamesTableRow[] | Default<[]>;
 
@@ -224,7 +225,8 @@ export default pattern<BoardInput, BoardOutput>(({ items, names }) => {
   // `.length` alone is what keeps this cheap: the shrunk schema declares
   // `items: unknown`, so counting the board expands no item.
   const itemCount = items.get().length;
-  // Derived once for the whole board; every item reads its own row out of it.
+  // Derived once for the whole board, for a caller's reverse lookup; no item
+  // reads it.
   const table = namesTable({ names });
   // Also derived once for the whole board: the mention universe every item's
   // editor autocompletes over, as one document of copies.
@@ -238,22 +240,23 @@ export default pattern<BoardInput, BoardOutput>(({ items, names }) => {
         reject("addItem", "agentName must be non-blank");
       }
       if (!trimmed) reject("addItem", "title must be non-empty");
-      const createdAt = Date.now();
-      const piece = Item({
-        title: trimmed,
-        body: body ?? "",
-        createdAt,
-        // The board's names table, so the item can read its own name out of
-        // the row the board already built for it.
-        boardNames: table,
-        // The board's mention universe, so the item's body editor completes
-        // `#42` and `[[` over its siblings.
-        mentionable,
-      });
-      // The name and the append are one transaction: no reader observes the
-      // item without its name, and a concurrent create serializes on the
-      // map's keys rather than taking the same one.
-      const name = assignName(names, piece);
+      // The name, the create, and the append are one transaction: the item is
+      // built holding the name the map records it under, no reader observes
+      // the item without its name, and a concurrent create serializes on the
+      // map's keys, re-running with the next name rather than taking the same
+      // one.
+      const { name, member: piece } = createNamed(names, (allocated) =>
+        Item({
+          title: trimmed,
+          body: body ?? "",
+          createdAt: Date.now(),
+          // The name this create allocated, stored with the item, which is
+          // what lets the item show it without reading the board.
+          shortName: allocated,
+          // The board's mention universe, so the item's body editor completes
+          // `#42` and `[[` over its siblings.
+          mentionable,
+        }));
       // Mergeable append: concurrent creates all land.
       items.push(piece);
       return { item: piece, name };

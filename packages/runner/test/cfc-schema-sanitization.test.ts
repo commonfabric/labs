@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -1378,7 +1379,7 @@ describe("schema-based prompt injection sanitization compatibility", () => {
     // not nested inside a surviving OR-clause.
     const hasMaterialRiskAnywhere = remaining.some((clause) =>
       isPromptInjectionMaterialRiskAtom(clause) ||
-      (typeof clause === "object" && clause !== null &&
+      (isObjectOrArray(clause) &&
         Array.isArray((clause as { anyOf?: unknown }).anyOf) &&
         (clause as { anyOf: unknown[] }).anyOf.some(
           isPromptInjectionMaterialRiskAtom,
@@ -1811,9 +1812,9 @@ describe("schema-based prompt injection sanitization compatibility", () => {
   });
 
   it("sanitizes tuple (prefixItems) elements against their slot schema", () => {
-    // CT-1895: itemSchemaForIndex collected only `items` (+allOf), so tuple
-    // elements sanitized against an unconstrained schema — a raw string in a
-    // number slot dodged the opaque-link gate.
+    // `itemSchemaForIndex` collects the `prefixItems` slot schema for a
+    // covered index, so a tuple element is sanitized against its own slot: a
+    // raw string in a number slot is replaced with an opaque link.
     const schema = {
       type: "object",
       properties: {

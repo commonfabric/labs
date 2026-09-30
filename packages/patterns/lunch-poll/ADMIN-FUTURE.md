@@ -16,8 +16,8 @@ changes converge, but it does not make the host role unforgeable.
 
 Authority should be modeled via **CFC integrity claims** rather than runtime
 equality checks. The reference implementation landed in **PR
-[#3358](https://github.com/commontoolsinc/labs/pull/3358) "Add CFC group chat
-demo and authorship fixes"** by Berni (merged 2026-05-19), which introduces the
+[#3358](https://github.com/commonfabric/labs/pull/3358) "Add CFC group chat demo
+and authorship fixes"** by Berni (merged 2026-05-19), which introduces the
 primitives:
 
 ```ts
@@ -92,7 +92,7 @@ the actual security boundary to CFC labels on the write paths, with
 
 ## Cross-references
 
-- [PR #3358](https://github.com/commontoolsinc/labs/pull/3358) — the enabling
+- [PR #3358](https://github.com/commonfabric/labs/pull/3358) — the enabling
   work. `packages/patterns/cfc-group-chat-demo/trusted.tsx` is the most
   condensed reference for the layered type shape.
 - [`packages/patterns/scoped-user-directory/`](../scoped-user-directory/) —

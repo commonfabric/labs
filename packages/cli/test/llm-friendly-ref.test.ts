@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { ValidationError } from "@cliffy/command";
 import {
   isReference,
   normalizeLLMFriendlyRef,
@@ -7,6 +8,7 @@ import {
   validateEmbeddedSpaces,
 } from "../lib/llm-friendly-ref.ts";
 import { createSession, Identity } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 
 // The 43-character id length matches the entity ids the runtime mints, and
 // clears the runner parser's handle-length threshold.
@@ -20,8 +22,8 @@ const signer = await Identity.fromPassphrase("cf-llm-friendly-ref");
 /** A session on `space`, the way `loadPieces` opens one. */
 const sessionOn = (space: string) =>
   createSession(
-    space.startsWith("did:")
-      ? { identity: signer, spaceDid: space as `did:${string}:${string}` }
+    isDID(space)
+      ? { identity: signer, spaceDid: space }
       : { identity: signer, spaceName: space },
   );
 
@@ -29,6 +31,12 @@ const sessionOn = (space: string) =>
 const didFor = async (name: string) => (await sessionOn(name)).space;
 
 describe("llm-friendly-ref", () => {
+  it("reports malformed target members and qualifiers as usage errors", () => {
+    for (const target of ["glaze#unknown", "glaze@unknown=value"]) {
+      expect(() => splitArgumentSuffix(target)).toThrow(ValidationError);
+    }
+  });
+
   it("returns undefined for references outside the reference form", () => {
     expect(normalizeLLMFriendlyRef("piece1")).toBeUndefined();
     expect(normalizeLLMFriendlyRef("piece1@user")).toBeUndefined();
@@ -50,6 +58,39 @@ describe("llm-friendly-ref", () => {
     });
   });
 
+  it("retains pins on rooted and complete references for the caller", () => {
+    const pin = "a".repeat(43);
+    for (const reference of [`/${HANDLE}`, `//${DID}/${HANDLE}`]) {
+      expect(normalizeLLMFriendlyRef(`${reference}@pin=${pin}/a@pin=literal`, {
+        space: DID,
+      })).toEqual({ pieceId: HANDLE, pin, path: ["a@pin=literal"] });
+    }
+  });
+
+  it("inherits caller scope on rooted and complete references", () => {
+    for (const scope of ["space", "user", "session"] as const) {
+      for (const reference of [`/${HANDLE}`, `//${DID}/${HANDLE}`]) {
+        for (const qualifier of ["", "@inherit", "@scope=inherit"]) {
+          expect(normalizeLLMFriendlyRef(`${reference}${qualifier}/items`, {
+            space: DID,
+            scope,
+          })).toEqual({ pieceId: HANDLE, scope, path: ["items"] });
+        }
+        expect(normalizeLLMFriendlyRef(`${reference}@space/items`, {
+          space: DID,
+          scope,
+        })).toEqual({ pieceId: HANDLE, scope: "space", path: ["items"] });
+      }
+    }
+  });
+
+  it("inherits a scope-only context without inventing a space", () => {
+    expect(normalizeLLMFriendlyRef(`/${HANDLE}@inherit`, { scope: "session" }))
+      .toEqual({ pieceId: HANDLE, scope: "session", path: [] });
+    expect(() => normalizeLLMFriendlyRef(`/${HANDLE}@inherit`))
+      .toThrow(/requires a reference context/);
+  });
+
   it("names the piece by slug where a handle is accepted", () => {
     expect(normalizeLLMFriendlyRef("/tracker")).toEqual({
       pieceId: "tracker",
@@ -67,20 +108,27 @@ describe("llm-friendly-ref", () => {
   });
 
   it("names the space by name where a DID is accepted", () => {
-    expect(normalizeLLMFriendlyRef("/@my-space/tracker/items")).toEqual({
+    expect(normalizeLLMFriendlyRef("//my-space/tracker/items")).toEqual({
       pieceId: "tracker",
       embeddedSpace: "my-space",
       path: ["items"],
     });
   });
 
+  it("refuses the retired named-space migration alias", () => {
+    expect(() => normalizeLLMFriendlyRef("/@my-space/tracker/items"))
+      .toThrow(
+        "The named-space prefix `/@my-space/` is retired; use `//my-space/`.",
+      );
+  });
+
   it("settles two space names against each other at parse time", () => {
     // Same name, same space: nothing is left for the session to check.
     expect(
-      normalizeLLMFriendlyRef("/@my-space/tracker", { space: "my-space" }),
+      normalizeLLMFriendlyRef("//my-space/tracker", { space: "my-space" }),
     ).toEqual({ pieceId: "tracker", path: [] });
     expect(() =>
-      normalizeLLMFriendlyRef("/@my-space/tracker", { space: "other-space" })
+      normalizeLLMFriendlyRef("//my-space/tracker", { space: "other-space" })
     ).toThrow(
       `Reference names space "my-space" but the command targets ` +
         `space "other-space".`,
@@ -91,7 +139,7 @@ describe("llm-friendly-ref", () => {
     // Only a derivation can compare the two spellings, and that needs the
     // session the target space is resolved by.
     expect(
-      normalizeLLMFriendlyRef("/@my-space/tracker", { space: DID }),
+      normalizeLLMFriendlyRef("//my-space/tracker", { space: DID }),
     ).toEqual({
       pieceId: "tracker",
       embeddedSpace: "my-space",
@@ -142,6 +190,14 @@ describe("llm-friendly-ref", () => {
       scope: "session",
       path: ["draft"],
     });
+  });
+
+  it("resolves inherited scope when the command supplies a space context", () => {
+    expect(normalizeLLMFriendlyRef("/tracker@inherit", { space: "bakery" }))
+      .toEqual({ pieceId: "tracker", scope: "space", path: [] });
+    expect(() => normalizeLLMFriendlyRef("/tracker@inherit")).toThrow(
+      /requires a reference context/,
+    );
   });
 
   it("rejects an invalid scope suffix", () => {
@@ -207,16 +263,15 @@ describe("llm-friendly-ref", () => {
       );
   });
 
-  it('reads a trailing "#argument" as the arguments-cell selection', () => {
+  it('reads a piece member "#argument" as the arguments-cell selection', () => {
     expect(normalizeLLMFriendlyRef(`/${HANDLE}#argument`)).toEqual({
       pieceId: HANDLE,
       input: true,
       path: [],
     });
-    // The suffix closes the whole reference: scope, space, and an embedded
-    // path all sit before it.
+    // The member precedes qualifiers and the pointer.
     expect(
-      normalizeLLMFriendlyRef(`/@${DID}/${HANDLE}@user/draft#argument`, {
+      normalizeLLMFriendlyRef(`/@${DID}/${HANDLE}#argument@user/draft`, {
         space: "my-space",
       }),
     ).toEqual({
@@ -228,15 +283,23 @@ describe("llm-friendly-ref", () => {
     });
   });
 
-  it("rejects any fragment other than #argument", () => {
-    expect(() => normalizeLLMFriendlyRef(`/${HANDLE}#result`)).toThrow(
-      /Unknown suffix "#result"/,
-    );
-    // "#" is reserved for the suffix, so a path key containing it is not an
-    // embedded-path spelling.
-    expect(() => normalizeLLMFriendlyRef(`/${HANDLE}/we#ird`)).toThrow(
-      /Unknown suffix/,
-    );
+  it("reads result members and hash characters in path keys", () => {
+    expect(normalizeLLMFriendlyRef(`/${HANDLE}#result`)).toEqual({
+      pieceId: HANDLE,
+      path: [],
+    });
+    expect(normalizeLLMFriendlyRef(`/${HANDLE}/we#ird`)).toEqual({
+      pieceId: HANDLE,
+      path: ["we#ird"],
+    });
+    expect(normalizeLLMFriendlyRef(`/${HANDLE}/draft#argument`)).toEqual({
+      pieceId: HANDLE,
+      path: ["draft#argument"],
+    });
+    expect(normalizeLLMFriendlyRef(`/${HANDLE}/draft#argument `)).toEqual({
+      pieceId: HANDLE,
+      path: ["draft#argument "],
+    });
   });
 
   it("splits the suffix off a bare target the way it does off a reference", () => {
@@ -246,7 +309,7 @@ describe("llm-friendly-ref", () => {
       target: "thermostat",
       input: true,
     });
-    expect(splitArgumentSuffix(`${HANDLE}@user#argument`)).toEqual({
+    expect(splitArgumentSuffix(`${HANDLE}#argument@user`)).toEqual({
       target: `${HANDLE}@user`,
       input: true,
     });
@@ -254,18 +317,17 @@ describe("llm-friendly-ref", () => {
       target: "thermostat",
       input: false,
     });
-    expect(() => splitArgumentSuffix("thermostat#result")).toThrow(
-      /Unknown suffix "#result"/,
+    expect(splitArgumentSuffix("thermostat#result")).toEqual({
+      target: "thermostat",
+      input: false,
+    });
+    expect(splitArgumentSuffix("thermostat#argument@user")).toEqual({
+      target: "thermostat@user",
+      input: true,
+    });
+    expect(() => splitArgumentSuffix("thermostat@user#argument")).toThrow(
+      /piece segment/,
     );
-    // The suffix closes the target, so a scope written behind it is part of
-    // the fragment rather than a scope.
-    expect(() => splitArgumentSuffix("thermostat#argument@user")).toThrow(
-      /Unknown suffix "#argument@user"/,
-    );
-    // Nothing in front of it leaves no piece to select the cell of, and the
-    // refusal downstream would report the target as one nobody wrote.
-    expect(() => splitArgumentSuffix("#argument")).toThrow(
-      /follows the piece it selects/,
-    );
+    expect(() => splitArgumentSuffix("#argument")).toThrow(/piece handle/);
   });
 });

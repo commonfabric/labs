@@ -1,15 +1,13 @@
-import {
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-  FABRIC_SPECIAL_OBJECT_BRAND,
-  isFabricPrimitiveSchemaType,
-  type JSONSchema,
-  type JSONValue,
-} from "@commonfabric/api";
+import type { JSONSchema, JSONValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   deepFrozenCloneAndInternSchema,
-  schemaTypeOfFabricPrimitive,
 } from "@commonfabric/data-model-schema";
+import {
+  isSubschema,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import {
   cloneIfNecessary,
   fabricAwareEqual,
@@ -19,17 +17,22 @@ import {
   isFabricPlainObject,
 } from "@commonfabric/data-model";
 import {
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  isFabricPrimitiveSchemaType,
+} from "@commonfabric/data-model/fabric-primitives";
+import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
 } from "@commonfabric/utils/types";
 
-import { isSubschema } from "../schema-walk.ts";
+import { FABRIC_SPECIAL_OBJECT_BRAND } from "../fabric-special-object-brand.ts";
 import {
   hasOwnEnumerableDataProperty,
   isCellKind,
   isSchemaScope,
 } from "../scope.ts";
+import { fabricAwareEqualThroughViews } from "../view-equality.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives, isOrClause } from "./clause.ts";
 import {
@@ -590,7 +593,7 @@ const stripRequiredFields = (schema: JSONSchema): JSONSchema => {
       ]),
     );
   }
-  if (typeof result.items === "object" && result.items !== null) {
+  if (isObjectOrArray(result.items)) {
     result.items = stripRequiredFields(result.items as JSONSchema);
   }
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
@@ -598,7 +601,7 @@ const stripRequiredFields = (schema: JSONSchema): JSONSchema => {
       result[key] = (result[key] as JSONSchema[]).map(stripRequiredFields);
     }
   }
-  if (typeof result.not === "object" && result.not !== null) {
+  if (isObjectOrArray(result.not)) {
     result.not = stripRequiredFields(result.not as JSONSchema);
   }
 
@@ -636,7 +639,7 @@ const typeMatches = (
     default:
       if (isFabricPrimitiveSchemaType(type)) {
         return value instanceof FabricPrimitive &&
-          schemaTypeOfFabricPrimitive(value) === type;
+          value.schemaType === type;
       }
       return !rejectUnknownType;
   }
@@ -730,6 +733,7 @@ const schemaTypeDefinitionIssue = (type: unknown): string | undefined => {
 
 const strictConstraintDefinitionIssue = (
   schema: Exclude<JSONSchema, boolean>,
+  formatAnnotations = false,
 ): string | undefined => {
   const record = schema as Record<string, unknown>;
   for (
@@ -787,7 +791,7 @@ const strictConstraintDefinitionIssue = (
   if (Object.hasOwn(record, "format")) {
     if (
       typeof record.format !== "string" ||
-      !SUPPORTED_SCHEMA_FORMATS.has(record.format)
+      (!formatAnnotations && !SUPPORTED_SCHEMA_FORMATS.has(record.format))
     ) {
       return `schema has unsupported format ${String(record.format)}`;
     }
@@ -803,6 +807,9 @@ const strictConstraintDefinitionIssue = (
 };
 
 interface SchemaDefinitionContext {
+  /** Whether formats are annotations and all structural positions are checked. */
+  structuredResult: boolean;
+
   activeByRoot: WeakMap<object, WeakSet<object>>;
   activeRefsByRoot: WeakMap<object, Set<string>>;
 
@@ -839,10 +846,17 @@ interface SchemaDefinitionContext {
   provenLog: Array<{ rootKey: object; schema: object }>;
 }
 
-/** Validate the schema language understood by strict Fabric migration checks. */
+/**
+ * Validates a Fabric schema definition. Migration mode restricts formats to
+ * those the migration value checker enforces. Structured-result mode admits
+ * string format annotations and checks unevaluated schema positions too.
+ * Diagnostics may contain schema content; callers crossing a disclosure
+ * boundary replace them with a fixed message.
+ */
 export const validateSchemaDefinition = (
   schema: JSONSchema,
   fullSchema: JSONSchema = schema,
+  mode: "migration" | "structured-result" = "migration",
 ): string | undefined => {
   // Compatibility later interns schemas for root-aware identity tracking.
   // Prove that normalization is safe up front so malformed literal payloads,
@@ -855,6 +869,7 @@ export const validateSchemaDefinition = (
     return `$: schema cannot be normalized: ${message}`;
   }
   return validateSchemaDefinitionInternal(schema, fullSchema, "$", {
+    structuredResult: mode === "structured-result",
     activeByRoot: new WeakMap(),
     activeRefsByRoot: new WeakMap(),
     walkedDefinitionsByRoot: new WeakMap(),
@@ -1056,7 +1071,10 @@ const validateSchemaDefinitionInternal = (
       }
     }
 
-    const constraintIssue = strictConstraintDefinitionIssue(schema);
+    const constraintIssue = strictConstraintDefinitionIssue(
+      schema,
+      context.structuredResult,
+    );
     if (constraintIssue !== undefined) return `${path}: ${constraintIssue}`;
 
     if (schema.required !== undefined) {
@@ -1152,17 +1170,19 @@ const validateSchemaDefinitionInternal = (
     }
 
     for (
-      const key of [
-        "additionalProperties",
-        "contains",
-        "contentSchema",
-        "else",
-        "if",
-        "items",
-        "not",
-        "propertyNames",
-        "then",
-      ] as const
+      const key of context.structuredResult
+        ? [...SINGLE_SUBSCHEMA_KEYS, ...UNUSED_SINGLE_SUBSCHEMA_KEYS]
+        : [
+          "additionalProperties",
+          "contains",
+          "contentSchema",
+          "else",
+          "if",
+          "items",
+          "not",
+          "propertyNames",
+          "then",
+        ] as const
     ) {
       const child = schema[key];
       if (child === undefined) continue;
@@ -1399,7 +1419,7 @@ const markSchemaValueActive = (
     context.activeByRoot.set(root, activity);
   }
   if (
-    (typeof value === "object" && value !== null) ||
+    isObjectOrArray(value) ||
     typeof value === "function"
   ) {
     const objectValue = value as object;
@@ -1432,7 +1452,7 @@ const unmarkSchemaValueActive = (
   const activity = context.activeByRoot.get(root);
   if (!activity) return;
   if (
-    (typeof value === "object" && value !== null) ||
+    isObjectOrArray(value) ||
     typeof value === "function"
   ) {
     activity.activeObjectValues.get(schema)?.delete(value as object);
@@ -1631,6 +1651,16 @@ export function relaxDefaultedRequired(
   return relaxed as JSONSchema;
 }
 
+/**
+ * Validates `value` against `schema`, returning the failure's message, or
+ * `undefined` when it validates.
+ *
+ * `value` may hold query-result views: the default merge hands over the parts
+ * it added nothing to as the views they were read through. An `enum`, a
+ * `const` or `uniqueItems` compares the part of `value` it applies to with
+ * `fabricAwareEqualThroughViews()`, which decides each view as the stored
+ * value it reads.
+ */
 export const validateSchemaValue = (
   schema: JSONSchema,
   value: unknown,
@@ -1695,7 +1725,7 @@ const validateAgainstSchemaInternal = (
   context: SchemaValidationContext,
 ): SchemaValidationFailure | undefined => {
   let successful: WeakSet<object> | undefined;
-  if (isObjectNotArray(schema) && typeof value === "object" && value !== null) {
+  if (isObjectNotArray(schema) && isObjectOrArray(value)) {
     const schemaRoot = fullSchema;
     const rootKey = isObjectOrArray(schemaRoot) ? schemaRoot : schema;
     let byRoot = context.successful.get(options);
@@ -1763,7 +1793,7 @@ const validateAgainstSchemaUncached = (
       // branch can still find sibling $defs entries, except when an embedded
       // or external ref changes the owning document, or resolution merged
       // ref-site siblings into a view that is a document of its own.
-      const resolvedRoot = typeof resolved === "object" && resolved !== null
+      const resolvedRoot = isObjectOrArray(resolved)
         ? cfcSchemaResolvedRoot(
           resolved,
           resolveCfcSchemaRefRoot(schema, schemaRoot),
@@ -1854,13 +1884,13 @@ const validateAgainstSchemaUncached = (
 
     if (
       Array.isArray(schema.enum) &&
-      !schema.enum.some((entry) => fabricAwareEqual(entry, value))
+      !schema.enum.some((entry) => fabricAwareEqualThroughViews(entry, value))
     ) {
       return mismatch("value is not in enum");
     }
     if (
       Object.hasOwn(schema, "const") &&
-      !fabricAwareEqual(schema.const, value)
+      !fabricAwareEqualThroughViews(schema.const, value)
     ) {
       return mismatch("value does not match const");
     }
@@ -1909,12 +1939,9 @@ const validateAgainstSchemaUncached = (
       if (typeAllowsObject && Array.isArray(schema.required)) {
         for (const key of schema.required) {
           // The nominal brand key has no runtime existence; a
-          // `FabricSpecialObject` satisfies it by construction. Only schemas
-          // from pre-vocabulary compilations carry it (current emissions skip
-          // it everywhere). Removable with the other brand exemptions (see
-          // opaqueLeafMissesRequired in traverse.ts) once those stored schemas
-          // have cycled out — a redeploy-gated horizon, since pattern update
-          // refuses the structural-to-vocabulary transition.
+          // `FabricSpecialObject` satisfies it by construction (the `TODO`
+          // on `FABRIC_SPECIAL_OBJECT_BRAND` says what removing this
+          // exemption takes).
           if (key === FABRIC_SPECIAL_OBJECT_BRAND) continue;
           if (!(key in value)) {
             return mismatch(`missing required property ${key}`);
@@ -2143,7 +2170,7 @@ function validateStrictSchemaConstraints(
         if (!Object.hasOwn(value, index)) continue;
         if (
           value.slice(0, index).some((entry) =>
-            fabricAwareEqual(entry, value[index])
+            fabricAwareEqualThroughViews(entry, value[index])
           )
         ) {
           return mismatch("array items are not unique");

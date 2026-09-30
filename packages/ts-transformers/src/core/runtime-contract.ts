@@ -7,6 +7,8 @@
  * the runner's compiler-stack module).
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 /**
  * Name of the sandbox global the pattern-coverage transformer emits probe
  * calls against; the engine installs a collector under this name when
@@ -76,7 +78,7 @@ export function isBuilderSourceSitesV1(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isObjectNotArray(value);
 }
 
 function isIntegerAtLeast(value: unknown, minimum: number): value is number {

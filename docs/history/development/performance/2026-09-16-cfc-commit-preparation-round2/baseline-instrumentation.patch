@@ -1,0 +1,259 @@
+diff --git a/packages/runner/src/cfc/consumed-label-index.ts b/packages/runner/src/cfc/consumed-label-index.ts
+index 8c959ad1f6..6fc1043107 100644
+--- a/packages/runner/src/cfc/consumed-label-index.ts
++++ b/packages/runner/src/cfc/consumed-label-index.ts
+@@ -48,6 +48,7 @@ const createNode = (): Node => ({
+ /** A collection-local snapshot of one validated label map. */
+ export class ConsumedLabelIndex {
+   #root = createNode();
++  #onQuery: ((wildcard: boolean) => void) | undefined;
+ 
+   /**
+    * Constructs a snapshot over validated entries. `canonicalPaths` preserves
+@@ -55,8 +56,12 @@ export class ConsumedLabelIndex {
+    */
+   constructor(
+     entries: readonly LabelMapEntry[],
+-    options: { canonicalPaths?: boolean } = {},
++    options: {
++      canonicalPaths?: boolean;
++      onQuery?: (wildcard: boolean) => void;
++    } = {},
+   ) {
++    this.#onQuery = options.onQuery;
+     for (const [ordinal, entry] of entries.entries()) {
+       const path = options.canonicalPaths
+         ? Object.isFrozen(entry.path)
+@@ -91,6 +96,7 @@ export class ConsumedLabelIndex {
+     path: readonly string[],
+     includeDescendants = true,
+   ): readonly IndexedEntry[] {
++    this.#onQuery?.(path.includes("*"));
+     if (path.length === 0) {
+       return includeDescendants ? this.#root.descendants : this.#root.exact;
+     }
+diff --git a/packages/runner/src/cfc/mod.ts b/packages/runner/src/cfc/mod.ts
+index 9cd0337d15..3aba6fdd29 100644
+--- a/packages/runner/src/cfc/mod.ts
++++ b/packages/runner/src/cfc/mod.ts
+@@ -57,6 +57,7 @@ export type {
+   CfcLabelMetadataProtectionMode,
+   CfcMetadata,
+   CfcPolicyEvaluationMode,
++  CfcPreparationWork,
+   CfcPrepareState,
+   CfcSandboxDiagnostic,
+   CfcSandboxExitCodeObservation,
+diff --git a/packages/runner/src/cfc/prepare.ts b/packages/runner/src/cfc/prepare.ts
+index ce1cba6394..3b5ed14ed4 100644
+--- a/packages/runner/src/cfc/prepare.ts
++++ b/packages/runner/src/cfc/prepare.ts
+@@ -2513,7 +2513,12 @@ export const deriveFlowJoin = (
+           document.metadata.labelMap.entries.filter((entry) =>
+             readConsumesEntry(observation.shape, entry)
+           ),
+-          { canonicalPaths: true },
++          {
++            canonicalPaths: true,
++            onQuery: (wildcard) => tx.noteCfcPreparationWork?.(
++              wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
++            ),
++          },
+         );
+         document.indexes.set(observation.shape, index);
+       }
+@@ -5639,7 +5644,11 @@ export const collectConsumedLabel = (
+         metadataKey,
+         metadata === undefined
+           ? undefined
+-          : new ConsumedLabelIndex(metadata.labelMap.entries),
++          : new ConsumedLabelIndex(metadata.labelMap.entries, {
++            onQuery: (wildcard) => tx.noteCfcPreparationWork?.(
++              wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
++            ),
++          }),
+       );
+     }
+     const labels = labelIndexes.get(metadataKey);
+@@ -7227,8 +7236,12 @@ export const prepareBoundaryCommit = (
+       const authoritativeCoverFor = (
+         entryPath: readonly string[],
+       ): IFCLabel | undefined => {
++        tx.noteCfcPreparationWork?.("authoritativeCoverCalls");
+         authoritativeIndex ??= new ConsumedLabelIndex(authoritativeEntries, {
+           canonicalPaths: true,
++          onQuery: (wildcard) => tx.noteCfcPreparationWork?.(
++            wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
++          ),
+         });
+         let best: { path: readonly string[]; label: IFCLabel } | undefined;
+         for (
+@@ -7809,6 +7822,8 @@ export const prepareBoundaryCommit = (
+         if (
+           flowHasLabels && flowConfidentiality.length > 0
+         ) {
++          tx.noteCfcPreparationWork?.("flowTemplateContainers");
++          tx.noteCfcPreparationWork?.("flowTemplateEntriesMinted", 3);
+           for (const observes of ["shape", "value", "followRef"] as const) {
+             persistedLabelEntries.push(markFlowStampEntry({
+               path: [...path, "*"],
+diff --git a/packages/runner/src/cfc/types.ts b/packages/runner/src/cfc/types.ts
+index fdf3d0d4ff..9bb1e2f696 100644
+--- a/packages/runner/src/cfc/types.ts
++++ b/packages/runner/src/cfc/types.ts
+@@ -992,3 +992,11 @@ export type CfcTxState = {
+   // not an input to it.
+   refusalDetails: CfcRefusalDetail[];
+ };
++
++/** Work counted during CFC preparation, without affecting its verdict. */
++export type CfcPreparationWork =
++  | "overlapWildcardQueries"
++  | "overlapConcreteQueries"
++  | "authoritativeCoverCalls"
++  | "flowTemplateEntriesMinted"
++  | "flowTemplateContainers";
+diff --git a/packages/runner/src/runtime.ts b/packages/runner/src/runtime.ts
+index b6100930ca..9179ace1f6 100644
+--- a/packages/runner/src/runtime.ts
++++ b/packages/runner/src/runtime.ts
+@@ -838,6 +838,21 @@ export interface CfcRuntimeStats {
+   /** Full consumed-label collections, including sink and host release checks. */
+   consumedLabelWalks: number;
+ 
++  /** Overlap queries containing a wildcard segment. */
++  overlapWildcardQueries: number;
++
++  /** Overlap queries containing only concrete segments. */
++  overlapConcreteQueries: number;
++
++  /** Authoritative cover lookups for carried link-view entries. */
++  authoritativeCoverCalls: number;
++
++  /** Child templates minted by flow persistence. */
++  flowTemplateEntriesMinted: number;
++
++  /** Containers receiving child templates from flow persistence. */
++  flowTemplateContainers: number;
++
+   cfcPreparedTx: number;
+   cfcPrepareRejects: number;
+   cfcDigestInvalidations: number;
+@@ -885,6 +900,11 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
+   dereferenceTracesMax: 0,
+   refusalDetailsRecorded: 0,
+   consumedLabelWalks: 0,
++  overlapWildcardQueries: 0,
++  overlapConcreteQueries: 0,
++  authoritativeCoverCalls: 0,
++  flowTemplateEntriesMinted: 0,
++  flowTemplateContainers: 0,
+   cfcPreparedTx: 0,
+   cfcPrepareRejects: 0,
+   cfcDigestInvalidations: 0,
+@@ -2321,6 +2341,9 @@ export class Runtime {
+       onRefusalDetail: () => {
+         this.#cfcStats.refusalDetailsRecorded += 1;
+       },
++      onPreparationWork: (kind, count) => {
++        this.#cfcStats[kind] += count;
++      },
+       onConsumedLabelWalk: () => {
+         this.#cfcStats.consumedLabelWalks += 1;
+       },
+diff --git a/packages/runner/src/storage/extended-storage-transaction.ts b/packages/runner/src/storage/extended-storage-transaction.ts
+index 58784733f5..a96de6baa5 100644
+--- a/packages/runner/src/storage/extended-storage-transaction.ts
++++ b/packages/runner/src/storage/extended-storage-transaction.ts
+@@ -91,6 +91,7 @@ import {
+   type RuntimeOwnedStores,
+ } from "../cfc/runtime-owned-stores.ts";
+ import {
++  type CfcPreparationWork,
+   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
+   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
+   POST_COMMIT_RELEASE_REJECTED,
+@@ -220,6 +221,9 @@ type CfcInstrumentationHooks = {
+   /** One full consumed-label collection was started. Measurement only. */
+   onConsumedLabelWalk?(): void;
+ 
++  /** Work performed by preparation, including label lookup and stamping. */
++  onPreparationWork?(kind: CfcPreparationWork, count: number): void;
++
+   /** One dereference trace was recorded, and how many the transaction holds
+    * after it. `probeBelongsToDereference` scans this set once per read
+    * activity at commit preparation, so its size is a per-read multiplier.
+@@ -2036,6 +2040,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
+     this.#cfcInstrumentation.onConsumedLabelWalk?.();
+   }
+ 
++  /** @inheritDoc */
++  noteCfcPreparationWork(kind: CfcPreparationWork, count = 1): void {
++    this.#cfcInstrumentation.onPreparationWork?.(kind, count);
++  }
++
+   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string } {
+     this.#assertWritable("writeCfcGrant()");
+     // The trusted policy-writer path (§8.12.7 route 2a, design §2.3
+@@ -4009,6 +4018,11 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
+     this.#wrapped.noteCfcConsumedLabelWalk();
+   }
+ 
++  /** @inheritDoc */
++  noteCfcPreparationWork(kind: CfcPreparationWork, count = 1): void {
++    this.#wrapped.noteCfcPreparationWork(kind, count);
++  }
++
+   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string } {
+     return this.#wrapped.writeCfcGrant(input);
+   }
+diff --git a/packages/runner/src/storage/interface.ts b/packages/runner/src/storage/interface.ts
+index b12d019c7b..ab43eabed8 100644
+--- a/packages/runner/src/storage/interface.ts
++++ b/packages/runner/src/storage/interface.ts
+@@ -66,6 +66,7 @@ import type {
+   CfcLabelMetadataObservation,
+   CfcLabelMetadataProtectionMode,
+   CfcPolicyEvaluationMode,
++  CfcPreparationWork,
+   CfcRefusalDetail,
+   CfcTriggerReadGating,
+   CfcTxState,
+@@ -2237,6 +2238,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
+   /** Counts a full consumed-label collection without changing CFC state. */
+   noteCfcConsumedLabelWalk(): void;
+ 
++  /** Counts prepare work without changing relevance or digest state. */
++  noteCfcPreparationWork(kind: CfcPreparationWork, count?: number): void;
++
+   /**
+    * The trusted policy-writer path for CFC grant documents (§8.12.7 route
+    * 2a; cfc/grants.ts module doc). Requires the transaction's CURRENT
+diff --git a/packages/runner/test/cfc-runtime-stats.test.ts b/packages/runner/test/cfc-runtime-stats.test.ts
+index b40a34accc..fc27ba61d7 100644
+--- a/packages/runner/test/cfc-runtime-stats.test.ts
++++ b/packages/runner/test/cfc-runtime-stats.test.ts
+@@ -115,6 +115,11 @@ describe("CFC runtime stats", () => {
+       dereferenceTracesMax: 0,
+       refusalDetailsRecorded: 0,
+       consumedLabelWalks: 0,
++      overlapWildcardQueries: 0,
++      overlapConcreteQueries: 0,
++      authoritativeCoverCalls: 0,
++      flowTemplateEntriesMinted: 0,
++      flowTemplateContainers: 0,
+       cfcPreparedTx: 0,
+       cfcPrepareRejects: 0,
+       cfcDigestInvalidations: 0,
+@@ -257,6 +262,11 @@ describe("CFC runtime stats", () => {
+       dereferenceTracesMax: 0,
+       refusalDetailsRecorded: 0,
+       consumedLabelWalks: 0,
++      overlapWildcardQueries: 0,
++      overlapConcreteQueries: 0,
++      authoritativeCoverCalls: 0,
++      flowTemplateEntriesMinted: 0,
++      flowTemplateContainers: 0,
+       cfcPreparedTx: 3,
+       cfcPrepareRejects: 1,
+       cfcDigestInvalidations: 1,

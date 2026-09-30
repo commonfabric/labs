@@ -24,9 +24,10 @@ import {
   unmarkUiInputBlindWriteTx,
 } from "../src/storage/reactivity-log.ts";
 import {
-  cfcLabelViewForDereference,
+  cfcLabelViewForAddress,
   cfcLabelViewForDereferenceTraces,
 } from "../src/cfc/label-view-state.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("snapshot memo test");
 const space = signer.did();
@@ -362,7 +363,7 @@ describe("snapshot memo", () => {
     const cell = runtime.getCell(space, "scoped-label-epochs", undefined, tx);
     const address = cell.getAsNormalizedFullLink();
     const writeLabel = (name: string) =>
-      tx.writeOrThrow({
+      seedStoredEnvelope(tx, {
         space,
         id: address.id,
         type: "application/json",
@@ -382,7 +383,7 @@ describe("snapshot memo", () => {
         },
       });
     const readLabel = () =>
-      cfcLabelViewForDereference(tx, address, address)
+      cfcLabelViewForAddress(tx, address)
         ?.entries[0].label.confidentiality;
     const scopedLabel = () =>
       tx.runWithAmbientReadMeta(machineryRead, readLabel);
@@ -408,11 +409,14 @@ describe("snapshot memo", () => {
     expect(readLabel()).toEqual(["second"]);
   });
 
-  it("journals label metadata separately for distinct ambient metadata objects", () => {
+  it("journals label metadata separately for distinct ambient metadata objects", async () => {
     const { holder } = linkingCell(
       "metadata-identity-holder",
       "metadata-identity-target",
     );
+    expect((await tx.commit()).ok).toBeDefined();
+    await storageManager.synced();
+    tx = runtime.edit();
     const { traces } = resolveLinkTracingDereferences(
       runtime,
       tx,
@@ -612,9 +616,12 @@ describe("snapshot memo", () => {
     }
   });
 
-  it("reads a document's stored labels once per dereference target", () => {
+  it("reads a document's stored labels once per dereference target", async () => {
     const { holder } = linkingCell("labels-holder", "labels-target");
     const link = holder.key("target").getAsNormalizedFullLink();
+    expect((await tx.commit()).ok).toBeDefined();
+    await storageManager.synced();
+    tx = runtime.edit();
     const { traces } = resolveLinkTracingDereferences(runtime, tx, link);
 
     cfcLabelViewForDereferenceTraces(tx, traces);
@@ -629,7 +636,7 @@ describe("snapshot memo", () => {
   it("keeps the label views of two paths in one document apart", () => {
     const labeled = runtime.getCell(space, "labeled-doc", undefined, tx);
     const link = labeled.getAsNormalizedFullLink();
-    tx.writeOrThrow({
+    seedStoredEnvelope(tx, {
       space,
       id: link.id,
       type: "application/json",
@@ -657,8 +664,8 @@ describe("snapshot memo", () => {
 
     // A view is rebased onto the address it was asked for, so the same
     // document answers differently at each path.
-    const viaA = cfcLabelViewForDereference(tx, at(["a"]), at(["a"]));
-    const viaB = cfcLabelViewForDereference(tx, at(["b"]), at(["b"]));
+    const viaA = cfcLabelViewForAddress(tx, at(["a"]));
+    const viaB = cfcLabelViewForAddress(tx, at(["b"]));
 
     expect(viaA?.entries[0].label.confidentiality).toEqual(["secret-a"]);
     expect(viaB?.entries[0].label.confidentiality).toEqual(["secret-b"]);
@@ -671,7 +678,7 @@ describe("snapshot memo", () => {
 
     cfcLabelViewForDereferenceTraces(tx, traces);
     const afterFirst = cfcMetadataReadCount();
-    holder.setRaw({ target: "no longer a link" });
+    holder.setRaw({ target: holder.key("replacement").getAsLink() });
     cfcLabelViewForDereferenceTraces(tx, traces);
 
     expect(cfcMetadataReadCount()).toBeGreaterThan(afterFirst);

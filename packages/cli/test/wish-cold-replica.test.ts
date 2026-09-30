@@ -45,7 +45,9 @@ describe("cf wish headless read on a cold replica", () => {
   }
 
   afterEach(async () => {
-    for (const runtime of runtimes.splice(0)) await runtime.dispose();
+    for (const runtime of runtimes.splice(0)) {
+      await runtime.dispose({ closeStorage: false });
+    }
     for (const manager of managers.splice(0)) await manager.close();
     await server?.close();
     server = undefined;
@@ -122,6 +124,84 @@ describe("cf wish headless read on a cold replica", () => {
     expect(error).toBeUndefined();
     expect(result).toBe("Ada Lovelace");
   });
+
+  for (const count of [2, 3]) {
+    for (const query of ["#profile", "#profileName"]) {
+      it(`resolves ${query} when a cold roster lists ${count} profiles`, async () => {
+        startServer();
+        const writer = connect();
+        await seedProfile(writer);
+        const profiles = [writer.getCell(profileSpaceDid, "profile-default")];
+        for (let i = 1; i < count; i++) {
+          const space =
+            (await Identity.fromPassphrase(`cf-wish-cold-profile-${i}`)).did();
+          const tx = writer.edit();
+          const profile = writer.getCell(space, "profile-default");
+          profile.withTx(tx).set({
+            name: `Other profile ${i}`,
+            initialNameApplied: `Other profile ${i}`,
+            avatar: "",
+            bio: "",
+            elements: [],
+          });
+          expect((await tx.commit()).error).toBeUndefined();
+          profiles.push(profile);
+        }
+        const tx = writer.edit();
+        writer.getCell(
+          userIdentity.did(),
+          "home-default-profile-link",
+          undefined,
+          tx,
+        )
+          .key("profiles").set(profiles);
+        expect((await tx.commit()).error).toBeUndefined();
+        await writer.storageManager.synced();
+
+        const reader = connect();
+        const { result, error } = await resolveWish(
+          reader,
+          userIdentity.did(),
+          { query },
+        );
+        expect(error).toBeUndefined();
+        if (query === "#profile") {
+          expect(result).toMatchObject({ name: "Ada Lovelace" });
+        } else expect(result).toBe("Ada Lovelace");
+      });
+    }
+  }
+
+  for (const missingFirst of [false, true]) {
+    it(`uses the healthy default when another profile is absent (missingFirst=${missingFirst})`, async () => {
+      startServer();
+      const writer = connect();
+      await seedProfile(writer);
+      const missingSpace =
+        (await Identity.fromPassphrase("cf-wish-missing-profile")).did();
+      const healthy = writer.getCell(profileSpaceDid, "profile-default");
+      const missing = writer.getCell(missingSpace, "absent-profile");
+      const tx = writer.edit();
+      writer.getCell(
+        userIdentity.did(),
+        "home-default-profile-link",
+        undefined,
+        tx,
+      )
+        .key("profiles").set(
+          missingFirst ? [missing, healthy] : [healthy, missing],
+        );
+      expect((await tx.commit()).error).toBeUndefined();
+      await writer.storageManager.synced();
+      const { result, error } = await resolveWish(
+        connect(),
+        userIdentity.did(),
+        { query: "#profileName" },
+      );
+      expect(error).toBeUndefined();
+      expect(result).toBe("Ada Lovelace");
+    });
+  }
 
   it("settles through several cold layers when every catch-up is a wait", async () => {
     // The lookup follows links a layer at a time — the home root, the

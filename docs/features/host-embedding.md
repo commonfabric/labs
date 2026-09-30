@@ -7,7 +7,7 @@ when the contract changes.
 
 > **Audience.** You are embedding `@commonfabric/ui` components and labs
 > patterns in a host that is *not* the labs shell — most concretely Loom
-> ([loom#3627](https://github.com/commontoolsinc/loom/pull/3627)). Bind
+> ([loom#3627](https://github.com/commonfabric/loom/pull/3627)). Bind
 > only to what is listed here; treat everything else (component
 > internals, create-surface DOM, resolution *implementation*) as in
 > motion.
@@ -35,6 +35,8 @@ weeks later.
 | 5 | Guarded-define idiom | API | `ui` | yes | `src/v2/components/host-embedding-guarded-define.test.ts` |
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
+| 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
+| 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
 
 ---
 
@@ -139,7 +141,10 @@ DOM). A host embeds by listening for:
   tab"). A host that calls `preventDefault()` owns the new tab and can
   apply its own URL scheme. Left uncancelled, the default builds a
   fabric URL and calls `globalThis.open`, which on a non-shell origin is
-  a 404 tab — so a host that mounts these components binds this one.
+  a 404 tab — so a host that mounts these components binds this one. The
+  conceptual browser form is described by
+  [Common Fabric URLs](../specs/fabric-urls.md). No deployment is planned; the
+  current event behavior remains authoritative.
 
 **Test.** `packages/navigation/test/navigate-contract.test.ts` (event
 names and detail shapes) and `packages/navigation/test/navigate.test.ts`
@@ -203,6 +208,16 @@ Calling `RuntimeClient.createPiece()` with an HTTP or HTTPS `URL` creates a
 followed piece. The runtime records the canonical URL and retained initial
 source in one creation transaction. Calling it with a source string or
 `Program` creates a detached piece when that source can be retained.
+
+For a persistent host UI piece, pass a stable `cause` in the options to
+`RuntimeClient.createPiece(source, space, options)` or
+`RuntimeInternals.createPiece(space, source, options)`. The cause derives the
+piece's identity within that space, so repeated calls address the same piece
+across reloads. Repeated creation requires the same pattern identity; supplying
+a different pattern is rejected, so a stable cause does not perform a source
+upgrade. Each call reapplies setup and inputs to the existing pattern; it is
+not a lookup that leaves an existing piece untouched. Omitting `cause`
+allocates a new identity. Use a distinct cause for each independent host piece.
 
 `updatePieceSource()` returns a one-use `confirmationToken` with an
 incompatibility warning. Passing that token back confirms only the reported
@@ -378,10 +393,109 @@ gesture-gated) with the pin seam (correctly owner-gated). Richer
 pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 `TILE_UI` + `cf-render variant=…`), not a new authorization gate.
 
+`addPiece` resolves its address through `cellFromUrl` in a composed reference
+pattern. The reference retains the sender's selection confidentiality; the
+linked piece keeps its own content labels. Pinning confidentially selected
+addresses into a public profile is refused by the ordinary writer-fit check.
+
 **Test.** `packages/patterns/system/profile-home.owner-gated.test.ts` —
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a
 `Stream`.
+
+---
+
+## 8. Trusted snapshot sharing
+
+`RuntimeClient.prepareSnapshotShare(sourceRef, { user: recipientRef })` prepares
+a JSON snapshot for one recipient. The recipient must carry one persisted
+principal attestation at the selected path. The alternative
+`{ space: destinationRef }` selects the space holding that cell. The response
+contains an opaque `id`, the exact `value`, and the verified `audience` atom.
+The worker reads stored policy; client-provided schema and label views grant no
+authority.
+
+The runtime uses its authenticated, bounded read ceiling when one is configured.
+Without a runtime-wide ceiling, preparation requires the source to fit the
+authenticated actor's own `User` ceiling. The default shell can therefore
+share an actor-private draft but cannot preview a source labeled only for
+another user. The source is read by the trusted worker before this check; the
+preview is returned only after it passes.
+
+The trusted host displays that value and audience and requires a trusted user
+confirmation before calling `RuntimeClient.commitSnapshotShare(id)`. The result
+is a new `CellHandle` naming the shared copy. The source remains unchanged. The
+runtime permits release only of the authenticated actor's own User clauses.
+Other clauses must already admit the recipient and remain on the copy. A changed
+source, recipient, or actor invalidates the preview. Each confirmation is
+consumed once, including on a failed commit.
+
+This is a trusted host capability. Authored patterns cannot obtain the worker's
+consent object or call this transport. The host's confirmation command supplies
+the renderer-trusted `ShareSnapshot` provenance; it accepts no authored event
+claims. An embedder exposing this command to untrusted content would delegate
+its release authority. The boundary protects against authored code and does not
+prove user intent against a malicious host.
+
+Previews belong to the client that prepared them. Another attached client cannot
+use the id. The host calls `RuntimeClient.cancelSnapshotShare(id)` when it
+closes or replaces a confirmation; client detachment and backend disposal also
+discard pending consent. The worker retains the consent object; only the preview
+crosses IPC.
+
+**Tests.** `packages/runtime-client/test/backends/snapshot-share.test.ts` covers
+source-schema rejection, preview binding, client isolation, one-use consent, and
+disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
+client API and wire shapes.
+
+---
+
+## 9. Custody seal and trust configuration
+
+A host declares the trust statements its worker runtime evaluates concept guards
+under with `RuntimeClientOptions.cfcTrustConfig`, which reaches the worker as
+`InitializationData.cfcTrustConfig` and the runtime as
+`RuntimeOptions.cfcTrustConfig`. A default profile that trusts a reviewed
+custody policy as a trusted declassifier is one statement naming that policy's
+exact `policyDigest` and one delegation to its verifier. The configuration is
+part of the runtime's security context, so an attach asserting another one is
+refused. Configurations compare by the digest the runner gives the configuration
+it normalizes, so key order, a key written as `undefined`, and an empty list
+written out or left out do not refuse an attach. Absent a trust configuration,
+no concept guard is satisfied and every custody seal is refused.
+
+`RuntimeClient.prepareCustodySeal({ draft, terms, policy, allowedSources })`
+prepares a [custody seal](../specs/cfc-custody-seal.md). Each field is a cell
+reference: the actor's draft, the room's terms document, a cell holding the
+room's policy reference or declaring the policy in its label, and the actor's
+source policy, which must be in the actor's home space. The worker reads each and returns an opaque `id`, the actor,
+the room space, the room's readers from its access list, the terms, the instance
+digest, the policy, the sources the draft draws on, and the exact stance. The
+worker read every field and checked the seal's invariants over them. The terms'
+optional `question` and `answers` are display fields it does not check: nothing
+verifies that the room's policy releases only those answers.
+
+The trusted host shows that preview and requires a trusted user confirmation
+before calling `RuntimeClient.commitCustodySeal(id)`, which returns the
+actor's receipt, the instance's box and the instance. The box is what the
+room's projector reads; the entry's blinded key is not returned. The worker builds the renderer-trusted `CustodySeal` gesture
+itself; the request carries no event. The seal is bound to what the actor
+reviewed: at commit it reads the draft, the terms, the room's readers, the
+policy cell and the source policy again, and a changed value in any of them,
+or a changed actor, makes the review stale. The transaction that writes the
+entry then verifies that every one of those reads still holds, so a change that
+lands after the commit's checks and before the entry is written refuses the
+seal too. A policy cell that now holds another reference refuses the seal
+rather than sealing the reference that was reviewed. Each confirmation is
+consumed once, including on a failed commit. `cancelCustodySeal(id)`, client
+detachment and backend disposal discard pending consent, and a preview belongs
+to the client that prepared it. A client that detaches while its commit is in
+flight aborts it: nothing is sealed unless the entry's transaction was sent
+before the client left. A commit aborted after the receipt was written leaves
+a receipt with no entry, which is how the actor's home space records a seal
+that did not commit. As with snapshot
+sharing, an embedder exposing this transport to untrusted content delegates the
+actor's consent. `cf-custody-seal` is the component that drives it.
 
 ---
 

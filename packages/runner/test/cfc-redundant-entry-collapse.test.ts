@@ -8,6 +8,7 @@ import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -69,7 +70,7 @@ const seedSource = async (
   } as JSONSchema);
   const sourceId = source.getAsNormalizedFullLink().id;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: sourceId,
@@ -256,7 +257,7 @@ describe("CFC redundant entry collapse", () => {
         .getAsNormalizedFullLink().id;
       const seedTarget = runtime.edit();
       writeSeedEnvelopeDoc(seedTarget, signer.did());
-      seedTarget.writeOrThrow({
+      seedStoredEnvelope(seedTarget, {
         space: signer.did(),
         scope: "space",
         id: targetId,
@@ -349,7 +350,7 @@ describe("CFC redundant entry collapse", () => {
       // shadows it. A disjoint sibling write leaves that attestation valid.
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: mapId,
@@ -447,7 +448,7 @@ describe("CFC redundant entry collapse", () => {
       // beside it carries.
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, signer.did());
-      seed.writeOrThrow({
+      seedStoredEnvelope(seed, {
         space: signer.did(),
         scope: "space",
         id: mapId,

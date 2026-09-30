@@ -1,8 +1,8 @@
 {
   "updated": "2026-09-11T19:29:23.868486+00:00",
   "title": "Pattern computation cost",
-  "design": "https://github.com/commontoolsinc/labs/pull/7155",
-  "pr": "https://github.com/commontoolsinc/labs/pull/7331",
+  "design": "https://github.com/commonfabric/labs/pull/7155",
+  "pr": "https://github.com/commonfabric/labs/pull/7331",
   "activity": "Producer #7323 current-main integration passes the full runner suite: 1,458 tests and 9,223 steps, zero failures. Final Cubic fixes pass 13 index tests / 57 steps, API 29/7, transformers 1,172/981, static 68/33 plus 24 browser cases, all 46 type groups and 600 documentation blocks. Antagonistic review is clean. Publishing fixes for fresh CI and Cubic review; #7336 has clean Cubic output at 330fd67c47. Live poll remains untouched.",
   "review": "Each slice requires clean current-head CI, actual Cubic review, and antagonistic review before landing. The checks ledger records completed merges.",
   "checks": [
@@ -248,7 +248,7 @@
   ],
   "validatedRevision": "6f5a2b23307cc8fdf4716ef6be94f87e0596779b",
   "validationProvenance": {
-    "revisionUrl": "https://github.com/commontoolsinc/labs/commit/6f5a2b23307cc8fdf4716ef6be94f87e0596779b",
+    "revisionUrl": "https://github.com/commonfabric/labs/commit/6f5a2b23307cc8fdf4716ef6be94f87e0596779b",
     "scope": "Serving-host acceptance: full runner suite passed (1,437 tests / 8,960 steps); final serving-loop file passed all 27 cases after the authored-watermark correction. All 46 type groups and 599 documentation blocks passed. CI and Cubic review are tracked separately before landing."
   }
 }

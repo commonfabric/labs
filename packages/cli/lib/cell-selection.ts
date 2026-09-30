@@ -2840,9 +2840,9 @@ interface WalkedPosition {
 
   /**
    * The space the rendered reference is written relative to: an address in
-   * another space carries a `@did` prefix, one in this space does not. It is
-   * the space the READER is working in rather than the source cell's, since a
-   * path that crosses a link can land the source elsewhere.
+   * another space carries a `//space/` prefix, one in this space a bare `/`.
+   * It is the space the READER is working in rather than the source cell's,
+   * since a path that crosses a link can land the source elsewhere.
    */
   contextSpace: MemorySpace | undefined;
 
@@ -3630,7 +3630,7 @@ function markersHeldBy(
  * through.
  *
  * `contextSpace` is the space the reader is working in, which decides whether
- * a composed address carries a `@did` prefix.
+ * a composed address carries a `//space/` prefix.
  */
 export async function boundReadValue(
   sourceCell: Cell<unknown>,

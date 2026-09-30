@@ -1,11 +1,14 @@
-import type { CellKind, LinkScope } from "@commonfabric/api";
+import type { CellKind, FabricValue, LinkScope } from "@commonfabric/api";
 import { fabricAwareEqual, taggedHashStringOf } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
+  acceptsOpaqueCellOrUnresolvedLink,
   applyPieceSourceTransition,
   Cell,
   type CellPath,
+  cellRuntime,
+  cellTx,
   cellWithScopedLinkRequiredsRelaxed,
   ContextualFlowControl,
   deepEqual,
@@ -19,6 +22,7 @@ import {
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   getValueAtPath,
+  type IExtendedStorageTransaction,
   isCell,
   isCellResultForDereferencing,
   isLink,
@@ -29,6 +33,7 @@ import {
   mergeSchemaDefaults,
   NAME,
   type NormalizedLink,
+  overlayUnreadableLinkPlaceholders,
   parseFabricRef,
   parseLinkOrThrow,
   type Pattern,
@@ -48,19 +53,22 @@ import {
   sanitizeSchemaForLinks,
   schemaAcceptsOpaqueCellValue,
   schemaPathSelection,
+  setCell,
   setPieceReconciliation,
 } from "@commonfabric/runner";
 import { storedArgumentRefusalDetail } from "@commonfabric/runner/shared";
 import {
-  cfcSchemaMergeIssue,
   cfcSchemaResolvedRoot,
   loadStoredCfcEnvelope,
+  type MergeCfcSchemaEnvelopeOptions,
+  releaseMergeOptions,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
-  storedSchemaCoversCandidateEnvelope,
+  storedCfcEnvelopeMergeIssue,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { pieceId } from "../piece-id.ts";
 import {
@@ -97,7 +105,7 @@ interface PieceCellIo {
   get(path?: CellPath): Promise<unknown>;
   set(value: unknown, path?: CellPath): Promise<void>;
   edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }>;
   getCell(path?: CellPath): Promise<Cell<unknown>>;
@@ -120,7 +128,7 @@ async function snapshotCloneData(
   const initialManifest = cloneInternalManifest(piece);
   for (const entry of initialManifest) {
     if (entry.kind === "computed") continue;
-    const internal = piece.runtime.getCellFromLink(
+    const internal = cellRuntime(piece).getCellFromLink(
       parseLinkOrThrow(entry.link, piece),
     );
     if (!isStream(internal)) {
@@ -128,7 +136,7 @@ async function snapshotCloneData(
     }
   }
 
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -157,7 +165,7 @@ async function snapshotCloneData(
     for (const entry of manifest) {
       if (entry.kind === "computed") continue;
       const link = parseLinkOrThrow(entry.link, txPiece);
-      const internal = piece.runtime.getCellFromLink(link, undefined, tx);
+      const internal = cellRuntime(piece).getCellFromLink(link, undefined, tx);
       if (isStream(internal)) continue;
       internals.push({
         partialCause: entry.partialCause,
@@ -173,7 +181,7 @@ async function snapshotCloneData(
     }
 
     pinCloneSnapshotCells(tx, snapshotCells.values());
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
     const { error } = await tx.commit();
     if (error) throw commitFailure(error);
@@ -189,7 +197,7 @@ async function restoreCloneInternals(
   piece: Cell<unknown>,
   snapshots: readonly CloneInternalSnapshot[],
 ): Promise<void> {
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -203,9 +211,11 @@ async function restoreCloneInternals(
         throw new Error("cloned piece is missing a source data cell");
       }
       const link = parseLinkOrThrow(entry.link, txPiece);
-      piece.runtime.getCellFromLink(link, undefined, tx).set(snapshot.value);
+      cellRuntime(piece).getCellFromLink(link, undefined, tx).set(
+        snapshot.value,
+      );
     }
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
     const { error } = await tx.commit();
     if (error) throw commitFailure(error);
@@ -213,7 +223,7 @@ async function restoreCloneInternals(
     if (!commitStarted) tx.abort(error);
     throw error;
   }
-  await piece.runtime.idle();
+  await cellRuntime(piece).idle();
 }
 
 type PiecePropIoType = "result" | "input";
@@ -235,7 +245,7 @@ function replaceMaterializedValueAtPath(
   if (path.length === 0) return value;
 
   const [segment, ...remaining] = path;
-  const prototype = current !== null && typeof current === "object"
+  const prototype = isObjectOrArray(current)
     ? Object.getPrototypeOf(current)
     : undefined;
   const clone: Record<PropertyKey, unknown> | unknown[] = Array.isArray(current)
@@ -245,7 +255,7 @@ function replaceMaterializedValueAtPath(
     : typeof segment === "number"
     ? []
     : {};
-  const child = current !== null && typeof current === "object"
+  const child = isObjectOrArray(current)
     ? (current as Record<PropertyKey, unknown>)[segment]
     : undefined;
   Object.defineProperty(clone, segment, {
@@ -255,6 +265,24 @@ function replaceMaterializedValueAtPath(
     writable: true,
   });
   return clone;
+}
+
+/**
+ * Whether a proper prefix of `path` holds a link in `raw`, so that a write at
+ * `path` resolves through that link into another document.
+ */
+function writePathCrossesLink(
+  raw: unknown,
+  path: readonly (string | number)[],
+): boolean {
+  let current = raw;
+  for (const segment of path.slice(0, -1)) {
+    current = isObjectOrArray(current)
+      ? (current as Record<PropertyKey, unknown>)[segment]
+      : undefined;
+    if (isLink(current)) return true;
+  }
+  return false;
 }
 
 /** Replace a schema-aware snapshot path, reading through Cell ancestors. */
@@ -271,7 +299,7 @@ function replaceMaterializedCellValueAtPath(
   if (path.length === 0) return value;
 
   const [segment, ...remaining] = path;
-  const prototype = current !== null && typeof current === "object"
+  const prototype = isObjectOrArray(current)
     ? Object.getPrototypeOf(current)
     : undefined;
   const clone: Record<PropertyKey, unknown> | unknown[] = Array.isArray(current)
@@ -281,7 +309,7 @@ function replaceMaterializedCellValueAtPath(
     : typeof segment === "number"
     ? []
     : {};
-  const child = current !== null && typeof current === "object"
+  const child = isObjectOrArray(current)
     ? (current as Record<PropertyKey, unknown>)[segment]
     : undefined;
   Object.defineProperty(clone, segment, {
@@ -470,9 +498,10 @@ export interface PieceSourceCompatibilityIssues {
 
   /**
    * The CFC schema envelope stored on the piece's argument document cannot
-   * merge with the candidate's argument schema — or cannot be read at all.
-   * Distinct from `schema` and `argument`, which reason about DECLARED types:
-   * this one reasons about what is physically at rest.
+   * merge with the candidate's argument schema, or the one stored on the
+   * piece's own document cannot merge with its result schema — or either
+   * cannot be read at all. Distinct from `schema` and `argument`, which reason
+   * about DECLARED types: this one reasons about what is physically at rest.
    */
   cfc?: string;
 }
@@ -659,7 +688,7 @@ function resolvePathSchemaContract(
   const schema = contract.schema;
   const schemaRoot = contract.root;
   if (
-    typeof schema !== "object" || schema === null ||
+    !isObjectOrArray(schema) ||
     typeof schema.$ref !== "string"
   ) {
     return { ...contract, schema, root: schemaRoot };
@@ -831,7 +860,7 @@ export function materializedValueAtPath(
   };
   for (const segment of path) {
     followCell();
-    if (current === null || typeof current !== "object") return undefined;
+    if (!isObjectOrArray(current)) return undefined;
     current = (current as Record<PropertyKey, unknown>)[segment];
   }
   followCell();
@@ -915,7 +944,7 @@ export function selectCurrentContainerSchema(
 ): JSONSchema {
   const currentType = Array.isArray(currentValue)
     ? "array"
-    : currentValue !== null && typeof currentValue === "object" &&
+    : isObjectOrArray(currentValue) &&
         !isCell(currentValue) && !isStream(currentValue)
     ? "object"
     : undefined;
@@ -976,7 +1005,7 @@ export function currentValuePathContracts(
     return linkPathContracts([contract], [segment]);
   } catch (originalError) {
     const { schema, root } = contract;
-    if (typeof schema !== "object" || schema === null) throw originalError;
+    if (!isObjectOrArray(schema)) throw originalError;
     if (active.has(schema)) {
       throw new Error("recursive correlated write schema cannot be localized");
     }
@@ -1112,7 +1141,7 @@ export function currentValuePathContracts(
 
 function withoutTopLevelScope(schema: JSONSchema): JSONSchema {
   if (
-    typeof schema !== "object" || schema === null || schema.scope === undefined
+    !isObjectOrArray(schema) || schema.scope === undefined
   ) {
     return schema;
   }
@@ -1129,7 +1158,7 @@ export function consumeOuterCellContract(
   schema: JSONSchema,
 ): OuterCellContract {
   const entries = ContextualFlowControl.getAsCellValues(schema);
-  if (entries.length === 0 || typeof schema !== "object" || schema === null) {
+  if (entries.length === 0 || !isObjectOrArray(schema)) {
     return { kind: "cell", payloadSchema: schema };
   }
   const kind = ContextualFlowControl.getAsCellKind(entries[0]);
@@ -1162,7 +1191,7 @@ export function localizeOuterCellContract(
 ): OuterCellLocalization {
   const contract = resolvePathSchemaContract(unresolved);
   const { schema, root } = contract;
-  if (typeof schema !== "object" || schema === null) return { contract };
+  if (!isObjectOrArray(schema)) return { contract };
   if (active.has(schema)) {
     return { contract, issue: "recursive Cell schema cannot be localized" };
   }
@@ -1406,7 +1435,7 @@ export function localizeStreamEventContract(
 ): StreamEventLocalization {
   const contract = resolvePathSchemaContract(unresolved);
   const { schema, root } = contract;
-  if (typeof schema !== "object" || schema === null) {
+  if (!isObjectOrArray(schema)) {
     return { contract, consumedStream: false };
   }
   if (active.has(schema)) {
@@ -1556,7 +1585,7 @@ export function durableSourceContract(
     const scopedRoot = pieces.runtime.getCellFromLink(
       { ...rawSourceLink, path: [], schema: undefined },
       undefined,
-      linkedCell.tx,
+      cellTx(linkedCell),
     );
     const hasScopedMeta = scopedRoot.getMetaRaw("schema") !== undefined ||
       scopedRoot.getMetaRaw("result") !== undefined;
@@ -1566,7 +1595,7 @@ export function durableSourceContract(
   const sourceRoot = pieces.runtime.getCellFromLink(
     { ...sourceLink, path: [], schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
 
   const resultSchema = readResultSchemaMeta(sourceRoot);
@@ -1592,15 +1621,16 @@ export function durableSourceContract(
   const ownerResult = pieces.runtime.getCellFromLink(
     { ...resultLink, schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
+    matchScope: LinkScope | undefined = sourceLink.scope,
   ): (string | number)[] | undefined => {
     if (
       producerLink.space !== sourceLink.space ||
       producerLink.id !== sourceLink.id ||
-      (producerLink.scope ?? "space") !== (sourceLink.scope ?? "space") ||
+      (producerLink.scope ?? "space") !== (matchScope ?? "space") ||
       producerLink.path.length > sourceLink.path.length ||
       producerLink.path.some((segment, index) =>
         segment !== sourceLink.path[index]
@@ -1624,7 +1654,7 @@ export function durableSourceContract(
         validationCell: pieces.runtime.getCellFromLink(
           { ...argumentLink, schema: undefined },
           undefined,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ),
         validationPath: path,
       });
@@ -1636,7 +1666,7 @@ export function durableSourceContract(
   if (!ownedArgument && Array.isArray(internal)) {
     for (const descriptor of internal) {
       if (
-        descriptor === null || typeof descriptor !== "object" ||
+        !isObjectOrArray(descriptor) ||
         !("link" in descriptor)
       ) continue;
       try {
@@ -1647,7 +1677,7 @@ export function durableSourceContract(
         const internalLink = pieces.runtime.getCellFromLink(
           parsedInternalLink,
           parsedInternalLink.schema,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ).getAsNormalizedFullLink();
         const path = relativePath(internalLink);
         if (path === undefined) continue;
@@ -1661,7 +1691,7 @@ export function durableSourceContract(
             validationCell: pieces.runtime.getCellFromLink(
               { ...internalLink, schema: undefined },
               undefined,
-              linkedCell.tx,
+              cellTx(linkedCell),
             ),
             validationPath: path,
           });
@@ -1694,9 +1724,14 @@ export function durableSourceContract(
           const target = pieces.runtime.getCellFromLink(
             parsed,
             parsed.schema,
-            linkedCell.tx,
+            cellTx(linkedCell),
           ).getAsNormalizedFullLink();
-          const suffix = relativePath(target);
+          // A projection is matched at the instance the link names. A result
+          // alias reading a scoped input addresses the input's base slot and
+          // reaches the scoped value through its redirect, so it is not
+          // collected for a scoped source; the argument contract above
+          // governs that value.
+          const suffix = relativePath(target, rawSourceLink.scope);
           if (suffix !== undefined) {
             projected.push({
               root: ownerSchema,
@@ -1712,7 +1747,7 @@ export function durableSourceContract(
         }
         return;
       }
-      if (value === null || typeof value !== "object" || seen.has(value)) {
+      if (!isObjectOrArray(value) || seen.has(value)) {
         return;
       }
       seen.add(value);
@@ -1751,7 +1786,7 @@ function suppliedLinks(
   seen = new WeakSet<object>(),
 ): SuppliedLink[] {
   if (isLink(value)) return [{ path, value }];
-  if (value === null || typeof value !== "object" || seen.has(value)) return [];
+  if (!isObjectOrArray(value) || seen.has(value)) return [];
 
   const prototype = Object.getPrototypeOf(value);
   // TODO(danfuzz): the prototype gate treats a `FabricInstance` as a leaf,
@@ -1979,7 +2014,7 @@ function resolveDurableSource(
   const linkedCell = pieces.runtime.getCellFromLink(
     { ...link, schema: undefined },
     undefined,
-    linkBase.tx,
+    cellTx(linkBase),
   );
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
@@ -2017,7 +2052,7 @@ function resolveDurableSource(
       const root = pieces.runtime.getCellFromLink(
         { ...sourceLink, path: [], schema: undefined, scope },
         undefined,
-        linkedCell.tx,
+        cellTx(linkedCell),
       );
       if (
         root.getMetaRaw("result") !== undefined ||
@@ -2586,7 +2621,7 @@ export function localizeWritableDestinationContracts(
   let contracts: PathSchemaContract[] = [{ schema: root, root }];
   let approximatedCorrelatedPath = false;
   const rawRoot = rootCell.getRawUntyped({ lastNode: "top" });
-  const materializedRoot = destination.validationCell.withTx(rootCell.tx)
+  const materializedRoot = destination.validationCell.withTx(cellTx(rootCell))
     .asSchema(root).get();
   const stagedMaterializedRoot = replaceMaterializedCellValueAtPath(
     materializedRoot,
@@ -2682,7 +2717,7 @@ function rawValueAtPath(
   let value = root;
   for (const segment of path) {
     if (
-      value === null || typeof value !== "object" ||
+      !isObjectOrArray(value) ||
       !Object.hasOwn(value, segment)
     ) {
       return { present: false, value: undefined };
@@ -2694,7 +2729,7 @@ function rawValueAtPath(
 
 /** @internal Exported for focused projection-presence tests. */
 export function rawResolvedValueAtPath(
-  tx: NonNullable<Cell<unknown>["tx"]>,
+  tx: IExtendedStorageTransaction,
   resolved: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
 ): { present: boolean; value: unknown } {
   // Read the document envelope, not only its Cell value. A metadata-only
@@ -2717,7 +2752,7 @@ export function rawResolvedValueAtPath(
   }
   const envelope = document.ok?.value;
   if (
-    envelope === null || typeof envelope !== "object" ||
+    !isObjectOrArray(envelope) ||
     !Object.hasOwn(envelope, "value")
   ) {
     return { present: false, value: undefined };
@@ -2778,7 +2813,7 @@ export function omitMissingProjectionAliases(
     const resolvedSchemaView = isCell(schemaView) && !isStream(schemaView)
       ? schemaView.get()
       : schemaView;
-    const tx = cell.tx;
+    const tx = cellTx(cell);
     if (tx === undefined) {
       throw new Error("projection alias reconciliation requires a transaction");
     }
@@ -2833,8 +2868,8 @@ export function omitMissingProjectionAliases(
     }
   }
   if (
-    materialized === null || typeof materialized !== "object" ||
-    raw === null || typeof raw !== "object"
+    !isObjectOrArray(materialized) ||
+    !isObjectOrArray(raw)
   ) return materialized;
 
   // TODO(danfuzz): the `typeof` gate admits a `FabricSpecialObject` on
@@ -2849,7 +2884,7 @@ export function omitMissingProjectionAliases(
       : { ...materialized }) as Record<string, unknown>;
   const materializedRecord = materialized as Record<PropertyKey, unknown>;
   const rawRecord = raw as Record<PropertyKey, unknown>;
-  const viewRecord = schemaView !== null && typeof schemaView === "object"
+  const viewRecord = isObjectOrArray(schemaView)
     ? schemaView as Record<PropertyKey, unknown>
     : undefined;
   for (const key of Object.keys(rawRecord)) {
@@ -3028,16 +3063,15 @@ class PiecePropIo implements PieceCellIo {
     // #getFromRoot, see schemaWithScopedLinkRequiredsRelaxed.
     const selected = cellWithScopedLinkRequiredsRelaxed(selectedCell).get();
     if (isCell(selected)) {
-      // An asCell projection materializes even an absent or explicitly
-      // undefined slot as a Cell, so inspect the stored slot before reading
-      // through the handle. Falling back preserves the root read's
-      // absent-vs-undefined rules and its missing-path diagnostics.
-      if (selectedCell.getRaw() === undefined) {
-        return await this.#getFromRoot(targetCell, path);
-      }
       const handle = cellWithScopedLinkRequiredsRelaxed(selected);
       await handle.pull();
-      return handle.get();
+      const value = handle.get();
+      // An asCell projection materializes even an absent or explicitly
+      // undefined slot as a Cell. The root projection distinguishes those
+      // cases while preserving the handle's scope cap.
+      return value === undefined
+        ? await this.#getFromRoot(targetCell, path)
+        : value;
     }
     if (selected === undefined) {
       return await this.#getFromRoot(targetCell, path);
@@ -3152,7 +3186,7 @@ class PiecePropIo implements PieceCellIo {
    * read, the way a write's caller verifies the write.
    */
   async edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
@@ -3191,7 +3225,9 @@ class PiecePropIo implements PieceCellIo {
       // Build the path with transaction context
       const txCell = targetCell.withTx(tx).key(...(path ?? []));
 
-      const decision = produce(txCell.getRaw({ lastNode: "value" }));
+      const decision = produce(
+        txCell.getRawUntyped({ lastNode: "value" }),
+      );
       if (decision === undefined) return { wrote: false };
       const value = decision.value;
 
@@ -3337,7 +3373,8 @@ class PiecePropIo implements PieceCellIo {
           pieces.runtime.getCellFromLink(rawTarget, undefined, tx)
             .setRawUntyped(undefined);
         } else {
-          txCell.set(
+          setCell(
+            txCell,
             nextValue,
             undefined,
             isStream(txCell) &&
@@ -3405,6 +3442,45 @@ class PiecePropIo implements PieceCellIo {
           writePath,
           materializedValue,
         );
+        // A slot whose stored value routes through a link this replica cannot
+        // read — another principal's per-user instance, a document not
+        // replicated here — materializes as absent, and judged as it stands
+        // would refuse the write for a value owned elsewhere. Such a slot is
+        // staged as the unresolved-link placeholder and accepted opaquely;
+        // its schema check happens when a reactive read materializes it, the
+        // rule stored-argument validation applies. A link the caller supplies
+        // defers on the same terms — the caller vouches for the link, not for
+        // its target being replicated here — so the raw tree the overlay
+        // walks holds the caller's value, links and all, at the write path,
+        // and a scalar or `undefined` written there is judged as written.
+        // Where the write path crosses a stored link the raw tree stays as
+        // stored, so the overlay can follow that link to the fields around
+        // the written one. The overlay only ever turns an absence into an
+        // accepted opaque, so a candidate is judged against the staged root
+        // first and the overlay is consulted only when that fails.
+        const rawRoot = targetCell.withTx(tx).getRaw();
+        const rawForOverlay = writePathCrossesLink(rawRoot, writePath)
+          ? rawRoot
+          : replaceMaterializedValueAtPath(rawRoot, writePath, value);
+        const argumentLink = targetCell.getAsNormalizedFullLink();
+        const inputIssue = (candidate: unknown): string | undefined => {
+          const options = {
+            acceptOpaqueValue: acceptsOpaqueCellOrUnresolvedLink,
+          };
+          const issue = validateSchemaValue(schema, candidate, schema, options);
+          if (issue === undefined) return undefined;
+          return validateSchemaValue(
+            schema,
+            overlayUnreadableLinkPlaceholders(
+              tx,
+              argumentLink,
+              rawForOverlay,
+              candidate,
+            ),
+            schema,
+            options,
+          );
+        };
         const mergedRoot = mergeSchemaDefaults(
           stagedRoot,
           extractDefaultValues(schema),
@@ -3428,15 +3504,12 @@ class PiecePropIo implements PieceCellIo {
               mergeMaterializedLinks: true,
               acceptOpaqueValue: schemaAcceptsOpaqueCellValue,
               acceptUnionCandidate: (candidate) =>
-                validateSchemaValue(
-                  schema,
+                inputIssue(
                   replaceMaterializedValueAtPath(
                     stagedRoot,
                     writePath,
                     candidate,
                   ),
-                  schema,
-                  { acceptOpaqueValue: schemaAcceptsOpaqueCellValue },
                 ) === undefined,
             },
           );
@@ -3448,12 +3521,7 @@ class PiecePropIo implements PieceCellIo {
             writePath,
             nextValue,
           );
-        const issue = validateSchemaValue(
-          schema,
-          validationRoot,
-          schema,
-          { acceptOpaqueValue: schemaAcceptsOpaqueCellValue },
-        );
+        const issue = inputIssue(validationRoot);
         if (issue !== undefined) {
           throw new Error(`updated input does not match its schema: ${issue}`);
         }
@@ -3609,8 +3677,7 @@ class PiecePropIo implements PieceCellIo {
               for (const contract of ancestorContracts) {
                 const ancestorSchema = contract.schema;
                 if (
-                  typeof ancestorSchema !== "object" ||
-                  ancestorSchema === null ||
+                  !isObjectOrArray(ancestorSchema) ||
                   (!("maxItems" in ancestorSchema) &&
                     !("minItems" in ancestorSchema))
                 ) {
@@ -4018,6 +4085,33 @@ export class PieceController<T = unknown> {
   }
 
   /**
+   * The piece's current pattern where it loads, and its stored pattern pointer
+   * alone where it does not, with what the load threw as `failure`.
+   *
+   * A source change names its predecessor by the pointer and compares a
+   * candidate with the loaded pattern, so a pattern that does not load costs
+   * that comparison and nothing else. Whether a change may go ahead without
+   * the comparison is the caller's to decide.
+   *
+   * @throws Error when the piece carries no pattern pointer, which leaves a
+   * change nothing to name as its predecessor.
+   */
+  async #loadCurrentPatternOrPointer(
+    options: { projectResult?: boolean; repairCache?: boolean } = {},
+  ): Promise<
+    & { ref: { identity: string; symbol: string } }
+    & ({ pattern: Pattern } | { pattern: undefined; failure: unknown })
+  > {
+    try {
+      return await this.#loadCurrentPattern(options);
+    } catch (failure) {
+      const ref = this.#patternPointer();
+      if (ref === undefined) throw failure;
+      return { pattern: undefined, ref, failure };
+    }
+  }
+
+  /**
    * The pattern's authored source program, recovered from the content-addressed
    * `pattern:<identity>` source-doc closure in the piece's space. Replaces the
    * deleted meta cell's `program`. `main` is the executable entry filename;
@@ -4163,8 +4257,28 @@ export class PieceController<T = unknown> {
     if (!isPieceSourceAction(action)) {
       throw new Error("unsupported piece source action");
     }
-    const { pattern: previousPattern, ref: previousRef } = await this
-      .#loadCurrentPattern();
+    // A piece whose current pattern does not load is the piece a change of
+    // source rescues: a stored identity only a retired bundle could resolve
+    // strands it otherwise. The pointer still names the predecessor, which is
+    // all a transition records of it, and all a detach needs. What an action
+    // that adopts a candidate loses is the comparison of that candidate with
+    // what the piece ran. The review below reports the loss as an
+    // incompatibility, so such a change applies only once confirmed.
+    const previous = await this.#loadCurrentPatternOrPointer();
+    const previousRef = previous.ref;
+    // Why the load failed is in no review, since a review has to read the
+    // same on the call that confirms it. A confirmation repeats a load that
+    // was already reported, so only the reviewing call logs it.
+    if (
+      previous.pattern === undefined && options.confirmedChange === undefined
+    ) {
+      pieceUpdateLogger.warn("change-source-current-unloadable", () => [
+        "the current pattern failed to load; reviewing the source change",
+        `against the stored identity ref ${previousRef.identity}#` +
+        `${previousRef.symbol} alone (${this.#cell.space})`,
+        previous.failure,
+      ]);
+    }
     const expected = getPieceSourceSnapshot(
       this.#cell,
       this.#pieces.runtime.runner.sessionPatternPointerFor(this.#cell),
@@ -4278,7 +4392,7 @@ export class PieceController<T = unknown> {
       candidate = loaded;
       prepared = confirmed;
       const currentReview = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4310,10 +4424,18 @@ export class PieceController<T = unknown> {
         acceptedReview = confirmed.review;
       }
     } else {
+      // A piece with no source history and no origin predates both, and its
+      // space may hold no source for what it runs. It takes the transition's
+      // displaced-identity arm, as it does under `setPattern`. A piece that
+      // recorded how it got its pattern keeps its claim to a restorable
+      // current source, so the baseline still refuses one that has none.
       const baseline = await preparePieceSourceTransitionBaseline(
         this.#pieces.runtime,
         this.#cell,
         expected,
+        expected.revisionId === null && expected.origin === null
+          ? { allowUnavailable: true }
+          : {},
       );
       let program: RuntimeProgram;
       let origin: string | null;
@@ -4424,7 +4546,7 @@ export class PieceController<T = unknown> {
         ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
       };
       const review = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4497,7 +4619,7 @@ export class PieceController<T = unknown> {
                     argumentCell,
                     argumentSchema,
                     this.#pieces,
-                    previousPattern.argumentSchema,
+                    previous.pattern?.argumentSchema,
                   );
                 } catch (error) {
                   const message = error instanceof Error
@@ -4561,7 +4683,7 @@ export class PieceController<T = unknown> {
       }
       if (isOverridableArgumentCompatibilityError(error)) {
         const review = await pieceSourceCompatibilityReview(
-          previousPattern,
+          previous,
           candidate,
           this.#cell,
           this.#pieces,
@@ -4596,8 +4718,8 @@ export class PieceController<T = unknown> {
   async checkPattern(
     program: RuntimeProgram,
   ): Promise<PatternCompatibilityReport> {
-    const { pattern: previousPattern } = await this
-      .#loadCurrentPattern({ repairCache: false });
+    const previous = await this
+      .#loadCurrentPatternOrPointer({ repairCache: false });
     const candidate = await this.#pieces.runtime.patternManager.compilePattern(
       program,
       { space: this.#pieces.getSpace(), persist: false },
@@ -4608,7 +4730,7 @@ export class PieceController<T = unknown> {
       throw new Error("the candidate source has no pattern identity");
     }
     const review = await pieceSourceCompatibilityReview(
-      previousPattern,
+      previous,
       candidate,
       this.#cell,
       this.#pieces,
@@ -4715,27 +4837,25 @@ export class PieceController<T = unknown> {
         // retained baseline: the stored ref serves only as the concurrency
         // guard and the candidate's predecessor entry, both of which name an
         // identity without loading it.
-        let previousPattern: Pattern | undefined;
-        let previousRef: { identity: string; symbol: string };
+        //
         // A served update repairs no cache: a write the load would seal
         // into the serving wave is not one the update's own commit
         // should rest on or answer for.
-        const repairCache = options?.served === undefined;
-        try {
-          ({ pattern: previousPattern, ref: previousRef } = await this
-            .#loadCurrentPattern({ repairCache }));
-        } catch (error) {
-          if (!options?.dangerouslyAllowIncompatibleSchema) throw error;
-          await this.#cell.sync();
-          const storedRef = getPatternIdentityRef(this.#cell);
-          if (!storedRef) throw error;
+        const previous = await this.#loadCurrentPatternOrPointer({
+          repairCache: options?.served === undefined,
+        });
+        const previousPattern = previous.pattern;
+        const previousRef = previous.ref;
+        if (previous.pattern === undefined) {
+          if (!options?.dangerouslyAllowIncompatibleSchema) {
+            throw previous.failure;
+          }
           pieceUpdateLogger.warn("set-pattern-current-unloadable", () => [
             "the current pattern failed to load; replacing source from the",
-            `stored identity ref ${storedRef.identity}#${storedRef.symbol}`,
+            `stored identity ref ${previousRef.identity}#${previousRef.symbol}`,
             `under dangerouslyAllowIncompatibleSchema (${this.#cell.space})`,
-            error,
+            previous.failure,
           ]);
-          previousRef = storedRef;
         }
         const expected = getPieceSourceSnapshot(
           this.#cell,
@@ -4971,7 +5091,7 @@ function sourceRevision(
 }
 
 function isPieceSourceAction(action: unknown): action is PieceSourceAction {
-  if (typeof action !== "object" || action === null || !("kind" in action)) {
+  if (!isObjectOrArray(action) || !("kind" in action)) {
     return false;
   }
   if (action.kind === "detach" || action.kind === "adopt") return true;
@@ -5065,7 +5185,7 @@ function assertPieceSourceRetainedLinksCompatible(
   argumentCell: Cell<unknown>,
   candidateSchema: JSONSchema,
   pieces: PiecesController,
-  priorArgumentSchema: JSONSchema,
+  priorArgumentSchema: JSONSchema | undefined,
 ): void {
   try {
     assertSuppliedLinkSchemasCompatible(
@@ -5091,7 +5211,7 @@ function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
-  const raw = argumentCell.getRaw();
+  const raw = argumentCell.getRawUntyped();
   const links = suppliedLinks(raw).map((suppliedLink) => {
     let linkBase = argumentCell;
     for (const segment of suppliedLink.path) {
@@ -5102,7 +5222,7 @@ function pieceSourceArgumentEvidence(
       const linkedCell = pieces.runtime.getCellFromLink(
         { ...link, schema: undefined },
         undefined,
-        linkBase.tx,
+        cellTx(linkBase),
       );
       const contract = durableSourceContract(linkedCell, pieces);
       return {
@@ -5137,17 +5257,37 @@ function pieceSourceArgumentEvidence(
   return taggedHashStringOf({ raw, links });
 }
 
+/**
+ * Every reason `candidate` cannot replace what `piece` runs, with the evidence
+ * the stored argument was judged on.
+ *
+ * `previous.pattern` is `undefined` for a piece whose current pattern does not
+ * load. Nothing can then say whether the candidate keeps the contract the piece
+ * ran under, which is itself an incompatibility: the review reports it under
+ * `schema`, naming the pattern by `previous.ref`, and judges retained links
+ * against the candidate alone. The stored argument and the CFC envelopes are
+ * judged as they always are, since neither consults the current pattern.
+ */
 async function pieceSourceCompatibilityReview(
-  previousPattern: Pattern,
+  previous: {
+    pattern: Pattern | undefined;
+    ref: { identity: string; symbol: string };
+  },
   candidate: Pattern,
   piece: Cell<unknown>,
   pieces: PiecesController,
 ): Promise<NonNullable<PreparedPieceSourceChange["review"]>> {
   const issues: PieceSourceCompatibilityIssues = {};
-  try {
-    assertPatternSchemasBackwardCompatible(previousPattern, candidate);
-  } catch (error) {
-    issues.schema = error instanceof Error ? error.message : String(error);
+  if (previous.pattern === undefined) {
+    issues.schema = `the piece's current pattern ` +
+      `\`${previous.ref.identity}#${previous.ref.symbol}\` cannot be loaded, ` +
+      `so the candidate cannot be compared with it`;
+  } else {
+    try {
+      assertPatternSchemasBackwardCompatible(previous.pattern, candidate);
+    } catch (error) {
+      issues.schema = error instanceof Error ? error.message : String(error);
+    }
   }
 
   const argumentCell = pieces.getArgument(piece);
@@ -5170,7 +5310,7 @@ async function pieceSourceCompatibilityReview(
       argumentCell,
       candidate.argumentSchema,
       pieces,
-      previousPattern.argumentSchema,
+      previous.pattern?.argumentSchema,
     );
   } catch (error) {
     issues.retainedLinks = error instanceof Error
@@ -5178,7 +5318,12 @@ async function pieceSourceCompatibilityReview(
       : String(error);
   }
 
-  const cfc = pieceSourceCfcEnvelopeIssue(argumentCell, candidate, pieces);
+  const cfc = pieceSourceCfcEnvelopeIssue(
+    piece,
+    argumentCell,
+    candidate,
+    pieces,
+  );
   if (cfc !== undefined) issues.cfc = cfc;
 
   return {
@@ -5188,8 +5333,8 @@ async function pieceSourceCompatibilityReview(
 }
 
 /**
- * Would the setup commit's CFC schema-envelope merge accept this candidate
- * over what the piece's argument document already stores?
+ * Would the setup commit's CFC schema-envelope merges accept this candidate
+ * over what the piece's documents already store?
  *
  * Why this is its own rule rather than a case of the three above: those all
  * reason about DECLARED types — the previous and candidate patterns' argument
@@ -5197,34 +5342,88 @@ async function pieceSourceCompatibilityReview(
  * envelope is neither. It is the schema the document was last committed under,
  * accumulated across every write that ever touched it, and it can carry claims
  * no pattern declares (a later write that strengthened a confidentiality label
- * widens it in place). So a piece whose pattern pointer has run ahead of its
- * stored envelope — the partially-migrated case this command exists to catch —
- * passes all three type-level checks and still takes `CFC enforcement rejected
- * commit` at the setup boundary. Reporting `compatible: true` there is worse
- * than having no preflight at all, because the verdict is what gates a deploy.
+ * widens it in place; a handler's write stamps its module identity onto the
+ * `writeAuthorizedBy` claim of the field it wrote). So a piece whose pattern
+ * pointer has run ahead of its stored envelope — the partially-migrated case
+ * this command exists to catch — passes all three type-level checks and still
+ * takes `CFC enforcement rejected commit` at the setup boundary. Reporting
+ * `compatible: true` there is worse than having no preflight at all, because
+ * the verdict is what gates a deploy.
  *
- * The merge is driven for real, in dry-run, through the same
- * `mergeCfcSchemaEnvelopes` (and the same stored-covers-candidate fast path)
- * the commit runs, so the two cannot disagree about what merges.
+ * Two documents take that merge at commit, and both are reviewed here. The
+ * argument document merges under the candidate's argument schema. The piece's
+ * own document — the result, where a profile's owner-protected fields live —
+ * merges under the candidate's result schema, and only when setup rewrites
+ * the result projection at all, which `setupRewritesResultProjection` decides
+ * for the review as it does for setup. Setup rewrites the projection in full,
+ * so its schema input covers the whole document as generated output and every
+ * path of it is exempt from the additive-required rule; the review passes the
+ * same exemption, or a candidate that adds a generated result field would be
+ * refused here and accepted by the deploy. An argument is an input: nothing
+ * generates it, so its merge takes no exemption.
  *
- * Scope, deliberately: the ARGUMENT document only. The piece's own document —
- * the result — merges at commit time under `generatedOutputPaths`, the set of
- * paths the running module materializes in that same transaction, which
- * exempts them from the additive-required rule. Those paths are a property of
- * the module's actual output bindings and are not knowable without executing
- * it, so a preflight that merged the result envelope without them would refuse
- * the ordinary, accepted case of a candidate that adds a generated result field
- * (see `packages/piece/test/state-continuity.test.ts`). An argument is an
- * input: nothing generates it, so its merge is faithful here.
+ * Each merge is driven for real, in dry run, through
+ * `storedCfcEnvelopeMergeIssue` — the fast paths the commit takes before it
+ * merges and then the merge itself — so the two cannot disagree about what
+ * merges.
  */
 function pieceSourceCfcEnvelopeIssue(
+  piece: Cell<unknown>,
   argumentCell: Cell<unknown>,
   candidate: Pattern,
   pieces: PiecesController,
 ): string | undefined {
-  const link = argumentCell.getAsNormalizedFullLink();
-  // `readTx()` cannot write, so the dry run stays a dry run.
-  const stored = loadStoredCfcEnvelope(pieces.runtime.readTx(), {
+  // `readTx()` cannot write, so the two dry runs stay dry runs.
+  const tx = pieces.runtime.readTx();
+  // The modules the release would install, as setup names them.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const programModules = entry === undefined
+    ? []
+    : patternManager.programModuleIdentities(entry.identity) ?? [];
+  const issues = [
+    pieceDocumentCfcEnvelopeIssue(
+      "argument",
+      argumentCell,
+      candidate.argumentSchema,
+      {},
+      tx,
+      programModules,
+    ),
+    // Setup writes the result projection, and with it the schema input the
+    // commit merges, only where the candidate's projection differs from the
+    // stored one. A candidate that changes nothing the projection carries
+    // takes no merge at commit, so the review asks setup's own question
+    // first rather than refusing over an envelope the commit never touches.
+    pieces.runtime.runner.setupRewritesResultProjection(tx, candidate, piece)
+      ? pieceDocumentCfcEnvelopeIssue(
+        "result",
+        piece,
+        candidate.resultSchema,
+        { generatedOutputPaths: [[]] },
+        tx,
+        programModules,
+      )
+      : undefined,
+  ].filter((issue): issue is string => issue !== undefined);
+  return issues.length === 0 ? undefined : issues.join("\n");
+}
+
+/**
+ * The issue one of the piece's documents raises against the candidate schema
+ * the setup commit would write it under, or `undefined` where the commit's
+ * merge accepts it. `document` names the document in the message.
+ */
+function pieceDocumentCfcEnvelopeIssue(
+  document: "argument" | "result",
+  cell: Cell<unknown>,
+  candidateSchema: JSONSchema,
+  options: MergeCfcSchemaEnvelopeOptions,
+  tx: IExtendedStorageTransaction,
+  programModules: Iterable<string>,
+): string | undefined {
+  const link = cell.getAsNormalizedFullLink();
+  const stored = loadStoredCfcEnvelope(tx, {
     space: link.space,
     id: link.id,
     scope: link.scope,
@@ -5240,25 +5439,32 @@ function pieceSourceCfcEnvelopeIssue(
     // refuses the write. Skipping it here — the tempting reading, since we
     // cannot evaluate the merge — is precisely how a check green-lights an
     // update the deploy then refuses, so it is a blocker instead.
-    return `the CFC schema envelope stored for this piece's argument ` +
+    return `the CFC schema envelope stored for this piece's ${document} ` +
       `document could not be read (${stored.reason}); applying a source ` +
       `would be rejected over the same failure`;
   }
-  // The commit takes the stored envelope unchanged when it already covers the
-  // candidate's, so a preflight that skipped this fast path would manufacture
-  // rejections the real update does not make.
-  if (
-    storedSchemaCoversCandidateEnvelope(stored.schema, candidate.argumentSchema)
-  ) {
-    return undefined;
-  }
-  const issue = cfcSchemaMergeIssue(stored.schema, candidate.argumentSchema);
+  // The update the check gates is a release of the piece, which merges with
+  // the release's options (see `releaseMergeOptions`).
+  const issue = storedCfcEnvelopeMergeIssue(
+    stored.schema,
+    candidateSchema,
+    {
+      ...options,
+      ...releaseMergeOptions(
+        tx,
+        { space: link.space, id: link.id, scope: link.scope },
+        stored.schema,
+        programModules,
+      ),
+    },
+  );
   if (issue === undefined) return undefined;
   return issue.migration
-    ? `the argument document stored for this piece predates the candidate's ` +
-      `schema and cannot migrate to it: ${issue.message}`
-    : `the candidate's argument schema does not merge with the CFC schema ` +
-      `envelope stored for this piece: ${issue.message}`;
+    ? `the ${document} document stored for this piece predates the ` +
+      `candidate's schema and cannot migrate to it: ${issue.message}`
+    : `the candidate's ${document} schema does not merge with the CFC ` +
+      `schema envelope stored for this piece's ${document} document: ` +
+      `${issue.message}`;
 }
 
 function hasPieceSourceCompatibilityIssues(

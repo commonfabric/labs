@@ -8,6 +8,10 @@
  * error it shows as its own, and how the watch behind it behaves as the
  * reference stops and starts resolving.
  *
+ * `/<space>/<id>` is here too: settling an id on the slug the space gives it
+ * is the rewrite that says the refusals above are about the member, rather
+ * than about rewriting at all.
+ *
  * The view is driven directly rather than through a runtime. Every fact these
  * tests are about is settled between a resolution's answer and the view's own
  * state, so a stub answering as the worker would is the whole environment they
@@ -18,7 +22,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
-import type { AppView } from "@commonfabric/navigation";
+import { type AppView, urlToAppView } from "@commonfabric/navigation";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
+// The reader `cf cell get` takes an address through, which is what a citation
+// the view offers has to satisfy. The CLI's package exports only its command
+// tree, so the module is reached by path.
+import { normalizeLLMFriendlyRef } from "../../cli/lib/llm-friendly-ref.ts";
 
 function installBrowserGlobals(): () => void {
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -104,26 +114,6 @@ function captureErrors(): { lines: string[]; restore: () => void } {
   };
 }
 
-/** Return the rendered text of nested Lit template results. */
-function templateText(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(templateText).join("");
-  if (typeof value !== "object") return String(value);
-  const template = value as {
-    strings?: readonly string[];
-    values?: readonly unknown[];
-  };
-  const strings = template.strings ?? [];
-  const values = template.values ?? [];
-  let text = "";
-  for (let index = 0; index < strings.length; index++) {
-    text += strings[index];
-    if (index < values.length) text += templateText(values[index]);
-  }
-  return text;
-}
-
 /**
  * Every value bound to the property `name` across nested Lit template
  * results, in the order the walk reaches them.
@@ -136,7 +126,7 @@ function templateText(value: unknown): string {
  * name nothing binds: the first is `[undefined]` and the second is `[]`.
  */
 function templateBindings(value: unknown, name: string): unknown[] {
-  if (value == null || typeof value !== "object") return [];
+  if (!isObjectOrArray(value)) return [];
   if (Array.isArray(value)) {
     return value.flatMap((entry) => templateBindings(entry, name));
   }
@@ -233,6 +223,12 @@ interface StubRuntime {
 
   /** Release the held answers, newest first. */
   releaseNewestFirst(): Promise<void>;
+
+  /**
+   * Name every piece from here on with `slug`, or with nothing when given
+   * `undefined`.
+   */
+  nameWithSlug(slug: string | undefined): void;
 }
 
 function stubRuntime(
@@ -243,12 +239,16 @@ function stubRuntime(
   const started: unknown[][] = [];
   let answer = first;
   let poll: (() => void) | undefined;
+  let pieceSlug: string | undefined;
   const stub: StubRuntime = {
     resolved,
     started,
     cancels: 0,
     answer: (next) => {
       answer = next;
+    },
+    nameWithSlug: (slug) => {
+      pieceSlug = slug;
     },
     poll: async () => {
       poll?.();
@@ -343,6 +343,7 @@ function stubRuntime(
       setTelemetryEnabled: () => Promise.resolve(),
       setBreakpoints: () => Promise.resolve(),
     }),
+    getSlug: () => Promise.resolve(pieceSlug),
     getSlugCell: () =>
       Promise.resolve({
         subscribe: () => () => {
@@ -439,6 +440,34 @@ function appViewOver(
 }
 
 /**
+ * The reference `view` hands its header to copy, or `undefined` where it
+ * offers none. Read off the binding rather than out of the rendered text, so
+ * an offer is found whatever it is spelled as.
+ */
+function citedReference(view: AppViewLike): string | undefined {
+  const bound = templateBindings(view.render(), "pieceReference");
+  // One header, so one binding: none would mean the header is gone, which
+  // this would otherwise read as a view offering nothing.
+  expect(bound).toHaveLength(1);
+  return bound[0] as string | undefined;
+}
+
+/**
+ * What each reader of a cited reference takes it to name: the reader `cf cell
+ * get` takes an address through, and this shell's page reader opening it
+ * under an origin, as a browser does with the reference pasted after one.
+ */
+function readBothWays(reference: string | undefined): {
+  cf: unknown;
+  page: AppView;
+} {
+  return {
+    cf: normalizeLLMFriendlyRef(String(reference)),
+    page: urlToAppView(new URL(`http://page.invalid${reference}`)),
+  };
+}
+
+/**
  * Drive `view` into the state the cases below turn on: the watch it was
  * running has been replaced, that watch's resolution is still out, and the
  * watch that replaced it is the one now resolving.
@@ -512,7 +541,178 @@ describe("AppView collection members", () => {
       view._selectedPattern.run();
       await view._selectedPattern.taskComplete;
 
-      expect(templateText(view.render())).toContain("/@naming-demo/top/42");
+      const reference = citedReference(view);
+      expect(reference).toBe("//naming-demo/top/42");
+      // Each reader takes it for the collection, the member that collection
+      // selects, and the space both are read in, with no binding supplied.
+      expect(readBothWays(reference)).toEqual({
+        cf: { pieceId: "top", embeddedSpace: "naming-demo", path: [42] },
+        page: {
+          spaceName: "naming-demo",
+          pieceSlug: "top",
+          pieceMember: "42",
+        },
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites a member of a space opened by DID by a reference carrying that DID", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(XAppView as never, stub, {
+        spaceDid: SPACE,
+        pieceSlug: "top",
+        pieceMember: "42",
+      });
+
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+
+      const reference = citedReference(view);
+      expect(reference).toBe(`//${SPACE}/top/42`);
+      expect(readBothWays(reference)).toEqual({
+        cf: { pieceId: "top", embeddedSpace: SPACE, path: [42] },
+        page: { spaceDid: SPACE, pieceSlug: "top", pieceMember: "42" },
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites a member of a space whose name the reference grammar cannot write by the DID the name resolved to", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      // `@` opens a qualifier in the grammar, so no reference can carry this
+      // name as its space. The shell resolves it all the same.
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({
+          spaceName: "naming@demo",
+          pieceSlug: "top",
+          pieceMember: "42",
+        }),
+      );
+
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+
+      const reference = citedReference(view);
+      expect(reference).toBe(`//${SPACE}/top/42`);
+      expect(readBothWays(reference)).toEqual({
+        cf: { pieceId: "top", embeddedSpace: SPACE, path: [42] },
+        page: { spaceDid: SPACE, pieceSlug: "top", pieceMember: "42" },
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites a space by name only where a page address keeps the name as written", async () => {
+    // A page URL percent-encodes a space character and a non-ASCII one, and
+    // resolves a dot segment away; the page reader takes an escaped `@` at
+    // the head of a space for its mark, and a name that is `..` reaches the
+    // page the segments after it name. Each such name would open another
+    // space, so each is cited by the DID it resolved to. A URL keeps the
+    // escape in the last name as written, and both readers read it back as
+    // that name, so it is cited by it.
+
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const cases = [
+        { spaceName: "demo space", cited: SPACE },
+        { spaceName: "my space", cited: SPACE },
+        { spaceName: "caf\u00e9", cited: SPACE },
+        { spaceName: "..", cited: SPACE },
+        { spaceName: "%40demo", cited: SPACE },
+        { spaceName: "demo%20space", cited: "demo%20space" },
+      ];
+      const outcomes = [];
+      for (const { spaceName } of cases) {
+        const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+        const view = appViewOver(
+          XAppView as never,
+          stub,
+          viewOf({ spaceName, pieceSlug: "top", pieceMember: "42" }),
+        );
+        view._selectedPattern.run();
+        await view._selectedPattern.taskComplete;
+        const reference = citedReference(view);
+        outcomes.push({ spaceName, reference, read: readBothWays(reference) });
+      }
+      expect(outcomes).toEqual(cases.map(({ spaceName, cited }) => ({
+        spaceName,
+        reference: `//${cited}/top/42`,
+        read: {
+          cf: { pieceId: "top", embeddedSpace: cited, path: [42] },
+          page: {
+            ...(cited === SPACE ? { spaceDid: SPACE } : { spaceName: cited }),
+            pieceSlug: "top",
+            pieceMember: "42",
+          },
+        },
+      })));
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites a member the reference's two readers read alike, and no other", async () => {
+    // A member name reaches the grammar as a JSON Pointer token and the page
+    // reader as a URL segment, and the two disagree on a name carrying a
+    // pointer escape or one a URL path rewrites. No spelling settles that: a
+    // literal `a~1b` reaches the grammar as `a/b`, and the `a~01b` that
+    // reaches it as `a~1b` reaches the page reader as `a~01b`. So a member
+    // there is no one address for is cited by none, rather than by an address
+    // naming a different member of the same collection.
+    //
+    // Every name the collection-naming library issues is a canonical decimal
+    // (`isMemberName` in `packages/patterns/collection-naming/allocator.ts`),
+    // and every name the slug grammar admits is read alike by both, so the
+    // first two rows are the members a shipped collection has.
+
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const cases = [
+        { pieceMember: "42", cited: "//naming-demo/top/42" },
+        {
+          pieceMember: "glaze-recipes",
+          cited: "//naming-demo/top/glaze-recipes",
+        },
+        { pieceMember: "a~1b", cited: undefined },
+        { pieceMember: "a b", cited: undefined },
+      ];
+      const outcomes = [];
+      for (const { pieceMember } of cases) {
+        const stub = stubRuntime({ pieceId: "fid1:member", pathAfter: [] });
+        const view = appViewOver(
+          XAppView as never,
+          stub,
+          viewOf({ pieceSlug: "top", pieceMember }),
+        );
+        view._selectedPattern.run();
+        await view._selectedPattern.taskComplete;
+        // The member is on screen either way, so what the rows differ in is
+        // the citation rather than whether the page opened.
+        outcomes.push({
+          pieceMember,
+          opened: stub.started.map((call) => call[1]),
+          cited: citedReference(view),
+        });
+      }
+      expect(outcomes).toEqual(cases.map(({ pieceMember, cited }) => ({
+        pieceMember,
+        opened: ["fid1:member"],
+        cited,
+      })));
     } finally {
       restore();
     }
@@ -534,14 +734,15 @@ describe("AppView collection members", () => {
 
       // A collection's name with no member after it names no member, so
       // there is nothing for a citation to resolve to.
-      expect(templateText(view.render())).not.toContain("/@naming-demo/top");
+      expect(citedReference(view)).toBeUndefined();
     } finally {
       restore();
     }
   });
 
-  it("drops a member the walk did not spend, and cites nothing for it", async () => {
+  it("refuses a member after a slug naming a piece at its root, for as long as the slug names one", async () => {
     const restore = installBrowserGlobals();
+    const errors = captureErrors();
     const replaced: AppView[] = [];
     const listener = (event: Event) => {
       replaced.push((event as CustomEvent<AppView>).detail);
@@ -550,8 +751,7 @@ describe("AppView collection members", () => {
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       // A slug naming a piece at its root spends no segment, so the walk
-      // hands the member back: it named nothing, and the page is the one the
-      // collection's name alone addresses.
+      // hands the member back: it names nothing in that piece.
       const stub = stubRuntime({ pieceId: "fid1:plain", pathAfter: ["42"] });
       const view = appViewOver(
         XAppView as never,
@@ -559,19 +759,183 @@ describe("AppView collection members", () => {
         viewOf({ pieceSlug: "plain", pieceMember: "42" }),
       );
 
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete.catch(() => {});
+
+      // Only resolving says what the slug names, so the reference is
+      // resolved. The piece it reached is not opened, and the address stays
+      // as it was written rather than settling on that piece's.
+      expect(stub.resolved.at(-1)).toEqual([SPACE, "plain", "42"]);
+      expect(stub.started).toEqual([]);
+      expect(replaced).toEqual([]);
+      const [loadError] = templateBindings(view.render(), "loadError") as [
+        { kind: string; error: Error },
+      ];
+      expect(loadError.kind).toBe("piece");
+      expect(loadError.error.message).toBe(
+        "no member 42 in plain, which names a piece rather than a collection",
+      );
+      // Nothing offers `//naming-demo/plain/42`, which would cite a cell
+      // inside the piece rather than anything the reader is looking at.
+      expect(citedReference(view)).toBeUndefined();
+
+      // The same answer again is the refusal already on screen, so nothing
+      // reloads.
+      const refused = view.accessForTestingOnly.slugRevision;
+      await pollAndSettle(view, stub);
+      expect(view.accessForTestingOnly.slugRevision).toBe(refused);
+
+      // Bound to a collection holding the member, the address names one.
+      stub.answer({ pieceId: "fid1:member-42", pathAfter: [] });
+      await pollAndSettle(view, stub);
+      expect(stub.started.map((call) => call[1])).toEqual(["fid1:member-42"]);
+    } finally {
+      globalThis.removeEventListener("cf-replace-navigation", listener);
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("settles an address naming a piece by id on the slug that names it", async () => {
+    // Refusing a member is about the member. An address the space can name
+    // better is still written back, and this is the case that does it: the
+    // slug stands in for the id, and every other field of the view — the
+    // space, the mode it is read in — comes through untouched.
+
+    const restore = installBrowserGlobals();
+    const replaced: AppView[] = [];
+    const listener = (event: Event) => {
+      replaced.push((event as CustomEvent<AppView>).detail);
+    };
+    globalThis.addEventListener("cf-replace-navigation", listener);
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:plain", pathAfter: [] });
+      stub.nameWithSlug("top");
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceId: "fid1:plain", mode: "embed" }),
+      );
+
       view._selectedPattern.run();
       await view._selectedPattern.taskComplete;
 
-      // The address settles on what the page is showing.
       expect(replaced).toEqual([{
         spaceName: "naming-demo",
-        pieceSlug: "plain",
+        pieceSlug: "top",
+        mode: "embed",
       }]);
-      // And nothing offers `/@naming-demo/plain/42`, which would cite a cell
-      // inside the piece rather than the piece the reader is looking at.
-      expect(templateText(view.render())).not.toContain("/@naming-demo/plain");
     } finally {
       globalThis.removeEventListener("cf-replace-navigation", listener);
+      restore();
+    }
+  });
+
+  it("leaves an address naming a piece by id alone when the name the space gives it is no slug", async () => {
+    // A name carrying a separator would write two segments where the address
+    // holds one, and the second would read back as a member.
+
+    const restore = installBrowserGlobals();
+    const replaced: AppView[] = [];
+    const listener = (event: Event) => {
+      replaced.push((event as CustomEvent<AppView>).detail);
+    };
+    globalThis.addEventListener("cf-replace-navigation", listener);
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:plain", pathAfter: [] });
+      stub.nameWithSlug("top/42");
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceId: "fid1:plain" }),
+      );
+
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+
+      expect(replaced).toEqual([]);
+    } finally {
+      globalThis.removeEventListener("cf-replace-navigation", listener);
+      restore();
+    }
+  });
+
+  it("opens nothing for an address naming segments past its member, and names them", async () => {
+    const restore = installBrowserGlobals();
+    const errors = captureErrors();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      // Member 42 is there to be opened, so opening nothing is the address's
+      // doing rather than the collection's.
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({
+          pieceSlug: "top",
+          pieceMember: "42",
+          pieceExtraPath: "comments/7",
+        }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete.catch(() => {});
+
+      // Decided from the address: nothing is resolved, watched, or loaded.
+      expect(stub.resolved).toEqual([]);
+      expect(stub.started).toEqual([]);
+      const [loadError] = templateBindings(view.render(), "loadError") as [
+        { kind: string; error: Error },
+      ];
+      expect(loadError.kind).toBe("piece");
+      expect(loadError.error.message).toBe(
+        "no piece at comments/7 after member 42 in top, since nothing past a member resolves",
+      );
+      expect(citedReference(view)).toBeUndefined();
+    } finally {
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("stops watching a member once the address names segments past it", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.poll();
+
+      // The longer address names no reference to follow, so the member's
+      // watch ends with it and nothing resolves for it afterwards.
+      view.app = {
+        identity: {},
+        config: {},
+        view: viewOf({
+          pieceSlug: "top",
+          pieceMember: "42",
+          pieceExtraPath: "comments/7",
+        }),
+      };
+      view.updated(new Map([["app", undefined]]));
+      const asked = stub.resolved.length;
+      await stub.poll();
+
+      expect(stub.cancels).toBe(1);
+      expect(stub.resolved.length).toBe(asked);
+    } finally {
       restore();
     }
   });
@@ -664,13 +1028,13 @@ describe("AppView collection members", () => {
       await view._selectedPattern.taskComplete;
       view.updated(new Map([["app", undefined]]));
       await stub.poll();
-      expect(templateText(view.render())).toContain("/@naming-demo/top/42");
+      expect(citedReference(view)).toBe("//naming-demo/top/42");
 
       // `top` is repointed at that very piece's own root. The reference now
-      // reaches the SAME piece and spends nothing, so a comparison holding
-      // only the piece calls this no change — and everything derived from the
-      // member standing would go on standing under an address that no longer
-      // names one.
+      // reaches the SAME piece and spends nothing, so member 42 names nothing
+      // in it. A comparison holding only the piece calls this no change, and
+      // everything derived from the member standing would go on standing
+      // under an address that no longer names one.
       const before = view.accessForTestingOnly.slugRevision;
       stub.answer({ pieceId: "fid1:member-42", pathAfter: ["42"] });
       await stub.poll();
@@ -679,14 +1043,24 @@ describe("AppView collection members", () => {
       // reruns the selection, and everything below is what the rerun settles.
       expect(view.accessForTestingOnly.slugRevision).toBeGreaterThan(before);
 
-      view._selectedPattern.run();
-      await view._selectedPattern.taskComplete;
+      const errors = captureErrors();
+      try {
+        view._selectedPattern.run();
+        await view._selectedPattern.taskComplete.catch(() => {});
+      } finally {
+        errors.restore();
+      }
 
-      expect(replaced).toEqual([{
-        spaceName: "naming-demo",
-        pieceSlug: "top",
-      }]);
-      expect(templateText(view.render())).not.toContain("/@naming-demo/top/42");
+      // The rerun refuses the member rather than settling the address on the
+      // piece, and cites nothing.
+      expect(replaced).toEqual([]);
+      const [loadError] = templateBindings(view.render(), "loadError") as [
+        { kind: string; error: Error },
+      ];
+      expect(loadError.error.message).toBe(
+        "no member 42 in top, which names a piece rather than a collection",
+      );
+      expect(citedReference(view)).toBeUndefined();
     } finally {
       globalThis.removeEventListener("cf-replace-navigation", listener);
       restore();

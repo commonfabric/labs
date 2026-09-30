@@ -37,6 +37,8 @@ The home space provides a persistent, user-owned storage location for:
   spaces
 - **Profile** - A list of the user's shared profiles, plus the chosen default
 - **Spaces** - A managed list of spaces the user has created or bookmarked
+- **Agent queue** - The index of the user's agent runs, and their registered
+  runner
 - **Settings** - User-level preferences including `defaultAppUrl`
 
 ## Favorites
@@ -127,6 +129,54 @@ The home space maintains a managed list of spaces in
 `defaultPattern.spaces`. Each entry has a `name` (required) and optional `did`.
 Users add spaces via the Spaces tab in the home pattern. Clicking a space link
 navigates to it (creating it if it doesn't exist yet).
+
+## Agent Queue
+
+The home default pattern holds the user's agent queue in
+`defaultPattern.agentQueue`, a piece of
+`packages/patterns/system/agent-queue.tsx`. It is discovered with
+`wish({ query: "#agent_queue" })`, a well-known home-space target. A hashtag
+search does not find it, because under `scope: ["~"]` that search reads the
+user's favorites only, and the queue is not a favorite.
+
+The piece holds two things:
+
+- `entries` - one `{ run, host }` entry per `AgentRun` record the user has
+  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  when a request commits, as an element addressed by the record's id
+  (`elementById` and `addUnique`, the way favorites are keyed), so two requests
+  indexed side by side land as two elements. `run` links to the record in the requesting space;
+  `host` is the origin of the toolshed serving that space, carried beside the
+  link because a link resolves a space and not the host that serves it.
+- `agentRunner` - the user's registered runner:
+  `{ host, tools, registrationId, registeredAt, lastClaimAt }`.
+  `cf agent runner` writes it
+  when it starts and refreshes it on every claim. It is owner-protected the way
+  the profile's share-inbox pointer is: the only writer is the piece's
+  `setAgentRunner` stream, and only the owner may send it. Cleanup names the
+  process's `registrationId`, so a stopped process cannot clear a replacement
+  registration. It holds no secret.
+  It exists so a consumer can say that no runner is registered, and so the
+  `agent` builtin can fail a request naming a tool the runner does not offer
+  before the request is staged.
+
+Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
+and Self. Each row shows its task, state, age, and available token usage.
+Reported cost and estimated cost have separate labels; an unavailable estimate
+shows the harness's withheld reason when supplied. Missing counters and costs
+remain unavailable rather than displaying zero. Relative ages share a one-minute
+clock from `#now/60`.
+
+**Cancel** records `cancelRequestedAt` on the selected run. The row shows
+"Cancellation requested" while the runner settles the request; the action does
+not change the run's state or outcome. A terminal run has no Cancel action. When
+no runner is registered, the tab explains that requests remain queued until one
+starts. A queue with no entries shows "No agent runs yet."
+
+A request made in a home space that holds no queue — its home pattern does not
+exist, or is a version without the field — ends `refused`.
+[`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
+request side.
 
 ## Custom Home Pattern
 

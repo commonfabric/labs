@@ -81,6 +81,19 @@ deno task cf test packages/patterns/my-pattern/main.test.tsx --verbose
 deno task cf test packages/patterns/my-pattern/
 ```
 
+### Testing labeled data
+
+Use `cf test <file> --cfc-shell-posture --verbose --stats-threshold 0` to run
+with the shell's `enforce-explicit` enforcement and `persist` flow labels.
+Individual dials are `--cfc-enforcement-mode` and `--cfc-flow-labels`; the latter
+accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
+The run prints the resolved posture. When CFC denies something — a write,
+including one the pattern's own setup makes — `--cfc-denials` prints each
+denial with the reasons behind it. The
+[CLI guide](../../../packages/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
+shows how a test declares a local SQLite store with per-column `ifc` labels and
+explains the per-step CFC preparation timings.
+
 ### Import roots
 
 A test pattern's imports resolve within its root directory. Without `--root`,
@@ -90,10 +103,10 @@ that span the package (shared helpers such as `test/vnode-helpers.ts`, sibling
 patterns, `cfc/` modules) resolve without a flag. A config file with no `name`,
 such as a workspace member stub that only defines tasks, does not anchor the
 root. Pass `--root` to anchor somewhere else; an import that climbs above the
-root fails naming the import and the importing file. The CI "Pattern Unit
-Tests" job (the `pattern-tests` target in `tasks/integration.ts`) passes
-`--root packages/patterns` explicitly, so a bare local run resolves imports
-the same way CI does.
+root fails naming the import and the importing file. CI's `pattern-unit` suite
+(the `pattern-tests` target in `tasks/integration.ts`) passes `--root
+packages/patterns` explicitly, so a bare local run resolves imports the same way
+CI does.
 
 ## Test Step Format
 
@@ -203,11 +216,67 @@ export default pattern(() => {
 ```
 
 `packages/patterns/map-demo.test.tsx` drives both an inline arrow and a bound
-handler this way.
+handler this way. `fireEvent(node, prop, event)` in the vnode helpers does the
+same for any event prop, and fails when the node binds nothing under it;
+`fireClick(node)` is its `onClick` case, with an empty event.
+`packages/patterns/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
+a `cf-input` by firing its `oncf-submit`.
 
 Prefer an exported `Stream<T>` when you own the pattern: it states the entry
 point in the output type. Use the tree walk when the handler belongs to the UI
 and exporting it would only serve the test.
+
+### Putting a cell link in an event
+
+A step's `event` may carry a link to a cell, such as one element of a stored
+list. The steps are part of the test pattern's own result, and that result's
+schema comes from the types of what the test returns. So where the linked
+cell's type carries a write policy — a `TrustedActionWrite` or a
+`writeAuthorizedBy` naming the pattern's own handler — the test pattern's
+setup has to satisfy that policy just to store the step, and CFC refuses it:
+
+```
+CFC denied (write-policy-gate): a policy check refused the commit
+  - writeAuthorizedBy requires a trusted verified binding identity at /$TESTS/*/event/note
+```
+
+Give the link the type the handler's event declares, in a local with a type
+annotation, and put that in the event. The annotation is what sets the schema,
+and the event's type names no policy. A cast is refused by the transformer.
+
+```tsx
+// Shown for illustration only.
+// `Notes` stores `StoredNote`s, a `TrustedActionWrite` naming its `add`
+// handler; `pick` takes `{ note: Cell<NoteRecord> }`.
+const board = Notes({
+  notes: Writable.of<StoredNote[]>([]),
+  picked: Writable.of<string>(""),
+});
+const first: Cell<NoteRecord> = board.notes.key(0);
+
+return {
+  [TESTS]: [
+    {
+      action: board.add,
+      event: { text: "hello" },
+      trustedUi: { surface: SURFACE, action: ADD },
+    },
+    { action: board.pick, event: { note: first } },
+    { assertion: assert(() => board.picked === "hello") },
+  ],
+};
+```
+
+`packages/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
+example whole, and `policy-link-inferred.test.tsx` beside it is the refused
+form.
+
+Take the link from a cell the test reaches some other way as well: an output
+of the pattern under test, as `board.notes` is here, or a cell the test also
+passes to that pattern or returns. A `.key()` link into a cell the test uses
+nowhere else fails the build with `Cell not found in pattern aliases`.
+
+`cf test --cfc-denials` prints a setup refusal like this one with its reason.
 
 ## Writing Assertions
 
@@ -512,5 +581,6 @@ const assert_total_correct = assert(() => {
 
 - [Testing Handlers via CLI](./handlers-cli-testing.md) - Manual CLI testing workflow
 - [Pattern Testing Spec](../../specs/PATTERN_TESTING_SPEC.md) - Technical specification
-- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests run here feed the coverage-debt gate
+- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests
+  run here feed the repository-wide coverage figure
 - [Patterns package test lanes](../../../packages/patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run

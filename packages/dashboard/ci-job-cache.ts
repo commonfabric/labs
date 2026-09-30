@@ -10,6 +10,7 @@
  */
 
 import { basename, dirname, join } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const CI_JOB_CACHE_DAYS = 60;
@@ -310,7 +311,7 @@ export class CiJobHistoryStore {
       }
       throw error;
     }
-    if (typeof parsed !== "object" || parsed === null) {
+    if (!isObjectOrArray(parsed)) {
       if (strict) throw new Error("Invalid CI job history cache.");
       return { refreshes: [], invalidations: [], futureKeys: [], runs: [] };
     }

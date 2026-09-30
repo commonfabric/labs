@@ -17,6 +17,8 @@
  */
 
 import * as path from "@std/path";
+
+import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
   serverExecutionCiLane,
   type ServerExecutionCiRole,
@@ -30,10 +32,10 @@ export type CapabilityId =
   | "jq"
   | "browser"
   | "git-history"
+  | "github-api"
   | "toolshed"
   | "toolshed-baked"
   | "toolshed-baked-opposite"
-  | "bg-piece-service-binary"
   | "cf"
   | "local-dev-servers"
   | "compile-cache";
@@ -47,8 +49,20 @@ export type CapabilityId =
 export type Exec = (
   command: string,
   args: readonly string[],
-  options?: { cwd?: string; env?: Record<string, string> },
+  options?: ExecOptions,
 ) => Promise<string>;
+
+/** Where an `Exec` runs its command, and with what environment. */
+export interface ExecOptions {
+  /** The directory the command runs in. */
+  cwd?: string;
+
+  /** Variables added to the environment the command inherits. */
+  env?: Record<string, string>;
+
+  /** Whether the command inherits no environment, leaving it only `env`. */
+  clearEnv?: boolean;
+}
 
 /** What a capability was given to work with. */
 export interface CapabilityContext {
@@ -77,17 +91,42 @@ export interface CapabilityContext {
   exec?: Exec;
 
   /**
+   * The GitHub token the lane took out of its own environment, for the
+   * suites that declared they need one. Absent where the lane was handed
+   * none.
+   */
+  githubToken?: string;
+
+  /**
    * How a capability asks a server it started what it is serving. A
    * caller that supplies one is saying what the server would have
    * answered, the way `exec` says what the machine would have answered.
    */
   fetch?: typeof fetch;
+
+  /**
+   * Where opening says what it is doing, a line at a time: each
+   * capability as it begins to open and once it has opened, and each
+   * command a capability runs, before it runs. Setup runs its commands
+   * with their output captured, so a step that never finishes is named in
+   * the log only by the line said before it. Absent, opening says nothing.
+   */
+  report?: (line: string) => void;
 }
 
 /** A capability that has been opened. */
 export interface OpenCapability {
   /** Environment the suites that asked for it run with. */
   env: Record<string, string>;
+
+  /**
+   * Files it writes that say what it did, for a lane that failed to
+   * report. A capability outside the test process is the half of a
+   * failure the test process cannot describe, and outside a job its work
+   * directory goes when the lane ends, so there a log nobody names here
+   * is gone.
+   */
+  logs?: readonly string[];
 
   /** Shuts it down. Called once, in the reverse of the opening order. */
   close(): Promise<void>;
@@ -111,18 +150,84 @@ export interface Capability {
 
 /**
  * What a lane keeps between runs, relative to the repository root. The
- * lane's workflow carries one fixed cache step covering this directory,
- * so everything a lane wants restored has to sit inside it, and it has
- * to outlive the lane: a directory the lane made for itself would be
- * empty on every run, and everything in it would be built again.
+ * lane's workflow restores and saves each part of it with a cache step of
+ * its own, so everything a lane wants restored has to sit at a path one
+ * of those steps names, and it has to outlive the lane: a directory the
+ * lane made for itself would be empty on every run, and everything in it
+ * would be built again.
  */
 export const CACHE_DIR = ".ci-cache";
 
-/** Where a built binary is kept, inside that directory. */
+/**
+ * Where a built binary is kept, inside that directory. The workflow
+ * caches each binary in it with a step of its own, under an exact key
+ * naming what that binary is built from and no restore prefix, because a
+ * lane uses a binary it finds without asking what it was built from.
+ */
 export const BINARY_CACHE_DIR = `${CACHE_DIR}/binaries`;
 
-/** Where the pattern compile byte cache is kept, inside that directory. */
+/**
+ * Where the pattern compile byte cache is kept, inside that directory.
+ * The workflow caches the file's directory with one step, under a key
+ * naming the compiler fingerprint, the lane and the pattern sources, and
+ * restores from the prefix naming the fingerprint alone, because a
+ * compiled pattern is reused only where its source is unchanged.
+ */
 export const COMPILE_CACHE_FILE = `${CACHE_DIR}/compile/lane.json`;
+
+/**
+ * The server-execution define a Toolshed at `role` is built and run with: the
+ * value the role names, or nothing where it names none. `defaultEnabled`
+ * stands in for the first-party default where given.
+ */
+function serverExecutionDefine(
+  role: ServerExecutionCiRole,
+  defaultEnabled?: boolean,
+): Record<string, string> {
+  const value = serverExecutionCiLane(role, defaultEnabled).experimentalValue;
+  return value === undefined ? {} : { EXPERIMENTAL_SERVER_EXECUTION: value };
+}
+
+/** The name of a binary a lane keeps in `BINARY_CACHE_DIR`. */
+export type CachedBinaryName = `toolshed-baked-${ServerExecutionCiRole}`;
+
+/** How a lane builds one binary it keeps in `BINARY_CACHE_DIR`. */
+export interface CachedBinary {
+  /** The binary `deno task build-binaries` is asked for. */
+  build: BinaryName;
+
+  /**
+   * The environment variables the build is given besides the host ones.
+   * Every other variable is unset, whatever the lane's own environment
+   * holds.
+   */
+  bakes: Record<string, string>;
+}
+
+/**
+ * Every binary a lane keeps in `BINARY_CACHE_DIR`, and how each is built. A
+ * binary is made from the variables its build sets as much as from its
+ * sources, so the cache key covers this table as well. The Toolshed builds
+ * follow whether server execution is on by default, which is the first-party
+ * default unless `defaultEnabled` says otherwise.
+ *
+ * None of them sets `COMMIT_SHA`. A cached binary serves every commit whose
+ * sources match those of the commit that built it, so a commit baked into it
+ * would be wrong at all the others, and a key covering the commit would never
+ * be reused.
+ */
+export function cachedBinaries(
+  defaultEnabled?: boolean,
+): Record<CachedBinaryName, CachedBinary> {
+  const toolshed = (role: ServerExecutionCiRole): CachedBinary => ({
+    build: "toolshed",
+    bakes: serverExecutionDefine(role, defaultEnabled),
+  });
+  return {
+    "toolshed-baked-default": toolshed("default"),
+    "toolshed-baked-opposite": toolshed("opposite"),
+  };
+}
 
 /** Nothing to undo. */
 const NOTHING = () => Promise.resolve();
@@ -144,6 +249,7 @@ const run: Exec = async (command, args, options = {}) => {
     stderr: "piped",
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.clearEnv === undefined ? {} : { clearEnv: options.clearEnv }),
   }).output();
   const stdout = new TextDecoder().decode(result.stdout);
   if (result.success) return stdout;
@@ -155,7 +261,11 @@ const run: Exec = async (command, args, options = {}) => {
 
 /** How this context runs commands. */
 function execOf(context: CapabilityContext): Exec {
-  return context.exec ?? run;
+  const exec = context.exec ?? run;
+  return (command, args, options) => {
+    context.report?.(`ci-lane: running ${[command, ...args].join(" ")}`);
+    return exec(command, args, options);
+  };
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -316,22 +426,86 @@ const gitHistory: Capability = {
 };
 
 /**
- * The environment a Toolshed at `role` builds and runs under: the ambient
- * environment carrying the server-execution define the role names, and
- * carrying none where the role names none.
+ * The names a GitHub token reaches a lane under, and the names a suite
+ * that declared one is given it under. The `gh` command line reads
+ * `GH_TOKEN`, and `check-action-pins` reads `GITHUB_TOKEN` and falls
+ * back to `GH_TOKEN`, so both names are taken out of the lane and both
+ * are exported to a suite that asked.
+ */
+const GITHUB_TOKEN_VARIABLES = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+
+/**
+ * Takes the GitHub token out of this process and answers with it.
  *
- * An unset define is a third state rather than a synonym for `false`. The
- * shell bakes it in as `null`, which is what the default role's posture
+ * A child process inherits what its parent holds, so a token left in the
+ * lane's own environment reaches every test in the lane whether or not
+ * its suite asked for one. Taking it out is what makes the declaration
+ * mean something.
+ *
+ * It leaves this process rather than being filtered out of each child's
+ * environment, because everything the lane spawns reads the environment
+ * from here: the batches through `runInvocation`, the capability setup
+ * commands, and the `git` calls that read the diff. One take covers
+ * them, and covers whatever spawns next.
+ *
+ * Where the lane was handed a token under more than one name, the first
+ * of the names above wins. Answers with nothing where it was handed
+ * none, which is the state on a workstation and in a job whose workflow
+ * passes none.
+ */
+export function takeGithubToken(): string | undefined {
+  let token: string | undefined;
+  for (const name of GITHUB_TOKEN_VARIABLES) {
+    const value = Deno.env.get(name);
+    Deno.env.delete(name);
+    if (token === undefined && value !== undefined && value.length > 0) {
+      token = value;
+    }
+  }
+  return token;
+}
+
+/**
+ * A token for the GitHub API, handed to the suites that ask the service a
+ * question and to no others.
+ *
+ * A lane runs the repository's own gates beside pattern and integration
+ * tests, and one gate asks GitHub what each action pin resolves to.
+ * Sixty requests an hour is what the service allows a caller with no
+ * token, shared across everything else reaching it from that address, so
+ * the gate needs one.
+ *
+ * What it exports is the token the lane took out of its own environment
+ * before it opened anything, handed back here.
+ */
+const githubApi: Capability = {
+  id: "github-api",
+  description: "a token for the GitHub API",
+  open(context) {
+    const token = context.githubToken;
+    return Promise.resolve(exported(
+      token === undefined ? {} : Object.fromEntries(
+        GITHUB_TOKEN_VARIABLES.map((name) => [name, token]),
+      ),
+    ));
+  },
+};
+
+/**
+ * The environment a Toolshed at `role` runs under: the ambient environment
+ * carrying the server-execution define the role names, and carrying none
+ * where the role names none.
+ *
+ * An unset define is a third state rather than a synonym for `false`. It
+ * follows the first-party default, which is what the default role's posture
  * check asks for, so that role removes the name rather than setting it.
  */
 function serverExecutionEnv(
   role: ServerExecutionCiRole,
 ): Record<string, string> {
   const env = Deno.env.toObject();
-  const value = serverExecutionCiLane(role).experimentalValue;
-  if (value === undefined) delete env.EXPERIMENTAL_SERVER_EXECUTION;
-  else env.EXPERIMENTAL_SERVER_EXECUTION = value;
-  return env;
+  delete env.EXPERIMENTAL_SERVER_EXECUTION;
+  return { ...env, ...serverExecutionDefine(role) };
 }
 
 /** How a Toolshed server is started, whichever binary provides it. */
@@ -346,6 +520,43 @@ interface ToolshedOptions {
    * it named works.
    */
   role: ServerExecutionCiRole;
+}
+
+/**
+ * How much of a capability's log a report carries. A server's log is mostly
+ * one line per request, so a whole one would bury the report it sits in; the
+ * end of it is where a run that went wrong says so.
+ */
+export const CAPABILITY_LOG_TAIL_LINES = 200;
+
+/**
+ * The end of the log at `at`, under a line saying how much was left out, or
+ * one line saying why it could not be read.
+ *
+ * Never throws. Every caller is reporting something that has already gone
+ * wrong, and a report that threw would replace the failure it was written for.
+ */
+export async function logTail(
+  at: string,
+  read: (path: string) => Promise<string> = Deno.readTextFile,
+): Promise<string> {
+  let contents: string;
+  try {
+    contents = await read(at);
+  } catch (error) {
+    return `  (unreadable: ${error})`;
+  }
+  const lines = contents.split("\n");
+  // A trailing newline ends the last line rather than starting another.
+  if (lines.at(-1) === "") lines.pop();
+  const tail = lines.slice(-CAPABILITY_LOG_TAIL_LINES);
+  const dropped = lines.length - tail.length;
+  return [
+    `  last ${tail.length} of ${lines.length} line(s)${
+      dropped > 0 ? `; ${dropped} earlier dropped` : ""
+    }`,
+    ...tail,
+  ].join("\n");
 }
 
 /** The process identifier a background launch reports having detached. */
@@ -390,6 +601,9 @@ async function startToolshed(
     `--log-file=${logFile}`,
   ], {
     cwd: options.cwd,
+    // The environment below is the whole of it, so that a name
+    // `serverExecutionEnv()` removed is unset rather than inherited.
+    clearEnv: true,
     env: {
       ...serverExecutionEnv(options.role),
       // The server reaches for a gateway and a model key at startup. A
@@ -418,10 +632,19 @@ async function startToolshed(
     );
   } catch (error) {
     stop();
-    throw error;
+    // The server started and then failed its posture check, so its own log
+    // is the account of why. Nothing is holding the path at this point --
+    // the capability never opened -- so the log is carried in the throw or
+    // it goes with the work directory unread.
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+        `toolshed log:\n${await logTail(logFile)}`,
+      { cause: error },
+    );
   }
   return {
     env,
+    logs: [logFile],
     close: () => {
       stop();
       return Promise.resolve();
@@ -459,6 +682,52 @@ const toolshed: Capability = {
     }),
 };
 
+/** The host variables this process's environment holds. */
+function hostEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of BUILD_HOST_VARIABLES) {
+    const value = Deno.env.get(name);
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
+/**
+ * The path of the cached binary `name`, which is built in place when the
+ * workflow restored none.
+ *
+ * The build inherits nothing from this process's environment but the host
+ * variables, and is handed the variables `cachedBinaries()` names for it,
+ * so a variable the lane's environment happens to hold cannot reach a
+ * binary that the cache key does not describe.
+ */
+async function cachedBinary(
+  context: CapabilityContext,
+  name: CachedBinaryName,
+): Promise<string> {
+  const binary = path.join(context.root, BINARY_CACHE_DIR, name);
+  if (context.dryRun) return binary;
+  let present = true;
+  try {
+    await Deno.stat(binary);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    present = false;
+  }
+  if (!present) {
+    const { build, bakes } = cachedBinaries()[name];
+    await execOf(context)(Deno.execPath(), ["task", "build-binaries", build], {
+      cwd: context.root,
+      clearEnv: true,
+      env: { ...hostEnv(), ...bakes },
+    });
+    await Deno.mkdir(path.dirname(binary), { recursive: true });
+    await Deno.copyFile(path.join(context.root, "dist", build), binary);
+  }
+  await Deno.chmod(binary, 0o755);
+  return binary;
+}
+
 /**
  * A Toolshed server from a compiled binary, at a stated server-execution
  * role.
@@ -482,37 +751,8 @@ function bakedToolshed(role: ServerExecutionCiRole): Capability {
       `a Toolshed server with the ${role} posture in its baked shell`,
     needs: ["deno"],
     async open(context) {
-      const binary = path.join(
-        context.root,
-        BINARY_CACHE_DIR,
-        `toolshed-baked-${role}`,
-      );
-      if (!context.dryRun) {
-        let present = true;
-        try {
-          await Deno.stat(binary);
-        } catch {
-          present = false;
-        }
-        if (!present) {
-          await execOf(context)(
-            Deno.execPath(),
-            ["task", "build-binaries", "toolshed"],
-            {
-              cwd: context.root,
-              env: serverExecutionEnv(role),
-            },
-          );
-          await Deno.mkdir(path.dirname(binary), { recursive: true });
-          await Deno.copyFile(
-            path.join(context.root, "dist", "toolshed"),
-            binary,
-          );
-        }
-        await Deno.chmod(binary, 0o755);
-      }
       return await startToolshed(context, {
-        command: [binary],
+        command: [await cachedBinary(context, `toolshed-baked-${role}`)],
         cwd: context.root,
         role,
       });
@@ -522,46 +762,6 @@ function bakedToolshed(role: ServerExecutionCiRole): Capability {
 
 const toolshedBaked = bakedToolshed("default");
 const toolshedBakedOpposite = bakedToolshed("opposite");
-
-/**
- * The compiled background-piece-service binary used by its deployed-topology
- * gate. That gate deliberately starts the shipped artifact rather than a
- * source process, so the binary is a capability like the baked Toolshed.
- */
-const bgPieceServiceBinary: Capability = {
-  id: "bg-piece-service-binary",
-  description: "the compiled background-piece-service binary",
-  needs: ["deno"],
-  async open(context) {
-    const binary = path.join(
-      context.root,
-      BINARY_CACHE_DIR,
-      "bg-piece-service",
-    );
-    if (!context.dryRun) {
-      let present = true;
-      try {
-        await Deno.stat(binary);
-      } catch {
-        present = false;
-      }
-      if (!present) {
-        await execOf(context)(
-          Deno.execPath(),
-          ["task", "build-binaries", "bg-piece-service"],
-          { cwd: context.root },
-        );
-        await Deno.mkdir(path.dirname(binary), { recursive: true });
-        await Deno.copyFile(
-          path.join(context.root, "dist", "bg-piece-service"),
-          binary,
-        );
-      }
-      await Deno.chmod(binary, 0o755);
-    }
-    return exported({ BG_PIECE_SERVICE_BIN: binary });
-  },
-};
 
 /**
  * The `cf` command line by name. `bin/cf` runs from source and works out
@@ -624,10 +824,10 @@ export const CAPABILITIES: ReadonlyMap<CapabilityId, Capability> = new Map(
     jq,
     browser,
     gitHistory,
+    githubApi,
     toolshed,
     toolshedBaked,
     toolshedBakedOpposite,
-    bgPieceServiceBinary,
     cf,
     localDevServers,
     compileCache,
@@ -684,6 +884,9 @@ export interface OpenedCapabilities {
   /** Seconds each capability's setup took, in the order they opened. */
   timings: Array<{ capability: CapabilityId; seconds: number }>;
 
+  /** Every log the opened capabilities named, in the order they opened. */
+  logs: Array<{ capability: CapabilityId; path: string }>;
+
   /** Closes them all, in the reverse of the order they opened. */
   close(): Promise<void>;
 }
@@ -701,6 +904,7 @@ export async function openCapabilities(
 ): Promise<OpenedCapabilities> {
   const exported = new Map<CapabilityId, Record<string, string>>();
   const timings: Array<{ capability: CapabilityId; seconds: number }> = [];
+  const logs: Array<{ capability: CapabilityId; path: string }> = [];
   const opened: OpenCapability[] = [];
   const close = async (): Promise<void> => {
     for (const capability of opened.reverse()) {
@@ -715,14 +919,17 @@ export async function openCapabilities(
   try {
     for (const id of resolveCapabilities(requested, registry)) {
       const capability = registry.get(id)!;
+      context.report?.(`ci-lane: opening ${id}: ${capability.description}`);
       const startedAt = performance.now();
       const open = await capability.open(context);
       opened.push(open);
       exported.set(id, open.env);
-      timings.push({
-        capability: id,
-        seconds: (performance.now() - startedAt) / 1000,
-      });
+      const seconds = (performance.now() - startedAt) / 1000;
+      timings.push({ capability: id, seconds });
+      context.report?.(`ci-lane: opened ${id} in ${seconds.toFixed(1)}s`);
+      for (const log of open.logs ?? []) {
+        logs.push({ capability: id, path: log });
+      }
     }
   } catch (error) {
     await close();
@@ -739,6 +946,7 @@ export async function openCapabilities(
       return env;
     },
     timings,
+    logs,
     close,
   };
 }

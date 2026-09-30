@@ -1,9 +1,6 @@
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import type { FabricInstance } from "@/interface.ts";
-import {
-  BaseFabricInstance,
-  DEEP_CLONE_CORE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
+import { BaseFabricInstance, DEEP_CLONE_CORE } from "@/fabric-bases";
 
 /**
  * Abstract base class for `FabricInstance` wrappers that bridge native JS
@@ -14,7 +11,7 @@ import {
 export abstract class FabricNativeWrapper<T extends object>
   extends BaseFabricInstance {
   /**
-   * The wrapped native value, used by `toNativeValue()` for freeze-state
+   * The wrapped JS value, used by `toNativeValue()` for freeze-state
    * checks.
    */
   protected abstract get wrappedValue(): T;
@@ -31,7 +28,7 @@ export abstract class FabricNativeWrapper<T extends object>
    */
   protected abstract toNativeThawed(): T;
 
-  /** Returns the underlying native value, optionally frozen. */
+  /** Returns the underlying JS value, optionally frozen. */
   toNativeValue(frozen: boolean): T {
     const value = this.wrappedValue;
     if (frozen === Object.isFrozen(value)) return value;

@@ -7,10 +7,9 @@
  * and what `loom connector handles` prints — says which handles exist and what
  * each one's reference is, but records no label class. `pieces.json` declares
  * each connector piece's `sqlite_sources`, whose table contract carries the
- * per-column `ifc` the daemon seeded, and that is where a handle's CFC class is
- * written down. Joining them on the piece and connection loom names in both is
- * what lets a grant be called `email` or `finance` rather than by a connection
- * id that means nothing to a model.
+ * per-column `ifc` the daemon seeded, and that is where a handle's CFC classes are
+ * written down. They join on piece, connection, and companion key. Connection
+ * identity names a grant; its declared CFC classes describe what it holds.
  *
  * A handle whose class cannot be read is not guessed at and not granted: it is
  * returned as unnamed, with the reason, for the launcher to print. A console
@@ -18,16 +17,24 @@
  * failure this whole launch path exists to prevent.
  */
 
-import { HANDLE_NAME_PATTERN } from "../src/input-cells.ts";
+import { renderCellReference } from "@commonfabric/runner/shared";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 import { parseHandleRef } from "../src/handle-table.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import { HARNESS_WELL_KNOWN_GRANT_NAMES } from "../src/contracts/well-known-grants.ts";
+import {
+  checkConnectorGrantSpec,
+  connectorGrantName,
+  isConnectorObservationTimestamp,
+} from "../src/well-known-grants.ts";
 
 /** The CFC atom type whose `class` names what a column holds. */
 const RESOURCE_ATOM_TYPE = "https://commonfabric.org/cfc/atom/Resource";
 
 /**
- * Names the harness grants on its own. A declared class landing on one of
+ * Names the harness grants on its own. A connection identity landing on one of
  * these is reported here rather than passed on, because the seeding refuses a
  * name twice and would take every session on the console down with it.
  */
@@ -53,8 +60,15 @@ export interface LoomConnectorRecords {
 /** A handle the records name but could not be granted, and why. */
 export interface UnnamedConnectorHandle {
   connection: string;
+  companionKey?: string;
   piece: string;
   reason: string;
+
+  /** Operator action that addresses the refusal. */
+  remedy: string;
+
+  /** Whether the records establish a refusal or leave the handle unreadable. */
+  state: "degraded" | "unknown";
 }
 
 /** What the records yielded: the grants to seed, and what they left out. */
@@ -64,9 +78,7 @@ export interface ResolvedConnectorGrants {
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 
 const asNonEmptyString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
@@ -77,7 +89,7 @@ const asNonEmptyString = (value: unknown): string | undefined =>
  * atoms of each column's `ifc.confidentiality`: the owner principal beside
  * them names who the columns belong to rather than what they hold, and the
  * `ConnectorObserved` integrity beside that is provenance, so neither answers
- * the question a grant's name asks.
+ * the question of what the store holds.
  */
 export const declaredClasses = (source: Record<string, unknown>): string[] => {
   const tables = asRecord(source.tables) ?? {};
@@ -102,22 +114,129 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
 
 /**
  * The key one injected handle is identified by on both sides of the join: the
- * piece that carries it and the connection it belongs to. Joined on `\0`,
- * which neither a loom piece name nor a connection id can hold, so no pair of
- * names collides by spelling one key two ways.
+ * piece, connection, and companion key Loom declares for the store.
  */
-const handleKey = (piece: string, connection: string): string =>
-  `${piece}\0${connection}`;
+const handleKey = (
+  piece: string,
+  connection: string,
+  companion: string,
+): string => JSON.stringify([piece, connection, companion]);
+
+/** Descriptive metadata published on one source receipt. */
+type ConnectorReceiptMetadata = Pick<
+  HarnessConnectorGrantSpec,
+  "rowCount" | "viewer" | "observation"
+>;
+
+/** Keeps agreed metadata and marks disagreements without choosing one receipt. */
+const mergeReceiptMetadata = (
+  target: ConnectorReceiptMetadata,
+  candidate: ConnectorReceiptMetadata,
+): void => {
+  if (target.rowCount !== candidate.rowCount) delete target.rowCount;
+  if (!deepEqual(target.viewer, candidate.viewer)) {
+    target.viewer = { identity: "conflicting" };
+  }
+  if (!deepEqual(target.observation, candidate.observation)) {
+    target.observation = { newestAt: null, reason: "conflicting-receipts" };
+  }
+};
+
+/** Reads source metadata by store identity, retaining agreement across repeats. */
+const sourceReceiptMetadata = (
+  rows: unknown,
+): Map<string, ConnectorReceiptMetadata> => {
+  const receipts = new Map<string, ConnectorReceiptMetadata>();
+  if (!Array.isArray(rows)) return receipts;
+  for (const row of rows) {
+    const source = asRecord(row);
+    const piece = asNonEmptyString(source?.piece);
+    const connection = asNonEmptyString(source?.connection_id);
+    const companion = asNonEmptyString(source?.companion_key);
+    if (
+      piece === undefined || connection === undefined ||
+      (source?.companion_key !== undefined && companion === undefined)
+    ) continue;
+    const count = source?.row_count;
+    const rowCount = source?.state === "linked" &&
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ? count
+      : undefined;
+    const key = handleKey(piece, connection, companion ?? "");
+    const viewer = receiptViewer(source?.viewer);
+    const observation = receiptObservation(source);
+    const metadata = {
+      ...(rowCount === undefined ? {} : { rowCount }),
+      ...(viewer === undefined ? {} : { viewer }),
+      ...(observation === undefined ? {} : { observation }),
+    };
+    const previous = receipts.get(key);
+    if (previous === undefined) {
+      receipts.set(key, metadata);
+    } else {
+      mergeReceiptMetadata(previous, metadata);
+    }
+  }
+  return receipts;
+};
+
+/** Reads account identity without treating a local source as an unknown account. */
+const receiptViewer = (
+  value: unknown,
+): HarnessConnectorGrantSpec["viewer"] => {
+  const viewer = asRecord(value);
+  const reason = asNonEmptyString(viewer?.absent_reason);
+  if (viewer?.kind === "none") {
+    return {
+      identity: "none",
+      reason: reason ?? "reason not reported",
+    };
+  }
+  if (viewer?.kind === "unknown") {
+    return {
+      identity: "unknown",
+      ...(reason === undefined ? {} : { reason }),
+    };
+  }
+  if (viewer?.kind !== "account") {
+    return undefined;
+  }
+  const sourceId = asNonEmptyString(viewer.source_id);
+  const email = viewer.email === null ? null : asNonEmptyString(viewer.email);
+  const label = asNonEmptyString(viewer.label);
+  return {
+    identity: "account",
+    ...(sourceId === undefined ? {} : { sourceId }),
+    ...(email === undefined ? {} : { email }),
+    ...(label === undefined ? {} : { label }),
+    ...(reason === undefined ? {} : { reason }),
+  };
+};
+
+/**
+ * Reads record observation time and the receipt's reason when none is available.
+ */
+const receiptObservation = (
+  receipt: Record<string, unknown> | undefined,
+): HarnessConnectorGrantSpec["observation"] => {
+  const newestAt = asNonEmptyString(receipt?.newest_observed_at);
+  if (isConnectorObservationTimestamp(newestAt)) {
+    return { newestAt: new Date(newestAt).toISOString() };
+  }
+  if (receipt?.newest_observed_at != null) return undefined;
+  const reason = asNonEmptyString(receipt?.newest_observed_at_reason);
+  return reason === undefined ? undefined : { newestAt: null, reason };
+};
 
 /**
  * The `sqlite_sources` entries `pieces.json` declares, keyed by
- * {@link handleKey}. The same pair keys the receipt's entries, so this is the
+ * {@link handleKey}. The same tuple keys the receipt's entries, so this is the
  * whole of the join.
  */
 const sourcesByHandle = (
   piecesJson: string,
   piecesJsonPath: string,
-): Map<string, Record<string, unknown>> => {
+): Map<string, Record<string, unknown>[]> => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(piecesJson);
@@ -129,7 +248,7 @@ const sourcesByHandle = (
     );
   }
   const pieces = asRecord(parsed)?.pieces;
-  const sources = new Map<string, Record<string, unknown>>();
+  const sources = new Map<string, Record<string, unknown>[]>();
   if (!Array.isArray(pieces)) {
     return sources;
   }
@@ -142,7 +261,18 @@ const sourcesByHandle = (
       const source = asRecord(candidate);
       const connection = asNonEmptyString(source?.connection_id);
       if (source !== undefined && connection !== undefined) {
-        sources.set(handleKey(name, connection), source);
+        if (
+          source.companion_key !== undefined &&
+          asNonEmptyString(source.companion_key) === undefined
+        ) continue;
+        const key = handleKey(
+          name,
+          connection,
+          asNonEmptyString(source.companion_key) ?? "",
+        );
+        const entries = sources.get(key) ?? [];
+        entries.push(source);
+        sources.set(key, entries);
       }
     }
   }
@@ -182,7 +312,7 @@ export const resolveConnectorGrants = (
   if (document === undefined) {
     throw new Error(
       `\`${records.handlesJsonPath}\` does not hold a JSON object; loom ` +
-        `writes {schema_version, written_at, space, handles}`,
+        `writes {schema_version, written_at, space, handles, sources}`,
     );
   }
   const handles = document.handles;
@@ -199,29 +329,55 @@ export const resolveConnectorGrants = (
   // reference that carries a different one is not this instance's to grant.
   const receiptSpace = asNonEmptyString(document.space);
   const sources = sourcesByHandle(records.piecesJson, records.piecesJsonPath);
+  const receipts = sourceReceiptMetadata(document.sources);
   const grants: HarnessConnectorGrantSpec[] = [];
   const unnamed: UnnamedConnectorHandle[] = [];
-  const claimedBy = new Map<string, string>();
+  const candidates = new Map<string, HarnessConnectorGrantSpec[]>();
   for (const entry of handles) {
     const handle = asRecord(entry);
     const connection = asNonEmptyString(handle?.connection_id) ?? "(unnamed)";
     const piece = asNonEmptyString(handle?.piece) ?? "(unnamed)";
-    const skip = (reason: string): void => {
-      unnamed.push({ connection, piece, reason });
+    const companionKey = asNonEmptyString(handle?.companion_key);
+    const grantSource = {
+      connection,
+      piece,
+      ...(companionKey === undefined ? {} : { companionKey }),
     };
+    const skip = (
+      reason: string,
+      remedy: string,
+      state: "degraded" | "unknown" = "degraded",
+    ): void => {
+      unnamed.push({ ...grantSource, reason, remedy, state });
+    };
+    if (
+      handle?.companion_key !== undefined &&
+      companionKey === undefined
+    ) {
+      skip(
+        "its companion key is not a non-empty string",
+        "Repair this connector's injection receipt in Loom, then restart the console.",
+        "unknown",
+      );
+      continue;
+    }
     const ref = asNonEmptyString(handle?.handle_ref);
     if (ref === undefined) {
-      skip("the receipt records no `handle_ref` for it");
+      skip(
+        "the receipt records no `handle_ref` for it",
+        "Reconcile this connector in Loom, then restart the console.",
+        "unknown",
+      );
       continue;
     }
     let link;
     try {
       link = parseHandleRef(ref);
-    } catch (error) {
+    } catch {
       skip(
-        `its \`handle_ref\` does not parse: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        "its `handle_ref` does not parse",
+        "Repair this connector's injection receipt in Loom, then restart the console.",
+        "unknown",
       );
       continue;
     }
@@ -240,52 +396,96 @@ export const resolveConnectorGrants = (
             `names no space to check it against`
           : `its \`handle_ref\` names space \`${link.space}\`, which is not the ` +
             `space the receipt was written for`,
+        "Reconcile the connector into the configured space, then restart the console.",
       );
       continue;
     }
-    const source = sources.get(handleKey(piece, connection));
-    if (source === undefined) {
+    const matchingSources = sources.get(
+      handleKey(piece, connection, companionKey ?? ""),
+    );
+    if (matchingSources === undefined) {
       skip(
         `\`${records.piecesJsonPath}\` declares no \`sqlite_sources\` entry ` +
-          `for this piece and connection`,
+          `for this piece, connection, and companion key`,
+        "Declare this piece, connection, and companion key in pieces.json sqlite_sources, reconcile, and restart the console.",
       );
       continue;
     }
-    const classes = declaredClasses(source);
-    if (classes.length === 0) {
-      skip("its declared table contract carries no CFC class");
-      continue;
-    }
-    if (classes.length > 1) {
+    if (matchingSources.length !== 1) {
       skip(
-        `its declared table contract carries ${classes.length} CFC classes ` +
-          `(${classes.join(", ")}), so one name would not say what it holds`,
+        "its piece declares multiple sources for the same connection and companion key",
+        "Give each store a distinct companion_key in pieces.json, reconcile, and restart the console.",
       );
       continue;
     }
-    const name = classes[0]!;
+    const classes = declaredClasses(matchingSources[0]!);
+    if (classes.length === 0) {
+      skip(
+        "its declared table contract carries no CFC class",
+        "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+      );
+      continue;
+    }
+    const name = connectorGrantName(grantSource);
     if (RESERVED_GRANT_NAMES.has(name)) {
       skip(
-        `its declared CFC class \`${name}\` is a name the harness already grants`,
+        `its connection name \`${name}\` is a name the harness already grants`,
+        "Rename this connection in Loom, then restart the console.",
       );
       continue;
     }
-    if (!HANDLE_NAME_PATTERN.test(name)) {
+    const receipt = receipts.get(
+      handleKey(piece, connection, companionKey ?? ""),
+    );
+    const viewer = receipt === undefined
+      ? receiptViewer(handle?.viewer)
+      : receipt.viewer;
+    const grant: HarnessConnectorGrantSpec = {
+      name,
+      cfcClasses: classes,
+      ...receipt,
+      ...(viewer === undefined ? {} : { viewer }),
+      ref: renderCellReference(link, { space: link.space, scope: "space" }),
+      source: grantSource,
+    };
+    try {
+      checkConnectorGrantSpec(grant);
+    } catch (error) {
       skip(
-        `its declared CFC class \`${name}\` is not a name a model may be handed`,
+        error instanceof Error ? error.message : String(error),
+        "Correct the connection name, companion key, or CFC class in Loom, then restart the console.",
       );
       continue;
     }
-    const claimed = claimedBy.get(name);
-    if (claimed !== undefined) {
-      skip(
-        `its declared CFC class \`${name}\` is already the grant connection ` +
-          `\`${claimed}\` was named by`,
-      );
-      continue;
+    const entries = candidates.get(name) ?? [];
+    entries.push(grant);
+    candidates.set(name, entries);
+  }
+  for (const entries of candidates.values()) {
+    const first = entries[0]!;
+    if (
+      entries.every((entry) =>
+        entry.ref === first.ref &&
+        entry.cfcClasses!.length === first.cfcClasses!.length &&
+        entry.cfcClasses!.every((value) => first.cfcClasses!.includes(value))
+      )
+    ) {
+      for (const entry of entries.slice(1)) {
+        mergeReceiptMetadata(first, entry);
+      }
+      grants.push(first);
+    } else {
+      for (const entry of entries) {
+        unnamed.push({
+          ...entry.source,
+          reason:
+            "its connection and companion name identifies conflicting handles or classes",
+          remedy:
+            "Reconcile the connection's store declarations and receipts in Loom, then restart the console.",
+          state: "degraded",
+        });
+      }
     }
-    claimedBy.set(name, connection);
-    grants.push({ name, ref, source: { connection, piece } });
   }
   return { grants, unnamed };
 };
@@ -328,6 +528,8 @@ export const parseConnectorGrants = (
     const source = asRecord(record?.source);
     const connection = asNonEmptyString(source?.connection);
     const piece = asNonEmptyString(source?.piece);
+    const cfcClass = asNonEmptyString(record?.cfcClass);
+    const companionKey = asNonEmptyString(source?.companionKey);
     if (
       name === undefined || ref === undefined || connection === undefined ||
       piece === undefined
@@ -337,12 +539,38 @@ export const parseConnectorGrants = (
           "a source naming its connection and piece",
       );
     }
-    if (!HANDLE_NAME_PATTERN.test(name)) {
+    if (
+      (record?.cfcClass !== undefined && cfcClass === undefined) ||
+      (source?.companionKey !== undefined && companionKey === undefined)
+    ) {
       throw new Error(
-        `\`CF_HARNESS_CONNECTOR_GRANTS\` names a grant \`${name}\`, which ` +
-          `must match ${HANDLE_NAME_PATTERN}`,
+        "`CF_HARNESS_CONNECTOR_GRANTS` cfcClass and companionKey must be nonempty strings when present",
       );
     }
+    const grant = {
+      name,
+      ref,
+      ...(record?.cfcClasses === undefined
+        ? {}
+        : { cfcClasses: record.cfcClasses as string[] }),
+      ...(cfcClass === undefined ? {} : { cfcClass }),
+      ...(record?.rowCount === undefined
+        ? {}
+        : { rowCount: record.rowCount as number }),
+      ...(record?.viewer === undefined
+        ? {}
+        : { viewer: record.viewer as HarnessConnectorGrantSpec["viewer"] }),
+      ...(record?.observation === undefined ? {} : {
+        observation: record
+          .observation as HarnessConnectorGrantSpec["observation"],
+      }),
+      source: {
+        connection,
+        piece,
+        ...(companionKey === undefined ? {} : { companionKey }),
+      },
+    };
+    checkConnectorGrantSpec(grant);
     // Held to the same rule the mint holds it to, so a reference that would
     // fail the first session fails the startup instead. An inherited variable
     // is the case this catches: the launcher checked what it resolved, and a
@@ -357,6 +585,6 @@ export const parseConnectorGrants = (
           }`,
       );
     }
-    return { name, ref, source: { connection, piece } };
+    return grant;
   });
 };

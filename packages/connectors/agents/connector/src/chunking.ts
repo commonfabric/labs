@@ -32,27 +32,38 @@ export function chunkEvents<T>(
   events: readonly T[],
   targetBytes = DEFAULT_CHUNK_BYTES,
 ): EventChunk<T>[] {
+  return [...iterateEventChunks(events, targetBytes)];
+}
+
+function* iterateChunks<T, U>(
+  events: readonly T[],
+  targetBytes: number,
+  capture: (event: T) => U,
+): Generator<EventChunk<U>> {
   if (!Number.isSafeInteger(targetBytes) || targetBytes <= 0) {
     throw new Error("targetBytes must be a positive safe integer");
   }
   if (events.length === 0) {
-    return [{ part: 0, events: [], byteLength: EMPTY_ARRAY_BYTES }];
+    yield { part: 0, events: [], byteLength: EMPTY_ARRAY_BYTES };
+    return;
   }
 
-  const chunks: EventChunk<T>[] = [];
-  let current: T[] = [];
+  let part = 0;
+  let current: U[] = [];
   let currentBytes = EMPTY_ARRAY_BYTES;
-  for (const event of events) {
+  for (const sourceEvent of events) {
+    const event = capture(sourceEvent);
     const eventBytes = encodedJsonArrayElementBytes(event);
     const candidateBytes = currentBytes +
       (current.length === 0 ? 0 : 1) +
       eventBytes;
     if (current.length > 0 && candidateBytes > targetBytes) {
-      chunks.push({
-        part: chunks.length,
+      yield {
+        part,
         events: current,
         byteLength: currentBytes,
-      });
+      };
+      part++;
       current = [event];
       currentBytes = EMPTY_ARRAY_BYTES + eventBytes;
     } else {
@@ -60,10 +71,17 @@ export function chunkEvents<T>(
       currentBytes = candidateBytes;
     }
   }
-  chunks.push({
-    part: chunks.length,
+  yield {
+    part,
     events: current,
     byteLength: currentBytes,
-  });
-  return chunks;
+  };
+}
+
+/** Yield each chunk as soon as its byte boundary is known. */
+export function* iterateEventChunks<T>(
+  events: readonly T[],
+  targetBytes = DEFAULT_CHUNK_BYTES,
+): Generator<EventChunk<T>> {
+  yield* iterateChunks(events, targetBytes, (event) => event);
 }

@@ -2,6 +2,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
+import { type Cell, isStream } from "../src/cell.ts";
 import type { JSONSchemaObj } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -45,6 +46,14 @@ describe("profile embed consumer", () => {
         }, runtime.getCell(profileSpace, "profile", undefined, create));
         runtime.prepareTxForCommit(create);
         expect((await create.commit()).error).toBeUndefined();
+        expect(await profile.key("name").pull()).toBe("");
+        const initializeName = runtime.edit();
+        profile.withTx(initializeName).key("setName").send({
+          name: "Ada Lovelace",
+        });
+        runtime.prepareTxForCommit(initializeName);
+        expect((await initializeName.commit()).error).toBeUndefined();
+        await runtime.idle();
         expect(await profile.key("name").pull()).toBe("Ada Lovelace");
 
         let selected = profile.withTx();
@@ -89,7 +98,14 @@ describe("profile embed consumer", () => {
           node.module.type === "ref" && node.module.implementation === "wish"
         );
         expect(wish).toBeDefined();
-        const schema = wish!.module.resultSchema as JSONSchemaObj;
+        const wishSchema = wish!.module.resultSchema as JSONSchemaObj;
+        const resultSchema = (wishSchema.properties?.result as JSONSchemaObj)
+          .anyOf?.find((candidate) =>
+            typeof candidate === "object" && candidate.type === "object"
+          ) as JSONSchemaObj;
+        expect(resultSchema).toBeDefined();
+        const { asCell: _asCell, ...unboxed } = resultSchema;
+        const schema = { ...unboxed, $defs: wishSchema.$defs };
         expect(schema.properties?.name).toEqual({ type: "string" });
         expect(schema.properties?.avatar).toEqual({ type: "string" });
         expect(schema.properties?.bio).toEqual({ type: "string", default: "" });
@@ -122,8 +138,14 @@ describe("profile embed consumer", () => {
         const consumer = selected.withTx().asSchema(schema);
         if (vintage) {
           expect(consumer.key("bio").get()).toBe("");
-          expect((consumer.get() as Record<string, unknown>).setBio)
-            .toBeUndefined();
+          expect(selected.key("setBio").getRawUntyped()).toBeUndefined();
+          const setBio = (consumer.get() as Record<string, unknown>)
+            .setBio as Cell<unknown>;
+          expect(isStream(setBio)).toBe(true);
+          expect(setBio.getAsNormalizedFullLink().id).toBe(
+            selected.getAsNormalizedFullLink().id,
+          );
+          expect(setBio.getAsNormalizedFullLink().path).toEqual(["setBio"]);
         }
         const unauthorized = runtime.edit();
         // Editing the resolved producer cell must still honor its stored policy.

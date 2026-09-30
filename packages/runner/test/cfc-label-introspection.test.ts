@@ -62,14 +62,17 @@ describe("CFC label introspection evaluator (inv-12 Stage 2)", () => {
       const entry = {
         path: ["body"],
         origin: "link" as const,
-        ...(complete && { observes: "followRef" as const }),
+        ...(complete && {
+          observes: "followRef" as const,
+          referenceAcquisition: "complete" as const,
+        }),
         label: { confidentiality: [caveatAtom(SOURCE_A)] },
       };
-      const templates = deriveLabelMetadataTemplateEntries([entry], 2);
+      const templates = deriveLabelMetadataTemplateEntries([entry], 3);
       expect(templates.length > 0).toBe(complete);
       const metadata = {
         ...metadataWith([entry, ...templates]),
-        version: 2 as const,
+        version: 3 as const,
       };
       const evaluation = evaluateConfLabelQuery(metadata, ["body"], {
         source: SOURCE_A,
@@ -153,6 +156,8 @@ describe("CFC label introspection evaluator (inv-12 Stage 2)", () => {
       // Payload paths are value-relative (§4.6.5): "/value/body" is the
       // ENVELOPE spelling of payload "/body" and normalizes to it.
       expect(parseConfLabelTargetPath("/value/body")).toEqual(["body"]);
+      // So a root payload field named `value` is reached through the prefix.
+      expect(parseConfLabelTargetPath("/value/value")).toEqual(["value"]);
     });
 
     it("refuses malformed pointers", () => {

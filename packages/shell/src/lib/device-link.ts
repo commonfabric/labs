@@ -32,10 +32,10 @@
 // opaque entropy rather than the words, and the reason pairing is reveal-gated
 // on the other end.
 //
-// `pathname + search` is preserved because the pairing QR targets a deep link —
-// after the confirm, the normal boot must continue to that path so the flow
-// ends inside a logged-in app the user can bookmark, and the scrubbed URL is
-// exactly what gets bookmarked.
+// The path and the query are preserved because the pairing QR targets a deep
+// link — after the confirm, the normal boot must continue to that path so the
+// flow ends inside a logged-in app the user can bookmark, and the scrubbed URL
+// is exactly what gets bookmarked.
 
 /** Fragment param name. Short because QR payload bytes are scarce. */
 const DEVICE_LINK_PREFIX = "#k=";
@@ -119,12 +119,19 @@ export function consumeDeviceLinkFragment(): DeviceLinkFragment {
   // somebody's secret; leaving it in the address bar to be bookmarked or synced
   // is the leak with none of the benefit. (This is why the scrub precedes the
   // frame check, not the reverse.)
+  //
+  // The scrub target is an absolute URL taken from `location.href` with the
+  // fragment cleared. `replaceState` resolves what it is handed as a relative
+  // reference, and a path beginning `//` is a protocol-relative URL there:
+  // `//space/top/42` against `https://app.example/` is `https://space/top/42`,
+  // which the call refuses as cross-origin, and a refusal caught below leaves
+  // the secret in the address bar. An absolute URL derived from the current one
+  // carries the document's own origin however the path is written, so the path
+  // and the query survive and the fragment is the only thing that goes.
   try {
-    globalThis.history?.replaceState(
-      null,
-      "",
-      location.pathname + location.search,
-    );
+    const scrubbed = new URL(location.href);
+    scrubbed.hash = "";
+    globalThis.history?.replaceState(null, "", scrubbed.href);
   } catch {
     // A sandboxed/unsupported history is not a reason to abandon the login;
     // the secret is merely more exposed than we'd like.

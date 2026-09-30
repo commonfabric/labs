@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { Identity } from "@commonfabric/identity";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 
@@ -16,6 +17,10 @@ const schema = {
     Leaf: { type: "object", properties: { text: { type: "string" } } },
   },
 } as const;
+
+/** The tagged hash a `cid:` reference names. */
+const rootHash = (ref: string): string =>
+  parseExternalSchemaRef(ref)!.taggedHash;
 
 describe("store read-through schema metadata", () => {
   for (const contentAddressed of [false, true]) {
@@ -72,6 +77,68 @@ describe("store read-through schema metadata", () => {
         }])).toBe(1);
         expect(replica.getDocument(id)).toEqual(updatedCarrier);
         expect(reads).toContain(updated.rootRef);
+      } finally {
+        await manager.close();
+      }
+    });
+  }
+
+  for (const absence of ["nothing", "deleted"] as const) {
+    it(`quarantines a read document whose schema document the store ${absence === "nothing" ? "holds nothing under" : "reports deleted"}, until the store supplies it`, async () => {
+      // The read-through cannot supply the referenced document, so the frame
+      // cannot carry the closure, and the validator keeps the referrer out
+      // rather than apply it against a hole. Once the store holds the
+      // closure, the same carrier integrates: the absent document was the
+      // one cause.
+      const signer = await Identity.fromPassphrase(
+        `${absence} dependency read through`,
+      );
+      const manager = StorageManager.emulate({ as: signer });
+      const decomposed = decomposeSchema(schema);
+      const id = `of:${absence}-dependency-carrier` as URI;
+      const carrier = {
+        value: { leaf: { text: "present" } },
+        schema: { $ref: decomposed.rootRef },
+      };
+      const closure = new Map<string, EntityDocument>(
+        [...decomposed.documents].map(([hash, document]) =>
+          [`cid:${hash}`, { value: document }] as [string, EntityDocument]
+        ),
+      );
+      let supplied = false;
+      const reads: string[] = [];
+      try {
+        manager.installStoreReadThrough(
+          signer.did(),
+          ({ id: read, scopeKey }) => {
+            reads.push(read);
+            const address = {
+              branch: "",
+              id: read,
+              scope: "space" as const,
+              scopeKey,
+            };
+            if (read === id) return { ...address, seq: 1, doc: carrier };
+            const document = supplied ? closure.get(read) : undefined;
+            if (document !== undefined) {
+              return { ...address, seq: 1, doc: document };
+            }
+            return absence === "nothing"
+              ? undefined
+              : { ...address, seq: 0, deleted: true as const };
+          },
+        );
+        const replica = manager.open(signer.did()).replica;
+        expect(replica.getDocument(id)).toBeUndefined();
+        expect(reads).toContain(decomposed.rootRef);
+        expect(replica.getDocument(decomposed.rootRef as URI)).toBeUndefined();
+
+        // A quarantined document leaves no record behind, so the next read
+        // asks the store again, and the store now holds the closure.
+        supplied = true;
+        expect(replica.getDocument(id)).toEqual(carrier);
+        expect(replica.getDocument(decomposed.rootRef as URI)?.value)
+          .toEqual(decomposed.documents.get(rootHash(decomposed.rootRef)));
       } finally {
         await manager.close();
       }

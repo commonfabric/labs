@@ -59,6 +59,7 @@ import {
   RECORD_SCHEMA_VERSION,
   type StoredReport,
 } from "@commonfabric/test-support/records";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   ciSubmissionsPrefix,
   storeBucket,
@@ -172,7 +173,7 @@ export function parseRollupPartition(
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const partition = value as Record<string, unknown>;
   if (partition.schema !== RECORD_SCHEMA_VERSION) return undefined;
   if (partition.day !== day) return undefined;
@@ -203,7 +204,7 @@ export function parseRollupManifest(
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const manifest = value as Record<string, unknown>;
   if (manifest.schema !== RECORD_SCHEMA_VERSION) return undefined;
   if (manifest.day !== day) return undefined;

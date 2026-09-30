@@ -114,7 +114,7 @@ describe("convert-cells-to-links-vetting", () => {
     // own properties -- as a bare `{}`.
 
     expect(() => convertCellsToLinks({ x: new Map() } as never)).toThrow(
-      "`Map` (a `FabricNativeObject`, so conversion is what decides it)",
+      "`Map` (a `FabricConvertibleJsObject`, so conversion is what decides it)",
     );
   });
 });

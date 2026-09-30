@@ -317,7 +317,7 @@ describe("prompt-loop external skill acquisition", () => {
       // source attribute.
       expect(childText).toContain(CANARY);
       expect(childText).toContain(
-        `<skill_context source="handle:${handleToken}">`,
+        `<skill_context source="handle:${handleToken}" pin="${SKILL_ID}@${COMMIT_SHA}">`,
       );
       for (const index of [0, 1, 2, 3, 4, 5, 6, 8]) {
         const parentText = chatViewOfRequest(requestBodies[index]).messages
@@ -461,7 +461,7 @@ describe("prompt-loop external skill acquisition", () => {
       // skill text, which is what makes the refusal in between meaningful.
       expect(retriedChildText).toContain(CANARY);
       expect(retriedChildText).toContain(
-        `<skill_context source="handle:${handleToken}">`,
+        `<skill_context source="handle:${handleToken}" pin="${SKILL_ID}@${COMMIT_SHA}">`,
       );
       // The bare retry never reached a child: it came back as an invalid tool
       // call naming the handle whose delegation did not complete.

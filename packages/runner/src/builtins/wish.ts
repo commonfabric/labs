@@ -4,20 +4,18 @@ import {
   type WishState,
   type WishTag,
 } from "@commonfabric/api";
+import { internSchema } from "@commonfabric/data-model-schema";
 import {
-  deepFrozenCloneAndInternSchema,
-  hashSchema,
-  internSchema,
-} from "@commonfabric/data-model-schema";
-import {
+  debugStr,
   type DebugValueOptions,
   toCompactDebugString,
 } from "@commonfabric/data-model";
 import { favoriteListSchema } from "@commonfabric/home-schemas";
+import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { LRUCache } from "@commonfabric/utils/cache";
 import { extractHashtags } from "@commonfabric/utils/hashtags";
 import { getLogger } from "@commonfabric/utils/logger";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
@@ -31,12 +29,10 @@ import {
   type Pattern,
   UI,
 } from "../builder/types.ts";
+import { useCancelGroup } from "../cancel.ts";
 import { type Cell } from "../cell.ts";
-import {
-  createSigilLinkFromParsedLink,
-  getMetaLink,
-  toMemorySpaceAddress,
-} from "../link-utils.ts";
+import { toMemorySpaceAddress } from "../link-utils.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
 import { setRunnableName } from "../runner-utils.ts";
 import { type Runtime, spaceCellSchema } from "../runtime.ts";
@@ -49,13 +45,18 @@ import {
   isStorageTransactionInconsistent,
 } from "../storage/rejection.ts";
 import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
-import { onSchemaRegistryClear } from "../schema-registry.ts";
+import { schemaRegistryEpoch } from "../schema-registry.ts";
 import {
   enrollRuntimeOwnedStore,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { scopedCell } from "./scope-policy.ts";
-import { rawMetaWriteAuthorization } from "../meta-seam.ts";
+import {
+  createDocumentReadiness,
+  DocumentPending,
+} from "../document-readiness.ts";
+import { wishStateSchemaForResult } from "./wish-schema.ts";
+import { setPatternCell, setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -121,6 +122,16 @@ class WishError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WishError";
+  }
+}
+
+/** The error a wish reports when the profile roster is confirmed empty. */
+const NO_PROFILE_ERROR = "No profile exists yet";
+
+/** A confirmed empty profile roster, for which Wish offers creation. */
+class NoProfileError extends WishError {
+  constructor() {
+    super(NO_PROFILE_ERROR);
   }
 }
 
@@ -217,6 +228,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#journal":
     case "#learned":
     case "#learnedSummary":
+    case "#agent_queue":
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
@@ -267,6 +279,7 @@ export function tagMatchesHashtag(
 
 type WishContext = {
   runtime: Runtime;
+  readiness: ReturnType<typeof createDocumentReadiness>;
   tx: IExtendedStorageTransaction;
   parentCell: Cell<any>;
   spaceCell?: Cell<unknown>;
@@ -320,30 +333,44 @@ function getSpaceCell(ctx: WishContext): Cell<unknown> {
 
 function getSpaceCellForDID(
   runtime: Runtime,
-  did: string,
+  did: DID,
   tx: IExtendedStorageTransaction,
 ): Cell<unknown> {
-  return runtime.getCell(
-    did as `did:${string}:${string}`,
-    did,
-    spaceCellSchema,
-    tx,
-  );
+  return runtime.getCell(did, did, spaceCellSchema, tx);
 }
 
-function getArbitraryDIDs(scope?: string[]): string[] {
-  return (scope ?? []).filter((s) => s !== "~" && s !== "." && s !== "profile");
+/**
+ * The scope entries that name a space outright, as opposed to the three
+ * keywords. Each one becomes a space to search, so an entry that is not a DID
+ * would be read as the id of a space nobody named; say so instead.
+ */
+export function getArbitraryDIDs(scope?: string[]): DID[] {
+  const named = (scope ?? []).filter((s) =>
+    s !== "~" && s !== "." && s !== "profile"
+  );
+  for (const entry of named) {
+    if (!isDID(entry)) {
+      throw new WishError(
+        `Invalid scope "${entry}": expected "~", ".", "profile", or a ` +
+          `space DID.`,
+      );
+    }
+  }
+  return named as DID[];
 }
 
 function resolvePath(
   base: Cell<any>,
   path: readonly string[],
+  ctx: Pick<WishContext, "readiness" | "tx">,
 ): Cell<unknown> {
-  let current = base;
+  let current = base.resolveAsCell();
+  ctx.readiness.requireDocument(current, ctx.tx);
   for (const segment of path) {
-    current = current.key(segment);
+    current = current.key(segment).resolveAsCell();
+    ctx.readiness.requireDocument(current, ctx.tx);
   }
-  return current.resolveAsCell();
+  return current;
 }
 
 function buildResolutionPath(
@@ -458,15 +485,20 @@ function subscribeProfileName(cell: Cell<unknown>): void {
  * order. Identity is by the profile's own SPACE — each profile is a distinct
  * `ProfileHome.inSpace()` space, so the `defaultProfile` / `mru` links are
  * matched to candidates by space, not `Cell.equals` (see `sameProfileCell`;
- * CT-1842). There is no synthetic key. Returns [] when no valid profile exists
- * yet.
+ * CT-1842). Skips confirmed-absent entries when a valid candidate remains.
+ * Throws `DocumentPending` while backing documents load, and `WishError`
+ * when absent entries leave no valid candidate.
  */
 function getProfileCandidateCells(
   ctx: WishContext,
 ): { ordered: Cell<unknown>[]; defaultValid: boolean } {
   const homeSpaceCell = getHomeSpaceCell(ctx);
+  // These checks gate loading; confirmed absence yields an empty roster below.
+  ctx.readiness.requireDocument(homeSpaceCell, ctx.tx);
   const defaultPattern = homeSpaceCell.key("defaultPattern").resolveAsCell();
-  const profilesCell = defaultPattern.key("profiles");
+  ctx.readiness.requireDocument(defaultPattern, ctx.tx);
+  const profilesCell = defaultPattern.key("profiles").resolveAsCell();
+  ctx.readiness.requireDocument(profilesCell, ctx.tx);
   // Read the list as cell references so a freshly-created profile (a link into
   // its own space, not yet loaded here) is still counted rather than collapsing
   // the whole list to `undefined`. See profileLinkListSchema.
@@ -474,9 +506,14 @@ function getProfileCandidateCells(
   const length = Array.isArray(rawList) ? rawList.length : 0;
 
   const candidates: Cell<unknown>[] = [];
+  let hasAbsentProfile = false;
   for (let i = 0; i < length; i++) {
     const entry = profilesCell.key(i);
     const cell = entry.resolveAsCell();
+    if (!ctx.readiness.requireDocument(cell, ctx.tx)) {
+      hasAbsentProfile = true;
+      continue;
+    }
     if (
       !profileCellIsValid(
         cell,
@@ -489,7 +526,10 @@ function getProfileCandidateCells(
     subscribeProfileName(cell);
     candidates.push(cell);
   }
-  if (candidates.length === 0) return { ordered: [], defaultValid: false };
+  if (candidates.length === 0) {
+    if (hasAbsentProfile) throw new WishError("Profile data is unavailable");
+    return { ordered: [], defaultValid: false };
+  }
 
   // Ordering inputs: the default link and the MRU list.
   const defaultEntry = defaultPattern.key("defaultProfile");
@@ -535,7 +575,7 @@ function getProfileCandidateCells(
 function getDefaultProfileCell(ctx: WishContext): Cell<unknown> {
   const { ordered } = getProfileCandidateCells(ctx);
   if (ordered.length === 0) {
-    throw new WishError("No profile exists yet");
+    throw new NoProfileError();
   }
   return ordered[0];
 }
@@ -572,9 +612,7 @@ function searchFavoritesForHashtag(
     queryKey,
     () => {
       const homeSpaceCell = getHomeSpaceCell(ctx);
-      return homeSpaceCell
-        .key("defaultPattern")
-        .key("favorites")
+      return resolvePath(homeSpaceCell, ["defaultPattern", "favorites"], ctx)
         .asSchema(favoriteListSchema);
     },
   );
@@ -606,35 +644,26 @@ function searchFavoritesForHashtag(
   );
 }
 
-type HashtagSearchResult = {
-  matches: BaseResolution[];
-
-  /** true when cell data has loaded (even if empty); false when still pending */
-  loaded: boolean;
-};
-
 /**
  * Search mentionables in current space for pieces matching a hashtag.
- * Synchronous: reads cell.get() which returns undefined if data isn't loaded
- * yet. The reactive system will re-trigger wish when the data arrives.
+ * Waits for the index and candidate documents before choosing a result.
  */
 function searchMentionablesForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
   spaceCell?: Cell<unknown>,
-): HashtagSearchResult {
+): BaseResolution[] {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const mentionableCell = measureWishPhase(
     "mentionable-cell",
     queryKey,
     () =>
-      (spaceCell ?? getSpaceCell(ctx))
-        .key("defaultPattern")
-        .key("backlinksIndex")
-        .key("mentionable")
-        .resolveAsCell()
-        .asSchema(mentionableListSchema),
+      resolvePath(
+        spaceCell ?? getSpaceCell(ctx),
+        ["defaultPattern", "backlinksIndex", "mentionable"],
+        ctx,
+      ).asSchema(mentionableListSchema),
   );
   const raw = measureWishPhase(
     "mentionable-get",
@@ -642,8 +671,7 @@ function searchMentionablesForHashtag(
     () => mentionableCell.get(),
   );
   if (raw === undefined || raw === null) {
-    // Data not loaded yet — reactive system will re-trigger when it arrives
-    return { matches: [], loaded: false };
+    return [];
   }
   const mentionables = (raw || []) as Cell<any>[];
 
@@ -701,28 +729,24 @@ function searchMentionablesForHashtag(
       }),
   );
 
-  return {
-    matches: measureWishPhase(
-      "mentionable-result-map",
-      queryKey,
-      () => matches.map((match) => ({ cell: match, pathPrefix })),
-    ),
-    loaded: true,
-  };
+  return measureWishPhase(
+    "mentionable-result-map",
+    queryKey,
+    () => matches.map((match) => ({ cell: match, pathPrefix })),
+  );
 }
 
 function searchProfileForHashtag(
   ctx: WishContext,
   searchTermWithoutHash: string,
   pathPrefix: string[],
-): HashtagSearchResult {
+): BaseResolution[] {
   const queryKey = sanitizeQueryKey(`#${searchTermWithoutHash}`);
   const elementsCell = measureWishPhase(
     "profile-elements-cell",
     queryKey,
     () =>
-      getDefaultProfileCell(ctx)
-        .key("elements")
+      resolvePath(getDefaultProfileCell(ctx), ["elements"], ctx)
         .asSchema(profileElementListSchema),
   );
   const elements = measureWishPhase(
@@ -731,7 +755,7 @@ function searchProfileForHashtag(
     () => elementsCell.get(),
   );
   if (elements === undefined || elements === null) {
-    return { matches: [], loaded: false };
+    return [];
   }
 
   const profileElements = elements as Array<{
@@ -753,23 +777,19 @@ function searchProfileForHashtag(
       }),
   );
 
-  return {
-    matches: measureWishPhase(
-      "profile-elements-result-map",
-      queryKey,
-      () =>
-        matches.flatMap((match) =>
-          match.cell ? [{ cell: match.cell, pathPrefix }] : []
-        ),
-    ),
-    loaded: true,
-  };
+  return measureWishPhase(
+    "profile-elements-result-map",
+    queryKey,
+    () =>
+      matches.flatMap((match) =>
+        match.cell ? [{ cell: match.cell, pathPrefix }] : []
+      ),
+  );
 }
 
 /**
  * Search for pieces by hashtag across favorites and/or mentionables based on scope.
- * Synchronous: relies on cell.get() returning undefined for unloaded data;
- * the reactive system will re-trigger wish when data arrives.
+ * Publishes only after every searched scope's backing documents have loaded.
  */
 function searchByHashtag(
   parsed: ParsedWishTarget,
@@ -785,7 +805,6 @@ function searchByHashtag(
   const searchProfile = ctx.scope?.includes("profile");
 
   const allMatches: BaseResolution[] = [];
-  let allScopedDataLoaded = true;
 
   if (searchFavorites) {
     allMatches.push(
@@ -794,45 +813,37 @@ function searchByHashtag(
   }
 
   if (searchMentionables) {
-    const { matches, loaded } = searchMentionablesForHashtag(
+    const matches = searchMentionablesForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
     );
     allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
   }
 
   if (searchProfile) {
-    const { matches, loaded } = searchProfileForHashtag(
+    const matches = searchProfileForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
     );
     allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
   }
 
   // Search mentionables in arbitrary DID spaces
   const arbitraryDIDs = getArbitraryDIDs(ctx.scope);
   for (const did of arbitraryDIDs) {
     const didSpaceCell = getSpaceCellForDID(ctx.runtime, did, ctx.tx);
-    const { matches, loaded } = searchMentionablesForHashtag(
+    const matches = searchMentionablesForHashtag(
       ctx,
       searchTermWithoutHash,
       parsed.path,
       didSpaceCell,
     );
     allMatches.push(...matches);
-    if (!loaded) allScopedDataLoaded = false;
   }
 
   if (allMatches.length === 0) {
-    if (!allScopedDataLoaded) {
-      // Some scoped data not loaded yet — return empty so the reactive
-      // system re-triggers wish when cell data arrives.
-      return [];
-    }
     const parts: string[] = [];
     if (searchFavorites) parts.push("favorites");
     if (searchMentionables) parts.push("mentionables");
@@ -872,10 +883,11 @@ function resolveHomeSpaceTarget(
 
       // Path provided = search by tag (legacy behavior)
       const searchTerm = parsed.path[0].toLowerCase();
-      const favoritesCell = homeSpaceCell
-        .key("defaultPattern")
-        .key("favorites")
-        .asSchema(favoriteListSchema);
+      const favoritesCell = resolvePath(
+        homeSpaceCell,
+        ["defaultPattern", "favorites"],
+        ctx,
+      ).asSchema(favoriteListSchema);
       const favorites = favoritesCell.get() || [];
 
       const match = favorites.find((entry) => {
@@ -921,6 +933,22 @@ function resolveHomeSpaceTarget(
       }];
     }
 
+    case "#agent_queue": {
+      // The user's agent queue: the index of their agent runs and their
+      // registered runner. A hashtag search would not find it, since under
+      // `scope: ["~"]` that search reads the user's favorites only.
+      const userDID = homeSpaceUserDID(ctx);
+      if (!userDID) {
+        throw new WishError(
+          "User identity DID not available for #agent_queue",
+        );
+      }
+      return [{
+        cell: getHomeSpaceCell(ctx),
+        pathPrefix: ["defaultPattern", "agentQueue"],
+      }];
+    }
+
     case "#learnedSummary": {
       // The free-form learned summary string (home `learned.summary`). This is
       // what `#profile` used to resolve to before it was repurposed for the
@@ -946,7 +974,7 @@ function resolveHomeSpaceTarget(
       if (ordered.length === 0) {
         // No profile yet — throw so the #profile error path falls back to the
         // create surface (see profileCreateUI).
-        throw new WishError("No profile exists yet");
+        throw new NoProfileError();
       }
       // Always expose the full, ordered roster as `candidates`. The wish action
       // below still makes `ordered[0]` the current profile and only renders the
@@ -1390,25 +1418,31 @@ function resolveSpaceTarget(
  *    #now)
  * 2. Well-known home space targets (#favorites, #journal, #learned, #profile)
  * 3. Hashtag search (arbitrary #tags in favorites/mentionables)
+ *
+ * Returns at least one resolution or throws a pending-load or resolution error.
  */
 function resolveBase(
   parsed: ParsedWishTarget,
   ctx: WishContext,
 ): BaseResolution[] {
-  // Try space targets first (most common)
-  const spaceResult = resolveSpaceTarget(parsed, ctx);
-  if (spaceResult) return spaceResult;
+  try {
+    // Try space targets first (most common)
+    const spaceResult = resolveSpaceTarget(parsed, ctx);
+    if (spaceResult) return spaceResult;
 
-  // Try home space targets
-  const homeResult = resolveHomeSpaceTarget(parsed, ctx);
-  if (homeResult) return homeResult;
+    // Try home space targets
+    const homeResult = resolveHomeSpaceTarget(parsed, ctx);
+    if (homeResult) return homeResult;
 
-  // Hashtag search
-  if (parsed.key.startsWith("#")) {
-    return searchByHashtag(parsed, ctx);
+    // Hashtag search
+    if (parsed.key.startsWith("#")) {
+      return searchByHashtag(parsed, ctx);
+    }
+
+    throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
+  } finally {
+    ctx.readiness.requireLoadedReads(ctx.tx);
   }
-
-  throw new WishError(`Wish target "${parsed.key}" is not recognized.`);
 }
 
 function isSharedHashtagSearchTarget(parsed: ParsedWishTarget): boolean {
@@ -1471,25 +1505,21 @@ function createSharedHashtagResolver(
     ctx.tx,
   );
 
+  const [cancel, addCancel] = useCancelGroup();
+  const readiness = createDocumentReadiness(ctx.runtime, addCancel);
   const action: Action = (tx: IExtendedStorageTransaction) => {
+    const sharedContext: WishContext = {
+      runtime: ctx.runtime,
+      readiness,
+      tx,
+      parentCell: ctx.parentCell,
+      scope: sharedScope,
+    };
     const actionStartedAt = performance.now();
     const stateCell = sharedCell.withTx(tx);
     const queryKey = sanitizeQueryKey(query);
     try {
-      const baseResolutions = searchByHashtag(sharedParsed, {
-        runtime: ctx.runtime,
-        tx,
-        parentCell: ctx.parentCell,
-        scope: sharedScope,
-      });
-      if (baseResolutions.length === 0) {
-        stateCell.set({
-          result: undefined,
-          candidates: [],
-          [UI]: undefined,
-        });
-        return;
-      }
+      const baseResolutions = resolveBase(sharedParsed, sharedContext);
 
       const resultCells = measureWishPhase(
         "shared-resolve-paths",
@@ -1500,7 +1530,11 @@ function createSharedHashtagResolver(
               baseResolution,
               sharedParsed.path,
             );
-            return resolvePath(baseResolution.cell, combinedPath);
+            return resolvePath(
+              baseResolution.cell,
+              combinedPath,
+              sharedContext,
+            );
           }),
       );
       const uniqueResultCells = measureWishPhase(
@@ -1525,6 +1559,7 @@ function createSharedHashtagResolver(
         [UI]: resultUI ?? cellLinkUI(uniqueResultCells[0]),
       });
     } catch (error) {
+      if (error instanceof DocumentPending) return;
       const errorMessage = error instanceof Error
         ? error.message
         : String(error);
@@ -1553,7 +1588,8 @@ function createSharedHashtagResolver(
     shallowReads: [],
     writes: [toMemorySpaceAddress(sharedCell.getAsNormalizedFullLink())],
   };
-  const cancel = ctx.runtime.scheduler.subscribe(action, initialLog);
+  readiness.onActionRegistered(action);
+  addCancel(ctx.runtime.scheduler.subscribe(action, initialLog));
 
   return { cell: sharedCell, cancel, refCount: 0 };
 }
@@ -1631,16 +1667,13 @@ export type SidecarSurfaceState = {
   openingEpoch?: number;
 };
 
-let schemaRegistryEpoch = 0;
-onSchemaRegistryClear(() => {
-  schemaRegistryEpoch += 1;
-});
-
 /** The pattern this slot has already opened, when it is still usable. */
 export function openedSidecarSurface(
   state: SidecarSurfaceState,
 ): Pattern | undefined {
-  return state.patternEpoch === schemaRegistryEpoch ? state.pattern : undefined;
+  return state.patternEpoch === schemaRegistryEpoch()
+    ? state.pattern
+    : undefined;
 }
 
 /**
@@ -1671,7 +1704,7 @@ export function openSidecarSurface(
 ): Promise<Pattern | undefined> {
   const opened = openedSidecarSurface(state);
   if (opened !== undefined) return Promise.resolve(opened);
-  const epoch = schemaRegistryEpoch;
+  const epoch = schemaRegistryEpoch();
   // An open started in an epoch that has since ended would answer with a
   // pattern whose schema references nothing can resolve, so it is left to
   // settle on its own and a fresh one is asked instead.
@@ -1690,7 +1723,7 @@ export function openSidecarSurface(
       // started one joins it, and otherwise a fresh one starts here. The
       // caller is handed a live answer either way, rather than a dead one or an
       // error account written over a surface still on its way.
-      if (epoch !== schemaRegistryEpoch) {
+      if (epoch !== schemaRegistryEpoch()) {
         return openSidecarSurface(runtime, state, piece, surface, options);
       }
       if (pattern !== undefined) {
@@ -1753,7 +1786,7 @@ export async function sidecarRunFailureDisposition(
  * this discrimination. Exported for the unit pin. */
 export function sidecarValueIsWinner(raw: unknown): boolean {
   if (raw === undefined) return false;
-  return !(typeof raw === "object" && raw !== null && "sidecarError" in raw);
+  return !(isObjectOrArray(raw) && "sidecarError" in raw);
 }
 
 // Test seam (this package has no logger-capture idiom — the OW45 register's
@@ -1814,70 +1847,6 @@ function createWishCandidatesCell(
     ? candidates
     : candidates.map((candidate) => projectWishCellValue(candidate, schema));
   return runtime.getImmutableCell(space, values, undefined, tx);
-}
-
-// asCell-wrapped schemas keyed by content hash. `hashSchema()` is one
-// unavoidable walk (through the query-result proxy when the input is one) and
-// is the cache key: it is `FabricValue`-aware, so schemas that differ only in
-// non-JSON `FabricValue` content (e.g. a `FabricBytes` default) get distinct
-// keys — a `JSON.stringify()` key would collide them. The clone-and-intern
-// repeats for the same content on every wish send, so cache it.
-const schemaAsCellCache = new LRUCache<string, JSONSchema>({ capacity: 256 });
-
-function schemaAsCell(schema: unknown): JSONSchema {
-  if (schema && typeof schema === "object") {
-    const key = hashSchema(schema as JSONSchema);
-    let result = schemaAsCellCache.get(key);
-    if (result === undefined) {
-      // `schema` may be a query-result proxy, so deep-frozen-clone rather than
-      // freeze in place; the clone de-proxies and preserves `FabricValue`
-      // leaves that a JSON round-trip would mangle.
-      result = deepFrozenCloneAndInternSchema({
-        ...(schema as Record<string, unknown>),
-        asCell: ["cell"],
-      });
-      schemaAsCellCache.put(key, result);
-    }
-    return result;
-  }
-  return { asCell: ["cell"] };
-}
-
-function wishStateSchemaForResult(schema: unknown): JSONSchema | undefined {
-  if (schema === undefined) return undefined;
-  // schemaAsCell JSON-round-trips its input, and `schema` is typically a
-  // query-result proxy where every property access during stringify pays the
-  // full cell-read machinery (~7ms for a large search schema in profiles).
-  // Materialize once and share the instance for both slots — internSchema
-  // canonicalizes the wrapper, so the duplicate reference is fine.
-  const resultSchema = schemaAsCell(schema);
-  // Fragment references resolve from the wish-state schema root after the
-  // requested schema is nested under result and candidates.
-  const schemaWithDefinitions = resultSchema as Record<string, unknown> & {
-    $defs?: Record<string, JSONSchema>;
-  };
-  const { $defs, ...nestedSchemaObject } = schemaWithDefinitions;
-  const nestedResultSchema = nestedSchemaObject as JSONSchema;
-  const candidateSchema = nestedResultSchema;
-  return internSchema({
-    ...($defs === undefined ? {} : { $defs }),
-    type: "object",
-    properties: {
-      result: {
-        anyOf: [
-          { type: "undefined" },
-          nestedResultSchema,
-        ],
-      },
-      candidates: {
-        type: "array",
-        items: candidateSchema,
-      },
-      error: true,
-      [UI]: true,
-    },
-    required: ["result", "candidates"],
-  });
 }
 
 function explicitWishSchemaScope(schema: unknown): CellScope | undefined {
@@ -2000,6 +1969,7 @@ const TARGET_SCHEMA = internSchema(
   },
 );
 
+/** Resolves a wish and re-arms profile resolution after pending document loads. */
 export function wish(
   inputsCell: Cell<[unknown, unknown]>,
   sendResult: (tx: IExtendedStorageTransaction, result: unknown) => void,
@@ -2007,8 +1977,9 @@ export function wish(
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime,
-): Action {
+): RawBuiltinResult {
   let cancelled = false;
+  const readiness = createDocumentReadiness(runtime, addCancel);
   // Per-instance cached #now cell — prevents non-idempotent re-runs from
   // Date.now() producing a different value each time the sync action fires.
   let nowCell: Cell<unknown> | undefined;
@@ -2111,6 +2082,9 @@ export function wish(
   const sidecarRunOptions = (surface: SidecarSurface) => ({
     parentPieceRootId: parentCell.getAsNormalizedFullLink().id,
     sourceOrigin: surface.origin,
+    // A sidecar the wish instantiates, in a continuation of its action, is
+    // no principal's act.
+    attributeInitialization: false,
   });
 
   addCancel(() => {
@@ -2166,20 +2140,8 @@ export function wish(
     const scoped = scopedCell(runtime, tx, baseCell, outputScope);
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
-    if (scoped !== baseCell) {
-      // Copy the meta result link from the base cell into our new scoped cell
-      const resultLink = getMetaLink(baseCell.withTx(tx), "result");
-      if (resultLink !== undefined) {
-        scoped.setMetaRaw(
-          "result",
-          createSigilLinkFromParsedLink(resultLink, {
-            base: scoped,
-            includeSchema: true,
-          }),
-          rawMetaWriteAuthorization,
-        );
-      }
-    }
+    setResultCell(scoped, parentCell.withTx(tx));
+    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);
@@ -2931,7 +2893,8 @@ export function wish(
   // initial resolution. Synchronous: reads cell.get() which triggers sync and
   // returns undefined if data isn't loaded yet. The reactive system re-triggers
   // wish when the data arrives.
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
+    if (cancelled) return;
     const actionStartedAt = performance.now();
     let actionQueryKey: string | undefined;
     let usedSharedHashtagResolver = false;
@@ -2956,9 +2919,8 @@ export function wish(
         const targetMayUseHomeSpace = wishTargetMayUseHomeSpace(query, scope);
 
         if (query === undefined || query === null || query === "") {
-          const errorMsg = `Wish target "${
-            toCompactDebugString(targetValue)
-          }" has no query.`;
+          const errorMsg =
+            debugStr`Wish target $quote${targetValue} has no query.`;
           const outputScope = wishOutputScope(
             schema,
             inputScope,
@@ -2987,6 +2949,7 @@ export function wish(
         if (query.startsWith("/") || /^#[a-zA-Z0-9-]+/.test(query)) {
           const ctx: WishContext = {
             runtime,
+            readiness,
             tx,
             parentCell,
             scope,
@@ -3020,7 +2983,13 @@ export function wish(
               return;
             }
 
-            if (canUseSharedHashtagResult(activeParsed, { headless })) {
+            // Home discovery must run under the demander's transaction. A
+            // shared subscription has no demanding principal of its own.
+            if (
+              !targetMayUseHomeSpace &&
+              wishOutputScope(schema, inputScope, false) === "space" &&
+              canUseSharedHashtagResult(activeParsed, { headless })
+            ) {
               const shared = getCurrentSharedHashtagResolver(ctx, activeParsed);
               usedSharedHashtagResolver = true;
               measureWishPhase(
@@ -3048,29 +3017,6 @@ export function wish(
             // Persist #now cell across re-runs to avoid non-idempotent loops
             if (ctx.nowCell) nowCell = ctx.nowCell;
 
-            if (baseResolutions.length === 0) {
-              // No matches yet — data may still be loading. Send a pending
-              // result; the reactive system will re-trigger when cells update
-              // (dependencies were registered by the cell.get() calls in the
-              // search functions).
-              measureWishPhase(
-                "send-pending",
-                queryKey,
-                () =>
-                  sendWishState(
-                    tx,
-                    {
-                      result: undefined,
-                      candidates: [],
-                      [UI]: undefined,
-                    } satisfies WishState<any>,
-                    outputScope,
-                    schema,
-                  ),
-              );
-              return;
-            }
-
             const resultCells = measureWishPhase(
               "resolve-paths",
               queryKey,
@@ -3083,6 +3029,7 @@ export function wish(
                   const resolvedCell = resolvePath(
                     baseResolution.cell,
                     combinedPath,
+                    ctx,
                   );
                   return schema ? resolvedCell.asSchema(schema) : resolvedCell;
                 }),
@@ -3255,8 +3202,10 @@ export function wish(
               }
             }
           } catch (e) {
+            if (e instanceof DocumentPending) return;
             const errorMsg = e instanceof WishError ? e.message : String(e);
-            const ui = parsed && isProfilePersonaTarget(parsed)
+            const ui = e instanceof NoProfileError && parsed &&
+                isProfilePersonaTarget(parsed)
               ? profileCreateUI(ctx)
               : errorUI(errorMsg);
             measureWishPhase(
@@ -3301,6 +3250,7 @@ export function wish(
           // Otherwise it's a generic query, instantiate suggestion.tsx
           const suggestionCtx: WishContext = {
             runtime,
+            readiness,
             tx,
             parentCell,
             scope,
@@ -3323,9 +3273,8 @@ export function wish(
         }
         return;
       } else {
-        const errorMsg = `Wish target is not recognized: ${
-          toCompactDebugString(targetValue)
-        }`;
+        const errorMsg =
+          debugStr`Wish target is not recognized: $quote${targetValue}`;
         const inputScope = tx.getNarrowestReadScope();
         measureWishPhase(
           "send-error",
@@ -3356,4 +3305,5 @@ export function wish(
       );
     }
   };
+  return { action, onActionRegistered: readiness.onActionRegistered };
 }

@@ -8,6 +8,7 @@
 import { describe, it } from "@std/testing/bdd";
 
 import { expect } from "@std/expect";
+import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { addressSealedPositions } from "../src/structured-result.ts";
 import { sealedPositionLink } from "../src/tools/run-pattern.ts";
 
@@ -23,6 +24,20 @@ const buildRef = (path: readonly (string | number)[]) =>
   `/of:fid1:result/${path.join("/")}`;
 
 describe("structured-result", () => {
+  it("addresses sealed positions without changing literal path keys", () => {
+    const id = `of:fid1:${"a".repeat(43)}` as const;
+    const path = ["", "..", "a#argument", "a/b", "title "];
+    const sealed = sealedPositionLink(
+      { id, space: SPACE, scope: "space", path: ["entries"] },
+      path,
+      SPACE,
+    );
+    expect(sealed).toBeDefined();
+    const parsed = parseLLMFriendlyLink(sealed!["@link"], SPACE);
+    expect(parsed.id).toBe(id);
+    expect(parsed.path).toEqual(["entries", ...path]);
+  });
+
   describe("addressSealedPositions()", () => {
     it("replaces each reported position with the address of its path", () => {
       const value = {

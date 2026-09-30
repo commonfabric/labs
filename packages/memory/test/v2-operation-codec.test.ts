@@ -1,6 +1,7 @@
 import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   createDefaultOperationCodecRegistry,
@@ -316,8 +317,7 @@ describe("v2-operation-codec", () => {
       id: "test-counter@1",
       integrate({ materialized, submitted }) {
         if (
-          typeof materialized !== "number" || submitted === null ||
-          typeof submitted !== "object" || Array.isArray(submitted) ||
+          typeof materialized !== "number" || !isObjectNotArray(submitted) ||
           typeof (submitted as { by?: unknown }).by !== "number"
         ) {
           throw new Error("counter values must be numeric");

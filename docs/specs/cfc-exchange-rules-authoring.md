@@ -139,6 +139,19 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
   cannot be named before the module is hashed. It resolves relative to the
   containing exported `exchangeRules` artifact—not to the module as a
   singleton—and always occupies the `appliesTo` (target-pattern) position.
+- Two fields of `THIS_POLICY` may appear inside other patterns, and each binds
+  from the selected policy reference at evaluation time: `THIS_POLICY.subject`
+  is the concrete subject bound at label creation, and
+  `THIS_POLICY.moduleIdentity` is the content identity of the module defining
+  the rules. The second is how a rule names a function of its own module in a
+  `TransformedBy` identity pattern
+  (`{ kind: "verified", moduleIdentity: THIS_POLICY.moduleIdentity, symbol }`)
+  without spelling a hash that changes with every edit of the module or of its
+  imports. `symbol` is the function's export name, so a blessed function must
+  be exported under that one name; a rule naming anything else never fires.
+  Because
+  the binding comes from the selected reference, a label created under one
+  version of the module is released only by that version's function.
 - `v("X")` is the `{ var: "X" }` placeholder of spec §4.3.3.
 - Field names follow the shipped authoring grammar and lower to the canonical
   evaluator dialect
@@ -170,7 +183,13 @@ the source. A trusted compiler/verifier first proves that the source closure
 and exported symbol lower to that manifest; digest verification alone proves
 only copied-byte integrity. At label creation the subject is bound. Before any
 space commits a persisted reference, it atomically stores or confirms a
-verified local copy of the small manifest keyed by `policyDigest`.
+verified local copy of the small manifest keyed by `policyDigest`. Fresh copies
+store the manifest inline. The trusted metadata reader also reconstructs
+factored copies through the canonical schema traversal and accepts them only
+after verifying the complete advertised digest, module identity, and symbol.
+Every traversed document remains an authorization read bound to the commit;
+malformed existing copies cannot be overwritten as though they were absent.
+This metadata traversal grants no runtime reference acquisition.
 
 Under cross-space label-metadata protection, `Policy.subject` may be represented
 by a self-describing `{ digestOf: <hash> }` field commitment rather than

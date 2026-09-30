@@ -7,6 +7,7 @@ import "@commonfabric/utils/equal-ignoring-symbols";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { isCell } from "../src/cell.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -194,7 +195,7 @@ describe("Cell", () => {
       slot: target.getAsWriteRedirectLink(),
     });
 
-    // Writing a `FabricInstance` (here, a native `Error` that gets wrapped
+    // Writing a `FabricInstance` (here, a JS `Error` that gets wrapped
     // into `FabricError`) through the redirect must land at the target,
     // not clobber the redirect link at `parent.slot`. Target started as
     // `"initial"`; under the bug, target stays as `"initial"` because the
@@ -868,7 +869,7 @@ describe("Cell utility functions", () => {
       // The raw untyped read should return the link structure.
       const raw = cell.getRawUntyped();
       expect(raw).toBeDefined();
-      expect(typeof raw === "object" && raw !== null && "/" in raw).toBe(true);
+      expect(isObjectOrArray(raw) && "/" in raw).toBe(true);
     });
 
     it("setRawUntyped accepts undefined", () => {

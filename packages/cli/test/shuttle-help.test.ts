@@ -6,7 +6,7 @@
  * shuttle has, so what is under test is the form and not the wording of any
  * verb: a summary reworded moves nothing here, and a column that stopped
  * lining up moves everything. What the real verbs say is asked in
- * `shuttle-verbs.test.ts`, where the table that holds it is.
+ * `shuttle-verbs.serial.test.ts`, where the table that holds it is.
  */
 
 import { expect } from "@std/expect";

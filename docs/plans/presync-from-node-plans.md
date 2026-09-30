@@ -338,11 +338,11 @@ in the pull request.
       transformer captures paths (`def.next`), not only roots. A module's
       inputs are synced under its argument schema the same way;
       `syncAllMentionedCells` is gone.
-- [x] `findAllWriteRedirectCells` probes a redirect chain through a
-      schema-less cell. Built with the binding link's schema, the probe's
-      raw read kicked a sync of the target under the whole authored slice,
-      which is what pulled a child's unread `friend` even after the plan
-      syncs stopped asking for it.
+- [x] `findAllWriteRedirectCells` probes a redirect chain against the
+      replica as it stands, kicking no sync of its own. A read of the target
+      under the binding link's schema pulled the whole authored slice, which
+      is what pulled a child's unread `friend` even after the plan syncs
+      stopped asking for it.
 - [x] The stored argument's direct link targets, and the result document
       owning each, are named root-only last in the pre-sync
       (`#syncStoredArgumentLinkTargets`), for both a resume and a setup

@@ -36,9 +36,11 @@ about one aspect of the runtime, are indexed in
   spellings. Naming the bare package name is worse than that. The entry point
   reaches every module the package exports, so naming it from inside completes
   a cycle, and the order in which the package's modules initialize starts to
-  depend on the order the entry point lists its exports. The
+  depend on the order the entry point lists its exports. An alias that reaches
+  the entry point's file, `@` or `@/index.ts` in a package that defines them,
+  is that same import under another name. The
   `cf-package/no-self-import` lint rule (`tasks/lint-self-import.ts`,
-  registered in the root `deno.jsonc`) reports both forms, so a plain
+  registered in the root `deno.jsonc`) reports all of these, so a plain
   `deno lint` catches them. It exempts a package's own tests, which name their
   package on purpose: the surface a consumer sees is the thing they are there
   to check.
@@ -440,6 +442,10 @@ come up.
 - Write descriptive error messages, marked up as
   [`code-comment-style.md`](code-comment-style.md#error-and-log-messages)
   describes.
+- Put a value into a message with the `debugStr` template tag, which quotes
+  the value's rendering and cuts it to length;
+  [`code-comment-style.md`](code-comment-style.md#putting-a-value-into-a-message)
+  says how.
 - Propagate errors using async/await.
 - Document possible errors in JSDoc.
 
@@ -561,6 +567,54 @@ function processData(data: Data) {
 }
 ```
 
+### Ask the object-shape question through the shared predicates
+
+`typeof value === "object"` is true of `null` and true of an array, so the test
+for "may I read this by property name?" is never one comparison. Where those
+conjuncts open a longer structural check, write the shape question as a call to
+the predicate named for it and let the rest of the check follow.
+
+> **❌ Avoid**
+
+```ts
+export function isEvent(value: unknown): boolean {
+  return typeof value === "object" && value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === "string";
+}
+```
+
+> **✅ Prefer**
+
+```ts
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
+export function isEvent(value: unknown): boolean {
+  return isObjectNotArray(value) && typeof value.type === "string";
+}
+```
+
+The predicates live in `@commonfabric/utils/types`, and each name settles the
+array question in its own final word. `isObjectOrArray()` admits any non-`null`
+value whose `typeof` is `"object"`, arrays included. `isObjectNotArray()` asks
+the same question with arrays removed. `isPlainObject()` additionally requires
+the prototype to be `Object.prototype` or `null`, so a class instance does not
+pass. Choose by what the check needs rather than by what the surrounding code is
+named after, because the three differ on which values reach the branch that
+follows. The module header describes the rest of the family, what each one
+narrows to, and why the narrowed types are read-only.
+
+Two situations keep the conjuncts written out. Pattern source may import only
+the specifiers `isAllowedAuthoredImportSpecifier` admits, which do not include
+this module, so a pattern spells the test out. And a check whose value the
+surrounding code goes on to assert as an interface type will not compile through
+the call, because `Record<string, unknown>` does not overlap an interface: read
+the fields off the narrowed record instead of asserting, or leave the test
+inline.
+
+A walk that can reach a stored value needs more than the shape question, and
+which predicate it needs is the next section.
+
 ### Walking or comparing a value
 
 A value the runtime holds may be a `FabricSpecialObject` — a byte sequence, a
@@ -621,7 +675,13 @@ using them is not optional in code that can reach a stored value:
   `FabricValue` without being known to be one — a schema `const` against a
   stored value, a schema default against a materialized one, a write against
   the value it replaces, a request against the snapshot a policy was checked
-  over. It is a structural walk that decides every `FabricSpecialObject` it
+  over. Its operands are values, never query-result views, at any depth. A
+  caller whose operands may hold views compares them with the runner's
+  `fabricAwareEqualThroughViews()`, which walks the views and hands the value
+  model only the special objects they read, or compares stored values (a
+  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  copies a `FabricInstance` read through a view as an empty record. It is a
+  structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on
   one side only, is unequal without either one's contents being read. Neither half serves alone: `valueEqual()` throws
@@ -631,9 +691,14 @@ using them is not optional in code that can reach a stored value:
   call — it decides a container by a content hash cached on identity, where the
   walk pays for every level each time — but it is not a drop-in even there. It
   decides a container by hashing it whole, so it throws on a value holding a
-  cycle and on one holding a class whose codec is a stub, both of which this
-  walk returns for. `valueEqual({ v: aFabricMap }, { v: 5 })` throws where
-  `fabricAwareEqual()` returns `false`.
+  class whose codec is a stub, which this walk returns for.
+  `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
+  returns `false`.
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
@@ -659,6 +724,11 @@ caller. Five shapes cover the tree today:
 - **Treat it as the atomic value it is.** Three sites in `data-updating.ts`
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
+  `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
+  in place of merging into it, and asks `isFabricInstanceOrView()` rather
+  than `instanceof`, so an instance seen through a cell read -- whose
+  prototype the view erases -- gets the same answer instead of being rebuilt
+  as a record with defaults filled into it.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty
@@ -689,6 +759,29 @@ are reachable only through its codec — refuses it outright rather than walking
 it. Those refusals are discovery instruments; see "Flag-gated tripwires" in
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md), which states the obligation
 each new one carries.
+
+### Validating a value that arrived through a decode
+
+A validator that reads named fields off a value asks first whether the value
+is a record. Which question it asks is settled by what built the value.
+
+`JSON.parse()` builds objects rooted at `Object.prototype` and nothing else,
+so over its output `isObjectNotArray()` and `isPlainObject()` agree on every
+value, and a validator fed only from it may ask either.
+
+A richer codec has a wider range. The fabric JSON codec builds class
+instances, and each of those passes the non-array test while carrying no own
+properties. A validator that admits one and then reads named fields off it
+reads `undefined` from every one. Where the fields it consults are optional,
+nothing is left to reject the value by, and it is accepted without a single
+field having been read off it.
+
+So a validator reading a value that arrived through a codec decode asks
+`isPlainObject()`, or `isFabricPlainObject()` where the declared type is
+already a `FabricValue`. The memory wire parser is the worked example: every
+position where a message names fields asks that question, and the positions
+it covers are listed under "Record positions in an envelope" in
+[the memory protocol chapter](../specs/memory-v2/04-protocol.md).
 
 ### Avoid representing invalid state
 
@@ -898,12 +991,15 @@ export const set = (cache: Cache, key: string, value: string) =>
 > changes.
 
 - For CI wall-time optimization, follow
-  [CI Performance Policy](CI_PERFORMANCE.md). Do not keep splitting jobs once
-  the required test jobs are already in the same rough timing band.
+  [CI Performance Policy](CI_PERFORMANCE.md). CI packs every test into lanes by
+  measured cost, so there are no jobs to split or rebalance by hand; a lane that
+  runs long calls for a split test or a moved dial.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
-- Run all tests using `deno task test` (NOT `deno test`)
-- To run a single test file use `deno test path/to/test.ts`.
+- Run all tests using `deno task test` (NOT `deno test`). It is not a
+  substitute for `deno task check`: every package's tests run under
+  `--no-check`.
+- To run a single test file use `deno test --no-check path/to/test.ts`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -925,18 +1021,23 @@ suite will break.
    `"test"` entry, naming the member; that check is what keeps a missing entry
    to a message rather than a CI timeout.
 
-   Use `"deno test"` for packages with tests, or `"echo 'No tests defined.'"` as
-   a stub for packages that don't have tests yet. A `"test"` task defined by its
-   `"dependencies"` alone counts too: what the check asks is whether the name
-   resolves in the package's own directory.
+   For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
+   the package's `"deno-test"` task, which runs the tests themselves — a
+   `deno test` for most packages, or a runner of the package's own; see
+   [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
+   the test-records preload reads, as `docs/development/test-records.md`
+   explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**
 
-   ```json
+   ```jsonc
    {
      "name": "@commonfabric/my-package",
      "exports": { ".": "./mod.ts" },
-     "tasks": { "test": "deno test" }
+     "tasks": {
+       "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+       "deno-test": "deno test --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+     }
    }
    ```
 
@@ -970,8 +1071,8 @@ deno task integration patterns counter
 - Runs integration tests with `API_URL` pointing to the local server
 - **Automatically stops servers after tests complete**
 
-**Available packages:** `runner`, `runtime-client`, `shell`,
-`background-piece-service`, `patterns`, `cli`, `generated-patterns`
+**Available packages:** `runner`, `runtime-client`, `shell`, `patterns`, `cli`,
+`generated-patterns`
 
 **Log files:** After servers start, check these if something goes wrong:
 

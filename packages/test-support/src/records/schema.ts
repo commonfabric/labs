@@ -5,6 +5,8 @@
  * material, is docs/history/plans/test-run-telemetry.md.
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
 /** Schema version carried by every context line and object path. */
 export const RECORD_SCHEMA_VERSION = 1;
 
@@ -90,10 +92,13 @@ export interface CiContext {
   event?: string;
 
   /**
-   * True when the run's head repository differs from the base repository.
-   * Stamped from the trusted payload, never from job artifacts: record
-   * lines and job facts of a fork run are authored by the fork, so
-   * consumers that feed decisions must filter fork runs out by this flag.
+   * True when the run's head repository is not the base repository, and
+   * true when the payload did not name both: a run this repository
+   * cannot place reads as a fork. Stamped from the trusted payload,
+   * never from job artifacts. The member gate means every stored run was
+   * authored under the repository's write access, so what this leaves a
+   * consumer is that a run it marks is never a baseline. See
+   * `docs/specs/test-records.md`, "Trust boundaries for consumers".
    */
   fork?: boolean;
 }
@@ -106,7 +111,7 @@ export interface RunContext {
   /** ULID; unique per uploaded object. */
   reportId: string;
 
-  /** Canonical repository name, as in "commontoolsinc/labs". */
+  /** Canonical repository name, as in "commonfabric/labs". */
   repo: string;
 
   /** Full hash of the commit the tests ran against. */
@@ -131,6 +136,24 @@ export interface RunContext {
 
   /** ISO 8601 UTC. */
   startedAt: string;
+
+  /**
+   * The seed the run's test runners shuffled their order by. Absent from
+   * a run that did not shuffle, whose tests ran in the order they were
+   * declared, so two contexts agree on the order exactly when this field
+   * does.
+   */
+  shuffleSeed?: number;
+}
+
+/**
+ * Whether a report ran code the default branch carries: a push to `main`
+ * that the fork flag does not mark. The flag also marks a run the relay
+ * could not place, so neither kind is a run of the default branch.
+ */
+export function isMainPush(context: RunContext): boolean {
+  return context.ci?.event === "push" && context.branch === "main" &&
+    context.ci.fork !== true;
 }
 
 const OUTCOMES = new Set(["pass", "fail", "skip"]);
@@ -141,6 +164,11 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+/** Whether a value is a seed `deno test --shuffle` would take. */
+export function isSeed(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 /** Serializes a record as one NDJSON line, newline included. */
@@ -165,11 +193,11 @@ export function parseRecordLine(line: string): TestRecord | undefined {
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (record.line !== "record") return undefined;
   const test = record.test as Record<string, unknown> | undefined;
-  if (typeof test !== "object" || test === null) return undefined;
+  if (!isObjectOrArray(test)) return undefined;
   if (
     !isNonEmptyString(test.k) || !isNonEmptyString(test.s) ||
     !isNonEmptyString(test.n)
@@ -207,7 +235,7 @@ export function parseContextLine(line: string): RunContext | undefined {
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const context = value as Record<string, unknown>;
   if (context.line !== "context") return undefined;
   if (context.schema !== RECORD_SCHEMA_VERSION) return undefined;
@@ -219,7 +247,8 @@ export function parseContextLine(line: string): RunContext | undefined {
     !isNonEmptyString(context.os) || !isNonEmptyString(context.arch) ||
     !isNonEmptyString(context.denoVersion) ||
     !isNonEmptyString(context.startedAt) ||
-    !isOptionalString(context.branch) || !isOptionalString(context.agent)
+    !isOptionalString(context.branch) || !isOptionalString(context.agent) ||
+    (context.shuffleSeed !== undefined && !isSeed(context.shuffleSeed))
   ) {
     return undefined;
   }
@@ -230,7 +259,7 @@ export function parseContextLine(line: string): RunContext | undefined {
   }
   let ci: CiContext | undefined;
   if (context.ci !== undefined) {
-    if (typeof context.ci !== "object" || context.ci === null) {
+    if (!isObjectOrArray(context.ci)) {
       return undefined;
     }
     const raw = context.ci as Record<string, unknown>;
@@ -271,6 +300,9 @@ export function parseContextLine(line: string): RunContext | undefined {
   if (context.branch !== undefined) result.branch = context.branch as string;
   if (ci !== undefined) result.ci = ci;
   if (context.agent !== undefined) result.agent = context.agent as string;
+  if (context.shuffleSeed !== undefined) {
+    result.shuffleSeed = context.shuffleSeed as number;
+  }
   return result;
 }
 

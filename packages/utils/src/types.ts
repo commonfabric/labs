@@ -81,7 +81,13 @@
  *
  * `@commonfabric/data-model` asks the first of these questions of a value the
  * type system already says is a `FabricValue`, and spells it
- * `isFabricObjectOrArray()` for the same reason.
+ * `isFabricObjectOrArray()` for the same reason. It spells the third
+ * `isFabricPlainObject()`, which narrows to `FabricPlainObject` and so keeps
+ * an indexed value typed as a `FabricValue`.
+ *
+ * `typeOfIncludingNull()` is the one function here that is not a predicate.
+ * It returns a value's `typeof` tag, with `null` given a tag of its own, for
+ * a caller that dispatches on the tag rather than testing for one type.
  */
 
 /**
@@ -94,16 +100,70 @@ export type Constructor<T = unknown> =
   & (abstract new (...args: any[]) => T)
   & { prototype: T };
 
+/**
+ * Whether `A` and `B` are the same type, by the identity the compiler applies
+ * when it compares two generic signatures. This is the stricter of the two
+ * type comparisons here. Where `Same` matches, this tells `any` in a type
+ * argument from every other argument, a `readonly` property from a mutable
+ * one, and a union from a type each of its members is assignable to. Reach for
+ * it when how a type is written is the claim.
+ */
+export type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false;
+
 /** Helper type to recursively add `readonly` properties to type `T`. */
 export type Immutable<T> = T extends ReadonlyArray<infer U>
   ? ReadonlyArray<Immutable<U>>
   : T extends object ? ({ readonly [P in keyof T]: Immutable<T[P]> })
   : T;
 
+/**
+ * Whether `T` is a union of more than one member: `true` for such a union, and
+ * `false` for a single type. Members are told apart by assignability, which
+ * bounds that in three ways. A union whose members are all mutually assignable,
+ * `Error | TypeError` among them, yields `false`. A union with a member that
+ * every other member is assignable to, and not the other way round, yields
+ * `boolean`: that member reports `false` and the rest `true`. And `never`, the
+ * union of no members, yields `never`, which `MustBeTrue` accepts vacuously.
+ * Compare the result with `Equal` where one of those can arise.
+ */
+export type IsUnion<T> = IsUnionOf<T, T>;
+
+/**
+ * Helper for `IsUnion`, which distributes over `Member` while holding the
+ * union it came from intact in `Whole`.
+ */
+type IsUnionOf<Member, Whole> = Member extends unknown
+  ? ([Whole] extends [Member] ? false : true)
+  : never;
+
+/**
+ * The tag `typeOfIncludingNull()` returns: the result of `typeof`, plus
+ * `null` for the value `null`, which `typeof` files under `object`.
+ */
+export type JsTypeTagIncludingNull =
+  | "bigint"
+  | "boolean"
+  | "function"
+  | "null"
+  | "number"
+  | "object"
+  | "string"
+  | "symbol"
+  | "undefined";
+
 /** Helper type to recursively remove `readonly` properties from type `T`. */
 export type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
   : T extends object ? ({ -readonly [P in keyof T]: Mutable<T[P]> })
   : T;
+
+/**
+ * Compiles only when `T` is `true`: the assertion form of `Same` and `Equal`,
+ * for a type alias that states a fact the compiler holds. `never` satisfies
+ * the constraint, so a comparison that yields `never` rather than `false` on a
+ * mismatch passes here vacuously; `Same` and `Equal` yield `false`.
+ */
+export type MustBeTrue<T extends true> = T;
 
 /** The union of all primitive JavaScript types. */
 export type Primitive =
@@ -119,6 +179,17 @@ export type Primitive =
  * A record whose string keys can be read but not assigned through this type.
  */
 export type ReadonlyRecord = Readonly<Record<string, unknown>>;
+
+/**
+ * Whether `A` and `B` are mutually assignable. This is the looser of the two
+ * type comparisons here: `any` in a type argument matches any argument,
+ * `Map<any, any>` and `Map<string, number>` among them; a `readonly` property
+ * matches a mutable one; and a union matches a type each of its members is
+ * assignable to, so `Error | TypeError` matches `Error`. `Equal` tells each
+ * of those apart.
+ */
+export type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false)
+  : false;
 
 // TODO(danfuzz): The wire formats accept a plain object with any keys, that
 // being the rule a cross-language format has to hold to. This implementation
@@ -327,6 +398,17 @@ export function isPrimitive(value: unknown): value is Primitive {
 }
 
 /**
+ * Returns the `typeof` tag of a value, with `null` given a tag of its own:
+ * `null` for the value `null`, and otherwise exactly what `typeof` returns.
+ * The result is a plain string, so testing it leaves `value` at its declared
+ * type where a `typeof` test would narrow it; a `switch` whose arms use the
+ * narrowed value is written on `typeof` itself.
+ */
+export function typeOfIncludingNull(value: unknown): JsTypeTagIncludingNull {
+  return (value === null) ? "null" : typeof value;
+}
+
+/**
  * Indicates whether `key` is one this implementation refuses to copy onto an
  * object from untrusted input. Use at boundaries where external data enters
  * the system (deserialization, structural copying).
@@ -357,7 +439,7 @@ export function isUnsafeObjectKey(key: string): boolean {
  *   `Object.defineProperty()`, and `JSON.parse()` all carry the name -- so
  *   what stands in the way is the copy loops, not JavaScript.
  * * `constructor` copies faithfully. It is reserved because other boundaries
- *   in this implementation already refuse it: the projection to native values
+ *   in this implementation already refuse it: the projection to JS values
  *   drops it, and `FabricError` throws on it. Accepting it here would mean
  *   admitting a key that a later boundary discards without saying so.
  *

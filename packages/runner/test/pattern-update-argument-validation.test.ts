@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -100,6 +101,32 @@ const typedRow = (marker: string): RuntimeProgram =>
     // stored docs of another vintage routinely do.
     "interface Row { name: string; other?: string; [key: string]: any }",
     "interface Args { row?: Row; [key: string]: any }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/**
+ * A version whose `stamp` is a `Date`, which generates `{ type: "object" }`
+ * and is stored as a `FabricEpochNsec`.
+ */
+const dateStamp = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Args { stamp?: Date }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/** The candidate: `stamp` is a record that requires a defaulted `zone`. */
+const zonedStamp = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { Default, pattern } from 'commonfabric';",
+    "interface Stamp { zone: Default<string, 'UTC'> }",
+    "interface Args { stamp?: Stamp }",
     "export default pattern<Args, { marker: string }>(() => {",
     `  return { marker: ${JSON.stringify(marker)} };`,
     "});",
@@ -894,6 +921,43 @@ describe("pattern update validates the stored argument", () => {
         count: 7,
       },
     );
+  });
+
+  it("refuses a roll-forward whose stored `FabricPrimitive` lacks a newly required defaulted field", async () => {
+    // `schema-compatibility.ts` admits a newly required argument field on its
+    // default, and a `FabricPrimitive` is frozen, so the default never reaches
+    // one. This check is what refuses that value.
+
+    const { cell } = await setupVintage(
+      dateStamp("v1"),
+      { stamp: new FabricEpochNsec(0n) },
+      "roll-forward-primitive-default",
+    );
+
+    const { error, thrown } = await rollForward(cell, zonedStamp("v2"));
+
+    expect(error).toContain(
+      "updated arguments do not match the candidate schema",
+    );
+    expect(error).toContain("stamp: missing required property zone");
+    expect(isStoredArgumentSchemaRefusal(thrown)).toBe(true);
+    const stored = rt.getCellFromLink(getMetaLink(cell, "argument")!)
+      .getRaw() as { stamp: unknown };
+    expect(stored.stamp).toBeInstanceOf(FabricEpochNsec);
+  });
+
+  it("rolls forward a stored record under the same newly required defaulted field (control)", async () => {
+    const { cell } = await setupVintage(
+      dateStamp("v1"),
+      { stamp: {} },
+      "roll-forward-record-default",
+    );
+
+    const { error } = await rollForward(cell, zonedStamp("v2"));
+
+    expect(error).toBeUndefined();
+    await cell.pull();
+    expect((cell.getAsQueryResult() as { marker: string }).marker).toBe("v2");
   });
 
   it("rolls forward when a stored slot holds a link that reads COLD", async () => {

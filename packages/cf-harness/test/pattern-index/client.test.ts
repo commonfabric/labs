@@ -6,6 +6,7 @@ import {
   verifyFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import {
+  createHarnessPatternIndexClientFactory,
   PatternIndexClient,
   PatternIndexError,
 } from "../../src/pattern-index/client.ts";
@@ -62,6 +63,44 @@ const createClient = (
 };
 
 describe("PatternIndexClient", () => {
+  it("constructs clients that sign as the identity read from the configured keyfile", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const key = await Identity.generatePkcs8();
+      const identity = await Identity.fromPkcs8(key);
+      const keyPath = `${root}/identity.key`;
+      await Deno.writeFile(keyPath, key);
+      const { fetchFn, requests } = recordingFetch([
+        jsonResponse({ results: [] }),
+      ]);
+      const config = { baseUrl: "https://index.test/api" };
+      const client = await createHarnessPatternIndexClientFactory(
+        config,
+        keyPath,
+        fetchFn,
+      )();
+      await client.searchPatterns({ text: "reusable components" });
+      const request = requests[0];
+      const verified = await verifyFirstPartyHttpRequest({
+        request: new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        }),
+      });
+      expect(verified.userDid).toBe(identity.did());
+      expect(request.url).toBe("https://index.test/api/searchPatterns");
+      const defaultTransportClient =
+        await createHarnessPatternIndexClientFactory(
+          config,
+          keyPath,
+        )();
+      expect(defaultTransportClient.did).toBe(identity.did());
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("refuses a base URL carrying a query or fragment", () => {
     for (
       const baseUrl of [
@@ -156,11 +195,110 @@ describe("PatternIndexClient", () => {
           signals: { uses: 4, score: 0.75 },
         }],
       }),
+      jsonResponse({ patterns: [], eventTypes: {} }),
     ]);
     const response = await client.searchPatterns({ tags: ["expenses"] });
     expect(response.results.length).toBe(1);
     expect(response.results[0].patternId).toBe("pat-1");
     expect(response.results[0].signals).toEqual({ uses: 4, score: 0.75 });
+  });
+
+  it("refreshes catalog membership while caching immutable lineage metadata", async () => {
+    const metadata = (id: string, priorPatternId?: string) => ({
+      patternId: id,
+      ownerDid: signer.did(),
+      createdAt: "2026-09-17T00:00:00Z",
+      description: id,
+      hashtags: ["donuts"],
+      dependencies: [],
+      ...(priorPatternId === undefined ? {} : { priorPatternId }),
+    });
+    const records = [metadata("old"), metadata("fresh", "old")];
+    const requests: { fn: string; body: Record<string, unknown> }[] = [];
+    let listed = records.slice(0, 1);
+    const client = new PatternIndexClient({
+      baseUrl: "https://index.test/api",
+      signer,
+      fetchFn: (input, init) => {
+        const fn = new URL(String(input)).pathname.split("/").at(-1)!;
+        const body = JSON.parse(String(init?.body));
+        requests.push({ fn, body });
+        const output = fn === "searchPatterns"
+          ? { results: [{ ...records[0], quality: "proven", kind: "app" }] }
+          : fn === "listPatterns"
+          ? {
+            patterns: listed.map((entry) => ({
+              ...entry,
+              events: { created: 1 },
+              score: 0,
+              quality: "unproven",
+            })),
+            eventTypes: {},
+          }
+          : records.find((entry) => entry.patternId === body.patternId);
+        return Promise.resolve(jsonResponse(output));
+      },
+    });
+    const first = await client.searchPatterns({ text: "donuts", limit: 1 });
+    listed = records;
+    const second = await client.searchPatterns({ text: "donuts", limit: 1 });
+    const third = await client.searchPatterns({ text: "donuts", limit: 1 });
+    expect(first.results.map((hit) => hit.patternId)).toEqual(["old"]);
+    expect(second.results.map((hit) => hit.patternId)).toEqual(["fresh"]);
+    expect(third).toEqual(second);
+    expect(requests.filter((request) => request.fn === "listPatterns").length)
+      .toBe(3);
+    expect(
+      requests.filter((request) => request.fn === "getPattern").map((request) =>
+        request.body
+      ),
+    ).toEqual([
+      { patternId: "old", includeSource: false },
+      { patternId: "fresh", includeSource: false },
+    ]);
+    expect(
+      (await client.getPattern({ patternId: "old", includeSource: true }))
+        .patternId,
+    ).toBe("old");
+    expect(requests.at(-1)?.body).toEqual({
+      patternId: "old",
+      includeSource: true,
+    });
+  });
+
+  it("does not cache failed or mismatched discovery metadata", async () => {
+    for (
+      const failure of [
+        jsonResponse({ error: "unavailable" }, 503),
+        jsonResponse({ patternId: "wrong" }),
+      ]
+    ) {
+      const hit = {
+        patternId: "old",
+        ownerDid: signer.did(),
+        quality: "unproven",
+        kind: "app",
+      };
+      const search = () => jsonResponse({ results: [hit] });
+      const catalog = () =>
+        jsonResponse({ patterns: [{ patternId: "old" }], eventTypes: {} });
+      const { client, requests } = createClient([
+        search(),
+        catalog(),
+        failure,
+        search(),
+        catalog(),
+        jsonResponse(hit),
+      ]);
+      await expect(client.searchPatterns({ text: "donuts" })).rejects.toThrow();
+      expect((await client.searchPatterns({ text: "donuts" })).results).toEqual(
+        [hit],
+      );
+      expect(
+        requests.filter((request) => request.url.endsWith("/getPattern"))
+          .length,
+      ).toBe(2);
+    }
   });
 
   it("asks getPattern for source only when told to", async () => {
@@ -296,9 +434,76 @@ describe("PatternIndexClient", () => {
     expect(JSON.parse(requests[0].body)).toEqual({
       patternId: "pat-1",
       eventType: "run_succeeded",
+      did: signer.did(),
       note: "ran in the harness",
     });
     expect(response.ok).toBe(true);
+  });
+
+  it("binds the event author to its signer despite a supplied DID", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+    const input = {
+      patternId: "pat-1",
+      eventType: "thumbs_up" as const,
+      did: "did:key:zImpersonated",
+    };
+    await client.recordEvent(input);
+
+    const request = requests[0];
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
+    expect(JSON.parse(request.body)).toEqual({
+      patternId: "pat-1",
+      eventType: "thumbs_up",
+      did: signer.did(),
+    });
+  });
+
+  it("signs a retraction as its configured identity and sends only its declared fields", async () => {
+    const request = {
+      patternId: "A".repeat(43),
+      successorPatternId: "B".repeat(43),
+      reason: "Superseded by the corrected reader",
+      ownerDid: "did:key:zOther",
+      retractedBy: "did:key:zOther",
+      admin: true,
+    };
+    const receipt = {
+      patternId: request.patternId,
+      status: "retracted",
+      successorPatternId: request.successorPatternId,
+      retractionReason: request.reason,
+      retractedBy: signer.did(),
+      retractedAt: "2026-09-21T00:00:00.000Z",
+      discoverable: false,
+      changed: true,
+    };
+    const { client, requests } = createClient([jsonResponse(receipt)]);
+
+    expect(await client.retractPattern(request)).toEqual(receipt);
+    expect(requests).toHaveLength(1);
+    const sent = requests[0];
+    expect(sent.url).toBe("https://index.test/api/retractPattern");
+    expect(sent.method).toBe("POST");
+    expect(JSON.parse(sent.body)).toEqual({
+      patternId: request.patternId,
+      successorPatternId: request.successorPatternId,
+      reason: request.reason,
+    });
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(sent.url, {
+        method: sent.method,
+        headers: sent.headers,
+        body: sent.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
   });
 
   it("posts a publication with its program and declared shapes", async () => {

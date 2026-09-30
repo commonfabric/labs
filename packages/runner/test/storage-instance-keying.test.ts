@@ -34,6 +34,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { entityKey, entityNameKey } from "../src/scheduler/keys.ts";
@@ -906,7 +907,7 @@ describe("stage A: OFF-arm serialized forms carry no scopeKey", () => {
     depth = 0,
   ): void => {
     if (
-      value === null || typeof value !== "object" || seen.has(value) ||
+      !isObjectOrArray(value) || seen.has(value) ||
       depth > 12
     ) {
       return;

@@ -184,10 +184,10 @@ Deno.test("owningMember attributes a file to its member", () => {
 });
 
 Deno.test("owningMember prefers the nested member over its container", () => {
-  const members = ["packages/patterns", "packages/patterns/auth"];
+  const members = ["packages/patterns", "packages/patterns/nested"];
   assertEquals(
-    owningMember("packages/patterns/auth/mod.ts", members),
-    "packages/patterns/auth",
+    owningMember("packages/patterns/nested/mod.ts", members),
+    "packages/patterns/nested",
   );
   assertEquals(
     owningMember("packages/patterns/other.ts", members),

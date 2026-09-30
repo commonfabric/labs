@@ -35,10 +35,12 @@ import type { FabricValue } from "@commonfabric/api";
 import {
   cloneIfNecessary,
   hashStringOf,
+  isFabricPlainObject,
   isValidFabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
 import { isLink } from "@commonfabric/runner";
+import { carryCfcReferenceProvenance } from "@commonfabric/runner/cfc";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
@@ -537,6 +539,8 @@ export function evaluateFixer(
             `${linkPath.length === 0 ? "<root>" : displayPath(linkPath)}.`,
         };
       }
+      // The copied bytes still name this exact acquired reference.
+      carryCfcReferenceProvenance(valueAtPath(document, linkPath), kept);
     }
     if (storedEqual(document, first)) return { kind: "conforms" };
     return {
@@ -734,10 +738,10 @@ export async function repairPieces(
   // landed preceding moved — a document the fixer no longer changes is in
   // the state the operation produces, whatever it hashes to.
   const decideFor = (
-    stored: unknown,
+    stored: FabricValue,
     expectedHash: string | undefined,
   ): RowDecision => {
-    if (!isPlainRecord(stored)) return { kind: "not-document" };
+    if (!isFabricPlainObject(stored)) return { kind: "not-document" };
     const documentHash = hashStringOf(stored);
     const outcome = evaluateFixer(stored, options.fixer);
     if (outcome.kind === "conforms") {
@@ -805,7 +809,7 @@ export async function repairPieces(
         const cell = await controller.input.getCell();
         await cell.pull();
         const decision = decideFor(
-          cell.getRaw({ lastNode: "value" }),
+          cell.getRawUntyped({ lastNode: "value" }),
           row.expectedHash,
         );
         preflight.set(row.piece, decision);
@@ -960,13 +964,13 @@ export async function repairPieces(
           const fresh = await controller.input.getCell();
           await fresh.pull();
           decision = decideFor(
-            fresh.getRaw({ lastNode: "value" }),
+            fresh.getRawUntyped({ lastNode: "value" }),
             row.expectedHash,
           );
         }
       } else {
         decision = decideFor(
-          cell.getRaw({ lastNode: "value" }),
+          cell.getRawUntyped({ lastNode: "value" }),
           row.expectedHash,
         );
       }

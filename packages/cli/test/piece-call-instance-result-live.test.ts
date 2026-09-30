@@ -3,9 +3,10 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type MemorySpace, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { CallableResolution } from "../lib/callable.ts";
 import { executeResolvedCallable } from "../lib/callable.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /**
  * A `FabricInstance` crossing `Cell.pull()` arrives as a query-result proxy
@@ -72,6 +73,7 @@ describe("piece-call-instance-result-live", () => {
     } as unknown as CallableResolution;
 
     return await executeResolvedCallable(resolution, {}, {
+      sendEvent: sendThroughStandIn,
       invocation: { id: `inv-${cause}`, session: "ses:instance-live" },
     });
   }
@@ -82,7 +84,7 @@ describe("piece-call-instance-result-live", () => {
         runtime,
         space,
         "instance-receipt",
-        new FabricLink({ id: "of:fid1:target", path: [] }),
+        new FabricError({ type: "Error", message: "stored instance" }),
       );
       expect(executed.invocation?.status).toBe("settled");
       expect(executed.invocation?.result).not.toBe(undefined);

@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { HarnessToolContext } from "./types.ts";
 
 export const STRUCTURED_FILE_TOOL_ERROR_CODES = [
@@ -64,13 +65,11 @@ export const structuredFileToolErrorOutputSchema = {
 export const isStructuredFileToolErrorOutput = (
   output: unknown,
 ): output is StructuredFileToolErrorOutput =>
-  typeof output === "object" &&
-  output !== null &&
+  isObjectOrArray(output) &&
   "ok" in output &&
   output.ok === false &&
   "error" in output &&
-  typeof output.error === "object" &&
-  output.error !== null &&
+  isObjectOrArray(output.error) &&
   "type" in output.error &&
   output.error.type === "cf-harness.structured-file-tool-error";
 

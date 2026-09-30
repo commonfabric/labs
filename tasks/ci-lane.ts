@@ -21,24 +21,47 @@
  * `main` cannot fix its number of lanes ahead of time the way a pull
  * request does, because the number depends on how much work there is and
  * the job matrix has to exist before anything starts. So one job asks
- * `--lane-count` and emits an integer, and that integer is the whole of
- * what passes from it to the lanes.
+ * `--lane-count` and emits an integer, and that integer and the `--full`
+ * the lanes are handed are the whole of what passes from it to them.
+ *
+ * A job prints its lane's plan in a step of its own, with `--dry-run`,
+ * and then runs the lane with `--described`, which packs the same plan
+ * again and names it in one line rather than printing it twice.
  *
  *   deno run -A tasks/ci-lane.ts --lane 3 --of 5 --base origin/main
  *   deno run -A tasks/ci-lane.ts --full --lane 1 --of 4
  *   deno run -A tasks/ci-lane.ts --full --lane-count
  *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --dry-run
+ *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --described
  */
 
+import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
   FragmentWriter,
   recordsDir,
   testIdentityKey,
   type TestRecord,
+  unitsBegan,
 } from "@commonfabric/test-support/records";
-import { type CapabilityId, openCapabilities } from "./ci-capabilities.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import {
+  commitMoment,
+  pinShuffleSeed,
+} from "@commonfabric/test-support/shuffle";
+import {
+  type CapabilityId,
+  COMPILE_CACHE_FILE,
+  logTail,
+  openCapabilities,
+  takeGithubToken,
+} from "./ci-capabilities.ts";
+import type { CompileCacheState } from "./ci-check-lib.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  unitProcesses,
+  wholeUnits,
+} from "./test-topology.ts";
 import {
   type Invocation,
   type Suite,
@@ -49,24 +72,54 @@ import {
 import { collectRecords } from "./test-records-gather.ts";
 import { fetchManifest, type ManifestFetch } from "./test-selection/store.ts";
 import {
+  costliestUnschedulable,
+  crowdingLine,
+  type CrowdingSuite,
   fullLaneCount,
+  type Plan,
   plan,
   type Selection,
   type SelectionReason,
+  suiteCharge,
+  suiteLoad,
+  testsOf,
+  unholdableSuites,
 } from "./test-selection/plan.ts";
-import { type Census, census } from "./test-selection/census.ts";
+import {
+  census,
+  isStandIn,
+  type PricedCensus,
+  pricedForRun,
+  type PricedManifest,
+} from "./test-selection/census.ts";
 import {
   type CoverageGateSelection,
   measuredMembersOf,
   measuredSetDirectory,
   measuredSetName,
+  measuredSets,
+  measuresSuite,
 } from "./test-selection/coverage.ts";
-import type { Manifest, WithheldReason } from "./test-selection/manifest.ts";
-import { LANES } from "./test-selection/policy.ts";
+import type {
+  Manifest,
+  ManifestEntry,
+  UnschedulableEntry,
+  WithheldReason,
+} from "./test-selection/manifest.ts";
+import {
+  FULL_LANES_MAX,
+  LANE_PROLOGUE_SECONDS,
+  LANES,
+} from "./test-selection/policy.ts";
+import { say } from "./step-summary.ts";
+import { duration } from "./test-selection/duration.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
 import {
+  batchMeasurementName,
+  excusedMeasurementName,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
+  laneMeasurementName,
 } from "./lane-measurement.ts";
 
 /** What the lane was asked to do. */
@@ -79,6 +132,16 @@ export interface LaneOptions {
 
   /** Print the plan and run nothing. */
   dryRun: boolean;
+
+  /**
+   * The plan was printed already, by a `--dry-run` of the same lane, so
+   * the lane names what it runs in one line rather than printing it
+   * again. A job does this so that the plan heads a step of its own,
+   * where a reader of a running job finds it rather than above thousands
+   * of lines of test output; the lane packs the same plan again, from the
+   * same tree and manifest, the way every lane packs its siblings' plan.
+   */
+  described?: boolean;
 
   /**
    * Print how many lanes the full run needs, and nothing else. This is
@@ -100,8 +163,8 @@ export interface LaneOptions {
   at?: string;
 
   /**
-   * Where coverage profiles and the reports converted from them go,
-   * relative to the root. The job uploads what is under it.
+   * Where the reports converted from coverage profiles go, relative to
+   * the root. The job uploads what is under it. The profiles go beside it.
    */
   coverageDir?: string;
 
@@ -111,8 +174,22 @@ export interface LaneOptions {
 /** Where coverage goes when the command line names nowhere else. */
 export const DEFAULT_COVERAGE_DIR = "coverage";
 
-/** Where a lane puts the profiles it collects, under its coverage directory. */
-export const COVERAGE_PROFILE_DIR = "raw";
+/**
+ * What a lane appends to its coverage directory's name to name the
+ * directory it puts the profiles it collects in. The profiles sit beside
+ * the directory the job uploads, not in it: one directory of them can
+ * hold hundreds of thousands of files, and the upload walks every
+ * directory under the path it is given, excluded or not.
+ */
+export const COVERAGE_PROFILE_SUFFIX = "-raw";
+
+/**
+ * Where a lane puts the reports the authored-pattern instrumentation
+ * writes, under its coverage directory. They are LCOV already, so they sit
+ * among the reports rather than among the profiles, and outside the
+ * measured sets' layout, since no set is scored from them.
+ */
+export const PATTERN_COVERAGE_DIR = "lcov/pattern-runtime";
 
 /** Where a lane puts the reports it converts, under its coverage directory. */
 export const COVERAGE_REPORT_DIR = "lcov/sets";
@@ -125,12 +202,43 @@ export const COVERAGE_REPORT_DIR = "lcov/sets";
  */
 export const COVERAGE_REPORT_FILE = "coverage.lcov";
 
+/**
+ * The measured set a file inside a lane's report layout belongs to, named
+ * by the directory the lane wrote it in, or nothing where the file is not
+ * inside that layout.
+ *
+ * The layout is matched whole rather than by its last segment, so that a
+ * suite named after one of those segments cannot be read as the layout
+ * itself. Whatever the file is — the report, or a marker written beside
+ * it — this is the one answer to which set it belongs to, so a reader
+ * cannot part company with the lane that wrote it.
+ */
+export function measuredSetOfReport(at: string): string | undefined {
+  const layout = COVERAGE_REPORT_DIR.split("/");
+  const parts = at.replaceAll("\\", "/").split("/");
+  // The last occurrence rather than the first: a lane whose coverage
+  // directory itself lies under a path spelling the layout would
+  // otherwise be read from the wrong one, and every report under it
+  // dismissed.
+  const start = parts.findLastIndex((_, index) =>
+    parts.slice(index, index + layout.length).join("/") === COVERAGE_REPORT_DIR
+  );
+  if (start === -1) return undefined;
+  const rest = parts.slice(start + layout.length);
+  return rest.length === 3 ? `${rest[0]}/${rest[1]}` : undefined;
+}
+
 /** Where this lane's coverage goes, absolute. */
 export function coverageRoot(options: LaneOptions): string {
   return path.resolve(
     options.root,
     options.coverageDir ?? DEFAULT_COVERAGE_DIR,
   );
+}
+
+/** Where this lane's coverage profiles go, absolute. */
+export function profileRoot(options: LaneOptions): string {
+  return `${coverageRoot(options)}${COVERAGE_PROFILE_SUFFIX}`;
 }
 
 /** Reads the command line, or returns undefined for a malformed one. */
@@ -155,6 +263,10 @@ export function parseLaneArgs(
     }
     if (flag === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+    if (flag === "--described") {
+      options.described = true;
       continue;
     }
     if (flag === "--lane-count") {
@@ -192,6 +304,9 @@ export function parseLaneArgs(
   // full run's question for a command line that did not ask it, and a
   // workflow edit dropping the flag would still get a plausible integer.
   if (options.laneCount && !options.full) return undefined;
+  // A dry run does nothing but describe, so one told the plan was
+  // described already has nothing to do.
+  if (options.described && options.dryRun) return undefined;
   return options;
 }
 
@@ -217,32 +332,28 @@ export function parseLaneArgs(
  * terms — the manifest worth reading is the one that was current when
  * the tree under test came into being.
  *
- * The committer date rather than the author's: a rebased or cherry-picked
- * commit keeps the date it was first written, which can be arbitrarily
- * old, while the committer date moves with the tree.
+ * The seed test order is shuffled by is taken from the same moment, for
+ * the same reasons.
+ *
+ * Throws where the commit's date cannot be read. Reading it can fail in
+ * one lane and not in its siblings, and no other moment is one they are
+ * sure to share.
  */
-export async function manifestMoment(
-  options: LaneOptions,
-): Promise<{ at: string; note?: string }> {
-  if (options.at !== undefined) return { at: options.at };
-  const result = await new Deno.Command("git", {
-    args: ["log", "-1", "--format=%cI", "HEAD"],
-    cwd: options.root,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  const raw = new TextDecoder().decode(result.stdout).trim();
+export function manifestMoment(
+  options: Pick<LaneOptions, "at" | "root">,
+): string {
+  if (options.at !== undefined) return options.at;
+  const moment = commitMoment(options.root);
+  if (moment === undefined) {
+    throw new Error(
+      `ci-lane: cannot read the date of the commit checked out at ` +
+        `\`${options.root}\`, which is the moment every lane testing it ` +
+        "resolves its manifest at; `--at` names another moment",
+    );
+  }
   // Git writes the committer's own offset, and manifest names carry UTC,
   // so the two are only comparable once this one is normalized.
-  const at = result.success ? new Date(raw).getTime() : Number.NaN;
-  if (Number.isNaN(at)) {
-    return {
-      at: new Date().toISOString(),
-      note: "cannot read the commit's date, so the manifest is the newest " +
-        "there is rather than the one this tree was made against",
-    };
-  }
-  return { at: new Date(at).toISOString() };
+  return moment.toISOString();
 }
 
 /** The files this change touched, as the repository names them. */
@@ -289,9 +400,19 @@ export interface Batch {
    * would cost the lane time the packer never charged it for.
    */
   runs: Map<Unit, number>;
+
+  /**
+   * Seconds the packer charged the lane for this batch: `suiteCharge()`
+   * over the selections it holds. The lane records it beside what the
+   * batch spent, which is what says how far the calibration was out.
+   */
+  projected: number;
 }
 
-/** How many times a batch's longest-running unit runs. */
+/**
+ * How many passes a batch makes: the most runs any of its units asks for.
+ * Each pass is an invocation of the suite's command of its own.
+ */
 export function batchRepeats(batch: Batch): number {
   let most = 1;
   for (const runs of batch.runs.values()) most = Math.max(most, runs);
@@ -308,19 +429,26 @@ export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
  * skip list of everything inside it that was not selected, so choosing
  * one test out of a file leaves its siblings registered as ignored rather
  * than missing.
+ *
+ * A unit its suite declares whole carries no skip list, because its runner runs
+ * every identity in it and reads no list.
  */
 export function batchesOf(
   suites: readonly Suite[],
-  manifest: Manifest | undefined,
+  manifest: PricedManifest,
   selections: readonly Selection[],
 ): Batch[] {
   const bySuite = new Map<string, Suite>(
     suites.map((suite) => [suite.id, suite]),
   );
-  const inUnit = new Map<string, string[]>();
-  for (const entry of manifest?.entries ?? []) {
+  const wholeOf = new Map<Suite, ReadonlySet<Unit>>(
+    suites.map((suite) => [suite, new Set(suite.whole)]),
+  );
+  const processes = unitProcesses(suites);
+  const inUnit = new Map<string, ManifestEntry[]>();
+  for (const entry of manifest.entries) {
     const key = `${entry.suite}\t${entry.unit}`;
-    inUnit.set(key, [...inUnit.get(key) ?? [], entry.test.n]);
+    inUnit.set(key, [...inUnit.get(key) ?? [], entry]);
   }
   const batches = new Map<string, Batch>();
   // What each unit was selected for: the names to run, and the most
@@ -344,14 +472,26 @@ export function batchesOf(
     const suite = bySuite.get(suiteId);
     if (suite === undefined) continue;
     const all = inUnit.get(key) ?? [];
-    const skip = all.filter((name) => !names.has(name));
+    // A unit declared whole runs every identity in it, chosen or not.
+    const whole = wholeOf.get(suite)!.has(unit);
+    const runs = whole ? all : all.filter((entry) => names.has(entry.test.n));
+    const request: UnitRequest = {
+      unit,
+      skip: whole ? [] : all.filter((entry) => !names.has(entry.test.n))
+        .map((entry) => entry.test.n),
+      cost: runs.reduce((total, entry) => total + entry.cost, 0),
+    };
     const batch = batches.get(suiteId);
-    const request: UnitRequest = { unit, skip };
     if (batch === undefined) {
       batches.set(suiteId, {
         suite,
         units: [request],
         runs: new Map([[unit, repeats]]),
+        projected: suiteCharge(
+          { manifest, processes },
+          suiteId,
+          selections.filter(({ entry }) => entry.suite === suiteId),
+        ),
       });
     } else {
       batch.units.push(request);
@@ -378,9 +518,44 @@ export function batchesOf(
       (a.unit < b.unit ? -1 : a.unit > b.unit ? 1 : 0)
     );
   }
-  return [...batches.values()].sort((a, b) =>
-    a.suite.id < b.suite.id ? -1 : a.suite.id > b.suite.id ? 1 : 0
-  );
+  // What a lane costs beyond its tests is fitted from what its batches
+  // were seen to take, and a lane that the step timeout or a
+  // cancellation stops part way through leaves its later batches unrun
+  // and unmeasured. So the order a lane takes its batches in decides
+  // which suites the cost model can ever learn, and a suite the model
+  // cannot price is one that makes lanes run past the bound they are
+  // packed to finish inside. Two keys answer that, in this order.
+  //
+  // A suite whose charge this run did not measure goes ahead of one
+  // whose charge it did, because it is the one worth measuring. That is
+  // a suite no lane has run at all, and a suite no lane has run the way
+  // this run runs it: what a suite costs with coverage on is unknown
+  // until a lane has run it so, whatever it costs without. And within
+  // each group the largest share of the lane goes first, because a lane
+  // that runs out of time should have spent it on the batch most worth
+  // knowing about and dropped the cheap ones. A share is read through
+  // `suiteLoad`, which is what the packer charged the lane for the suite's
+  // tests, so a suite whose tests run slower than they were measured at,
+  // or run several times, is as large here as it was when the lane was
+  // filled.
+  //
+  // Both keys are a function of the plan, and the identifier settles a
+  // tie, so every attempt at a lane runs its batches in the same order
+  // whatever order the plan listed its selections in.
+  const keyed = [...batches.values()].map((batch) => ({
+    batch,
+    id: batch.suite.id,
+    measured: manifest.fitted.has(batch.suite.id) ? 1 : 0,
+    seconds: suiteLoad(
+      manifest,
+      batch.suite.id,
+      selections.filter(({ entry }) => entry.suite === batch.suite.id),
+    ),
+  }));
+  return keyed.sort((a, b) =>
+    a.measured - b.measured || b.seconds - a.seconds ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  ).map(({ batch }) => batch);
 }
 
 /** What running one invocation came to. */
@@ -410,14 +585,23 @@ export async function runInvocation(
 }
 
 /**
- * A record measuring the lane machinery rather than a test. The publisher
- * fits `setupCost`, `suiteOverhead` and `correction` from these, so they
- * travel as ordinary records through the machinery that already exists
+ * One figure a lane measured about itself, as a record measuring the lane
+ * machinery rather than a test. The publisher reads `setupCost` and a
+ * suite's process setup from these, and fits its other figures to them, so
+ * they travel as ordinary records through the machinery that already exists
  * and need no pipeline of their own. They stay unmarked whatever variant
  * the batch they measure carried: they measure the lane, not an alternate
  * execution of one test.
+ *
+ * The record format carries one number and calls it a duration, so which
+ * of the lane's figures this is and what it counts are decided by the
+ * name.
  */
-function timingRecord(name: string, seconds: number, ok: boolean): TestRecord {
+function measurementRecord(
+  name: string,
+  figure: number,
+  ok: boolean,
+): TestRecord {
   return {
     line: "record",
     test: {
@@ -426,8 +610,13 @@ function timingRecord(name: string, seconds: number, ok: boolean): TestRecord {
       n: name,
     },
     outcome: ok ? "pass" : "fail",
-    durationMs: Math.round(seconds * 1000),
+    durationMs: Math.round(figure),
   };
+}
+
+/** One span of time a lane measured about itself, in seconds. */
+function timingRecord(name: string, seconds: number, ok: boolean): TestRecord {
+  return measurementRecord(name, seconds * 1000, ok);
 }
 
 /** Appends records to the lane's own spool. */
@@ -452,6 +641,13 @@ export interface BatchCoverage {
    * runs, which is what the full run asks for.
    */
   members?: ReadonlySet<string>;
+
+  /**
+   * Where the authored-pattern instrumentation writes, for the full run
+   * alone. What it measures feeds the repository-wide figure, which only
+   * the full run publishes; no measured set is scored from it.
+   */
+  patternDir?: string;
 }
 
 /**
@@ -468,10 +664,85 @@ export function batchCoverage(
   suiteId: string,
   gate: CoverageGateSelection,
 ): BatchCoverage | undefined {
-  const dir = path.join(coverageRoot(options), COVERAGE_PROFILE_DIR, suiteId);
-  if (options.full) return { dir };
-  const members = measuredMembersOf(gate, suiteId);
-  return members.size === 0 ? undefined : { dir, members };
+  if (!measuresSuite(gate, suiteId, options.full)) return undefined;
+  const root = coverageRoot(options);
+  const dir = path.join(profileRoot(options), suiteId);
+  return options.full
+    ? { dir, patternDir: path.join(root, PATTERN_COVERAGE_DIR, suiteId) }
+    : { dir, members: measuredMembersOf(gate, suiteId) };
+}
+
+/**
+ * What a lane writes beside a set's report when the units it measured
+ * through held a failure the run did not fail for.
+ *
+ * Coverage measured through a failing unit is short by whatever that
+ * unit would have reached, and a run excusing a flaky failure stays
+ * green, so nothing else downstream would know. The report still merges
+ * into the repository-wide figure, which is a trend; what this stops is
+ * the set's own number becoming the baseline every later pull request is
+ * held to.
+ */
+export const COVERAGE_FAILURE_MARKER = "measured-through-a-failure.txt";
+
+/**
+ * The record a lane that opened the pattern compile byte cache leaves of
+ * whether it found one restored: `cold` or `warm`, the whole of the file.
+ *
+ * A cold cache compiles every pattern from scratch, which runs compile
+ * branches a warm run never reaches, so it moves the repository-wide
+ * figure that the pattern suites contribute to. The record goes at the
+ * top of the lane's report directory, which its coverage artifact holds,
+ * so that whatever reads the figure can tell a cold run's from a warm
+ * one's.
+ */
+export const COMPILE_CACHE_STATE_FILE = "compile-cache-state.txt";
+
+/**
+ * Marks each measured set whose units a lane saw fail, beside the report
+ * it wrote for that set.
+ */
+export async function markMeasuredFailures(
+  options: LaneOptions,
+  suites: readonly Suite[],
+  failed: ReadonlySet<string>,
+): Promise<string[]> {
+  if (failed.size === 0) return [];
+  const root = coverageRoot(options);
+  const marked: string[] = [];
+  for (const ref of measuredSets(suites)) {
+    const hit = ref.set.units.filter((unit) =>
+      failed.has(`${ref.suite}\t${unit}`)
+    );
+    if (hit.length === 0) continue;
+    const at = path.join(
+      root,
+      COVERAGE_REPORT_DIR,
+      measuredSetDirectory(ref),
+      COVERAGE_FAILURE_MARKER,
+    );
+    await Deno.mkdir(path.dirname(at), { recursive: true });
+    await Deno.writeTextFile(at, `${hit.sort().join("\n")}\n`);
+    marked.push(measuredSetName(ref));
+  }
+  return marked.sort();
+}
+
+/**
+ * Writes the record of whether the compile byte cache was restored, at the
+ * top of the directory the lane's coverage artifact carries.
+ */
+export async function writeCompileCacheState(
+  options: LaneOptions,
+  state: CompileCacheState,
+): Promise<void> {
+  const at = path.join(
+    coverageRoot(options),
+    path.dirname(COVERAGE_REPORT_DIR),
+    COMPILE_CACHE_STATE_FILE,
+  );
+  await Deno.mkdir(path.dirname(at), { recursive: true });
+  await Deno.writeTextFile(at, `${state}\n`);
 }
 
 /**
@@ -488,7 +759,7 @@ export async function convertCoverage(
   options: LaneOptions,
 ): Promise<{ ok: boolean; reports: string[] }> {
   const root = coverageRoot(options);
-  const profiles = path.join(root, COVERAGE_PROFILE_DIR);
+  const profiles = profileRoot(options);
   const reports: string[] = [];
   let ok = true;
   for (const suiteId of await directoriesIn(profiles)) {
@@ -544,16 +815,54 @@ export async function runBatch(
   records: TestRecord[];
   conflicts: TestRecord[];
   seconds: number;
+  unexplained: number;
+  silent: string[];
 }> {
   const records: TestRecord[] = [];
   const conflicts: TestRecord[] = [];
   let ok = true;
   let seconds = 0;
+  // Units an execution was asked to run and recorded nothing for. Only
+  // this loop can answer that: a unit runs its tests or it does not, and
+  // a reader taking the batch's records as one list sees the execution
+  // that ran beside the one that did not and cannot tell them apart.
+  const silent = new Set<string>();
+  // Executions that ended badly having recorded no failure of their own,
+  // which is a failure somewhere the records cannot see: a runner that
+  // could not start, a command that died before reporting.
+  //
+  // Counted per execution rather than over the batch, because an excusal
+  // is a statement about one invocation. A repeat that died having
+  // recorded nothing sits in the same list of records as a repeat that
+  // recorded a failure a flake rate excuses, and a reader taking the
+  // batch's records as one list cannot tell that from a batch where
+  // every execution ran.
+  let unexplained = 0;
+  // How many times a pass opened a unit, over every pass.
+  let opened = 0;
+  // What the unit that took longest in each pass took, added up over the
+  // passes.
+  let longest = 0;
+  // The processes started that mark when their units began, and what they
+  // spent before then between them, over every pass.
+  let processes = 0;
+  let setup = 0;
   for (let run = 1; run <= batchRepeats(batch); run++) {
+    console.log(
+      `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
+        `${batchRepeats(batch)}`,
+    );
     const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
-    const invocations = await batch.suite.command(unitsForRun(batch, run), {
+    const asked = unitsForRun(batch, run);
+    opened += asked.length;
+    // The units this execution recorded anything at all for, gathered
+    // across whatever invocations the suite splits it into.
+    const heard = new Set<string>();
+    // Seconds each unit's records took in this pass.
+    const unitSeconds = new Map<string, number>();
+    const invocations = await batch.suite.command(asked, {
       root: options.root,
       outputDir,
       spoolDir: batchSpool,
@@ -563,9 +872,13 @@ export async function runBatch(
         ...(coverage.members === undefined
           ? {}
           : { measuredMembers: coverage.members }),
+        ...(coverage.patternDir === undefined
+          ? {}
+          : { patternCoverageDir: coverage.patternDir }),
       }),
     });
     for (const invocation of invocations) {
+      const startedAt = Date.now();
       const outcome = await runInvocation(invocation, {
         ...env,
         // Each execution writes into a spool of its own, so a repeat
@@ -576,6 +889,18 @@ export async function runBatch(
       });
       seconds += outcome.seconds;
       if (!outcome.ok) ok = false;
+      // A process that marked nothing says nothing about where its setup
+      // ended, so all of what it spent stays with its units.
+      const began = invocation.process === undefined
+        ? undefined
+        : await unitsBegan(batchSpool);
+      if (began !== undefined) {
+        processes += 1;
+        setup += Math.min(
+          outcome.seconds,
+          Math.max(0, began - startedAt) / 1000,
+        );
+      }
       const collected = await collectRecords({
         spoolDir: batchSpool,
         junit: (invocation.junit ?? []).map((output) => ({
@@ -591,32 +916,282 @@ export async function runBatch(
           ? {}
           : { variant: batch.suite.variant }),
       });
+      if (
+        !outcome.ok &&
+        !collected.records.some((record) => record.outcome === "fail")
+      ) {
+        unexplained += 1;
+      }
+      for (const record of collected.records) {
+        const location = batch.suite.locate(record);
+        if (location?.level !== "unit") continue;
+        heard.add(location.unit);
+        unitSeconds.set(
+          location.unit,
+          (unitSeconds.get(location.unit) ?? 0) + record.durationMs / 1000,
+        );
+      }
       records.push(...collected.records);
       conflicts.push(...collected.conflicts);
       await Deno.remove(batchSpool, { recursive: true }).catch(() => {});
       await Deno.mkdir(batchSpool, { recursive: true });
     }
+    for (const request of asked) {
+      if (!heard.has(request.unit)) silent.add(request.unit);
+    }
+    longest += Math.max(0, ...unitSeconds.values());
   }
   if (spool !== undefined) {
     spoolRecords(spool, [
       ...records,
+      // What the batch spent, what its tests took between them, how many
+      // times its passes opened a unit, what the longest unit of each
+      // pass took added together, how many passes it made, what the
+      // processes it started spent before their units began, and how many
+      // such processes it started. The publisher reads a suite's cost
+      // beyond its tests from the seven together: the first two differ by
+      // everything the batch paid that no test's duration holds, the third
+      // is the part of that which grows with the units opened, the fourth
+      // is the least the batch could have spent on its tests however many
+      // of them ran side by side, since its passes follow one another, the
+      // fifth is how many times it paid for starting the suite's command,
+      // and the sixth and seventh measure what each process it started
+      // paid before its units began. The eighth, what the packer charged
+      // the lane for the batch, is not fitted from: set beside the first,
+      // it says how far the fit the lane was packed by was out.
+      //
+      // The tests' own time is summed here rather than read back from
+      // the records, because a reader has no way to tell which of a
+      // report's records came from which batch, and a unit that recorded
+      // nothing at all leaves no trace of having been opened. A record
+      // off the suite's surfaces counts once like any other: whatever is
+      // wrong with its metadata, the batch spent that time running it,
+      // and leaving it out would move that time into the overhead.
       timingRecord(
-        `${LANE_MEASUREMENT_PREFIX}batch ${batch.suite.id}`,
+        batchMeasurementName(batch.suite.id, coverage !== undefined),
         seconds,
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "ran",
+        ),
+        records.reduce((total, record) => total + record.durationMs, 0) / 1000,
+        ok,
+      ),
+      measurementRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "units",
+        ),
+        opened,
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "longest",
+        ),
+        longest,
+        ok,
+      ),
+      measurementRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "passes",
+        ),
+        batchRepeats(batch),
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "start",
+        ),
+        setup,
+        ok,
+      ),
+      measurementRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "processes",
+        ),
+        processes,
+        ok,
+      ),
+      timingRecord(
+        batchMeasurementName(
+          batch.suite.id,
+          coverage !== undefined,
+          "projected",
+        ),
+        batch.projected,
         ok,
       ),
     ]);
   }
-  return { ok, records, conflicts, seconds };
+  return {
+    ok,
+    records,
+    conflicts,
+    seconds,
+    unexplained,
+    silent: [...silent].sort(),
+  };
 }
 
-/** Says something both on the lane's output and in the job summary. */
-function say(lines: readonly string[]): void {
-  const text = `${lines.join("\n")}\n`;
-  console.log(text);
-  const summary = Deno.env.get("GITHUB_STEP_SUMMARY");
-  if (summary !== undefined && summary.length > 0) {
-    Deno.writeTextFileSync(summary, text, { append: true });
+/** What reading a batch's records against what it was asked to run found. */
+export interface Accounting {
+  /** Failing identities whose failure fails the lane. */
+  gating: string[];
+
+  /** Failing identities a flake rate excuses, where they are excused. */
+  excused: string[];
+
+  /**
+   * Identities the batch was asked to run and no record accounts for.
+   * An excused failure beside one of these is not excused: an invocation
+   * that recorded a failure and then stopped has run almost nothing
+   * while satisfying any weaker test.
+   */
+  unaccounted: string[];
+
+  /**
+   * The units a failure was seen in, whether or not it was excused. A
+   * measured set holding one of these measured its member through a
+   * failing test.
+   */
+  failedUnits: string[];
+}
+
+/**
+ * Reads one batch's records against what it was asked to run.
+ *
+ * An identity is accounted for by a record naming it. A stand-in is
+ * accounted for by its unit recording anything at all: a stand-in is what
+ * the packer places for a unit no manifest has seen, and no record will
+ * ever carry its name, because a real record is named for a test rather
+ * than for a file.
+ *
+ * An identity that went unaccounted for while its unit recorded is
+ * ordinary churn — a manifest is hours old by construction, and a test
+ * renamed since records under the new name — so it costs an excusal
+ * rather than the run.
+ *
+ * Whether every execution ran what it was asked to is not a question for
+ * this. A batch's records arrive as one list however many executions
+ * wrote them, so only the loop that ran them can tell an execution that
+ * recorded its unit from one that did not; `runBatch` answers that.
+ */
+export function accountFor(
+  batch: Batch,
+  asked: readonly Selection[],
+  records: readonly TestRecord[],
+  nonGating: ReadonlySet<string>,
+): Accounting {
+  const gating: string[] = [];
+  const excused: string[] = [];
+  const heard = new Set<string>();
+  const heardUnits = new Set<string>();
+  const failedUnits = new Set<string>();
+  for (const record of records) {
+    const location = batch.suite.locate(record);
+    if (location?.level === "unit") heardUnits.add(location.unit);
+    const key = testIdentityKey(record.test);
+    heard.add(key);
+    if (record.outcome !== "fail") continue;
+    if (location?.level === "unit") failedUnits.add(location.unit);
+    (nonGating.has(key) ? excused : gating).push(key);
+  }
+  const unaccounted = asked
+    .filter((selection) => selection.entry.suite === batch.suite.id)
+    .filter((selection) =>
+      isStandIn(selection.entry)
+        ? !heardUnits.has(selection.entry.unit)
+        : !heard.has(testIdentityKey(selection.entry.test))
+    )
+    .map((selection) => testIdentityKey(selection.entry.test));
+  return {
+    gating: [...new Set(gating)].sort(),
+    excused: [...new Set(excused)].sort(),
+    unaccounted: [...new Set(unaccounted)].sort(),
+    failedUnits: [...failedUnits].sort(),
+  };
+}
+
+/** Says what a batch's records came to, where they came to anything. */
+export function describeAccounting(
+  suite: string,
+  accounting: Accounting,
+  excusing: boolean,
+  silent: readonly string[],
+): void {
+  const lines: string[] = [];
+  /** One paragraph of the batch's summary, headed and then listed. */
+  const section = (head: string, items: readonly string[]): void => {
+    if (items.length === 0) return;
+    if (lines.length > 0) lines.push("");
+    lines.push(head, "");
+    for (const item of items) lines.push(`- ${item}`);
+  };
+  section(
+    `${suite}: ${accounting.gating.length} failures this run fails for:`,
+    accounting.gating,
+  );
+  section(
+    excusing
+      ? `${suite}: ${accounting.excused.length} failures too flaky to ` +
+        `judge a change by, which do not fail this run:`
+      : `${suite}: ${accounting.excused.length} failures a flake rate ` +
+        `would excuse, which fail this run because the batch did not ` +
+        `account for everything it was asked to run:`,
+    accounting.excused,
+  );
+  // Named whenever there are any, because this is the one list that
+  // decides whether an excusal holds, and a rename is what it usually
+  // is. A summary saying the batch left something unaccounted for and
+  // not saying what is a message nobody can act on.
+  section(
+    `${suite}: ${accounting.unaccounted.length} identities no record ` +
+      `accounts for, which a rename since the manifest would explain:`,
+    accounting.unaccounted,
+  );
+  section(
+    `${suite}: ${silent.length} units an execution recorded nothing for, ` +
+      `so nothing ran them:`,
+    silent,
+  );
+  if (lines.length > 0) say(lines);
+}
+
+/**
+ * Prints the end of every log the opened capabilities named.
+ *
+ * A capability runs outside the test process, so a failure on its side is
+ * the half no test record describes, and the directory it wrote to goes
+ * when the lane ends. The lane's own output is what survives that — a
+ * continuous-integration job keeps it, and a person running a lane is
+ * reading it already — so the evidence goes there rather than into an
+ * artifact the lane would have to invent a way to upload.
+ *
+ * Not through `say`: the job summary is rendered prose with a size of its
+ * own to keep, and this is a log.
+ */
+export async function describeCapabilityLogs(
+  logs: readonly { capability: string; path: string }[],
+  read: (path: string) => Promise<string> = Deno.readTextFile,
+): Promise<void> {
+  for (const { capability, path: at } of logs) {
+    console.log(`\n--- ${capability} log ---`);
+    console.log(await logTail(at, read));
+    console.log(`--- end of ${capability} log ---`);
   }
 }
 
@@ -679,17 +1254,44 @@ function chosenFor(
 ): { identities: number; seconds: number; why: string } {
   const mine = selections.filter((s) => s.entry.suite === suite);
   const reasons = new Map<SelectionReason, number>();
-  let seconds = 0;
   for (const selection of mine) {
     reasons.set(selection.reason, (reasons.get(selection.reason) ?? 0) + 1);
-    seconds += selection.entry.cost * selection.repeats;
   }
   return {
     identities: mine.length,
-    seconds,
+    seconds: testsOf(mine).ran,
     why: [...reasons].sort().map(([reason, count]) => `${reason} ${count}`)
       .join(", "),
   };
+}
+
+/**
+ * How much of a lane's projection stands on units nothing has measured:
+ * how many of its selections are stand-ins, and the seconds of the
+ * projection their own cost decides.
+ *
+ * Read through `suiteLoad`, which is how the packer charges a suite's
+ * tests: the seconds are what each suite's charge comes to less what it
+ * would come to without its stand-ins, so that they are a share of the
+ * projection rather than a second reading of the same quantity. The
+ * overheads a lane pays around a stand-in are measured rather than
+ * guessed, and are not here.
+ */
+function standingOnStandIns(
+  manifest: Manifest,
+  selections: readonly Selection[],
+): { units: number; seconds: number } {
+  let units = 0;
+  let seconds = 0;
+  for (
+    const [suite, held] of Map.groupBy(selections, ({ entry }) => entry.suite)
+  ) {
+    const measured = held.filter(({ entry }) => !isStandIn(entry));
+    units += held.length - measured.length;
+    seconds += suiteLoad(manifest, suite, held) -
+      suiteLoad(manifest, suite, measured);
+  }
+  return { units, seconds };
 }
 
 /**
@@ -699,42 +1301,52 @@ function chosenFor(
  * expected to take and why each of its identities was chosen. "Why did
  * my test not run" is the question a selected run provokes, and a
  * summary that only names the suites cannot begin to answer it. The
- * seconds are the tests' own measured time and not what the lane will
- * take: the overheads the packer charged on top are per lane rather than
- * per identity, and `projectedSeconds` is where the whole figure is.
+ * seconds in the table are the tests' own time and not what the lane
+ * will take: the overheads the packer charged on top are per lane rather
+ * than per identity, and `projectedSeconds` is where the whole figure is.
+ *
+ * Not all of that time is measured. A unit nothing has recorded is
+ * carried on a stand-in whose cost comes from the suite around it, and
+ * the projection line says how many of its seconds those account for.
  */
 export function describePlan(
   options: LaneOptions,
   batches: readonly Batch[],
   capabilities: readonly CapabilityId[],
-  manifest: { objectName?: string; absent?: string },
-  unschedulable: readonly string[],
-  chosen: { selections: readonly Selection[]; projectedSeconds: number },
+  fetched: { objectName?: string; absent?: string },
+  unschedulable: readonly UnschedulableEntry[],
+  crowding: readonly CrowdingSuite[],
+  chosen: {
+    /** The manifest these selections were made against and costed by. */
+    manifest: Manifest;
+    selections: readonly Selection[];
+    projectedSeconds: number;
+  },
   budget: number,
-  unmeasured: number,
-  entries: number,
 ): void {
   const lines: string[] = [];
   lines.push(`## Lane ${options.lane} of ${options.of}`);
   lines.push("");
   lines.push(
-    manifest.absent === undefined
-      ? `Manifest: \`${manifest.objectName}\``
-      : `Running unselected: ${manifest.absent}`,
+    fetched.absent === undefined
+      ? `Manifest: \`${fetched.objectName}\``
+      : `Running unselected: ${fetched.absent}`,
   );
   lines.push("");
   lines.push(`Capabilities: ${capabilities.join(", ") || "none"}`);
   lines.push("");
+  // A stand-in's cost is taken from the suite around it rather than from
+  // the unit it stands for, so a projection resting on several says what
+  // the lane would take if those figures held. Somebody reading this
+  // beside a lane that ran four times as long is told as much.
+  const standing = standingOnStandIns(chosen.manifest, chosen.selections);
   lines.push(
-    `Projected: ${chosen.projectedSeconds.toFixed(0)}s of ${budget}s` +
-      // Every stand-in in that figure is a guess at what a unit costs,
-      // so a projection carrying many of them says what the lane would
-      // take if the guesses were right rather than what it will take.
-      // Somebody reading a summary beside a lane that ran four times as
-      // long deserves to be told which of the two they have.
-      (unmeasured === 0
+    `Projected: ${duration(chosen.projectedSeconds)} of ${duration(budget)}` +
+      (standing.units === 0
         ? ""
-        : `, ${unmeasured} of ${entries} costs unmeasured`),
+        : `, ${duration(standing.seconds)} of it charged to ` +
+          `${standing.units} unit${standing.units === 1 ? "" : "s"} ` +
+          `nothing has measured`),
   );
   lines.push("");
   lines.push(
@@ -745,15 +1357,49 @@ export function describePlan(
     const share = chosenFor(batch.suite.id, chosen.selections);
     lines.push(
       `| ${batch.suite.id} | ${batch.units.length} | ${share.identities} | ` +
-        `${share.seconds.toFixed(1)}s | ${batchRepeats(batch)} | ` +
+        `${duration(share.seconds)} | ${batchRepeats(batch)} | ` +
         `${share.why} |`,
     );
   }
-  if (unschedulable.length > 0) {
+  // An identity of a suite no lane can hold is past the bound by that
+  // suite's fixed charge and by nothing about itself, so the suite's own
+  // line below says everything naming it would.
+  const unholdable = unholdableSuites(crowding);
+  const expensive = unschedulable.filter((entry) =>
+    !unholdable.has(entry.suite)
+  );
+  if (expensive.length > 0) {
+    // A discretionary identity costing more than the bound a lane is
+    // packed to finish inside runs nowhere, because no lane can hold it
+    // inside that bound. Naming it is what turns that into something
+    // somebody can act on; the sixty-second rule is where such a test
+    // gets split.
     lines.push("");
     lines.push("Nothing can run these, so nothing did:");
     lines.push("");
-    for (const entry of unschedulable) lines.push(`- ${entry}`);
+    // The summary has the withheld and coverage reports to hold after
+    // this one, so this one takes a fixed share of it and the count
+    // says how much there is.
+    const { named, rest } = costliestUnschedulable(expensive);
+    for (const entry of named) {
+      lines.push(
+        `- ${entry.suite}: ${testIdentityKey(entry.test)} costs ` +
+          `${duration(entry.cost)}, more than a lane can hold`,
+      );
+    }
+    if (rest.length > 0) lines.push(`- and ${rest.length} more`);
+  }
+  if (crowding.length > 0) {
+    // What a lane pays before it runs anything of a suite. Past a lane's
+    // budget nothing can share a lane with one of that suite's tests, so
+    // the suite takes a lane per test it places; past the bound no lane
+    // can hold it at all. Either way the tests named above are not what
+    // is expensive, and a plan that only named them would send somebody
+    // to look at the wrong thing.
+    lines.push("");
+    lines.push("Suites a lane cannot fill around:");
+    lines.push("");
+    for (const suite of crowding) lines.push(`- ${crowdingLine(suite)}`);
   }
   say(lines);
 }
@@ -761,11 +1407,10 @@ export function describePlan(
 /** What the lane reaches for beyond its own arguments. */
 export interface LaneDeps {
   /**
-   * Where the manifest comes from. A caller that supplies one is saying
-   * what the store holds, which is how the selected path — the packing,
-   * the skip lists, the summary — is exercised without one.
+   * Where the manifest comes from, read at a moment. Every caller names
+   * one, and the store is named at the command line alone.
    */
-  manifest?: (at: string) => Promise<ManifestFetch>;
+  manifest: (options: { at: string }) => Promise<ManifestFetch>;
 
   /**
    * Where the suites come from. A caller that supplies them is saying
@@ -786,15 +1431,37 @@ export interface LaneDeps {
   spool?: () => string | undefined;
 }
 
-/** What reading this tree against its manifest came to. */
+/**
+ * The manifest the lanes testing this checkout's commit resolve, as the
+ * store gave it, or why there is none.
+ *
+ * Anything that reads a manifest for a checkout resolves it here. One
+ * that resolved it some other way could be describing a different
+ * manifest from the one those lanes read, and nothing it printed would
+ * say so.
+ */
+export async function resolveManifest(
+  options: Pick<LaneOptions, "at" | "root">,
+  deps: Pick<LaneDeps, "manifest">,
+): Promise<ManifestFetch> {
+  return await deps.manifest({ at: manifestMoment(options) });
+}
+
+/** The manifest this commit belongs to, and what the change touched. */
 interface Reading {
-  seen: Census;
+  /** The manifest, or nothing where the store holds none for the commit. */
+  manifest: Manifest | undefined;
+
+  /** The files the change touched, and none for the full run. */
+  changed: ReadonlySet<string>;
+
+  /** Which object the manifest was read from, or why there is none. */
   fetched: { objectName?: string; absent?: string };
 }
 
 /**
- * Resolves the manifest this commit belongs to and reads the working
- * tree against it.
+ * Resolves the manifest this commit belongs to and the files the change
+ * touched.
  *
  * Everything that plans anything starts here — a lane, and the job that
  * counts the full run's lanes — so the tree and the manifest are
@@ -804,21 +1471,30 @@ interface Reading {
  */
 async function read(
   options: LaneOptions,
-  suites: readonly Suite[],
-  deps: LaneDeps,
-  say: (line: string) => void,
+  deps: Pick<LaneDeps, "manifest">,
 ): Promise<Reading> {
-  const moment = await manifestMoment(options);
-  if (moment.note !== undefined) say(`ci-lane: ${moment.note}`);
-  const fetch = deps.manifest ?? ((at: string) => fetchManifest({ at }));
-  const manifest = await fetch(moment.at);
-  // A full run reads the manifest for what things cost and nothing else,
-  // and a run with no diff has touched nothing.
-  const changed = options.full
-    ? new Set<string>()
-    : await changedFiles(options.root, options.base);
+  const manifest = await resolveManifest(options, deps);
+  // Every lane of a run packs its share of one plan, and the plan is only
+  // one plan if every lane read the same manifest. A manifest never
+  // changes once created, so lanes asking about one moment get one answer
+  // from the store, but a store one lane could not reach may be one the
+  // next lane read. Packing without a manifest then would lay out a plan
+  // its siblings are not following, and a test the two plans put in each
+  // other's lanes would run in neither while the run reports a pass.
+  if (manifest.unreachable) {
+    throw new Error(
+      `ci-lane: the manifest store could not be read (${manifest.absent}), ` +
+        "and a lane that packed without it might not follow the plan the " +
+        "other lanes of this run packed from",
+    );
+  }
   return {
-    seen: census(suites, manifest.manifest, changed),
+    manifest: manifest.manifest,
+    // A full run reads the manifest for what things cost and nothing
+    // else, and a run with no diff has touched nothing.
+    changed: options.full
+      ? new Set<string>()
+      : await changedFiles(options.root, options.base),
     fetched: {
       ...(manifest.objectName === undefined
         ? {}
@@ -828,54 +1504,188 @@ async function read(
   };
 }
 
-/**
- * Packs what this tree holds into the lanes this run has.
- *
- * The policy is the whole of what the two runs differ by here. Under
- * `everything` every identity is required, so the exclusions and the
- * value, density and exploration passes have nothing left to act on and
- * the packer behaves the same way for both.
- */
-function packing(
-  options: LaneOptions,
-  suites: readonly Suite[],
-  seen: Census,
-): ReturnType<typeof plan> {
-  return plan({
-    manifest: seen.manifest,
-    mandatory: seen.mandatory,
-    capabilities: capabilitiesBySuite(suites),
-    lanes: options.of,
-    ...(options.full ? { policy: "everything" as const } : {}),
-  });
+/** What one run makes of a tree: the tree as it prices it, and packed. */
+export interface PlanOver {
+  /** The tree read against the manifest, priced the way the run prices it. */
+  seen: PricedCensus;
+
+  /** What the tree holds, packed into the run's lanes. */
+  laid: Plan;
 }
 
 /**
- * How many lanes the full run on `main` needs.
+ * What a run packs a tree into, given the manifest it resolved, what its
+ * change touched, whether it is the full run, and how many lanes it has.
+ * Pure: the lanes of a run and anything describing what they did compute
+ * it here, so the two cannot come to different answers.
+ *
+ * Whether the run is the full one is the whole of what the two runs
+ * differ by here. Under `everything` every identity is required, so the
+ * exclusions and the value, density and exploration passes have nothing
+ * left to act on and the packer behaves the same way for both.
+ */
+export function planOver(input: {
+  suites: readonly Suite[];
+  manifest: Manifest | undefined;
+  changed: ReadonlySet<string>;
+  full: boolean;
+  lanes: number;
+}): PlanOver {
+  const seen = pricedOver(input);
+  return {
+    seen,
+    laid: plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(input.suites),
+      wholeUnits: wholeUnits(input.suites),
+      processes: unitProcesses(input.suites),
+      lanes: input.lanes,
+      ...(input.full ? { policy: "everything" as const } : {}),
+    }),
+  };
+}
+
+/**
+ * Helper for `planOver` and the full run's lane count, which reads a
+ * tree against a manifest and prices it the way the run prices it.
+ */
+function pricedOver(input: {
+  suites: readonly Suite[];
+  manifest: Manifest | undefined;
+  changed: ReadonlySet<string>;
+  full: boolean;
+}): PricedCensus {
+  return pricedForRun(
+    census(input.suites, input.manifest, input.changed),
+    input.suites,
+    input.full,
+  );
+}
+
+/** What every lane of a run works out before taking its own share. */
+export interface LanePlan extends PlanOver {
+  /** Which object the manifest was read from, or why there is none. */
+  fetched: Reading["fetched"];
+}
+
+/**
+ * The plan every lane of a run computes over this tree: the manifest
+ * this commit belongs to, the tree read against it, and what the tree
+ * holds packed into `options.of` lanes.
+ *
+ * A lane runs its own share of this. Anything that describes what a lane
+ * would do computes it here rather than packing the tree again, so the
+ * description and the lanes cannot disagree about what would run.
+ */
+export async function lanePlan(
+  options: LaneOptions,
+  suites: readonly Suite[],
+  deps: Pick<LaneDeps, "manifest">,
+): Promise<LanePlan> {
+  const { manifest, changed, fetched } = await read(options, deps);
+  return {
+    fetched,
+    ...planOver({
+      suites,
+      manifest,
+      changed,
+      full: options.full,
+      lanes: options.of,
+    }),
+  };
+}
+
+/**
+ * How many lanes the full run on `main` takes: as many as it needs, up to
+ * `FULL_LANES_MAX`.
  *
  * This is the whole of what the job ahead of the full run decides, and an
- * integer is the whole of what it emits. The lanes then read the same
+ * integer is the whole of what it answers. The lanes then read the same
  * tree against the same manifest and take their own share, the way the
  * pull-request lanes do, so nothing about what runs passes through a job
  * output and there is no second packing to disagree with theirs.
  *
- * Notes about resolving the manifest go to the error stream, because
- * this answers on the standard one and a job reads the answer from
- * there.
+ * Everything else goes to the error stream, because this answers on the
+ * standard one and a job reads the answer from there: notes about what
+ * the count rests on, and what each lane at that count is projected to
+ * take, which also goes to the job summary.
  */
 export async function fullLanes(
   options: LaneOptions,
-  deps: LaneDeps = {},
+  deps: LaneDeps,
 ): Promise<number> {
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen } = await read(options, suites, deps, console.error);
+  const { manifest, changed } = await read(options, deps);
+  const needed = fullLanesNeeded(suites, manifest, changed, options.full);
+  const lanes = Math.min(needed, FULL_LANES_MAX);
+  if (needed > lanes) {
+    console.error(
+      `ci-lane: the full run needs ${needed} lanes and takes ` +
+        `${FULL_LANES_MAX}, the most FULL_LANES_MAX allows, so a lane may ` +
+        `run past its budget`,
+    );
+  }
+  const { laid } = planOver({
+    suites,
+    manifest,
+    changed,
+    full: options.full,
+    lanes,
+  });
+  // Where the store gave no manifest, nothing was calibrated, and the
+  // prologue is the figure the lanes' budget was derived from.
+  describeFullLanes(
+    laid,
+    manifest?.calibration.prologue ?? LANE_PROLOGUE_SECONDS,
+  );
+  return lanes;
+}
+
+/**
+ * What each lane of the full run is projected to take, on the error
+ * stream and in the job summary, since the count is the whole of what
+ * this answers on the standard one. The lanes pack this same plan, so
+ * what a lane is projected to take here is what it projects for itself.
+ */
+export function describeFullLanes(laid: Plan, prologue: number): void {
+  const longest = Math.max(
+    0,
+    ...laid.lanes.map((lane) => lane.projectedSeconds),
+  );
+  say([
+    `## The full run's ${laid.lanes.length} lane(s)`,
+    "",
+    `Each is packed against ${duration(laid.budgetSeconds)} of work, and ` +
+    `the job around it takes about ${duration(prologue)} more to set up ` +
+    `and ship. The longest is projected to take ` +
+    `${duration(longest + prologue)} in all.`,
+    "",
+    "| Lane | Tests | Projected work | Projected job |",
+    "| --- | --- | --- | --- |",
+    ...laid.lanes.map((lane) =>
+      `| ${lane.lane} | ${lane.selections.length} | ` +
+      `${duration(lane.projectedSeconds)} | ` +
+      `${duration(lane.projectedSeconds + prologue)} |`
+    ),
+  ], console.error);
+}
+
+/** How many lanes the full run would take with no cap on them. */
+function fullLanesNeeded(
+  suites: readonly Suite[],
+  manifest: Manifest | undefined,
+  changed: ReadonlySet<string>,
+  full: boolean,
+): number {
+  const seen = pricedOver({ suites, manifest, changed, full });
   if (seen.unmeasured === seen.manifest.entries.length) {
     // Nothing at all has a measured cost, so a cost model here would be
     // arithmetic over a figure this invented, and the answer would be
     // wrong by whatever that figure is wrong by. It errs in the
     // direction that breaks a run, too: too few lanes means every one of
-    // them runs past the bound its job is killed at, where too many
-    // means some jobs finish early.
+    // them runs past the bound it is packed to finish inside, where too
+    // many means some jobs finish early.
     //
     // So a lane per suite with anything to run goes in as a floor. It
     // needs no number nobody measured, and it keeps the count growing as
@@ -888,9 +1698,9 @@ export async function fullLanes(
     // answer below what they imply is one the lanes cannot honor
     // whatever else is true. That matters most where a stand-in costs
     // more than the bare unmeasured figure: a suite whose measured units
-    // have all been renamed away carries its old median onto every
-    // stand-in, and a count that assumed the bare figure would be out by
-    // that whole multiple.
+    // have all been renamed away carries what the units it lost cost
+    // onto every stand-in, and a count that assumed the bare figure
+    // would be out by that whole multiple.
     const running = suites.filter((suite) => {
       const unavailable = unavailableUnits(suite);
       return suite.units.some((unit) => !unavailable.has(unit));
@@ -898,6 +1708,8 @@ export async function fullLanes(
     const byCost = fullLaneCount({
       manifest: seen.manifest,
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
+      processes: unitProcesses(suites),
     });
     const lanes = Math.max(1, running.length, byCost);
     console.error(
@@ -911,17 +1723,30 @@ export async function fullLanes(
   return fullLaneCount({
     manifest: seen.manifest,
     capabilities: capabilitiesBySuite(suites),
+    wholeUnits: wholeUnits(suites),
+    processes: unitProcesses(suites),
   });
+}
+
+/**
+ * The directory the continuous-integration job keeps its own temporary
+ * files in, where the lane is running inside one.
+ */
+function runnerTemp(): string | undefined {
+  const at = Deno.env.get("RUNNER_TEMP");
+  return at === undefined || at.length === 0 ? undefined : at;
 }
 
 /** Runs one lane, and says whether everything in it passed. */
 export async function runLane(
   options: LaneOptions,
-  deps: LaneDeps = {},
+  deps: LaneDeps,
 ): Promise<boolean> {
+  // Ahead of everything this lane reads, plans, opens or spawns, so that
+  // no child of it inherits the token except through the capability.
+  const githubToken = takeGithubToken();
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen, fetched } = await read(options, suites, deps, console.log);
-  const laid = packing(options, suites, seen);
+  const { seen, fetched, laid } = await lanePlan(options, suites, deps);
   const mine = laid.lanes.find((lane) => lane.lane === options.lane);
   if (mine === undefined) {
     // A lane outside the run it belongs to. Taking an empty share
@@ -933,44 +1758,82 @@ export async function runLane(
     );
   }
   const batches = batchesOf(suites, seen.manifest, mine.selections);
-  // A discretionary identity costing more than a lane's hard bound
-  // runs nowhere, because a lane holding it would be killed before it
-  // reported anything. Naming it is what turns that into something
-  // somebody can act on; the sixty-second rule is where such a test
-  // gets split. A mandatory one is placed however much it costs, and
-  // the over-budget line below is where a lane says it ran long.
-  const unschedulable = laid.unschedulable.map((entry) =>
-    `${entry.suite}: ${testIdentityKey(entry.test)} costs ` +
-    `${entry.cost.toFixed(0)}s, more than a lane can hold`
-  );
-  if (laid.overBudgetSeconds > 0) {
-    console.log(
-      `ci-lane: the mandatory set puts a lane ` +
-        `${laid.overBudgetSeconds.toFixed(0)} seconds past the ` +
-        `${laid.budgetSeconds}-second budget`,
-    );
-  }
-
   const needs = new Set<CapabilityId>();
   for (const batch of batches) {
     for (const capability of batch.suite.needs) needs.add(capability);
   }
-  describePlan(
-    options,
-    batches,
-    [...needs].sort(),
-    fetched,
-    unschedulable,
-    { selections: mine.selections, projectedSeconds: mine.projectedSeconds },
-    laid.budgetSeconds,
-    seen.unmeasured,
-    seen.manifest.entries.length,
-  );
-  describeWithheld(laid.withheld, seen.mandatory);
+  if (options.described) {
+    // Enough to tell the plan this runs from the one described, should
+    // the two ever differ, and what it was projected to take beside the
+    // batches' own timings.
+    console.log(
+      `ci-lane: running lane ${options.lane} of ${options.of} as described: ` +
+        `${batches.length} batch(es) of ` +
+        `${batches.map((batch) => batch.suite.id).join(", ") || "nothing"}, ` +
+        `projected at ${duration(mine.projectedSeconds)} of ` +
+        `${duration(laid.budgetSeconds)}, ` +
+        (fetched.absent === undefined
+          ? `against ${fetched.objectName}`
+          : `unselected: ${fetched.absent}`),
+    );
+  } else {
+    // A mandatory identity is placed however much it costs, and this is
+    // where a lane says it ran long.
+    if (laid.overBudgetSeconds > 0) {
+      console.log(
+        `ci-lane: the mandatory set puts a lane ` +
+          `${duration(laid.overBudgetSeconds)} past its ` +
+          `${duration(laid.budgetSeconds)} budget`,
+      );
+    }
+    describePlan(
+      options,
+      batches,
+      [...needs].sort(),
+      fetched,
+      laid.unschedulable,
+      laid.crowding,
+      {
+        manifest: seen.manifest,
+        selections: mine.selections,
+        projectedSeconds: mine.projectedSeconds,
+      },
+      laid.budgetSeconds,
+    );
+    describeWithheld(laid.withheld, seen.mandatory);
+  }
   if (options.dryRun) return true;
 
-  const workDir = await Deno.makeTempDir({ prefix: "ci-lane-" });
+  // Asked before any batch runs, because the first pattern a batch
+  // compiles writes the file whatever the cache held.
+  const compileCacheState = needs.has("compile-cache")
+    ? await exists(path.join(options.root, COMPILE_CACHE_FILE))
+      ? "warm"
+      : "cold"
+    : undefined;
+  const temp = runnerTemp();
+  const workDir = await Deno.makeTempDir({
+    prefix: "ci-lane-",
+    // Under the job's own temporary directory where there is one, which
+    // is where a workflow step can upload what a failing lane left
+    // behind.
+    ...(temp === undefined ? {} : { dir: temp }),
+  });
+  // A lane that passed leaves nothing behind. A lane that failed in a job
+  // keeps what its capabilities wrote, because a server's log is what
+  // says why a suite could not reach it, and a workflow step can upload
+  // the directory from the job's temporary directory. Anywhere else
+  // nothing would collect it, and one directory would accumulate per
+  // failed run.
+  const leaveWorkDir = async (passed: boolean) => {
+    if (passed || temp === undefined) {
+      await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    }
+  };
   const spool = (deps.spool ?? recordsDir)();
+  // Where the work the packer projected starts: opening the capabilities
+  // is part of it, and what came before is the prologue.
+  const startedAt = performance.now();
   // The directory belongs to the lane from the moment it exists, and a
   // capability that refuses to open is one of the ways the lane ends.
   let opened;
@@ -979,9 +1842,11 @@ export async function runLane(
       root: options.root,
       dryRun: false,
       workDir,
+      ...(githubToken === undefined ? {} : { githubToken }),
+      report: console.log,
     });
   } catch (error) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(false);
     throw error;
   }
   if (spool !== undefined) {
@@ -998,6 +1863,21 @@ export async function runLane(
   }
   let ok = true;
   const conflicts: TestRecord[] = [];
+  // Units a failure was seen in, as `suite\tunit` keys. A set holding one
+  // of these measured its member through a failing test, so its number is
+  // short by whatever that test would have reached.
+  const failedUnits = new Set<string>();
+  // What a failure here is allowed not to fail the run for. A pull
+  // request holds these back rather than running them, so the set is
+  // empty there and the whole of this is the full run's.
+  const nonGating = new Set(
+    laid.nonGating.map((entry) => testIdentityKey(entry.test)),
+  );
+  // Identities a batch excused, and identities a batch failed that could
+  // not excuse them. Only the first and not the second went without
+  // failing the run.
+  const excused = new Set<string>();
+  const unexcused = new Set<string>();
   try {
     for (const batch of batches) {
       // A failure never stops the lane: one failing batch would otherwise
@@ -1014,14 +1894,66 @@ export async function runLane(
         opened.envFor(batch.suite.needs),
         batchCoverage(options, batch.suite.id, seen.coverage),
       );
-      if (!result.ok) ok = false;
       conflicts.push(...result.conflicts);
+      // The records decide, rather than the command's exit status: a
+      // runner that failed only on identities a flake rate excuses
+      // exits non-zero and has told this run nothing it should stop
+      // for, and a runner that exited zero having run none of its unit
+      // has. What the exit status is still read for is an execution
+      // that ended badly having recorded no failure at all, which the
+      // records by themselves cannot describe.
+      const accounting = accountFor(
+        batch,
+        mine.selections,
+        result.records,
+        nonGating,
+      );
+      // An invocation is excused only when it accounted for every
+      // identity it was asked to run: one that recorded a failure and
+      // then stopped has run almost nothing while satisfying any weaker
+      // test.
+      const excusing = accounting.unaccounted.length === 0;
+      describeAccounting(batch.suite.id, accounting, excusing, result.silent);
+      if (
+        accounting.gating.length > 0 || result.silent.length > 0 ||
+        result.unexplained > 0 ||
+        (accounting.excused.length > 0 && !excusing)
+      ) {
+        ok = false;
+      }
+      for (const unit of accounting.failedUnits) {
+        failedUnits.add(`${batch.suite.id}\t${unit}`);
+      }
+      for (const key of accounting.excused) {
+        (excusing ? excused : unexcused).add(key);
+      }
     }
+    // Written once every batch has run, so that a batch that withdrew an
+    // excusal is heard before any is recorded, and a report of this run
+    // says what it did not fail for from what it did rather than from
+    // what the manifest would have it do.
+    if (spool !== undefined) {
+      spoolRecords(
+        spool,
+        [...excused].filter((key) => !unexcused.has(key)).sort().map((key) =>
+          measurementRecord(excusedMeasurementName(key), 0, true)
+        ),
+      );
+    }
+  } catch (error) {
+    // A lane whose loop threw has failed, whatever the batches it got
+    // through said, and it is the one that most needs what the server
+    // wrote. Recorded before the finally below reads it.
+    ok = false;
+    throw error;
   } finally {
+    // Read while the servers are still up: closing one signals it and
+    // returns, so a read after that races a shutdown still writing.
+    // Only for a lane that failed -- a green run has nothing to explain,
+    // and the logs are large.
+    if (!ok) await describeCapabilityLogs(opened.logs);
     await opened.close();
-    // The lane owns this directory and nothing outside the lane reads
-    // it, so it goes whether the batches passed, failed, or never ran.
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(ok);
   }
   describeConflicts(conflicts);
   // After the capabilities are closed, because a conversion is the lane's
@@ -1031,7 +1963,36 @@ export async function runLane(
   // for a report that was never complete.
   const converted = await convertCoverage(options);
   if (!converted.ok) ok = false;
-  describeCoverage(seen.coverage, converted.reports);
+  const marked = await markMeasuredFailures(options, suites, failedUnits);
+  if (compileCacheState !== undefined) {
+    await writeCompileCacheState(options, compileCacheState);
+  }
+  // What the lane's work came to against what it was projected to come
+  // to and the most it could come to inside the lane's bound, which is the
+  // bound less the prologue the budget was derived with. Read last, so that
+  // it holds everything the lane did after its prologue. The publisher
+  // counts from these how many lanes ran past their bound, and how many of
+  // those the packer had expected to.
+  if (spool !== undefined) {
+    spoolRecords(spool, [
+      timingRecord(
+        laneMeasurementName("spent"),
+        (performance.now() - startedAt) / 1000,
+        ok,
+      ),
+      timingRecord(
+        laneMeasurementName("projected"),
+        mine.projectedSeconds,
+        ok,
+      ),
+      timingRecord(
+        laneMeasurementName("bound"),
+        laid.boundSeconds - LANE_PROLOGUE_SECONDS,
+        ok,
+      ),
+    ]);
+  }
+  describeCoverage(seen.coverage, converted.reports, marked);
   return ok;
 }
 
@@ -1043,8 +2004,13 @@ export async function runLane(
 export function describeCoverage(
   gate: CoverageGateSelection,
   reports: readonly string[],
+  marked: readonly string[] = [],
 ): void {
-  if (gate.reached.length === 0 && reports.length === 0) return;
+  if (
+    gate.reached.length === 0 && reports.length === 0 && marked.length === 0
+  ) {
+    return;
+  }
   const lines = ["## Coverage", ""];
   if (gate.off !== undefined) {
     lines.push(`No measured set is forced: ${gate.off}.`, "");
@@ -1069,6 +2035,14 @@ export function describeCoverage(
       lines.push(`- ${named.get(report) ?? report}`);
     }
   }
+  if (marked.length > 0) {
+    lines.push(
+      "",
+      "Measured through a failing test, so no baseline is published:",
+      "",
+    );
+    for (const set of marked) lines.push(`- ${set}`);
+  }
   say(lines);
 }
 
@@ -1078,15 +2052,15 @@ export function describeCoverage(
  * lane that failed, zero otherwise.
  */
 export async function main(
-  args: readonly string[] = Deno.args,
-  root: string = Deno.cwd(),
-  deps: LaneDeps = {},
+  args: readonly string[],
+  root: string,
+  deps: LaneDeps,
 ): Promise<number> {
   const options = parseLaneArgs(args, root);
   if (options === undefined) {
     console.error(
       "usage: ci-lane.ts [--lane N] [--of M] [--full] [--dry-run] " +
-        "[--lane-count] [--base <ref>] [--at <iso>] [--coverage-dir <dir>]",
+        "[--described] [--lane-count] [--base <ref>] [--at <iso>] [--coverage-dir <dir>]",
     );
     return 2;
   }
@@ -1097,7 +2071,17 @@ export async function main(
   return await runLane(options, deps) ? 0 : 1;
 }
 
+/** What the lane the command line runs reads its manifest from. */
+const store: LaneDeps = { manifest: fetchManifest };
+
 // `Deno.exitCode` rather than `Deno.exit`, which would end the process
 // before the unload handlers run — and one of those is what writes a
 // test run's name map into its spool.
-if (import.meta.main) Deno.exitCode = await main();
+//
+// The seed is settled before any invocation is built, so that every
+// command this lane builds and every task it starts shuffles the same
+// way.
+if (import.meta.main) {
+  pinShuffleSeed();
+  Deno.exitCode = await main(Deno.args, Deno.cwd(), store);
+}

@@ -708,6 +708,6 @@ Five smaller calls belong to whoever does the work:
   changes both registries deliberately, which is what keeping them siblings
   rather than one list is for.
 
-[#5663]: https://github.com/commontoolsinc/labs/issues/5663
-[#5746]: https://github.com/commontoolsinc/labs/pull/5746
-[#7166]: https://github.com/commontoolsinc/labs/pull/7166
+[#5663]: https://github.com/commonfabric/labs/issues/5663
+[#5746]: https://github.com/commonfabric/labs/pull/5746
+[#7166]: https://github.com/commonfabric/labs/pull/7166

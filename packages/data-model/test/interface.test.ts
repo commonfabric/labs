@@ -2,11 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
-  FabricConvertibleValue,
-  FabricNativeObject,
+  FabricConvertibleJsObject,
+  FabricConvertibleJsValue,
   FabricValue,
   FabricValueLayer,
-} from "@/interface.ts";
+} from "@";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each
@@ -16,17 +16,17 @@ import type {
 // becomes unused and the type check fails on it.
 
 /**
- * The recursive shape `FabricConvertibleValue` names, written out: the values
- * that convert to and from fabric form are `FabricValue`s, native objects, and
+ * The recursive shape `FabricConvertibleJsValue` names, written out: the values
+ * that convert to and from fabric form are `FabricValue`s, JS objects, and
  * read-only trees of either.
  */
 type WrittenOutConvertible =
   | FabricValue
-  | FabricNativeObject
+  | FabricConvertibleJsObject
   | readonly WrittenOutConvertible[]
   | { readonly [key: string]: WrittenOutConvertible };
 
-declare const convertible: FabricConvertibleValue;
+declare const convertible: FabricConvertibleJsValue;
 declare const writtenOut: WrittenOutConvertible;
 declare const value: FabricValue;
 declare const mutableArray: unknown[];
@@ -37,13 +37,14 @@ declare const layerRecord: Exclude<
   readonly unknown[] | FabricValue
 >;
 
-/** Carrier for the `FabricConvertibleValue` checks. */
+/** Carrier for the `FabricConvertibleJsValue` checks. */
 function fabricConvertibleValueTypeChecks() {
   // The alias admits the written-out recursion. The reverse is refused by the
   // one arm the written-out recursion lacks: a `FabricInstancePlus` at
-  // `FabricNativeObject`, an instance whose contents may hold a native.
-  const fromWrittenOut: FabricConvertibleValue = writtenOut;
-  // @ts-expect-error a `FabricInstancePlus<FabricNativeObject>` is admitted only by the alias
+  // `FabricConvertibleJsObject`, an instance whose contents may hold a
+  // convertible JS object.
+  const fromWrittenOut: FabricConvertibleJsValue = writtenOut;
+  // @ts-expect-error a `FabricInstancePlus<FabricConvertibleJsObject>` is admitted only by the alias
   const toWrittenOut: WrittenOutConvertible = convertible;
 
   return { fromWrittenOut, toWrittenOut };
@@ -70,8 +71,8 @@ describe("interface", () => {
   // Each `it()` names the claim its carrier holds; the type checker is what
   // decides it, and at run time only the carrier is observable.
 
-  describe("FabricConvertibleValue", () => {
-    it("admits the written-out recursion over `FabricValue` and `FabricNativeObject`, and is wider by the plus-instance arm", () => {
+  describe("FabricConvertibleJsValue", () => {
+    it("admits the written-out recursion over `FabricValue` and `FabricConvertibleJsObject`, and is wider by the plus-instance arm", () => {
       expect(typeof fabricConvertibleValueTypeChecks).toBe("function");
     });
   });

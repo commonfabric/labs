@@ -209,27 +209,6 @@ describe("claude-hooks", () => {
     });
   });
 
-  describe("ask-before-delete-spaces.ts", () => {
-    it("asks before a command clears every space", async () => {
-      const result = await onCommand(
-        "ask-before-delete-spaces",
-        "./scripts/restart-local-dev.sh --dangerously-clear-all-spaces",
-      );
-      expect(result.code).toBe(ALLOWED);
-      expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision)
-        .toBe("ask");
-    });
-
-    it("says nothing for a command that clears no space", async () => {
-      const result = await onCommand(
-        "ask-before-delete-spaces",
-        "./scripts/restart-local-dev.sh --clear-cache",
-      );
-      expect(result.code).toBe(ALLOWED);
-      expect(result.stdout).toBe("");
-    });
-  });
-
   describe("pre-edit-reminders.ts", () => {
     const contextFor = async (filePath: string) => {
       const result = await onFilePath("pre-edit-reminders", filePath);

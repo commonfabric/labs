@@ -11,12 +11,16 @@ import {
   createHarnessTranscriptOmissions,
   HARNESS_TRANSCRIPT_OMISSION_RULES,
   type HarnessTranscriptOmissionRule,
+  restoreHarnessTranscriptOmissions,
 } from "../src/contracts/transcript-omissions.ts";
 import {
   createToolOutputId,
   createToolResultRef,
 } from "../src/contracts/tool-result.ts";
-import type { HarnessToolTranscriptMessage } from "../src/contracts/transcript.ts";
+import type {
+  HarnessToolTranscriptMessage,
+  HarnessTranscriptMessage,
+} from "../src/contracts/transcript.ts";
 
 describe("transcript omissions", () => {
   const runId = "omission-run";
@@ -94,6 +98,69 @@ describe("transcript omissions", () => {
     }]);
 
     expect(record.results).toEqual([]);
+  });
+
+  for (
+    const invalid of [
+      "duplicate-index",
+      "duplicate-output",
+      "wrong-identity",
+      "unmatched",
+    ] as const
+  ) {
+    it(`rejects a ${invalid} checkpoint before restoring any omission annotations`, () => {
+      const first = message(["artifact-only"]);
+      const record = createHarnessTranscriptOmissions([first]);
+      const transcript: HarnessTranscriptMessage[] = JSON.parse(JSON.stringify([
+        first,
+        { ...first, toolCallId: "call-2" },
+      ]));
+      const result = record.results[0];
+      const invalidResult = invalid === "duplicate-index"
+        ? { ...result, outputId: "another-output" }
+        : invalid === "duplicate-output"
+        ? { ...result, transcriptIndex: 1, toolCallId: "call-2" }
+        : {
+          ...result,
+          transcriptIndex: invalid === "unmatched" ? 2 : 1,
+          outputId: "another-output",
+        };
+      expect(() =>
+        restoreHarnessTranscriptOmissions(transcript, {
+          ...record,
+          results: [result, invalidResult],
+        })
+      ).toThrow(
+        invalid.startsWith("duplicate")
+          ? "Stored transcript omissions repeat a result"
+          : "Stored transcript omissions do not match their result",
+      );
+      expect(createHarnessTranscriptOmissions(transcript).results).toEqual([]);
+    });
+  }
+
+  it("restores known omissions alongside unrecorded legacy results without claiming they were empty", () => {
+    const original: HarnessTranscriptMessage[] = [
+      message(["artifact-only"]),
+      {
+        role: "tool",
+        toolCallId: "legacy-call",
+        toolName: "run_pattern",
+        content: "legacy result",
+        resultRef: createToolResultRef(
+          createToolOutputId(runId, "run_pattern", 2),
+          "run_pattern",
+          runId,
+        ),
+      },
+    ];
+    const record = createHarnessTranscriptOmissions(original);
+    const restored: HarnessTranscriptMessage[] = JSON.parse(
+      JSON.stringify(original),
+    );
+    restoreHarnessTranscriptOmissions(restored, record);
+    expect(createHarnessTranscriptOmissions(restored)).toEqual(record);
+    expect(record.results.map((result) => result.transcriptIndex)).toEqual([0]);
   });
 
   it("carries an earlier omission across a replacement tool message", () => {
@@ -179,6 +246,55 @@ describe("transcript omissions", () => {
       "artifact-only",
       "model-context-truncation",
     ]);
+  });
+
+  it("retains prior-process rules for a restored user handoff", () => {
+    const researchOutputId = createToolOutputId(runId, "research", 1);
+    const researchRef = createToolResultRef(
+      researchOutputId,
+      "research",
+      runId,
+      artifactPath,
+    );
+    const omission = createHarnessTranscriptOmissionRuleRecord(
+      "artifact-only",
+      researchRef,
+      ["/researchRecord"],
+    )!;
+    const previous = createHarnessTranscriptOmissions([
+      annotateHarnessToolResultOmissions({
+        role: "tool",
+        toolCallId: "opening-research:omission-run",
+        toolName: "research",
+        content: "sanitized kit",
+        resultRef: researchRef,
+      }, [omission]),
+    ]);
+    const restored = JSON.parse(JSON.stringify({
+      role: "user",
+      content: "Host opening research handoff",
+      toolResultProvenance: {
+        type: "cf-harness.tool-result-provenance",
+        toolCallId: "opening-research:omission-run",
+        toolId: "research",
+        outputId: researchOutputId,
+      },
+    })) as HarnessTranscriptMessage;
+
+    expect(createHarnessTranscriptOmissions([restored], previous).results)
+      .toEqual([{
+        transcriptIndex: 0,
+        toolCallId: "opening-research:omission-run",
+        toolId: "research",
+        outputId: researchOutputId,
+        rules: [{
+          rule: "artifact-only",
+          locations: [{
+            artifactPath,
+            jsonPointer: "/researchRecord",
+          }],
+        }],
+      }]);
   });
 
   it("does not overwrite an unsupported prior omission record", async () => {

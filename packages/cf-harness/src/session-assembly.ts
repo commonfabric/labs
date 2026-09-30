@@ -20,8 +20,10 @@
  * nowhere else.
  */
 
+import type { RunscNetworkMode } from "./sandbox/runsc.ts";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { HarnessLoomAuthoringConfig } from "./loom-authoring.ts";
+import type { HarnessLoomRetrievalConfig } from "./loom-retrieval.ts";
 import type { CfHarnessEngine } from "./engine.ts";
 import type {
   HarnessFabricSessionConfig,
@@ -51,8 +53,9 @@ import {
   type CfHarnessHostMountConfig,
   hostMountsToAdditionalMounts,
 } from "./host-mounts.ts";
-import { inputCellsContextMessage } from "./input-cells.ts";
 import { patternRefsContextMessage } from "./pattern-refs.ts";
+import { pieceTargetingContextMessages } from "./piece-targeting.ts";
+import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type { DockerRunscAdditionalMountConfig } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
@@ -86,6 +89,16 @@ export interface HarnessSessionConfig {
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
 
+  /**
+   * The runsc sandbox (`--sandbox-runtime runsc`): no Docker, sessions
+   * honoured. Absent means the docker sandbox.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
+
   /** The skills tree scanned into the run's registry, on the host. */
   skillsRoot?: string;
 
@@ -98,8 +111,11 @@ export interface HarnessSessionConfig {
   /** Skills preloaded into the run's opening context, by name. */
   skillNames: readonly string[];
 
-  /** Reference trees `query_docs` answers out of, and where they came from. */
+  /** Reference trees `research` may inspect, and where they came from. */
   docsCorpus?: HarnessDocsCorpusRecord;
+
+  /** Whether a skill this run holds may have its scripts run in the sandbox. */
+  allowSkillScripts?: boolean;
 
   allowedSkillScripts: readonly HarnessAllowedSkillScript[];
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
@@ -117,6 +133,9 @@ export interface HarnessSessionConfig {
 
   /** Explicit host-owned backing for durable Loom authoring. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Explicit host-owned backing for read-only Loom retrieval. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -149,6 +168,10 @@ export interface HarnessSessionConfig {
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   browserAccess?: HarnessBrowserAccessLease;
   reasoningEffort?: string;
+
+  /** Reasoning effort for the `research` tool's own model turns. */
+  researchReasoningEffort?: string;
+
   compactThreshold?: number;
   promptCacheMode?: "implicit" | "explicit";
 
@@ -167,6 +190,7 @@ export const harnessSessionToolBacking = (
 ): HarnessToolBackingAvailability => ({
   fabricSessionAvailable: config.fabricSession !== undefined,
   loomAuthoringAvailable: config.loomAuthoring !== undefined,
+  loomRetrievalAvailable: config.loomRetrieval !== undefined,
   patternIndexAvailable: config.patternIndex !== undefined,
   skillsShSearchAvailable: config.skillsSh !== undefined,
   skillsShAcquisitionAvailable: config.skillsSh !== undefined,
@@ -190,14 +214,41 @@ export const harnessSessionChatPolicy = (
 ): HarnessChatPolicy => ({
   type: "cf-harness.chat-policy",
   toolMode: "workspace-write",
-  allowedToolIds: config.allowedToolIds ??
-    parentToolIdsForBacking(harnessSessionToolBacking(config)),
+  allowedToolIds: config.allowedToolIds ?? sessionParentToolIds(config),
   allowedSubagentProfiles: config.allowedSubagentProfiles,
   ...(config.cfcEnforcementModeOverride !== undefined
     ? { cfcEnforcementMode: config.cfcEnforcementModeOverride }
     : {}),
   ...(promptSlot !== undefined ? { promptSlot } : {}),
 });
+
+/**
+ * The parent tool surface a session offers when nothing narrows it: what its
+ * backings support, plus `run_skill_script` where the operator allows a skill
+ * script and a registry backs one.
+ *
+ * Backing and authorization are different questions, and
+ * {@link parentToolIdsForBacking} answers only the first: `run_skill_script`
+ * appears in its withheld set and never in the list it builds, so a backing
+ * alone never offers the tool. What offers it is the operator allowing a
+ * script to run — the run-wide switch, or an exact entry — and offering it
+ * here is what makes that decision reach the run holding the registry, rather
+ * than only a child holding an acquisition, which gets it from its own
+ * surface. The gate at the call still decides which script, and whether a
+ * host target needs an exact name.
+ */
+const sessionParentToolIds = (
+  config: HarnessSessionConfig,
+): readonly BuiltinToolId[] => {
+  const backing = harnessSessionToolBacking(config);
+  const backed = parentToolIdsForBacking(backing);
+  const allowsAScript = config.allowSkillScripts === true ||
+    (config.allowedSkillScripts?.length ?? 0) > 0;
+  return allowsAScript && backing.skillRegistryAvailable &&
+      !backed.includes("run_skill_script")
+    ? [...backed, "run_skill_script"]
+    : backed;
+};
 
 /** The sandbox bind mounts this session provisions, in one list. */
 export const harnessSessionAdditionalMounts = (
@@ -237,6 +288,21 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxDockerRuntime !== undefined
       ? { sandboxDockerRuntime: config.sandboxDockerRuntime }
       : {}),
+    ...(config.sandboxRuntimeKind !== undefined
+      ? { sandboxRuntimeKind: config.sandboxRuntimeKind }
+      : {}),
+    ...(config.sandboxRootfs !== undefined
+      ? { sandboxRootfs: config.sandboxRootfs }
+      : {}),
+    ...(config.sandboxCfcPolicy !== undefined
+      ? { sandboxCfcPolicy: config.sandboxCfcPolicy }
+      : {}),
+    ...(config.sandboxRunscBinary !== undefined
+      ? { sandboxRunscBinary: config.sandboxRunscBinary }
+      : {}),
+    ...(config.sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode: config.sandboxRunscNetworkMode }
+      : {}),
     ...(config.cfcResultDir !== undefined
       ? { cfcResultDir: config.cfcResultDir }
       : {}),
@@ -255,6 +321,7 @@ export const harnessSessionEngineOptions = (
     ...(config.docsCorpus !== undefined
       ? { docsCorpus: config.docsCorpus }
       : {}),
+    ...(config.allowSkillScripts === true ? { allowSkillScripts: true } : {}),
     ...(config.allowedSkillScripts.length > 0
       ? { allowedSkillScripts: config.allowedSkillScripts }
       : {}),
@@ -273,6 +340,9 @@ export const harnessSessionEngineOptions = (
     ...(config.loomAuthoring !== undefined
       ? { loomAuthoring: config.loomAuthoring }
       : {}),
+    ...(config.loomRetrieval !== undefined
+      ? { loomRetrieval: config.loomRetrieval }
+      : {}),
     ...(config.patternIndex !== undefined
       ? { patternIndex: config.patternIndex }
       : {}),
@@ -290,6 +360,9 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.reasoningEffort !== undefined
       ? { reasoningEffort: config.reasoningEffort }
+      : {}),
+    ...(config.researchReasoningEffort !== undefined
+      ? { researchReasoningEffort: config.researchReasoningEffort }
       : {}),
     ...(config.compactThreshold !== undefined
       ? { compactThreshold: config.compactThreshold }
@@ -323,15 +396,15 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, and the operator's
- * input cells.
+ * skills, the well-known grants of the session's space, host-supplied input
+ * cells, and the guidance for selecting a piece target.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
  * connect is reported and the run continues, because a grant is an
- * entitlement the run did not ask for. Input cells are explicit operator
- * configuration, so one that cannot be minted fails the run rather than
- * starting it without what the operator attached.
+ * entitlement the run did not ask for. Input cells name task targets, whether
+ * attached by the operator or retained by the session, so one that cannot be
+ * minted fails the run rather than starting it without that target.
  *
  * This is the first thing the run's driver does, so it takes the run
  * (`running`) before anything else and, when a step throws, fails it as
@@ -395,17 +468,15 @@ const establishContextMessages = async (
       options.onGrantsUnavailable?.(error);
     }
   }
-  const inputCellsMessage = inputCellsContextMessage(
-    await engine.establishInputCells(),
+  messages.push(
+    ...pieceTargetingContextMessages(await engine.establishInputCells()),
   );
-  if (inputCellsMessage !== undefined) {
-    messages.push(inputCellsMessage);
-  }
   const patternRefsMessage = patternRefsContextMessage(
     await engine.establishPatternRefs(),
   );
   if (patternRefsMessage !== undefined) {
     messages.push(patternRefsMessage);
   }
+  messages.push(REVISION_VERIFICATION_GUIDANCE);
   return messages;
 };

@@ -298,7 +298,7 @@ One spelling carries the whole target, and it is the one a person writes:
 
 | Spelling | Carries | Piece written as | Space written as |
 | --- | --- | --- | --- |
-| `/@my-space/tracker`, positionally or on `--cell` | space, piece, scope, path | a handle or a slug | a name or a DID |
+| `//my-space/tracker`, positionally or on `--cell` | space, piece, scope, path | a handle or a slug | a name or a DID |
 | `--space` plus `--cell` | space, piece | a handle or a slug | a name or a DID |
 | `--url` | host, plus a reference | a handle or a slug | a name or a DID |
 
@@ -321,7 +321,7 @@ three ways:
 ```text
   7  tracker
  51  of:fid1:pOrTkvYX-…
-110  /@did:key:z6MkiAwQ…/of:fid1:pOrTkvYX-…
+110  //did:key:z6MkiAwQ…/of:fid1:pOrTkvYX-…
 ```
 
 Collapsing two flags into one token saves a handful of characters. Naming the

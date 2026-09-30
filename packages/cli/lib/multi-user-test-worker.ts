@@ -31,6 +31,7 @@ import type { RealmEncodedValue } from "@commonfabric/data-model/codec-realm";
 import {
   CFC_ENFORCEMENT_MODES,
   type CfcEnforcementMode,
+  type CfcFlowLabelsMode,
   isCfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
 import {
@@ -54,8 +55,10 @@ import {
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
 import { defer } from "@commonfabric/utils/defer";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
+import { printCfcDenials } from "./cfc-denials.ts";
 import {
   flushDefaultModuleByteCache,
   getDefaultModuleByteCache,
@@ -66,7 +69,7 @@ import {
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
-import { buildActionEvent } from "./trusted-test-event.ts";
+import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
   id: number;
@@ -77,6 +80,14 @@ export interface WorkerRequest {
 export type WorkerResponse =
   | { id: number; ok: unknown }
   | { id: number; error: string };
+
+/**
+ * The message a participant worker posts once, before any response, naming
+ * its lifetime lock for `terminateWorker()` to wait on.
+ */
+export interface WorkerLifetimeNotice {
+  lifetimeLock: string | undefined;
+}
 
 export type StepKind =
   | "action"
@@ -108,6 +119,9 @@ export interface ParticipantInitResult {
    * named, so a participant that came up on another rung says so.
    */
   cfcEnforcementMode: CfcEnforcementMode;
+
+  /** Flow-label mode resolved by this participant runtime. */
+  cfcFlowLabels: CfcFlowLabelsMode;
 }
 
 const SETUP_CAUSE = "multi-user-test-setup";
@@ -320,6 +334,17 @@ const handlers: Record<
    */
   async init(args) {
     const requestedMode = requestedEnforcementMode(args.cfcEnforcementMode);
+    const flowLabels = args.cfcFlowLabels;
+    if (
+      flowLabels !== undefined && flowLabels !== "off" &&
+      flowLabels !== "observe" && flowLabels !== "persist"
+    ) {
+      throw new Error(
+        `Initialization cfcFlowLabels is ${
+          String(flowLabels)
+        }, not off, observe, or persist`,
+      );
+    }
     const identity = await Identity.fromKeyPair(
       keyPairFromRealmValue(
         args.identity as RealmEncodedValue,
@@ -345,8 +370,7 @@ const handlers: Record<
       memoryHost: new URL(args.apiUrl as string),
     });
     // `runtimePresets.patternTest` carries the shared first-party posture
-    // (CT-1814), including the enforce-explicit CFC pin this site previously
-    // restated — and the same env-honored experimental flags as the
+    // (CT-1814) and the same env-honored experimental flags as the
     // single-user runner (this worker previously ignored EXPERIMENTAL_*, so
     // the two harness modes could run under different flags).
     runtime = new Runtime(runtimePresets.patternTest({
@@ -355,11 +379,19 @@ const handlers: Record<
       experimental: experimentalOptionsFromEnv(Deno.env.get),
       errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
       moduleByteCache: getDefaultModuleByteCache(),
+      ...(flowLabels !== undefined ? { cfcFlowLabels: flowLabels } : {}),
       ...(requestedMode !== undefined
         ? { cfcEnforcementMode: requestedMode }
         : {}),
     }));
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
+    if (args.cfcDenials === true) {
+      // This worker runs one participant for its whole life, so nothing stops
+      // the printing.
+      printCfcDenials((line) =>
+        console.log(`    [${String(args.participant)}] ${line}`)
+      );
+    }
     // Channel 1: capture pattern-code console.error / console.warn calls.
     runtime.scheduler.onConsole(
       (({ method, args }) => {
@@ -404,9 +436,13 @@ const handlers: Record<
     // `compileAndRegisterModules` seals compile + evaluate + register (see
     // test-runner.ts): map/filter/flatMap ops resolve via their content-addressed
     // canonical artifact instead of the defer-corrupted embedded graph (CT-1811).
+    // The closure is written into the shared space, for the same reason
+    // test-runner.ts writes it: a pattern instantiated with `inSpace()` is
+    // replicated from it.
     const evalResult = await runtime.patternManager.compileAndRegisterModules(
       program,
       { patternCoverage },
+      { space },
     );
     const { main } = evalResult;
     // Channel 2: snapshot logger counts AFTER compile, before the run phase.
@@ -532,6 +568,7 @@ const handlers: Record<
         await (resultCell.key("allowConsoleWarnings") as Cell<unknown>)
           .pull() === true,
       cfcEnforcementMode: rt().cfcEnforcementMode,
+      cfcFlowLabels: rt().cfcFlowLabels,
     };
     return result;
   },
@@ -674,7 +711,16 @@ const handlers: Record<
   },
 };
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+// Every response follows the lifetime notice, so the orchestrator holds the
+// lock's name before any reply can lead it to terminate this worker.
+const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
+  (self as unknown as Worker).postMessage(
+    { lifetimeLock } satisfies WorkerLifetimeNotice,
+  )
+);
+
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+  await announced;
   const { id, cmd, args } = event.data;
   const handler = handlers[cmd];
   const respond = (response: WorkerResponse) =>

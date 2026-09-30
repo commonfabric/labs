@@ -11,6 +11,7 @@
  * matchers differ exactly there ($defs threading vs fail-closed policy refs).
  */
 
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { JSONSchema, JSONSchemaObj } from "./builder/types.ts";
 
 export const arrayMatchesPositionally = (
@@ -30,7 +31,7 @@ export const arrayMatchesPositionally = (
   if (schema.items === false) {
     // A closed tuple: `items: false` forbids any element past the slots.
     if (value.length > (prefixItems?.length ?? 0)) return false;
-  } else if (typeof schema.items === "object" && schema.items !== null) {
+  } else if (isObjectOrArray(schema.items)) {
     for (
       let index = prefixItems?.length ?? 0;
       index < value.length;

@@ -26,6 +26,61 @@ function markConnected(element: CFCellLink, isConnected = true): void {
 }
 
 describe("CFCellLink", () => {
+  it("navigates to the linked space and scope even inside a named space", () => {
+    const element = new CFCellLink() as any;
+    element.spaceName = "current-space";
+    element._resolvedCell = {
+      ref: () => ({
+        space: "did:key:foreign",
+        id: "of:fid1:same",
+        scope: "user",
+        path: [],
+      }),
+      space: () => "did:key:foreign",
+      id: () => "of:fid1:same",
+    };
+    const seen: unknown[] = [];
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+    globalThis.addEventListener("cf-navigate", listener);
+    try {
+      element._handleClick({ stopPropagation() {} });
+      expect(seen).toEqual([{
+        spaceDid: "did:key:foreign",
+        pieceId: "of:fid1:same",
+        pieceScope: "user",
+      }]);
+    } finally {
+      globalThis.removeEventListener("cf-navigate", listener);
+    }
+  });
+  it("navigates to a nested view without losing its scoped target", () => {
+    const element = new CFCellLink() as any;
+    element.spaceName = "current-space";
+    element._resolvedCell = {
+      ref: () => ({
+        space: "did:key:foreign",
+        id: "of:fid1:same",
+        scope: "user",
+        path: ["view", "a/b"],
+      }),
+      space: () => "did:key:foreign",
+      id: () => "of:fid1:same",
+    };
+    const seen: unknown[] = [];
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+    globalThis.addEventListener("cf-navigate", listener);
+    try {
+      element._handleClick({ stopPropagation() {} });
+      expect(seen).toEqual([{
+        spaceDid: "did:key:foreign",
+        pieceId: "of:fid1:same",
+        pieceScope: "user",
+        piecePath: ["view", "a/b"],
+      }]);
+    } finally {
+      globalThis.removeEventListener("cf-navigate", listener);
+    }
+  });
   it("should be defined", () => {
     expect(CFCellLink).toBeDefined();
   });

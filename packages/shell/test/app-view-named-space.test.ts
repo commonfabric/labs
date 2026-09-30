@@ -63,6 +63,41 @@ function installBrowserGlobals(): () => void {
 }
 
 describe("XAppView named-space preparation", () => {
+  it("renders the selected nested view rather than its document root", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XBodyView } = await import("../src/views/BodyView.ts");
+      const nested = { target: "nested view" };
+      const root = {
+        key: (key: string) => {
+          expect(key).toBe("detail");
+          return nested;
+        },
+      };
+      const body = new XBodyView();
+      body.activePattern = {
+        id: () => "of:fid1:root",
+        cell: () => root,
+      } as never;
+      (body as unknown as { piecePath: string[] }).piecePath = ["detail"];
+      const contains = (value: unknown, wanted: unknown): boolean => {
+        if (value === wanted) return true;
+        if (Array.isArray(value)) {
+          return value.some((child) => contains(child, wanted));
+        }
+        if (value && typeof value === "object" && "values" in value) {
+          return contains(value.values, wanted);
+        }
+        return false;
+      };
+      const rendered = body.render();
+      expect(contains(rendered, nested)).toBe(true);
+      expect(contains(rendered, root)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it("prepares the named space before root and selected pattern tasks", async () => {
     const restore = installBrowserGlobals();
     try {

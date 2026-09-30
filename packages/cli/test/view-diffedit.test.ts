@@ -3566,7 +3566,17 @@ Subject: [PATCH] Embedded envelope`,
             `+${current}\n`,
           );
           if (format.name === "four-character medium") {
-            assert(/^commit [0-9a-f]{4}\n/.test(shown), shown.split("\n")[0]);
+            // Git treats --abbrev as a minimum and lengthens the prefix
+            // until it is unambiguous, so the printed hash is a prefix of
+            // the full one that is at least four digits long.
+            const head = runGit(root, ["rev-parse", "HEAD"]).trim();
+            const [, abbreviated = ""] = /^commit ([0-9a-f]+)\n/.exec(shown) ??
+              [];
+            assert(
+              abbreviated.length >= 4 && abbreviated.length < head.length &&
+                head.startsWith(abbreviated),
+              shown.split("\n")[0],
+            );
           }
           const ws = stubWs(root);
           const model = parseDiff(shown)!;

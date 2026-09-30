@@ -1,4 +1,8 @@
+import { fromFileUrl } from "@std/path";
+
 import { Database } from "@db/sqlite";
+import { isObjectOrArray } from "@commonfabric/utils/types";
+
 import {
   type HarnessChatBrowserAccessLease,
   type HarnessChatContext,
@@ -10,12 +14,22 @@ import {
   type HarnessChatTurnStatus,
 } from "./contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
-import type {
-  HarnessChatEventListOptions,
-  HarnessChatSessionSnapshot,
-  HarnessChatSessionStore,
-  HarnessChatSessionTurnEventMutation,
-  HarnessChatTurnListOptions,
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
+import {
+  createHarnessTranscriptOmissions,
+  isHarnessTranscriptOmissions,
+  restoreHarnessTranscriptOmissions,
+} from "./contracts/transcript-omissions.ts";
+import {
+  type HarnessChatEventListOptions,
+  type HarnessChatResearchContext,
+  type HarnessChatSessionSnapshot,
+  type HarnessChatSessionStore,
+  type HarnessChatSessionTurnEventMutation,
+  HarnessChatStoreAliasedError,
+  HarnessChatStoreHeldError,
+  type HarnessChatStoreHolder,
+  type HarnessChatTurnListOptions,
 } from "./session-store.ts";
 
 const PRAGMAS = `
@@ -26,12 +40,13 @@ const PRAGMAS = `
 `;
 
 const INIT = `
-BEGIN TRANSACTION;
-
 CREATE TABLE IF NOT EXISTS chat_session (
   session_id  TEXT NOT NULL PRIMARY KEY,
   status      TEXT NOT NULL,
   transcript  TEXT NOT NULL,
+  research_context TEXT,
+  assigned_pieces TEXT,
+  transcript_omissions TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   closed_at   TEXT
@@ -76,12 +91,14 @@ CREATE INDEX IF NOT EXISTS idx_chat_event_session_sequence
 CREATE INDEX IF NOT EXISTS idx_chat_event_emitted_at
   ON chat_event (emitted_at);
 
-COMMIT;
 `;
 
 type SessionRow = {
   status: string;
   transcript: string;
+  research_context: string | null;
+  assigned_pieces: string | null;
+  transcript_omissions: string | null;
 };
 
 type EventRow = {
@@ -100,6 +117,12 @@ type TurnRow = {
 
 export interface OpenSqliteHarnessChatSessionStoreOptions {
   url: URL;
+
+  /**
+   * The record written beside the database for whoever is refused it. One
+   * naming this process is minted when none is given.
+   */
+  holder?: HarnessChatStoreHolder;
 }
 
 const databaseAddress = (url: URL): URL => {
@@ -132,6 +155,50 @@ const parseNullableJsonColumn = <Value>(
 ): Value | undefined =>
   value === null ? undefined : parseJsonColumn<Value>(value, column);
 
+/** Suffix of the file beside a database that carries its hold. */
+const HOLDER_FILE_SUFFIX = "-holder";
+
+/**
+ * Returns the path of the file carrying the hold on the database at `url`,
+ * which must exist. The database path is resolved through every link first,
+ * so two spellings of one database name one hold file rather than one each.
+ */
+export const sqliteHarnessChatSessionStoreHolderPath = async (
+  url: URL,
+): Promise<string> => `${await resolvedDatabasePath(url)}${HOLDER_FILE_SUFFIX}`;
+
+/** Returns the path of the database at `url`, resolved through every link. */
+const resolvedDatabasePath = (url: URL): Promise<string> =>
+  Deno.realPath(fromFileUrl(databaseAddress(url)));
+
+const isStoreHolder = (value: unknown): value is HarnessChatStoreHolder => {
+  if (!isObjectOrArray(value)) {
+    return false;
+  }
+  const holder = value as Record<string, unknown>;
+  return typeof holder.instanceId === "string" &&
+    typeof holder.pid === "number" &&
+    typeof holder.heldSince === "string";
+};
+
+/**
+ * Reads the holder record at `path`, or `undefined` where what is there is
+ * not one: the holder writes the record after taking the hold, so a reader
+ * refused in that moment can find the file empty or half written.
+ */
+const readStoreHolder = async (
+  path: string,
+): Promise<HarnessChatStoreHolder | undefined> => {
+  const text = await Deno.readTextFile(path);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  return isStoreHolder(value) ? value : undefined;
+};
+
 const turnRowParams = (turn: HarnessChatTurnRecord) => ({
   session_id: turn.sessionId,
   turn_id: turn.turn.turnId,
@@ -154,8 +221,16 @@ const turnRowParams = (turn: HarnessChatTurnRecord) => ({
 export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
   readonly database: Database;
 
-  constructor(database: Database) {
+  #holderFile?: Deno.FsFile;
+
+  /**
+   * Constructs a store over `database`. `holderFile` is the handle whose
+   * lock is the hold on the database, released when the store closes; a
+   * store without one belongs to this process alone.
+   */
+  constructor(database: Database, holderFile?: Deno.FsFile) {
     this.database = database;
+    this.#holderFile = holderFile;
   }
 
   saveSession(snapshot: HarnessChatSessionSnapshot): void {
@@ -164,6 +239,9 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         session_id,
         status,
         transcript,
+        research_context,
+        assigned_pieces,
+        transcript_omissions,
         created_at,
         updated_at,
         closed_at
@@ -172,6 +250,9 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         :session_id,
         :status,
         :transcript,
+        :research_context,
+        :assigned_pieces,
+        :transcript_omissions,
         :created_at,
         :updated_at,
         :closed_at
@@ -179,12 +260,24 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
       ON CONFLICT(session_id) DO UPDATE SET
         status = :status,
         transcript = :transcript,
+        research_context = :research_context,
+        assigned_pieces = :assigned_pieces,
+        transcript_omissions = :transcript_omissions,
         updated_at = :updated_at,
         closed_at = :closed_at
     `).run({
       session_id: snapshot.session.sessionId,
       status: JSON.stringify(snapshot.session),
       transcript: JSON.stringify(snapshot.transcript),
+      transcript_omissions: JSON.stringify(
+        createHarnessTranscriptOmissions(snapshot.transcript),
+      ),
+      research_context: snapshot.researchContext === undefined
+        ? null
+        : JSON.stringify(snapshot.researchContext),
+      assigned_pieces: snapshot.assignedPieces === undefined
+        ? null
+        : JSON.stringify(snapshot.assignedPieces),
       created_at: snapshot.session.createdAt,
       updated_at: snapshot.session.updatedAt,
       closed_at: snapshot.session.closedAt ?? null,
@@ -195,7 +288,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
     sessionId: string,
   ): HarnessChatSessionSnapshot | undefined {
     const row = this.database.prepare(`
-      SELECT status, transcript
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions
       FROM chat_session
       WHERE session_id = :session_id
     `).get({ session_id: sessionId }) as SessionRow | undefined;
@@ -204,7 +297,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
 
   listSessions(): readonly HarnessChatSessionSnapshot[] {
     return (this.database.prepare(`
-      SELECT status, transcript
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions
       FROM chat_session
       ORDER BY created_at ASC, session_id ASC
     `).all() as SessionRow[]).map(decodeSessionRow);
@@ -442,21 +535,56 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
     return row.sequence;
   }
 
+  /**
+   * Closes the database connection, then releases the hold, so no other
+   * process can take the database while this one still has it open; a
+   * connection that fails to close still releases it.
+   */
   close(): void {
-    this.database.close();
+    try {
+      this.database.close();
+    } finally {
+      this.#holderFile?.close();
+      this.#holderFile = undefined;
+    }
   }
 }
 
-const decodeSessionRow = (row: SessionRow): HarnessChatSessionSnapshot => ({
-  session: parseJsonColumn<HarnessChatSessionStatus>(
-    row.status,
-    "chat_session.status",
-  ),
-  transcript: parseJsonColumn<HarnessTranscriptMessage[]>(
+const decodeSessionRow = (row: SessionRow): HarnessChatSessionSnapshot => {
+  const transcript = parseJsonColumn<HarnessTranscriptMessage[]>(
     row.transcript,
     "chat_session.transcript",
-  ),
-});
+  );
+  if (row.transcript_omissions != null) {
+    const omissions = parseJsonColumn<unknown>(
+      row.transcript_omissions,
+      "chat_session.transcript_omissions",
+    );
+    if (!isHarnessTranscriptOmissions(omissions)) {
+      throw new Error("Stored transcript omissions have an invalid format");
+    }
+    restoreHarnessTranscriptOmissions(transcript, omissions);
+  }
+  return {
+    ...(row.research_context == null ? {} : {
+      researchContext: parseJsonColumn<HarnessChatResearchContext>(
+        row.research_context,
+        "chat_session.research_context",
+      ),
+    }),
+    ...(row.assigned_pieces == null ? {} : {
+      assignedPieces: parseJsonColumn<HarnessAssignedPiece[]>(
+        row.assigned_pieces,
+        "chat_session.assigned_pieces",
+      ),
+    }),
+    session: parseJsonColumn<HarnessChatSessionStatus>(
+      row.status,
+      "chat_session.status",
+    ),
+    transcript,
+  };
+};
 
 const decodeTurnRow = (row: TurnRow): HarnessChatTurnRecord => {
   const context = parseNullableJsonColumn<HarnessChatContext>(
@@ -482,13 +610,95 @@ const decodeTurnRow = (row: TurnRow): HarnessChatTurnRecord => {
   };
 };
 
+/**
+ * Opens the database at `options.url` and holds it for this process until the
+ * store closes, creating the database and its schema when they are absent.
+ * The hold is an exclusive advisory lock on a file beside the database, taken
+ * before the database is connected: one that another live process holds is
+ * refused with a `HarnessChatStoreHeldError` naming that holder, and nothing
+ * has touched it. The operating system releases the lock with the handle, so
+ * a holder that exits without closing releases it just the same, and a hold
+ * is never stale while it is held. A hold is also the only evidence of a
+ * holder: a process that opened the database without taking one leaves no
+ * trace here, and its database reads as unheld. A database with more than
+ * one name (hard links) is refused under every name with a
+ * `HarnessChatStoreAliasedError`, since a hold beside one name is not seen
+ * from another.
+ */
 export const openSqliteHarnessChatSessionStore = async (
   options: OpenSqliteHarnessChatSessionStoreOptions,
 ): Promise<SqliteHarnessChatSessionStore> => {
-  const database = await new Database(databaseAddress(options.url), {
+  const address = databaseAddress(options.url);
+  // The hold file is named by the database's resolved path, so the database
+  // has to exist first; to SQLite an empty file is an empty database.
+  (await Deno.open(fromFileUrl(address), { write: true, create: true }))
+    .close();
+  const store = await resolvedDatabasePath(address);
+  // A hard link is a second name the resolution cannot see, and a hold
+  // beside one name would not be seen from the other.
+  const names = (await Deno.stat(store)).nlink ?? 1;
+  if (names > 1) {
+    throw new HarnessChatStoreAliasedError(store, names);
+  }
+  const holderPath = `${store}${HOLDER_FILE_SUFFIX}`;
+  const holderFile = await Deno.open(holderPath, {
+    read: true,
+    write: true,
     create: true,
   });
-  database.exec(PRAGMAS);
-  database.exec(INIT);
-  return new SqliteHarnessChatSessionStore(database);
+  try {
+    if (!(await holderFile.tryLock(true))) {
+      throw new HarnessChatStoreHeldError(
+        store,
+        await readStoreHolder(holderPath),
+      );
+    }
+    // Written in place: the lock lives on this file's inode, so a record
+    // renamed over it would leave later openers locking a file nobody holds.
+    await Deno.writeTextFile(
+      holderPath,
+      JSON.stringify(
+        options.holder ?? {
+          instanceId: crypto.randomUUID(),
+          pid: Deno.pid,
+          heldSince: new Date().toISOString(),
+        },
+      ),
+    );
+    const database = await new Database(address, {
+      create: true,
+    });
+    try {
+      database.exec(PRAGMAS);
+      database.transaction(() => {
+        database.exec(INIT);
+        const columns = database.prepare("PRAGMA table_info(chat_session)")
+          .all() as {
+            name: string;
+          }[];
+        if (!columns.some((column) => column.name === "research_context")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN research_context TEXT",
+          );
+        }
+        if (!columns.some((column) => column.name === "assigned_pieces")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN assigned_pieces TEXT",
+          );
+        }
+        if (!columns.some((column) => column.name === "transcript_omissions")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN transcript_omissions TEXT",
+          );
+        }
+      }).immediate();
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+    return new SqliteHarnessChatSessionStore(database, holderFile);
+  } catch (error) {
+    holderFile.close();
+    throw error;
+  }
 };

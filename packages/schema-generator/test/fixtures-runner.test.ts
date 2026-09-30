@@ -19,6 +19,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   batchTypeCheckFixtures,
@@ -230,7 +231,7 @@ function normalizeArrayOrdering(obj: unknown): unknown {
   // no faithful `Object.entries` descent for it either, so it still flattens to
   // `{}` here. Handle it when the golden path needs to carry one.
   if (
-    obj !== null && typeof obj === "object" && !(obj instanceof FabricPrimitive)
+    isObjectOrArray(obj) && !(obj instanceof FabricPrimitive)
   ) {
     const entries = Object.entries(obj as Record<string, unknown>)
       .map(([key, value]) => {

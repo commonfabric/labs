@@ -59,9 +59,160 @@ export interface AcceptedContractBreak {
    * when either gate runs (`pattern-break-registry-guards.ts`).
    */
   record: string;
+
+  /**
+   * The ruling that lets this entry name a required pattern. Absent on every
+   * other entry: the guard refuses a break on an auto-updating root unless
+   * one is carried, because such a break strands every space's root the
+   * moment it merges, and that is a decision a person makes by name.
+   */
+  requiredPatternOverride?: RequiredPatternOverride;
+}
+
+/** Who ruled that a required pattern takes an accepted break, and why. */
+export interface RequiredPatternOverride {
+  /** The person whose ruling this is. */
+  rulingBy: string;
+
+  /** The date of the ruling, `YYYY-MM-DD`. */
+  on: string;
+
+  /** The ruling, quoted or summarized. */
+  reason: string;
 }
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
+  {
+    // The profile gained its owner-protected share inbox pointer (`inbox`,
+    // optional, undefaulted). The picker consumes a stored profile, and the
+    // proof compares the new property's `ifc` label against a baseline that
+    // has no such property at all, so it reads a label change where a
+    // stored profile without the field still validates. An unlabelled
+    // pointer would pass the proof and let a stranger redirect the owner's
+    // inbox; the label is the point.
+    pattern: "system/profile-picker.tsx",
+    baselines: [
+      "20260729T022742Z-BVxqS5A3M24IcX6m",
+      "20260818T220011Z-J-y30yE6xQ8axACi",
+    ],
+    paths: ["argument.defaultProfile"],
+    reason:
+      "the profile's new owner-protected inbox pointer reads as a changed label under a baseline that never had the property",
+    record: "docs/history/profile-inbox-pointer-break.md",
+  },
+  {
+    // A SECOND entry for the picker, and no baseline here appears above: the
+    // pairs stay disjoint because the gate keys accepted pairs into a Map,
+    // so a baseline named twice would take the later path set in place of
+    // the earlier one.
+    //
+    // The share inbox pointer's `space` and `host` fields left, replaced by
+    // a link to the inbox piece under `piece`. The recorded object requires
+    // the two fields, so no candidate without them applies over it.
+    pattern: "system/profile-picker.tsx",
+    baselines: [
+      "20260915T064957Z-Idjl03Ljo7Yyeecn",
+      "20260918T000350Z-TY78mWqtLnHDoZtN",
+    ],
+    paths: ["argument.defaultProfile"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+  },
+  {
+    // The record's scope moved from the value onto the handle once the schema
+    // generator stopped dropping a scope wrapper reached through an alias. The
+    // recorded contracts carry no scope at all; the argument now caps the
+    // handle at `user`, which every record the `agent` builtin creates meets.
+    pattern: "system/agent-run.tsx",
+    baselines: [
+      "20260920T164352Z-nTSuqgfjRzkwXIgf",
+      "20260920T170445Z-TMoN6scQaXVlTvPW",
+    ],
+    paths: ["argument.run"],
+    reason:
+      "the run argument's scope moved onto the handle as a user cap, which the recorded unscoped contracts read as a changed asCell entry; the linked records are user-scoped documents the cap admits",
+    record: "docs/history/agent-run-record-handle-scope-break.md",
+  },
+  {
+    // The same ruling seen from the profile itself: the proof names the
+    // first of the two fields that left.
+    pattern: "system/profile-home.tsx",
+    baselines: [
+      "20260915T064957Z-mE7S34E5xl20_PZs",
+      "20260917T235321Z--A47I2nujs7eKua6",
+    ],
+    paths: ["result.inbox.host"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+  },
+  {
+    // The same ruling seen from home, whose published `defaultProfile`
+    // carries the profile's shape. Home is a required pattern, so this entry
+    // carries the ruling that lets it name one: every space's root takes the
+    // break the moment it merges, and nothing deployed beyond one install
+    // holds a pointer of the old shape.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20260915T064957Z-k40oHeJO0hh31i1H",
+      "20260917T220636Z-xdDxE87ojM-_6i1g",
+      "20260918T000350Z-AhP3Iq9N0OLx48b1",
+      "20260918T002421Z-RB590FUNua-vIXOh",
+      "20260918T072634Z-NeP8mB1oe_0bWKFV",
+    ],
+    paths: ["result.defaultProfile"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Berni",
+      on: "2026-09-18",
+      reason:
+        "you can make that an allowed incompatible pattern update if you need to since other than Gideon no one will have that version of setInbox",
+    },
+  },
+  {
+    // Three cells' declared defaults take effect. Each is typed
+    // `Stored | Default<Record<PropertyKey, never>>` and reaches the schema
+    // generator through a scope alias, where default recovery from the
+    // resolved union had taken the propertyless plain arm for a marker-less
+    // brand, so no baseline carries the `default: {}` the declarations always
+    // meant. A piece holding one of them unset reads `{}` where it read
+    // `undefined`. The proof reports one issue per role, so it names only
+    // `adminRegistry`; the other four paths are found by peeling.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: [
+      "20260729T022742Z-piF14M8QDh5pSPw1",
+      "20260821T064855Z-7vNcdzNpQKWFJXVr",
+      "20260831T222745Z-kIL5Ew24PVUYtyxy",
+    ],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "argument.myProfile",
+      "result.myProfile",
+      "argument.rooms",
+      "result.rooms",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
+    record: "docs/history/admin-registry-default-honored-break.md",
+  },
   {
     // The Join verb's event opens: `Record<PropertyKey, never>` compiled to
     // a closed empty object the runner's closed-world gate now enforces, so
@@ -176,7 +327,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // board's demand narrowed to the eight members it reads — which narrows
     // the published projection with it, opens the link and author `kind`
     // domains a closed enum in provided data could never widen, and stops
-    // `addLink` requiring the two fields its handler already defaulted.
+    // `addLink` requiring the two fields its handler already defaulted. And
+    // the mention universe reaching a topic as a readable cell, the break
+    // the entry below records for the baselines after these.
     pattern: "topics/topic.tsx",
     baselines: [
       "20260729T022742Z-6pmDbdEVBz84jJRa",
@@ -205,11 +358,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
       "argument.comments[]",
       "result.createdByName",
+      // The mention universe's readable-cell narrowing, the break the entry
+      // below records: these baselines carry it as well, and the argument
+      // role reports it once the widened `kind` domains are accepted (a
+      // closed enum widening to `string` is a type widening the proof
+      // admits).
+      "argument.mentionable",
     ],
     reason:
-      "Two accepted breaks on one pattern: the reference-graph rebuild on cell " +
-      "identity (docs/history/topics-crossref-identity-break.md), and the " +
-      "demand narrowing recorded below.",
+      "Three accepted breaks on one pattern: the reference-graph rebuild on " +
+      "cell identity (docs/history/topics-crossref-identity-break.md), the " +
+      "demand narrowing recorded below, and the mention universe's readable-" +
+      "cell narrowing, which these baselines carry as well " +
+      "(docs/history/topics-mentionable-readonly-break.md).",
     record: "docs/history/topics-demand-narrowing-break.md",
   },
   {
@@ -374,12 +535,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // A second entry for this pattern, with baselines disjoint from the other
-    // one's, which is what keeps the bound tight: forgiving this path on the
-    // older baselines too would let the proof's one-issue-per-role limit hide
-    // an unintended break behind pairs this break never produced a finding
-    // against. Those older baselines report `bodyUpdatedBy.kind` or
-    // `boardCrossrefs` for the argument role, so `mentionable` is not the
-    // reported issue there.
+    // one's: the gate keys accepted pairs into a Map, so a baseline named
+    // twice would take the later path set in place of the earlier one. The
+    // older baselines report this same narrowing for the argument role and
+    // name it in their own entry above, beside the breaks only they carry.
     pattern: "topics/topic.tsx",
     baselines: [
       "20260826T221814Z-RZiIzB74VkCoXYty",
@@ -584,5 +743,161 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "seeds one labeled cell beside one unlabeled cell, which a clause over " +
       "both defeated.",
     record: "docs/history/pattern-result-ifc-contract-break.md",
+  },
+  {
+    // The Send verb's event opens, the same break the roster Join verbs took
+    // above: `Record<PropertyKey, never>` compiled to a closed empty object,
+    // which the runner's closed-world gate enforces, so the Send button's
+    // serialized DOM event was refused and no message could be sent. `void`
+    // is a different recorded contract for the stream; nothing held state
+    // under the old one.
+    pattern: "profile-group-chat/main.tsx",
+    baselines: ["20260729T022742Z-VIR19UFKyKrauX_B"],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat, same record.
+    pattern: "scoped-group-chat/main-plain-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-Z-pkp9K1p6P_byR_",
+      "20260909T184756Z-M530BSuyTtIuZ_9J",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat's writable-input variant, same record.
+    pattern: "scoped-group-chat/main-with-writable-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-_XyScfA2QEj14JnS",
+      "20260909T184756Z-NMt89YDsQnt_urES",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The everyone-is-admin flag's `true` branch gains the `writeAuthorizedBy`
+    // claim its type declares, which a canonical alias formatting its payload
+    // without a node had dropped. The proof descends to the flag here.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260922T020444Z-IRoEgfpuUdf-xwvE"],
+    paths: [
+      "argument.adminRegistry.everyoneIsAdmin",
+      "result.adminRegistry.everyoneIsAdmin",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The same break; against this older contract the proof blames the whole
+    // registry rather than descending to the flag.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The CFC group chat demo's fields become `cf-submit-input`s, so Enter
+    // gives the trusted gesture its writes require. The drafts and their
+    // setter streams are removed, and the trusted streams take the submitted
+    // text as their event. The older baselines carry this break in the
+    // entries above that already name them.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260923T205929Z-mHuHgI9LlBLCu53t"],
+    paths: [
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the drafts removed, with the trusted streams taking the text a `cf-submit-input` click carries",
+    record: "docs/history/cfc-chat-demo-submit-input-break.md",
+  },
+  {
+    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
+    // apply the open-object evolution allowance inside a union branch, so a
+    // stored panel whose `addedBy` held a non-string reads as a refused
+    // alternative.
+    pattern: "loom/main.tsx",
+    baselines: [
+      "20260920T232507Z-_ewvPy8qDJYL47km",
+      "20260922T052256Z--2Q9ESzxSenSTer9",
+    ],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+    record: "docs/history/loom-panel-added-by-break.md",
+  },
+  {
+    // Each `Panel` kind gains an optional `addedByProfile`, whose write
+    // contract and label are its type. The proof does not apply the
+    // open-object evolution allowance inside a union branch.
+    pattern: "loom/main.tsx",
+    baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedByProfile reads as a narrowed union branch under the baseline recorded before it",
+    record: "docs/history/loom-panel-adder-profile-break.md",
+  },
+  {
+    // The demo's release rule now pins two levels, `commit` and the `submit`
+    // step beneath it, so the policy its briefs declare has a new digest,
+    // which the proof reads as a changed label on the briefs.
+    pattern: "cfc-exchange-rules/witnessed-chain.tsx",
+    baselines: ["20260926T005010Z-wTSqH_JN5Vg6LFNp"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest",
+    record: "docs/history/witnessed-chain-two-level-break.md",
   },
 ];

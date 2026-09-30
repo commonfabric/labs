@@ -19,7 +19,15 @@ import { Identity } from "@commonfabric/identity";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { match, principal } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "../src/storage/v2-emulate.ts";
+import {
+  ExecutionLeaseCycle,
+  executionLeaseHolder,
+} from "@commonfabric/memory/v2/execution-lease";
+import { servedCommitDestination } from "./support/served-commits.ts";
 
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -65,15 +73,26 @@ interface QueryState {
 }
 
 describe("sqlite-served-identity", () => {
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: EmulatedStorageManager;
+  let server: ReturnType<typeof newLoopbackServer>;
+  let lease: ExecutionLeaseCycle;
   let runtime: Runtime;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // The ambient identity is the SERVICE (the serving runtime's default
     // provider is bound to `storageManager.as` — runtime.ts). The flag is
     // ON: the per-instance scoped-read row these pins read through is
     // claimable only under EXPERIMENTAL_SERVER_EXECUTION (protocol.md §2).
-    storageManager = StorageManager.emulate({ as: serviceSigner });
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    lease = new ExecutionLeaseCycle({
+      engine: await server.engineForSpace(space),
+      space,
+      holder: executionLeaseHolder(serviceSigner.did()),
+    });
+    expect(lease.acquire()).toBe(true);
+    storageManager = EmulatedStorageManager.connectTo(server, {
+      as: serviceSigner,
+    });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
@@ -85,6 +104,8 @@ describe("sqlite-served-identity", () => {
     await runtime?.idle();
     await runtime?.dispose();
     await storageManager?.close();
+    lease.release();
+    await server.close();
   });
 
   /** Drive the raw sqliteDatabase builtin once on `tx` (creation run) and
@@ -151,12 +172,20 @@ describe("sqlite-served-identity", () => {
     const builtin = sqliteDatabase(
       inputs,
       (tx, handle) =>
-        handles.push((handle as Cell<SqliteDbRef>).withTx(tx).get()),
+        handles.push({ ...(handle as Cell<SqliteDbRef>).withTx(tx).get() }),
       () => {},
       [parent],
       parent,
       runtime,
       { ...parent.getAsNormalizedFullLink(), scope: "session" },
+    );
+    runtime.installSealDestination(
+      servedCommitDestination(
+        runtime,
+        space,
+        await server.engineForSpace(space),
+        lease,
+      ),
     );
     for (const session of ["first", "second", "first"]) {
       const tx = runtime.edit();
@@ -209,7 +238,7 @@ describe("sqlite-served-identity", () => {
     // client's runs are never wave-stamped (ON-arm speculation and the
     // whole OFF arm alike — the OFF mint path is additionally pinned by
     // sqlite-db-owner.test.ts).
-    const clientManager = StorageManager.emulate({ as: aliceSigner });
+    const clientManager = EmulatedStorageManager.emulate({ as: aliceSigner });
     const client = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: clientManager,
@@ -459,26 +488,22 @@ describe("sqlite-served-identity", () => {
     const { builtin, result } = await clearedQuerySetup();
 
     // Each stamped run stages its claim `{pending, requestHash}` into its
-    // OWN transaction (the requesting run's commit carries the claim —
-    // serving-loop.md §4). Read each hash back from the run's own staged
-    // state, before commit: the durable per-instance landing is the
-    // serving loop's wave-commit annotation, which the composed
-    // integration pair covers (sqlite-read-clearance-multi-runtime).
+    // OWN transaction. These probes compare staged request identities;
+    // the composed sqlite-read-clearance-multi-runtime test covers their
+    // durable per-instance landing through serving waves.
     const tx1 = runtime.edit();
     demandedStamp(tx1, aliceSigner.did(), "sess-alice");
     builtin.action(tx1);
     const aliceHash = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx1.abort();
 
     const tx2 = runtime.edit();
     demandedStamp(tx2, bobSigner.did(), "sess-bob");
     builtin.action(tx2);
     const bobHash = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx2.abort();
 
     expect(aliceHash).toBeDefined();
     expect(bobHash).toBeDefined();
@@ -505,16 +530,14 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const hashOne = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx1.abort();
 
     const tx2 = runtime.edit();
     demandedStamp(tx2, aliceSigner.did(), "sess-two");
     builtin.action(tx2);
     const hashTwo = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx2.abort();
 
     expect(hashOne).toBeDefined();
     expect(hashTwo).toBeDefined();
@@ -543,8 +566,7 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const first = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx1.abort();
 
     const second = await makeBuiltin();
     const tx2 = runtime.edit();
@@ -553,8 +575,7 @@ describe("sqlite-served-identity", () => {
     const restaged = (second.result().withTx(tx2).get() as
       | QueryState
       | undefined)?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx2.abort();
 
     expect(first).toBeDefined();
     expect(restaged).toBe(first);
@@ -578,16 +599,14 @@ describe("sqlite-served-identity", () => {
     builtin.action(tx1);
     const hashOne = (result().withTx(tx1).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx1.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx1.abort();
 
     const tx2 = runtime.edit();
     demandedStamp(tx2, aliceSigner.did(), "sess-two");
     builtin.action(tx2);
     const hashTwo = (result().withTx(tx2).get() as QueryState | undefined)
       ?.requestHash;
-    expect((await tx2.commit()).error).toBeUndefined();
-    await runtime.settled();
+    tx2.abort();
 
     expect(hashOne).toBeDefined();
     expect(hashOne).toBe(hashTwo);

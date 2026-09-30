@@ -41,8 +41,8 @@ and `description`, then point to canonical repo docs. Examples:
 
 `cf-harness` uses `skillsRoot?: string` in `src/config.ts` for explicit skill
 preload. The CLI, prompt loop, and artifact store persist the discovered
-registry and activation artifacts. The registry snapshots supporting resources
-that are present in the configured skill directories at run start.
+registry and activation artifacts. The registry snapshots `SKILL.md` and
+supporting resources present in the configured skill directories at run start.
 
 ## External Models Reviewed
 
@@ -113,7 +113,7 @@ metadata and container path. See
   and an acquired script answers to the same operator allowlist a registry
   skill's script does.
 - Managing user-global skill directories outside an explicitly configured root.
-- Running skill scripts automatically or without an exact operator allowlist.
+- Running skill scripts automatically, or without the operator allowing them.
 - Treating `allowed-tools` as a permission grant.
 - Defining Pattern Factory's general orchestration or fulfillment contract.
 - Implementing a broad filesystem discovery tool as a prerequisite.
@@ -153,10 +153,11 @@ Validation should be lenient where that improves compatibility:
 - Symlinked skill directories are allowed only when the resolved `SKILL.md`
   stays under the configured skill root or another explicitly allowed root.
 
-## Supporting Resource Index
+## Skill Resource Index
 
-Supporting resources are discovered automatically from the filesystem at
-runtime. Normal skills do not need a hand-authored resource manifest.
+`SKILL.md` and supporting resources are discovered automatically from the
+filesystem at runtime. Normal skills do not need a hand-authored resource
+manifest.
 
 At run start, `cf-harness` should snapshot every accepted skill directory and
 record a resource index inside `skill-registry.json`. This index is bounded by
@@ -185,7 +186,8 @@ Each resource record should include:
 
 Resource discovery:
 
-- skip the root `SKILL.md`
+- include the root `SKILL.md` as kind `other` before scanning supporting files,
+  counting it toward the resource file limit
 - sort paths deterministically
 - reject or skip resources whose resolved paths escape the skill directory or
   configured skills root
@@ -198,12 +200,14 @@ checks the actual file at call time. If the file differs from the run-start
 snapshot, the tool reports the mismatch in its output and artifacts rather than
 silently treating the snapshot as exact.
 
-## Supporting Resource Reads
+## Skill Resource Reads
 
 Status: implemented for indexed skill resources.
 
 `read_skill_resource` is a built-in read tool available to parent runs by
-default. It takes:
+default. A run can read a registered skill's instructions with
+`path: "SKILL.md"` without preloading the skill. Supporting resources use their
+relative paths:
 
 ```json
 {
@@ -235,7 +239,8 @@ observations, writes, or CFC downgrades.
 
 ## Skill Script Execution
 
-Status: implemented for exact-allowlisted scripts in already activated skills.
+Status: implemented for scripts of already activated skills the operator allows
+— the run-wide switch, or an exact entry.
 
 `run_skill_script` is a built-in side-effect tool. It is not available in the
 default parent tool set; callers must explicitly include
@@ -340,7 +345,12 @@ The current CLI flags are:
 ```text
 --skills-root <path>      Skill root containing <name>/SKILL.md
 --skill <name>            Preload a skill for this run (repeatable)
---allow-skill-script <s>  Allow exact script execution (skill:scripts/path)
+--allow-skill-scripts     Run skill scripts in the sandbox, for every skill
+                          this run holds, registry and acquired alike
+--allow-skill-script <s>  Allow one exact script (skill:scripts/path,
+                          where skill is a registry name or an acquired pin;
+                          a registry name requires --skills-root, a pin does
+                          not)
 --no-skill-catalog        Disable automatic skill catalog disclosure
 ```
 
@@ -354,9 +364,26 @@ Current v1 behavior:
 - `--skill` requires `--skills-root`.
 - Multiple `--skill` values are allowed and loaded in the provided order after
   deduplication.
-- `--allow-skill-script` requires `--skills-root`, is repeatable, deduplicates
-  exact normalized entries, and does not itself expose the execution tool.
-  `--allow-tool run_skill_script` is also required.
+- `--allow-skill-script` is repeatable and deduplicates exact normalized
+  entries. An entry keyed on a registry name requires `--skills-root`, since
+  that is what gives the script a sandbox path; an entry keyed on an acquired
+  pin does not, its bytes reaching the sandbox through the acquisition's own
+  mount.
+- The entry and the tool are decided separately for the run's own surface and
+  together for a child's, and the difference is not a preference. The run's
+  surface is `--allow-tool`, a list of tools rather than a list of scripts, so
+  an operator narrowing it must include `run_skill_script` — an entry alone does
+  not add a tool to a list the operator wrote. A delegated child's surface is
+  its profile's, which the operator never writes, so a child handed an acquired
+  skill receives `run_skill_script` when two things hold together: the run
+  allows skill scripts — the run-wide switch, or at least one entry at that
+  skill's pin — and the child's own sandbox mounts that skill. The second is the
+  backing gate, which a child sharing a handed-in runtime fails, no mount having
+  been added for it — so the allowlist decides what may run and the mount is
+  whether there is anything to run. There is no configuration anyone wants in
+  which a script is allowlisted and the tool withheld; where that happens on the
+  run's own surface it is a mistake, and a run narrowed that way offers no tool
+  rather than refusing a call, so nothing names the cause.
 - `--no-skill-catalog` is available for tightly scripted batch runs that only
   want explicit preloaded skills.
 
@@ -388,8 +415,8 @@ Behavior:
 1. Resolve and validate `skillsRoot`.
 2. Build a registry of `skillsRoot/**/SKILL.md` with bounded traversal.
 3. Validate frontmatter and produce diagnostics.
-4. For each accepted skill, index supporting resources from the runtime
-   filesystem and record them in `skill-registry.json`.
+4. For each accepted skill, index `SKILL.md` and supporting resources from the
+   runtime filesystem and record them in `skill-registry.json`.
 5. For each explicit `--skill`, read the full `SKILL.md`.
 6. Inject a structured skill context block before the user task.
 7. Record skill registry and skill activation artifacts.
@@ -507,8 +534,37 @@ Policy rules:
 - A skill cannot grant a tool that the run did not already allow.
 - A skill cannot downgrade CFC enforcement.
 - A skill cannot authorize reading protected substrate observations.
-- A skill script can run only through `run_skill_script`, and only when both the
-  tool and exact `skill:scripts/path` entry are allowlisted by the operator.
+- A skill script can run only through `run_skill_script`, and only where the
+  operator allows skill scripts: `--allow-skill-scripts` for every skill the run
+  holds, or an exact `skill:scripts/path` entry for one. The switch covers a
+  registry skill and an acquired one alike, since what a script is trusted with
+  is the sandbox it runs in rather than where the skill came from.
+- A registry skill's script must additionally belong to a skill activated by
+  name in this run, and match that script's entry in the run-start registry
+  snapshot by digest and size.
+- An acquired skill's script goes through the same decision. An entry naming one
+  keys on the pin its bytes were read at — `owner/repo/slug@<commit sha>` —
+  since an acquired skill has no registry name; a run with the switch on needs
+  no entry at all. It has no registry and no run-start snapshot either, so the
+  two conditions above are met differently: the run must hold an activation
+  whose acquisition names that pin, and the file must match the digest taken at
+  acquisition. The run-wide switch satisfies the allowlist gate for an acquired
+  script as for a registry one, and replaces neither of those two conditions. It
+  runs in the sandbox; a run whose skill-script execution target is the host
+  refuses it.
+- What backs `run_skill_script` for an acquired script is the mount that puts it
+  at a path, so a run given no `--skills-root` still offers the tool to a child
+  whose sandbox carries that mount, and `--allow-skill-script` takes an acquired
+  pin without a skills root. A run holding an acquired skill it does not mount —
+  the acquiring parent, or a child sharing a handed-in sandbox runtime — is not
+  backed by the mount. That is not the same as having no tool: a skills root
+  backs `run_skill_script` on its own, so such a run is offered the tool
+  whenever it has one, and what stops it is a refusal rather than an absence.
+  The acquiring parent never loaded what it acquired, so no activation names the
+  pin and the call refuses `skill_not_activated`; a run that is activated for
+  the pin and still lacks the mount refuses `script_not_mounted`.
+  `read_skill_resource` stays registry-backed, an acquired skill having no
+  resource index.
 - `allowed-tools` can narrow or advise, but v1 should not let it expand the
   allowed tool surface.
 - Prompt-injection-like content in a skill should produce a diagnostic event. It
@@ -532,6 +588,7 @@ Persist these artifacts under the run root:
 ```text
 skill-registry.json
 skill-activations.json
+acquired-skills.json
 ```
 
 `skill-registry.json`:
@@ -549,6 +606,19 @@ skill-activations.json
       "skillPath": "/workspace/labs/skills/pattern-dev/SKILL.md",
       "skillDir": "/workspace/labs/skills/pattern-dev",
       "digest": "sha256:...",
+      "resources": [
+        {
+          "path": "scripts/check.ts",
+          "kind": "script",
+          "resourcePath": "/workspace/labs/skills/pattern-dev/scripts/check.ts",
+          "sandboxResourcePath": "/workspace/skills/pattern-dev/scripts/check.ts",
+          "sizeBytes": 2048,
+          "digest": "sha256:...",
+          "contentKind": "text",
+          "script": { "executable": true, "runtime": "deno" },
+          "diagnostics": []
+        }
+      ],
       "frontmatter": {},
       "diagnostics": []
     }
@@ -556,6 +626,10 @@ skill-activations.json
   "diagnostics": []
 }
 ```
+
+Each script resource carries the `digest` and `sizeBytes` a registry script's
+execution is held to. `run_skill_script` re-reads the file and refuses when
+either has moved.
 
 `skill-activations.json`:
 
@@ -581,6 +655,23 @@ skill-activations.json
       "activatedAt": "...",
       "cfcPromptRole": "context",
       "handleToken": "cfh:a:3kk78"
+    },
+    {
+      "name": "handle:cfh:a:f4ecd",
+      "source": "skill-handle",
+      "runId": "...",
+      "digest": "sha256:...",
+      "activatedAt": "...",
+      "cfcPromptRole": "context",
+      "handleToken": "cfh:a:f4ecd",
+      "acquisition": {
+        "registryId": "owner/repo/slug",
+        "commitSha": "dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c",
+        "sourceUrl": "https://raw.githubusercontent.com/owner/repo/dd93980.../skills/slug/SKILL.md",
+        "verification": "git-commit-sha",
+        "valueDigest": "sha256:...",
+        "receivedAt": "..."
+      }
     }
   ]
 }
@@ -590,6 +681,51 @@ The registry path fields (`skillPath`, `skillDir`, `sandboxSkillPath`,
 `sandboxSkillDir`) are absent for a `skill-handle` activation: its text came
 from a cell the delegation's `skillHandle` named, not from a registry directory,
 and `handleToken` plus `digest` carry its provenance instead.
+
+A handle an acquisition minted carries `acquisition` as well, and that is what
+an acquired skill's script is authorized by: the run holds the skill when an
+activation's `acquisition` names the pin, since there is no registry name to
+match.
+
+The child's `skill_context` header includes that acquisition's pin as
+`pin="owner/repo/slug@<commit sha>"`. It is the `skill` argument accepted by
+`run_skill_script`. A run holding acquired skills receives a pin hint when a
+non-pin identifier fails registry lookup. The header is context metadata; the
+activation digest and return scrub cover the skill text itself.
+
+`acquired-skills.json`, written only by a run that acquired a skill carrying
+scripts:
+
+```json
+{
+  "type": "cf-harness.acquired-skills",
+  "version": 1,
+  "generatedAt": "...",
+  "skills": [
+    {
+      "registryId": "owner/repo/slug",
+      "commitSha": "dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c",
+      "pin": "owner/repo/slug@dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c",
+      "hostRoot": "<artifactRoot>/.acquired-skills/<runId>/<commitSha>/slug",
+      "sandboxRoot": "/acquired-skill",
+      "scripts": [
+        {
+          "path": "scripts/report.sh",
+          "hostPath": "<hostRoot>/scripts/report.sh",
+          "sandboxPath": "/acquired-skill/scripts/report.sh",
+          "valueDigest": "sha256:...",
+          "sizeBytes": 512
+        }
+      ]
+    }
+  ]
+}
+```
+
+`valueDigest` is the digest taken at acquisition, in the encoding the
+acquisition records, and it stands where a registry script's snapshot digest
+stands: the execution re-reads the file and refuses when it has moved. The
+`hostRoot` sits outside every run root, so no run's own artifacts contain it.
 
 On resume:
 
@@ -679,6 +815,7 @@ This avoids ambiguity between host paths and sandbox paths.
 | Explicit skill root, discovery, preload, registry, activation, and resume artifacts | implemented                                                |
 | Indexed supporting-resource reads                                                   | implemented                                                |
 | Exact allowlisted sandbox Deno/Bash skill scripts                                   | implemented                                                |
+| Acquired skills' scripts, run under that same allowlist and keyed by pin            | implemented                                                |
 | Profile-scoped host skill scripts for the leased browser child                      | implemented                                                |
 | Pattern Factory phase-specific skills                                               | implemented                                                |
 | Explicit child-profile skill policy and summary-only parent return                  | implemented                                                |

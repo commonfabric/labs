@@ -1,6 +1,7 @@
 /**
- * The reference form — `/[@space/]<piece>[@scope][/path]`, the runner's
- * `parseReferenceParts` grammar — is the canonical way to name a cell: the
+ * The reference form — `//<space>/<piece>[#member][@qualifier…][/path]` or its
+ * space-relative form `/<piece>[#member][@qualifier…][/path]`, the runner's
+ * `parseCellReference` grammar — is the canonical way to name a cell: the
  * same structure names the same cell in patterns, in the shell, and at this
  * CLI's intake seams.
  *
@@ -13,25 +14,26 @@
  * say what they are, so neither can be mistaken for a name and the wider
  * vocabulary costs the narrower one nothing.
  *
- * At these seams a target may additionally end in the `#argument` suffix,
- * which selects the piece's arguments cell the way `--input` does.
+ * On the piece segment, `#argument` selects a member,
+ * the piece's arguments cell, the way `--input` does.
  *
- * The CLI's bare grammar (`pieceId[@scope][#argument]`,
+ * The CLI's bare grammar (`pieceId[#argument][@scope]`,
  * `pieceId[@scope]/path` at link endpoints, and slugs) is a convenience alias
  * for interactive use. New reference-syntax capabilities land in the
  * canonical form first, and the alias must not grow a capability the
- * canonical form lacks. The suffix is one the canonical form has, and a bare
+ * canonical form lacks. The member is one the canonical form has, and a bare
  * id designates the piece a reference designates, so it means the same on
  * both.
  */
 
 import { ValidationError } from "@cliffy/command";
 import type { CellScope } from "@commonfabric/api";
-import { createSession, isDID, type Session } from "@commonfabric/identity";
+import { createSession, type Session } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import {
   isPieceHandle,
   linkPathSegmentToCellPathSegment,
-  parseReferenceParts,
+  parseCellReference,
 } from "@commonfabric/runner/shared";
 import { isSlugAddress, isValidSlug } from "@commonfabric/runner/slugs";
 
@@ -42,8 +44,11 @@ export interface NormalizedLLMFriendlyRef {
 
   scope?: CellScope;
 
+  /** Module identity qualifier, retained for callers to apply their pin policy. */
+  pin?: string;
+
   /**
-   * True when the reference ended in the `#argument` suffix: the caller
+   * True when the piece segment selected the `#argument` member: the caller
    * selected the piece's arguments cell, the same selection `--input`
    * spells as a flag. Only commands that take `--input` accept it.
    */
@@ -164,74 +169,68 @@ export function validatePieceSegment(pieceId: string): void {
 }
 
 /**
- * Split the trailing `#argument` suffix off a target, and say whether it was
- * there.
- *
- * Both spellings of a target take the suffix, so both reach it here. `#` is
- * reserved for it: a target carrying any other fragment is refused, which is
- * why a path key containing `#` needs the positional path spelling rather
- * than the embedded one.
- *
- * The split runs before anything else parses the target. Left on, the suffix
- * lands inside the piece id, and the refusal that follows names an unknown
- * piece — a message that says nothing about the `#` that caused it. A suffix
- * with nothing in front of it is refused here for the same reason: what is
- * left names no piece, and the refusal downstream would report a target the
- * caller did write as one they did not.
+ * Removes a member from the piece segment of a target, returning its argument
+ * selection. Path keys retain `#`, including a final `path#argument` key.
  */
 export function splitArgumentSuffix(
   target: string,
 ): { target: string; input: boolean } {
-  const hash = target.indexOf("#");
-  if (hash === -1) return { target, input: false };
-
-  const suffix = target.slice(hash);
-  if (suffix !== "#argument") {
+  const rooted = target.startsWith("/");
+  const reference = rooted ? target : `/${target}`;
+  let parsed;
+  try {
+    parsed = parseCellReference(reference);
+  } catch (error) {
     throw new ValidationError(
-      `Unknown suffix "${suffix}". The one supported suffix is ` +
-        `"#argument", which selects the piece's arguments cell the way ` +
-        `"--input" does.`,
+      error instanceof Error ? error.message : String(error),
       { exitCode: 1 },
     );
   }
-  if (hash === 0) {
-    throw new ValidationError(
-      `"#argument" selects a piece's arguments cell, so it follows the ` +
-        `piece it selects.`,
-      { exitCode: 1 },
-    );
-  }
-  return { target: target.slice(0, hash), input: true };
+  const segments = target.split("/");
+  const index = target.startsWith("//")
+    ? 3
+    : target.startsWith("/@")
+    ? 2
+    : rooted
+    ? 1
+    : 0;
+  segments[index] = segments[index].replace(/#(?:argument|result)(?=@|$)/, "");
+  return { target: segments.join("/"), input: parsed.member === "argument" };
 }
 
 /**
  * Normalize a piece reference — `/of:fid1:abc.../path`, or `/tracker/path`,
- * optionally with a `/@space/` prefix or an `@scope` suffix on the piece —
+ * optionally with a `//space/` prefix or qualifiers on the piece —
  * into the piece, scope, and path the CLI's own intake uses.
  *
  * Returns `undefined` when `ref` is not written as a reference at all, so a
  * caller can fall through to its existing handling. The grammar itself is the
- * runner's (`parseReferenceParts`); a rooted string that fails to parse is a
+ * runner's (`parseCellReference`); a rooted string that fails to parse is a
  * usage error, as is a space that differs from the command's target space
  * where the two spellings can be compared without a session. When they cannot,
  * the reference's space comes back as `embeddedSpace` for the caller to settle
  * through `validateEmbeddedSpaces` once the session has resolved its own.
  *
- * The one addition to the runner's grammar is the trailing `#argument`
- * suffix, read by {@link splitArgumentSuffix} and returned as `input`.
+ * The `#argument` member is returned as `input`. Scope inherits from the
+ * supplied context; pins are retained for the caller to accept or refuse.
  */
 export function normalizeLLMFriendlyRef(
   ref: string,
-  options: { space?: string } = {},
+  options: { space?: string; scope?: CellScope } = {},
 ): NormalizedLLMFriendlyRef | undefined {
-  const trimmed = ref.trim();
+  const trimmed = ref.trimStart();
   if (!isReference(trimmed)) return undefined;
-
-  const { target, input } = splitArgumentSuffix(trimmed);
 
   let parsed;
   try {
-    parsed = parseReferenceParts(target);
+    parsed = parseCellReference(
+      trimmed,
+      options.space !== undefined
+        ? { space: options.space, scope: options.scope }
+        : options.scope !== undefined
+        ? { scope: options.scope }
+        : undefined,
+    );
   } catch (error) {
     throw new ValidationError(
       error instanceof Error ? error.message : String(error),
@@ -262,9 +261,10 @@ export function normalizeLLMFriendlyRef(
 
   return {
     pieceId,
-    ...(parsed.scope && { scope: parsed.scope as CellScope }),
+    ...(parsed.scope && { scope: parsed.scope }),
+    ...(parsed.pin && { pin: parsed.pin }),
     ...(embeddedSpace !== undefined && { embeddedSpace }),
-    ...(input && { input: true }),
+    ...(parsed.member === "argument" && { input: true }),
     path: parsed.path.map(linkPathSegmentToCellPathSegment),
   };
 }

@@ -6,7 +6,13 @@ import { classifyAtomField } from "./label-field-classification.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
 import { cfcLabelPathPrefixMatches } from "./label-view-core.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
-import type { IFCLabel, LabelEntryOrigin, LabelMapEntry } from "./types.ts";
+import { isCompleteCfcReferenceEntry } from "./types.ts";
+import type {
+  CfcMetadata,
+  IFCLabel,
+  LabelEntryOrigin,
+  LabelMapEntry,
+} from "./types.ts";
 
 // Template-population Stage B (docs/specs/cfc-template-population.md §5/§6;
 // spec §4.6.4.2): the §4.6.4.2 field-precise label-metadata population
@@ -78,19 +84,18 @@ export const isLabelMetadataTemplateEntry = (
 
 /**
  * Whether an entry contains the restrictions on the sources it describes.
- * Derived and structure entries carry the conservative flow join. Version-2
- * link entries with an explicit followRef class carry complete acquisition
+ * Derived and structure entries carry the conservative flow join. Version-3
+ * link entries explicitly marked referenceAcquisition:"complete" carry acquisition
  * history. Untouched legacy links in an upgraded envelope do not qualify.
  * The mint and introspection surface share this gate, so a sibling template
  * cannot make fields from an unauthenticated entry observable.
  */
 export const cfcEntryHasDerivedContainment = (
-  entry: Pick<LabelMapEntry, "origin" | "observes">,
-  metadataVersion: 1 | 2 = 1,
+  entry: Pick<LabelMapEntry, "origin" | "observes" | "referenceAcquisition">,
+  metadataVersion: CfcMetadata["version"] = 1,
 ): boolean =>
   entry.origin === "derived" || entry.origin === "structure" ||
-  (metadataVersion === 2 && entry.origin === "link" &&
-    entry.observes === "followRef");
+  isCompleteCfcReferenceEntry(metadataVersion, entry);
 
 /**
  * The §4.6.4.2 public/protected split for one atom field, shared by the mint
@@ -209,7 +214,7 @@ const scanAlternative = (
  */
 export const deriveLabelMetadataTemplateEntries = (
   entries: readonly LabelMapEntry[],
-  metadataVersion: 1 | 2 = 1,
+  metadataVersion: CfcMetadata["version"] = 1,
 ): LabelMapEntry[] => {
   const out: LabelMapEntry[] = [];
   for (const entry of entries) {

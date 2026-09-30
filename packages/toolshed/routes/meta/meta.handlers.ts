@@ -60,6 +60,7 @@ export const MetaResponseSchema = z.object({
     writeFloor: CfcDialSchema,
     triggerReadGating: z.boolean(),
     decomposedEnvelopes: z.boolean(),
+    contentAddressedLabels: z.boolean(),
     policyEvaluation: CfcDialSchema,
     labelMetadataProtection: CfcDialSchema,
     declaredMonotonicity: CfcDialSchema,

@@ -49,56 +49,64 @@ export function parseLcovReports(
   reports: readonly string[],
   options: ParseLcovOptions = {},
 ): Map<string, LcovFileCoverage> {
-  const mapPath = options.mapPath ?? ((sourcePath: string) => sourcePath);
   const files = new Map<string, LcovFileCoverage>();
+  for (const report of reports) addLcovReport(files, report, options);
+  return files;
+}
 
-  for (const report of reports) {
-    let current: LcovFileCoverage | undefined;
-    // A record opens with an optional `TN:` test-name line before its `SF:`
-    // line, so a test name is held until the source path is known.
-    let pendingTestName: string | undefined;
+/**
+ * Reads one LCOV report into `files`, merging its records into the entries
+ * already there the way {@linkcode parseLcovReports} merges across reports.
+ * A reader with more reports than it can hold as text at once adds each as
+ * it reads it, and holds only what they cover.
+ */
+export function addLcovReport(
+  files: Map<string, LcovFileCoverage>,
+  report: string,
+  options: ParseLcovOptions = {},
+): void {
+  const mapPath = options.mapPath ?? ((sourcePath: string) => sourcePath);
+  let current: LcovFileCoverage | undefined;
+  // A record opens with an optional `TN:` test-name line before its `SF:`
+  // line, so a test name is held until the source path is known.
+  let pendingTestName: string | undefined;
 
-    for (const line of report.split(/\r?\n/)) {
-      if (line.startsWith("TN:")) {
-        pendingTestName = line.slice(3) || undefined;
-      } else if (line.startsWith("SF:")) {
-        const sourcePath = line.slice(3);
-        const key = mapPath(sourcePath);
-        current = files.get(key);
-        if (!current) {
-          current = { sourcePath, lineHits: new Map() };
-          files.set(key, current);
-        }
-        if (pendingTestName && !current.testName) {
-          current.testName = pendingTestName;
-        }
-        pendingTestName = undefined;
-      } else if (!current) {
-        continue;
-      } else if (line.startsWith("DA:")) {
-        const [lineNumberText, hitsText] = line.slice(3).split(",");
-        // Both fields have to carry something. `Number("")` is 0, so a record
-        // missing its line number reads as line 0 and one missing its count
-        // reads as a line nobody ran.
-        const lineNumber = lineNumberText?.trim()
-          ? Number(lineNumberText)
-          : NaN;
-        const hits = hitsText?.trim() ? Number(hitsText) : NaN;
-        if (
-          Number.isInteger(lineNumber) && lineNumber > 0 &&
-          Number.isFinite(hits)
-        ) {
-          current.lineHits.set(
-            lineNumber,
-            (current.lineHits.get(lineNumber) ?? 0) + hits,
-          );
-        }
-      } else if (line === "end_of_record") {
-        current = undefined;
-        pendingTestName = undefined;
+  for (const line of report.split(/\r?\n/)) {
+    if (line.startsWith("TN:")) {
+      pendingTestName = line.slice(3) || undefined;
+    } else if (line.startsWith("SF:")) {
+      const sourcePath = line.slice(3);
+      const key = mapPath(sourcePath);
+      current = files.get(key);
+      if (!current) {
+        current = { sourcePath, lineHits: new Map() };
+        files.set(key, current);
       }
+      if (pendingTestName && !current.testName) {
+        current.testName = pendingTestName;
+      }
+      pendingTestName = undefined;
+    } else if (!current) {
+      continue;
+    } else if (line.startsWith("DA:")) {
+      const [lineNumberText, hitsText] = line.slice(3).split(",");
+      // Both fields have to carry something. `Number("")` is 0, so a record
+      // missing its line number reads as line 0 and one missing its count
+      // reads as a line nobody ran.
+      const lineNumber = lineNumberText?.trim() ? Number(lineNumberText) : NaN;
+      const hits = hitsText?.trim() ? Number(hitsText) : NaN;
+      if (
+        Number.isInteger(lineNumber) && lineNumber > 0 &&
+        Number.isFinite(hits)
+      ) {
+        current.lineHits.set(
+          lineNumber,
+          (current.lineHits.get(lineNumber) ?? 0) + hits,
+        );
+      }
+    } else if (line === "end_of_record") {
+      current = undefined;
+      pendingTestName = undefined;
     }
   }
-
-  return files;
 }

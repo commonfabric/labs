@@ -637,7 +637,7 @@ backward-compatible evolution:
 3. **Migration tools**: Implementations SHOULD provide utilities for upgrading
    sigil versions
 
-[Common Fabric]: https://common.tools/
+[Common Fabric]: https://commonfabric.com/
 [Irakli Gozalishvili]: https://github.com/gozala
 [Memory Protocol]: ./memory.md
 [Binary Data Support]: ./memory-blobs.md

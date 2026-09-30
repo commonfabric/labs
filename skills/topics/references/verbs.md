@@ -53,19 +53,20 @@ and call that Topic directly.
 
 The current declared contract is:
 
-| Piece | Verb            | Input                                           | Declared result         |
-| ----- | --------------- | ----------------------------------------------- | ----------------------- |
-| Board | `addTopic`      | `title`, optional `body`, `agentName`           | created `topic`, `name` |
-| Board | `backfillNames` | `agentName`                                     | the names it wrote      |
-| Topic | `addComment`    | `body`, `agentName`                             | appended `comment`      |
-| Topic | `addLink`       | `url`, optional `kind` and `label`, `agentName` | appended `link`         |
-| Topic | `setBody`       | complete `body`, `agentName`                    | body and attribution    |
-| Topic | `setTitle`      | `title`, `agentName`                            | title and attribution   |
-| Topic | `mention`       | Topic reference                                 | none                    |
-| Topic | `unmention`     | Topic reference                                 | none                    |
-| Topic | `editComment`   | comment reference, `body`, `agentName`          | body and `editedAt`     |
-| Topic | `removeComment` | comment reference, `agentName`                  | the retraction stamp    |
-| Topic | `removeLink`    | link reference **or** `url`, `agentName`        | url and stamp           |
+| Piece | Verb            | Input                                           | Declared result                |
+| ----- | --------------- | ----------------------------------------------- | ------------------------------ |
+| Board | `addTopic`      | `title`, optional `body`, `agentName`           | created `topic`, `name`        |
+| Board | `backfillNames` | `agentName`                                     | `assigned`, `named`, `pending` |
+| Topic | `addComment`    | `body`, `agentName`                             | appended `comment`             |
+| Topic | `addLink`       | `url`, optional `kind` and `label`, `agentName` | appended `link`                |
+| Topic | `setBody`       | complete `body`, `agentName`                    | body and attribution           |
+| Topic | `setTitle`      | `title`, `agentName`                            | title and attribution          |
+| Topic | `mention`       | Topic reference                                 | none                           |
+| Topic | `unmention`     | Topic reference                                 | none                           |
+| Topic | `editComment`   | comment reference, `body`, `agentName`          | body and `editedAt`            |
+| Topic | `removeComment` | comment reference, `agentName`                  | the retraction stamp           |
+| Topic | `removeLink`    | link reference **or** `url`, `agentName`        | url and stamp                  |
+| Topic | `recordName`    | `name`, the number the board allocated          | `name` and `wrote`             |
 
 A retraction stamps the record rather than deleting it: the comment or link
 stays, carrying what it always said, while readers stop showing it and

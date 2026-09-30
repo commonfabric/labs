@@ -28,6 +28,7 @@ import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -77,7 +78,7 @@ const seedLabeledSource = async (entries: number): Promise<Fixture> => {
   ).id as URI;
   const seed = runtime.edit();
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id,

@@ -1,20 +1,23 @@
 /**
- * Python highlighting for direct files, diffs, and live edits. The scanner is
- * lenient and lossless, including while multiline strings are incomplete.
+ * Python highlighting and structure for direct files, diffs, and live edits.
+ * The grammar is loaded once for the whole file, which is what the pager does
+ * before it parses anything.
  */
 
 import { assert, assertEquals } from "@std/assert";
 import { join } from "@std/path";
-import {
-  createPythonHighlighter,
-  pythonDocument,
-  pythonHighlightLines,
-} from "../lib/view/languages/python/python.ts";
 import { languageForFile } from "../lib/view/languages/language.ts";
+import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter, diffSource } from "../lib/view/diffedit.ts";
+
+await pythonLanguage.prepare!();
+
+function highlight(source: string): Line[] {
+  return pythonLanguage.highlightLines(source);
+}
 
 function verbatim(lines: readonly Line[]): string {
   return lines.map((line) => line.spans.map((span) => span.text).join(""))
@@ -91,7 +94,7 @@ Deno.test("python: declarations, keywords, calls, properties, and comments color
     "class Greeter:",
     "    pass",
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
   assertEquals([...classesOf(lines, "#!/usr/bin/env python3")], ["comment"]);
   assertEquals([...classesOf(lines, "@")], ["operator"]);
@@ -99,11 +102,13 @@ Deno.test("python: declarations, keywords, calls, properties, and comments color
   assertEquals([...classesOf(lines, "async")], ["keyword"]);
   assertEquals([...classesOf(lines, "def")], ["storageKeyword"]);
   assertEquals([...classesOf(lines, "greet")], ["functionName"]);
+  assertEquals([...classesOf(lines, "name")], ["parameter", "identifier"]);
+  assertEquals([...classesOf(lines, "str")], ["typeName"]);
   assertEquals([...classesOf(lines, "if")], ["controlKeyword"]);
   assertEquals([...classesOf(lines, "is")], ["operator"]);
   assertEquals([...classesOf(lines, "None")], ["keyword"]);
   assertEquals([...classesOf(lines, "ValueError")], ["callName"]);
-  assertEquals([...classesOf(lines, "upper")], ["propertyName"]);
+  assertEquals([...classesOf(lines, "upper")], ["callName"]);
   assertEquals([...classesOf(lines, "# ready")], ["comment"]);
   assertEquals([...classesOf(lines, "class")], ["storageKeyword"]);
   assertEquals([...classesOf(lines, "Greeter")], ["interfaceName"]);
@@ -115,18 +120,48 @@ Deno.test("python: current string prefixes and escapes remain single tokens", ()
     String.raw`plain = "a\"b\\c"`,
     String.raw`raw = r"\w+\s"`,
     String.raw`bytes_value = br"\x00"`,
-    `formatted = f"{value!r}"`,
-    `template = tr"{value}"`,
     `legacy = u"text"`,
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
   assertEquals([...classesOf(lines, String.raw`"a\"b\\c"`)], ["string"]);
   assertEquals([...classesOf(lines, String.raw`r"\w+\s"`)], ["string"]);
   assertEquals([...classesOf(lines, String.raw`br"\x00"`)], ["string"]);
-  assertEquals([...classesOf(lines, `f"{value!r}"`)], ["template"]);
-  assertEquals([...classesOf(lines, `tr"{value}"`)], ["template"]);
   assertEquals([...classesOf(lines, `u"text"`)], ["string"]);
+  assertEquals(verbatim(lines), source);
+});
+
+Deno.test("python: interpolated strings color their fields as code", () => {
+  const source = [
+    `formatted = f"{value!r}"`,
+    `templated = t"{value}"`,
+    `reversed_prefix = rf"{value}"`,
+    `nested = f"{items["key"]}"`,
+  ].join("\n");
+  const lines = highlight(source);
+
+  for (const opening of ['f"', 't"', 'rf"']) {
+    assertEquals([...classesOf(lines, opening)], ["template"], opening);
+  }
+  assertEquals([...classesOf(lines, "{")], ["punctuation"]);
+  assertEquals([...classesOf(lines, "value")], ["identifier"]);
+  assertEquals([...classesOf(lines, "!r")], ["template"]);
+  assertEquals([...classesOf(lines, `"key"`)], ["string"]);
+  assertEquals(verbatim(lines), source);
+});
+
+Deno.test("python: formatted strings accept nested same-quote expressions", () => {
+  const source = [
+    'value = f"{items["key"]!r:>{width}}"',
+    `nested = f"{f'{value=}'}"`,
+    'filled = f"{value:[<10}"',
+    String.raw`escaped = f"\{items["key"]}"`,
+  ].join("\n");
+  const lines = highlight(source);
+
+  assertEquals([...classesOf(lines, "items")], ["identifier"]);
+  assertEquals([...classesOf(lines, `"key"`)], ["string"]);
+  assertEquals([...classesOf(lines, "width")], ["identifier"]);
   assertEquals(verbatim(lines), source);
 });
 
@@ -138,7 +173,7 @@ Deno.test("python: multiline strings carry state across blank lines", () => {
     'third"""',
     "answer = 42",
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
   assertEquals(lines[1], { text: "", spans: [] });
   assertEquals(
@@ -154,35 +189,10 @@ Deno.test("python: CRLF backslash continuations stay inside strings", () => {
   const continuation = "\\\r\n";
   const source = `plain = "left${continuation}right"\r\n` +
     `formatted = f"{1${continuation}+ 2}"`;
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
   assertEquals([...classesOf(lines, 'right"')], ["string"]);
-  assertEquals([...classesOf(lines, '+ 2}"')], ["template"]);
-  assertEquals(verbatim(lines), source);
-});
-
-Deno.test("python: formatted strings accept nested same-quote expressions", () => {
-  const source = [
-    'value = f"{items["key"]!r:>{width}}"',
-    `nested = f"{f'{value=}'}"`,
-    'filled = f"{value:[<10}"',
-    String.raw`escaped = f"\{items["key"]}"`,
-  ].join("\n");
-  const lines = pythonHighlightLines(source);
-
-  assertEquals(
-    [...classesOf(lines, 'f"{items["key"]!r:>{width}}"')],
-    ["template"],
-  );
-  assertEquals(
-    [...classesOf(lines, `f"{f'{value=}'}"`)],
-    ["template"],
-  );
-  assertEquals([...classesOf(lines, 'f"{value:[<10}"')], ["template"]);
-  assertEquals(
-    [...classesOf(lines, String.raw`f"\{items["key"]}"`)],
-    ["template"],
-  );
+  assertEquals([...classesOf(lines, "+")], ["operator"]);
   assertEquals(verbatim(lines), source);
 });
 
@@ -194,11 +204,11 @@ Deno.test("python: formatted replacement fields can cross physical lines", () =>
     '}"',
     "answer = True",
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
-  assertEquals([...classesOf(lines, "    first +  # comment")], ["template"]);
-  assertEquals([...classesOf(lines, "    second")], ["template"]);
-  assertEquals([...classesOf(lines, '}"')], ["template"]);
+  assertEquals([...classesOf(lines, "first")], ["identifier"]);
+  assertEquals([...classesOf(lines, "# comment")], ["comment"]);
+  assertEquals([...classesOf(lines, "second")], ["identifier"]);
   assertEquals([...classesOf(lines, "True")], ["boolean"]);
   assertEquals(verbatim(lines), source);
 });
@@ -206,7 +216,7 @@ Deno.test("python: formatted replacement fields can cross physical lines", () =>
 Deno.test("python: numeric forms and ellipsis use literal classes", () => {
   const source =
     "values = (0, 1_000, 0b_1010, 0o755, 0xCA_FE, .5, 1., 1.5e-2, 3j, ...)";
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
   for (
     const number of [
@@ -229,7 +239,7 @@ Deno.test("python: numeric forms and ellipsis use literal classes", () => {
 
 Deno.test("python: brackets retain rainbow depth and Unicode columns", () => {
   const source = 'π = call([{"😀": value}])';
-  const [line] = pythonHighlightLines(source);
+  const [line] = highlight(source);
   const brackets = line.spans.filter((span) => span.cls === "bracket");
 
   assertEquals(
@@ -248,162 +258,34 @@ Deno.test("python: brackets retain rainbow depth and Unicode columns", () => {
   assertEquals(verbatim([line]), source);
 });
 
-Deno.test("python: soft keywords remain identifiers outside statements", () => {
+Deno.test("python: soft keywords are keywords only where they open a statement", () => {
   const source = [
     "match subject:",
     "    case Point(x, y):",
     "        pass",
     "type Pair[T] = tuple[T, T]",
     "match = 1",
-    "match = lambda x: x",
-    "match  \\",
-    "    = lambda x: x",
-    "match, other = lambda: 1",
-    "match, \\",
-    "    other = lambda: 1",
     "match.subject",
     "match + 1",
     "match: object",
     "match()",
-    "match(subject):",
-    "    case Point():",
-    "match lambda x=1: x:",
-    "    case 1:",
-    "        pass",
-    "match value if flag else lambda arg=1: arg:",
-    "    case _: pass",
-    "match value, lambda arg=1: arg:",
-    "    case _: pass",
-    "match lambda outer=lambda inner=1: inner: outer:",
-    "    case _: pass",
-    "match x := 1:",
-    "    case 1: pass",
-    "match left == right:",
-    "    case True: pass",
-    "match call(x=1):",
-    "    case _: pass",
-    "match (",
-    "    subject",
-    "):",
-    "    case Point(",
-    "        x,",
-    "    ):",
-    "        pass",
-    "match \\",
-    "    subject:",
-    "    case (  # grouped pattern",
-    "        Point()",
-    "    ):",
-    "        pass",
-    "case()",
     "case: int",
     "case += 1",
-    "case = lambda x: x",
-    "match.subject: int",
-    "case[index]: str",
-    "{",
-    "    match + 1: value,",
-    "}",
+    "case[index] = 1",
     "type(value)",
     "type[index]",
-    "type \\",
-    "    Explicit = int",
-    "type Continued \\",
-    "    = str",
-    "type Generic[T] \\",
-    "    = list[T]",
     "value = 1; type Result = int",
     "if True: type Inline = str",
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const lines = highlight(source);
 
-  assert(classesOf(lines, "match").has("controlKeyword"));
-  assert(classesOf(lines, "match").has("identifier"));
-  assert(classesOf(lines, "match").has("callName"));
-  assert(classesOf(lines, "case").has("controlKeyword"));
-  assert(classesOf(lines, "case").has("callName"));
-  assert(classesOf(lines, "type").has("storageKeyword"));
-  assert(classesOf(lines, "type").has("callName"));
-  assert(classesOf(lines, "type").has("identifier"));
-  assertEquals(classOnLine(lines, "match.subject", "match"), "identifier");
-  assertEquals(classOnLine(lines, "match + 1", "match"), "identifier");
+  assertEquals(classOnLine(lines, "match subject:", "match"), "controlKeyword");
   assertEquals(
-    classOnLine(lines, "match = lambda x: x", "match"),
-    "identifier",
-  );
-  assertEquals(classOnLine(lines, "match  \\", "match"), "identifier");
-  assertEquals(
-    classOnLine(lines, "match, other = lambda: 1", "match"),
-    "identifier",
-  );
-  assertEquals(classOnLine(lines, "match, \\", "match"), "identifier");
-  assertEquals(classOnLine(lines, "match: object", "match"), "identifier");
-  assertEquals(classOnLine(lines, "case: int", "case"), "identifier");
-  assertEquals(classOnLine(lines, "case += 1", "case"), "identifier");
-  assertEquals(
-    classOnLine(lines, "case = lambda x: x", "case"),
-    "identifier",
-  );
-  assertEquals(
-    classOnLine(lines, "match.subject: int", "match"),
-    "identifier",
-  );
-  assertEquals(classOnLine(lines, "case[index]: str", "case"), "identifier");
-  assertEquals(
-    classOnLine(lines, "    match + 1: value,", "match"),
-    "identifier",
-  );
-  assertEquals(classOnLine(lines, "match (", "match"), "controlKeyword");
-  assertEquals(
-    classOnLine(lines, "match lambda x=1: x:", "match"),
+    classOnLine(lines, "    case Point(x, y):", "case"),
     "controlKeyword",
   );
   assertEquals(
-    classOnLine(
-      lines,
-      "match value if flag else lambda arg=1: arg:",
-      "match",
-    ),
-    "controlKeyword",
-  );
-  assertEquals(
-    classOnLine(lines, "match value, lambda arg=1: arg:", "match"),
-    "controlKeyword",
-  );
-  assertEquals(
-    classOnLine(
-      lines,
-      "match lambda outer=lambda inner=1: inner: outer:",
-      "match",
-    ),
-    "controlKeyword",
-  );
-  assertEquals(classOnLine(lines, "match x := 1:", "match"), "controlKeyword");
-  assertEquals(
-    classOnLine(lines, "match left == right:", "match"),
-    "controlKeyword",
-  );
-  assertEquals(
-    classOnLine(lines, "match call(x=1):", "match"),
-    "controlKeyword",
-  );
-  assertEquals(
-    classOnLine(lines, "    case Point(", "case"),
-    "controlKeyword",
-  );
-  assertEquals(classOnLine(lines, "match \\", "match"), "controlKeyword");
-  assertEquals(
-    classOnLine(lines, "    case (  # grouped pattern", "case"),
-    "controlKeyword",
-  );
-  assertEquals(classOnLine(lines, "type[index]", "type"), "identifier");
-  assertEquals(classOnLine(lines, "type \\", "type"), "storageKeyword");
-  assertEquals(
-    classOnLine(lines, "type Continued \\", "type"),
-    "storageKeyword",
-  );
-  assertEquals(
-    classOnLine(lines, "type Generic[T] \\", "type"),
+    classOnLine(lines, "type Pair[T] = tuple[T, T]", "type"),
     "storageKeyword",
   );
   assertEquals(
@@ -414,57 +296,85 @@ Deno.test("python: soft keywords remain identifiers outside statements", () => {
     classOnLine(lines, "if True: type Inline = str", "type"),
     "storageKeyword",
   );
-  const crlfAssignment = pythonHighlightLines(
-    "match, \\\r\n    other = lambda: 1",
-  );
-  assertEquals(
-    classOnLine(crlfAssignment, "match, \\\r", "match"),
-    "identifier",
-  );
+  for (
+    const [lineText, token] of [
+      ["match = 1", "match"],
+      ["match.subject", "match"],
+      ["match + 1", "match"],
+      ["match: object", "match"],
+      ["case: int", "case"],
+      ["case += 1", "case"],
+      ["case[index] = 1", "case"],
+      ["type[index]", "type"],
+    ] as const
+  ) {
+    assertEquals(classOnLine(lines, lineText, token), "identifier", lineText);
+  }
+  assertEquals(classOnLine(lines, "match()", "match"), "callName");
+  assertEquals(classOnLine(lines, "type(value)", "type"), "callName");
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("python: soft-keyword scanners handle nested and incomplete forms", () => {
-  const misplacedType = pythonHighlightLines("value type Alias = int");
-  assertEquals([...classesOf(misplacedType, "type")], ["identifier"]);
+Deno.test("python: soft keywords resolve across line continuations", () => {
+  // What follows a soft keyword settles it, and a line continuation can put
+  // that on the next physical line.
+  const assignment = "match  \\\n    = lambda x: x";
+  const alias = "type Alias \\\n    = int";
 
-  const genericAlias = [
-    "type Alias[",
-    '    T: tuple[str, "]"],',
-    "    # punctuation in this comment does not close the parameters: ]",
-    "] = list[T]",
-  ].join("\n");
-  const genericLines = pythonHighlightLines(genericAlias);
-  assertEquals([...classesOf(genericLines, "type")], ["storageKeyword"]);
-  assertEquals(verbatim(genericLines), genericAlias);
-
-  const commentedMatch = pythonHighlightLines(
-    "match subject # fake suite colon:",
-  );
-  assertEquals([...classesOf(commentedMatch, "match")], ["identifier"]);
-
-  const stringMatch = pythonHighlightLines('match "fake:"');
-  assertEquals([...classesOf(stringMatch, "match")], ["identifier"]);
-
-  const incompleteMatch = pythonHighlightLines("match subject");
-  assertEquals([...classesOf(incompleteMatch, "match")], ["identifier"]);
-
-  const escapedFormatSpec = 'value = f"{item:{{x}" + after';
-  const formatLines = pythonHighlightLines(escapedFormatSpec);
-  assertEquals([...classesOf(formatLines, "after")], ["identifier"]);
-  assertEquals(verbatim(formatLines), escapedFormatSpec);
-
-  const crlfAlias = "type Alias \\\r\n    = int";
   assertEquals(
-    [...classesOf(pythonHighlightLines(crlfAlias), "type")],
-    ["storageKeyword"],
+    classOnLine(highlight(assignment), "match  \\", "match"),
+    "identifier",
   );
-
-  for (const source of [String.raw`type \ Alias = int`, "type"]) {
-    const lines = pythonHighlightLines(source);
-    assertEquals([...classesOf(lines, "type")], ["identifier"]);
-    assertEquals(verbatim(lines), source);
+  assertEquals(
+    classOnLine(highlight(alias), "type Alias \\", "type"),
+    "storageKeyword",
+  );
+  assertEquals(
+    classOnLine(
+      highlight("match, \\\r\n    other = lambda: 1"),
+      "match, \\\r",
+      "match",
+    ),
+    "identifier",
+  );
+  assertEquals(
+    classOnLine(
+      highlight("type Alias \\\r\n    = int"),
+      "type Alias \\\r",
+      "type",
+    ),
+    "storageKeyword",
+  );
+  assertEquals(
+    classOnLine(
+      highlight("match lambda x=1: x:\n    case 1:\n        pass"),
+      "match lambda x=1: x:",
+      "match",
+    ),
+    "controlKeyword",
+  );
+  for (const source of [assignment, alias, "match subject"]) {
+    assertEquals(verbatim(highlight(source)), source, source);
   }
+});
+
+Deno.test("python: incomplete formatted fields recover without dropping text", () => {
+  const source = [
+    'escaped = f"{{literal}}"',
+    'line_break = f"{value',
+    "next = True",
+    'commented = f"""{value  # field comment',
+    '}"""',
+    String.raw`backslash = f"{value\}}"`,
+    "lower_hex = 0xdead_beef",
+    "bare = 😀",
+  ].join("\n");
+  const lines = highlight(source);
+
+  assertEquals([...classesOf(lines, 'f"{{literal}}"')], ["template"]);
+  assertEquals([...classesOf(lines, "# field comment")], ["comment"]);
+  assertEquals([...classesOf(lines, "0xdead_beef")], ["number"]);
+  assertEquals(verbatim(lines), source);
 });
 
 Deno.test("python: malformed and incomplete input stays lossless", () => {
@@ -477,45 +387,136 @@ Deno.test("python: malformed and incomplete input stays lossless", () => {
       "\ud800",
       "",
       " \t\f",
+      "def broken(",
+      "class Half:\n    def inner(self",
     ]
   ) {
-    const document = pythonDocument(source);
-    assertEquals(verbatim(document.lines), source);
-    assertEquals(document.structure, []);
+    const document = pythonLanguage.parseDocument(source);
+    assertEquals(verbatim(document.lines), source, JSON.stringify(source));
   }
+  const unterminated = highlight('value = """unterminated\nstill text');
+  assertEquals([...classesOf(unterminated, '"""')], ["string"]);
 });
 
-Deno.test("python: incomplete formatted fields recover without dropping text", () => {
+Deno.test("python: structure carries classes, functions, and their decorators", () => {
   const source = [
-    "value = match",
-    'escaped = f"{{literal}}"',
-    'line_break = f"{value',
-    "next = True",
-    'commented = f"""{value  # field comment',
-    '}"""',
-    String.raw`backslash = f"{value\}}"`,
-    "lower_hex = 0xdead_beef",
-    "bare = 😀",
+    "import sys",
+    "",
+    "",
+    "@register",
+    "class Store:",
+    "    @property",
+    "    def size(self) -> int:",
+    "        return len(self.items)",
+    "",
+    "    async def load(self) -> None:",
+    "        self.items = []",
+    "",
+    "",
+    "def main() -> int:",
+    "    def inner() -> None:",
+    "        pass",
+    "",
+    "    return 0",
   ].join("\n");
-  const lines = pythonHighlightLines(source);
+  const document = pythonLanguage.parseDocument(source);
 
-  assert(classesOf(lines, "match").has("identifier"));
-  assertEquals([...classesOf(lines, 'f"{{literal}}"')], ["template"]);
-  assertEquals([...classesOf(lines, "True")], ["boolean"]);
-  assertEquals([...classesOf(lines, "0xdead_beef")], ["number"]);
-  assertEquals(verbatim(lines), source);
+  assertEquals(
+    document.flatStructure.map((node) => [
+      node.kind,
+      node.label,
+      node.depth,
+      node.startLine,
+      node.endLine,
+    ]),
+    [
+      ["class", "class Store", 0, 3, 10],
+      ["method", "def size", 1, 5, 7],
+      ["method", "async def load", 1, 9, 10],
+      ["function", "def main", 0, 13, 17],
+      ["function", "def inner", 1, 14, 15],
+    ],
+  );
+  assertEquals(document.structure.map((node) => node.label), [
+    "class Store",
+    "def main",
+  ]);
+  assertEquals([...document.definitions.keys()], [
+    "Store",
+    "size",
+    "load",
+    "main",
+    "inner",
+  ]);
+  const store = document.structure[0];
+  assertEquals(store.startCol, 0);
+  assertEquals(store.name, "Store");
+  assertEquals(
+    source.slice(store.nameOffset!, store.nameOffset! + 5),
+    "Store",
+  );
+  assertEquals(store.astKinds, ["class_definition"]);
 });
 
 Deno.test("python: live file highlighting re-baselines multiline state", () => {
   const before = 'value = """first\nsecond\n"""\n';
   const after = 'value = "first"\nsecond = True\n';
-  const highlighter = createPythonHighlighter(before);
+  const highlighter = pythonLanguage.createHighlighter(before);
 
   assertEquals([...classesOf(highlighter.lines, "second")], ["string"]);
   const updated = highlighter.update(after);
   assertEquals([...classesOf(updated, "second")], ["identifier"]);
   assertEquals([...classesOf(updated, "True")], ["boolean"]);
   assertEquals(verbatim(updated), after);
+});
+
+Deno.test("python: an incremental update matches a complete re-highlight", () => {
+  const source = [
+    "# café ☕ and an astral 😀",
+    "import sys",
+    "",
+    "",
+    "class Store:",
+    '    """Keeps items."""',
+    "",
+    "    def add(self, item: str) -> None:",
+    "        self.items.append(item)",
+    "",
+    "    def size(self) -> int:",
+    "        return len(self.items)",
+    "",
+    "",
+    "def main(argv: list[str]) -> int:",
+    "    store = Store()",
+    "    for name in argv:",
+    "        store.add(name)",
+    "    return store.size()",
+    "",
+  ].join("\n");
+  const edits: [string, string][] = [
+    ["store.add(name)", "store.add(name.strip())"],
+    ["def size(self)", "def size_of(self)"],
+    ["    return len(self.items)", "    return len(self.items) + 1"],
+    ["import sys", "import sys\nimport os"],
+    ["        self.items.append(item)", ""],
+    ["def main(argv: list[str]) -> int:", "def main(argv) -> int:"],
+    ["    store = Store()", "    store = Store(("],
+    ["# café ☕ and an astral 😀", "# café ☕ and an astral 😀 and more"],
+    ['    """Keeps items."""', '    """Keeps items'],
+  ];
+  const highlighter = pythonLanguage.createHighlighter(source);
+  let current = source;
+  for (const [from, to] of edits) {
+    assert(current.includes(from), `${from} is absent`);
+    current = current.replace(from, to);
+    const updated = highlighter.update(current);
+    assertEquals(verbatim(updated), current, from);
+    assertEquals(
+      updated.map((line) => line.spans),
+      highlight(current).map((line) => line.spans),
+      from,
+    );
+  }
 });
 
 Deno.test("python: unavailable diff files use context for multiline strings", () => {

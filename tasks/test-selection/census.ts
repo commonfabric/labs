@@ -12,23 +12,30 @@
 
 import { testIdentityKey } from "@commonfabric/test-support/records";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { unitProcesses } from "../test-topology.ts";
 import {
   type Suite,
   unavailableUnits,
   type Unit,
 } from "../test-topology/suite.ts";
+import { pricedCalibration } from "./calibrate.ts";
 import {
   coverageGateFor,
   type CoverageGateSelection,
   measuredUnitKeys,
+  measuresSuite,
 } from "./coverage.ts";
 import {
   emptyManifest,
   type Manifest,
   type ManifestEntry,
 } from "./manifest.ts";
-import type { SelectionReason } from "./plan.ts";
+import { calibrationFor, type SelectionReason } from "./plan.ts";
 import { UNMEASURED_COST_SECONDS, VALUE_FLOOR } from "./policy.ts";
+import { percentile90 } from "./score.ts";
+
+/** How a stand-in's name is built, and what recognizes one again. */
+const UNRECORDED = "unrecorded ";
 
 /**
  * A stand-in identity for a unit no manifest has ever seen. Records exist
@@ -43,25 +50,41 @@ export function unknownIdentity(suite: Suite, unit: string): TestIdentity {
   const test: TestIdentity = {
     k: surface?.kind ?? "unit",
     s: surface?.scope ?? "repo",
-    n: `unrecorded ${unit}`,
+    n: `${UNRECORDED}${unit}`,
   };
   if (suite.variant !== undefined) test.v = suite.variant;
   return test;
 }
 
 /**
- * The middle value of a set of numbers, or nothing where the set is
- * empty. The middle rather than the mean because measured test costs are
- * extremely skewed: a tenth of them hold nine tenths of the time, so a
- * mean says what the slowest few cost rather than what a test costs.
+ * Whether a manifest entry is a stand-in for a unit no manifest has
+ * seen, rather than a real identity some run recorded.
+ *
+ * A reader that asks which identities a batch accounted for needs this:
+ * no record will ever carry a stand-in's name, because a real record is
+ * named for a test and a stand-in is named for a file.
  */
-function median(values: readonly number[]): number | undefined {
+export function isStandIn(entry: ManifestEntry): boolean {
+  return entry.test.n === `${UNRECORDED}${entry.unit}`;
+}
+
+/**
+ * What one unit nothing has measured is charged, from what the suite's
+ * measured units cost, or nothing where the suite has none: the larger of
+ * their mean and their ninetieth percentile.
+ *
+ * Both readings, because a lane holding one such unit is packed against a
+ * single figure and a lane holding twenty against their total, and
+ * neither reading covers the other's case. Which of the two is larger is
+ * decided by the suite's tail. `docs/specs/test-selection.md` carries the
+ * argument, beside what a measured test's own cost is read at.
+ */
+function standInCost(values: readonly number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[middle]!
-    : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  const mean = sorted.reduce((total, one) => total + one, 0) / sorted.length;
+  const p90 = percentile90(sorted);
+  return Math.max(mean, p90);
 }
 
 /**
@@ -69,13 +92,14 @@ function median(values: readonly number[]): number | undefined {
  * only for tests that ran, so a unit with none is new or renamed, and
  * both have to run.
  *
- * It is charged what the middle unit of its own suite costs. The suites
+ * It is charged from what its own suite's units cost, since the suites
  * are orders of magnitude apart — a unit test is milliseconds and a
  * pattern integration test is tens of seconds — so one figure for all of
  * them would misjudge most of them, and a suite's own units are the best
- * guess there is at what a new one will take. Charging nothing, which is
- * what a stand-in used to cost, made the packer treat every new test as
- * free and put the whole of a new suite in the first lane it offered.
+ * evidence there is about what a new one will take.
+ *
+ * `standInCost` is what that comes to. A suite with nothing measured at
+ * all has no such evidence and takes `UNMEASURED_COST_SECONDS`.
  */
 export function standIn(
   suite: Suite,
@@ -86,13 +110,40 @@ export function standIn(
     test: unknownIdentity(suite, unit),
     suite: suite.id,
     unit,
-    cost: median(suiteCosts) ?? UNMEASURED_COST_SECONDS,
+    cost: standInCost(suiteCosts) ?? UNMEASURED_COST_SECONDS,
     score: VALUE_FLOOR,
     inputs: { catches: 0, sources: 0, churn: 0 },
     flakeRate: 0,
     flakeEvidence: { flakes: 0, runs: 0 },
     repeats: 1,
   };
+}
+
+/**
+ * The unit an entry belongs to in this tree.
+ *
+ * A manifest's `unit` is what its suite said at publication, and a suite
+ * that re-grains its units leaves every entry it published naming a unit
+ * the tree no longer has. Those entries would be read as covering
+ * nothing, and every unit that replaced them as never recorded, so a
+ * corpus whose whole history is present would be charged as new until
+ * the next publication.
+ *
+ * So an entry whose stored unit the tree still holds keeps it, and only
+ * one whose unit has gone is put back through the suite that owns it.
+ * Where the suite cannot place it — its record carries no file, or it
+ * belongs to the suite rather than to any unit — the stored unit stands
+ * and the entry drops out as before, which is what makes this unable to
+ * lose anything that reading the stored value would have kept.
+ */
+function unitNow(
+  suites: ReadonlyMap<string, Suite>,
+  held: ReadonlyMap<string, ReadonlySet<Unit>>,
+  entry: ManifestEntry,
+): Unit {
+  if (held.get(entry.suite)?.has(entry.unit) === true) return entry.unit;
+  const located = suites.get(entry.suite)?.locate({ test: entry.test });
+  return located?.level === "unit" ? located.unit : entry.unit;
 }
 
 /** What this working tree holds, and what has to run whatever it is worth. */
@@ -163,9 +214,17 @@ export function census(
   // repository — so charging it what one test costs would charge a new
   // file a fraction of what running it takes.
   const unitTotal = new Map<string, number>();
+  const held = new Map<string, Set<Unit>>(
+    suites.map((suite) => [suite.id, new Set(suite.units)]),
+  );
+  const suiteById = new Map(suites.map((suite) => [suite.id, suite]));
   for (const entry of manifest?.entries ?? []) {
-    const key = `${entry.suite}\t${entry.unit}`;
-    inUnit.set(key, [...inUnit.get(key) ?? [], entry]);
+    // The entry carries the unit it was placed under, since everything
+    // downstream reads that field rather than the key it was found by.
+    const unit = unitNow(suiteById, held, entry);
+    const key = `${entry.suite}\t${unit}`;
+    const placed = unit === entry.unit ? entry : { ...entry, unit };
+    inUnit.set(key, [...inUnit.get(key) ?? [], placed]);
     unitTotal.set(key, (unitTotal.get(key) ?? 0) + entry.cost);
   }
   const costs = new Map<string, number[]>();
@@ -266,5 +325,56 @@ export function census(
     mandatory,
     unmeasured,
     coverage,
+  };
+}
+
+/**
+ * A manifest as one run prices it: each suite's calibration entry is what
+ * this run charges it, and `fitted` says which of those charges were
+ * fitted from batches run the way this run runs them.
+ */
+export interface PricedManifest extends Manifest {
+  /**
+   * The suites whose charge was fitted from batches run the way this run
+   * runs them. What the rest cost run this way is not yet known.
+   */
+  fitted: ReadonlySet<string>;
+}
+
+/** A census as one run prices it. */
+export interface PricedCensus extends Census {
+  manifest: PricedManifest;
+}
+
+/**
+ * The census as a run prices it. A suite whose batches the run measures
+ * is charged what its batches have cost with coverage on, and every
+ * other suite what they cost without, so that everything reading the
+ * census — packing the lanes, ordering their batches, counting the full
+ * run's lanes, and a report saying what a run would have chosen — prices
+ * one suite alike. `pricedCalibration()` says what a suite no lane has
+ * run that way is charged, and `calibrationFor()` which suites are
+ * charged their process fit.
+ */
+export function pricedForRun(
+  seen: Census,
+  suites: readonly Suite[],
+  full: boolean,
+): PricedCensus {
+  const priced = pricedCalibration(
+    seen.manifest.calibration,
+    new Map(
+      suites.map((
+        suite,
+      ) => [suite.id, measuresSuite(seen.coverage, suite.id, full)]),
+    ),
+  );
+  return {
+    ...seen,
+    manifest: {
+      ...seen.manifest,
+      calibration: calibrationFor(priced.calibration, unitProcesses(suites)),
+      fitted: priced.fitted,
+    },
   };
 }

@@ -15,24 +15,9 @@ import {
 } from "../../../console/steps.ts";
 import type { HarnessTranscriptMessage } from "../../../src/contracts/transcript.ts";
 import { createToolOutputId } from "../../../src/contracts/tool-result.ts";
+import { templateText } from "./template-text.ts";
 
 describe("console/src/steps-view", () => {
-  const templateText = (value: unknown): string => {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-    if (Array.isArray(value)) return value.map(templateText).join("");
-    if (typeof value !== "object") return "";
-    const template = value as {
-      strings?: readonly string[];
-      values?: readonly unknown[];
-    };
-    return (template.strings ?? []).map((part, index) =>
-      part + templateText(template.values?.[index])
-    ).join("");
-  };
-
   describe("clampSelection", () => {
     it("keeps a selection the run is long enough to hold", () => {
       expect(clampSelection(3, 9)).toBe(3);
@@ -81,6 +66,43 @@ describe("console/src/steps-view", () => {
       expect(text).toContain("side-effect");
       expect(text).toContain("cfc_enforce_explicit_direct_command");
     });
+
+    it("lists the prompt slot's influence as integrity on the path it names", () => {
+      const text = templateText(stepPolicyView({
+        ...step(),
+        invocation: {
+          type: "cf-harness.cfc-invocation-context",
+          version: 1,
+          sequence: 1,
+          runId: "r",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          toolId: "bash",
+          operation: "shell",
+          cfcEnforcementMode: "enforce-strict",
+          cwd: "/workspace",
+          runManifest: { present: false },
+          inputs: {},
+          promptSlotInfluenceLabels: {
+            version: 1,
+            entries: [{
+              path: ["command"],
+              label: {
+                integrity: [{
+                  type: "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
+                  version: 1,
+                }],
+              },
+            }],
+          },
+        },
+      }));
+
+      expect(text).toContain("command");
+      expect(text).toContain("PromptSlotInfluence");
+      // An integrity-only row carries no taint and says nothing about its
+      // absence.
+      expect(text).not.toContain("no confidentiality atom");
+    });
   });
 
   describe("withheldSummary", () => {
@@ -96,7 +118,7 @@ describe("console/src/steps-view", () => {
 
     it("labels a legacy result as having no omission record", () => {
       expect(withheldSummary(step({ status: "unrecorded", locations: [] })))
-        .toBe("withheld from the model · no record");
+        .toBe("model omissions · no record");
     });
 
     it("labels a recorded result with its withheld position count", () => {
@@ -109,7 +131,20 @@ describe("console/src/steps-view", () => {
           value: "retained",
           available: true,
         }],
-      }))).toBe("withheld from the model · 1");
+      }))).toBe("kept on the artifact, not sent to the model · 1");
+    });
+
+    it("labels policy-denied observations by their rule", () => {
+      expect(withheldSummary(step({
+        status: "recorded",
+        locations: [{
+          rule: "observation-denied",
+          artifactPath: "/run/tool-outputs/result.json",
+          jsonPointer: "/stdout",
+          redaction: "[redacted by CFC]",
+          available: true,
+        }],
+      }))).toBe("withheld by policy · 1");
     });
 
     it("distinguishes an unreadable record from a missing result entry", () => {
@@ -140,7 +175,7 @@ describe("console/src/steps-view", () => {
         status: "unrecorded",
         locations: [],
       })));
-      expect(text).toContain("withheld from the model · no record");
+      expect(text).toContain("model omissions · no record");
       expect(text).toContain("Legacy runs cannot be");
       expect(text).toContain("reconstructed honestly");
     });
@@ -151,6 +186,8 @@ describe("console/src/steps-view", () => {
         locations: [],
       })));
       expect(text).toContain("No omission rule applied to this result");
+      expect(text).not.toContain("withheld by policy");
+      expect(text).not.toContain("kept on the artifact");
     });
 
     it("does not describe a bad or incomplete current record as legacy", () => {
@@ -191,10 +228,13 @@ describe("console/src/steps-view", () => {
           available: false,
         }],
       })));
-      expect(text).toContain("artifact-only");
+      expect(text).toContain("kept on the artifact, not sent to the model");
+      expect(text).toContain("withheld by policy");
+      expect(text).toContain("model-context-truncation");
       expect(text).toContain('{\n  "retained": true\n}');
       expect(text).toContain("[redacted by CFC]");
       expect(text).toContain("recorded artifact position is unavailable");
+      expect(text).not.toContain("Model received:");
     });
 
     it("never renders an available denied value through an overlapping rule", () => {
@@ -247,6 +287,7 @@ describe("console/src/steps-view", () => {
 
       expect(text.match(/\[redacted by CFC\]/g)).toHaveLength(2);
       expect(text).not.toContain("PLANTED-SECRET");
+      expect(text).toContain("Model received: model-facing");
     });
   });
 
@@ -348,6 +389,10 @@ describe("console/src/steps-view", () => {
       expect(text).toContain("Source replaced by a later attempt");
       expect(text).toContain("run-pattern-source sidecar");
       expect(text).toContain("retained");
+      expect(text).toContain(
+        'Model received: {\n  "status": "ok",\n  "value": 4\n}',
+      );
+      expect(text).not.toContain("withheld by policy");
       expect(text).toContain("longest numeric run 32");
       expect(text).toContain("Open subagent run");
     });
@@ -404,6 +449,9 @@ describe("console/src/steps-view", () => {
     });
 
     it("marks a withheld release beside the CFC line of a step that succeeded", () => {
+      // The CFC line names the refused release separately from the artifact
+      // omission, while the model-facing result still records success.
+
       const step: ConsoleStep = {
         index: 0,
         kind: "tool",
@@ -434,11 +482,9 @@ describe("console/src/steps-view", () => {
       view.steps = [step];
 
       const text = templateText(view.view());
-      // The badge names the boundary's own outcome and the marker beside it
-      // counts what the retrospective holds back, so the step reads as the
-      // success it was rather than as a denied call.
-      expect(text).toContain("withheld");
-      expect(text).toContain("withheld from the model \u00b7 1");
+      expect(text).toContain("withheld by policy");
+      expect(text).toContain("kept on the artifact, not sent to the model · 1");
+      expect(text).toContain('Model received: {\n  "status": "ok"\n}');
       expect(text).not.toContain("denied");
     });
   });

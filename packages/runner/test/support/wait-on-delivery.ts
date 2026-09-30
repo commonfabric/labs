@@ -1,13 +1,9 @@
+import { stuckNet } from "@commonfabric/test-support/stuck-net";
 import { CoalescedDocListener } from "../../src/speculation/doc-notification-listener.ts";
 import type {
   IStorageNotificationCapability,
   MemorySpace,
 } from "../../src/storage/interface.ts";
-
-/** The stuck-condition net (two minutes): generous headroom over any
- * healthy delivery observed in these suites, so that a crossing points
- * at a stuck wait rather than a slow one. */
-const STUCK_NET_MS = 120_000;
 
 /**
  * Resolves once `predicate` holds, waking on each client-side delivery
@@ -25,16 +21,16 @@ const STUCK_NET_MS = 120_000;
  * stats counter) never wakes this wait; that state waits through
  * `waitUntil` (wait-until.ts).
  *
- * The deadline is a stuck-condition net, not a bound on how long the
- * awaited work may take: the serving loop holds the event loop open
- * through its lease-renew interval, so a wait with no net would wedge
- * the run instead of failing it (see "Where the polling `waitFor`
- * stays" in `docs/development/waiting-in-tests.md`). Crossing it
- * proves only that no delivery satisfied the predicate within the
- * window — a fixed bound cannot tell a stuck wait from one delayed
- * past it; the width just makes the stuck reading the likely one.
- * Under the package's fake clock the net freezes with every other
- * test-armed timer and the wait is purely event-driven.
+ * The deadline is `stuckNet`, not a bound on how long the awaited work may
+ * take: the serving loop holds the event loop open through its lease-renew
+ * interval, so a wait with no net would wedge the run instead of failing
+ * it (see "Where the polling `waitFor` stays" in
+ * `docs/development/waiting-in-tests.md`). Crossing it proves only that no
+ * delivery satisfied the predicate within the window — a fixed bound
+ * cannot tell a stuck wait from one delayed past it; the width just makes
+ * the stuck reading the likely one. Under the package's fake clock the net
+ * freezes with every other test-armed timer and the wait is purely
+ * event-driven.
  */
 export const waitOnDelivery = async (options: {
   /** The client storage manager whose notification relay carries the
@@ -72,18 +68,11 @@ export const waitOnDelivery = async (options: {
   listener.ensure();
   try {
     if (predicate()) return;
-    const net = setTimeout(() => {
-      settled.reject(
-        new Error(
-          `timed out waiting for ${label} — no satisfying delivery ` +
-            `within ${STUCK_NET_MS} ms`,
-        ),
-      );
-    }, STUCK_NET_MS);
+    const net = stuckNet(`a satisfying delivery for ${label}`);
     try {
-      await settled.promise;
+      await Promise.race([settled.promise, net.rejects]);
     } finally {
-      clearTimeout(net);
+      net.clear();
     }
   } finally {
     listener.release();

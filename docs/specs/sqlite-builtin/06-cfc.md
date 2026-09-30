@@ -34,7 +34,9 @@ subsumption restricted to singletons) — the clause-aware migration path is CFC
 spec §18.5. Async effects already declare a **write policy**
 before committing side effects via the sink-request mechanism
 ([`packages/runner/src/cfc/sink-request.ts`](../../../packages/runner/src/cfc/sink-request.ts)),
-which is the seam SQLite writes will use.
+which is the seam SQLite writes use — and, under the `sqliteQuery` sink, the
+seam a query's READ request stages through as well ("The query's control
+state" below, for what that gate governs and what it leaves to the builtin).
 
 ## Per-column labels (implemented)
 
@@ -400,14 +402,18 @@ with the pure half in
    Rule-less tables keep Phase 2's conservative static merge. (An
    author-declared `derived:` fallback label for the refuse case remains a
    possible follow-up.)
-3. **Evaluate per row, attach per row.** Each result row already splits into
-   its own entity doc; the flush writes each labeled row doc **directly** (its
+3. **Evaluate per row, attach per row.** Each result row is stored as an
+   immutable entity doc of its own under the result cell, keyed on its
+   content, its label and the space's row salt (Section
+   [05](./05-reactivity.md), and "Where a query's selection inputs are
+   labeled" below). The flush writes each labeled row doc **directly** (its
    own id, root path) under a root-`ifc` schema. Keyed by the row doc's id,
-   the per-row root label coexists with Phase 2's per-column field labels on
-   the same doc and dominates its fields by prefix-match (a field of a row is
-   at least as confidential as the row — inheriting down can only raise).
-   Downstream consumers inherit it through dereference traces
-   (`cfcLabelViewForDereferenceTraces`), exactly like per-column labels.
+   the per-row root label coexists with Phase 2's
+   per-column field labels on the same doc and dominates its fields by
+   prefix-match (a field of a row is at least as confidential as the row —
+   inheriting down can only raise). Downstream consumers inherit it through
+   dereference traces (`cfcLabelViewForDereferenceTraces`), exactly like
+   per-column labels.
 
 **Declared output ceiling.** A query may declare the maximum confidentiality
 its result may carry — a consumer contract checked per row against the
@@ -444,37 +450,85 @@ contract, required to be policy-permitted and auditable — and it never applies
 to aggregates (a withheld row already contributed server-side; a count cannot
 be un-counted), where the mode is rejected outright.
 
-**Runtime read ceiling.** A ceiling can also come from the runtime rather
-than the query: `RuntimeOptions.cfcReadMaxConfidentiality` (with
-`cfcReadOnExceed` beside it) is a ceiling every `db.query` the runtime issues
-reads under, aggregates included. A query declaring no ceiling reads under
-the runtime's; a query declaring one — the `maxConfidentiality` option or the
-Row schema's `MaxConfidentiality` — reads under the **meet** of the two
-(`meetCfcObservationCeilings`: a row fits the meet iff it fits each), so a
-query tightens the runtime's ceiling and never widens it. Placeholder atoms
-resolve per query, against the same acting principal and db owner as the
-query's own. The query's `onExceed` stands; the runtime's supplies the default
-beneath it, and `fail` beneath that. `skip` is refused on an aggregate
-projection exactly as the query option is. Absent, the runtime applies no
-ceiling (the owner view); an empty list, which admits nothing, is refused at
-construction.
+**Runtime read ceiling.** `RuntimeOptions.cfcReadMaxConfidentiality` bounds
+cell payload reads as well as SQLite results. An ordinary cell read measures
+its stored label, including descendants of an object, and withholds a value
+outside the ceiling. Absent is the owner view; an empty list is refused at
+construction. Observation ceilings for ordinary cells require concrete clauses.
+Database-owner and current-principal placeholders in a ceiling bind only at the
+SQLite query boundary; they do not admit a concrete label on an unrelated
+persisted cell. This differs from a fresh store's `User(CurrentPrincipal)`
+confidentiality declaration, which binds to its creator during commit.
 
-The option exists because the only carrier a pattern can read is a cell in
-the space, which every runtime on the space shares: a ceiling that has to
-differ per runtime — a device's lens, a run's clearance — cannot ride a
-pattern's inputs. For the same reason it applies only to a query whose result
-is **session-scoped** by the pattern's own declaration (`PerSession<>` on the
-result, `.asScope("session")` on the query, the `scope: "session"` query
-option, or a session-scoped db): a space- or user-shared result is one cell
-every runtime on the space resolves, its link — scope included — is shared
-too, and a runtime cannot narrow it for itself. A query under a runtime
-ceiling whose result is broader is refused before anything shared is written,
-through the runtime's error handlers rather than the result cell, which
-another runtime may be serving. Under served execution the serving runtime
-performs the query, so its option governs every run it serves; a client
-runtime's option governs the queries it executes itself. The runtime's
-ceiling joins the request hash, so a settled result is a hit only for a
-runtime reading under the same ceiling.
+Constructing an `asCell` handle may probe the terminal target's shape without
+reading its protected payload. Every intermediate redirect remains a pointer
+observation and must fit the reader's ceiling before its target is followed.
+Reading through the returned handle performs the ordinary payload check.
+Observing a retained handle's identity or dereferencing it also measures the
+confidentiality of its acquisition, even when the operation performs no storage
+read. The effective ceiling meets the runtime ceiling with the served session's
+ceiling. These observation checks apply when CFC write enforcement is disabled;
+that setting controls the observation journal, not read clearance.
+
+Scheduler dependency seeding carries `schedulerDependencyRead`: it records
+subscription edges without delivering the materialized values to an action.
+Those probes do not require the action's read ceiling. The action's own reads
+remain gated, including reads of a value already examined during preflight.
+Cell traversal caches are partitioned by ambient read metadata so a cached
+scheduling probe cannot supply an ordinary payload read.
+
+A **session-scoped** query result (`PerSession<>`, `.asScope("session")`,
+`scope: "session"`, or a session-scoped db) meets the runtime ceiling with the
+query's declared ceiling before materialization. Placeholder atoms resolve
+against the acting principal and database owner. The query's `onExceed` stands;
+`cfcReadOnExceed` supplies its default, with `fail` beneath that. The runtime
+ceiling joins the request hash because the filtered result belongs to one
+session. A runtime `skip` falls back to `fail` for aggregates; a query's own
+`skip` on an aggregate is refused.
+
+A **shared** query result materializes under its query-declared ceiling and
+mode, independently of runtime ceilings. The runtime ceiling does not join its
+request hash or filter its stored rows. The hash of every query, shared or
+not, includes the version of the contract its result's labels are written
+under, so a result stored under another contract is reissued.
+Each reader instead observes the
+materialized result through the ordinary cell read guard. The result array
+carries the canonical join of all source-row labels, including rows that the
+query contract skips, as an `enumerate` label. Its membership and length are
+therefore withheld when any contributor exceeds the reader's ceiling. An
+addressed row payload carries that row's own labels without inheriting the
+array's membership label. A `withheld` count carries the same join as a value
+label. These store declarations retain their confidentiality across refreshes:
+removing or relabeling a row does not release the array's historical membership
+label. A reader admitted by every current row may therefore still be refused
+the array and its length. An aggregate is withheld as a whole. Shared row-label
+failures omit row ordinals and data-derived details. These rules let multiple
+runtime ceilings share one materialization without revealing private row counts or
+replacing one reader's filtered rows with another's.
+
+**Under server execution the ceiling travels with the session.** A client
+runtime under server execution (`experimental.serverExecution` on, without
+the serving posture) executes no query of its own — the space server's
+runtime serves them — so its option cannot bound session-scoped queries where
+it sits. It declares the ceiling instead, once, in every session it opens: the signed
+`session.open` descriptor carries `readCeiling` (memory-v2 `04-protocol.md`
+§4.1.2), the memory server records it on the session, and the SpaceServer
+stamps it onto every run it serves AS that session (`WaveRunContext.readCeiling`,
+serving-loop.md §3c). A served session-scoped `db.query` reads under the serving
+runtime's own option met with the carried ceiling: the meet joins the request
+hash, decides the rows, and supplies the `onExceed` default (the mode meets
+toward `fail`). A served run acting as a session that declared none reads under
+the serving runtime's option alone. A shared result instead materializes under
+its query contract on a served run too, and each reader observes that labeled
+materialization through the ordinary cell read guard.
+The session record is the seam: a ceiling the server assigns to a session
+lands in the same record and reaches the run the same way. Fail-closed at
+the edges: a client carrying a ceiling refuses a server that does not
+advertise the `sessionReadCeiling` protocol flag, since an older server
+would accept the descriptor and serve unbounded; a runtime whose storage
+manager cannot carry the ceiling refuses to be built with one; and the
+session-scoped and shared-result rules hold on a served run exactly as on a
+client.
 
 **Read-time clearance (Phase 3.b).** Filtering by *who is asking*, rather than
 by a declared contract: `db.query(sql, { readClearance: true })` keeps only the
@@ -644,9 +698,9 @@ re-derives.
    `skip` never applies to aggregates.
 5. **Read, ceiling exceeded:** `onExceed` decides — fail the query (default)
    or skip the row (declared opt-in, row-returning queries only). The
-   runtime's ceiling, where one is declared, meets the query's first; a query
-   under a runtime ceiling whose result is not session-scoped ⟶ refuse the
-   query before it is staged.
+   runtime's ceiling meets the query's for session-scoped results. A shared
+   result retains its query-contract materialization and is withheld on cell
+   observation when its stored label exceeds the runtime ceiling.
 6. **Write, unattributable:** fail closed (Phase 2's set) — except the
    3.c-covered shapes with unlabeled inputs against a server that advertises
    commit evaluation (rule-input UPDATE, INSERT…SELECT, upsert, columnless
@@ -682,6 +736,228 @@ Demos:
 (3.a/3.b) and
 [`sqlite-cfc-commit-eval.test.ts`](../../../packages/runner/integration/sqlite-cfc-commit-eval.test.ts)
 (3.c: atomic rollback + post-image upsert relabel).
+
+## The query's control state
+
+A query result cell holds the rows under `/result` and the request's own
+bookkeeping beside them: `/pending`, `/requestHash`, `/error`. The rows'
+policy is the author's — the columns a table declares, and the rule a row
+carries. The bookkeeping's is not, and cannot be: a request hash is a digest
+over the statement, the parameters, the ceiling and the reader, so a parameter
+read out of a labeled row puts that row's label on the hash. Which atoms that
+is depends on what the transaction issuing the request read, which no `ifc`
+written into a schema can say.
+
+So the result cell is a store the runtime owns, and its control paths declare
+their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
+same route the runner's own piece documents take. The declaration grows by
+clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
+parameterized out of three differently labeled reads ends up admitting all
+three and readable by whoever satisfies all three.
+
+Where that declaration is observable afterwards is `/requestHash`, and it is
+worth knowing why the other two differ. The issuing transaction declares on
+every path it writes, and the settle then rewrites `pending` — and, on a
+failure, `error` — from a transaction that reads only its own write
+destination and therefore carries nothing. The runtime re-derives a path's
+entry from what its writer carried, so those two come back empty; the hash
+does not change between the two writes, so nothing re-derives it. A reader of
+`pending` alone is tainted by nothing as a result. Everything the flow model
+says about the routing bit still holds of the request that set it; what is
+recorded durably is the hash.
+
+The foreign-space refusal below is the exception, and the only one. It is
+written by the ISSUING transaction — the one carrying the clause it refuses
+over, since that is the condition it fires on — so the route declares that
+clause on `/pending` and `/error` there, and it stays: no settle follows to
+re-derive it. A pattern that renders "this query was refused" therefore
+inherits the atoms the refusal was about, and a store it writes them into has
+to admit them. That is the ratchet landing where the refusal did rather than
+an accident, and it is worth knowing before rendering a refusal into a store
+whose policy an author wrote.
+
+`/result`'s per-column entries are untouched — the route declines at a path a
+schema declares — and so are the row documents, because that settle
+transaction carries no clause of its own.
+
+### Where a query's selection inputs are labeled
+
+CFC spec §8.17.6. `S` is the confidentiality of the query's selection inputs,
+its statement and parameters: the flow join of the transaction that issued
+the request, recorded at issue and supplied by the settle.
+
+| Observation | Label | Carried by |
+| --- | --- | --- |
+| `/result` membership, order, length | `S` joined with the rows' labels | declared `observes: "enumerate"` entry at `/result`, consumed by a read of `/result` or its `length` and not by a read of one slot |
+| `/withheld` | the same | declared entry at `/withheld` |
+| which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
+| a row's content | the row's column and row labels | the row document's own entries |
+| a row document's existence | the row's label | the row document's root entry |
+| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
+| `/pending`, on the success path | nothing | recorded residual |
+
+All of it holds at every scope. A session-scoped result is materialized per
+reader, which limits who can read it and does not label what that reader's
+code derives from it and writes elsewhere.
+
+Which rows' labels the membership takes turns on the scope. A shared result
+takes every row's, the rows its contract skipped included: the count of the
+rows it kept tells any reader of the space about the rows it dropped. A
+session-scoped result is filtered for its one reader under that reader's own
+ceiling, so it takes the labels of the rows it holds. The labels of the rows
+it dropped would withhold the result from the reader it was filtered for.
+
+The membership carries the rows' labels as well as `S` because which rows
+exist is a fact about each of them (§8.17.4). The runner has one class for
+membership and count, so the length carries the same label: a value derived
+from the row count of a result over labeled columns carries the columns'
+labels, at every scope. A read of one slot, and of the row it leads to, does
+not consume the membership entry: an `enumerate` entry applies to a read of
+its container and not to a read of one child, and a read of an array's native
+`length` counts as a read of the array
+([`cfc-observation-classes.md`](../cfc-observation-classes.md)
+§6.1). A reader of row 0 therefore carries `S` and row 0's label, and not
+row 1's; code that enumerates or counts the rows carries all of them.
+
+The slot entry for `S` is a declared `followRef` entry because that is the
+class every reader of a reference consumes: a standalone probe of a slot,
+`equals()` on a slot, the list's references taken as handles or read raw, and
+a dereference, which consumes the entry through the probe of the slot it
+follows ([`cfc-observation-classes.md`](../cfc-observation-classes.md) §6.1,
+[`cfc-template-population.md`](../cfc-template-population.md) §6). `S` is
+one label for the whole result, so one entry covers every slot, and it grows
+by clause and never shrinks, as the control paths' declarations do. A row's
+label differs from slot to slot, and the link written at a slot carries the
+labels of the document it names, replaced whenever the slot is written. Rows
+of one result under different row labels therefore keep their own: a reader
+of one row through the result does not pick up another row's label at the
+slot.
+
+`S` is not joined into a row. A reader who reaches a row through the result
+consumes `S` at the slot and the row's label at the row. A reader holding a
+reference to the row from elsewhere consumes the row's label alone, and what
+that reference reads never changes, because a row document is immutable.
+
+A row carrying per-column labels and no row label declares the join of its
+column labels on its root as an `observes: "shape"` entry, so its existence
+carries them. A row under a row label carries the row label at its root for
+every class; where such a row also carries per-column labels, its existence
+carries the row label and its columns carry theirs. A row of a query that
+projects an `asCell` link column declares no existence label: a label at a
+row's root subjects every link written beneath it to the link write policy,
+which refuses a link to a cell that carries no label metadata.
+
+A row to which neither its columns nor a row rule assign a label stores none,
+and declares an empty one. The link write policy governs the slots of a
+result store that carries a label, and refuses a link there to a document
+that stores no label and for which the writing transaction declares none. A
+settle that finds a row's document standing writes the slot and not the
+document, so the declaration cannot rely on what the document stores: every
+settle into a store that carries a label, or is written under one, declares
+the empty label at the root of each such row. The declaration stores nothing
+on the row document, and it does not subject a link written beneath the
+row's root to the link write policy, which counts a declaration by the atoms
+it holds. Into a store that carries no label a row declares nothing, so the
+rows of an unlabeled result do not make its settle relevant to commit
+preparation.
+
+A row document's id is hashed with the space's row salt as well as the row
+key and the result cell's coordinates. The salt is a runtime secret
+(`packages/runner/src/runtime-secret.ts`): one document per space at a
+reserved id, minted with a random value by the first settle that needs it.
+The transaction write chokepoint refuses every unprivileged write to that id,
+and the one writer, `ensureRuntimeSecret()`, returns nothing. A stored salt is
+trusted only when its stored schema carries the writer claim
+`writeAuthorizedBy: ["runtime-secret"]`, which the runtime records under that
+builtin identity when it mints one and which no executed code can satisfy. A
+value planted in the namespace before the chokepoint existed, or through a
+runtime without it, carries no such claim, and the next settle replaces it. The salt is labeled with the
+read-failed atom, which no ceiling admits, so code that reads it cannot
+write, display or send anything derived from it; the builtin reads it as a
+verifier-internal read, which joins nothing to the settle's label. Without
+the salt the id would be a value computable from the row, and the reference
+at each slot would have to carry the row's label so that a reader could not
+confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the
+id says nothing about the row, so the slot carries `S` alone.
+
+Three residuals are recorded against §8.17.6:
+
+- **Equal ids are visible under `S`.** An id is opaque, but it is stable: two
+  slots holding equal rows hold one id, and a row that stays in a result
+  across a change of parameter keeps its id. A reader of the result learns
+  both under `S` and the membership labels, without reading a row.
+- **The salt's protection is its label.** Anything that reads the space's
+  documents outside the runtime, or a runtime whose enforcement mode does not
+  refuse writes on labels, can read the salt and recompute ids. The residual
+  a recomputed id opens is the one the salt closes: whether a guessed row is
+  in a result, disclosed without the row's label.
+- **A row document is immutable by construction of its writer, and nothing
+  refuses another writer.** The builtin never writes a document twice. A
+  pattern holding a row reference can write to it. A writer claim naming the
+  builtin (`ifc.writeAuthorizedBy`) on each row document is the direction.
+
+What the store's undeclared bookkeeping was refusing by accident, before the
+route reached it, includes one case the sink seam cannot express: a query
+whose database lies in another space, issued by a request carrying
+confidentiality. The parameters of such a query go to whoever holds THAT
+space's replicas, who are not the audience the result document's residency
+names. The builtin refuses it directly, before the request is staged, with a
+stable reason and no request hash — a later evaluation whose request carries
+nothing asks again rather than finding a memo hit.
+
+The measure there is the transaction's flow join, not the transaction-global
+consumed set the sink ceilings read — which is also what a per-sink ceiling
+for this sink would have to measure, if a deployment ever declares one: the
+consumed set counts this node's reads of its own settled result, so a ceiling
+reading it would refuse every issue after the first. The difference is the reads the write
+machinery makes of its own destination, which the flow join excludes
+(§18.6.2): this node reads its own settled result to decide whether a
+writeback is stale, and that result carries the labels of the columns it
+projected, so the wider set answers "labeled" on every issue after the first
+whatever the parameters are.
+
+That exclusion has the cost §18.6.2 records, and it applies here: whether the
+rows landed discloses whether the stored hash still matched, and that hash is
+a labeled value. One bit per attempt, an equality oracle under repetition.
+What it buys is that the clauses the control state accumulates do not land on
+the rows, where each column's own declared ceiling is the measure and the
+route declines.
+
+Every request also stages through the sink-request seam, under the
+`sqliteQuery` sink. Under the max-enforcement posture that sink releases
+ungated, because the bound it wants is the database's space rather than a
+clause list, and a per-sink registry ceiling holds only the latter; the gap
+carries its owner and the condition that retires it, like every other ungated
+sink. A deployment that wants a confidentiality gate on sqlite reads declares
+a ceiling for the sink, and the seam is where it applies — with the caveat
+above about which set such a ceiling must measure.
+
+The refusal is gated on the flow dial rather than on the enforcement ladder: a
+runtime deriving no flow labels has an empty join by construction, so nothing
+is labeled and the refusal never fires. The default flow mode is `off`, so a
+deployment that has not opted into flow labels gets no cross-space bound —
+and nothing for one to protect.
+
+One thing outside this builtin decides whether a caller can use any of it. A
+`lift` whose output document has acquired stored CFC label metadata cannot be
+written again unless the lift declares a RESULT SCHEMA: without one the write
+carries no schema write-policy input, the commit is refused, and the scheduler
+retries and gives up. So a caller whose query parameter reaches the builtin
+through such a lift lands its first labeled parameter and never its second.
+An authored pattern is normally covered — `ts-transformers` injects both
+schemas into a `lift` from its TypeScript types — and what is not is a lift
+built directly against the builder, as a runner test does, or one whose return
+type the injector cannot read.
+
+> Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
+> `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
+> the `shapeConfidentiality` join, and
+> `enqueueSinkRequestPostCommitEffect` in
+> [`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts);
+> asserted in
+> [`cfc-sqlite-query-control-state.test.ts`](../../../packages/runner/test/cfc-sqlite-query-control-state.test.ts).
+> The route's conditions are in
+> [`cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4.
 
 ## Why this stays declarative
 

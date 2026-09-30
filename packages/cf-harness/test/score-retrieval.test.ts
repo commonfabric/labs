@@ -67,6 +67,12 @@ const startFakeIndex = (
           results: (resultsByText[body.text ?? ""] ?? []).map(searchResult),
         });
       }
+      if (functionName === "getPattern") {
+        const body = await request.json() as { patternId: string };
+        if (body.patternId === "good" || body.patternId === "noise") {
+          return Response.json(searchResult(body.patternId));
+        }
+      }
       return new Response("not found", { status: 404 });
     },
   );

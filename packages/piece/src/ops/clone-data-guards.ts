@@ -4,6 +4,7 @@
  * remains the piece controller's responsibility.
  */
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   type Cell,
   type IExtendedStorageTransaction,
@@ -14,6 +15,7 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 export function cloneCellKey(cell: Cell<unknown>): string {
   const link = cell.getAsNormalizedFullLink();
@@ -51,7 +53,9 @@ export function assertCloneDataUnlabeled(carrier: unknown): void {
   const view = cfcLabelViewForCellFailClosed(carrier);
   const labeled = view?.entries.some((entry) =>
     (entry.label.confidentiality?.length ?? 0) > 0 ||
-    (entry.label.integrity?.length ?? 0) > 0
+    (entry.label.integrity?.some((atom) =>
+      !isObjectOrArray(atom) || atom.type !== CFC_ATOM_TYPE.LinkReference
+    ) ?? false)
   );
   if (labeled) {
     throw new Error(
@@ -72,7 +76,7 @@ export function cloneInternalManifest(
   }
   return manifest.map((entry) => {
     if (
-      typeof entry !== "object" || entry === null ||
+      !isObjectOrArray(entry) ||
       !("partialCause" in entry) || !("link" in entry)
     ) {
       throw new Error("piece has invalid internal data metadata");

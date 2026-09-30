@@ -10,7 +10,8 @@
 // allowlisted path, so keeping the whole surface POST-only is what leaves room
 // for a future in-shell or in-pattern client.
 
-import { createSession, isDID } from "@commonfabric/identity";
+import { createSession } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { loadIdentity } from "./identity.ts";
 

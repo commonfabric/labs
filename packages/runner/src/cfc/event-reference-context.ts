@@ -38,9 +38,13 @@ import {
   immutableReferenceEntries,
   withImmutableReferenceTable,
 } from "./immutable-reference.ts";
-import type { CfcLabelView } from "./label-view-core.ts";
+import {
+  type CfcLabelView,
+  withCfcLabelViewOrigins,
+} from "./label-view-core.ts";
 import { joinCfcObservedConfidentiality } from "./observation.ts";
 import { deriveFlowJoin } from "./prepare.ts";
+import { retainedInputWitnesses } from "./input-witness.ts";
 import { schemaWithRetainedReferenceScope } from "./reference-scope.ts";
 import {
   cfcReferenceBindingMatches,
@@ -91,6 +95,13 @@ function validReference(value: CfcReferenceProvenance): boolean {
     (value.binding.overwrite === undefined ||
       value.binding.overwrite === "redirect") &&
     Array.isArray(value.confidentiality) &&
+    (value.originSpaces === undefined || stringPath(value.originSpaces)) &&
+    (value.selectionWitnesses === undefined ||
+      Array.isArray(value.selectionWitnesses) &&
+        deepEqual(
+          value.selectionWitnesses,
+          retainedInputWitnesses(value.selectionWitnesses),
+        )) &&
     (value.scopeCaps === undefined ||
       Array.isArray(value.scopeCaps) &&
         value.scopeCaps.every((cap) =>
@@ -123,6 +134,7 @@ function restoreView(record: EventReference): CfcLabelView | undefined {
   ) invalidContext();
   for (const entry of record.immutableReferences) {
     if (
+      entry.transport !== undefined ||
       !validReference(entry.reference) || !entry.source ||
       !isFabricDataUri(entry.source.id) || !stringPath(entry.source.path)
     ) invalidContext();
@@ -145,11 +157,18 @@ function restoreView(record: EventReference): CfcLabelView | undefined {
   verifyImmutableReferenceTree(record.reference, record.immutableReferences);
   const view = withCfcReferenceConfidentiality(
     record.view,
-    record.viewConfidentiality,
+    joinCfcObservedConfidentiality([
+      record.viewConfidentiality,
+      record.reference.confidentiality,
+    ]),
+    record.reference.selectionWitnesses,
   );
-  return record.immutableReferences.length === 0
-    ? view
-    : withImmutableReferenceTable(view, record.immutableReferences);
+  return withCfcLabelViewOrigins(
+    record.immutableReferences.length === 0
+      ? view
+      : withImmutableReferenceTable(view, record.immutableReferences),
+    record.reference.originSpaces ?? [],
+  );
 }
 
 function verifyImmutableReferenceTree(
@@ -252,7 +271,9 @@ export function serializeRuntimeEvent(
           },
         }),
         viewConfidentiality: cfcReferenceConfidentialityForView(view),
-        immutableReferences: immutableReferenceEntries(view),
+        immutableReferences: immutableReferenceEntries(view).map(
+          ({ transport: _transport, ...entry }) => entry,
+        ),
       });
       // The handler schema owns value projection. Only the acquired follow
       // restriction travels on the link, inline so event admission does not
@@ -270,7 +291,22 @@ export function serializeRuntimeEvent(
   if (references.length === 0 && cycles.length === 0 && target === undefined) {
     return { payload };
   }
-  const flow = deriveFlowJoin(tx).confidentiality;
+  const { confidentiality: flow, labeledSpaces } = deriveFlowJoin(tx, {
+    collectLabeledSpaces: true,
+  });
+  const withSendingOrigins = (reference: CfcReferenceProvenance) => ({
+    ...reference,
+    // New sender influence has no authenticated historical selection proof.
+    selectionWitnesses: flow.length === 0
+      ? reference.selectionWitnesses ?? []
+      : [],
+    originSpaces: [
+      ...new Set([
+        ...(reference.originSpaces ?? []),
+        ...(labeledSpaces ?? []),
+      ]),
+    ],
+  });
   const acquiredTarget = getCfcReferenceProvenance(target);
   if (
     target !== undefined &&
@@ -295,6 +331,14 @@ export function serializeRuntimeEvent(
       reference: {
         binding: { space, id: payloadId, scope: "space", path: targetPath },
         confidentiality: cycleConfidentiality,
+        originSpaces: [
+          ...new Set([
+            ...(labeledSpaces ?? []),
+            ...references.flatMap((record) =>
+              record.reference.originSpaces ?? []
+            ),
+          ]),
+        ],
       },
       viewConfidentiality: cycleConfidentiality,
       immutableReferences: [],
@@ -319,7 +363,7 @@ export function serializeRuntimeEvent(
     payloadHash: hashStringOf(payload),
     ...(acquiredTarget === undefined ? {} : {
       dispatchReference: {
-        ...acquiredTarget,
+        ...withSendingOrigins(acquiredTarget),
         confidentiality: joinCfcObservedConfidentiality([
           acquiredTarget.confidentiality,
           flow,
@@ -329,7 +373,7 @@ export function serializeRuntimeEvent(
     references: references.map((record) => ({
       ...record,
       reference: {
-        ...record.reference,
+        ...withSendingOrigins(record.reference),
         confidentiality: joinCfcObservedConfidentiality([
           record.reference.confidentiality,
           flow,
@@ -473,9 +517,13 @@ function restoreAttestedReferences(
     dispatchReference.scopeCaps,
   );
   const reference = deepFreeze(dispatchReference);
-  const view = withCfcReferenceConfidentiality(
-    undefined,
-    reference.confidentiality,
+  const view = withCfcLabelViewOrigins(
+    withCfcReferenceConfidentiality(
+      undefined,
+      reference.confidentiality,
+      reference.selectionWitnesses,
+    ),
+    reference.originSpaces ?? [],
   );
   registerCfcReferenceCarrier(restoredTarget, () => reference, () => view);
   return { payload: restored, target: restoredTarget };

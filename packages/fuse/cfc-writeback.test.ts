@@ -124,11 +124,14 @@ Deno.test("CFC mode resolution and annotation defaults match runner modes", () =
     resolveCfcMode({ cliMode: undefined, envMode: "enforce-explicit" }),
     "enforce-explicit",
   );
-  assertEquals(resolveCfcMode({}), "disabled");
+  assertEquals(resolveCfcMode({}), "enforce-strict");
   // An empty string is a source that stated nothing, not a name off the
   // ladder: the mount reads an absent flag as "" and so does an exported but
   // unset environment variable.
-  assertEquals(resolveCfcMode({ cliMode: "", envMode: "" }), "disabled");
+  assertEquals(
+    resolveCfcMode({ cliMode: "", envMode: "" }),
+    "enforce-strict",
+  );
 
   assertEquals(
     shouldEnableCfcAnnotations({

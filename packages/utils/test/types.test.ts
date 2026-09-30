@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type Constructor,
+  type Equal,
   isBoolean,
   isFiniteNumber,
   isFunction,
@@ -14,8 +15,13 @@ import {
   isPrimitive,
   isReadonlyObjectOrArray,
   isString,
+  type IsUnion,
   isUnsafeObjectKey,
+  type JsTypeTagIncludingNull,
+  type MustBeTrue,
   Mutable,
+  type Same,
+  typeOfIncludingNull,
   unsafeObjectKeyIn,
 } from "@commonfabric/utils/types";
 
@@ -26,6 +32,26 @@ type ImmutableObj<T> = {
 function mutate<T>(value: T, callback: (v: Mutable<T>) => void) {
   callback(value as Mutable<T>);
 }
+
+/**
+ * Labeled sample values with the tag `typeOfIncludingNull()` returns for
+ * each: at least one of every JS type `typeof` decides, and `null`.
+ */
+const JS_TYPE_SAMPLES: ReadonlyArray<
+  [string, unknown, JsTypeTagIncludingNull]
+> = [
+  ["a bigint", 42n, "bigint"],
+  ["a boolean", true, "boolean"],
+  ["a function", () => {}, "function"],
+  ["a class", class {}, "function"],
+  ["`null`", null, "null"],
+  ["a number", 42, "number"],
+  ["`NaN`", NaN, "number"],
+  ["a string", "", "string"],
+  ["a unique symbol", Symbol("s"), "symbol"],
+  ["an interned symbol", Symbol.for("s"), "symbol"],
+  ["`undefined`", undefined, "undefined"],
+];
 
 describe("types", () => {
   describe("Mutable", () => {
@@ -444,6 +470,138 @@ describe("types", () => {
       expect(isPrimitive(new Date())).toBe(false);
       expect(isPrimitive(() => {})).toBe(false);
       expect(isPrimitive(class {})).toBe(false);
+    });
+  });
+
+  describe("JsTypeTagIncludingNull", () => {
+    it("is the result type of `typeof`, plus `null`", () => {
+      // The `typeof` result type has no name of its own, so it is read off a
+      // function that returns one.
+
+      const typeOf = (value: unknown) => typeof value;
+      type TypeOfTag = ReturnType<typeof typeOf>;
+
+      const _same: Same<TypeOfTag | "null", JsTypeTagIncludingNull> = true;
+    });
+  });
+
+  describe("Same", () => {
+    // Each case pairs the claim with its control: a comparison that reads the
+    // other way, so that `true` is the comparison's verdict rather than the
+    // only thing it can say.
+
+    it("is `true` for a type and itself, and `false` for two unrelated types", () => {
+      const _same: Same<string, string> = true;
+      const _unrelated: Same<string, number> = false;
+    });
+
+    it("is `true` across `any` in a type argument", () => {
+      const _any: Same<Map<any, any>, Map<string, number>> = true;
+      const _concrete: Same<Map<string, string>, Map<string, number>> = false;
+    });
+
+    it("is `true` across a `readonly` modifier on a property", () => {
+      const _property: Same<{ readonly a: number }, { a: number }> = true;
+      const _array: Same<readonly number[], number[]> = false;
+    });
+
+    it("is `true` for a union and a type each of its members is assignable to", () => {
+      const _subtype: Same<Error | TypeError, Error> = true;
+      const _disjoint: Same<Error | Date, Error> = false;
+    });
+  });
+
+  describe("Equal", () => {
+    it("is `true` for a type and itself, and `false` for two unrelated types", () => {
+      const _same: Equal<string, string> = true;
+      const _unrelated: Equal<string, number> = false;
+    });
+
+    it("is `false` across `any` in a type argument", () => {
+      const _any: Equal<Map<any, any>, Map<string, number>> = false;
+      const _written: Equal<Map<any, any>, Map<any, any>> = true;
+    });
+
+    it("is `false` across a `readonly` modifier on a property", () => {
+      const _property: Equal<{ readonly a: number }, { a: number }> = false;
+      const _written: Equal<{ readonly a: number }, { readonly a: number }> =
+        true;
+    });
+
+    it("is `false` for a union and a type each of its members is assignable to", () => {
+      const _subtype: Equal<Error | TypeError, Error> = false;
+      const _written: Equal<Error | TypeError, Error | TypeError> = true;
+    });
+  });
+
+  describe("IsUnion", () => {
+    // Each result is compared through `Equal`, which tells `true` from
+    // `boolean` where a bare assignment of `true` would accept either.
+
+    it("is `true` for a union of unrelated types, and `false` for a single type", () => {
+      const _union: Equal<IsUnion<string | number>, true> = true;
+      const _single: Equal<IsUnion<string>, false> = true;
+    });
+
+    it("is `false` for a single object type, however many members it has", () => {
+      const _object: Equal<IsUnion<{ a: string; b: number }>, false> = true;
+    });
+
+    it("is `true` for `boolean`, which is the union of `true` and `false`", () => {
+      const _boolean: Equal<IsUnion<boolean>, true> = true;
+      const _literal: Equal<IsUnion<true>, false> = true;
+    });
+
+    it("is `boolean` for a union with a member every other member is assignable to", () => {
+      type Wide = { a: 1 };
+      type Narrow = { a: 1; b: 2 };
+      const _covered: Equal<IsUnion<Wide | Narrow>, boolean> = true;
+      const _disjoint: Equal<IsUnion<Error | Date>, true> = true;
+    });
+
+    it("is `false` for a union whose members are mutually assignable", () => {
+      const _mutual: Equal<IsUnion<Error | TypeError>, false> = true;
+    });
+
+    it("is `false` for a union the compiler reduces to one member", () => {
+      const _absorbed: Equal<IsUnion<string | "x">, false> = true;
+    });
+
+    it("is `never` for `never`", () => {
+      const _never: Equal<IsUnion<never>, never> = true;
+    });
+  });
+
+  describe("MustBeTrue", () => {
+    it("compiles for `true` and for nothing else `Same` or `Equal` can yield", () => {
+      type _True = MustBeTrue<true>;
+      // @ts-expect-error `false` does not satisfy the constraint
+      type _False = MustBeTrue<false>;
+      // @ts-expect-error `boolean` does not satisfy the constraint
+      type _Boolean = MustBeTrue<boolean>;
+    });
+
+    it("compiles for `never`, which a comparison yielding it on mismatch passes vacuously", () => {
+      type _Never = MustBeTrue<never>;
+    });
+  });
+
+  describe("typeOfIncludingNull()", () => {
+    for (const [label, value, tag] of JS_TYPE_SAMPLES) {
+      it(`returns \`${tag}\` for ${label}`, () => {
+        expect(typeOfIncludingNull(value)).toBe(tag);
+      });
+    }
+
+    it("returns `object` for an object of any kind", () => {
+      // The value `null` has a tag and every other object has none, whatever
+      // its class or prototype.
+
+      expect(typeOfIncludingNull({})).toBe("object");
+      expect(typeOfIncludingNull(Object.create(null))).toBe("object");
+      expect(typeOfIncludingNull([])).toBe("object");
+      expect(typeOfIncludingNull(new Date())).toBe("object");
+      expect(typeOfIncludingNull(new (class {})())).toBe("object");
     });
   });
 

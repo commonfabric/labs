@@ -12,6 +12,7 @@ import {
 import {
   clickTrustedAction,
   fillCfInput,
+  fillCfTextarea,
   waitForRuntimeIdle,
   waitForText,
   waitForTextAbsent,
@@ -161,7 +162,7 @@ describe("profile-embed integration test", () => {
 
     // Amend the bio too (bio is clearable; the embed sends the trimmed draft).
     // cf-textarea wraps a native <textarea> (not an <input>), so fillCfInput —
-    // which only drives inner <input>s — does not apply; drive it directly.
+    // which only drives inner <input>s — does not apply.
     await fillCfTextarea(
       page,
       '[data-ui-region="profile-embed-edit"] cf-textarea',
@@ -216,43 +217,6 @@ async function createProfileFromFallback(page: Page, name: string) {
   // session, so the child space stays open and subscribed and the reactive read
   // resolves from already-open state without a separate cross-space sync.
   await waitForRuntimeIdle(page);
-}
-
-// Fill a cf-textarea's inner native <textarea> and durably commit the edit.
-// Mirrors fillCfInput's fillAndVerify but targets a <textarea> host: drive the
-// field like a user (focus, set value, dispatch input/change/blur), then ask
-// the host to commit() so the two-way-bound draft cell flushes.
-async function fillCfTextarea(page: Page, selector: string, value: string) {
-  await waitForRuntimeIdle(page);
-  const field = await page.waitForSelector(selector, {
-    strategy: "pierce",
-  });
-  const ok = await field.evaluate(async (element: Element, nextValue) => {
-    const textarea = element instanceof HTMLTextAreaElement
-      ? element
-      : element.shadowRoot?.querySelector("textarea");
-    if (!(textarea instanceof HTMLTextAreaElement)) return false;
-    const root = textarea.getRootNode();
-    const host = root instanceof ShadowRoot ? root.host : element;
-    const hostElement = host as Element & { commit?: () => Promise<void> };
-    textarea.focus();
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      "value",
-    )?.set;
-    if (setter) setter.call(textarea, nextValue);
-    else textarea.value = nextValue;
-    textarea.dispatchEvent(
-      new Event("input", { bubbles: true, composed: true }),
-    );
-    textarea.dispatchEvent(
-      new Event("change", { bubbles: true, composed: true }),
-    );
-    textarea.blur();
-    await hostElement.commit?.();
-    return textarea.value === nextValue;
-  }, { args: [value] });
-  assert(ok, `Unable to fill cf-textarea "${selector}"`);
 }
 
 // Click the save/done cf-button whose accessible text matches `label`. Each of

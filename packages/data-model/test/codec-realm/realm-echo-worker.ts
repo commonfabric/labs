@@ -6,11 +6,17 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+
+import type { RealmEncodedValue } from "@/codec-realm";
 import { fabricFromRealmValue } from "@/codecs.ts";
-import type { RealmEncodedValue } from "@/codec-realm/interface.ts";
+import { UNAVAILABLE_SYNCING } from "@/fabric-primitives";
 
 /** What the worker reports back about one decoded value. */
 export type EchoReport = {
+  /** The worker's lifetime lock, which `terminateWorker()` waits on. */
+  lifetimeLock: string | undefined;
+
   /** Whether the decode succeeded. */
   ok: boolean;
 
@@ -65,7 +71,10 @@ function keyPairFacts(pair: unknown): Record<string, unknown> | undefined {
   };
 }
 
-self.onmessage = (ev: MessageEvent) => {
+const heldLifetimeLock = holdWorkerLifetimeLock();
+
+self.onmessage = async (ev: MessageEvent) => {
+  const lifetimeLock = await heldLifetimeLock;
   try {
     const value = fabricFromRealmValue(ev.data as RealmEncodedValue) as Record<
       string,
@@ -77,6 +86,7 @@ self.onmessage = (ev: MessageEvent) => {
     }
     self.postMessage(
       {
+        lifetimeLock,
         ok: true,
         classes,
         facts: {
@@ -88,6 +98,8 @@ self.onmessage = (ev: MessageEvent) => {
           // happened to be checked first: a class can arrive with the right
           // constructor and the wrong data, and only a value check sees it.
           days: (value.days as { value: bigint } | undefined)?.value,
+          span: (value.span as { value: bigint } | undefined)?.value,
+          daySpan: (value.daySpan as { value: bigint } | undefined)?.value,
           hashTag: (value.hash as { tag: string } | undefined)?.tag,
           hashBytes: (value.hash as { bytes: Uint8Array } | undefined)
             ? [...(value.hash as { bytes: Uint8Array }).bytes]
@@ -124,12 +136,38 @@ self.onmessage = (ev: MessageEvent) => {
             ? value.lookalike[1]
             : undefined,
           keyPair: keyPairFacts(value.keyPair),
+          unavailableParts: (value.unavailable as
+              | {
+                reason: string;
+                errorKind: string | null;
+                rawErrorMessage: string | null;
+              }
+              | undefined)
+            ? [
+              (value.unavailable as { reason: string }).reason,
+              (value.unavailable as { errorKind: string | null }).errorKind,
+              (value.unavailable as { rawErrorMessage: string | null })
+                .rawErrorMessage,
+            ]
+            : undefined,
+          prefabIsThatRealmsPrefab: value.prefab === UNAVAILABLE_SYNCING,
+          loneString: value.loneString,
+          loneKeys: (value.loneKey !== undefined)
+            ? Object.keys(value.loneKey as object)
+            : undefined,
+          loneSymKey: (typeof value.loneSym === "symbol")
+            ? Symbol.keyFor(value.loneSym)
+            : undefined,
         },
       } satisfies EchoReport,
     );
   } catch (e) {
     self.postMessage(
-      { ok: false, error: (e as Error).message } satisfies EchoReport,
+      {
+        lifetimeLock,
+        ok: false,
+        error: (e as Error).message,
+      } satisfies EchoReport,
     );
   }
 };

@@ -43,8 +43,8 @@ import type { CfcDeclaredWideningExemption, LabelMapEntry } from "./types.ts";
  * principal, a copied `exactCopyOf` label whose source changed — are
  * non-monotone declared updates by construction under `enforce`. That is
  * §8.12.1 semantics, not an accident: per-value evidence belongs in the
- * derived component, and the dial ships default-`off` while those mints
- * migrate.
+ * derived component, and the dial ships default-`observe` while those
+ * mints migrate.
  *
  * The one sanctioned exception (§8.12.7 route 2b — the future
  * declassification-event writer) is the per-transaction privileged
@@ -114,6 +114,18 @@ export const collectDeclaredMonotonicityViolations = (input: {
   >();
   for (const stored of input.storedEntries) {
     if (stored.origin !== "declared") {
+      continue;
+    }
+    // A declared entry with no label values declares no policy to keep: it
+    // marks a writer-claimed position so a write there is routed to the
+    // claim (the persist loop mints one for a claimed position that holds
+    // nothing yet). The writer's first write, which mints the position's
+    // real label — an `addIntegrity` claim among it — is a creation as far
+    // as monotonicity is concerned, not an addition to an empty claim.
+    if (
+      (stored.label.confidentiality?.length ?? 0) === 0 &&
+      (stored.label.integrity?.length ?? 0) === 0
+    ) {
       continue;
     }
     const storedPath = canonicalizeLogicalPath(stored.path);

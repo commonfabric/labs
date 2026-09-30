@@ -12,15 +12,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { JSON_CODEC, REALM_CODEC } from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { isValidFabricValue } from "@/validity-check.ts";
-import { hashStringOf } from "@/value-hash.ts";
+import { hashStringOf, isValidFabricValue } from "@";
+import {
+  CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+  REALM_CODEC,
+} from "@/codec-common";
+import type { RealmCodecValue } from "@/codec-realm";
+import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 
 /** Fixed public-key bytes for deterministic tests. */
 const PUBLIC_BYTES = new Uint8Array([1, 2, 3]);
@@ -154,6 +155,12 @@ describe("FabricKeyPair", () => {
   });
 
   describe("instance members", () => {
+    describe(".schemaType", () => {
+      it("is `FabricKeyPair`", () => {
+        expect(materialPair().schemaType).toBe("FabricKeyPair");
+      });
+    });
+
     describe(".hasMaterial", () => {
       it("returns `true` for an instance built from bytes", () => {
         expect(materialPair().hasMaterial).toBe(true);
@@ -282,6 +289,10 @@ describe("FabricKeyPair", () => {
           });
         });
 
+        it("returns a frozen record", () => {
+          expect(Object.isFrozen(codec.encode(materialPair(), env))).toBe(true);
+        });
+
         it("throws for an instance holding handles", async () => {
           const pair = new FabricKeyPair(await generatePair());
 
@@ -397,6 +408,13 @@ describe("FabricKeyPair", () => {
           // No algorithm field: each `CryptoKey` carries its own, which is
           // what the reconstructed pair reads it from.
           expect(state.algorithm).toBe(undefined);
+        });
+
+        it("returns a frozen record for material and for handles", async () => {
+          const handles = new FabricKeyPair(await generatePair());
+
+          expect(Object.isFrozen(codec.encode(materialPair(), env))).toBe(true);
+          expect(Object.isFrozen(codec.encode(handles, env))).toBe(true);
         });
       });
 
@@ -594,7 +612,9 @@ describe("FabricKeyPair", () => {
     it("throws for an instance holding handles", async () => {
       const pair = new FabricKeyPair(await generatePair());
 
-      expect(() => hashStringOf(pair)).toThrow(/cannot hash a key pair/);
+      expect(() => hashStringOf(pair)).toThrow(
+        "Cannot hash a `FabricKeyPair` that holds opaque handles",
+      );
     });
   });
 });

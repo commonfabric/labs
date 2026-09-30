@@ -14,6 +14,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolveConsoleConfig } from "../console/server.ts";
 import { parseCfHarnessCliArgs } from "../src/cli.ts";
+import { CfHarnessEngine } from "../src/engine.ts";
 import {
   harnessSessionChatPolicy,
   type HarnessSessionConfig,
@@ -41,6 +42,10 @@ const parityArguments = (
     "gpt-parity",
     "--max-model-turns",
     "32",
+    "--reasoning-effort",
+    "high",
+    "--research-reasoning-effort",
+    "high",
     "--skills-root",
     skillsRoot,
     "--fabric-api-url",
@@ -81,6 +86,10 @@ const parityArguments = (
     "gpt-parity",
     "--max-model-turns",
     "32",
+    "--reasoning-effort",
+    "high",
+    "--research-reasoning-effort",
+    "high",
     "--skills-root",
     skillsRoot,
     "--fabric-api-url",
@@ -162,6 +171,11 @@ describe("session-assembly", () => {
         expect(harnessSessionEngineOptions(server)).toEqual(
           harnessSessionEngineOptions(cli),
         );
+        // Equal options would also pass if both surfaces dropped the setting.
+        expect(harnessSessionEngineOptions(server).researchReasoningEffort)
+          .toBe("high");
+        expect(harnessSessionEngineOptions(cli).researchReasoningEffort)
+          .toBe("high");
       } finally {
         await cleanup();
       }
@@ -320,4 +334,124 @@ describe("session-assembly", () => {
       expect(allowed).toContain("assign_slug");
     });
   });
+});
+
+Deno.test("harnessSessionChatPolicy offers run_skill_script for an exact entry", () => {
+  // An entry is as much the operator allowing a script as the switch is, so
+  // it offers the tool too; which script may run is decided at the call.
+  const base = {
+    workspace: "/workspace",
+    artifactRoot: "/artifacts",
+    maxModelTurns: 8,
+    skillsRoot: "/workspace/skills",
+    skillNames: [],
+    allowedSkillScripts: [],
+    skillScriptExecutionTarget: "sandbox",
+    handleValueOrigins: [],
+    inputCells: [],
+    connectorGrants: [],
+    patternRefs: [],
+    allowedSubagentProfiles: [],
+  } as unknown as HarnessSessionConfig;
+
+  expect(harnessSessionChatPolicy(base).allowedToolIds).not.toContain(
+    "run_skill_script",
+  );
+  expect(
+    harnessSessionChatPolicy({
+      ...base,
+      allowedSkillScripts: [{ skill: "cf-tidy", path: "scripts/tidy.sh" }],
+    }).allowedToolIds,
+  ).toContain("run_skill_script");
+  expect(
+    harnessSessionChatPolicy({ ...base, allowSkillScripts: true })
+      .allowedToolIds,
+  ).toContain("run_skill_script");
+});
+
+Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine", () => {
+  // Each value is one the engine would NOT arrive at by itself: the docker
+  // runtime is the default kind, `sandbox` the default network mode, `runsc`
+  // on the PATH the default binary, and no policy the default policy. A
+  // setting dropped here therefore shows as a different value, not the same
+  // one reached another way.
+  const config = {
+    workspace: "/workspace",
+    artifactRoot: "/artifacts",
+    maxModelTurns: 8,
+    skillNames: [],
+    allowedSkillScripts: [],
+    skillScriptExecutionTarget: "sandbox",
+    hostMounts: [],
+    handleValueOrigins: [],
+    inputCells: [],
+    connectorGrants: [],
+    patternRefs: [],
+    allowedSubagentProfiles: [],
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/images/custom-rootfs",
+    sandboxCfcPolicy: "/opt/cfc/policy.json",
+    sandboxRunscBinary: "/opt/runsc/bin/runsc",
+    sandboxRunscNetworkMode: "none",
+  } as unknown as HarnessSessionConfig;
+
+  const options = harnessSessionEngineOptions(config);
+
+  expect(options.sandboxRuntimeKind).toBe("runsc");
+  expect(options.sandboxRootfs).toBe("/images/custom-rootfs");
+  expect(options.sandboxCfcPolicy).toBe("/opt/cfc/policy.json");
+  expect(options.sandboxRunscBinary).toBe("/opt/runsc/bin/runsc");
+  expect(options.sandboxRunscNetworkMode).toBe("none");
+
+  // And they are the engine's own option names: the engine built from them
+  // runs what the session asked for. `artifactRoot` is left out so that
+  // building the engine writes nothing.
+  const { artifactRoot: _artifactRoot, ...engineOptions } = options;
+  const engine = new CfHarnessEngine({
+    ...engineOptions,
+    runId: "run-session-assembly-runsc",
+    processRunner: {
+      run: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
+    },
+  });
+  expect(engine.sandbox.describe().kind).toBe("runsc-cfc");
+  expect(engine.ownedSandboxConfig).toBeUndefined();
+  expect(engine.ownedRunscSandboxConfig).toMatchObject({
+    rootfs: "/images/custom-rootfs",
+    cfcPolicyPath: "/opt/cfc/policy.json",
+    runscBinary: "/opt/runsc/bin/runsc",
+    networkMode: "none",
+    workspaceHostPath: "/workspace",
+  });
+});
+
+Deno.test("harnessSessionEngineOptions names no sandbox runtime for a session that names none", () => {
+  // The docker path: a session that says nothing about the runtime hands the
+  // engine nothing about it, so the engine's default stays the engine's.
+  const options = harnessSessionEngineOptions({
+    workspace: "/workspace",
+    artifactRoot: "/artifacts",
+    maxModelTurns: 8,
+    skillNames: [],
+    allowedSkillScripts: [],
+    skillScriptExecutionTarget: "sandbox",
+    hostMounts: [],
+    handleValueOrigins: [],
+    inputCells: [],
+    connectorGrants: [],
+    patternRefs: [],
+    allowedSubagentProfiles: [],
+  } as unknown as HarnessSessionConfig);
+
+  for (
+    const key of [
+      "sandboxRuntimeKind",
+      "sandboxRootfs",
+      "sandboxCfcPolicy",
+      "sandboxRunscBinary",
+      "sandboxRunscNetworkMode",
+    ]
+  ) {
+    expect(key in options).toBe(false);
+  }
 });

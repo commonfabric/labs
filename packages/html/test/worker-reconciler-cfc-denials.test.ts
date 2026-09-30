@@ -6,6 +6,7 @@ import { resetCfcDenialAnnouncements } from "@commonfabric/runner/cfc";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import type { WorkerVNode } from "../src/worker/types.ts";
@@ -56,7 +57,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       undefined,
       tx,
     );
-    tx.writeOrThrow({
+    seedStoredEnvelope(tx, {
       space: signer.did(),
       id: secret.getAsNormalizedFullLink().id!,
       type: "application/json",
@@ -183,6 +184,30 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       expect(said).not.toContain("OncologyReferralLetter");
     });
 
+    // A property is decided on what its read consumed, so the explanation of
+    // one it withholds names those labels, and only at debug.
+    await t.step("explains a property it withholds", async () => {
+      const property: WorkerVNode = {
+        type: "vnode",
+        name: "span",
+        props: { title: confidential as never },
+        children: [],
+      };
+      const quiet = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+      });
+      expect(quiet).toContain(CEILING_BLOCK);
+      expect(quiet).not.toContain("OncologyReferralLetter");
+      const said = await mounted(property, {
+        collector: collectOps(),
+        ceiling: true,
+        debug: true,
+      });
+      expect(said).toContain("OncologyReferralLetter");
+      expect(said).toContain("consumed");
+    });
+
     await t.step(
       "names the label beside the ceiling once raised to debug",
       async () => {
@@ -192,7 +217,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           debug: true,
         });
         expect(said).toContain("OncologyReferralLetter");
-        expect(said).toContain("stored");
+        expect(said).toContain("consumed");
       },
     );
 

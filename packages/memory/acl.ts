@@ -1,6 +1,6 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 import { ACL, ACLUser, ANYONE, Capability, DID, DIDKey } from "./interface.ts";
-import { isDID } from "../identity/src/interface.ts";
+import { isDID } from "@commonfabric/identity/did";
 
 export type { ACL, ACLUser, ANYONE, Capability, DID, DIDKey };
 
@@ -30,7 +30,7 @@ export function isCapability(value: unknown): value is Capability {
 }
 
 export function isACL(value: unknown): value is ACL {
-  if (!isObjectNotArray(value)) return false;
+  if (!isPlainObject(value)) return false;
   for (const [did, cap] of Object.entries(value)) {
     if (!isACLUser(did)) return false;
     if (!isCapability(cap)) return false;
@@ -49,7 +49,7 @@ export function hasConcreteOwner(acl: ACL): boolean {
 /** Whether a stored ACL document is exactly `expected`: same principals,
  *  same capabilities, nothing more. Key order is not part of the contract. */
 export function sameAcl(stored: unknown, expected: ACL): boolean {
-  if (!isObjectNotArray(stored)) return false;
+  if (!isPlainObject(stored)) return false;
   const actual = stored as Record<string, unknown>;
   const expectedKeys = Object.keys(expected);
   return Object.keys(actual).length === expectedKeys.length &&

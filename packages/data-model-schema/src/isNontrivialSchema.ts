@@ -1,4 +1,5 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * Indicates if the given (nullable) schema is in fact a non-trivial schema. A
@@ -16,7 +17,7 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 export function isNontrivialSchema(
   schema: JSONSchema | undefined | null,
 ): schema is JSONSchemaObj {
-  if ((schema === null) || (typeof schema !== "object")) {
+  if (!isObjectOrArray(schema)) {
     return false;
   }
 

@@ -1,11 +1,14 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
 import {
+  authorizeLoopbackSessionOpen,
   verifySessionOpenAuthorization,
   wireAuthorizationOf,
 } from "../v2/session-open-auth.ts";
@@ -42,10 +45,15 @@ const verifyOptions = (
 const buildOpen = async (
   extra: { aud?: string; challenge?: string; iat?: number; exp?: number } = {},
   identity = alice,
-  session: { sessionId?: string; seenSeq?: number; sessionToken?: string } = {},
+  session: {
+    sessionId?: string;
+    seenSeq?: number;
+    sessionToken?: string;
+    genesisRoot?: FabricValue;
+  } = {},
 ) => {
   const sub = space.did();
-  const invocation: Record<string, unknown> = {
+  const invocation: Record<string, FabricValue> = {
     iss: identity.did(),
     cmd: "session.open",
     sub,
@@ -76,9 +84,13 @@ describe("wireAuthorizationOf", () => {
 
   it("rejects a signature that is not `FabricBytes`", () => {
     // Raw bytes are what the in-process `Signature<T>` looks like; the wire
-    // form must be the `FabricPrimitive`, so this must not narrow.
+    // form must be the `FabricPrimitive`, so this must not narrow. The
+    // declared `FabricValue` does not keep a `Uint8Array` out of the
+    // argument position; the check does.
     assertEquals(
-      wireAuthorizationOf({ signature: new Uint8Array([1, 2, 3]) }),
+      wireAuthorizationOf(
+        { signature: new Uint8Array([1, 2, 3]) } as unknown as FabricValue,
+      ),
       undefined,
     );
     assertEquals(wireAuthorizationOf({}), undefined);
@@ -86,6 +98,32 @@ describe("wireAuthorizationOf", () => {
 });
 
 describe("verifySessionOpenAuthorization", () => {
+  it("binds the complete custom-root expectation to the signed descriptor", async () => {
+    const root = {
+      source: "system:loom/main.tsx",
+      cause: "signed-intent",
+      argument: { title: "Expected" },
+    };
+    const message = await buildOpen(signedFields(), alice, {
+      genesisRoot: root,
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(message, verifyOptions()),
+      alice.did(),
+    );
+    await assertRejects(() =>
+      verifySessionOpenAuthorization(
+        { ...message, session: {} },
+        verifyOptions(),
+      )
+    );
+    await assertRejects(() =>
+      verifySessionOpenAuthorization({
+        ...message,
+        session: { genesisRoot: { ...root, argument: { title: "Changed" } } },
+      }, verifyOptions())
+    );
+  });
   it("accepts a valid signed open and returns the issuer principal", async () => {
     assertEquals(
       await verifySessionOpenAuthorization(
@@ -283,5 +321,118 @@ describe("verifySessionOpenAuthorization", () => {
       Error,
       "audience mismatch",
     );
+  });
+
+  describe("record shape", () => {
+    // A class instance reads as carrying no properties, so a descriptor
+    // comparison over one compares nothing against nothing. `FabricBytes` is
+    // the instance a peer can put there: the codec decodes it at any position
+    // in the invocation, which the issuer then signs like any other content.
+    it("rejects an open whose signed session descriptor is a class instance", async () => {
+      const msg = await buildOpen(signedFields(), alice, {
+        sessionId: "session:resume",
+      });
+      const invocation = {
+        ...msg.invocation,
+        args: {
+          protocol: MEMORY_PROTOCOL,
+          session: new FabricBytes(new Uint8Array([1, 2, 3])),
+        },
+      };
+      const signature = await alice.sign(hashOf(invocation).bytes);
+      if (signature.error) throw signature.error;
+      await assertRejects(
+        () =>
+          verifySessionOpenAuthorization({
+            space: msg.space,
+            session: {},
+            invocation,
+            authorization: { signature: new FabricBytes(signature.ok) },
+          }, verifyOptions()),
+        Error,
+        "authorization mismatch",
+      );
+    });
+
+    // The declared `FabricPlainObject` is what the wire parser establishes,
+    // not something this function may assume of its own argument.
+    it("rejects an open whose invocation is a class instance", async () => {
+      const msg = await buildOpen(signedFields());
+      await assertRejects(
+        () =>
+          verifySessionOpenAuthorization({
+            ...msg,
+            invocation: new FabricBytes(
+              new Uint8Array([1, 2, 3]),
+            ) as unknown as FabricPlainObject,
+          }, verifyOptions()),
+        Error,
+        "requires authorization",
+      );
+    });
+
+    it("returns `undefined` from `wireAuthorizationOf` for a class-instance authorization", () => {
+      expect(
+        wireAuthorizationOf(new FabricBytes(new Uint8Array([1, 2, 3]))),
+      ).toBe(undefined);
+    });
+  });
+});
+
+describe("authorizeLoopbackSessionOpen", () => {
+  it("returns the issuer of a signed open that verifies", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        await buildOpen(signedFields()),
+        verifyOptions(),
+      ),
+    ).toBe(alice.did());
+  });
+
+  it("throws for a signed open whose invocation no longer matches its signature", async () => {
+    const message = await buildOpen(signedFields());
+    message.invocation.iat = 0;
+    await expect(
+      Promise.resolve(authorizeLoopbackSessionOpen(message, verifyOptions())),
+    ).rejects.toThrow("Invalid signature");
+  });
+
+  it("throws for a signed open addressed to a different audience", async () => {
+    const message = await buildOpen(signedFields({ aud: mallory.did() }));
+    await expect(
+      Promise.resolve(authorizeLoopbackSessionOpen(message, verifyOptions())),
+    ).rejects.toThrow("memory session.open audience mismatch");
+  });
+
+  it("returns the issuer of a signed open that also names another principal", async () => {
+    const message = await buildOpen(signedFields());
+    expect(
+      await authorizeLoopbackSessionOpen({
+        ...message,
+        authorization: { ...message.authorization, principal: mallory.did() },
+      }, verifyOptions()),
+    ).toBe(alice.did());
+  });
+
+  it("returns the principal an unsigned open names", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        {
+          space: space.did(),
+          session: {},
+          authorization: { principal: mallory.did() },
+        },
+        verifyOptions(),
+      ),
+    ).toBe(mallory.did());
+  });
+
+  it("returns `undefined` for an unsigned open that names no principal", async () => {
+    expect(
+      await authorizeLoopbackSessionOpen(
+        { space: space.did(), session: {}, authorization: {} },
+        verifyOptions(),
+      ),
+    ).toBeUndefined();
   });
 });

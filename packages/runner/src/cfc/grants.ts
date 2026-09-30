@@ -1,4 +1,9 @@
-import { hashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import { isDID } from "@commonfabric/identity/did";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { URI } from "@commonfabric/memory/interface";
@@ -8,6 +13,7 @@ import type {
   MemorySpace,
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import { type AtomPattern, isAtomPattern } from "./atom-pattern.ts";
 import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES, isOrClause } from "./clause.ts";
 import type {
   CfcGrantResolver,
@@ -99,7 +105,7 @@ export type CfcGrantIdentity = {
 
   /** What it releases: a doc reference (URI string) or an atom-pattern
    * scope record (design §2.1 `Reference | AtomPattern`). */
-  readonly resource: unknown;
+  readonly resource: AtomPattern;
 };
 
 /** A verified grant record (design doc §2.1 shape). */
@@ -136,7 +142,7 @@ export type CfcGrant = CfcGrantIdentity & {
 export type CfcGrantWriteInput = {
   readonly kind: string;
   readonly owner: string;
-  readonly resource: unknown;
+  readonly resource: AtomPattern;
   readonly audience: readonly unknown[];
 
   /** Defaults to `owner` — the v1 governing-space posture (module doc). */
@@ -240,8 +246,8 @@ type PendingGrantConsumptionClaim = {
  * or a method on the transaction interface: a claim staged here is written
  * into the reserved `grant:cfc:` namespace INSIDE the privileged scope by
  * `flushCfcGrantConsumptionClaims` (called from `prepareBoundaryCommit`), so
- * a registration surface reachable from handler code via `(cell.tx as any)`
- * would launder unprivileged receipt forgeries — spending any grant the
+ * a registration surface reachable from code holding the transaction would
+ * launder unprivileged receipt forgeries — spending any grant the
  * caller can name — through the runtime's own privileged flush, bypassing
  * the S18 gate that blocks direct writes. Module privacy keeps the ONLY
  * writers the resolver below (which registers a claim exclusively for a
@@ -344,9 +350,6 @@ export const flushCfcGrantConsumptionClaims = (
   return reasons;
 };
 
-const isDid = (value: unknown): value is string =>
-  typeof value === "string" && value.startsWith("did:");
-
 // `var` is the atom-pattern placeholder key (atom-pattern.ts reserved-key
 // discipline). An audience entry carrying one anywhere would interact with
 // pattern matching when the entry later lands in a clause — refuse at write.
@@ -412,10 +415,10 @@ export const prepareCfcGrantWrite = (
   if (typeof kind !== "string" || kind.length === 0) {
     throw new Error("cfc-grant: kind must be a non-empty string");
   }
-  if (!isDid(owner)) {
+  if (!isDID(owner)) {
     throw new Error("cfc-grant: owner must be a DID");
   }
-  if (!isDid(actingPrincipal) || owner !== actingPrincipal) {
+  if (!isDID(actingPrincipal) || owner !== actingPrincipal) {
     throw new Error(
       "cfc-grant: owner must equal the transaction's acting principal " +
         "(release authority; §13.4.3 verification list, intent evidence " +
@@ -438,6 +441,9 @@ export const prepareCfcGrantWrite = (
     (typeof resource === "string" && resource.length === 0)
   ) {
     throw new Error("cfc-grant: resource must name what the grant releases");
+  }
+  if (!isAtomPattern(resource)) {
+    throw new Error("cfc-grant: resource must be a `FabricValue`");
   }
   if (!Array.isArray(audience) || audience.length === 0) {
     throw new Error("cfc-grant: audience must be a non-empty array");
@@ -468,7 +474,7 @@ export const prepareCfcGrantWrite = (
     const revoked = input.revoked;
     if (
       !isObjectOrArray(revoked) || typeof revoked.at !== "number" ||
-      !Number.isFinite(revoked.at) || !isDid(revoked.by)
+      !Number.isFinite(revoked.at) || !isDID(revoked.by)
     ) {
       throw new Error("cfc-grant: revoked must be { at: number, by: DID }");
     }
@@ -520,13 +526,13 @@ export const prepareCfcGrantWrite = (
 export const verifyCfcGrantDocument = (
   space: string,
   id: string,
-  value: unknown,
+  value: FabricValue,
 ): CfcGrant | undefined => {
-  if (!isObjectNotArray(value)) return undefined;
+  if (!isFabricPlainObject(value)) return undefined;
   const candidate = value as Partial<CfcGrant> & Record<string, unknown>;
   if (candidate.version !== CFC_GRANT_VERSION) return undefined;
   if (
-    typeof candidate.kind !== "string" || !isDid(candidate.owner) ||
+    typeof candidate.kind !== "string" || !isDID(candidate.owner) ||
     typeof candidate.space !== "string" || candidate.space !== space
   ) {
     return undefined;
@@ -557,7 +563,7 @@ export const verifyCfcGrantDocument = (
     const revoked = candidate.revoked;
     if (
       !isObjectOrArray(revoked) || typeof revoked.at !== "number" ||
-      !isDid((revoked as { by?: unknown }).by)
+      !isDID((revoked as { by?: unknown }).by)
     ) {
       return undefined;
     }
@@ -768,7 +774,7 @@ export const createTxCfcGrantResolver = (
   return (query: CfcGrantResolverQuery): readonly CfcAtom[] => {
     const owner = query.fields.owner;
     const resource = query.fields.resource;
-    if (!isDid(owner) || resource === undefined || resource === null) {
+    if (!isDID(owner) || resource === undefined || resource === null) {
       return [];
     }
     // v1 governing space == owner's identity space (module doc). An explicit

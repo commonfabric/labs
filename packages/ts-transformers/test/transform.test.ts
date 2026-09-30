@@ -2,6 +2,7 @@ import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
@@ -254,14 +255,14 @@ export default pattern(() => {
     const causes = forCauses(parseModule(main));
     assertEquals(
       causes.find((c) =>
-        typeof c === "object" && c !== null && !Array.isArray(c) &&
+        isObjectNotArray(c) &&
         (c as Record<string, unknown>).stream === "save"
       ),
       { stream: "save" },
     );
     assertEquals(
       causes.find((c) =>
-        typeof c === "object" && c !== null && !Array.isArray(c) &&
+        isObjectNotArray(c) &&
         Array.isArray((c as Record<string, unknown>).stream)
       ),
       { stream: ["__patternResult", "nested", "cancel"] },

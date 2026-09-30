@@ -12,8 +12,9 @@
 //      engine's OWN conflict check would have rejected. We replay that exact
 //      check here — resolving each read's declared scope via the engine's
 //      `resolveScopeKey` and testing patch overlap with the engine's exported
-//      `patchOverlapsRead` — so a hit is genuinely anomalous, not a benign
-//      cross-scope or disjoint-path interleaving the runtime tolerates.
+//      `patchOverlapsRead`, the definition its check is held to — so a hit is
+//      genuinely anomalous, not a benign cross-scope or disjoint-path
+//      interleaving the runtime tolerates.
 //
 // HONESTY: the server VALIDATES every confirmed read before inserting a commit
 // (`validateConfirmedReads` → `findConflictSeq` in `packages/memory/v2`), so a

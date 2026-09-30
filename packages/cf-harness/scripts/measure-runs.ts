@@ -23,8 +23,12 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { join } from "@std/path";
+import { basename, join } from "@std/path";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { HarnessRunReport } from "../src/contracts/run-report.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import type { HarnessResearchRecord } from "../src/research/runner.ts";
+import { isCollapsedRunPatternSource } from "../src/run-pattern-source-collapse.ts";
 
 /** Where the console writes its runs, relative to its working directory. */
 export const DEFAULT_ARTIFACT_ROOT = ".cf-harness-console/runs";
@@ -203,6 +207,22 @@ export interface RunMeasurement {
 
   /** Every tool the run called, and how each call ended. */
   toolOutcomes: Readonly<Record<string, Readonly<Record<string, number>>>>;
+
+  /** Private research work from this run's own tool artifacts, not inheritance. */
+  research?: TranscriptJson<readonly MeasuredResearch[]>;
+}
+
+/** A research invocation and the bounded work its artifact records. */
+export interface MeasuredResearch {
+  outputId: string;
+  origin: "model" | "opening-research";
+  wallMs: number;
+  work: TranscriptJson<{
+    modelTurns: number;
+    toolCalls: number;
+    readChars: number;
+    sourceReads: number;
+  }>;
 }
 
 /**
@@ -686,6 +706,9 @@ const runPatternTargetOf = (
     return read({ kind: "pattern-id", patternId });
   }
   if (typeof sourceText === "string") {
+    if (isCollapsedRunPatternSource(sourceText)) {
+      return unread("collapsed source requires its saved source artifact");
+    }
     return read({
       kind: "source",
       sourceBytes: new TextEncoder().encode(sourceText).length,
@@ -742,6 +765,7 @@ export const measureTranscript = (
   runId: string,
   role: RunMeasurement["role"],
   transcript: readonly HarnessTranscriptMessage[],
+  sourceArtifacts: ReadonlyMap<string, TranscriptJson<string>> = new Map(),
 ): RunMeasurement => {
   const results = new Map<string, TranscriptJson<Record<string, unknown>>>();
   // A transcript that parsed as an array may still hold something that is not
@@ -749,9 +773,7 @@ export const measureTranscript = (
   // unreadable run rather than aborting the whole report.
   const messages = transcript.filter((
     message,
-  ): message is typeof transcript[number] =>
-    typeof message === "object" && message !== null
-  );
+  ): message is typeof transcript[number] => isObjectOrArray(message));
   for (const message of messages) {
     if (message.role === "tool") {
       if (typeof message.toolCallId !== "string") continue;
@@ -779,7 +801,7 @@ export const measureTranscript = (
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
-      const args = parseJson<Record<string, unknown>>(
+      let args = parseJson<Record<string, unknown>>(
         call.function.arguments,
         `the ${call.function.name} arguments`,
       );
@@ -795,6 +817,20 @@ export const measureTranscript = (
           });
           break;
         case "run_pattern":
+          if (
+            args.kind === "read" && typeof args.value.sourceText === "string"
+          ) {
+            const output = outputFor(call.id);
+            const source = output.kind === "read" &&
+                typeof output.value.outputId === "string"
+              ? sourceArtifacts.get(output.value.outputId)
+              : undefined;
+            if (source?.kind === "read") {
+              args = read({ ...args.value, sourceText: source.value });
+            } else if (source?.kind === "unread") {
+              args = source;
+            }
+          }
           runPatterns.push({
             target: runPatternTargetOf(args),
             outcome: statusOf(outputFor(call.id)),
@@ -891,6 +927,201 @@ const readTranscript = async (
     : unread("transcript.json is not an array of messages");
 };
 
+/** Reads source sidecars by their stored output identity, including old drafts. */
+const readSourceArtifacts = async (
+  runRoot: string,
+): Promise<ReadonlyMap<string, TranscriptJson<string>>> => {
+  const sources = new Map<string, TranscriptJson<string>>();
+  try {
+    for await (const entry of Deno.readDir(join(runRoot, "tool-outputs"))) {
+      if (!entry.isFile || !entry.name.endsWith("-run-pattern-source.json")) {
+        continue;
+      }
+      const artifact = await readJsonObject(
+        join(runRoot, "tool-outputs", entry.name),
+      );
+      if (artifact.kind === "unread") continue;
+      const { outputId, sourceText, type } = artifact.value;
+      if (typeof outputId !== "string") continue;
+      sources.set(
+        outputId,
+        sources.has(outputId)
+          ? unread(`multiple source artifacts claim ${outputId}`)
+          : type === "cf-harness.run-pattern-source" &&
+              typeof sourceText === "string"
+          ? read(sourceText)
+          : unread(`the source artifact for ${outputId} is malformed`),
+      );
+    }
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+  return sources;
+};
+
+/** Parses an artifact without treating an unread value as an empty object. */
+const readJsonObject = async (
+  path: string,
+): Promise<TranscriptJson<Record<string, unknown>>> => {
+  try {
+    const parsed = parseJson<unknown>(
+      await Deno.readTextFile(path),
+      basename(path),
+    );
+    if (parsed.kind === "unread") return parsed;
+    return isObjectNotArray(parsed.value)
+      ? read(parsed.value as Record<string, unknown>)
+      : unread(`${basename(path)} is not an object`);
+  } catch (error) {
+    return unread(
+      `${basename(path)} could not be read: ${describeError(error)}`,
+    );
+  }
+};
+
+/** Research activity normalized to only the fields measurement consumes. */
+type ResearchActivityReading =
+  & Pick<MeasuredResearch, "origin" | "outputId" | "wallMs">
+  & {
+    /** Path of the raw result artifact, when the activity retained one. */
+    artifactPath?: string;
+  };
+
+/**
+ * Reads and normalizes research activity. Other fields may be absent from
+ * historical reports, but no row can be dropped merely because its tool
+ * identity is unreadable.
+ */
+const readResearchActivity = (
+  value: unknown,
+): TranscriptJson<readonly ResearchActivityReading[]> => {
+  if (!Array.isArray(value)) {
+    return unread("`run-report.json` has no activity list");
+  }
+  const research: ResearchActivityReading[] = [];
+  for (const [index, activity] of value.entries()) {
+    if (
+      typeof activity !== "object" || activity === null ||
+      Array.isArray(activity) || typeof activity.toolId !== "string" ||
+      activity.toolId.length === 0
+    ) {
+      return unread(
+        `\`run-report.json\` has malformed \`.toolActivity[${index}]\``,
+      );
+    }
+    if (activity.toolId !== "research") continue;
+    if (
+      typeof activity.toolCallId !== "string" ||
+      activity.toolCallId.length === 0 ||
+      typeof activity.startedAt !== "string" ||
+      !Number.isFinite(Date.parse(activity.startedAt)) ||
+      typeof activity.endedAt !== "string" ||
+      !Number.isFinite(Date.parse(activity.endedAt)) ||
+      (activity.origin !== undefined && activity.origin !== "model" &&
+        activity.origin !== "opening-research")
+    ) {
+      return unread(
+        `\`run-report.json\` has malformed \`.toolActivity[${index}]\``,
+      );
+    }
+    const resultRef = activity.resultRef;
+    if (
+      resultRef !== undefined &&
+      (typeof resultRef !== "object" || resultRef === null ||
+        Array.isArray(resultRef) || typeof resultRef.outputId !== "string" ||
+        (resultRef.artifactPath !== undefined &&
+          typeof resultRef.artifactPath !== "string"))
+    ) {
+      return unread(
+        `\`run-report.json\` has malformed \`.toolActivity[${index}]\``,
+      );
+    }
+    research.push({
+      outputId: resultRef?.outputId ?? activity.toolCallId,
+      origin: activity.origin ?? "model",
+      wallMs: Date.parse(activity.endedAt) - Date.parse(activity.startedAt),
+      ...(resultRef?.artifactPath !== undefined
+        ? { artifactPath: resultRef.artifactPath }
+        : {}),
+    });
+  }
+  return read(research);
+};
+
+/** Adds host opening calls and private work without counting inherited kits. */
+const measureResearchArtifacts = async (
+  runRoot: string,
+  measurement: RunMeasurement,
+): Promise<RunMeasurement> => {
+  let reportText: string;
+  try {
+    reportText = await Deno.readTextFile(join(runRoot, "run-report.json"));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return measurement;
+    return { ...measurement, research: unread(describeError(error)) };
+  }
+  const parsed = parseJson<HarnessRunReport>(reportText, "run-report.json");
+  if (parsed.kind === "unread") return { ...measurement, research: parsed };
+  if (parsed.value?.runId !== measurement.runId) {
+    return {
+      ...measurement,
+      research: unread(
+        "run-report.json has no matching run identity and activity list",
+      ),
+    };
+  }
+  const activity = readResearchActivity(parsed.value.toolActivity);
+  if (activity.kind === "unread") {
+    return { ...measurement, research: activity };
+  }
+  const calls = activity.value;
+  if (calls.length === 0) return measurement;
+  const research: MeasuredResearch[] = [];
+  const toolOutcomes = { ...measurement.toolOutcomes };
+  for (const call of calls) {
+    const outputId = call.outputId;
+    const artifact = call.artifactPath === undefined
+      ? unread<Record<string, unknown>>("research has no output artifact")
+      : await readJsonObject(
+        join(runRoot, "tool-outputs", basename(call.artifactPath)),
+      );
+    const matched =
+      artifact.kind === "read" && artifact.value.outputId !== outputId
+        ? unread<Record<string, unknown>>(
+          "research artifact output identity does not match its activity",
+        )
+        : artifact;
+    if (call.origin === "opening-research") {
+      const counts = { ...toolOutcomes.research };
+      const outcome = toolOutcomeOf(matched);
+      counts[outcome] = (counts[outcome] ?? 0) + 1;
+      toolOutcomes.research = counts;
+    }
+    const record = matched.kind === "read"
+      ? matched.value.researchRecord as HarnessResearchRecord | undefined
+      : undefined;
+    research.push({
+      outputId,
+      origin: call.origin,
+      wallMs: call.wallMs,
+      work: record?.researchRunId === outputId &&
+          record.budgets !== undefined && Array.isArray(record.sourceReads) &&
+          [
+            record.budgets.modelTurns,
+            record.budgets.toolCalls,
+            record.budgets.readChars,
+          ].every((n) => Number.isSafeInteger(n) && n >= 0)
+        ? read({ ...record.budgets, sourceReads: record.sourceReads.length })
+        : unread(
+          matched.kind === "unread"
+            ? matched.reason
+            : "research has no matching private work record",
+        ),
+    });
+  }
+  return { ...measurement, toolOutcomes, research: read(research) };
+};
+
 /** Measures one run directory, read or not. */
 export const measureRun = async (
   artifactRoot: string,
@@ -900,9 +1131,19 @@ export const measureRun = async (
   const transcript = await readTranscript(
     join(artifactRoot, runId, "transcript.json"),
   );
-  return transcript.kind === "read"
-    ? measureTranscript(runId, role, transcript.value)
-    : unreadRun(runId, role, transcript.reason);
+  if (transcript.kind === "unread") {
+    return unreadRun(runId, role, transcript.reason);
+  }
+  const runRoot = join(artifactRoot, runId);
+  return await measureResearchArtifacts(
+    runRoot,
+    measureTranscript(
+      runId,
+      role,
+      transcript.value,
+      await readSourceArtifacts(runRoot),
+    ),
+  );
 };
 
 /** Every run directory name under an artifact root. */
@@ -1008,6 +1249,20 @@ export const renderRunLines = (run: RunMeasurement): readonly string[] => {
   const lines: string[] = [];
   if (run.transcript.kind === "unread") {
     return [`  [${label}] NOT READ: ${singleLine(run.transcript.reason)}`];
+  }
+  if (run.research?.kind === "unread") {
+    lines.push(
+      `  [${label}] research NOT READ (${singleLine(run.research.reason)})`,
+    );
+  } else {
+    for (const call of run.research?.value ?? []) {
+      const work = call.work.kind === "unread"
+        ? `NOT READ (${singleLine(call.work.reason)})`
+        : `${call.work.value.modelTurns} turns, ${call.work.value.toolCalls} private calls, ${call.work.value.sourceReads} reads, ${call.work.value.readChars} characters`;
+      lines.push(
+        `  [${label}] research ${call.origin}: ${work}; ${call.wallMs} ms`,
+      );
+    }
   }
   for (const search of run.searches) {
     lines.push(

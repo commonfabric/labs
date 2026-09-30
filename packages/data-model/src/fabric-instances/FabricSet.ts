@@ -3,7 +3,7 @@ import {
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
+} from "@/fabric-bases";
 import {
   CODEC,
   type LiveEnvironment,

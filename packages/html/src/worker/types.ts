@@ -9,10 +9,12 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { Cancel, Cell, JSONSchema, SigilLink } from "@commonfabric/runner";
 import type {
   CfcConfClause,
+  CfcModulePolicySource,
   RenderConfidentialityResolver,
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import type { CellRef, JSONValue } from "@commonfabric/runtime-client";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { VDomOp } from "../vdom-ops.ts";
 
 /**
@@ -66,11 +68,7 @@ export type WorkerJSXElement = WorkerVNode | Cell<WorkerVNode>;
  * Check if a value is a WorkerVNode.
  */
 export function isWorkerVNode(value: unknown): value is WorkerVNode {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as WorkerVNode).type === "vnode"
-  );
+  return isObjectOrArray(value) && value.type === "vnode";
 }
 
 /**
@@ -131,6 +129,13 @@ export interface RenderPolicy {
   textIntegrity?: {
     requiredIntegrity: readonly CfcAtom[];
     allowLiteralText: boolean;
+
+    /**
+     * Whether cell text may render at all. A boundary that requires no atoms
+     * admits no cell text, and an enclosing boundary's requirement does not
+     * change that for the text inside it.
+     */
+    admitsCellText: boolean;
 
     /**
      * The enclosing text-integrity boundaries this policy applies to, innermost
@@ -343,7 +348,7 @@ export function normalizeRenderConfidentialityCeiling(
   value: unknown,
 ): RenderConfidentialityCeiling | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "object" || value === null) return {};
+  if (!isObjectOrArray(value)) return {};
   const { atoms, caveatKinds } = value as {
     atoms?: unknown;
     caveatKinds?: unknown;
@@ -356,9 +361,16 @@ export function normalizeRenderConfidentialityCeiling(
   };
 }
 
-/**
- * Options for the worker reconciler.
- */
+/** Authoritative session access for rendered cells and their followed targets. */
+export interface SpaceAccessProvider {
+  /** Current authoritative access loss, if any, for the named space. */
+  error(space: string): Error | undefined;
+
+  /** Observes loss and recovery; the current snapshot is read through `error()`. */
+  subscribe(space: string, onChange: () => void): Cancel;
+}
+
+/** Options for a worker-side renderer and its host authority boundaries. */
 export interface WorkerReconcilerOptions {
   /** Preserves host-owned acquisition authority on an exported binding. */
   exportCellRef?: (cell: Cell<unknown>, ref: CellRef) => CellRef;
@@ -376,6 +388,9 @@ export interface WorkerReconcilerOptions {
 
   /** Optional: callback when an error occurs */
   onError?: (error: Error) => void;
+
+  /** Authoritative session access, independent of cell confidentiality labels. */
+  spaceAccess?: SpaceAccessProvider;
 
   /**
    * Policy for honoring author-supplied render-boundary declassification.
@@ -410,6 +425,16 @@ export interface WorkerReconcilerOptions {
    * upgrade (Stage-1 sync snapshot only; still sound, just less precise).
    */
   membershipProvider?: SpaceMembershipProvider;
+
+  /**
+   * The module-policy manifest source backing
+   * {@link resolveRenderConfidentiality}. When present, a rendered cell whose
+   * label selects a module policy (`PolicyOf<...>`) subscribes to that
+   * policy's manifest document within its cancel group, so a cell sealed
+   * because the manifest had not synced re-renders once it arrives. Absent →
+   * no reactive upgrade; the sync snapshot still gates soundly.
+   */
+  modulePolicySource?: Pick<CfcModulePolicySource, "subscribe">;
 }
 
 /**

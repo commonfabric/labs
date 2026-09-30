@@ -1,11 +1,15 @@
 import { assert, assertEquals, assertFalse } from "@std/assert";
-import { getColorEnabled, setColorEnabled } from "@std/fmt/colors";
+import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+
 import {
   extractNoColor,
   resolveColorEnabled,
   safeEnvGet,
 } from "../lib/color-mode.ts";
-import { main } from "../commands/main.ts";
+import type { ColorOutput } from "./fixtures/color-mode-output.ts";
 
 const noEnv = () => undefined;
 
@@ -142,40 +146,51 @@ Deno.test("resolveColorEnabled honors FORCE_COLOR / CLICOLOR_FORCE when piped", 
   }));
 });
 
-Deno.test("setColorEnabled controls Cliffy version output", () => {
+// The first rendering test starts the child; both tests share its output.
+let colorOutputPromise: Promise<ColorOutput> | undefined;
+
+/** Renders with color support established before Deno and its modules load. */
+async function readColorOutput(): Promise<ColorOutput> {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: fromFileUrl(new URL("../../../", import.meta.url)),
+    args: (lock) => [
+      "run",
+      "--quiet",
+      "--frozen",
+      `--lock=${lock}`,
+      "--allow-read",
+      "--allow-env",
+      "--allow-ffi",
+      fromFileUrl(new URL("./fixtures/color-mode-output.ts", import.meta.url)),
+    ],
+    env: { NO_COLOR: "", FORCE_COLOR: "", CLICOLOR_FORCE: "" },
+  });
+  expect(output.code, new TextDecoder().decode(output.stderr)).toBe(0);
+  return JSON.parse(new TextDecoder().decode(output.stdout)) as ColorOutput;
+}
+
+Deno.test("setColorEnabled controls Cliffy version output", async () => {
   // Guards the invariant behind the "@std/fmt/colors" import-map pin in
   // packages/cli/deno.jsonc: our setColorEnabled() must reach the same module
   // instance Cliffy styles version/error output with. If Cliffy's @std/fmt
   // dependency range drifts away from the pin, this test fails and the pin must
   // be updated.
-  const previous = getColorEnabled();
-  try {
-    setColorEnabled(false);
-    assertFalse(main.getLongVersion().includes("\x1b["));
-    setColorEnabled(true);
-    assert(main.getLongVersion().includes("\x1b["));
-  } finally {
-    setColorEnabled(previous);
-  }
+
+  const output = await (colorOutputPromise ??= readColorOutput());
+  expect(output.plainVersion).toMatch(/\S/);
+  expect(output.plainVersion).not.toContain("\x1b[");
+  expect(output.coloredVersion).toContain("\x1b[");
 });
 
-Deno.test("help colors follow the Cliffy help option", () => {
+Deno.test("help colors follow the Cliffy help option", async () => {
   // Cliffy's HelpGenerator force-sets its own `colors` option while rendering,
   // so help output is controlled through Command.help(), not setColorEnabled —
   // mod.ts mirrors the resolved policy into main.help({ colors }).
-  try {
-    main.reset().help({ colors: false });
-    assertFalse(main.getHelp().includes("\x1b["));
-    const cell = main.getCommand("cell");
-    assert(cell, "cf cell command exists");
-    assertFalse(
-      cell.getHelp().includes("\x1b["),
-      "subcommands inherit the root help colors",
-    );
-    main.reset().help({ colors: true });
-    assert(main.getHelp().includes("\x1b["));
-  } finally {
-    // colors: true matches the HelpGenerator default the command started with.
-    main.reset().help({ colors: true });
-  }
+
+  const output = await (colorOutputPromise ??= readColorOutput());
+  expect(output.plainHelp).toMatch(/\S/);
+  expect(output.plainHelp).not.toContain("\x1b[");
+  expect(output.plainCellHelp).toMatch(/\S/);
+  expect(output.plainCellHelp).not.toContain("\x1b[");
+  expect(output.coloredHelp).toContain("\x1b[");
 });

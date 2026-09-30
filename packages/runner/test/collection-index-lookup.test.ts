@@ -45,6 +45,12 @@ describe("collection index lookup", () => {
       rows.set(["a"]);
       expect(() => rows.groupBy(() => "a")).toThrow("groupByWithPattern");
       expect(() => rows.keyBy(() => "a")).toThrow("keyByWithPattern");
+      expect(() => CellImpl.prototype.lookup.call(rows, "a")).toThrow(
+        "lookup requires a collection index",
+      );
+      expect(() => CellImpl.prototype.keys.call(rows)).toThrow(
+        "keys requires a collection index",
+      );
       expect(() => CellImpl.prototype.keyEntries.call(rows)).toThrow(
         "keyEntries requires a collection index",
       );
@@ -77,10 +83,16 @@ describe("collection index lookup", () => {
     expect(proxy.lookup("a")).toEqual([1]);
     expect(proxy.keys()).toEqual(["a"]);
     expect(proxy.keyEntries()).toEqual([{ kind: "value", value: "a" }]);
+    // The schema is supplied, so the gate resolves it and finds an object that
+    // declares no index marker, which is the shape an ordinary typed record
+    // with these field names has.
     const data = runtime.getCell<{ lookup: string; keys: string }>(
       space,
       "proxy-data",
-      undefined,
+      {
+        type: "object",
+        properties: { lookup: { type: "string" }, keys: { type: "string" } },
+      },
       tx,
     );
     data.set({ lookup: "ordinary lookup", keys: "ordinary keys" });
@@ -170,87 +182,322 @@ describe("collection index lookup", () => {
       cancel();
     }
   });
-  it("ignores unrelated buckets and key enumeration while following its selected bucket", async () => {
+  it("returns an empty group while the group index descriptor has not been written", async () => {
+    // The handle points at a spot that holds no value, which is how an index
+    // reads before its descriptor is published there. The consumer gets what
+    // an index with no occupants returns, and follows the descriptor once it
+    // is written. A resumed `groupBy` reaching this state through its own
+    // coordinator is covered in collection-index-resume.test.ts.
+
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{
         name: "/main.tsx",
         contents: `
+        import { pattern, GroupIndex, computed } from "commonfabric";
+        export default pattern<{index: GroupIndex<string, number>}>(({index}) => {
+          const bucket = index.lookup("a");
+          const names = index.keys();
+          return {
+            size: computed(() => bucket.length),
+            named: computed(() => names.length),
+          };
+        });
+      `,
+      }],
+    });
+    const errors: Error[] = [];
+    runtime.scheduler.onError((error: Error) => errors.push(error));
+    let tx = runtime.edit();
+    const container = runtime.getCell<
+      { index?: CollectionIndexData<string, number[]> }
+    >(space, "unwritten-group-container", undefined, tx);
+    container.set({});
+    const index = container.key("index");
+    const result = runtime.run(
+      tx,
+      compiled,
+      { index },
+      runtime.getCell<{ size: number; named: number }>(
+        space,
+        "unwritten-group-output",
+        compiled.resultSchema,
+        tx,
+      ),
+    );
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    const cancel = result.sink(() => {});
+    try {
+      await runtime.idle();
+      expect(errors.map((error) => error.message)).toEqual([]);
+      expect(await result.key("size").pull()).toBe(0);
+      expect(await result.key("named").pull()).toBe(0);
+      tx = runtime.edit();
+      index.withTx(tx).set({
+        kind: "collection-index",
+        mode: "group",
+        keys: ["a"],
+        keyEntries: [{ kind: "value", value: "a" }],
+        buckets: {
+          [collectionKeyBucket({ kind: "string", value: "a" })]: [1, 2],
+        },
+      });
+      await tx.commit();
+      await runtime.idle();
+      expect(errors.map((error) => error.message)).toEqual([]);
+      expect(await result.key("size").pull()).toBe(2);
+      expect(await result.key("named").pull()).toBe(1);
+    } finally {
+      cancel();
+    }
+  });
+  it("returns `undefined` while the key index descriptor has not been written", async () => {
+    // `undefined` is both the right answer here and what a run that failed
+    // leaves behind, so the empty `errors` and the `named` count are what
+    // separate the two; `matched` alone could not.
+
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+        import { pattern, KeyIndex, computed } from "commonfabric";
+        export default pattern<{index: KeyIndex<string, number>}>(({index}) => {
+          const match = index.lookup("a");
+          const names = index.keys();
+          return {
+            matched: computed(() => match !== undefined),
+            named: computed(() => names.length),
+          };
+        });
+      `,
+      }],
+    });
+    const errors: Error[] = [];
+    runtime.scheduler.onError((error: Error) => errors.push(error));
+    let tx = runtime.edit();
+    const container = runtime.getCell<
+      { index?: CollectionIndexData<string, number | undefined> }
+    >(space, "unwritten-key-container", undefined, tx);
+    container.set({});
+    const index = container.key("index");
+    const result = runtime.run(
+      tx,
+      compiled,
+      { index },
+      runtime.getCell<{ matched: boolean; named: number }>(
+        space,
+        "unwritten-key-output",
+        compiled.resultSchema,
+        tx,
+      ),
+    );
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    const cancel = result.sink(() => {});
+    try {
+      await runtime.idle();
+      expect(errors.map((error) => error.message)).toEqual([]);
+      expect(await result.key("matched").pull()).toBe(false);
+      expect(await result.key("named").pull()).toBe(0);
+      tx = runtime.edit();
+      index.withTx(tx).set({
+        kind: "collection-index",
+        mode: "key",
+        keys: ["a"],
+        keyEntries: [{ kind: "value", value: "a" }],
+        buckets: { [collectionKeyBucket({ kind: "string", value: "a" })]: 4 },
+      });
+      await tx.commit();
+      await runtime.idle();
+      expect(errors.map((error) => error.message)).toEqual([]);
+      expect(await result.key("matched").pull()).toBe(true);
+      expect(await result.key("named").pull()).toBe(1);
+    } finally {
+      cancel();
+    }
+  });
+  it("refuses a lookup whose index type names neither mode while still enumerating keys", async () => {
+    // `GroupIndex` and `KeyIndex` each name one mode; the descriptor interface
+    // spelled directly names both, so an unpublished lookup through it cannot
+    // tell an empty group from an absent match. Enumeration does not depend on
+    // the mode and answers throughout.
+
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+        import { pattern, CollectionIndexHandle, CollectionIndexData, computed } from "commonfabric";
+        export default pattern<
+          {index: CollectionIndexHandle<CollectionIndexData<string, number[]>>}
+        >(({index}) => {
+          const bucket = index.lookup("a");
+          const names = index.keys();
+          return {
+            size: computed(() => bucket.length),
+            named: computed(() => names.length),
+          };
+        });
+      `,
+      }],
+    });
+    const errors: Error[] = [];
+    runtime.scheduler.onError((error: Error) => errors.push(error));
+    const tx = runtime.edit();
+    const container = runtime.getCell<
+      { index?: CollectionIndexData<string, number[]> }
+    >(space, "unnamed-mode-container", undefined, tx);
+    container.set({});
+    const result = runtime.run(
+      tx,
+      compiled,
+      { index: container.key("index") },
+      runtime.getCell<{ size: number; named: number }>(
+        space,
+        "unnamed-mode-output",
+        compiled.resultSchema,
+        tx,
+      ),
+    );
+    runtime.prepareTxForCommit(tx);
+    await tx.commit();
+    const cancel = result.sink(() => {});
+    try {
+      await runtime.idle();
+      expect(errors.map((error) => error.message)).toEqual([
+        expect.stringContaining("lookup needs the index mode"),
+      ]);
+      expect(await result.key("named").pull()).toBe(0);
+    } finally {
+      cancel();
+    }
+  });
+  it("reads a mode a schema pins with `const` rather than with `enum`", () => {
+    // `const` is the other JSON Schema spelling for one admissible value. The
+    // descriptor here is unwritten, so the schema is the only thing naming the
+    // marker and the mode.
+
+    const tx = runtime.edit();
+    const index = runtime.getCell<CollectionIndexData<string, number[]>>(
+      space,
+      "const-schema-index",
+      {
+        type: "object",
+        properties: {
+          kind: { const: "collection-index" },
+          mode: { const: "group" },
+          keys: { type: "array", items: { type: "string" } },
+          keyEntries: { type: "array" },
+          buckets: { type: "object" },
+        },
+      },
+      tx,
+    );
+    const proxy = index.getAsReactiveProxy() as unknown as GroupIndex<
+      string,
+      number
+    >;
+    expect(proxy.lookup("a")).toEqual([]);
+    expect(proxy.keys()).toEqual([]);
+    expect(proxy.keyEntries()).toEqual([]);
+    tx.abort();
+  });
+  for (const cfcFlowLabels of ["off", "persist"] as const) {
+    const description = cfcFlowLabels === "off"
+      ? "ignores unrelated buckets and key enumeration while following its selected bucket"
+      : "rechecks an absent bucket when unrelated references change its authorization metadata";
+    it(description, async () => {
+      await runtime.dispose({ closeStorage: false });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        cfcFlowLabels,
+      });
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
         import { pattern, KeyIndex } from "commonfabric";
         export default pattern<{index: KeyIndex<string, number | null>}>(
           ({index}) => ({ value: index.lookup("a") })
         );
       `,
-      }],
+        }],
+      });
+      let tx = runtime.edit();
+      const index = runtime.getCell<CollectionIndexData<string, number | null>>(
+        space,
+        "isolated-index",
+        undefined,
+        tx,
+      );
+      const a = collectionKeyBucket({ kind: "string", value: "a" });
+      const b = collectionKeyBucket({ kind: "string", value: "b" });
+      index.set({
+        kind: "collection-index",
+        mode: "key",
+        keys: ["b"],
+        keyEntries: [{ kind: "value", value: "b" }],
+        buckets: { [b]: 2 },
+      });
+      const output = runtime.getCell<{ value: number | null | undefined }>(
+        space,
+        "isolated-output",
+        compiled.resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, compiled, { index }, output);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit();
+      const cancel = result.sink(() => {});
+      let runs = 0;
+      const collect = (event: Event) => {
+        if (
+          (event as RuntimeTelemetryEvent).marker.type ===
+            "scheduler.run.complete"
+        ) runs++;
+      };
+      try {
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeUndefined();
+        runtime.telemetry.addEventListener("telemetry", collect);
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(b).set(20);
+        index.withTx(tx).key("keys").set(["b", "c"]);
+        index.withTx(tx).key("keyEntries").set([
+          { kind: "value", value: "b" },
+          { kind: "value", value: "c" },
+        ]);
+        await tx.commit();
+        await runtime.idle();
+        if (cfcFlowLabels === "persist") expect(runs).toBeGreaterThan(0);
+        else expect(runs).toBe(0);
+        runs = 0;
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).set(10);
+        await tx.commit();
+        await runtime.idle();
+        expect(runs).toBeGreaterThan(0);
+        expect(await result.key("value").pull()).toBe(10);
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).set(null);
+        await tx.commit();
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeNull();
+        tx = runtime.edit();
+        index.withTx(tx).key("buckets").key(a).asSchema(true).set(undefined);
+        await tx.commit();
+        await runtime.idle();
+        expect(await result.key("value").pull()).toBeUndefined();
+      } finally {
+        runtime.telemetry.removeEventListener("telemetry", collect);
+        cancel();
+      }
     });
-    let tx = runtime.edit();
-    const index = runtime.getCell<CollectionIndexData<string, number | null>>(
-      space,
-      "isolated-index",
-      undefined,
-      tx,
-    );
-    const a = collectionKeyBucket({ kind: "string", value: "a" });
-    const b = collectionKeyBucket({ kind: "string", value: "b" });
-    index.set({
-      kind: "collection-index",
-      mode: "key",
-      keys: ["b"],
-      keyEntries: [{ kind: "value", value: "b" }],
-      buckets: { [b]: 2 },
-    });
-    const output = runtime.getCell<{ value: number | null | undefined }>(
-      space,
-      "isolated-output",
-      compiled.resultSchema,
-      tx,
-    );
-    const result = runtime.run(tx, compiled, { index }, output);
-    runtime.prepareTxForCommit(tx);
-    await tx.commit();
-    const cancel = result.sink(() => {});
-    let runs = 0;
-    const collect = (event: Event) => {
-      if (
-        (event as RuntimeTelemetryEvent).marker.type ===
-          "scheduler.run.complete"
-      ) runs++;
-    };
-    try {
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeUndefined();
-      runtime.telemetry.addEventListener("telemetry", collect);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(b).set(20);
-      index.withTx(tx).key("keys").set(["b", "c"]);
-      index.withTx(tx).key("keyEntries").set([
-        { kind: "value", value: "b" },
-        { kind: "value", value: "c" },
-      ]);
-      await tx.commit();
-      await runtime.idle();
-      expect(runs).toBe(0);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).set(10);
-      await tx.commit();
-      await runtime.idle();
-      expect(runs).toBeGreaterThan(0);
-      expect(await result.key("value").pull()).toBe(10);
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).set(null);
-      await tx.commit();
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeNull();
-      tx = runtime.edit();
-      index.withTx(tx).key("buckets").key(a).asSchema(true).set(undefined);
-      await tx.commit();
-      await runtime.idle();
-      expect(await result.key("value").pull()).toBeUndefined();
-    } finally {
-      runtime.telemetry.removeEventListener("telemetry", collect);
-      cancel();
-    }
-  });
+  }
   it("preserves Cell key identity through compilation and reacts to alias retargeting", async () => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",

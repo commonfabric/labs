@@ -3,6 +3,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * Schema keywords whose values are themselves schemas (or collections of
@@ -38,13 +39,13 @@ const RECORD_VALUED_KEYWORDS = new Set<string>([
 export function tagsFromSchema(
   schema: JSONSchema | undefined | null,
 ): string[] {
-  if (schema === null || typeof schema !== "object") return [];
+  if (!isObjectOrArray(schema)) return [];
 
   const tags: string[] = [];
   const visited = new Set<object>();
 
   const visit = (node: unknown): void => {
-    if (node === null || typeof node !== "object" || Array.isArray(node)) {
+    if (!isObjectNotArray(node)) {
       return;
     }
     if (visited.has(node)) return;
@@ -61,7 +62,7 @@ export function tagsFromSchema(
 
     for (const keyword of SCHEMA_CHILD_KEYWORDS) {
       const child = record[keyword];
-      if (child === null || typeof child !== "object") continue;
+      if (!isObjectOrArray(child)) continue;
       if (Array.isArray(child)) {
         for (const entry of child) visit(entry);
       } else if (RECORD_VALUED_KEYWORDS.has(keyword)) {

@@ -37,7 +37,8 @@ interface CardState {
 //        .for("activeProfile", true)   (authored-name cause)
 //   join({ myName, profile: activeProfile })
 //     -> binds the named derived node, with builder-layer cause layering
-//        .for(["boundJoin", "profile"], true)
+//        ?.for(["boundJoin", "profile"], true)   (optional, since the type of
+//        `activeProfile` admits `undefined`)
 // Context: the INLINE form of this `??` in the builder args is rejected with
 //   the hoist diagnostic (see fixtures/bug-repro/ and
 //   test/builder-argument-computation-diagnostic.test.ts); this golden pins

@@ -2,7 +2,11 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import { type AtomPattern, matchAtomPattern } from "./atom-pattern.ts";
+import {
+  type AtomPattern,
+  isAtomPattern,
+  matchAtomPattern,
+} from "./atom-pattern.ts";
 
 /**
  * User-scoped trust closure (spec §4.8, Epic B3 of
@@ -157,6 +161,11 @@ export const buildCfcTrustConfig = (
       if (statement.concrete === undefined) {
         throw new Error(
           "cfcTrustConfig: statement needs a concrete atom pattern",
+        );
+      }
+      if (!isAtomPattern(statement.concrete)) {
+        throw new Error(
+          "cfcTrustConfig: statement.concrete is not a `FabricValue`",
         );
       }
       statements.push({

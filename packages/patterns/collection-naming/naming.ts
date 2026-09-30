@@ -1,9 +1,12 @@
 /**
- * A member namespace for a collection pattern: the allocator its create verb
- * calls, the table that gives each member its name by identity, the backfill
- * that names what the collection held before it numbered anything, and the
- * declaration the collection publishes so a consumer learns the policy rather
- * than assuming one. Nothing here knows what kind of piece a member is: a
+ * A member namespace for a collection pattern: the table that gives each
+ * member its name by identity, the two backfills over what the collection held
+ * before it numbered anything — one writing the namespace alone, one also
+ * asking each member to store its own name — the declaration the collection
+ * publishes so a consumer learns the policy rather than assuming one, and —
+ * re-exported from `allocator.ts`, so that one import reaches the whole
+ * namespace — the allocator its create verb calls. Nothing here knows what
+ * kind of piece a member is beyond the one verb `recordNames()` sends to: a
  * member is a cell, compared by identity and never read through.
  *
  * The namespace is one map cell on the collection, `{ "42": <member> }`,
@@ -16,6 +19,12 @@
  * read the same keys, the second to commit is rejected, re-runs against the
  * first one's write, and takes the next name.
  *
+ * The split from `allocator.ts` is by what a declaration needs at runtime.
+ * Nothing there takes a `commonfabric` value, so a plain `deno test` can
+ * import it; the readers and lifts here take `lift`, `equals` and `Writable`,
+ * which are ambient declarations binding nothing outside the runtime, so a
+ * declaration reaching for one of those belongs in this module.
+ *
  * `docs/specs/collection-naming.md` is the design this implements.
  */
 
@@ -27,6 +36,28 @@ import {
   type ReadonlyCell,
   Writable,
 } from "commonfabric";
+
+import {
+  assignName,
+  createNamed,
+  incrementName,
+  isLargerName,
+  isMemberName,
+  type NamesMap,
+  type NamesMapCell,
+  nextNameAmong,
+} from "./allocator.ts";
+
+export {
+  assignName,
+  createNamed,
+  incrementName,
+  isLargerName,
+  isMemberName,
+  type NamesMap,
+  type NamesMapCell,
+  nextNameAmong,
+};
 
 /**
  * What a collection holds its member names to over time. Published beside
@@ -90,45 +121,6 @@ export const SEQUENCE_NAMING: NamingDeclaration = {
 };
 
 /**
- * The namespace: each name to the member it names, held as an unread
- * reference. Declared `unknown` so that a member is stored as a link and a
- * reader of the map — the allocator surveying its keys, a resolver following
- * one entry — expands no member it did not follow.
- *
- * A collection declares it at its input as `Writable<Default<NamesMap, {}>>`,
- * written inline at the property rather than through an alias, and both
- * halves of that are load-bearing. `NamesMap | Default<{}>` adds a bare
- * empty-object arm to the union, and wherever that union reaches a handler
- * unmerged it becomes an `anyOf` whose empty arm reads every value whole —
- * the merge lets a branch that looked win over the opaque one — so the
- * allocator would expand every member to survey the keys; the two-argument
- * form keeps the union to the record type. And the schema generator reads
- * the default off the property's own type node, so a default declared
- * through an alias is dropped from the schema.
- */
-export type NamesMap = Record<string, unknown>;
-
-/**
- * The namespace as a verb holds it: read whole for its keys, written one key
- * at a time. Nothing here rewrites the map whole, which is what lets two
- * verbs naming different members merge instead of clobbering each other.
- *
- * Declared structurally, with `get()` returning `undefined` for a map nothing
- * has written yet. A verb reads its binding through a schema that carries no
- * default, so on a collection that has never named a member the map is
- * absent inside the verb however the input declares it; the structural
- * declaration is what makes the readers here handle that where the compiler
- * can see it. A `Writable<NamesMap>` satisfies it.
- */
-export interface NamesMapCell {
-  /** The map, or `undefined` before the first name is written. */
-  get(): NamesMap | undefined;
-
-  /** The entry for `name`, to be set to the member it names. */
-  key(name: string): { set(member: unknown): void };
-}
-
-/**
  * One row of a collection's names table: a member, and the name the
  * collection calls it by.
  *
@@ -146,70 +138,6 @@ export interface NamesTableRow {
 
   /** The member's name. */
   name: string;
-}
-
-/**
- * Whether `key` is a member name: a canonical decimal string — `0`, or a
- * non-zero digit followed by digits, with no leading zeros, no sign, and no
- * exponent. The map can be written by any client over the memory protocol,
- * so a key is not guaranteed to be a name this sequence issued; a key
- * outside the grammar is not a name, and it neither counts as the largest
- * nor blocks allocation.
- */
-const isMemberName = (key: string): boolean => /^(0|[1-9][0-9]*)$/.test(key);
-
-/**
- * Whether canonical decimal `a` is larger than canonical decimal `b`. Names
- * are compared as strings — by length, then lexicographically — and never
- * as JavaScript numbers, which lose distinctness past `2^53` and would
- * reuse a name there.
- */
-const isLargerName = (a: string, b: string): boolean =>
-  a.length !== b.length ? a.length > b.length : a > b;
-
-/**
- * Helper for `nextNameAmong()` and `backfillNames()`, which returns the
- * canonical decimal one larger than `name`, as a string. The trailing run
- * of nines turns to zeros and the digit before it goes up by one; a name
- * that is all nines gains a leading `1`.
- */
-const incrementName = (name: string): string => {
-  const [, head, nines] = name.match(/^([0-9]*?)(9*)$/)!;
-  const zeros = "0".repeat(nines.length);
-  if (head === "") return `1${zeros}`;
-  return `${head.slice(0, -1)}${Number(head.at(-1)) + 1}${zeros}`;
-};
-
-/**
- * The next name the sequence issues over the keys in use: `1` when none of
- * them is a member name, otherwise one more than the largest. The sequence
- * is dense from `1` and a name is never reused, so this is the whole of the
- * allocation rule; what makes it safe under concurrency is where it is
- * called, which `assignName()` states. Keys that are not member names —
- * `isMemberName()` says which — are ignored.
- */
-export function nextNameAmong(names: Iterable<string>): string {
-  const largest = Array.from(names)
-    .filter(isMemberName)
-    .reduce<string | undefined>(
-      (max, name) => max === undefined || isLargerName(name, max) ? name : max,
-      undefined,
-    );
-  return largest === undefined ? "1" : incrementName(largest);
-}
-
-/**
- * Allocates the next name over `names` and records `member` under it, and
- * returns the name. Called from the body of an `action()` or `handler()`, so
- * the read of the map's keys and the write of the new key land in one
- * transaction. That is what makes the name safe: a concurrent create that
- * read the same keys conflicts on commit, re-runs against this write, and
- * takes the name after it.
- */
-export function assignName(names: NamesMapCell, member: unknown): string {
-  const name = nextNameAmong(Object.keys(names.get() ?? {}));
-  names.key(name).set(member);
-  return name;
 }
 
 /**
@@ -329,6 +257,143 @@ export function backfillNames(
     next = incrementName(next);
   }
   return written;
+}
+
+/**
+ * What one `recordNames()` run reports, as three lists of names in filing
+ * order. Together they cover every listed member the run could name, which is
+ * every position holding an object: a position holding anything else is in none
+ * of them.
+ */
+export interface RecordNamesResult {
+  /**
+   * The names the run wrote into the namespace. Empty when the namespace
+   * already named every listed member, which is what a second run writes.
+   */
+  assigned: string[];
+
+  /**
+   * The names of the members that already report them. The run sent these
+   * members nothing and wrote nothing for them.
+   */
+  named: string[];
+
+  /**
+   * The names the run asked members to store, one send each. A send's effect
+   * is invisible to the transaction that makes it, so the run confirms none of
+   * them.
+   *
+   * Empty is the finished state: every listed member reports its name and the
+   * run asked for nothing. Non-empty is not a failure — it is the set to run
+   * the step over again, and the run after reports whichever asking landed
+   * under `named` and asks for the rest. A name that stays here across runs is
+   * a member whose own verb is refusing it, which `recordName` does for a
+   * member that already stores a different name.
+   *
+   * All of that rests on a member publishing the name it stores. A collection
+   * that withholds that publication leaves this list holding every listed
+   * member on every run, because no member can be seen to have stored
+   * anything: `named` stays empty and the step cannot say it is finished. The
+   * run is still safe to repeat, and still not idle: `recordName` reads the
+   * member's own input rather than its publication, so a member already
+   * storing the name writes nothing further while one whose name never landed
+   * stores it now — and the asking is itself a write to the member's stream
+   * either way.
+   */
+  pending: string[];
+}
+
+/**
+ * Names every member of `members` the namespace does not name, and asks each
+ * listed member to store the name the namespace holds for it by sending that
+ * name to the member's own `recordName` verb. A member that already reports
+ * that name is sent nothing, so a run over a fully recorded list writes nothing
+ * at all — no key and no event.
+ *
+ * "Names" here is the names table's own notion: the namespace names a member
+ * when it holds it under a key the grammar admits, which is what `namesTable`
+ * builds a row from and what `nameOf` finds. A member the namespace holds ONLY
+ * under a foreign key — one a client wrote over the memory protocol, which
+ * `isMemberName()` does not admit — has no name by that lookup, so it is named
+ * here like any other unnamed member, and the foreign entry is left where it
+ * is. This is where the two walks differ: `backfillNames()` counts a member
+ * present at any key as named and skips it, which leaves it with no name and no
+ * row. Nothing this collection writes produces a foreign key; only a foreign
+ * writer does.
+ *
+ * The member contract this rests on is `recordName({ name })`: a member that
+ * stores its own name provides it, takes the name the collection allocated,
+ * and refuses a name that disagrees with one it already stores. A member whose
+ * pattern declares no such verb stores the payload as ordinary data at that
+ * name in its result, because a send to a path holding no stream is an
+ * ordinary write — `Cell.send` in `packages/runner/src/cell.ts` delegates to
+ * `set`. So a collection calls this only where every member declares the verb.
+ *
+ * What the result can and cannot say follows from where the writes land. The
+ * namespace is this collection's own document, so `assigned` is what this
+ * transaction wrote. A member's stored name is the member's own document,
+ * which only the member can write, so `pending` is a list of requests: the
+ * names asked for, none of them confirmed. A name that keeps appearing there
+ * across runs is a member whose own verb is refusing it, which `recordName`
+ * does for a member that already stores a different name.
+ *
+ * Called from a verb body for the reason `assignName()` is: the keyset read
+ * and the key writes are one transaction, so a create that lands while this
+ * runs serializes with it rather than colliding on a name.
+ */
+export function recordNames(
+  members: {
+    // The stored values, for each member's own report of its name, and the
+    // position's cell, for the verb this sends to. The verb is named
+    // structurally because no collection's member type is in scope here.
+    get(): readonly ({ shortName?: string } | undefined)[];
+    key(index: number): {
+      resolveAsCell(): {
+        key(verb: "recordName"): { send(event: { name: string }): void };
+      };
+    };
+  },
+  names: NamesMapCell,
+): RecordNamesResult {
+  const map = names.get() ?? {};
+  // Every name the namespace holds, to the member it names. A key outside the
+  // grammar is not a name, so an entry under one names nothing here — the same
+  // view `namesTable()` publishes and `nameOf()` reads.
+  const entries = Object.entries(map)
+    .filter(([name]) => isMemberName(name)) as [string, object | undefined][];
+  const listed = members.get();
+  const assigned: string[] = [];
+  const named: string[] = [];
+  const pending: string[] = [];
+  const handled: object[] = [];
+  let next = nextNameAmong(Object.keys(map));
+  for (let index = 0; index < listed.length; index++) {
+    const value = listed[index];
+    // Only a position holding an object can hold a member, for the reason
+    // `backfillNames()` gives.
+    if (!isObject(value)) continue;
+    const member = members.key(index).resolveAsCell();
+    // Each member once, however many positions hold it: membership is asked
+    // of IDENTITY, never of position, so a collection listing one member
+    // twice asks it for its name once.
+    if (handled.some((other) => equals(member, other))) continue;
+    handled.push(member);
+    let name = entries.find(([, other]) => equals(member, other))?.[0];
+    if (name === undefined) {
+      name = next;
+      names.key(name).set(member);
+      entries.push([name, member]);
+      assigned.push(name);
+      next = incrementName(name);
+    }
+    if (value?.shortName === name) {
+      named.push(name);
+      continue;
+    }
+    member.key("recordName").send({ name });
+    pending.push(name);
+  }
+  return { assigned, named, pending };
 }
 
 /**

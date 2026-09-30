@@ -225,14 +225,12 @@ function dailyCosts(
 }
 
 export const gcpSpend: Tile = {
-  id: "gcp-spend",
+  label: "cloud spend",
   intervalMs: 3_600_000,
   async collect(ctx): Promise<TileView> {
-    const label = "cloud spend";
     const table = ctx.env("GCP_BILLING_TABLE");
     if (!table) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "set GCP_BILLING_TABLE",
@@ -242,7 +240,6 @@ export const gcpSpend: Tile = {
     // BigQuery identifier, optionally with a partition decorator.
     if (!/^[A-Za-z0-9_.$-]+$/.test(table)) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "invalid GCP_BILLING_TABLE",
@@ -259,7 +256,6 @@ export const gcpSpend: Tile = {
       );
       if (rows.length === 0) {
         return {
-          label,
           status: "unknown",
           value: "—",
           sub: "no billing data yet",
@@ -268,7 +264,6 @@ export const gcpSpend: Tile = {
       history = dailyCosts(rows, now);
     } catch {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "unavailable — check credentials",
@@ -276,7 +271,6 @@ export const gcpSpend: Tile = {
     }
     if (!history) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "no billing data yet",
@@ -284,7 +278,6 @@ export const gcpSpend: Tile = {
     }
     if (history.lagDays > MAX_EXPORT_LAG_DAYS) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: `billing export ${daysLabel(history.lagDays)} behind`,
@@ -323,7 +316,6 @@ export const gcpSpend: Tile = {
     const value = `~${usd(summary.projected)}/mo`;
     const mtd = `${usd(history.paidMtd)} MTD`;
     return {
-      label,
       status,
       value,
       valueLabel: value,

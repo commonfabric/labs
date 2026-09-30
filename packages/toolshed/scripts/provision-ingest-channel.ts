@@ -27,6 +27,7 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
+import { isDID } from "@commonfabric/identity/did";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import env from "@/env.ts";
@@ -83,7 +84,7 @@ export function validateProvisionRequest(
   // reader silently orphaned); installId is the mark's audience AND a
   // `\n`-separated input to channelId, so whitespace/newlines corrupt the
   // cross-repo join key.
-  if (!space.startsWith("did:")) {
+  if (!isDID(space)) {
     return {
       code: 2,
       message: `Invalid --space '${space}': must be a DID (did:...).`,

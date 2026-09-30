@@ -99,6 +99,16 @@ The `followRef` observation remains in the flow join even when the attempt
 subsequently dereferences the same slot. A runtime-owned bookkeeping marker can
 exclude its own machinery reads; the probe marker itself grants no exemption.
 
+Two runtime reads have no row here, though the walk classifies them like any
+other: the stream-marker probe the write path makes to choose between an
+event send and a stored write, and the diff's read of the address it is about
+to write. `deriveFlowJoin()` drops them after classification, so neither
+consumes any of the classes above, and the walk's other consumers see them
+unchanged. Per §18.6.2 each is a runtime-internal read rather than a handler
+observation —
+[`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md) covers
+them.
+
 **Where `count` went.** The spec's fifth class (§4.6.3) deliberately does not
 get its own axis value: a count observation (cardinality without membership) is
 strictly weaker than `enumerate`, so count-shaped reads (length, `COUNT`)
@@ -151,7 +161,8 @@ On a value overwrite:
 Existence entries carry confidentiality only. They do not carry the creating
 attempt's integrity into the hereditary meet: a shape observation does not
 certify contents. The value entry carries both confidentiality and integrity;
-membership stamps, like existence entries, carry confidentiality only.
+membership stamps additionally retain the `TransformedBy` attribution common to
+their writers; that attribution is not hereditary content certification.
 
 ## 6. What `deriveFlowJoin` consumes per read shape
 
@@ -193,6 +204,17 @@ The class selection in `cfc/observation-classes.ts` and the flow derivation in
   with no content endorsement to the hereditary integrity meet. Relationship
   evidence remains on the reference component.
 
+- **An `enumerate` entry applies at its container only.** It labels a
+  container's membership, order and count, so it is consumed by a read of
+  the container. A read of an array's native `length`, which the journal
+  records beneath the array, is also measured as a shape read of the array;
+  a verifier probe of the parent tells an array from an object with a field
+  named `length`, and a machinery-marked read is left as it is. It is not
+  consumed by a read of one child, which observes that child: longest-prefix
+  resolution would otherwise put the membership of every element on a read
+  of any one of them. A concrete `structure` entry takes the same exact-path
+  rule, and a recursive read of an ancestor consumes either.
+
 ## 7. Observation ceiling (LLM path) and render
 
 Observation ceilings and rendering use the §4 classification and path-label
@@ -231,7 +253,7 @@ Compatibility depends on which observation classes a reader understands:
 - **`followRef`.** Readers that exclude reference probes or link-origin entries
   cannot enforce reference confidentiality. Deployments require class-aware
   readers before enabling writers that rely on those restrictions. Precise
-  reference writers also require the version-2 metadata compatibility rules in
+  reference writers also require the version-3 metadata compatibility rules in
   [CFC references](cfc-references.md).
 
 ## Provenance

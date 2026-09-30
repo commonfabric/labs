@@ -73,11 +73,19 @@ export class IntersectionFormatter implements TypeFormatter {
       checker,
     );
     if (failureReason) {
-      return {
+      const schema: MutableJSONSchemaObj = {
         type: "object",
         additionalProperties: true,
         $comment: `Unsupported intersection pattern: ${failureReason}`,
       };
+      context.schemaOrigins?.set(schema, {
+        kind: "intersection",
+        parts: () =>
+          parts.map((part) =>
+            this.#schemaGenerator.formatChildType(part, context)
+          ),
+      });
+      return schema;
     }
 
     const merged = this.#mergeIntersectionParts(partsToProcess, context);
@@ -240,8 +248,7 @@ export class IntersectionFormatter implements TypeFormatter {
     schema: MutableJSONSchema,
   ): schema is MutableJSONSchemaObj & { type: "object" } {
     return (
-      typeof schema === "object" &&
-      schema !== null &&
+      isObjectOrArray(schema) &&
       schema.type === "object"
     );
   }
@@ -252,8 +259,7 @@ export class IntersectionFormatter implements TypeFormatter {
   ): (MutableJSONSchemaObj & { type: "object" }) | undefined {
     if (this.#isObjectSchema(schema)) return schema;
     if (
-      typeof schema === "object" &&
-      schema !== null &&
+      isObjectOrArray(schema) &&
       typeof (schema as Record<string, unknown>).$ref === "string"
     ) {
       const ref = (schema as Record<string, unknown>).$ref as string;

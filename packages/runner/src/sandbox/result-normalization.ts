@@ -1,5 +1,5 @@
 import {
-  fabricFromNativeValue,
+  fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -8,6 +8,7 @@ import {
   FabricEpochNsec,
   FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { isReactive } from "../builder/types.ts";
 import { hasEncodableForm } from "../encodable-form.ts";
@@ -50,7 +51,7 @@ function isPlainResultObject(value: object): boolean {
 function isSandboxResultContainer(
   value: unknown,
 ): value is unknown[] | Record<string, unknown> {
-  return value !== null && typeof value === "object" &&
+  return isObjectOrArray(value) &&
     (Array.isArray(value) || isPlainResultObject(value));
 }
 
@@ -121,7 +122,7 @@ function normalizeSandboxNativeLeaf(value: unknown): unknown {
 function typeNameForActionResult(value: unknown): string {
   if (typeof value === "function") return "function";
   if (typeof value === "symbol") return "Symbol";
-  if (value !== null && typeof value === "object") {
+  if (isObjectOrArray(value)) {
     return value.constructor?.name ?? "unknown type";
   }
   return typeof value;
@@ -171,8 +172,8 @@ function adaptSandboxResult(
   if (!isSandboxResultContainer(value)) {
     try {
       const realmNormalized = normalizeSandboxNativeLeaf(value);
-      const converted = fabricFromNativeValue(realmNormalized, false);
-      return fabricFromNativeValue(converted);
+      const converted = fabricFromConvertibleJsValue(realmNormalized, false);
+      return fabricFromConvertibleJsValue(converted);
     } catch (cause) {
       throw formatActionResultError(value, cause, actionName, path);
     }
@@ -278,14 +279,14 @@ function validateFabricActionResult(
     // identity shortcut so validation still rejects frozen-but-illegal
     // primitives such as unique symbols. The second conversion retains the
     // normalized graph and applies the normal deep-freeze contract.
-    const converted = fabricFromNativeValue(value, false);
-    return fabricFromNativeValue(converted);
+    const converted = fabricFromConvertibleJsValue(value, false);
+    return fabricFromConvertibleJsValue(converted);
   } catch (cause) {
     if (isSandboxResultContainer(value) && !seen.has(value)) {
       seen.add(value);
       for (const [key, child] of Object.entries(value)) {
         try {
-          fabricFromNativeValue(child, false);
+          fabricFromConvertibleJsValue(child, false);
         } catch {
           validateFabricActionResult(
             child,

@@ -1,10 +1,11 @@
 {
   "name": "@commonfabric/llm",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
     // --allow-read: test/package-boundary.test.ts reads this package's own
     // sources, its configuration, and its README.
-    "test": "ENV=test deno test --no-check --allow-env --allow-read"
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-read"
   },
   "exports": {
     ".": "./src/index.ts",

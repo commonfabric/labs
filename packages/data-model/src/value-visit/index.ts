@@ -1,6 +1,6 @@
 /**
- * Types and classes for visiting (a/k/a, iterating or walking over)
- * `FabricValue`s.
+ * Types and classes for visiting (a/k/a, iterating or walking over) values in
+ * the `FabricValuePlus` family.
  *
  * As with the `data-model` in general, the visitor engine uses `Object.is()`
  * comparisons (or equivalent) to determine value-sameness. This means that `0`
@@ -11,14 +11,8 @@
  * `data-model`'s export map.
  */
 
+export * from "./impl.ts";
 export * from "./interface.ts";
-export { BaseValueVisitor } from "./BaseValueVisitor.ts";
-export { ContainerIteratingValueVisitor } from "./ContainerIteratingValueVisitor.ts";
-export { NopValueVisitor } from "./NopValueVisitor.ts";
 
-export {
-  makeVisitFabricValueFunction,
-  makeVisitValueFunction,
-  visitFabricValue,
-  visitValue,
-} from "./impl.ts";
+export { BaseValueVisitor } from "./BaseValueVisitor.ts";
+export { DefaultValueVisitor } from "./DefaultValueVisitor.ts";

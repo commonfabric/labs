@@ -1,4 +1,5 @@
 import type { CellScope } from "@commonfabric/api";
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import type {
   FabricArray,
   FabricPlainObject,
@@ -16,9 +17,14 @@ import type {
   EventAttentionResolution,
   OpCursor,
   OperationFieldSnapshot,
+  PresenceFacets,
+  PresenceRecord,
 } from "@commonfabric/memory/v2";
 import type { MetaField } from "@commonfabric/runner";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type {
+  CfcConfClause,
+  CfcTrustConfigInput,
+} from "@commonfabric/runner/cfc";
 import type { CfcLabelView } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   ActionRunTraceEntry,
@@ -36,6 +42,7 @@ import type {
   WriteStackTraceEntry,
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
+import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
 export type { JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
@@ -171,6 +178,30 @@ export enum RequestType {
   /** Reads a cell's display CFC label, without its value. */
   CellGetCfcLabel = "cell:getCfcLabel",
 
+  /** Prepares an exact snapshot and audience for trusted host confirmation. */
+  SnapshotSharePrepare = "snapshotShare:prepare",
+
+  /** Commits one client-owned snapshot confirmation without authored claims. */
+  SnapshotShareCommit = "snapshotShare:commit",
+
+  /** Discards an unconfirmed snapshot owned by this client. */
+  SnapshotShareCancel = "snapshotShare:cancel",
+
+  /** Prepares a custody seal and its terms for trusted host confirmation. */
+  CustodySealPrepare = "custodySeal:prepare",
+
+  /** Commits one client-owned custody seal confirmation. */
+  CustodySealCommit = "custodySeal:commit",
+
+  /** Discards an unconfirmed custody seal owned by this client. */
+  CustodySealCancel = "custodySeal:cancel",
+
+  /** Publishes a custody instance's answer once, into its answer slot. */
+  CustodyAnswerPublish = "custodyAnswer:publish",
+
+  /** Reads a custody instance's published answer, verified as the seal's. */
+  CustodyAnswerRead = "custodyAnswer:read",
+
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
 
@@ -191,6 +222,15 @@ export enum RequestType {
 
   /** Forgets a client's pinned operation target. */
   OperationSessionClose = "operation:session-close",
+
+  /** Joins a presence room for a cell's field and starts its events. */
+  PresenceJoin = "presence:join",
+
+  /** Replaces the record this client holds in a presence room. */
+  PresencePublish = "presence:publish",
+
+  /** Leaves a presence room. */
+  PresenceLeave = "presence:leave",
 
   /** Runs a read-only SQL query against a SQLite database cell. */
   SqliteQuery = "sqlite:query",
@@ -250,6 +290,12 @@ export enum RequestType {
    * error rather than a `false`.
    */
   RegisterSpaceHost = "runtime:registerSpaceHost",
+
+  /**
+   * Routes one space's storage to a named host as `RegisterSpaceHost` does,
+   * and returns the reason along with a refusal.
+   */
+  RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
@@ -495,9 +541,14 @@ export enum NotificationType {
 
   /**
    * Reports an error that surfaced with no request to fail: a renderer error,
-   * or one raised by a pattern between requests.
+   * one raised by a pattern between requests, or the boot-time health check
+   * finding a host unreachable after `initialize` was answered, which carries
+   * {@link RuntimeErrorCode.HostUnreachable}.
    */
   ErrorReport = "callback:error",
+
+  /** Reports authoritative loss of the runtime principal's access to a space. */
+  SpaceAccessLost = "callback:space-access-lost",
 
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
@@ -514,8 +565,12 @@ export enum NotificationType {
   /** Reports a new operation-backed snapshot for a subscription. */
   OperationUpdate = "operation:update",
 
+  /** Carries one presence room event for a membership. */
+  PresenceUpdate = "presence:update",
+
   /** Reports one authoritative terminal event-delivery notice. */
   EventNeedsAttention = "callback:event-needs-attention",
+  EventIntentOutcome = "callback:event-intent-outcome",
 }
 
 /**
@@ -594,6 +649,15 @@ export enum RuntimeErrorCode {
    * rather than a retry.
    */
   CompilerStackLoadFailed = "compiler-stack-load-failed",
+
+  /**
+   * The boot-time health check found the backend, or one of the space hosts,
+   * unreachable. The worker is running regardless and its storage reconnects
+   * by itself, so the client's remedy is to wait or to say so, not to retry
+   * the initialization. Posted once, to the clients connected when the check
+   * answers; a client that attaches later is not told.
+   */
+  HostUnreachable = "host-unreachable",
 }
 
 /**
@@ -718,11 +782,6 @@ export type InitializationData = {
   spaceIdentity?: FabricKeyPair;
 
   /**
-   * How long a request may go unanswered before the client gives up on it.
-   */
-  timeoutMs?: number;
-
-  /**
    * Experimental space-model feature flags, declared by the host. The worker
    * runs the arm named here rather than resolving its own, so that the two
    * realms cannot diverge.
@@ -735,6 +794,9 @@ export type InitializationData = {
      * spellings are a clean break rather than a pair a reader accepts.
      */
     modernCellRep?: boolean;
+
+    /** Whether the `agent()` builtin stages requests. Defaults on. */
+    agentBuiltin?: boolean;
 
     /**
      * Whether server-execution v2 is on
@@ -817,6 +879,18 @@ export type InitializationData = {
   cfcReadOnExceed?: "fail" | "skip";
 
   /**
+   * The deployment trust configuration the worker's runtime evaluates concept
+   * guards under (`RuntimeOptions.cfcTrustConfig`): trust statements, verifier
+   * delegations and concept edges, such as a default profile's statement that
+   * a reviewed policy digest is a trusted declassifier. The runtime validates
+   * it at construction and refuses to start on a malformed one. It is fixed
+   * for the runtime's lifetime; a host that also declares `trustSnapshot`
+   * folds this configuration's version into that snapshot's `revision`.
+   * Absent means no statements, and every concept guard fails closed.
+   */
+  cfcTrustConfig?: CfcTrustConfigInput;
+
+  /**
    * Whether author-supplied render-boundary declassification is honored.
    * `allow` is the default. `deny` ignores an author's
    * `declassifyConfidentiality`, so that a pattern cannot release a secret
@@ -857,7 +931,7 @@ export type InitializationData = {
      * the worker to run against the snapshot with no acting principal
      * named.
      */
-    actingPrincipal?: string;
+    actingPrincipal?: DID;
 
     /**
      * Which revision of the snapshot this is: the runtime id with the
@@ -892,6 +966,17 @@ export type InitializationData = {
    * the next runtime rather than live. Off by default.
    */
   concurrentWatchRefresh?: boolean;
+
+  /**
+   * Hold the {@link RequestType.Initialize} reply until the backend's health
+   * check has answered, and refuse the initialization when a host fails it.
+   * Off by default: the worker answers as soon as its runtime stands, the
+   * check runs alongside, and a host it cannot reach is reported as a
+   * {@link NotificationType.ErrorReport} carrying
+   * {@link RuntimeErrorCode.HostUnreachable} while the memory client keeps
+   * reconnecting on its own.
+   */
+  awaitHealth?: boolean;
 };
 
 /**
@@ -927,7 +1012,10 @@ export type InitializeRequest = BaseRequest & {
  * one origin are one posture.
  *
  * **Every field here holds plain JSON-shaped values only.** They are compared
- * with `deepEqual`, which compares a class instance by its enumerable own
+ * with `deepEqual`, except `cfcTrustConfig`, which is compared by the digest
+ * the runner gives the configuration it normalizes (`buildCfcTrustConfig`), so
+ * key order and keys written as `undefined` do not refuse an attach. `deepEqual`
+ * compares a class instance by its enumerable own
  * properties -- so a `FabricValue`-carrying field would compare EQUAL between
  * two different values whose state lives in private fields, and an attach
  * asserting a different one would be accepted. A field that must carry such a
@@ -946,6 +1034,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
     | "trustSnapshot"
@@ -1142,6 +1231,187 @@ export type CellGetCfcLabelRequest = BaseRequest & {
   cell: CellRef;
 };
 
+/** A held profile or space cell whose audience the runtime verifies. */
+export type SnapshotShareAudienceRef = { user: CellRef } | { space: CellRef };
+
+/** The exact value and verified audience a trusted host must show. */
+export type SnapshotSharePreview = {
+  id: string;
+  value: JSONValue;
+  audience: CfcAtom;
+};
+
+/** The {@link RequestType.SnapshotSharePrepare} request. */
+export type SnapshotSharePrepareRequest = BaseRequest & {
+  type: RequestType.SnapshotSharePrepare;
+  source: CellRef;
+  audience: SnapshotShareAudienceRef;
+  appendBooksTo?: { recommended: CellRef; received: CellRef };
+};
+
+/** The {@link RequestType.SnapshotShareCommit} request. */
+export type SnapshotShareCommitRequest = BaseRequest & {
+  type: RequestType.SnapshotShareCommit;
+  id: string;
+};
+
+/** The {@link RequestType.SnapshotShareCancel} request. */
+export type SnapshotShareCancelRequest = BaseRequest & {
+  type: RequestType.SnapshotShareCancel;
+  id: string;
+};
+
+/**
+ * The {@link RequestType.CustodySealPrepare} request: the cells a host binds
+ * the seal to. The worker reads each at the address named, and every
+ * authority the seal relies on comes from what it reads there, not from the
+ * request.
+ */
+export type CustodySealPrepareRequest = BaseRequest & {
+  type: RequestType.CustodySealPrepare;
+
+  /** The actor's draft, whose exact value is sealed. */
+  draft: CellRef;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+
+  /** The actor's source policy, in the actor's home space. */
+  allowedSources: CellRef;
+
+  /**
+   * The room's cell that receives the link to the instance's box, in the
+   * room space. The seal writes the link itself, in the transaction that
+   * writes the entry, so the room's release witness covers which box the
+   * room reads.
+   */
+  box?: CellRef;
+};
+
+/** A principal the room space's access list lets read the room. */
+export type CustodyRoomReader = {
+  /** The principal's DID, or `*` for anyone. */
+  principal: string;
+
+  /** The capability the access list gives it. */
+  role: "owner" | "writer" | "reader";
+};
+
+/**
+ * What a trusted host shows before a custody seal: everything here was read
+ * and checked by the worker, not supplied by the caller.
+ */
+export type CustodySealPreview = {
+  /** Opaque confirmation id, good for one commit by this client. */
+  id: string;
+
+  /** The authenticated actor whose value is sealed. */
+  actor: DID;
+
+  /** The room space the value is sealed into. */
+  room: DID;
+
+  /** Who can read the room, and so see what it releases. */
+  readers: CustodyRoomReader[];
+
+  /** The terms, exactly as they are sealed. */
+  terms: JSONValue;
+
+  /** The instance: the digest of the terms. */
+  instance: string;
+
+  /** The room's custody policy. */
+  policy: CfcAtom;
+
+  /** The actor's `Context` and `Resource` sources the value draws on. */
+  sources: CfcAtom[];
+
+  /**
+   * Whether every release rule of the room's policy requires the seal's input
+   * witness and releases only to the seal, which publishes the answer once
+   * per instance. When `false`, a member's own code can learn the actor's
+   * entry one answer at a time, and the confirmation says so.
+   */
+  witnessedRelease: boolean;
+
+  /** The exact value that enters custody. */
+  stance: JSONValue;
+};
+
+/** The {@link RequestType.CustodySealCommit} request. */
+export type CustodySealCommitRequest = BaseRequest & {
+  type: RequestType.CustodySealCommit;
+  id: string;
+};
+
+/**
+ * What a committed custody seal wrote, answered to the trusted host. The
+ * entry's blinded key is not part of it: the host hands the box to the
+ * pattern, and nothing a pattern can read says which entry is the actor's.
+ */
+export type CustodySealCommitResponse = {
+  /** The actor-private receipt, in the actor's home space. */
+  receipt: CellRef;
+
+  /** The instance's box, in the room space: what the room's projector reads. */
+  box: CellRef;
+
+  /** The instance the entry was sealed into: the digest of the terms. */
+  instance: string;
+};
+
+/** The {@link RequestType.CustodySealCancel} request. */
+export type CustodySealCancelRequest = BaseRequest & {
+  type: RequestType.CustodySealCancel;
+  id: string;
+};
+
+/**
+ * The {@link RequestType.CustodyAnswerPublish} request: the room's cells the
+ * worker reads the answer from. The worker reads each at the address named;
+ * whether the answer is published is decided by what it reads there.
+ */
+export type CustodyAnswerPublishRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerPublish;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+
+  /** The room's projected answer. */
+  output: CellRef;
+};
+
+/** What a custody answer publication wrote. */
+export type CustodyAnswerPublishResponse = {
+  /** The instance the answer was published for. */
+  instance: string;
+
+  /** The answer as published. */
+  answer: JSONValue;
+};
+
+/** The {@link RequestType.CustodyAnswerRead} request: the room's cells. */
+export type CustodyAnswerReadRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerRead;
+
+  /** The room's terms document; its space is the room space. */
+  terms: CellRef;
+
+  /** A cell holding the room's custody policy reference. */
+  policy: CellRef;
+};
+
+/** A custody instance's published answer, absent while none is. */
+export type CustodyAnswerReadResponse = {
+  answer?: JSONValue;
+};
+
 /** The {@link RequestType.OperationQuery} request. */
 export type OperationQueryRequest = BaseRequest & {
   type: RequestType.OperationQuery;
@@ -1311,6 +1581,80 @@ export type OperationSessionCloseRequest = BaseRequest & {
    */
   operationSessionId: string;
 };
+
+/** The {@link RequestType.PresenceJoin} request. */
+export type PresenceJoinRequest = BaseRequest & {
+  type: RequestType.PresenceJoin;
+
+  /**
+   * Identifies this membership, chosen by the joiner. Every
+   * {@link PresenceUpdateNotification} carries it back, and the publish and
+   * leave requests name the membership by it.
+   */
+  subscriptionId: string;
+
+  /**
+   * The cell whose resolved field the room is derived from, and whose space
+   * the room lives under.
+   */
+  cell: CellRef;
+
+  /**
+   * An explicit room in place of the one derived from the field. The space
+   * is still the cell's: a room is addressed under it, and joining is
+   * admitted by the client's session on it.
+   */
+  room?: string;
+};
+
+/** What a {@link PresenceJoinRequest} returns. */
+export type PresenceJoinResponse = {
+  /** The id the relay assigned this membership. */
+  participantId: string;
+
+  /** The room the membership joined, derived or as requested. */
+  room: string;
+
+  /** Every other member that has published, at its latest record. */
+  participants: PresenceRecord[];
+};
+
+/** The {@link RequestType.PresencePublish} request. */
+export type PresencePublishRequest = BaseRequest & {
+  type: RequestType.PresencePublish;
+
+  /** The membership, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** Plain-text display name, within the relay's bounds. */
+  name: string;
+
+  /** Per-kind state, within the relay's bounds. */
+  facets: PresenceFacets;
+};
+
+/** The {@link RequestType.PresenceLeave} request. */
+export type PresenceLeaveRequest = BaseRequest & {
+  type: RequestType.PresenceLeave;
+
+  /** The membership to end, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+};
+
+/**
+ * One presence room event on its way across the worker boundary. It is the
+ * memory client's event with its `failure` error reduced to a name and a
+ * message, which is what survives the crossing.
+ */
+export type PresenceWireEvent =
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: PresenceRecord[];
+  }
+  | { kind: "upsert"; participant: PresenceRecord }
+  | { kind: "remove"; participantId: string }
+  | { kind: "failure"; error: { name: string; message: string } };
 
 /** A response carrying one operation-backed field snapshot. */
 export type OperationFieldResponse = {
@@ -1513,6 +1857,25 @@ export type ResolveSpaceNameRequest = BaseRequest & {
  */
 export type RegisterSpaceHostRequest = BaseRequest & {
   type: RequestType.RegisterSpaceHost;
+
+  /**
+   * The space to route.
+   */
+  space: DID;
+
+  /**
+   * The origin its storage should resolve against.
+   */
+  host: string;
+};
+
+/**
+ * Record a host hint for a space under the rules and the ordering contract of
+ * {@link RegisterSpaceHostRequest}. The worker returns the registration, which
+ * carries the reason for a refusal.
+ */
+export type RegisterSpaceHostDetailedRequest = BaseRequest & {
+  type: RequestType.RegisterSpaceHostDetailed;
 
   /**
    * The space to route.
@@ -2852,6 +3215,14 @@ export type IPCClientRequest =
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
   | CellGetCfcLabelRequest
+  | SnapshotSharePrepareRequest
+  | SnapshotShareCommitRequest
+  | SnapshotShareCancelRequest
+  | CustodySealPrepareRequest
+  | CustodySealCommitRequest
+  | CustodySealCancelRequest
+  | CustodyAnswerPublishRequest
+  | CustodyAnswerReadRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -2859,6 +3230,9 @@ export type IPCClientRequest =
   | OperationSubscribeRequest
   | OperationUnsubscribeRequest
   | OperationSessionCloseRequest
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
   | SqliteQueryRequest
   | SqliteExecRequest
   | GetCellRequest
@@ -2909,6 +3283,7 @@ export type IPCClientRequest =
   | RuntimeSyncedRequest
   | ResolveSpaceNameRequest
   | RegisterSpaceHostRequest
+  | RegisterSpaceHostDetailedRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -2981,6 +3356,14 @@ export type BooleanResponse = {
    * The verdict.
    */
   value: boolean;
+};
+
+/** The outcome of a space host registration. */
+export type SpaceHostRegistrationResponse = {
+  /**
+   * Whether the hint was accepted, and the reason when it was not.
+   */
+  registration: SpaceHostRegistration;
 };
 
 /**
@@ -3264,6 +3647,25 @@ export type NavigateRequestNotification = {
   targetCellRef: CellRef;
 };
 
+/** A refused event admission. Read access to the space can remain valid. */
+export type EventIntentOutcomeNotice = {
+  space: DID;
+  eventId: string;
+  kind: "refused";
+  reason: "admission-refused";
+};
+
+/** A payload-free outcome delivered to the runtime's accepted clients. */
+export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
+  type: NotificationType.EventIntentOutcome;
+};
+
+/** An authoritative loss of the runtime principal's access to one space. */
+export type SpaceAccessLostNotification = {
+  type: NotificationType.SpaceAccessLost;
+  space: DID;
+};
+
 /**
  * An error with no request to fail -- a renderer error, or one a pattern
  * raised between requests. Every field but `message` is context that the
@@ -3396,6 +3798,13 @@ export type EventAttentionResolveResponse = {
  */
 export type WorkerReadyNotification = {
   type: TransportNotificationType.WorkerReady;
+  /**
+   * The name of a Web Lock the worker holds from before this post until its
+   * runtime is torn down, which is when a terminated web worker's locks are
+   * released. A request for it is therefore granted only once the worker is
+   * gone. A worker that names none is not waited for.
+   */
+  lifetimeLock?: string;
 };
 
 /** The `console` methods the worker's console bridge forwards. */
@@ -3475,6 +3884,17 @@ export type OperationUpdateNotification = {
   field: OperationFieldSnapshot;
 };
 
+/** Reports one presence room event for a membership. */
+export type PresenceUpdateNotification = {
+  type: NotificationType.PresenceUpdate;
+
+  /** The membership this is for, as {@link PresenceJoinRequest} named it. */
+  subscriptionId: string;
+
+  /** The event, in its wire form. */
+  event: PresenceWireEvent;
+};
+
 /**
  * Every shape a successful response can carry. The arm a given request yields
  * is fixed by {@link Commands} rather than chosen here.
@@ -3483,10 +3903,16 @@ export type RemoteResponse =
   | EmptyResponse
   | NullResponse
   | BooleanResponse
+  | SpaceHostRegistrationResponse
   | CellValueResponse
   | CellGetResponse
   | CellResponse
   | CfcLabelViewResponse
+  | SnapshotSharePreview
+  | CustodySealPreview
+  | CustodySealCommitResponse
+  | CustodyAnswerPublishResponse
+  | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3511,6 +3937,7 @@ export type RemoteResponse =
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
+  | PresenceJoinResponse
   | EventAttentionListResponse
   | EventAttentionResolveResponse;
 
@@ -3523,10 +3950,13 @@ export type IPCRemoteNotification =
   | ConsoleNotification
   | NavigateRequestNotification
   | ErrorNotification
+  | EventIntentOutcomeNotification
+  | SpaceAccessLostNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification
   | OperationUpdateNotification
+  | PresenceUpdateNotification
   | EventNeedsAttentionNotification;
 
 /**
@@ -3702,6 +4132,38 @@ export type Commands = {
     request: CellGetCfcLabelRequest;
     response: CfcLabelViewResponse;
   };
+  [RequestType.SnapshotSharePrepare]: {
+    request: SnapshotSharePrepareRequest;
+    response: SnapshotSharePreview;
+  };
+  [RequestType.SnapshotShareCommit]: {
+    request: SnapshotShareCommitRequest;
+    response: CellResponse;
+  };
+  [RequestType.SnapshotShareCancel]: {
+    request: SnapshotShareCancelRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.CustodySealPrepare]: {
+    request: CustodySealPrepareRequest;
+    response: CustodySealPreview;
+  };
+  [RequestType.CustodySealCommit]: {
+    request: CustodySealCommitRequest;
+    response: CustodySealCommitResponse;
+  };
+  [RequestType.CustodySealCancel]: {
+    request: CustodySealCancelRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.CustodyAnswerPublish]: {
+    request: CustodyAnswerPublishRequest;
+    response: CustodyAnswerPublishResponse;
+  };
+  [RequestType.CustodyAnswerRead]: {
+    request: CustodyAnswerReadRequest;
+    response: CustodyAnswerReadResponse;
+  };
   [RequestType.OperationCapabilities]: {
     request: OperationCapabilitiesRequest;
     response: OperationCapabilitiesResponse;
@@ -3728,6 +4190,18 @@ export type Commands = {
   };
   [RequestType.OperationSessionClose]: {
     request: OperationSessionCloseRequest;
+    response: BooleanResponse;
+  };
+  [RequestType.PresenceJoin]: {
+    request: PresenceJoinRequest;
+    response: PresenceJoinResponse;
+  };
+  [RequestType.PresencePublish]: {
+    request: PresencePublishRequest;
+    response: BooleanResponse;
+  };
+  [RequestType.PresenceLeave]: {
+    request: PresenceLeaveRequest;
     response: BooleanResponse;
   };
   [RequestType.SqliteQuery]: {
@@ -3758,6 +4232,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHost]: {
     request: RegisterSpaceHostRequest;
     response: BooleanResponse;
+  };
+  [RequestType.RegisterSpaceHostDetailed]: {
+    request: RegisterSpaceHostDetailedRequest;
+    response: SpaceHostRegistrationResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

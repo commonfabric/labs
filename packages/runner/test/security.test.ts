@@ -9,7 +9,10 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import { createModuleCompartmentGlobals } from "../src/sandbox/mod.ts";
 import { createCallbackCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
-import { evaluateFunctionSourceInSES } from "../src/sandbox/ses-runtime.ts";
+import {
+  ensureSESLockdown,
+  evaluateFunctionSourceInSES,
+} from "../src/sandbox/ses-runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Module } from "../src/builder/types.ts";
 
@@ -21,6 +24,12 @@ describe("SES security regressions", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
   beforeEach(() => {
+    // A compartment-globals factory builds a gated `Date` over the intrinsics
+    // SES lockdown tames, so it requires a locked-down realm. A lane can run
+    // any one case of this file on its own, so every case establishes that
+    // realm here rather than depending on another case; see
+    // docs/development/unit-test-coding-style.md.
+    ensureSESLockdown();
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -56,7 +65,7 @@ describe("SES security regressions", () => {
     );
   });
 
-  it("exposes compatibility fetch without exposing other host globals", async () => {
+  it("withholds fetch from module compartments, and the host internals", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",
       files: [
@@ -82,7 +91,7 @@ describe("SES security regressions", () => {
 
     expect(main?.default()).toEqual({
       hasProcess: false,
-      hasFetch: true,
+      hasFetch: false,
       hasStructuredClone: true,
       hasProxy: false,
       hasProxyKey: true,
@@ -91,12 +100,12 @@ describe("SES security regressions", () => {
 
   it("exposes frozen host constructors and prototypes to module compartments", () => {
     const globals = createModuleCompartmentGlobals();
-    const headersCtor = globals.Headers as typeof Headers;
+    const encoderCtor = globals.TextEncoder as typeof TextEncoder;
     const urlCtor = globals.URL as typeof URL;
 
-    expect(typeof headersCtor).toBe("function");
-    expect(Object.isFrozen(headersCtor)).toBe(true);
-    expect(Object.isFrozen(headersCtor.prototype)).toBe(true);
+    expect(typeof encoderCtor).toBe("function");
+    expect(Object.isFrozen(encoderCtor)).toBe(true);
+    expect(Object.isFrozen(encoderCtor.prototype)).toBe(true);
 
     expect(typeof urlCtor).toBe("function");
     expect(Object.isFrozen(urlCtor)).toBe(true);
@@ -133,7 +142,7 @@ describe("SES security regressions", () => {
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow();
   });
 
-  it("exposes compatibility fetch in callback compartments without host internals", () => {
+  it("withholds fetch from callback compartments, and the host internals", () => {
     const probe = engine.getInvocation(`
       function probe() {
         return {
@@ -154,7 +163,7 @@ describe("SES security regressions", () => {
 
     expect(probe()).toEqual({
       hasProcess: false,
-      hasFetch: true,
+      hasFetch: false,
       hasStructuredClone: true,
       hasProxy: false,
       hasConsoleHook: false,
@@ -359,10 +368,10 @@ describe("SES security regressions", () => {
         const result = {};
 
         try {
-          globalThis.fetch = undefined;
-          result.fetchWrite = "allowed";
+          globalThis.structuredClone = undefined;
+          result.cloneWrite = "allowed";
         } catch (error) {
-          result.fetchWrite = error.name;
+          result.cloneWrite = error.name;
         }
 
         try {
@@ -386,7 +395,6 @@ describe("SES security regressions", () => {
           result.addWrite = error.name;
         }
 
-        result.fetchType = typeof fetch;
         result.cloneType = typeof structuredClone;
         result.proxyType = typeof Proxy;
         result.arrayName = Array.name;
@@ -394,11 +402,10 @@ describe("SES security regressions", () => {
         return result;
       }
     `) as () => {
-      fetchWrite: string;
+      cloneWrite: string;
       arrayWrite: string;
       selfWrite: string;
       addWrite: string;
-      fetchType: string;
       cloneType: string;
       proxyType: string;
       arrayName: string;
@@ -406,11 +413,10 @@ describe("SES security regressions", () => {
     };
 
     expect(probe()).toEqual({
-      fetchWrite: "TypeError",
+      cloneWrite: "TypeError",
       arrayWrite: "TypeError",
       selfWrite: "TypeError",
       addWrite: "TypeError",
-      fetchType: "function",
       cloneType: "function",
       proxyType: "undefined",
       arrayName: "Array",
@@ -430,10 +436,10 @@ describe("SES security regressions", () => {
             "  const host = globalThis as Record<string, unknown>;",
             "  const result: Record<string, unknown> = {};",
             "  try {",
-            "    host.fetch = undefined;",
-            '    result.fetchWrite = "allowed";',
+            "    host.structuredClone = undefined;",
+            '    result.cloneWrite = "allowed";',
             "  } catch (error) {",
-            "    result.fetchWrite = (error as Error).name;",
+            "    result.cloneWrite = (error as Error).name;",
             "  }",
             "  try {",
             "    host.Array = 123;",
@@ -453,7 +459,6 @@ describe("SES security regressions", () => {
             "  } catch (error) {",
             "    result.addWrite = (error as Error).name;",
             "  }",
-            "  result.fetchType = typeof fetch;",
             "  result.cloneType = typeof structuredClone;",
             // Through `host`, because the type libraries no longer declare
             // `Proxy` — naming it directly is now a compile error rather than
@@ -471,11 +476,10 @@ describe("SES security regressions", () => {
     const { main } = await engine.compileAndEvaluateModules(program);
 
     expect(main?.default()).toEqual({
-      fetchWrite: "TypeError",
+      cloneWrite: "TypeError",
       arrayWrite: "TypeError",
       selfWrite: "TypeError",
       addWrite: "TypeError",
-      fetchType: "function",
       cloneType: "function",
       proxyType: "undefined",
       arrayName: "Array",
@@ -511,14 +515,14 @@ describe("SES security regressions", () => {
   });
 
   it("freezes host constructors before exposing them to callback compartments", () => {
-    const originalAppend = Headers.prototype.append;
+    const originalAppend = URLSearchParams.prototype.append;
 
     try {
       const probe = engine.getInvocation(`
         function probe() {
           "use strict";
           try {
-            Headers.prototype.append = function hijacked() {};
+            URLSearchParams.prototype.append = function hijacked() {};
             return "allowed";
           } catch (error) {
             return error.name;
@@ -527,16 +531,16 @@ describe("SES security regressions", () => {
       `) as () => string;
 
       expect(probe()).toBe("TypeError");
-      expect(Headers.prototype.append).toBe(originalAppend);
+      expect(URLSearchParams.prototype.append).toBe(originalAppend);
     } finally {
-      if (Headers.prototype.append !== originalAppend) {
-        Headers.prototype.append = originalAppend;
+      if (URLSearchParams.prototype.append !== originalAppend) {
+        URLSearchParams.prototype.append = originalAppend;
       }
     }
   });
 
   it("freezes host constructors before exposing them to module compartments", async () => {
-    const originalAppend = Headers.prototype.append;
+    const originalAppend = URLSearchParams.prototype.append;
 
     try {
       const program: RuntimeProgram = {
@@ -548,7 +552,7 @@ describe("SES security regressions", () => {
               "export default function probe() {",
               '  "use strict";',
               "  try {",
-              "    Headers.prototype.append = function hijacked() {};",
+              "    URLSearchParams.prototype.append = function hijacked() {};",
               '    return "allowed";',
               "  } catch (error) {",
               "    return (error as Error).name;",
@@ -562,10 +566,10 @@ describe("SES security regressions", () => {
       const { main } = await engine.compileAndEvaluateModules(program);
 
       expect(main?.default()).toBe("TypeError");
-      expect(Headers.prototype.append).toBe(originalAppend);
+      expect(URLSearchParams.prototype.append).toBe(originalAppend);
     } finally {
-      if (Headers.prototype.append !== originalAppend) {
-        Headers.prototype.append = originalAppend;
+      if (URLSearchParams.prototype.append !== originalAppend) {
+        URLSearchParams.prototype.append = originalAppend;
       }
     }
   });

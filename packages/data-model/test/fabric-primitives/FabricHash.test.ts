@@ -14,11 +14,14 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { JSON_CODEC } from "@/codec-interface/interface.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
+import {
+  CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+  REALM_CODEC,
+} from "@/codec-common";
+import { FabricHash } from "@/fabric-primitives";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);
@@ -81,6 +84,14 @@ describe("FabricHash", () => {
   });
 
   describe("instance members", () => {
+    describe(".schemaType", () => {
+      it("is `FabricHash`", () => {
+        expect(new FabricHash(SAMPLE_HASH, "fid1").schemaType).toBe(
+          "FabricHash",
+        );
+      });
+    });
+
     describe("toString()", () => {
       it("produces `fid1:<base64>` format", () => {
         const cid = new FabricHash(SAMPLE_HASH, "fid1");
@@ -228,6 +239,11 @@ describe("FabricHash", () => {
             hash: cid.hashString,
           });
         });
+
+        it("returns a frozen record", () => {
+          const cid = new FabricHash(SAMPLE_HASH, "fid1");
+          expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
+        });
       });
 
       describe("canDecode()", () => {
@@ -283,6 +299,18 @@ describe("FabricHash", () => {
           expect(decoded).toBeInstanceOf(FabricHash);
           expect((decoded as FabricHash).tag).toBe("sha3");
           expect((decoded as FabricHash).bytes).toEqual(cid.bytes);
+        });
+      });
+    });
+
+    describe("[REALM_CODEC]", () => {
+      const codec = FabricHash[REALM_CODEC];
+      const env = NULL_LIVE_ENVIRONMENT;
+
+      describe("encode()", () => {
+        it("returns a frozen record", () => {
+          const cid = new FabricHash(SAMPLE_HASH, "fid1");
+          expect(Object.isFrozen(codec.encode(cid, env))).toBe(true);
         });
       });
     });

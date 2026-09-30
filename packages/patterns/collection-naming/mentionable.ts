@@ -90,11 +90,18 @@ export function mentionableRowsOf(
  * declares is the ceiling on the walk — three display strings per member — so
  * the derivation expands no member's prose, thread, verbs, or rendered view.
  *
- * `shortName` is declared OPTIONAL rather than defaulted so this demand stays
- * applicable over a collection whose members predate its namespace: a default
- * below an array constraint is one the compatibility proof cannot show stable
- * under default insertion. A member that publishes none contributes a row
- * carrying the empty string, which `mentionableRowsOf` coalesces.
+ * `shortName` is declared OPTIONAL rather than defaulted, which is a fact
+ * about the compatibility proof: a default below an array constraint is one
+ * the proof cannot show stable under default insertion, while an optional
+ * property carries no default to move. That is the bound on what the spelling
+ * buys, and it is about the READ: `cf piece setsrc` refuses a member demand
+ * that gains any property at all — optional included — over a collection
+ * whose stored members do not publish it, because the schema recorded on the
+ * retained link is unconstrained at that path. Finding 1 of
+ * `docs/history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`
+ * measured that refusal against an optional string and an optional `unknown`
+ * alike. A member that publishes none contributes a row carrying the empty
+ * string, which `mentionableRowsOf` coalesces.
  */
 export const mentionableIndex = lift(
   (

@@ -4,6 +4,8 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { unattachedTurnContext } from "./support/session-store-fixtures.ts";
 import { join } from "@std/path";
 import {
   createPatternSkillsFixture,
@@ -31,6 +33,7 @@ import {
 } from "../src/interactive-chat-service.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
+import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import type {
   SandboxCommandResult,
   SandboxRuntime,
@@ -172,6 +175,7 @@ Deno.test("interactive service starts sessions and completes non-streaming turns
   );
   assertEquals(service.events("session-1").at(-1)?.event, {
     kind: "turn_completed",
+    outcome: "completed",
     turnId: "turn-1",
     finalText: "Done.",
     usage: {
@@ -182,10 +186,12 @@ Deno.test("interactive service starts sessions and completes non-streaming turns
       totalTokens: 2_100,
     },
   });
-  assertEquals(loopOptions[0], {
+  expect(loopOptions[0]).toEqual({
     workspaceHostPath: "/workspace",
     cwd: "/workspace/project",
     model: "gpt-test",
+    taskText: "Hi",
+    researchGoal: "Hi",
     cacheAffinityKey: "interactive:session-1",
     allowedToolIds: [
       "bash",
@@ -196,6 +202,7 @@ Deno.test("interactive service starts sessions and completes non-streaming turns
       "write_file",
       "delegate_task",
       "describe_handle",
+      "finish_task",
     ],
     allowedSubagentProfiles: ["default"],
   });
@@ -567,10 +574,12 @@ Deno.test("interactive service forces comment-thread turns to read-only prompt-l
   });
   await service.waitForTurn("session-1", "turn-1");
 
-  assertEquals(loopOptions[0], {
+  expect(loopOptions[0]).toEqual({
     workspaceHostPath: "/workspace",
     cacheAffinityKey: "interactive:session-1",
     allowedToolIds: ["read_file", "view_image", "read_skill_resource"],
+    taskText: "Read only please",
+    researchGoal: "Read only please",
     allowedSubagentProfiles: [],
   });
   assertEquals(service.status("session-1").sessions[0].policy, {
@@ -614,10 +623,12 @@ Deno.test("interactive service passes Browser Access leases to browser-profile t
   assertEquals(turn.ok, true);
   await service.waitForTurn("session-1", "turn-1");
 
-  assertEquals(loopOptions[0], {
+  expect(loopOptions[0]).toEqual({
     workspaceHostPath: "/workspace",
     cacheAffinityKey: "interactive:session-1",
     allowedToolIds: ["delegate_task"],
+    taskText: "Inspect the browser",
+    researchGoal: "Inspect the browser",
     allowedSubagentProfiles: ["browser"],
     browserAccess,
   });
@@ -960,6 +971,121 @@ Deno.test("interactive service closes sessions and filters status", async () => 
     startTurn.ok === false ? startTurn.error.code : "",
     "session_closed",
   );
+});
+
+Deno.test("interactive service releases a late runtime after a closed turn unwinds", async () => {
+  const constructing = Promise.withResolvers<void>();
+  const constructed = Promise.withResolvers<void>();
+  const acquired = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let disposed = 0;
+  const fabric = {
+    pieces: {
+      runtime: {
+        dispose: () => {
+          disposed++;
+          return Promise.resolve();
+        },
+      },
+    },
+  } as unknown as HarnessFabricSession;
+  const service = new HarnessInteractiveChatService({
+    basePromptLoopOptions: {
+      fabricSessionFactory: async () => {
+        constructing.resolve();
+        await constructed.promise;
+        return fabric;
+      },
+    },
+    createPromptLoop: (options) => {
+      const engine = new CfHarnessEngine(options);
+      return {
+        runTranscript: async (runOptions) => {
+          await engine.fabricSessionFactory!();
+          acquired.resolve();
+          await finish.promise;
+          return makeResult(runOptions, "Done.");
+        },
+      };
+    },
+  });
+  expect(
+    (await service.startSession("open", {
+      sessionId: "closing",
+      workspace: { hostPath: "/workspace" },
+    })).ok,
+  ).toBe(true);
+  expect(
+    (await service.startTurn("start", {
+      sessionId: "closing",
+      input: { text: "Start" },
+    })).ok,
+  ).toBe(true);
+  await Promise.race([
+    constructing.promise,
+    service.waitForIdle().then(() => {
+      throw new Error(JSON.stringify(service.events("closing")));
+    }),
+  ]);
+  try {
+    expect((await service.closeSession("close", "closing")).ok).toBe(true);
+    constructed.resolve();
+    await acquired.promise;
+    expect(disposed).toBe(0);
+  } finally {
+    constructed.resolve();
+    finish.resolve();
+    await service.waitForIdle();
+  }
+  expect(disposed).toBe(1);
+});
+
+Deno.test("interactive service releases runtimes when closed-event delivery fails", async () => {
+  let disposed = 0;
+  const fabric = {
+    pieces: {
+      runtime: {
+        dispose: () => {
+          disposed++;
+          return Promise.resolve();
+        },
+      },
+    },
+  } as unknown as HarnessFabricSession;
+  const service = new HarnessInteractiveChatService({
+    basePromptLoopOptions: {
+      fabricSessionFactory: () => Promise.resolve(fabric),
+    },
+    createPromptLoop: (options) => {
+      const engine = new CfHarnessEngine(options);
+      return {
+        runTranscript: async (runOptions) => {
+          await engine.fabricSessionFactory!();
+          return makeResult(runOptions, "Done.");
+        },
+      };
+    },
+    onEvent: ({ event }) => {
+      if (event.kind === "session_closed") throw new Error("Peer disconnected");
+    },
+    onEventDeliveryError: () => {},
+  });
+  await service.startSession("open", {
+    sessionId: "closing",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("start", {
+    sessionId: "closing",
+    input: { text: "Start" },
+  });
+  await service.waitForIdle();
+  expect(service.listTurns({ sessionId: "closing" }).turns[0].turn.status)
+    .toBe("completed");
+  await expect(service.closeSession("close", "closing")).rejects.toThrow(
+    "Peer disconnected",
+  );
+  expect(service.status("closing").sessions[0].status).toBe("closed");
+  expect(disposed).toBe(1);
 });
 
 Deno.test("interactive service rejects duplicate session ids", async () => {
@@ -1595,9 +1721,11 @@ Deno.test("a completed turn promotes its transcript independently of the loop's 
   });
   await service.waitForTurn("session-1", "turn-2");
 
-  assertEquals(seenTranscripts[1], [
+  expect(seenTranscripts[1]).toEqual([
+    ...unattachedTurnContext(),
     { role: "user", content: "Hi" },
     { role: "assistant", content: "Done." },
+    ...unattachedTurnContext(),
     { role: "user", content: "Again" },
   ]);
 });
@@ -1793,7 +1921,7 @@ for (const resultsBeforeFault of FAULT_POINTS) {
         input: { text: "Try again" },
       });
       await service.waitForTurn("session-1", "turn-2");
-      assertEquals(nextTurnTranscripts, [[{
+      expect(nextTurnTranscripts).toEqual([[...unattachedTurnContext(), {
         role: "user",
         content: "Try again",
       }]]);

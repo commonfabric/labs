@@ -7,11 +7,8 @@
 
 /**
  * The fixed well-known references, whose model-facing descriptions the
- * harness authors in full. A connector grant's name is not one of these:
- * it is read from the records of the loom instance the console was launched
- * against, which is why it is held to the same name shape an operator's
- * `--input-cell` name is (`HANDLE_NAME_PATTERN` in `src/input-cells.ts`)
- * before it reaches a model.
+ * harness authors in full. Connector names come from the Loom instance's
+ * connection identities and are validated before reaching model context.
  */
 export type HarnessWellKnownGrantName = "piece-registry";
 
@@ -30,6 +27,9 @@ export interface HarnessConnectorGrantSource {
   /** The loom connection the handle belongs to. */
   connection: string;
 
+  /** An additional store on a connection, when Loom declares one. */
+  companionKey?: string;
+
   /** The loom piece that carries the handle. */
   piece: string;
 }
@@ -37,11 +37,80 @@ export interface HarnessConnectorGrantSource {
 /** One connector handle to grant, as the console was configured with it. */
 export interface HarnessConnectorGrantSpec {
   /**
-   * The model-facing name: the one CFC class loom's own table contract
-   * declares for the handle's columns, so a session is told `email` for a
-   * mail database and `finance` for a bank one.
+   * Connection identity: `connection` or `connection#companionKey`.
+   * Records without separate class metadata use their class as the name.
    */
   name: string;
+
+  /** All declared column classifications, in contract order. */
+  cfcClasses?: string[];
+
+  /** Singular classification on persisted grants without `cfcClasses`. */
+  cfcClass?: string;
+
+  /**
+   * Physical rows at injection, including metadata and history; absent if unknown.
+   */
+  rowCount?: number;
+
+  /**
+   * Account identity from the receipt; absent when the receipt did not record it.
+   */
+  viewer?:
+    | {
+      /** An authenticated connection. */
+      identity: "account";
+
+      /** Provider's viewer identifier, which may be opaque. */
+      sourceId?: string;
+
+      /** Login address; `null` means this account has no address. */
+      email?: string | null;
+
+      /** Provider's display label for the account. */
+      label?: string;
+
+      /** Why the provider identity is unavailable or withheld, when stated. */
+      reason?: string;
+    }
+    | {
+      /** A source with no account. */
+      identity: "none";
+
+      /** Receipt reason for the absence. */
+      reason: string;
+    }
+    | {
+      /** The receipt could not establish an identity. */
+      identity: "unknown";
+
+      /** Receipt reason for the unavailable identity. */
+      reason?: string;
+    }
+    | {
+      /** Repeated receipts disagree about this store's identity. */
+      identity: "conflicting";
+
+      /** The disagreement itself explains the unavailable identity. */
+      reason?: never;
+    };
+
+  /** Newest record observation, distinct from content time; absent if unknown. */
+  observation?:
+    | {
+      /** ISO8601 time when Loom observed the newest record. */
+      newestAt: string;
+
+      /** Absence reasons accompany only missing timestamps. */
+      reason?: never;
+    }
+    | {
+      /** No observation time was returned. */
+      newestAt: null;
+
+      /** `no-rows` means empty; other reasons mean the time could not be read. */
+      reason: string;
+    };
 
   /** The reference to mint, as an LLM-friendly link string. */
   ref: string;
@@ -71,16 +140,7 @@ export type HarnessWellKnownGrant =
 
     source?: undefined;
   }
-  | {
-    /** The declared CFC class loom named this handle's columns with. */
-    name: string;
-
+  | (HarnessConnectorGrantSpec & {
     /** The token the model holds. */
     token: string;
-
-    /** The canonical reference behind it; never model-facing. */
-    ref: string;
-
-    /** The loom handle the name was read from. */
-    source: HarnessConnectorGrantSource;
-  };
+  });

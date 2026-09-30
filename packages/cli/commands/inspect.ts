@@ -11,6 +11,7 @@
 
 import { Command, ValidationError } from "@cliffy/command";
 import { Table } from "@cliffy/table";
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   annotate,
   buildCrossSpaceLinkIndex,
@@ -50,6 +51,7 @@ import {
   listSqliteFiles,
   openSpace,
   openSpaces,
+  parseScope,
   quickStats,
   type RemoteSpace,
   renderInspectorHtml,
@@ -59,6 +61,7 @@ import {
   type ScanExtent,
   type Scope,
   scopeOverlay,
+  shortDid as shortDidLabel,
   type SpaceGraph,
   spaceParticipants,
   type SpaceRef,
@@ -258,7 +261,7 @@ function formatSelectedPath(segments: string[], exact: boolean): string {
 }
 
 function summarizeChangeValue(
-  value: unknown,
+  value: FabricValue,
   isUndefined?: true,
   valueKind?: string,
 ): string {
@@ -268,8 +271,7 @@ function summarizeChangeValue(
 
 // did:key:z6Mk…wQ2n  ->  z6Mk…wQ2n  (compact, still recognizable)
 function shortDid(did: string): string {
-  const tail = did.startsWith("did:key:") ? did.slice("did:key:".length) : did;
-  return tail.length > 14 ? `${tail.slice(0, 8)}…${tail.slice(-4)}` : tail;
+  return shortDidLabel(did, 8, 4);
 }
 
 // A scope as a compact, human label: "space", "user z6Mk…", "session z6Mk…/abc".
@@ -287,13 +289,13 @@ function fmtScope(s: Scope): string {
 // Session ids look like `session:did:key:<space>:<uuid>` (often %-encoded).
 // Surface the short space DID + uuid head instead of a uniform truncation.
 function fmtSession(s: string): string {
-  const decoded = decodeURIComponent(s);
-  const m = decoded.match(/^session:(did:key:)?([^:]+):([0-9a-f-]+)/i);
-  if (m) {
-    const did = m[2];
-    const short = did.length > 12 ? `${did.slice(0, 6)}…${did.slice(-4)}` : did;
-    return `${short}/${m[3].slice(0, 8)}`;
+  const scope = parseScope(s);
+  if (scope.kind === "session" && scope.principal) {
+    return `${shortDidLabel(scope.principal)}/${
+      (scope.sessionId ?? "").slice(0, 8)
+    }`;
   }
+  const decoded = decodeURIComponent(s);
   return decoded.length > 22 ? `${decoded.slice(0, 21)}…` : decoded;
 }
 

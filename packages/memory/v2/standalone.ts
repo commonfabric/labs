@@ -18,6 +18,13 @@
  * storage host for a route it does not have hears, and it carries a status
  * that stops the answer being read as the thing that was asked for.
  *
+ * It serves storage and nothing else: no serving loop runs here, so a runtime
+ * in the server-execution ON posture that connects to it sends events nothing
+ * delivers. `listenServingMemoryServer()` in
+ * `@commonfabric/runner/executor/serving-memory-server.deno` co-hosts one on
+ * {@link StandaloneMemoryServer.server}; it lives in the runner because the
+ * serving loop does.
+ *
  * Deno-only (uses `Deno.serve`); keep this export path out of browser
  * bundles.
  */
@@ -157,19 +164,18 @@ export class StandaloneMemoryServer {
       let helloReceived = false;
       let sawFirstMessage = false;
       let closed = false;
-      const channel = new MemoryMessageCompressionChannel(
-        (frame) => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(frame);
-          }
-        },
-        () => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.close(1011, "memory websocket message failure");
-          }
-          closeConnection();
-        },
-      );
+      const failChannel = () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1011, "memory websocket message failure");
+        }
+        closeConnection();
+      };
+
+      const channel = new MemoryMessageCompressionChannel((frame) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(frame);
+        }
+      }, failChannel);
       channels.add(channel);
       const connection = memory.connect((message) => {
         channel.send(encodeMemoryBoundary(message));
@@ -242,6 +248,15 @@ export class StandaloneMemoryServer {
       return response;
     });
     return new StandaloneMemoryServer(memory, http, channels);
+  }
+
+  /**
+   * The memory server behind the websocket. A caller co-hosting a serving
+   * loop attaches its `ExecutorHost` here, and a runtime in this process may
+   * connect to it in-process rather than over the socket.
+   */
+  get server(): MemoryServer.Server {
+    return this.#memory;
   }
 
   /**

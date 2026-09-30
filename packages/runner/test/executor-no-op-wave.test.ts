@@ -41,7 +41,8 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { readWatermarkSeq, waitForSettled } from "../src/executor/watermark.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { ArrivalLog, settleServing } from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 const spaceSigner = await Identity.fromPassphrase("no-op wave space");
 const space = spaceSigner.did() as MemorySpace;
@@ -54,6 +55,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
   let onServingRuntime: ((runtime: Runtime) => Promise<void>) | undefined;
   let clientManager: EmulatedStorageManager;
   let clientRuntime: Runtime;
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
 
   const newHost = (): ExecutorHost =>
     new ExecutorHost({
@@ -81,11 +83,23 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
     });
+
+  /** Resolves once the space has an ACTIVE tenure. The serving pattern
+   * run rides `createRuntime`, so this is also the barrier a client's
+   * own edits stand behind: a run committing beside them reads a basis
+   * their writes have already moved. */
+  const activated = (): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === space && entry.outcome === "active"
+    );
 
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     onServingRuntime = undefined;
+    activations = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -138,19 +152,18 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
         resultName,
         compiled.resultSchema,
       );
-      for (let attempt = 0;; attempt++) {
-        await argument.sync();
-        await result.sync();
-        const tx = runtime.edit();
-        runtime.run(tx, compiled, argument, result);
-        const committed = await tx.commit();
-        if (committed.error === undefined) break;
-        if (attempt >= 4) {
-          throw new Error(
-            `serving pattern run failed: ${committed.error.message}`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      await argument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, compiled, argument, result);
+      const committed = await tx.commit();
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
       }
       await runtime.idle();
     };
@@ -197,6 +210,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     const cancelDemand = clientResult.sink((value) => {
       if (typeof value?.total === "number") observedTotals.push(value.total);
     });
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "noop-arg",
@@ -208,9 +222,11 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
       clientArg.withTx(tx).set({ n: 6 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => clientResult.key("total").get() === 7,
-      "the served derivation to land its first (real) write",
+    await waitForCellValue<number>(
+      clientRuntime,
+      clientResult.key("total"),
+      (total) => total === 7,
+      { stuckLabel: "the client's total to reach 7" },
     );
     // Let the first wave fully settle before sampling: wait on the
     // INPUT's coverage (never on raw serverSeq — see maxAuthoredSeq).
@@ -218,7 +234,6 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
       clientRuntime,
       space,
       maxAuthoredSeq(engine),
-      { timeoutMs: 15_000 },
     );
     expect(settledFirst).toBeGreaterThan(0);
     const derivedAfterFirst = derivedSeqs(engine);
@@ -239,14 +254,11 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     // advance is the carrier), and (2) waitForSettled RESOLVES past
     // it — a stranded client here is exactly the hazard the owner
     // asked about.
-    const settled = await waitForSettled(clientRuntime, space, noopInputSeq, {
-      timeoutMs: 15_000,
-    });
+    const settled = await waitForSettled(clientRuntime, space, noopInputSeq);
     expect(settled).toBeGreaterThanOrEqual(noopInputSeq);
-    await waitUntil(
-      () => readWatermarkSeq(engine) >= noopInputSeq,
-      "the coverage advance over the all-no-op wave's input",
-    );
+    // The client read that value off its replica of the watermark doc,
+    // which the engine's own copy is upstream of.
+    expect(readWatermarkSeq(engine)).toBeGreaterThanOrEqual(noopInputSeq);
 
     // (3) the no-op half of the contract: the identical recompute
     // produced NO fresh derived commit and NO value re-push. (A
@@ -262,12 +274,26 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     expect(distinctTotals).toEqual([7]);
 
     // (4) no livelock: currency recorded — the loop reaches quiescence
-    // and STAYS there (no run-storm re-deriving the unchanged value).
-    // Sample the derived-commit count across a settle window: flat.
+    // and STAYS there (no run-storm re-deriving the unchanged value). A
+    // storm iteration is a wave, and a wave is input-driven, so a fresh
+    // authored input whose coverage the watermark reports is ordered
+    // after every iteration a storm would have run by now. Past that
+    // barrier the derived-commit count has moved by at most the kick's
+    // own advance; a storm moves it without bound.
     const before = derivedSeqs(engine).length;
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    const after = derivedSeqs(engine).length;
-    expect(after).toBe(before);
+    {
+      const kick = clientRuntime.getCell<{ n: number }>(
+        space,
+        "noop-livelock-kick",
+        undefined,
+      );
+      await kick.sync();
+      const tx = clientRuntime.edit();
+      kick.withTx(tx).set({ n: 1 });
+      expect((await tx.commit()).error).toBeUndefined();
+    }
+    await settleServing(engine, clientRuntime, space);
+    expect(derivedSeqs(engine).length).toBeLessThanOrEqual(before + 1);
 
     const stats = host.stats();
     // The serving loop saw the no-op input's wave (waves advanced past
@@ -296,6 +322,7 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     );
     await clientResult.sync();
     const cancelDemand = clientResult.sink(() => {});
+    await activated();
     const clientArg = clientRuntime.getCell<{ n: number }>(
       space,
       "ctl-arg",
@@ -307,9 +334,11 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
       clientArg.withTx(tx).set({ n: 6 });
       expect((await tx.commit()).error).toBeUndefined();
     }
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the first derivation write",
+    await waitForCellValue<number>(
+      clientRuntime,
+      clientResult.key("total"),
+      (total) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     const derivedAfterFirst = derivedSeqs(engine).length;
     {
@@ -320,9 +349,11 @@ describe("all-no-op wave (the land-off tx-boundary pin)", () => {
     // The trigger the saturating arm shares: the second input re-runs
     // the derivation — here the recompute DIFFERS, so a fresh derived
     // commit lands and the client renders 63.
-    await waitUntil(
-      () => clientResult.key("total").get() === 63,
-      "the re-run derivation's fresh write",
+    await waitForCellValue<number>(
+      clientRuntime,
+      clientResult.key("total"),
+      (total) => total === 63,
+      { stuckLabel: "the client's total to reach 63" },
     );
     expect(derivedSeqs(engine).length).toBeGreaterThan(derivedAfterFirst);
     cancelDemand();

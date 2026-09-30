@@ -1,9 +1,12 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { JSONSchema } from "@commonfabric/api";
+import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "@commonfabric/llm/types";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
-  GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
-  type LLMNativeModelToolId,
-} from "@commonfabric/llm/types";
+  type HarnessNativeModelToolId,
+  type HarnessOpenAIWebSearchResult,
+  OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL,
+} from "./native-model-tool.ts";
 import type { HarnessFailureRecord } from "../diagnostics.ts";
 import type {
   HarnessModelAuthSource,
@@ -21,23 +24,7 @@ export const BROWSER_SUBAGENT_PROFILE = "browser" as const;
 export const WEB_FETCH_SUBAGENT_PROFILE = "web_fetch" as const;
 export const WEB_SEARCH_SUBAGENT_PROFILE = "web_search" as const;
 export const PATTERN_AUTHOR_SUBAGENT_PROFILE = "pattern-author" as const;
-export const EXPLORE_SUBAGENT_PROFILE = "explore" as const;
 export const WEB_SEARCH_SUBAGENT_MODEL = "gemini-3.5-flash" as const;
-
-/**
- * The model an explore turn runs on. A profile's `modelOverride` reaches the
- * provider verbatim as the request's `model`, so this is the gateway's own
- * name for the model and carries no routing prefix.
- */
-export const EXPLORE_SUBAGENT_MODEL = "gemini-3.5-flash" as const;
-
-/**
- * The explore model on the Codex Responses transport, which serves only its
- * own models. An explore turn is one bounded reply over sections the caller
- * already holds, so the dial is cost: this is the cheapest model that
- * transport answers with.
- */
-export const EXPLORE_SUBAGENT_CODEX_MODEL = "gpt-5.6-luna" as const;
 
 export const DEFAULT_SUBAGENT_MAX_MODEL_TURNS = 8;
 export const MAX_SUBAGENT_MAX_MODEL_TURNS = 64;
@@ -97,10 +84,19 @@ export const WEB_SEARCH_SUBAGENT_ALLOWED_TOOL_IDS =
  * the job should compose it rather than write one, and say how the one it ran
  * turned out.
  *
- * `query_docs` is how an author reaches documentation it has no path to. A
- * child cannot delegate — this profile has no `delegate_task`, and the
- * subagent manifest pins the depth at one — so an explore agent is a tool on
- * this surface or it is unreachable from the one context that needs it.
+ * `read_piece_source` and `revise_piece` are how it changes a piece someone
+ * already has rather than building a new one: the read is addressed by handle
+ * and answers that piece's current authored files, and the revision replaces
+ * them through the runtime's own compatibility check. They are on this surface
+ * and on no parent's — see `SUBAGENT_ONLY_TOOL_IDS` — because the return
+ * contract below has no field for source in any encoding, so program text a
+ * third party authored reaches the context that has to edit it and stops
+ * there.
+ *
+ * `research` is how an author reaches documentation, indexed source, and
+ * implementation guidance it has no path to. A child cannot delegate, so the
+ * bounded private research loop is a tool on this surface rather than another
+ * child run.
  */
 export const PATTERN_AUTHOR_SUBAGENT_ALLOWED_TOOL_IDS = [
   "bash",
@@ -108,19 +104,12 @@ export const PATTERN_AUTHOR_SUBAGENT_ALLOWED_TOOL_IDS = [
   "read_skill_resource",
   "describe_handle",
   "run_pattern",
+  "read_piece_source",
+  "revise_piece",
   "search_patterns",
   "record_feedback",
-  "query_docs",
+  "research",
 ] as const satisfies readonly BuiltinToolId[];
-
-/**
- * Tool surface of the `explore` profile: none at all. The child is handed the
- * documentation sections it may answer out of and has no way to reach anything
- * else — no file it could read, no command it could run, no space it could
- * touch. Read-only is the profile's shape rather than a rule applied to it.
- */
-export const EXPLORE_SUBAGENT_ALLOWED_TOOL_IDS =
-  [] as const satisfies readonly BuiltinToolId[];
 
 export const NO_HOST_TOOL_IDS = [] as const satisfies readonly BuiltinToolId[];
 export const BROWSER_SUBAGENT_HOST_TOOL_IDS = [
@@ -221,7 +210,7 @@ export const asHarnessSubagentFailureReport = (
   value: unknown,
 ): { code: HarnessSubagentFailureReasonCode } | undefined => {
   if (
-    typeof value !== "object" || value === null || Array.isArray(value) ||
+    !isObjectNotArray(value) ||
     (value as Record<string, unknown>).ok !== false
   ) {
     return undefined;
@@ -247,6 +236,12 @@ export const asHarnessSubagentFailureReport = (
  */
 export type HarnessSubagentReturnContractAuthority = "caller" | "profile";
 
+const VERIFICATION_REF_SCHEMA: JSONSchema = {
+  type: "string",
+  description:
+    "Optional reference to a run_pattern result comparing the old and new rule on the piece's actual inputs. Read its fields through run_pattern; this reference is separate from the revised piece's resultRef.",
+};
+
 /**
  * Return contract of the `pattern-author` profile: a discriminated union, so
  * a success and a failure are different SHAPES rather than different prose.
@@ -260,18 +255,21 @@ export type HarnessSubagentReturnContractAuthority = "caller" | "profile";
  * names what stopped it from the fixed inert vocabulary — no data read out of
  * the space, no partial result dressed as a whole one.
  *
- * The success branch is a RUNNING pattern's result cell and nothing else: a
- * reference, a line of prose about what it computes, and the hashtags it was
- * recorded in the index under. There is no field for source, in any
- * encoding, because a parent has no use for source it should not be
+ * The success branch names the created or revised piece's result cell, with a
+ * line of prose about the build or change and its publication hashtags. An
+ * unavailable result inspection carries `verification: "not-checked"`; a
+ * successful source update does not establish its effect on data. Either branch
+ * can name a separate verification result; reading its comparison goes
+ * through run_pattern's ordinary release rules. There is no field for source,
+ * in any encoding, because a parent has no use for source it should not be
  * compiling — the child ran the pattern, and reuse travels through the index,
  * where a searcher finds an atom by its hashtags and composes it by its
  * import specifier without the source passing through anyone's context.
  *
  * The free-form strings arrive at the parent as opaque links, the ordinary
  * treatment of unconstrained strings in a sanitized child return; `ok`, the
- * failure `code`, and the minted `resultRef` token are what the parent acts
- * on.
+ * failure `code`, fixed verification marker, and minted reference tokens are
+ * what the parent acts on.
  */
 export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
   oneOf: [
@@ -282,75 +280,38 @@ export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
         resultRef: {
           type: "string",
           description:
-            "The reference run_pattern returned for the working pattern's result cell.",
+            "The working piece's result reference from run_pattern or revise_piece, never the verification probe's reference.",
+        },
+        verificationRef: VERIFICATION_REF_SCHEMA,
+        verification: {
+          type: "string",
+          enum: ["not-checked"],
+          description:
+            "The piece was created or revised, but its result could not be inspected. State that limitation, describe only the build or change, and point the user to the piece. Omission does not establish verification.",
         },
         describes: {
           type: "string",
           description:
-            "One or two inert sentences saying what the pattern computes. No data read out of the space.",
+            "One or two inert sentences describing what was built or changed, with any inspection limitation. No data read out of the space or claims about unseen results.",
         },
         hashtags: {
           type: "array",
           items: { type: "string" },
           description:
-            "The hashtags the pattern was recorded in the index under: the words a later search finds it by if evidence earns discoverability. Omitted by a run with no pattern index, which publishes nothing.",
+            "The hashtags supplied for publication to the index: the words a later search finds it by if publication succeeds and evidence earns discoverability. Omitted by a run with no pattern index, which publishes nothing.",
         },
       },
       required: ["ok", "resultRef", "describes"],
       additionalProperties: false,
     },
-    SUBAGENT_FAILURE_RETURN_SCHEMA,
-  ],
-};
-
-/** Longest answer the `explore` profile may return, in characters. */
-export const MAX_EXPLORE_ANSWER_LENGTH = 2_000;
-
-/** Most citations one explore answer may name. */
-export const MAX_EXPLORE_CITATIONS = 8;
-
-/**
- * Return contract of the `explore` profile: a bounded answer and the places it
- * came from, and nothing else.
- *
- * The bound on `answer` is what keeps the asking child's context intact — the
- * point of asking a question rather than reading a file is that the reply is
- * the size of an answer. The citations are inert: a path and a heading address
- * a place in the corpus, carrying no text and no handle, so reading that place
- * stays a separate act by whoever is entitled to it.
- */
-export const EXPLORE_RETURN_SCHEMA: JSONSchema = {
-  type: "object",
-  properties: {
-    answer: {
-      type: "string",
-      maxLength: MAX_EXPLORE_ANSWER_LENGTH,
-      description:
-        "The answer to the question, drawn only from the supplied sections.",
-    },
-    citations: {
-      type: "array",
-      maxItems: MAX_EXPLORE_CITATIONS,
-      items: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: "Corpus path of a supplied section, exactly as given.",
-          },
-          heading: {
-            type: "string",
-            description: "Heading of that section, exactly as given.",
-          },
-        },
-        required: ["path", "heading"],
-        additionalProperties: false,
+    {
+      ...SUBAGENT_FAILURE_RETURN_SCHEMA,
+      properties: {
+        ...SUBAGENT_FAILURE_RETURN_SCHEMA.properties,
+        verificationRef: VERIFICATION_REF_SCHEMA,
       },
-      description: "The sections the answer was drawn from.",
     },
-  },
-  required: ["answer", "citations"],
-  additionalProperties: false,
+  ],
 };
 
 export const WEB_SEARCH_SUBAGENT_NATIVE_MODEL_TOOL_IDS = [
@@ -366,26 +327,12 @@ export const HARNESS_SUBAGENT_PROFILES = [
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
 ] as const;
 
-/**
- * The profiles the harness runs on a caller's behalf rather than on a
- * delegation's. `explore` is one because its answer is only as good as the
- * corpus it was handed, and the harness is what hands it one: a delegation
- * naming it directly would put a model with no documentation in front of a
- * schema that asks for citations, which is the failure this profile exists to
- * end rather than to reproduce.
- */
-export const HARNESS_INTERNAL_SUBAGENT_PROFILES = [
-  EXPLORE_SUBAGENT_PROFILE,
-] as const;
-
 export type HarnessDelegableSubagentProfile =
   typeof HARNESS_SUBAGENT_PROFILES[number];
-export type HarnessSubagentProfile =
-  | HarnessDelegableSubagentProfile
-  | typeof HARNESS_INTERNAL_SUBAGENT_PROFILES[number];
+export type HarnessSubagentProfile = HarnessDelegableSubagentProfile;
 export type HarnessSubagentModelSource = "parent" | "profile";
-export type HarnessNativeModelToolId = LLMNativeModelToolId;
-export type HarnessSubagentRunStatus = "completed" | "failed";
+export type { HarnessNativeModelToolId } from "./native-model-tool.ts";
+export type HarnessSubagentRunStatus = "completed" | "failed" | "canceled";
 export type HarnessSubagentReturnChannel =
   typeof DEFAULT_SUBAGENT_RETURN_CHANNEL;
 
@@ -510,31 +457,15 @@ export const PATTERN_AUTHOR_SUBAGENT_PROFILE_CONFIG:
     returnPolicy: DEFAULT_SUBAGENT_RETURN_POLICY,
   };
 
-/**
- * The `explore` profile: a cheap model, no tools, one turn, and a return
- * contract it does not share authority over. Every property is the same
- * decision — the child answers one question out of the text it was handed, and
- * a single turn is all that takes.
- */
-export const EXPLORE_SUBAGENT_PROFILE_CONFIG: HarnessSubagentProfileConfig = {
-  type: "cf-harness.subagent-profile-config",
-  profile: EXPLORE_SUBAGENT_PROFILE,
-  allowedToolIds: EXPLORE_SUBAGENT_ALLOWED_TOOL_IDS,
-  hostToolIds: NO_HOST_TOOL_IDS,
-  modelOverride: EXPLORE_SUBAGENT_MODEL,
-  maxModelTurns: 1,
-  returnSchema: EXPLORE_RETURN_SCHEMA,
-  returnContractAuthority: "profile",
-  returnPolicy: DEFAULT_SUBAGENT_RETURN_POLICY,
-};
-
 export const isHarnessSubagentProfile = (
   input: string,
 ): input is HarnessDelegableSubagentProfile =>
   (HARNESS_SUBAGENT_PROFILES as readonly string[]).includes(input);
 
+/** Resolves the profile against the run's provider before policy is captured. */
 export const getHarnessSubagentProfileConfig = (
   profile: HarnessSubagentProfile,
+  provider: HarnessModelProviderId = "openai-compatible-gateway",
 ): HarnessSubagentProfileConfig => {
   switch (profile) {
     case DEFAULT_SUBAGENT_PROFILE:
@@ -544,11 +475,17 @@ export const getHarnessSubagentProfileConfig = (
     case WEB_FETCH_SUBAGENT_PROFILE:
       return WEB_FETCH_SUBAGENT_PROFILE_CONFIG;
     case WEB_SEARCH_SUBAGENT_PROFILE:
+      if (provider === "openai-codex") {
+        const { modelOverride: _modelOverride, ...config } =
+          WEB_SEARCH_SUBAGENT_PROFILE_CONFIG;
+        return {
+          ...config,
+          nativeModelToolIds: [OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL],
+        };
+      }
       return WEB_SEARCH_SUBAGENT_PROFILE_CONFIG;
     case PATTERN_AUTHOR_SUBAGENT_PROFILE:
       return PATTERN_AUTHOR_SUBAGENT_PROFILE_CONFIG;
-    case EXPLORE_SUBAGENT_PROFILE:
-      return EXPLORE_SUBAGENT_PROFILE_CONFIG;
   }
 };
 
@@ -573,6 +510,16 @@ export interface HarnessSubagentInputSummary {
   contextDigest?: string;
   returnSchemaBytes?: number;
   returnSchemaDigest?: string;
+}
+
+/**
+ * The child reads through the parent's fabric session and therefore inherits
+ * its ceiling. The clauses remain in each run's fabric-session record; this
+ * model-visible reference records inheritance without disclosing their atoms.
+ */
+export interface HarnessSubagentConfidentialityCeiling {
+  source: "parent";
+  mode: "bounded" | "owner-view";
 }
 
 export interface HarnessSubagentRunManifest {
@@ -600,6 +547,7 @@ export interface HarnessSubagentRunManifest {
   returnPolicy: HarnessSubagentReturnPolicy;
   createdAt: string;
   inputSummary: HarnessSubagentInputSummary;
+  confidentialityCeiling?: HarnessSubagentConfidentialityCeiling;
 }
 
 /**
@@ -671,6 +619,9 @@ export interface HarnessSubagentResult {
   runState: HarnessSubagentRunStateSummary;
   manifest: HarnessSubagentRunManifest;
   structuredReturn?: HarnessSubagentStructuredReturn;
+
+  /** Cited sources survive structured returns without changing their schema. */
+  nativeModelToolResults?: HarnessOpenAIWebSearchResult[];
 }
 
 interface HarnessSubagentRunRefBase {
@@ -728,7 +679,7 @@ export type HarnessSubagentRunRef =
 
 /** One published pattern the parent selected from its prior search results. */
 export interface DelegateTaskPatternRef {
-  /** Content-addressed id exactly as `search_patterns` returned it. */
+  /** Content-addressed id exactly as search or host research returned it. */
   patternId: string;
 
   /** Parent-authored context for this selection, passed to the child verbatim. */

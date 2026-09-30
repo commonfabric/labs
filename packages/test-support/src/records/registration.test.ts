@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { fromFileUrl, join } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 
 import {
   activeCapture,
@@ -12,22 +12,15 @@ import {
   NAME_MAP_SUFFIX,
   parseSkipList,
   readNameMaps,
-  registerFrameworkModule,
-  registeringModule,
-  relativeToRoot,
+  repositoryPathOf,
   repositoryRootOf,
   runDirectory,
+  runningFile,
   serializeSkipList,
+  writableSpool,
 } from "./registration.ts";
-// Imported for what loading it declares: the shared fixture runner calls
-// `describe` on behalf of the file that asked for a suite, so it declares
-// itself machinery and the attribution walks past its frames.
-import "../fixture-runner.ts";
 
-// The wrapper's own frame, as it appears in a real registration stack.
-const WRAPPER = new URL("./registration.ts", import.meta.url).href;
-
-// The fixture runner's frame, as it appears in the same stack.
+// The fixture runner's module, as a class name would end.
 const FIXTURE_RUNNER = new URL("../fixture-runner.ts", import.meta.url).href;
 
 async function writeNameMap(
@@ -43,62 +36,61 @@ async function writeNameMap(
 }
 
 describe("registration", () => {
-  describe("registeringModule()", () => {
-    it("returns the first frame outside the test machinery", () => {
-      const stack = [
-        "Error",
-        `    at Object.test (${WRAPPER}:3:17)`,
-        "    at TestSuiteInternal.registerTest (https://jsr.io/@std/testing/" +
-        "1.0.20/_test_suite.ts:270:10)",
-        "    at describe (https://jsr.io/@std/testing/1.0.20/bdd.ts:1267:22)",
-        "    at file:///repo/packages/memory/test/space.test.ts:2:1",
-      ].join("\n");
-      expect(registeringModule(stack)).toBe(
-        "file:///repo/packages/memory/test/space.test.ts",
-      );
-    });
-
-    it("passes over a module declared as framework machinery", () => {
-      registerFrameworkModule(
-        "file:///repo/packages/test-support/test/clock.ts",
-      );
-      const stack = [
-        "Error",
-        `    at Object.test (${WRAPPER}:3:17)`,
-        "    at frozenTest (file:///repo/packages/test-support/test/" +
-        "clock.ts:8:5)",
-        "    at file:///repo/packages/runner/test/scheduler.test.ts:11:1",
-      ].join("\n");
-      expect(registeringModule(stack)).toBe(
-        "file:///repo/packages/runner/test/scheduler.test.ts",
-      );
-    });
-
-    it("passes over the shared fixture runner", () => {
-      const stack = [
-        "Error",
-        `    at Object.test (${WRAPPER}:3:17)`,
-        `    at defineFixtureSuite (${FIXTURE_RUNNER}:224:3)`,
-        "    at file:///repo/packages/ts-transformers/test/" +
-        "fixture-based.test.ts:27:3",
-      ].join("\n");
-      expect(registeringModule(stack)).toBe(
-        "file:///repo/packages/ts-transformers/test/fixture-based.test.ts",
-      );
-    });
-
-    it("names the shared fixture runner as machinery for ingestion too", () => {
-      // The two lists cover one module from two sides. Declaring it
-      // walks the map past its frames; naming its path tail stops
-      // ingestion reading it as the file every fixture case came from.
+  describe("MACHINERY_MODULE_SUFFIXES", () => {
+    it("names the shared fixture runner", () => {
+      // It calls `describe` on behalf of the file that asked for a suite,
+      // so ingestion declines the class name it takes.
       expect(
         MACHINERY_MODULE_SUFFIXES.some((tail) => FIXTURE_RUNNER.endsWith(tail)),
       ).toBe(true);
     });
 
-    it("returns undefined when no frame names a file", () => {
-      expect(registeringModule("")).toBeUndefined();
-      expect(registeringModule("Error\n    at <anonymous>")).toBeUndefined();
+    it("names the runner's silent-backstop guard", () => {
+      // The guard wraps `Deno.test` between the runner's clock preload and
+      // each test file, and Deno names a describe's first step after it.
+      const guard =
+        "file:///repo/packages/runner/test/support/silent-backstop-guard.ts";
+      expect(MACHINERY_MODULE_SUFFIXES.some((tail) => guard.endsWith(tail)))
+        .toBe(true);
+    });
+
+    it("names no test file", () => {
+      expect(
+        MACHINERY_MODULE_SUFFIXES.some((tail) =>
+          "packages/memory/test/space.test.ts".endsWith(tail)
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("repositoryPathOf()", () => {
+    it("returns a file's path relative to the repository enclosing it", () => {
+      expect(repositoryPathOf(import.meta.url)).toBe(
+        "packages/test-support/src/records/registration.test.ts",
+      );
+    });
+
+    it("returns nothing for a file inside no repository", async () => {
+      const outside = await Deno.makeTempDir();
+      try {
+        const url = toFileUrl(join(outside, "a.test.ts")).href;
+        expect(repositoryPathOf(url)).toBeUndefined();
+      } finally {
+        await Deno.remove(outside, { recursive: true });
+      }
+    });
+
+    it("returns nothing for a URL that names no file", () => {
+      expect(repositoryPathOf("https://example.com/a.test.ts"))
+        .toBeUndefined();
+    });
+  });
+
+  describe("runningFile()", () => {
+    it("returns the test file this process runs, relative to the repository root", () => {
+      expect(runningFile()).toBe(
+        "packages/test-support/src/records/registration.test.ts",
+      );
     });
   });
 
@@ -156,29 +148,6 @@ describe("registration", () => {
       expect(asDefinition(["a name"])).toBeUndefined();
       expect(asDefinition([{ sanitizeOps: false }, () => {}])).toBeUndefined();
       expect(asDefinition([42, body])).toBeUndefined();
-    });
-  });
-
-  describe("relativeToRoot()", () => {
-    it("strips the root, with or without its trailing slash", () => {
-      expect(
-        relativeToRoot("file:///repo/packages/memory/a.test.ts", "/repo"),
-      ).toBe("packages/memory/a.test.ts");
-      expect(
-        relativeToRoot("file:///repo/packages/memory/a.test.ts", "/repo/"),
-      ).toBe("packages/memory/a.test.ts");
-    });
-
-    it("leaves a path outside the root whole", () => {
-      expect(relativeToRoot("file:///elsewhere/a.test.ts", "/repo")).toBe(
-        "/elsewhere/a.test.ts",
-      );
-    });
-
-    it("decodes what the URL escaped", () => {
-      expect(relativeToRoot("file:///repo/a%20b/c.test.ts", "/repo")).toBe(
-        "a b/c.test.ts",
-      );
     });
   });
 
@@ -403,8 +372,8 @@ describe("registration", () => {
         registrar,
         skips: { "packages/a/one.test.ts": ["skip me"] },
       });
-      // The file comes from the registration stack, which here is this
-      // test file, so nothing matches and the skip does not apply.
+      // The file is the one this process runs, which is this test file,
+      // so nothing matches and the skip does not apply.
       built.registrar("skip me", () => {});
       expect(seen[0]!.ignore).toBeFalsy();
       expect(built.capture.skipped("packages/a/one.test.ts", "skip me")).toBe(
@@ -420,7 +389,7 @@ describe("registration", () => {
       const { registrar } = recorder();
       const built = buildCapture({ registrar });
       built.registrar("named here", () => {});
-      // This test file registered it, so that is the file captured.
+      // This process runs this test file, so that is the file captured.
       expect(built.capture.names.get("named here")).toMatch(
         /registration\.test\.ts$/,
       );
@@ -437,6 +406,20 @@ describe("registration", () => {
       }).only("only this", () => {});
       expect(seen[0]!.ignore).toBe(true);
       expect(seen[1]!.only).toBe(true);
+    });
+
+    it("carries the registrar's lifecycle hooks as they are", () => {
+      const beforeEach = (_fn: () => void) => {};
+      const afterAll = (_fn: () => void) => {};
+      const registrar = Object.assign(recorder().registrar, {
+        beforeEach,
+        afterAll,
+      });
+      const built = buildCapture({ registrar });
+      expect(built.registrar.beforeEach).toBe(beforeEach);
+      expect(built.registrar.afterAll).toBe(afterAll);
+      expect(built.registrar.beforeAll).toBeUndefined();
+      expect(built.registrar.afterEach).toBeUndefined();
     });
 
     it("writes the captured map into the spool it was given", async () => {
@@ -460,6 +443,23 @@ describe("registration", () => {
     });
   });
 
+  describe("writableSpool()", () => {
+    it("returns false where the run names no spool", () => {
+      // A process whose environment names no spool has nowhere to leave a
+      // name map, so it is not worth wrapping `Deno.test` for.
+      expect(writableSpool(undefined)).toBe(false);
+    });
+
+    it("returns true for a spool this process may write", async () => {
+      const spool = await Deno.makeTempDir();
+      try {
+        expect(writableSpool(spool)).toBe(true);
+      } finally {
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+  });
+
   describe("parseSkipList()", () => {
     it("round-trips what serializeSkipList wrote", () => {
       const skips = { "packages/a/one.test.ts": ["slow > case"] };
@@ -480,13 +480,6 @@ describe("registration", () => {
 });
 
 describe("what the capture does with what it cannot read", () => {
-  it("leaves a URL it cannot parse alone", () => {
-    // The registering module is recovered from a stack trace, which is
-    // not always a URL. What is not one is passed through rather than
-    // turned into a path that names nothing.
-    expect(relativeToRoot("not a url", "/repo")).toBe("not a url");
-  });
-
   it("ignores a name map that is not a map", async () => {
     const dir = await Deno.makeTempDir();
     try {
@@ -546,8 +539,8 @@ describe("repositoryRootOf()", () => {
 
   it("is nothing for a path under no repository at all", async () => {
     // The climb reaches the filesystem root and stops there. Answering
-    // with the root itself would make every registering module's path
-    // relative to "/", which names no file in any repository.
+    // with the root itself would make every test file's path relative
+    // to "/", which names no file in any repository.
     const outside = await Deno.makeTempDir();
     try {
       expect(repositoryRootOf(join(outside, "a.test.ts"))).toBeUndefined();

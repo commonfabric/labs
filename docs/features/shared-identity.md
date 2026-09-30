@@ -25,9 +25,9 @@ counting users.
 
 Only to deliberately act *as the local dev server's own identity* — i.e. for
 operator/admin tasks on your own localhost where the caller must match toolshed's
-dev identity (e.g. `add-admin-piece`, the background piece service operator,
-deploying system home patterns). For everything else — your personal identity,
-normal pattern dev, and any shared or remote server — use `id new`.
+dev identity (e.g. deploying system home patterns). For everything else — your
+personal identity, normal pattern dev, and any shared or remote server — use
+`id new`.
 
 ## Recommended Local Workflow
 

@@ -79,6 +79,7 @@ import {
 } from "./fold.ts";
 import { type DiffHunk, type DiffModel, parseDiff } from "./diff.ts";
 import {
+  type CommitHeader,
   commitSubjects,
   findCommitHeaders,
   findCommitMessages,
@@ -217,6 +218,9 @@ interface JumpEntry {
   /** Document line the jump lands the viewport on (a file header or a `commit`
    * header line). */
   readonly line: number;
+
+  /** Last document line belonging to this file or commit, inclusive. */
+  readonly endLine: number;
 
   /** The styled row shown in the list. */
   readonly display: Line;
@@ -410,6 +414,11 @@ export class Session {
   #jumpSel = 0;
   #jumpSearching = false;
   #jumpCountMode: DiffCountMode = "normal";
+  #commitHeaderCache?: {
+    readonly doc: Document;
+    readonly headers: readonly CommitHeader[];
+  };
+
   #jumpCountCache?: {
     readonly doc: Document;
     readonly mode: DiffCountMode;
@@ -1244,6 +1253,7 @@ export class Session {
       this.#handleWheel(key.name === "wheel-up" ? -1 : 1);
       return;
     }
+    if (this.#handleDialogNavigation(key)) return;
     if (
       this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
       this.#mode === "revertPrompt"
@@ -1282,6 +1292,113 @@ export class Session {
     return Math.max(1, this.height - 1);
   }
 
+  /** Applies the shared navigation keys to the active dialog's content or focus. */
+  #handleDialogNavigation(key: Key): boolean {
+    const picker = this.#mode === "filePicker";
+    const jump = this.#mode === "jumpList";
+    const prompt = this.#mode === "savePrompt" ||
+      this.#mode === "amendPrompt" ||
+      this.#mode === "revertPrompt";
+    const overlay = this.#mode === "normal" && !this.#chord
+      ? this.#overlay
+      : null;
+    if (!picker && !jump && !prompt && !overlay) return false;
+    if (
+      (picker || (jump && this.#jumpSearching)) && !key.ctrl &&
+      (key.name.length === 1 || key.name === "space" ||
+        (key.char !== undefined && key.char >= " "))
+    ) return false;
+
+    const rows = overlayBox(this.width, this.height).innerH;
+    const page = Math.max(1, rows - 1);
+    let delta = 0;
+    let byLine = false;
+    let edge: "first" | "last" | null = null;
+    switch (key.name) {
+      case "down":
+      case "ctrl-n":
+      case "j":
+      case "J":
+        delta = 1;
+        byLine = true;
+        break;
+      case "up":
+      case "ctrl-p":
+      case "k":
+      case "K":
+        delta = -1;
+        byLine = true;
+        break;
+      case "left":
+      case "right":
+        if (!prompt) return false;
+        delta = key.name === "left" ? -1 : 1;
+        break;
+      case "space":
+        if (prompt) return false;
+        delta = page;
+        break;
+      case "pagedown":
+      case "ctrl-f":
+        delta = page;
+        break;
+      case "pageup":
+      case "ctrl-b":
+      case "b":
+      case "B":
+        delta = -page;
+        break;
+      case "ctrl-d":
+      case "ctrl-u":
+        delta = Math.max(1, Math.floor(rows / 2)) *
+          (key.name === "ctrl-d" ? 1 : -1);
+        break;
+      case "g":
+      case "home":
+        edge = "first";
+        break;
+      case "G":
+      case "end":
+        edge = "last";
+        break;
+      default:
+        return false;
+    }
+    const move = (position: number, last: number): number =>
+      clamp(
+        edge === "first" ? 0 : edge === "last" ? last : position + delta,
+        0,
+        Math.max(0, last),
+      );
+    this.#message = "";
+    if (picker) {
+      this.#pickerSel = move(this.#pickerSel, this.#pickerEntries.length - 1);
+      this.#scrollListToSelection(this.#pickerSel);
+    } else if (jump) {
+      this.#jumpSel = move(this.#jumpSel, this.#jumpEntries.length - 1);
+      this.#scrollJumpToSelection(this.#jumpSel);
+    } else if (prompt) {
+      this.#dialogFocus = move(
+        this.#dialogFocus,
+        this.#promptDialog()!.buttons.length - 1,
+      );
+    } else if (overlay) {
+      if (
+        byLine && overlay.mode === "info" &&
+        overlay.targets.length > 0
+      ) {
+        this.#moveCardSelection(delta);
+      } else {
+        this.#overlayScroll = move(
+          this.#overlayScroll,
+          this.#overlayMaxScroll(overlay),
+        );
+        if (edge) overlay.cardSel = -1;
+      }
+    }
+    return true;
+  }
+
   /** Scrolls the active document or list without moving the edit cursor. */
   #handleWheel(direction: -1 | 1): void {
     this.#message = "";
@@ -1293,7 +1410,7 @@ export class Session {
     if (this.#mode === "filePicker") {
       const last = Math.max(0, this.#pickerEntries.length - 1);
       this.#pickerSel = clamp(this.#pickerSel + delta, 0, last);
-      this.#ensurePickerVisible();
+      this.#scrollListToSelection(this.#pickerSel);
       return;
     }
     if (this.#mode === "jumpList") {
@@ -1325,17 +1442,22 @@ export class Session {
       : this.#pagerLastTop(this.#displayCount());
   }
 
-  /** Furthest vertical position for a pager layout with `rowCount` rows. */
-  #pagerLastTop(rowCount: number): number {
-    const isDiff = this.#source?.isDiff === true;
-    const hasTrailingEmptyLine = isDiff &&
+  /** Furthest pager position, allowing every commit header to reach the top. */
+  #pagerLastTop(
+    rowCount: number,
+    plan: WrapPlan | null = this.#wrapLines ? this.#wrapPlan() : null,
+  ): number {
+    if (!this.#source?.isDiff) return maxTop(rowCount, this.height);
+    const hasTrailingEmptyLine =
       this.#foldPlan().displayLines.at(-1)?.text.length === 0;
-    return isDiff
-      ? maxPagerTop(
+    const lastCommit = this.#commitHeaders().at(-1);
+    return Math.max(
+      maxPagerTop(
         diffContentRowCount(rowCount, hasTrailingEmptyLine),
         this.height,
-      )
-      : maxTop(rowCount, this.height);
+      ),
+      lastCommit ? this.#toDisplayWithPlan(lastCommit.line, 0, plan) : 0,
+    );
   }
 
   #selectedNode(): StructureNode | null {
@@ -1550,11 +1672,7 @@ export class Session {
       o.cardSel -= 1;
     }
     const line = o.targets[o.cardSel].cardLine;
-    const innerH = overlayBox(this.width, this.height).innerH;
-    if (line < this.#overlayScroll) this.#overlayScroll = line;
-    else if (line >= this.#overlayScroll + innerH) {
-      this.#overlayScroll = line - innerH + 1;
-    }
+    this.#scrollListToSelection(line);
   }
 
   /** Open an external definition file in a read-only overlay, framed at the
@@ -1872,7 +1990,6 @@ export class Session {
   #handleOverlayKey(key: Key): void {
     const overlay = this.#overlay;
     if (!overlay) return;
-    const maxScroll = this.#overlayMaxScroll(overlay);
     const hasTargets = overlay.mode === "info" && overlay.targets.length > 0;
     switch (key.name) {
       case "escape":
@@ -1942,27 +2059,6 @@ export class Session {
           this.#overlayScroll = 0;
         }
         break;
-      case "down":
-      case "j":
-      case "J":
-        if (hasTargets) this.#moveCardSelection(1);
-        else this.#overlayScroll = clamp(this.#overlayScroll + 1, 0, maxScroll);
-        break;
-      case "up":
-      case "k":
-      case "K":
-        if (hasTargets) this.#moveCardSelection(-1);
-        else this.#overlayScroll = clamp(this.#overlayScroll - 1, 0, maxScroll);
-        break;
-      case "pagedown":
-      case "space":
-        this.#overlayScroll = clamp(this.#overlayScroll + 10, 0, maxScroll);
-        break;
-      case "b":
-      case "B":
-      case "pageup":
-        this.#overlayScroll = clamp(this.#overlayScroll - 10, 0, maxScroll);
-        break;
     }
   }
 
@@ -2008,7 +2104,7 @@ export class Session {
         this.#requestQuit();
         return;
       case "?":
-        this.#overlay = helpOverlay();
+        this.#overlay = helpOverlay(this.#commitHeaders().length > 1);
         this.#overlayScroll = 0;
         return;
       case "/":
@@ -2079,6 +2175,12 @@ export class Session {
       case "G":
       case "end":
         this.top = lastTop;
+        return;
+      case "<":
+        this.#stepCommit(false);
+        return;
+      case ">":
+        this.#stepCommit(true);
         return;
       case "ctrl-l":
         this.#performExpand();
@@ -3243,6 +3345,13 @@ export class Session {
     this.#ensureCursorVisible();
   }
 
+  /** Show `text` in the status line, where it stays until something replaces
+   * it. */
+  showMessage(text: string): void {
+    this.#message = text;
+    this.transientMessage = false;
+  }
+
   /** Take away a message that was set to go away on its own, once the driver has
    * left it up for its moment. Does nothing to a message that is not one of
    * those, so a later one is never cleared out from under itself. */
@@ -3269,9 +3378,10 @@ export class Session {
   /** Run the deferred full re-parse, refreshing the structure tree and
    * cross-references after the per-keystroke re-highlights (which keep the lines
    * current but not the structure). The incremental highlighter is discarded so
-   * the next edit re-seeds it from this authoritative parse. */
-  reparse(): void {
-    if (!this.#source || !this.#buffer || !this.needsReparse) return;
+   * the next edit re-seeds it from this authoritative parse. `force` re-parses
+   * when no edit asked for it, as when a language's parser has just loaded. */
+  reparse({ force = false }: { force?: boolean } = {}): void {
+    if (!this.#source || !this.#buffer || !(this.needsReparse || force)) return;
     this.#setSourceDocument(
       this.#source.parse(
         this.#buffer.text(),
@@ -3960,7 +4070,7 @@ export class Session {
       const baseTop = clamp(
         basePin - pinRow,
         0,
-        this.#pagerLastTop(basePlan.rowCount),
+        this.#pagerLastTop(basePlan.rowCount, basePlan),
       );
       this.top = baseTop;
       const next = this.#expandOffer();
@@ -3974,7 +4084,7 @@ export class Session {
       let decoratedTop = clamp(
         this.#toDisplayWithPlan(movedPin, 0, decoratedPlan) - pinRow,
         0,
-        this.#pagerLastTop(decoratedPlan.rowCount),
+        this.#pagerLastTop(decoratedPlan.rowCount, decoratedPlan),
       );
       const visible = this.#metadataWithVisibleTriangle(
         nextAnnotations,
@@ -3991,7 +4101,7 @@ export class Session {
         decoratedTop = clamp(
           this.#toDisplayWithPlan(movedPin, 0, decoratedPlan) - pinRow,
           0,
-          this.#pagerLastTop(decoratedPlan.rowCount),
+          this.#pagerLastTop(decoratedPlan.rowCount, decoratedPlan),
         );
       }
       this.top = decoratedTop;
@@ -4236,7 +4346,7 @@ export class Session {
       Math.max(0, plan.firstRow.length - 1),
     );
     const row = wrappedRowForPosition(plan, line, anchor.displayCol)?.row ?? 0;
-    return clamp(row, 0, this.#pagerLastTop(plan.rowCount));
+    return clamp(row, 0, this.#pagerLastTop(plan.rowCount, plan));
   }
 
   /** Hide a metadata label when its reflow pushes the triangle off-screen. */
@@ -4466,10 +4576,6 @@ export class Session {
       0,
       Math.max(0, this.#pickerEntries.length - 1),
     );
-    this.#ensurePickerVisible();
-  }
-
-  #ensurePickerVisible(): void {
     this.#scrollListToSelection(this.#pickerSel);
   }
 
@@ -4487,27 +4593,12 @@ export class Session {
 
   #handleFilePicker(key: Key): void {
     this.#message = "";
-    const last = Math.max(0, this.#pickerEntries.length - 1);
     switch (key.name) {
       case "escape":
         this.#mode = "normal";
         this.#overlayScroll = 0;
         this.#message = "Cancelled";
         return;
-      case "down":
-      case "ctrl-n":
-        this.#pickerSel = clamp(this.#pickerSel + 1, 0, last);
-        return this.#ensurePickerVisible();
-      case "up":
-      case "ctrl-p":
-        this.#pickerSel = clamp(this.#pickerSel - 1, 0, last);
-        return this.#ensurePickerVisible();
-      case "pagedown":
-        this.#pickerSel = clamp(this.#pickerSel + 10, 0, last);
-        return this.#ensurePickerVisible();
-      case "pageup":
-        this.#pickerSel = clamp(this.#pickerSel - 10, 0, last);
-        return this.#ensurePickerVisible();
       case "backspace":
         if (this.#pickerFilter.length > 0) {
           this.#pickerFilter = this.#pickerFilter.slice(0, -1);
@@ -4641,6 +4732,20 @@ export class Session {
   // jump list (i)
   //
 
+  /** Commit headers in the current diff, cached against its document. */
+  #commitHeaders(): readonly CommitHeader[] {
+    if (!this.#source?.isDiff) return [];
+    if (this.#commitHeaderCache?.doc !== this.#currentDoc) {
+      this.#commitHeaderCache = {
+        doc: this.#currentDoc,
+        headers: findCommitHeaders(
+          this.#currentDoc.lines.map((line) => line.text),
+        ),
+      };
+    }
+    return this.#commitHeaderCache.headers;
+  }
+
   /** Open the list of the diff's files and commit messages, so Enter jumps the
    * view to the one chosen. Only a diff has this list; a plain source view says
    * so and stays put. */
@@ -4669,21 +4774,37 @@ export class Session {
     const texts = this.#currentDoc.lines.map((l) => l.text);
     const subjects = commitSubjects(texts);
     const counts = this.#jumpDiffCounts();
+    const headers = this.#commitHeaders();
+    const files = this.#foldFiles();
     const entries: JumpEntry[] = [];
-    for (const header of findCommitHeaders(texts)) {
+    for (const [index, header] of headers.entries()) {
+      const endLine = (headers[index + 1]?.line ?? texts.length) - 1;
+      const commitFiles = files.filter((file) =>
+        file.headerLine > header.line && file.headerLine <= endLine
+      );
       const subject = subjects.get(header.sha) ?? "";
       const short = header.sha.slice(0, 9);
       entries.push({
         line: header.line,
-        display: commitJumpLine(short, subject),
+        endLine,
+        display: commitJumpLine(
+          short,
+          subject,
+          sumDiffLineCounts(
+            commitFiles.map((file) => counts.files[file.index] ?? file),
+          ),
+          commitFiles.length > 0 &&
+            commitFiles.every((file) => this.#collapsed.has(file.index)),
+        ),
         filterText: `commit ${header.sha} ${subject}`.toLowerCase(),
         name: `commit ${short}`,
       });
     }
-    for (const file of this.#foldFiles()) {
+    for (const file of files) {
       const fileCounts = counts.files[file.index] ?? file;
       entries.push({
         line: file.headerLine,
+        endLine: file.endLine,
         display: fileJumpLine(
           file,
           this.#collapsed.has(file.index),
@@ -4726,7 +4847,6 @@ export class Session {
 
   #handleJumpList(key: Key): void {
     this.#message = "";
-    const last = Math.max(0, this.#jumpEntries.length - 1);
     if (
       key.name === "escape" ||
       (key.name === "q" && !this.#jumpSearching)
@@ -4744,24 +4864,6 @@ export class Session {
       return;
     }
     switch (key.name) {
-      case "down":
-      case "ctrl-n":
-        this.#jumpSel = clamp(this.#jumpSel + 1, 0, last);
-        return this.#scrollJumpToSelection(this.#jumpSel);
-      case "up":
-      case "ctrl-p":
-        this.#jumpSel = clamp(this.#jumpSel - 1, 0, last);
-        return this.#scrollJumpToSelection(this.#jumpSel);
-      case "pagedown":
-        this.#jumpSel = clamp(this.#jumpSel + 10, 0, last);
-        return this.#scrollJumpToSelection(this.#jumpSel);
-      case "space":
-        if (this.#jumpSearching) break;
-        this.#jumpSel = clamp(this.#jumpSel + 10, 0, last);
-        return this.#scrollJumpToSelection(this.#jumpSel);
-      case "pageup":
-        this.#jumpSel = clamp(this.#jumpSel - 10, 0, last);
-        return this.#scrollJumpToSelection(this.#jumpSel);
       case "backspace":
         if (this.#jumpSearching && this.#jumpFilter.length > 0) {
           this.#jumpFilter = this.#jumpFilter.slice(0, -1);
@@ -4781,6 +4883,12 @@ export class Session {
       return;
     }
     switch (key.name) {
+      case "<":
+        this.#stepCommit(false);
+        return;
+      case ">":
+        this.#stepCommit(true);
+        return;
       case "/":
         this.#jumpSearching = true;
         this.#jumpFilter = "";
@@ -4812,18 +4920,42 @@ export class Session {
     }
   }
 
-  /** Toggles the file on the highlighted jump-list row. */
+  /** Toggles the highlighted file or all files belonging to its commit row. */
   #toggleJumpFile(): void {
-    const fileIndex = this.#jumpEntries[this.#jumpSel]?.fileIndex;
-    const file = fileIndex === undefined
-      ? undefined
-      : this.#foldFiles()[fileIndex];
-    if (!file) {
-      this.#message = "Select a file to hide or show.";
-      return;
+    const entry = this.#jumpEntries[this.#jumpSel];
+    if (!entry) return;
+    if (entry.fileIndex === undefined) {
+      this.#toggleFileCategory(
+        (file) =>
+          file.headerLine > entry.line &&
+          file.headerLine <= entry.endLine,
+        entry.name,
+      );
+    } else {
+      this.#toggleFile(this.#foldFiles()[entry.fileIndex]);
     }
-    this.#toggleFile(file);
     this.#rebuildJumpEntries();
+  }
+
+  /** Moves to the preceding or following commit header in the active view. */
+  #stepCommit(forward: boolean): void {
+    const inList = this.#mode === "jumpList";
+    const positions = inList
+      ? this.#jumpEntries.flatMap((entry, index) =>
+        entry.fileIndex === undefined ? [index] : []
+      )
+      : this.#commitHeaders().map((header) => this.#toDisplay(header.line));
+    const current = inList ? this.#jumpSel : this.top;
+    const target = forward
+      ? positions.find((position) => position > current)
+      : positions.findLast((position) => position < current);
+    if (target === undefined) return;
+    if (inList) {
+      this.#jumpSel = target;
+      this.#scrollJumpToSelection(target);
+    } else {
+      this.#jumpToLine(this.#toDoc(target));
+    }
   }
 
   /** Keeps the selection visible and reveals the summary at the last entry. */
@@ -4916,13 +5048,14 @@ export class Session {
       jumpCountModeLine(this.#jumpCountMode),
       jumpCountSummaryLine(counts.totals, shown),
     );
+    const commitHint = this.#commitHeaders().length > 1 ? " · <> commits" : "";
     return {
       title: "Jump to file or commit",
       lines,
       scroll: this.#overlayScroll,
       footer: this.#jumpSearching
         ? "type · ↑↓ select · Space page · Enter jump · Esc list"
-        : "↑↓ · Space page · / filter · f F E T M · D counts · Enter · Esc",
+        : `↑↓ g G${commitHint} · / filter · f F E T M · D · Enter · Esc`,
       selectedLine: this.#jumpEntries.length > 0 ? this.#jumpSel : undefined,
     };
   }
@@ -5020,9 +5153,13 @@ function isArrowName(name: string): boolean {
     name === "right";
 }
 
-/** The styled jump-list row for a commit: a bullet, the short hash, and the
- * subject when one is known. */
-function commitJumpLine(shortSha: string, subject: string): Line {
+/** Builds a commit row with its total counts, muted when all files are hidden. */
+function commitJumpLine(
+  shortSha: string,
+  subject: string,
+  counts: DiffLineCounts,
+  collapsed: boolean,
+): Line {
   const spans: Span[] = [];
   let text = "";
   const add = (s: string, cls: TokenClass) => {
@@ -5031,8 +5168,17 @@ function commitJumpLine(shortSha: string, subject: string): Line {
   };
   add("● ", "diffMeta");
   add(`commit ${shortSha}`, "sectionHeader");
+  add("  ", "whitespace");
+  add(`+${counts.adds}`, "diffAdd");
+  add(" ", "whitespace");
+  add(`−${counts.dels}`, "diffDel");
   if (subject) add(`  ${subject}`, "plain");
-  return { text, spans };
+  return {
+    text,
+    spans: collapsed
+      ? spans.map((span) => ({ ...span, cls: "comment" }))
+      : spans,
+  };
 }
 
 /** Add the category keys that affect a file to its jump-list row. Collapsed
@@ -5088,7 +5234,7 @@ function jumpCountSummaryLine(
   return { text, spans };
 }
 
-export function helpOverlay(): {
+export function helpOverlay(hasMultipleCommits: boolean): {
   title: string;
   info: Line[];
   mode: "info";
@@ -5096,6 +5242,9 @@ export function helpOverlay(): {
   cardSel: number;
   staticFooter: string;
 } {
+  const commitRows: Array<[string, string]> = hasMultipleCommits
+    ? [["  < / >", "previous / next commit"]]
+    : [];
   const rows: Array<[string, string]> = [
     ["Scrolling", ""],
     ["  mouse wheel", "scroll up / down"],
@@ -5112,13 +5261,17 @@ export function helpOverlay(): {
     ["  n / N", "next / previous match"],
     ["", ""],
     ["Diff files", ""],
-    ["  f", "hide / show the file under the cursor (collapse to a summary)"],
+    ["  f", "hide / show the current file"],
     ["  F / E", "hide all files / show all files"],
     ["  T", "hide / show test and test-support files"],
     ["  M", "hide / show Markdown files"],
     ["  i", "list the diff's files and commits, jump to one"],
-    ["  / (in list)", "filter the list"],
-    ["  D (in list)", "cycle its diff counts"],
+    ...commitRows,
+    ["", ""],
+    ["Diff index", ""],
+    ["  f", "hide / show a file or commit"],
+    ["  /", "filter the list"],
+    ["  D", "cycle its diff counts"],
     ["", ""],
     ["Structure tree", ""],
     ["  W / S", "previous / next sibling (W → parent, S → out, at ends)"],
@@ -5171,6 +5324,6 @@ export function helpOverlay(): {
     mode: "info",
     targets: [],
     cardSel: -1,
-    staticFooter: "↑/↓ scroll · esc / q close",
+    staticFooter: "↑/↓ scroll · g/G top/bottom · esc / q close",
   };
 }

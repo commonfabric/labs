@@ -13,6 +13,7 @@
  * space cannot be read is still a run to record.
  */
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   discoverSpaceDbs,
   linksWithPaths,
@@ -23,6 +24,7 @@ import {
   type SpaceDb,
 } from "@commonfabric/state-inspector";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   HARNESS_CELL_LABELS_TYPE,
   type HarnessCellLabelEntry,
@@ -38,7 +40,7 @@ import {
 const TRANSFORMED_BY = "https://commonfabric.org/cfc/atom/TransformedBy";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 /**
  * One stored atom, normalized. A string atom is its own type and its own
@@ -116,15 +118,56 @@ interface StoredCellLabels {
 }
 
 /**
+ * The label a stored entry holds: the entry's own label when inline, else
+ * the value of the `cid:` label document its single-member `$ref` names,
+ * read out of the same store. `undefined` for a reference the store cannot
+ * supply a label for — no document, one holding no record, or a reference
+ * outside the `cid:` namespace, which names no label document and is not
+ * followed into whatever entity it names — which the caller records as an
+ * unread path rather than as a label with no atoms: an entry list is a
+ * positive finding about what the space holds, and a label that could not
+ * be read is not a label of nothing.
+ */
+const storedLabelOf = (
+  raw: Record<string, unknown>,
+  read: (id: string) => Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined => {
+  const label = isRecord(raw.label) ? raw.label : {};
+  const ref = label.$ref;
+  if (typeof ref !== "string" || Object.keys(label).length !== 1) {
+    return label;
+  }
+  if (!ref.startsWith("cid:")) return undefined;
+  const content = read(ref)?.value;
+  return isLabelShaped(content) ? content : undefined;
+};
+
+/**
+ * Whether a label document's value is label-shaped: a record whose every
+ * member is `confidentiality` or `integrity` holding an array. A document
+ * of any other shape holds no label the reader can report.
+ */
+const isLabelShaped = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) &&
+  Object.entries(value).every(([key, member]) =>
+    (key === "confidentiality" || key === "integrity") &&
+    Array.isArray(member)
+  );
+
+/**
  * The labelled paths of one stored document. The document's `cfc` path holds
  * a `labelMap` whose entries each name a path and the label sitting at it; a
  * document with no `cfc` path has no labels, which is a finding rather than a
  * failure. Several entries may name one path, differing in what produced them
  * and what they observed, and all of them are kept: the effective label at a
- * path is the join of its components, so dropping one changes the answer.
+ * path is the join of its components, so dropping one changes the answer. A
+ * label the entry holds by reference is read from the label document `read`
+ * resolves the reference to; one the store cannot supply is recorded as an
+ * unread path at the entry's path, with the `no-document` reason.
  */
 const labelsOf = (
   document: Record<string, unknown> | undefined,
+  read: (id: string) => Record<string, unknown> | undefined,
 ): StoredCellLabels => {
   const cfc = document?.cfc;
   if (!isRecord(cfc)) {
@@ -135,21 +178,27 @@ const labelsOf = (
     ? labelMap.entries
     : [];
   const entries: HarnessCellLabelEntry[] = [];
+  const unreadPaths: HarnessCellLabelUnreadPath[] = [];
   for (const raw of stored) {
     if (!isRecord(raw)) {
       continue;
     }
-    const label = isRecord(raw.label) ? raw.label : {};
+    const entryPath = Array.isArray(raw.path)
+      ? raw.path.filter((segment): segment is string =>
+        typeof segment === "string"
+      )
+      : [];
+    const label = storedLabelOf(raw, read);
+    if (label === undefined) {
+      unreadPaths.push({ path: entryPath, reason: "no-document" });
+      continue;
+    }
     const integrity = atomsOf(label.integrity);
     const transformedBy = integrity.find((atom) =>
       atom.type === TRANSFORMED_BY
     );
     entries.push({
-      path: Array.isArray(raw.path)
-        ? raw.path.filter((segment): segment is string =>
-          typeof segment === "string"
-        )
-        : [],
+      path: entryPath,
       confidentiality: atomsOf(label.confidentiality),
       integrity,
       ...(typeof raw.origin === "string" ? { origin: raw.origin } : {}),
@@ -162,6 +211,7 @@ const labelsOf = (
     ...(typeof cfc.schemaHash === "string"
       ? { schemaHash: cfc.schemaHash }
       : {}),
+    ...(unreadPaths.length > 0 ? { unreadPaths } : {}),
   };
 };
 
@@ -214,8 +264,13 @@ export const cellAddressOfRef = (ref: string): CellAddress | undefined => {
   }
 };
 
-/** A space DID, as a store file is named after one and a reference spells one. */
-const SPACE_DID = /^did:[a-z0-9]+:[A-Za-z0-9._%-]+$/;
+/**
+ * A space DID pinned tightly enough to be read as a store's own identity.
+ * `isDID` answers only whether a string is a DID, so it admits `did:` and a
+ * method-specific identifier of any shape; a name that proves nothing about
+ * which space a file holds must not be read as proving one.
+ */
+const STORE_FILENAME_SPACE_DID = /^did:[^:]+:[^:]+$/;
 
 /**
  * The DID of the space a database file holds, from the file's own name: a
@@ -227,7 +282,7 @@ const SPACE_DID = /^did:[a-z0-9]+:[A-Za-z0-9._%-]+$/;
  */
 const spaceDidOfDbPath = (dbPath: string): string | undefined => {
   const name = (dbPath.split("/").pop() ?? dbPath).replace(/\.sqlite$/, "");
-  return SPACE_DID.test(name) ? name : undefined;
+  return STORE_FILENAME_SPACE_DID.test(name) ? name : undefined;
 };
 
 /**
@@ -349,7 +404,7 @@ const LINK_GRAPH: LinkGraphBounds = {
  * paths it missed are not knowledge this reader has.
  */
 const linkedCellsOf = (
-  document: Record<string, unknown> | undefined,
+  document: Record<string, FabricValue> | undefined,
   space: string | undefined,
   bounds: LinkWalkBounds,
 ): {
@@ -414,8 +469,8 @@ interface GraphStep {
  * rather than to the hop bound.
  */
 const walkLinkedLabels = (
-  read: (id: string) => Record<string, unknown> | undefined,
-  root: { id: string; document: Record<string, unknown> | undefined },
+  read: (id: string) => Record<string, FabricValue> | undefined,
+  root: { id: string; document: Record<string, FabricValue> | undefined },
   space: string | undefined,
   bounds: LinkWalkBounds,
   graph: LinkGraphBounds,
@@ -453,10 +508,17 @@ const walkLinkedLabels = (
         continue;
       }
       const through = { path, into };
-      for (const entry of labelsOf(document).entries) {
+      const labels = labelsOf(document, read);
+      for (const entry of labels.entries) {
         const at = throughLink(through, entry.path);
         if (at !== undefined) {
           entries.push({ ...entry, path: at, source: id });
+        }
+      }
+      for (const unread of labels.unreadPaths ?? []) {
+        const at = throughLink(through, unread.path);
+        if (at !== undefined) {
+          unreadPaths.push({ path: at, reason: unread.reason });
         }
       }
       // A document reached through itself has just had its labels recorded at
@@ -597,12 +659,13 @@ export const openSpaceLabelReader = async (
       if (outcome === undefined || outcome.status !== "present") {
         return { entries: [], linked: [], unread: "no-document" };
       }
-      const own = labelsOf(outcome.document);
+      const readSpaceDocument = (id: string) => {
+        const target = reconstructOutcome(opened, { id, scope: "space" });
+        return target.status === "present" ? target.document : undefined;
+      };
+      const own = labelsOf(outcome.document, readSpaceDocument);
       const { entries, linked, unreadPaths, truncation } = walkLinkedLabels(
-        (id) => {
-          const target = reconstructOutcome(opened, { id, scope: "space" });
-          return target.status === "present" ? target.document : undefined;
-        },
+        readSpaceDocument,
         { id: address.id, document: outcome.document },
         did,
         bounds,
@@ -622,11 +685,12 @@ export const openSpaceLabelReader = async (
             `large is usually a cycle.`,
         );
       }
+      const allUnreadPaths = [...(own.unreadPaths ?? []), ...unreadPaths];
       return {
         ...own,
         entries: [...own.entries, ...entries],
         linked,
-        ...(unreadPaths.length > 0 ? { unreadPaths } : {}),
+        ...(allUnreadPaths.length > 0 ? { unreadPaths: allUnreadPaths } : {}),
         ...(truncation !== undefined ? { truncation } : {}),
       };
     },

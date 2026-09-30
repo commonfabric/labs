@@ -92,6 +92,15 @@ const freshDocValue = (stamp: number) => ({
 });
 const doc = (value: unknown): EntityDocument => ({ value } as EntityDocument);
 
+// What a read beside a commit's first read of an entity reads: the leaves
+// above, the array, and two containers holding several of them.
+const EXTRA_READ_PATHS = [
+  ...KEY_LEAVES,
+  ["value", "items"],
+  ["value", "votes"],
+  ["value"],
+] as const;
+
 interface SessionState {
   sessionId: string;
   principal: string;
@@ -144,10 +153,19 @@ interface ScheduleStats {
    * refusal. The generator writes values an entity already holds often
    * enough for the run-wide total to reach the vacuity floor. */
   identityElisions: number;
+
+  /**
+   * Commits the engine accepted holding more than one read, which it decided
+   * from one shared scan.
+   */
+  sharedScanAccepts: number;
 }
 
 const runSchedule = async (seed: number): Promise<ScheduleStats> => {
   const rng = mulberry32(seed);
+  // The reads a commit carries beside its first draw on a stream of their
+  // own, so that drawing them takes nothing from `rng`.
+  const extraReadRng = mulberry32(seed ^ 0x2545f491);
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const engine: Engine = await open({ url: toFileUrl(path) });
   const history = emptyHistory();
@@ -161,6 +179,7 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
     sparseAccepts: 0,
     sparseRejects: 0,
     identityElisions: 0,
+    sharedScanAccepts: 0,
   };
 
   const ctx = (step: number, extra: Record<string, unknown> = {}) =>
@@ -341,6 +360,20 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
             seq: session.integratedSeq,
           });
         }
+        // The engine decides a commit's reads of one entity at one basis from
+        // one shared scan, so some commits carry up to two more reads of the
+        // same form as the first, at other paths.
+        const extraReads = Math.floor(extraReadRng() * 3);
+        for (let extra = 0; extra < extraReads; extra++) {
+          const path = toDocumentPath([
+            ...pick(extraReadRng, EXTRA_READ_PATHS),
+          ]);
+          if (reads.pending.length > 0) {
+            reads.pending.push({ ...reads.pending[0], path });
+          } else {
+            reads.confirmed.push({ ...reads.confirmed[0], path });
+          }
+        }
       }
 
       for (const read of [...reads.confirmed, ...reads.pending]) {
@@ -356,6 +389,9 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
       if (engineSeq !== null) {
         stats.accepted++;
         if (reads.pending.length > 0) stats.pendingReadAccepts++;
+        if (reads.pending.length + reads.confirmed.length > 1) {
+          stats.sharedScanAccepts++;
+        }
         if (sparseThisStep) stats.sparseAccepts++;
         stack.push(commit.localSeq);
         session.stacks.set(id, stack);
@@ -456,6 +492,7 @@ Deno.test("memory v2 differential: engine admission refines the naive model acro
     sparseAccepts: 0,
     sparseRejects: 0,
     identityElisions: 0,
+    sharedScanAccepts: 0,
   };
   for (let seed = 1; seed <= 100; seed++) {
     const stats = await runSchedule(seed);
@@ -465,6 +502,7 @@ Deno.test("memory v2 differential: engine admission refines the naive model acro
     totals.sparseAccepts += stats.sparseAccepts;
     totals.sparseRejects += stats.sparseRejects;
     totals.identityElisions += stats.identityElisions;
+    totals.sharedScanAccepts += stats.sharedScanAccepts;
   }
   // Schedule-shape sanity (deterministic, seeds are fixed): the generator
   // must keep exercising rejections, accepted pending-stack reads, and both
@@ -476,7 +514,7 @@ Deno.test("memory v2 differential: engine admission refines the naive model acro
   if (
     totals.rejected < 50 || totals.pendingReadAccepts < 50 ||
     totals.sparseAccepts < 5 || totals.sparseRejects < 5 ||
-    totals.identityElisions < 5
+    totals.identityElisions < 5 || totals.sharedScanAccepts < 50
   ) {
     throw new Error(
       `degenerate schedule mix: ${JSON.stringify(totals)} — retune generator`,

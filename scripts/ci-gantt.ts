@@ -26,7 +26,7 @@
 //
 // Usage:
 //   scripts/ci-gantt.ts [options]
-//     --repo OWNER/REPO     default commontoolsinc/labs
+//     --repo OWNER/REPO     default commonfabric/labs
 //     --workflow FILE       default deno.yml
 //     --limit N             runs to fetch, default 100
 //     --input PATH          cached run and job JSON; skips GitHub requests
@@ -69,7 +69,7 @@ if (args.includes("--help") || args.includes("-h")) {
   Deno.exit(0);
 }
 
-const REPO = opt("repo", "commontoolsinc/labs");
+const REPO = opt("repo", "commonfabric/labs");
 const WORKFLOW = opt("workflow", "deno.yml");
 const LIMIT = numOpt("limit", 100, { min: 1, integer: true });
 const INPUT = opt("input", "");

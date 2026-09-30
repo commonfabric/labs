@@ -122,7 +122,10 @@ export interface HarnessCellLabelEntry {
  * cell exists somewhere; a store with nothing at it is a store that did not
  * receive the run's writes, which is what a snapshot taken against the wrong
  * file looks like, and the reading "this cell carries no label" would be
- * exactly wrong.
+ * exactly wrong. A label a stored entry holds by reference to a label
+ * document the store cannot supply is the same reason, recorded at the
+ * entry's own path: the entry says a label sits there, and the reader could
+ * not read it.
  */
 export type HarnessCellLabelUnreadReason =
   | "cross-space"

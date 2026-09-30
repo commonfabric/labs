@@ -1,6 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { liveUpdateStream, type UpdateStream } from "../stream-client.ts";
+import {
+  followUpdates,
+  liveUpdateStream,
+  type UpdateSource,
+  type UpdateStream,
+} from "../stream-client.ts";
 
 const CONNECTING = 0, OPEN = 1, CLOSED = 2;
 const SILENCE = 55_000;
@@ -224,6 +229,70 @@ describe("stream-client", () => {
         expect(page.check(now)).toBe(true);
       }
       expect(page.opened.length).toBe(1);
+    });
+  });
+
+  describe("followUpdates()", () => {
+    /** A stream the test delivers events on by name. */
+    class FakeSource implements UpdateSource {
+      readyState = CONNECTING;
+      readonly listeners = new Map<string, (event: { data: string }) => void>();
+      close(): void {
+        this.readyState = CLOSED;
+      }
+      addEventListener(
+        type: string,
+        listener: (event: { data: string }) => void,
+      ): void {
+        this.listeners.set(type, listener);
+      }
+      deliver(type: string, data = ""): void {
+        this.listeners.get(type)!({ data });
+      }
+    }
+
+    function follow() {
+      const sources: FakeSource[] = [];
+      const received: string[] = [];
+      let paints = 0;
+      const updates = followUpdates(
+        () => {
+          const source = new FakeSource();
+          sources.push(source);
+          return source;
+        },
+        SILENCE,
+        () => paints++,
+        { page: (data) => received.push(data) },
+      );
+      return { sources, received, updates, paints: () => paints };
+    }
+
+    it("hands each named event's data to its handler and repaints", () => {
+      const page = follow();
+      page.updates.check(Date.now());
+      const [source] = page.sources;
+      source.readyState = OPEN;
+      source.deliver("open");
+      source.deliver("page", "<main>one</main>");
+      source.deliver("ping", "1");
+      expect(page.received).toEqual(["<main>one</main>"]);
+      expect(page.paints()).toBe(3);
+      expect(page.updates.check(Date.now())).toBe(true);
+    });
+
+    it("says the server cannot be heard as soon as the connection drops", () => {
+      const page = follow();
+      page.updates.check(Date.now());
+      const [source] = page.sources;
+      source.readyState = OPEN;
+      source.deliver("open");
+      source.deliver("error");
+      expect(page.paints()).toBe(2);
+      expect(page.updates.check(Date.now())).toBe(false);
+      source.deliver("ping", "2");
+      expect(page.updates.check(Date.now())).toBe(true);
+      expect(page.received).toEqual([]);
     });
   });
 });

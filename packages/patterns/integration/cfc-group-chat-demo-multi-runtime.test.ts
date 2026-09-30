@@ -4,16 +4,18 @@
  * Each test opens the same piece in several runtimes (Alice, Bob — distinct
  * identities — plus a second session for Alice) backed by one shared
  * in-memory storage server. This exercises what neither the single-runtime
- * pattern test nor the single-page browser test can: PerUser/PerSession
- * isolation between concurrently-active users, and live propagation of
- * PerSpace state between them.
+ * pattern test nor the single-page browser test can: PerUser isolation
+ * between concurrently-active users, and live propagation of PerSpace state
+ * between them.
  *
  * No toolshed or browser required.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   MultiRuntimeHarness,
@@ -57,42 +59,79 @@ async function createGroupChatHarness(): Promise<MultiRuntimeHarness> {
   });
 }
 
-// Each helper below chains TWO events: a draft write, then a trusted
-// action whose served handler reads that draft — and silently no-ops
-// when it reads it empty (`prepareTrustedMessageSend` and friends
-// return null on a blank draft). Events on DIFFERENT streams have no
-// cross-stream serve-order guarantee (events.md §2: per stream,
-// commit-seq order; across streams, no claim), so under ON a loaded
-// serving loop can serve the trusted action against a pre-draft view —
-// the action terminalizes cleanly as a no-op, and a downstream arrival
-// wait then times out on a write that never happened (the 2026-08-22
-// ON-lane flake: runs 32543810077 and 32547606642, quiescence clean,
-// zero errors, next step healthy). The real UI forbids that
-// interleaving — the trusted control stays disabled until the SERVED
-// draft state round-trips (the browser test waits `waitForDisabled`,
-// OW47 S-G) — so these helpers gate the same way: fire the trusted
-// action only after the draft event's terminal consequence has arrived
-// back at this session (`awaitEventConsequences`), which puts the
-// draft's commit in the space's history before the action is served.
+let harness: MultiRuntimeHarness;
+let alice: MultiRuntimeSession;
+let bob: MultiRuntimeSession;
+let aliceTab2: MultiRuntimeSession;
+
+// A `cf-submit-input` delivers its field's text on the trusted click, from its
+// button or from Enter in the field; each helper below sends that one event.
+const submitted = (text: string) => ({
+  type: "click",
+  target: { value: text },
+});
+
+/**
+ * Saves `name` as this session's profile, and waits until the session reads
+ * it back.
+ *
+ * A user with no saved profile is inert: `prepareTrustedMessageSend` and
+ * `prepareTrustedAdminToggle` each read the caller's saved profile and return
+ * null without one, so that user's trusted sends and admin toggles are silent
+ * no-ops. Every test below that needs a named user saves that name itself
+ * rather than relying on a test above having saved it, because a lane may
+ * select one test out of this file and register the rest as ignored. A save
+ * updates the same profile entity every time and `registerProfile` dedupes, so
+ * saving again costs a round trip and changes nothing.
+ */
 async function saveProfile(
   session: MultiRuntimeSession,
   name: string,
 ): Promise<void> {
-  await session.send("setProfileDraft", name);
-  await session.awaitEventConsequences();
-  await session.send("saveProfile", {}, {
+  await session.send("saveProfile", submitted(name), {
     surface: PROFILE_SURFACE,
     action: SAVE_PROFILE_ACTION,
   });
+  await harness.waitFor(
+    debugStr`${session.label} sees the profile name $quote${name}`,
+    async () => (await session.read(["currentProfileName"])) === name,
+  );
+}
+
+/**
+ * Leaves "everyone is admin" off, with alice an admin and bob not one.
+ *
+ * The toggle fires only where the lockdown is not already in place.
+ * `currentUserAdminRole` reads `everyoneIsAdmin` to establish the caller's
+ * authority only while that flag is what grants it; once alice holds an admin
+ * role of her own it takes the shorter path, and the handler then writes the
+ * flag without having read it, which the write policy refuses.
+ */
+async function lockDownAdmin(): Promise<void> {
+  const registry = (await alice.read(["adminRegistry"])) as
+    | { everyoneIsAdmin?: boolean }
+    | undefined;
+  if (registry?.everyoneIsAdmin !== false) {
+    await alice.send("toggleEveryoneAdmin", { everyoneIsAdmin: false }, {
+      surface: ADMIN_SURFACE,
+      action: SET_ADMIN_ACTION,
+    });
+  }
+  await harness.waitFor(
+    "alice is an admin under the lockdown",
+    async () => (await alice.read(["currentUserIsAdmin"])) === true,
+  );
+  await harness.waitFor(
+    "bob is not an admin under the lockdown",
+    async () => (await bob.read(["currentUserIsAdmin"])) === false,
+  );
 }
 
 async function sendMessage(
   session: MultiRuntimeSession,
   body: string,
 ): Promise<void> {
-  await session.send("setMessageDraft", body);
-  await session.awaitEventConsequences();
-  await session.send("sendTrustedMessage", {}, {
+  await session.send("sendTrustedMessage", submitted(body), {
     surface: SEND_SURFACE,
     action: SEND_ACTION,
   });
@@ -102,9 +141,7 @@ async function addRoom(
   session: MultiRuntimeSession,
   name: string,
 ): Promise<void> {
-  await session.send("setRoomDraft", name);
-  await session.awaitEventConsequences();
-  await session.send("addTrustedRoom", {}, {
+  await session.send("addTrustedRoom", submitted(name), {
     surface: ROOM_SURFACE,
     action: ADD_ROOM_ACTION,
   });
@@ -114,19 +151,11 @@ async function messages(session: MultiRuntimeSession): Promise<any[]> {
   return ((await session.read(["messages"])) as any[]) ?? [];
 }
 
-// `rooms` defaults to `{}`, so reading the path ["rooms", "list"] would throw
-// before the first room is added; read the parent and pluck the list instead.
 async function rooms(session: MultiRuntimeSession): Promise<any[]> {
-  const value = (await session.read(["rooms"])) as { list?: any[] } | undefined;
-  return value?.list ?? [];
+  return ((await session.read(["rooms", "list"])) as any[] | undefined) ?? [];
 }
 
 describe("cfc group chat demo across runtimes", () => {
-  let harness: MultiRuntimeHarness;
-  let alice: MultiRuntimeSession;
-  let bob: MultiRuntimeSession;
-  let aliceTab2: MultiRuntimeSession;
-
   beforeAll(async () => {
     harness = await createGroupChatHarness();
     alice = harness.session("alice");
@@ -140,10 +169,6 @@ describe("cfc group chat demo across runtimes", () => {
 
   it("shares PerSpace messages between users (harness sanity)", async () => {
     await saveProfile(alice, "Alice");
-    await harness.waitFor(
-      "alice sees her own profile name",
-      async () => (await alice.read(["currentProfileName"])) === "Alice",
-    );
 
     await sendMessage(alice, "Hello from Alice");
     await harness.waitFor(
@@ -153,52 +178,9 @@ describe("cfc group chat demo across runtimes", () => {
     );
   });
 
-  it("does not leak the profile name draft to another user", async () => {
-    await alice.send("setProfileDraft", "Alice is typing");
-    await harness.settle();
-
-    const bobDraft = await bob.read(["profileDraft"]);
-    assert(
-      bobDraft === "" || bobDraft === undefined,
-      `PerUser profileDraft leaked across users: bob sees ${
-        JSON.stringify(bobDraft)
-      }`,
-    );
-
-    // PerUser state SHOULD follow the same user into another session.
-    await harness.waitFor(
-      "alice's second session sees her own draft",
-      async () =>
-        (await aliceTab2.read(["profileDraft"])) === "Alice is typing",
-    );
-  });
-
-  it("keeps PerSession drafts isolated between sessions of one user", async () => {
-    await alice.send("setHostMessageDraft", "tab-local host draft");
-    await harness.settle();
-
-    const tab2Draft = await aliceTab2.read(["hostMessageDraft"]);
-    assert(
-      tab2Draft === "" || tab2Draft === undefined,
-      `PerSession hostMessageDraft leaked across sessions: tab2 sees ${
-        JSON.stringify(tab2Draft)
-      }`,
-    );
-    const bobDraft = await bob.read(["hostMessageDraft"]);
-    assert(
-      bobDraft === "" || bobDraft === undefined,
-      `PerSession hostMessageDraft leaked across users: bob sees ${
-        JSON.stringify(bobDraft)
-      }`,
-    );
-  });
-
   it("keeps each user's saved profile their own", async () => {
+    await saveProfile(alice, "Alice");
     await saveProfile(bob, "Bob");
-    await harness.waitFor(
-      "bob sees his own profile name",
-      async () => (await bob.read(["currentProfileName"])) === "Bob",
-    );
     await harness.settle();
 
     // Bob saving must not clobber Alice's PerUser profile.
@@ -215,6 +197,9 @@ describe("cfc group chat demo across runtimes", () => {
   });
 
   it("shows other users' actual profile names, not unnamed placeholders", async () => {
+    await saveProfile(alice, "Alice");
+    await saveProfile(bob, "Bob");
+
     await sendMessage(bob, "Hi, this is Bob");
     await harness.waitFor(
       "alice receives bob's message",
@@ -243,27 +228,14 @@ describe("cfc group chat demo across runtimes", () => {
     const namesFromAlice = profilesFromAlice
       .map((entry) => entry?.profile?.name)
       .toSorted();
-    assertEquals(
-      namesFromAlice,
-      ["Alice", "Bob"],
-      "alice cannot resolve all registered profile names",
-    );
+    expect(namesFromAlice, "alice cannot resolve all registered profile names")
+      .toEqual(["Alice", "Bob"]);
   });
 
   it("admin lockdown gates room creation but never message sending", async () => {
-    // Alice turns off "everyone is admin" — she becomes the bootstrap admin.
-    await alice.send("toggleEveryoneAdmin", { everyoneIsAdmin: false }, {
-      surface: ADMIN_SURFACE,
-      action: SET_ADMIN_ACTION,
-    });
-    await harness.waitFor(
-      "alice is still admin after lockdown",
-      async () => (await alice.read(["currentUserIsAdmin"])) === true,
-    );
-    await harness.waitFor(
-      "bob is no longer admin after lockdown",
-      async () => (await bob.read(["currentUserIsAdmin"])) === false,
-    );
+    await saveProfile(alice, "Alice");
+    await saveProfile(bob, "Bob");
+    await lockDownAdmin();
 
     // Posting messages is NOT admin-gated: both users must still be able
     // to send.
@@ -287,17 +259,10 @@ describe("cfc group chat demo across runtimes", () => {
     // Room creation IS admin-gated: bob's attempt must be rejected…
     await addRoom(bob, "Bob's room");
     await harness.settle();
-    // waitFor retries through transiently-unsynced reads; the room list must
-    // settle as readable AND empty.
-    await harness.waitFor(
-      "alice's room list stays empty after bob's rejected add",
-      async () => (await rooms(alice)).length === 0,
-    );
-    assertEquals(
+    expect(
       (await rooms(alice)).map((room) => room?.name),
-      [],
       "non-admin bob was able to add a room",
-    );
+    ).toEqual([]);
 
     // …while admin alice's succeeds.
     await addRoom(alice, "Ops");
@@ -308,6 +273,10 @@ describe("cfc group chat demo across runtimes", () => {
   });
 
   it("admins can grant admin to another user by name", async () => {
+    await saveProfile(alice, "Alice");
+    await saveProfile(bob, "Bob");
+    await lockDownAdmin();
+
     await alice.send("toggleParticipantAdmin", { name: "Bob" }, {
       surface: ADMIN_SURFACE,
       action: SET_ADMIN_ACTION,
@@ -317,11 +286,11 @@ describe("cfc group chat demo across runtimes", () => {
       async () => (await bob.read(["currentUserIsAdmin"])) === true,
     );
 
-    await addRoom(bob, "Bob's room");
+    await addRoom(bob, "Bob's own room");
     await harness.waitFor(
       "bob can add a room once admin",
       async () =>
-        (await rooms(alice)).some((room) => room?.name === "Bob's room"),
+        (await rooms(alice)).some((room) => room?.name === "Bob's own room"),
     );
   });
 });

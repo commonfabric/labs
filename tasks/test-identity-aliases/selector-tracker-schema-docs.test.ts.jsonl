@@ -1,0 +1,1 @@
+{"date":"2026-09-11","from":{"k":"unit","s":"runner","n":"selector-tracker-schema-docs > inherits parent definitions when a union branch has no local scope"},"to":{"k":"unit","s":"runner","n":"selector-tracker-schema-docs > resolves a union branch that declares no `$defs` against the union's definitions"}}

@@ -1,5 +1,6 @@
 import { cloneWithoutValueAtPath } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
@@ -353,7 +354,7 @@ describe("collection-index", () => {
       // enumeration this case expects not to run.
       const indexCell = restored.key("index").resolveAsCell();
       const hasKeyEntries = (value: unknown): boolean =>
-        value !== null && typeof value === "object" &&
+        isObjectOrArray(value) &&
         Object.hasOwn(value, "keyEntries");
       const repaired = Promise.withResolvers<void>();
       if (hasKeyEntries(indexCell.getRawUntyped())) repaired.resolve();

@@ -7,6 +7,7 @@ import type { URI } from "@commonfabric/memory/interface";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { parsePointer } from "../../memory/v2/path.ts";
@@ -79,7 +80,7 @@ const seedLabeledDoc = async (
   const cell = runtime.getCell(signer.did(), id, undefined, seed);
   const docId = cell.getAsNormalizedFullLink().id as URI;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     id: docId,
     type: "application/json",
@@ -113,6 +114,213 @@ const seedPlainDoc = async (
 };
 
 describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
+  it("captures gate paths before a backend metadata read can mutate them", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager });
+    try {
+      await seedPlainDoc(runtime, "path-capture-source", {
+        guarded: "untrusted",
+        allowed: "trusted",
+      });
+      const tx = runtime.edit();
+      const source = runtime.getCell(signer.did(), "path-capture-source")
+        .getAsNormalizedFullLink();
+      runtime.getCell(signer.did(), "path-capture-sink", SINK_SCHEMA, tx)
+        .set({ out: "target" });
+      const path = ["value", "guarded"];
+      const view = new Proxy(tx, {
+        get(target, property) {
+          if (property === "getPotentiallyExternalReadActivities") {
+            return () => [{ ...source, path, meta: {} }];
+          }
+          if (property === "readOrThrow") {
+            return (...args: Parameters<typeof target.readOrThrow>) => {
+              if (args[0].id === source.id && args[0].path[0] === "cfc") {
+                path[1] = "allowed";
+                return {
+                  version: 1,
+                  schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                  labelMap: {
+                    version: 1,
+                    entries: [{
+                      path: ["guarded"],
+                      label: { integrity: [OTHER_ATOM] },
+                    }, {
+                      path: ["allowed"],
+                      label: { integrity: [FLOOR_ATOM] },
+                    }],
+                  },
+                };
+              }
+              return target.readOrThrow(...args);
+            };
+          }
+          const member = Reflect.get(target, property, target);
+          return typeof member === "function" ? member.bind(target) : member;
+        },
+      });
+      expect(
+        prepareBoundaryCommit(view).some((reason) =>
+          reason.includes("requiredIntegrity failed")
+        ),
+      ).toBe(true);
+      expect(path).toEqual(["value", "allowed"]);
+      tx.abort();
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
+  it("enforces input floors through the raw journal when candidate inspection is unavailable", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager });
+    try {
+      await seedLabeledDoc(runtime, "fallback-source", "source", {
+        integrity: [OTHER_ATOM],
+      });
+      const tx = runtime.edit();
+      runtime.getCell(signer.did(), "fallback-source", undefined, tx).get();
+      runtime.getCell(signer.did(), "fallback-target", SINK_SCHEMA, tx).set({
+        out: "target",
+      });
+      let rawInspections = 0;
+      const view = new Proxy(tx, {
+        get(target, prop) {
+          if (prop === "getPotentiallyExternalReadActivities") return undefined;
+          if (prop === "getReadActivities") {
+            return () => {
+              rawInspections++;
+              return target.getReadActivities?.() ?? [];
+            };
+          }
+          const member = Reflect.get(target, prop, target);
+          return typeof member === "function" ? member.bind(target) : member;
+        },
+      });
+      expect(
+        prepareBoundaryCommit(view).some((reason) =>
+          reason.includes("requiredIntegrity failed")
+        ),
+      ).toBe(true);
+      expect(rawInspections).toBeGreaterThan(0);
+      tx.abort();
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
+  it("permits a self-endorsed write with no reads on a backend without read inspection", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager });
+    try {
+      const tx = runtime.edit();
+      runtime.getCell(signer.did(), "no-read-target", SINK_SCHEMA, tx).set({
+        out: "target",
+      });
+      const view = new Proxy(tx, {
+        get(target, prop) {
+          if (
+            prop === "getPotentiallyExternalReadActivities" ||
+            prop === "getReadActivities"
+          ) return undefined;
+          const member = Reflect.get(target, prop, target);
+          return typeof member === "function" ? member.bind(target) : member;
+        },
+      });
+      const summaries: CfcPrefixProvenanceSummary[] = [];
+      expect(prepareBoundaryCommit(view, {
+        onPrefixProvenance: (summary) => summaries.push(summary),
+      })).toEqual([]);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0].protectedWrites).toBe(1);
+      expect(summaries[0].prefixGatedReads).toBe(0);
+      tx.abort();
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
+  it("refreshes candidate reads and source envelopes for each target", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager });
+    try {
+      await seedLabeledDoc(runtime, "candidate-current-source", "source", {
+        integrity: [FLOOR_ATOM],
+      });
+      await seedLabeledDoc(runtime, "candidate-late-source", "late", {
+        integrity: [FLOOR_ATOM],
+      });
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "candidate-current-source",
+        undefined,
+        tx,
+      );
+      source.get();
+      for (const name of ["candidate-first-sink", "candidate-second-sink"]) {
+        runtime.getCell(signer.did(), name, SINK_SCHEMA, tx).set({ out: name });
+      }
+      let passes = 0;
+      const lengths: number[] = [];
+      const view = new Proxy(tx, {
+        get(target, prop) {
+          if (prop === "getPotentiallyExternalReadActivities") {
+            return () => {
+              passes++;
+              if (passes === 2) {
+                runtime.getCell(
+                  signer.did(),
+                  "candidate-late-source",
+                  undefined,
+                  target,
+                ).get();
+                // Model a metadata write between target checks. The native
+                // write keeps this fixture separate from application-write
+                // authorization; the gate must read the current envelope.
+                expect(
+                  target.tx.write({
+                    space: signer.did(),
+                    id: source.getAsNormalizedFullLink().id as URI,
+                    type: "application/json",
+                    path: ["cfc", "labelMap"],
+                  }, {
+                    version: 1,
+                    entries: [{ path: [], label: { integrity: [OTHER_ATOM] } }],
+                  }).ok,
+                ).toBeDefined();
+              }
+              const reads = [
+                ...target.getPotentiallyExternalReadActivities?.() ?? [],
+              ];
+              lengths.push(reads.length);
+              return reads;
+            };
+          }
+          const member = Reflect.get(target, prop, target);
+          return typeof member === "function" ? member.bind(target) : member;
+        },
+      });
+      const reasons = prepareBoundaryCommit(view);
+      expect(passes).toBe(2);
+      expect(lengths[1]).toBeGreaterThan(lengths[0]);
+      expect(
+        reasons.some((reason) => reason.includes("requiredIntegrity failed")),
+      )
+        .toBe(true);
+      expect(
+        reasons.filter((reason) => reason.includes("requiredIntegrity failed")),
+      )
+        .toHaveLength(1);
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
   it("a labeled read past the last overlapping write reports prefix-gated < transaction-global", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime({
@@ -394,6 +602,7 @@ describe("CFC prefix-provenance summary (direct gate probes)", () => {
   ): IExtendedStorageTransaction =>
     new Proxy(tx, {
       get(target, prop) {
+        if (prop === "getPotentiallyExternalReadActivities") return undefined;
         if (prop === "getReadActivities") {
           return (): IReadActivity[] =>
             [...target.getReadActivities?.() ?? []].map((activity) => {

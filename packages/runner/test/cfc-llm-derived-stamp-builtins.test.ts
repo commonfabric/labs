@@ -19,6 +19,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "../src/builtins/llm-schemas.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // Epic D1b (docs/history/plans/cfc-future-work-implementation.md): the `llm`,
 // `generateText`, and `generateObject` builtins stamp their MODEL-OUTPUT
@@ -95,7 +96,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
     try {
       // Model-output write: builtin identity + the stamp schema at ["result"].
       const modelTx = runtime.edit();
-      modelTx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(modelTx, {
         kind: "builtin",
         builtinId: "llm",
       });
@@ -149,6 +150,68 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
         LLM_DERIVED_ATOM,
       );
       forgeReadTx.commit();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+  it("strips union evidence on an ordinary rewrite and refuses forged evidence", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    const schema = {
+      anyOf: [
+        { type: "string", ifc: { addIntegrity: [LLM_DERIVED_ATOM] } },
+        {
+          type: "number",
+          ifc: { addIntegrity: [LLM_DERIVED_ATOM, cfcAtom.injectionSafe()] },
+        },
+      ],
+    } as const;
+    try {
+      const write = async (
+        id: string,
+        value: string | number,
+        builtin: boolean,
+      ) => {
+        const writeTx = runtime.edit();
+        if (builtin) {
+          setCfcImplementationIdentity(writeTx, {
+            kind: "builtin",
+            builtinId: "generateObject",
+          });
+        }
+        const cell = runtime.getCell(space, id, undefined, writeTx);
+        cell.key("result").asSchema(schema).set(value);
+        cell.key("messages").asSchema({ type: "array" }).set([]);
+        writeTx.prepareCfc();
+        expect((await writeTx.commit()).ok).toBeDefined();
+      };
+      const integrity = (id: string) => {
+        const readTx = runtime.edit();
+        try {
+          return integrityAtomsAt(
+            runtime.getCell(space, id, undefined, readTx).key("result"),
+          );
+        } finally {
+          readTx.abort();
+        }
+      };
+
+      const authored = "llm-union-authored";
+      await write(authored, 2, true);
+      expect(integrity(authored)).toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrity(authored)).toContainEqual(cfcAtom.injectionSafe());
+      await write(authored, "ordinary replacement", false);
+      expect(integrity(authored)).not.toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrity(authored)).not.toContainEqual(cfcAtom.injectionSafe());
+
+      const forged = "llm-union-forged";
+      await write(forged, 2, false);
+      expect(integrity(forged)).not.toContainEqual(LLM_DERIVED_ATOM);
+      expect(integrity(forged)).not.toContainEqual(cfcAtom.injectionSafe());
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -557,6 +620,13 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
     expect(childDocIntegrity(runtime, taggedSecond)).toContainEqual(
       LLM_DERIVED_ATOM,
     );
+    // The inert branch cannot certify the other branch's free-form text.
+    expect(childDocIntegrity(runtime, taggedFirst)).not.toContainEqual(
+      cfcAtom.injectionSafe(),
+    );
+    expect(childDocIntegrity(runtime, taggedSecond)).toContainEqual(
+      cfcAtom.injectionSafe(),
+    );
     // Recursive-`$ref` item carries the stamp on its own doc.
     expect(childDocIntegrity(runtime, treeChild)).toContainEqual(
       LLM_DERIVED_ATOM,
@@ -571,6 +641,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       // The assertion below reads that `result` carries no LlmDerived atom.
       // That holds at the `disabled` rung.
       cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
     });
     const disabledTx = disabledRuntime.edit();
     const { commonfabric } = createTrustedBuilder(disabledRuntime);
@@ -622,6 +693,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       // The assertion below reads that `result` carries no LlmDerived atom.
       // That holds at the `disabled` rung.
       cfcEnforcementMode: "disabled",
+      cfcFlowLabels: "off",
     });
     const disabledTx = disabledRuntime.edit();
     const { commonfabric } = createTrustedBuilder(disabledRuntime);

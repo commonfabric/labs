@@ -6,10 +6,21 @@
  */
 
 export { TRUST_RUNS_MAX } from "./ci-trust-layout.ts";
+export {
+  CI_RUNS_MAX,
+  CI_RUNS_MAX_AGE_DAYS,
+  DUR_MAX_AGE_HOURS,
+  DUR_MIN_RUNS,
+} from "./ci-run-limits.ts";
 
 export const PORT = Number(Deno.env.get("DASHBOARD_PORT") ?? "8731");
-export const REPO = Deno.env.get("DASHBOARD_REPO") ?? "commontoolsinc/labs";
+export const REPO = Deno.env.get("DASHBOARD_REPO") ?? "commonfabric/labs";
 export const CI_WORKFLOW = "deno.yml";
+export const TEST_SELECTION_WORKFLOW = "test-selection.yml";
+
+// How often the server looks for tiles that are due and tells every open page
+// it is still there.
+export const TICK_MS = 15_000;
 
 // The service.name production reports under in SigNoz. The tiles that read traces
 // scope to it by name: the same SigNoz also holds staging and one-off perf runs,
@@ -19,20 +30,23 @@ export const PROD_SERVICE = "toolshed-production";
 
 // The loom repo and its main CI workflow ("Tests (fast)"), for the loom-repo CI
 // tiles and the combined recent-runs stream.
-export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commontoolsinc/loom";
+export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commonfabric/loom";
 export const LOOM_CI_WORKFLOW = "test-fast.yml";
 
-// Shared fetch window: the fetch stops at whichever of these two yields fewer
-// workflow runs. Every CI tile slices from it.
-export const CI_RUNS_MAX = 200; // workflow runs
-export const CI_RUNS_MAX_AGE_DAYS = 60; // ~2 months
+// The weaver repo and its CI workflow, for the weaver-repo CI tiles.
+export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
+  "commonfabric/commonfabric-weaver";
+export const WEAVER_CI_WORKFLOW = "ci.yml";
+
+// How long a job's failure stays red on the ci tile. A job that has been
+// failing for longer than this is still failing, and still listed, but it is
+// no longer the thing that just broke, so it goes orange and leaves the red
+// for a failure somebody can still act on.
+export const CI_FAILURE_FRESH_HOURS = 48;
 
 // Tile display windows and status thresholds (tune here).
 export const TRUST_GOOD = 90, TRUST_WARN = 75; // first-try-green %
 export const DUR_GOOD = 12, DUR_WARN = 20; // median CI minutes
-// ci-duration median window — the larger of these two (more runs wins).
-export const DUR_MIN_RUNS = 20;
-export const DUR_MAX_AGE_HOURS = 6;
 // benchmark trend window — the same "larger of the two" idea, but in days: the
 // benchmarks.yml job runs about four-hourly, and the daily-median trend fit needs
 // several distinct days, so the recent slice is measured in days, not hours.

@@ -135,10 +135,16 @@ comes from [DAG-JSON](https://ipld.io/specs/codecs/dag-json/spec/).
 
 See [Identity and References](./3-identity-and-references.md) for details.
 
-#### Stream Marker: `{ $stream: true }`
+#### Streams: Declared, Not Stored
 
-Objects with exactly `{ $stream: true }` mark stream cell locations. The marker
-persists to preserve stream identity; event payloads are ephemeral.
+A stream position stores no value. What marks it is its schema: the link that
+reaches it carries `asCell: ["stream"]` in front of the event schema, and among
+those links is the one the owning piece keeps for the stream in its `internal`
+manifest. The stream's own document holds only its `result` back-link to that
+owner, so a reader holding the document alone tells it is a stream by following
+the back-link to the manifest. Event payloads are ephemeral. Documents written
+before this held a `{ "$stream": true }` sentinel as their value; readers still
+recognize it, and nothing writes it.
 
 See [Cells](./4-cells.md) for stream semantics.
 
@@ -291,12 +297,15 @@ Today, special JSON forms are created early and travel through the system:
 
 - `normalizeAndDiff()` converts Cells to SigilLinks (`{ "/": {...} }`) immediately
 - `convertCellsToLinks()` explicitly replaces Cell references with JSON forms
-- `fabricFromNativeValue()` wraps Errors as `{ "@Error": {...} }` during data updates
-- Stream markers (`{ $stream: true }`) are stored and compared as JSON objects
+- `fabricFromConvertibleJsValue()` wraps Errors as `{ "@Error": {...} }` during
+  data updates
+
+Streams have no JSON form of their own: a stream position is declared by the
+schema on the link that reaches it, and stores nothing.
 
 The JSON forms then propagate through transactions, the reactive system, and
 query results. Code throughout the system must detect and handle these special
-shapes via `isSigilLink()`, `isStreamValue()`, `isErrorWrapper()`, etc.
+shapes via `isSigilLink()`, `isErrorWrapper()`, etc.
 
 #### Proposed: Defer Conversion to Boundaries
 
@@ -363,28 +372,39 @@ abstract class FabricInstance {
 
 // Codec protocol: each class hosts an encoder-decoder object -- the
 // single source of truth for how its instances encode -- as a static
-// getter keyed by a well-known symbol. `Encoded` is the domain the
-// essential state lives in.
-interface FabricCodec<Encoded> {
+// getter keyed by a well-known symbol. `PlusType` is what the values may
+// hold beyond `FabricValue`, `never` for a codec over `FabricValue` alone;
+// `Encoded` is the domain the essential state lives in; `State` narrows
+// it to this codec's own states.
+interface FabricCodec<PlusType, Encoded, State extends Encoded = Encoded> {
   get uniqueHandledClass(): Constructor | undefined;
   get recognizedTypeTag(): string | undefined;
-  canEncode(value: FabricValue): boolean;
-  tagForValue(value: FabricValue): string;
-  encode(value: FabricValue): Encoded;       // shallow
+  canEncode(value: FabricValuePlus<PlusType>): boolean;
+  canDecode(state: Encoded): state is State;
+  tagForValue(value: FabricValuePlus<PlusType>): string;
+  encode(                                    // shallow
+    value: FabricValuePlus<PlusType>,
+    env: LiveEnvironment,
+  ): State;
   decode(                                    // shallow
     typeTag: string,
-    state: Encoded,
+    state: State,
     env: LiveEnvironment,
-  ): FabricValue;
+  ): FabricValuePlus<PlusType>;
 }
 
-// Nonterminal: state made of `FabricValue`s, which the walker expands in
-// turn. One such instance can serve every wire format.
-type NonterminalCodec = FabricCodec<FabricValue>;
+// Nonterminal: state made of the same values the codec takes, which the
+// walker expands in turn. One such instance can serve every wire format;
+// only one at `never` has a wire form.
+type NonterminalCodec<
+  PlusType = never,
+  State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
+> = FabricCodec<PlusType, FabricValuePlus<PlusType>, State>;
 
 // Terminal: state already in one format's own domain, which the walker
-// passes through. Serves that one format alone.
-type TerminalCodec<Encoded> = FabricCodec<Encoded>;
+// passes through. Serves that one format alone, over `FabricValue`s.
+type TerminalCodec<Encoded, State extends Encoded = Encoded> =
+  FabricCodec<never, Encoded, State>;
 
 // The symbol a class binds under is a separate question from the kind.
 // `CODEC` is the claim that one codec serves every format, which a
@@ -396,8 +416,8 @@ type TerminalCodec<Encoded> = FabricCodec<Encoded>;
 // Which kind a codec is cannot be read off its signature -- the domains
 // overlap -- so a codec declares it by which base class it extends.
 
-interface FabricClassWithNonterminalCodec {
-  get [CODEC](): NonterminalCodec;
+interface FabricClassWithNonterminalCodec<PlusType = never> {
+  get [CODEC](): NonterminalCodec<PlusType>;
 }
 ```
 
@@ -584,7 +604,6 @@ The boundaries where encoding occurs in the current architecture:
 |----------|----------|-----------|
 | **Persistence** | `memory` ↔ database | read/write |
 | **Iframe sandbox** | `runner` ↔ `iframe-sandbox` | postMessage |
-| **Background service** | `shell` ↔ `background-piece-service` | worker messages |
 | **Network sync** | `toolshed` ↔ remote peers | WebSocket/HTTP |
 | **Cross-space** | space A ↔ space B | if in separate processes |
 
@@ -707,17 +726,18 @@ digit reserves space for future incompatible revisions of the wire format.
 For full details — including how decoders verify and strip the prefix —
 see Section 1.1 of the formal spec.
 
-#### Current State: Three Conventions
+#### Current State: Two Conventions
 
-The current system uses three different conventions for special object shapes:
+The current system uses two different conventions for special object shapes:
 
 | Convention | Example | Used For |
 |------------|---------|----------|
 | IPLD sigil | `{ "/": { "link@1": {...} } }` | Cell references |
 | `@` prefix | `{ "@Error": {...} }` | Error instances |
-| `$` prefix | `{ "$stream": true }` | Stream markers |
 
-This inconsistency complicates parsing and adds cognitive overhead.
+A third, the `$`-prefixed `{ "$stream": true }` stream marker, is retired: a
+stream position is declared by its schema and stores nothing. This
+inconsistency complicates parsing and adds cognitive overhead.
 
 #### Proposed: Unified `/<type>@<version>` Keys
 
@@ -733,7 +753,6 @@ Examples:
 ```json
 { "/Link@1": { "id": "of:abc...", "path": ["x", "y"], "space": "..." } }
 { "/Error@1": { "name": "TypeError", "message": "...", "stack": "..." } }
-{ "/Stream@1": null }
 { "/Map@1": [ ["key1", "value1"], ["key2", "value2"] ] }
 { "/Set@1": [ "a", "b", "c" ] }
 { "/Bytes@1": "base64encoded..." }
@@ -767,13 +786,10 @@ keeping the boundary between encoding signals and user data unambiguous.
 
 #### Stateless Types
 
-Types that require no decoding state use `null` as the value:
-
-```json
-{ "/Stream@1": null }
-```
-
-This clearly distinguishes "no state needed" from "empty state" (`{}`).
+A type that requires no decoding state uses `null` as its value, which
+distinguishes "no state needed" from "empty state" (`{}`). No current type is
+stateless: the stream marker that would have been one is retired rather than
+renamed, since a stream position is declared by its schema and stores nothing.
 
 #### Escaping and Literal Values
 
@@ -900,8 +916,8 @@ Automerge has a **fixed type system by design** — merge semantics, binary form
 optimization, and cross-language interoperability require known types. Custom
 types must be handled at an application layer above Automerge.
 
-This means the current special object shapes (`"/"`, `$stream`, `@Error`) would
-need a mapping layer:
+This means the current special object shapes (`"/"`, `@Error`) would need a
+mapping layer:
 - Store as Automerge primitives/containers
 - Interpret special shapes at a layer above Automerge
 - The `bytes` type could store arbitrary data but loses fine-grained merge
@@ -955,7 +971,7 @@ collaborative editing where needed.
 
 ## Open Questions
 
-- Should there be additional special object shapes beyond `"/"`, `$stream`, and `@Error`?
+- Should there be additional special object shapes beyond `"/"` and `@Error`?
 - How should versioning of special shapes work?
 - What happens when unknown special shapes are encountered?
 - Should the `@Error` format capture more or less information?

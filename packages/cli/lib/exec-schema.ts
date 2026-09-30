@@ -1,6 +1,10 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { toCompactDebugString } from "@commonfabric/data-model";
-import { schemaToTypeString } from "@commonfabric/runner";
+import {
+  ContextualFlowControl,
+  resolveExternalRootRefForStructure,
+  schemaToTypeString,
+} from "@commonfabric/runner";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -215,7 +219,7 @@ function parseValueForSchema(
     }
     if (
       type === "object" &&
-      (typeof value !== "object" || value === null || Array.isArray(value))
+      !isObjectNotArray(value)
     ) {
       throw new Error(`Invalid value for ${flagName}: expected object JSON`);
     }
@@ -708,13 +712,19 @@ function hasHelpField(schema: JSONSchema): boolean {
   return properties ? "help" in properties : false;
 }
 
-function isSchemaLessHandlerInput(schema: JSONSchema): boolean {
-  if (schema === true) {
+function isSchemaLessHandlerInput(linkSchema: JSONSchema): boolean {
+  if (linkSchema === true) {
     return true;
   }
-  if (!isSchemaObject(schema)) {
+  if (!isSchemaObject(linkSchema)) {
     return false;
   }
+  // A link's schema can be a content-addressed reference, with the stream
+  // declaration and the event's own type on the document it names and nothing
+  // but the reference at the root. Every check below reads that document, so
+  // a referenced `{ asCell: ["stream"], type: "string" }` is judged as the
+  // single-value verb it is rather than by its bare-looking wrapper.
+  const schema = resolveExternalRootRefForStructure(linkSchema);
   if (schema.type !== undefined || schema.properties !== undefined) {
     return false;
   }
@@ -736,7 +746,7 @@ function isSchemaLessHandlerInput(schema: JSONSchema): boolean {
   if (typeof schema.$ref === "string" && objectProperties(schema) !== null) {
     return false;
   }
-  return Array.isArray(schema.asCell) && schema.asCell.at(0) === "stream";
+  return ContextualFlowControl.declaresStream(schema);
 }
 
 export function normalizeCallableInputForExecution(
@@ -746,7 +756,7 @@ export function normalizeCallableInputForExecution(
   if (spec.callableKind !== "tool") {
     return input;
   }
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+  if (!isObjectNotArray(input)) {
     return input;
   }
 

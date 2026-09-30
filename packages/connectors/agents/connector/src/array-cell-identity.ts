@@ -1,4 +1,5 @@
 import { isLinkRef, linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { canonicalJson, hashFabricValue } from "./canonical-json.ts";
 import { stableFabricValue } from "./stable-fabric-value.ts";
 
@@ -72,7 +73,7 @@ const SECONDARY_IDENTITY_FIELDS = [
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);

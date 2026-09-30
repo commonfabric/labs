@@ -300,7 +300,7 @@ Open the Omnibot (click the FAB in the bottom-right). Send a message asking it t
 > 1. Plan a weekend camping trip
 > 2. Research the best noise-canceling headphones under $200
 > 3. Budget for a home office upgrade — $500 to spend
-> 4. Clone the https://github.com/commontoolsinc/labs repo and summarize the readme in a note
+> 4. Clone the https://github.com/commonfabric/labs repo and summarize the readme in a note
 
 Wait ~15-25 seconds for the LLM to use the `addDoItem` or `addDoItems` tools. The items appear in the do-list as soon as the tool executes — you don't need to wait for the LLM to finish its text summary. Once you see items in the list, click anywhere on the page to dismiss the omnibox and move on. Note: dismissing the omnibox eats the first click — it does NOT also interact with whatever is underneath. You'll need a second click to interact with elements like AI Suggestions disclosures.
 

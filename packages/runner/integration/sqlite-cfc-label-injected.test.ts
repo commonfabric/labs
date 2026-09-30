@@ -28,7 +28,7 @@
 
 import { Database } from "@db/sqlite";
 
-import { fabricFromNativeValue } from "@commonfabric/data-model";
+import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { deriveDiskHandleId } from "../../cli/lib/sqlite-source.ts";
@@ -202,7 +202,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
     const writeHandle = (tables: unknown) =>
       runtime.editWithRetry((tx) => {
         handle.withTx(tx).setRawUntyped(
-          fabricFromNativeValue({ id: handleId, tables, rev: 0 }),
+          fabricFromConvertibleJsValue({ id: handleId, tables, rev: 0 }),
           true,
         );
       });

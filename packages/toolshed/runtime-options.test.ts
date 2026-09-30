@@ -51,7 +51,7 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
     options.experimental?.serverExecution,
     SERVER_EXECUTION_DEFAULT_ENABLED,
   );
-  assertEquals(options.cfcEnforcementMode, "enforce-explicit");
+  assertEquals(options.cfcEnforcementMode, "enforce-strict");
   assertEquals(options.cfcFlowLabels, "persist");
 });
 
@@ -142,14 +142,14 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
     // The CFC posture publishes alongside, from the same constructed Runtime
     // (lib/cfc-posture.ts): the production preset pins plus constructor defaults.
     const cfc = cfcPosture();
-    assertEquals(cfc?.enforcementMode.rung, "enforce-explicit");
+    assertEquals(cfc?.enforcementMode.rung, "enforce-strict");
     assertEquals(cfc?.flowLabels.rung, "persist");
     assertEquals(cfc?.flowLabels.diagnosticOnly, false);
     assertEquals(cfc?.policyDigest, null);
     // Every known sink is named, none of them ceilinged: a server that has
-    // configured nothing publishes ten ungated sinks rather than an empty
+    // configured nothing publishes every sink as ungated rather than an empty
     // list a reader could take for full coverage.
-    assertEquals(cfc?.sinks.length, 10);
+    assertEquals(cfc?.sinks.length, 12);
     assertEquals(cfc?.sinks.every((sink) => "ungated" in sink), true);
     assertEquals(posture?.modernCellRep, true);
     // Resolved, not passed: the env reader said nothing about these, and a

@@ -18,12 +18,13 @@ import { isAliasBinding } from "../src/alias-binding.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import {
   linkCfcLabelView,
-  setLinkCfcLabelView,
+  withLinkCfcLabelView,
 } from "../src/cfc/link-label-view.ts";
-import { isCell } from "../src/cell.ts";
+import { createCell, isCell } from "../src/cell.ts";
 import {
   areLinksSame,
   areNormalizedLinksSame,
+  createSigilLinkFromParsedLink,
   getDerivedInternalCellLink,
   getMetaCell,
   parseLink,
@@ -41,7 +42,13 @@ import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import type { JSONSchema } from "../src/builder/types.ts";
+import type {
+  FabricExecPlainObject,
+  FabricExecValue,
+  JSONSchema,
+  Pattern,
+} from "../src/builder/types.ts";
+import type { AnyCell } from "../src/cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -229,15 +236,15 @@ describe("pattern-binding", () => {
       // A static primitive binding matches an identical produced value...
       sendValueToBinding(tx, testCell, argumentCellLink, 42, 42);
       // ...including `NaN` (`Object.is` semantics; a `!==` check would
-      // spuriously throw `Got NaN instead of NaN` here).
+      // spuriously throw here, reporting `NaN` instead of `NaN`).
       sendValueToBinding(tx, testCell, argumentCellLink, NaN, NaN);
       // A genuine mismatch throws.
       expect(() => sendValueToBinding(tx, testCell, argumentCellLink, 42, 43))
-        .toThrow("Got 43 instead of 42");
+        .toThrow("Got `43` instead of `42`");
       // A produced object is rendered, not stringified as `[object Object]`.
       expect(() =>
         sendValueToBinding(tx, testCell, argumentCellLink, 42, { a: 1 })
-      ).toThrow("Got {a:1} instead of 42");
+      ).toThrow("Got `{a:1}` instead of `42`");
     });
 
     it("normalizes cell values before writing a narrower scoped binding", () => {
@@ -600,11 +607,64 @@ describe("pattern-binding", () => {
       expect({ ...parsed, schema: resolvedSchema(parsed.schema) }).toEqual({
         ...argumentCell.getAsNormalizedFullLink(),
         path: ["profile"],
-        scope: "user",
+        // The link keeps the argument cell's scope; the declared scope stays
+        // in the schema, realized when the link is read or written.
         schema: profileSchema,
         overwrite: "redirect",
         // parseLink of a sigil stamps the read-side data-derived mark (OW51).
         viaLinkHop: true,
+      });
+    });
+
+    it("carries a handle cap an argument path passes through onto a nested binding", () => {
+      const binding = {
+        name: { $alias: { cell: "argument", path: ["profile", "name"] } },
+      };
+      const resultCell = runtime.getCell(
+        space,
+        "nested handle cap result cell",
+        undefined,
+        tx,
+      );
+      // A link schema drops cell wrappers, so the argument link does not show
+      // the handle's cap; the authored argument schema does.
+      const argumentCell = runtime.getCell(
+        space,
+        "nested handle cap argument cell",
+        {
+          type: "object",
+          properties: {
+            profile: {
+              type: "object",
+              properties: { name: { type: "string" } },
+            },
+          },
+        },
+        tx,
+      );
+      const result = unwrapOneLevelAndBindToDoc(
+        binding,
+        argumentCell.getAsNormalizedFullLink(),
+        resultCell,
+        {
+          argumentCapSchema: {
+            type: "object",
+            properties: {
+              profile: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+            },
+          },
+        },
+      ) as { name: unknown };
+
+      const parsed = parseLink(result.name, resultCell)!;
+      expect(parsed.scope).toBe("space");
+      expect(resolvedSchema(parsed.schema)).toEqual({
+        type: "string",
+        scope: "user",
       });
     });
 
@@ -727,7 +787,7 @@ describe("pattern-binding", () => {
             },
           },
         ],
-      };
+      } satisfies Pattern;
 
       const result = unwrapOneLevelAndBindToDoc(
         { op: nestedPattern },
@@ -963,10 +1023,12 @@ describe("pattern-binding", () => {
       // The label view is a flow-control side channel, and cfc's own module
       // calls it no part of a link's addressing identity -- so it is no part
       // of what names a node either.
-      const link = runtime
-        .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
-        .getAsLink();
-      setLinkCfcLabelView(link, {} as never);
+      const link = withLinkCfcLabelView(
+        runtime
+          .getCell(space, `labeled ${crypto.randomUUID()}`, undefined, tx)
+          .getAsLink(),
+        {} as never,
+      );
       expect(linkCfcLabelView(link)).not.toBeUndefined();
 
       const reduced = reduce({ x: link }).x;
@@ -1179,6 +1241,82 @@ describe("pattern-binding", () => {
       ]);
     });
 
+    it("follows a chain whose redirect link carries a schema", () => {
+      // A schema on the binding link leaves the chain the walk yields
+      // unchanged. What the schema decides is which hops resolution may
+      // follow on the way, which the case below measures.
+      const testCell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "schema-bearing chain",
+        undefined,
+        tx,
+      );
+      testCell.set({ x: 3 });
+      testCell.key("mid").set(
+        testCell.key("x").getAsWriteRedirectLink({ base: testCell }),
+      );
+      const binding = createSigilLinkFromParsedLink(
+        {
+          ...testCell.key("mid").getAsNormalizedFullLink(),
+          schema: { type: "number" },
+        },
+        { includeSchema: true, overwrite: "redirect" },
+      );
+      expect(parseLink(binding, testCell).schema).toBeDefined();
+      const links = findAllWriteRedirectCells(binding, testCell);
+      expect(links.map((l) => l.path)).toEqual([["mid"], ["x"]]);
+    });
+
+    it("stops at a hop the redirect link's schema caps out of reach", () => {
+      // Resolution follows the links on the way to the redirect's position
+      // under the schema the link carries, and that schema's scope cap decides
+      // which of them it may follow. The chain runs through a session-scoped
+      // document: a link capped at `space` cannot reach it, so the walk ends at
+      // the redirect, and the same link capped at `any` walks on into it.
+      const sessionCell = createCell<Record<string, unknown>>(
+        runtime,
+        {
+          ...runtime.getCell(
+            space,
+            "capped chain session target",
+            undefined,
+            tx,
+          ).getAsNormalizedFullLink(),
+          scope: "session",
+        },
+        tx,
+      );
+      sessionCell.set({ z: 9 });
+      sessionCell.key("y").set(
+        sessionCell.key("z").getAsWriteRedirectLink({ base: sessionCell }),
+      );
+      const outer = runtime.getCell<Record<string, unknown>>(
+        space,
+        "capped chain outer",
+        undefined,
+        tx,
+      );
+      outer.set({ hop: sessionCell });
+
+      const redirectThroughHop = (scope: "space" | "any") =>
+        findAllWriteRedirectCells(
+          createSigilLinkFromParsedLink(
+            {
+              ...outer.getAsNormalizedFullLink(),
+              path: ["hop", "y"],
+              schema: { type: "number", scope },
+            },
+            { includeSchema: true, overwrite: "redirect" },
+          ),
+          outer,
+        );
+
+      expect(redirectThroughHop("space").map((l) => l.path))
+        .toEqual([["hop", "y"]]);
+      expect(redirectThroughHop("any").map((l) => l.path))
+        .toEqual([["hop", "y"], ["z"]]);
+    });
+
     it("should find all write redirect links in an array", () => {
       const testCell = runtime.getCell<{ arr: number[] }>(
         space,
@@ -1262,6 +1400,62 @@ describe("pattern-binding", () => {
       expect(links[0].path).toEqual(["foo"]);
       expect(links[0].id).toBeDefined();
       expect(links[0].space).toBe(space);
+    });
+  });
+
+  describe("walk typing", () => {
+    it("types each walk's result by the kind of its argument", () => {
+      // Asserted when the file is type-checked: the carrier is never called.
+      // A pattern comes back a pattern and a record a record; a value of any
+      // other kind is promised an execution value and nothing narrower.
+
+      function carrier(
+        pattern: Pattern,
+        record: FabricExecPlainObject,
+        value: FabricExecValue,
+        cell: AnyCell<unknown>,
+      ) {
+        const patternOut: Pattern = unwrapOneLevelAndBindToDoc(
+          pattern,
+          undefined,
+          cell,
+        );
+        const recordOut: FabricExecPlainObject = unwrapOneLevelAndBindToDoc(
+          record,
+          undefined,
+          cell,
+        );
+        const valueOut: FabricExecValue = unwrapOneLevelAndBindToDoc(
+          value,
+          undefined,
+          cell,
+        );
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const valueAsRecord: FabricExecPlainObject = unwrapOneLevelAndBindToDoc(
+          value,
+          undefined,
+          cell,
+        );
+
+        const causalRecord: FabricExecPlainObject = causalFormOfBinding(record);
+        const causalValue: FabricExecValue = causalFormOfBinding(value);
+        // @ts-expect-error a `FabricExecValue` argument is typed only as one
+        const causalAsRecord: FabricExecPlainObject = causalFormOfBinding(
+          value,
+        );
+
+        return {
+          patternOut,
+          recordOut,
+          valueOut,
+          valueAsRecord,
+          causalRecord,
+          causalValue,
+          causalAsRecord,
+        };
+      }
+
+      expect(typeof carrier).toBe("function");
     });
   });
 });

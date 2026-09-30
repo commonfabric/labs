@@ -21,7 +21,7 @@
  * `addItem`'s own argument list is out of reach: a created item is published
  * through the board's row demand, which carries no `[UI]` and no verbs, so
  * nothing here can open the editor of an item the board built. The member
- * below is composed with exactly what `addItem` passes it, which holds the
+ * below is composed with the universe `addItem` passes it, which holds the
  * item's side of that contract and leaves the board's side to review.
  *
  * Deliberately its own file, as the Topics one is: it touches the board's
@@ -63,7 +63,6 @@ export default pattern(() => {
   const viewer = Item({
     title: "Viewer",
     body: "",
-    boardNames: board.namesTable,
     mentionable: board.mentionable,
   });
   // Through the verb that opens it, which is the only route in.

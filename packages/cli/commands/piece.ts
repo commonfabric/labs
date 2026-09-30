@@ -23,7 +23,10 @@ import ports from "@commonfabric/ports" with { type: "json" };
 import { isSlugAddress, parseCellPath, UI } from "@commonfabric/runner";
 import {
   encodeJsonPointer,
+  linkPathSegmentToCellPathSegment,
+  parseCellReference,
   parseScopedIdSegment,
+  renderCellReference,
 } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/utils/encoding";
 
@@ -84,12 +87,14 @@ import {
   describePiece,
   type EntryConfig,
   executePieceCallable,
+  followPieceSource,
   formatViewTree,
   generateSpaceMap,
   getCellCfcLabel,
   getCellValue,
   getPieceView,
   inspectPiece,
+  LinkedPieceRefusal,
   linkPieces,
   linkSqliteDiskSource,
   LinkValidationError,
@@ -617,6 +622,7 @@ Source Origin: ${pieceData.patternRef?.source.origin ?? "<unknown>"}
 export function renderPieceSummaries(
   pieces: Array<{
     id: string;
+    reference: string;
     name?: string;
     patternRef?: PiecePatternRef;
     error?: string;
@@ -627,6 +633,7 @@ export function renderPieceSummaries(
     render(
       pieces.map((piece) => ({
         id: piece.id,
+        reference: piece.reference,
         name: piece.name ?? null,
         patternRef: piece.patternRef ?? null,
       })),
@@ -636,11 +643,12 @@ export function renderPieceSummaries(
   }
 
   const rows = [
-    ["ID", "NAME", "PATTERN"],
+    ["ID", "NAME", "PATTERN", "REFERENCE"],
     ...pieces.map((piece) => [
       piece.id,
       piece.error ? `<error: ${piece.error}>` : (piece.name ?? "<unnamed>"),
       piece.error ? "" : formatPatternRef(piece.patternRef),
+      piece.reference,
     ]),
   ];
   if (rows.length > 1) render(Table.from(rows).toString());
@@ -785,7 +793,9 @@ export function verbInputErrorReport(
   return {
     message: error.message,
     hint: cliText(
-      `TIP: Run 'cf piece verbs --cell ${opts.piece} --json' to see each verb's expected input.`,
+      `TIP: Run 'cf piece verbs --cell ${
+        error.linkedPiece ?? opts.piece
+      } --json' to see each verb's expected input.`,
     ),
   };
 }
@@ -1456,7 +1466,7 @@ const CELL_FLAG = `"--cell" (or "--piece")`;
 
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
-  "space embedded in the reference (/@my-space/tracker) supplies --space " +
+  "space embedded in the reference (//my-space/tracker) supplies --space " +
   "when the flag is absent, and must agree with it when both are given. " +
   '"--piece" is a deprecated name for this flag, still accepted and meaning ' +
   "the same thing.";
@@ -1602,9 +1612,9 @@ PATH FORMAT: Use forward slashes and numeric indices for arrays.
 ADDRESS: The target is best written in the first positional, as a reference
 (it begins with "/"): cf ${spelling} /tracker/items 0/name. A reference names
 the piece by handle or by slug, and may carry the space by name or by DID
-(/@my-space/tracker). --cell takes the same word when a flag suits better, and
-is where the bare id and slug spellings go. A trailing #argument selects the
-arguments cell the way --input does, on any of them.`,
+(//my-space/tracker). --cell takes the same word when a flag suits better, and
+is where the bare id and slug spellings go. Put #argument on the piece segment,
+before qualifiers or path, to select the arguments cell the way --input does.`,
     )
     .usage(`${pieceUsage} [addressOrPath] [path]`)
     .example(
@@ -1618,7 +1628,7 @@ arguments cell the way --input does, on any of them.`,
     )
     .example(
       cliText(
-        `cf ${spelling} ${EX_ID} --api-url ${EX_HOST} /@${EX_SPACE}/tracker`,
+        `cf ${spelling} ${EX_ID} --api-url ${EX_HOST} //${EX_SPACE}/tracker`,
       ),
       "Name the space inside the reference instead of on --space.",
     )
@@ -1738,10 +1748,10 @@ JSON VALUES: Strings need quotes: echo '"hello"' | cf ${spelling} ...
 ADDRESS: The target is best written in the first positional, as a reference
 (it begins with "/"): a path embedded in it counts, so cf ${spelling}
 /tracker/title needs no path argument. A reference names the piece by handle
-or by slug, and may carry the space (/@my-space/tracker). --cell takes the
+or by slug, and may carry the space (//my-space/tracker). --cell takes the
 same word when a flag suits better, and is where the bare id and slug
-spellings go. A trailing #argument selects the arguments cell the way --input
-does, on any of them.`,
+spellings go. #argument on the piece segment, before qualifiers and the path,
+selects the arguments cell the way --input does, on any of them.`,
       ),
     )
     .usage(`${pieceUsage} [addressOrPath] [path]`)
@@ -1806,7 +1816,11 @@ argument is present.
 ADDRESS: The target is best written before the callable name, as a reference
 (it begins with "/"): cf ${spelling} /tracker addItem '{"title":"Milk"}'. A
 reference names the piece by handle or by slug, and may carry the space
-(/@my-space/tracker). --cell takes the same word when a flag suits better.`,
+(//my-space/tracker). --cell takes the same word when a flag suits better.
+A path on the reference is followed through the link stored there, and the
+call goes to the piece that link names, in whichever space it names:
+cf ${spelling} //my-space/of:fid1:abc.../inbox/piece receive '{...}'. A path
+with no link to a piece at it is refused ("names no piece").`,
     )
     .usage(`${pieceUsage} [address] <callable> [input]`)
     .example(
@@ -2383,6 +2397,14 @@ export const piece = targetOptions(
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
   .arguments("<main:string>")
+  .option(
+    "--request-key <key:string>",
+    "Reuse a creation request after an uncertain result without creating another piece.",
+  )
+  .option(
+    "--input-file <path:string>",
+    "Initialize the piece with a JSON object from this file before starting or registering it.",
+  )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
     "--main-export <export:string>",
@@ -2577,6 +2599,42 @@ export const piece = targetOptions(
       return;
     }
     await applyPieceSourceCommandAction(options, mainPath);
+  })
+  /* piece follow */
+  .command(
+    "follow",
+    cliText(
+      `Point a piece at a source origin and adopt what it serves now.
+
+From then on the piece follows the origin: opening it adopts each later
+release. This is how a piece created detached is put on the lifecycle a
+release reaches — a profile made before the runtime claimed origins for
+the children of system pieces, say:
+
+  cf piece follow --cell <profile> system:system/profile-home.tsx
+
+Unlike 'setsrc', which detaches, the origin is recorded with the revision.
+Not served yet: against a deployment that serves piece lifecycle verbs the
+command refuses, since the served update takes no origin.`,
+    ),
+  )
+  .example(
+    cliText(
+      `cf piece follow ${EX_ID} ${EX_COMP_PIECE} system:system/profile-home.tsx`,
+    ),
+    `Make "${EX_PIECE}" follow the deployment's profile pattern.`,
+  )
+  .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
+  .option(
+    "--dangerously-allow-incompatible-schema",
+    "Accept the reviewed incompatibility, including a current pattern " +
+      "that cannot be loaded. Stored-input validation and " +
+      "source-transition protections still apply.",
+  )
+  .arguments("<origin:string>")
+  .action(async (options, origin) => {
+    setQuietMode(!!options.quiet);
+    await followPieceSourceAction(options, origin);
   })
   /* piece inspect */
   .command("inspect", "Inspect detailed information about a piece")
@@ -3283,8 +3341,8 @@ export interface PieceCellCommandDependencies {
 /**
  * The `cf cell get` action: the target may ride `--cell` or sit in the
  * first positional as a canonical address ({@link readTargetPositionals}
- * decides which the positionals name), and either spelling may end in
- * `#argument`, which reads the arguments cell the way `--input` does.
+ * decides which the positionals name). `#argument` on the piece segment,
+ * before qualifiers or path, reads the arguments cell the way `--input` does.
  *
  * A named export with seams rather than an arrow function at the `.action()`
  * call: what the intake decided is the thing under test — which spelling
@@ -3300,15 +3358,18 @@ export async function getCellValueFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const target = readTargetPositionals(options, first, second);
-  const pieceConfig = {
+  const initialConfig = {
     ...parsePieceOptions(
       target.address ? { ...options, cell: target.address } : options,
       { acceptsPath: true, acceptsArgument: true },
     ),
     jsonOutput: true,
   };
-  const pathSegments = mergePiecePath(pieceConfig, target.pathString);
-  const input = options.input || pieceConfig.pieceInput;
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    target.pathString,
+  );
+  const input = pieceConfig.pieceInput;
   try {
     const selection = await parseCellSelectionOptions(options);
     const value = await (deps.getCellValue ?? getCellValue)(
@@ -3363,11 +3424,14 @@ export async function setCellValueFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const target = readTargetPositionals(options, first, second);
-  const pieceConfig = parsePieceOptions(
+  const initialConfig = parsePieceOptions(
     target.address ? { ...options, cell: target.address } : options,
     { acceptsPath: true, acceptsArgument: true },
   );
-  const pathSegments = mergePiecePath(pieceConfig, target.pathString);
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    target.pathString,
+  );
   // An empty positional is the one spelling that names the root, so it is
   // the one spelling under which a write may land on a whole cell.
   const rootSpelled = target.pathString === "";
@@ -3380,7 +3444,7 @@ export async function setCellValueFromCommand(
     pathSegments,
     value,
     {
-      input: options.input || pieceConfig.pieceInput,
+      input: pieceConfig.pieceInput,
       refuseRootWrite: !rootSpelled,
     },
   );
@@ -3580,11 +3644,14 @@ export async function callFromCommand(
   }
   try {
     const invocation = pieceCallInvocation(tail);
+    // A path on the target is kept rather than refused: the dispatch follows
+    // the link stored there to the piece it names, and refuses a path that
+    // leads to none.
     const pieceConfig = parsePieceOptions({
       ...options,
       ...(cell !== undefined && { cell }),
       json: invocation.jsonOutput,
-    });
+    }, { acceptsPath: true });
     const result = await boundedSettlement(
       (deps.executePieceCallable ?? executePieceCallable)(
         pieceConfig,
@@ -3610,6 +3677,11 @@ export async function callFromCommand(
           ),
         },
       ).catch((error) => {
+        if (error instanceof LinkedPieceRefusal) {
+          observer.finish("failed");
+          suppressDeferredSkewNote();
+          exitWithDataError({ message: error.message }, dataErrorSinks);
+        }
         if (error instanceof UnknownPieceVerbError) {
           observer.finish("failed");
           suppressDeferredSkewNote();
@@ -3632,7 +3704,7 @@ export async function callFromCommand(
       observer,
       result,
       callableName,
-      pieceConfig.piece,
+      result.resolved?.linkedPiece ?? pieceConfig.piece,
       deps,
       { detached: waitControl.mode === "commit", invocation: identity },
     );
@@ -3648,15 +3720,18 @@ export async function getCellCfcLabelFromCommand(
   deps: PieceLabelCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
-  const pieceConfig = {
+  const initialConfig = {
     ...parsePieceOptions(options, { acceptsPath: true, acceptsArgument: true }),
     jsonOutput: true,
   };
-  const pathSegments = mergePiecePath(pieceConfig, pathString);
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    pathString,
+  );
   const label = await (deps.getCellCfcLabel ?? getCellCfcLabel)(
     pieceConfig,
     pathSegments,
-    { input: options.input || pieceConfig.pieceInput },
+    { input: pieceConfig.pieceInput },
   );
   (deps.render ?? render)(label, { json: true });
 }
@@ -3667,17 +3742,20 @@ export async function setCellCfcLabelFromCommand(
   deps: PieceLabelCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
-  const pieceConfig = {
+  const initialConfig = {
     ...parsePieceOptions(options, { acceptsPath: true, acceptsArgument: true }),
     jsonOutput: true,
   };
-  const pathSegments = mergePiecePath(pieceConfig, pathString);
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    pathString,
+  );
   const update = await (deps.drainStdin ?? drainStdin)();
   const label = await (deps.setCellCfcLabel ?? setCellCfcLabel)(
     pieceConfig,
     pathSegments,
     update,
-    { input: options.input || pieceConfig.pieceInput },
+    { input: pieceConfig.pieceInput },
   );
   (deps.render ?? render)(label, { json: true });
 }
@@ -3907,14 +3985,15 @@ export function readBulkSelection(
             { exitCode: 1 },
           );
         }
-        if (splitArgumentSuffix(entry).input) {
+        const bare = splitArgumentSuffix(entry);
+        if (bare.input) {
           throw new ValidationError(
             `A bulk operation reads whole pieces; drop the #argument suffix ` +
               `on ${JSON.stringify(entry)}.`,
             { exitCode: 1 },
           );
         }
-        return entry;
+        return bare.target;
       }
       if (ref.scope !== undefined) {
         throw new ValidationError(
@@ -4818,6 +4897,15 @@ export async function newPieceFromCommand(
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const spaceConfig = parseSpaceOptions(options);
+  const input = options.inputFile === undefined
+    ? undefined
+    : JSON.parse(await Deno.readTextFile(options.inputFile));
+  if (
+    options.inputFile !== undefined &&
+    (input === null || typeof input !== "object" || Array.isArray(input))
+  ) {
+    throw new Error("`--input-file` must contain a JSON object.");
+  }
   const pieceId = await (deps.newPiece ?? newPiece)(
     spaceConfig,
     localPatternEntry(main, options),
@@ -4825,6 +4913,10 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(input === undefined ? {} : { input }),
+      ...(options.requestKey === undefined
+        ? {}
+        : { requestKey: options.requestKey }),
     },
   );
   render(pieceId);
@@ -4997,6 +5089,78 @@ export async function setPieceSourceFromCommand(
     },
   );
   return { config, update };
+}
+
+/** Injectable effects for {@link followPieceSourceAction}. */
+export interface FollowPieceSourceCommandDependencies {
+  followPieceSource?: typeof followPieceSource;
+  render?: (value: unknown) => void;
+  hint?: (message: string) => void;
+  printError?: (message: string) => void;
+  setExitCode?: (code: number) => void;
+}
+
+/**
+ * The `cf piece follow <origin>` action body: points the piece at the origin
+ * and reports the transition. A candidate the piece cannot take is reported
+ * with the compatibility message and a non-zero exit, and nothing is written.
+ */
+export async function followPieceSourceAction(
+  options: PieceCLIOptions,
+  origin: string,
+  deps: FollowPieceSourceCommandDependencies = {},
+): Promise<void> {
+  const config = parsePieceOptions(options);
+  const trimmed = origin.trim();
+  if (trimmed.length === 0) {
+    throw new ValidationError("An origin is required.", { exitCode: 1 });
+  }
+  const result = await (deps.followPieceSource ?? followPieceSource)(
+    config,
+    trimmed,
+    {
+      dangerouslyAllowIncompatibleSchema:
+        options.dangerouslyAllowIncompatibleSchema,
+    },
+  );
+  if (result.status === "incompatible") {
+    (deps.printError ?? console.error)(
+      `The source ${trimmed} serves now cannot replace what ${config.piece} ` +
+        `runs: ${result.message}`,
+    );
+    if (!options.dangerouslyAllowIncompatibleSchema) {
+      (deps.printError ?? console.error)(
+        "Review the incompatibility before retrying with " +
+          "--dangerously-allow-incompatible-schema. Existing links may no " +
+          "longer fit the new pattern.",
+      );
+    }
+    (deps.setExitCode ?? ((code: number) => {
+      Deno.exitCode = code;
+    }))(1);
+    return;
+  }
+  if (result.acceptedIncompatibility !== undefined) {
+    (deps.render ?? render)(
+      `Accepted incompatibility: ${result.acceptedIncompatibility}`,
+    );
+  }
+  (deps.render ?? render)(`${config.piece} now follows ${trimmed}`);
+  if (result.executionWarning !== undefined) {
+    // The transition is durable, but the piece did not come back up: said
+    // where `--quiet` cannot hide it, and exit non-zero so a script cannot
+    // read the receipt as a healthy piece — the same shape `setsrc` reports.
+    (deps.printError ?? console.error)(
+      `The follow committed, but refreshing the running piece failed: ${result.executionWarning}`,
+    );
+    (deps.setExitCode ?? ((code: number) => {
+      Deno.exitCode = code;
+    }))(1);
+    return;
+  }
+  (deps.hint ?? hint)(cliText(`NEXT STEPS:
+  → Inspect state: cf piece inspect --cell ${config.piece} ...
+  → Open the piece in the shell; each later release of the origin is adopted there.`));
 }
 
 /** Applies `piece setsrc` and renders the receipt returned by the commit. */
@@ -5206,7 +5370,7 @@ export function spaceWasWritten(
 //
 // The space can arrive four ways: `--url` carries it, `--space` names it,
 // `CF_SPACE` supplies it when the flag is absent, and a reference may carry it
-// as a `/@<space>/` prefix. Only a written `--space` refuses `--url`; an
+// as a `//<space>/` prefix. Only a written `--space` refuses `--url`; an
 // ambient one yields to the space the URL carries. A reference's space fills an
 // absent `--space`; a present one must agree — checked at parse time when the
 // two are written the same way, and at session open through
@@ -5339,18 +5503,51 @@ function collectEmbeddedSpace(
   ];
 }
 
-/**
- * The full path a piece data command addresses: any path embedded in an
- * LLM-friendly `--cell` reference, followed by the positional path argument.
- */
+/** Resolves a positional reference against the command's selected cell. */
+function resolvePiecePath(
+  config: PieceConfig,
+  pathString?: string,
+): { pieceConfig: PieceConfig; pathSegments: (string | number)[] } {
+  if (pathString?.startsWith("/")) {
+    throw new ValidationError(
+      "A positional reference must be piece-relative; use the target positional or `--cell` for a rooted reference.",
+      { exitCode: 1 },
+    );
+  }
+  let parsed;
+  try {
+    parsed = parseCellReference(pathString || ".", {
+      space: config.space,
+      id: config.piece,
+      member: config.pieceInput ? "argument" : "result",
+      scope: config.pieceScope ?? "space",
+      path: config.piecePath?.map(String) ?? [],
+    });
+  } catch (error) {
+    throw new ValidationError(
+      error instanceof Error ? error.message : String(error),
+      { exitCode: 1 },
+    );
+  }
+  const pieceConfig = { ...config };
+  if (parsed.scope !== (config.pieceScope ?? "space")) {
+    pieceConfig.pieceScope = parsed.scope;
+  }
+  if ((parsed.member === "argument") !== !!config.pieceInput) {
+    pieceConfig.pieceInput = parsed.member === "argument";
+  }
+  return {
+    pieceConfig,
+    pathSegments: parsed.path.map(linkPathSegmentToCellPathSegment),
+  };
+}
+
+/** Returns the path resolved from a positional reference against the selected cell. */
 export function mergePiecePath(
   pieceConfig: PieceConfig,
   pathString?: string,
 ): (string | number)[] {
-  return [
-    ...(pieceConfig.piecePath ?? []),
-    ...(pathString ? parseCellPath(pathString) : []),
-  ];
+  return resolvePiecePath(pieceConfig, pathString).pathSegments;
 }
 
 export function parseLink(
@@ -5378,24 +5575,14 @@ export function parseLink(
     };
   }
 
-  // The bare spelling reaches the same refusal, so the suffix is turned down
-  // wherever it is written rather than buried in an id nothing resolves.
-  //
-  // This suffix and no other fragment, which is why the test is `endsWith`
-  // rather than the shared reader: a bare endpoint carries its path in the
-  // same word and has no positional path to fall back on, so a `#` elsewhere
-  // in one is part of the key it sits in and stays readable. A reference
-  // endpoint is already past `normalizeLLMFriendlyRef`, which reserves `#`
-  // outright, so the two spellings differ here on purpose. What holds this
-  // apart from the shared reader is one case in
-  // `packages/cli/test/piece.test.ts`, "parseLink() keeps a `#` inside a bare
-  // endpoint's path key".
-  if (ref.endsWith("#argument")) {
+  const bare = splitArgumentSuffix(ref);
+  if (bare.input) {
     throw new ValidationError(
       `The "#argument" suffix does not apply to a link endpoint.`,
       { exitCode: 1 },
     );
   }
+  ref = bare.target;
 
   const parts = ref.split("/");
   if (parts.length < 1) {
@@ -5494,22 +5681,29 @@ function decomposeUrl(
   // JSON Pointer escaping too.
   const piece = decodeUrlSegment(segments[1]);
   const path = segments.slice(2).map(decodeUrlPathSegment);
-  // `#` is what closes a reference, so a part holding one cannot be written
-  // into the reference this decomposes to. Refused rather than folded in:
-  // read as the suffix, it would silently address the arguments cell.
-  const holdsHash = [space, piece, ...path].find((part) => part.includes("#"));
+  // A hash in the piece would select a document member. Path hashes are data.
+  const holdsHash = [space, piece].find((part) => part.includes("#"));
   if (holdsHash !== undefined) {
     throw new ValidationError(
-      `The "--url" names "${holdsHash}", and "#" closes a reference, so it ` +
+      `The "--url" names "${holdsHash}", and "#" selects a piece member, so it ` +
         `cannot ride one. Write the path as an argument instead.`,
       { exitCode: 1 },
     );
   }
-  return {
-    apiUrl,
-    space,
-    reference: encodeJsonPointer(["", `@${space}`, piece, ...path]),
-  };
+  let reference: string;
+  try {
+    reference = renderCellReference({
+      ...parseCellReference(`/${encodeJsonPointer([piece])}`),
+      space,
+      path,
+    });
+  } catch (error) {
+    throw new ValidationError(
+      error instanceof Error ? error.message : String(error),
+      { exitCode: 1 },
+    );
+  }
+  return { apiUrl, space, reference };
 }
 
 // We use stdin for piece input which must be an `Object`

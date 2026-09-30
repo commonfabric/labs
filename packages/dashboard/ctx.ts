@@ -4,16 +4,23 @@
  * runs, say — trigger only one fetch between them.
  */
 
-import { github, memo } from "./lib.ts";
+import { github, memo, STALE_RUNS_ERROR } from "./lib.ts";
 import {
   CI_RUNS_MAX,
   CI_RUNS_MAX_AGE_DAYS,
   CI_WORKFLOW,
   REPO,
 } from "./config.ts";
-import type { Ctx, Run } from "./types.ts";
+import {
+  type Ctx,
+  type Run,
+  runSource,
+  type RunScope,
+  type RunSource,
+  runSourceKey,
+} from "./types.ts";
 
-// Up to CI_RUNS_MAX main-branch runs of one workflow, stopping early once runs
+// Up to CI_RUNS_MAX runs of one source, stopping early once runs
 // pass the age cutoff — i.e. min(CI_RUNS_MAX, ~2 months). Each run is tagged with
 // the repo it came from so a combined stream (recent-runs) can link each row to
 // the right repo. Each tile slices this base to its own window.
@@ -39,7 +46,38 @@ function tileRun(run: Run, repo: string): Run {
   };
 }
 
-async function fetchRuns(repo: string, workflow: string): Promise<Run[]> {
+/** A run as GitHub lists it, which also names the branch it ran for. */
+type ListedRun = Run & { head_branch: string | null };
+
+// Whether `run` belongs to `scope`, by the test GitHub applies for the
+// listing's `branch=main` or `event=pull_request` parameter.
+function inScope(run: ListedRun, scope: RunScope): boolean {
+  return scope === "main"
+    ? run.head_branch === "main"
+    : run.event === "pull_request";
+}
+
+// Whether `run` started before `cutoff`. A run with an unreadable start time is
+// kept rather than read as ancient.
+function startedBefore(run: Run, cutoff: number): boolean {
+  const t = Date.parse(run.run_started_at);
+  return Number.isFinite(t) && t < cutoff;
+}
+
+// The newest page of one workflow's runs, whatever they ran for. GitHub serves
+// this listing current. A listing narrowed by branch or event is served from an
+// index that can be days behind it.
+async function fetchHead(repo: string, workflow: string): Promise<ListedRun[]> {
+  const r = await github<{ workflow_runs?: ListedRun[] }>(
+    `repos/${repo}/actions/workflows/${workflow}/runs?per_page=100`,
+  );
+  return r.workflow_runs ?? [];
+}
+
+async function fetchListed(
+  { repo, workflow, scope }: RunSource,
+): Promise<Run[]> {
+  const filter = scope === "main" ? "branch=main" : "event=pull_request";
   const cutoff = Date.now() - CI_RUNS_MAX_AGE_DAYS * 86_400_000;
   const collected = new Map<number, Run>();
   const pages = Math.ceil(CI_RUNS_MAX / 100);
@@ -56,49 +94,120 @@ async function fetchRuns(repo: string, workflow: string): Promise<Run[]> {
     const anchored = anchor
       ? `&created=${encodeURIComponent(`<=${anchor.created_at}`)}`
       : "";
-    const r = await github<{ workflow_runs: Run[] }>(
-      `repos/${repo}/actions/workflows/${workflow}/runs?branch=main&per_page=100${anchored}`,
+    const r = await github<{ workflow_runs?: Run[] }>(
+      `repos/${repo}/actions/workflows/${workflow}/runs?${filter}&per_page=100${anchored}`,
     );
     const batch = r.workflow_runs ?? [];
     if (!batch.length) break;
-    if (anchor && !batch.some((run) => run.id === anchor!.id)) {
+    const joint = anchor;
+    if (joint && !batch.some((run) => run.id === joint.id)) {
       throw new Error(
-        `GitHub ${repo} ${workflow} runs at or before ${anchor.created_at} came ` +
-          `back without run ${anchor.id}, opening on ${batch[0].id} of ` +
+        `GitHub ${repo} ${workflow} runs at or before ${joint.created_at} came ` +
+          `back without run ${joint.id}, opening on ${batch[0].id} of ` +
           `${batch[0].created_at}`,
       );
     }
     anchor = batch[batch.length - 1];
     for (const run of batch) {
-      const t = Date.parse(run.run_started_at);
-      if (Number.isFinite(t) && t < cutoff) break walk; // newest-first, so the rest are older too
+      if (startedBefore(run, cutoff)) break walk; // newest-first, so the rest are older too
       collected.set(run.id, tileRun(run, repo));
       if (collected.size >= CI_RUNS_MAX) break walk;
     }
   }
-  // The walk decides which runs are in the window; the sort decides their order,
-  // so a page served out of turn cannot leave an old run at the head.
-  return [...collected.values()].sort((a, b) =>
-    Date.parse(b.created_at) - Date.parse(a.created_at)
-  );
+  return [...collected.values()];
+}
+
+// Up to CI_RUNS_MAX runs of one source, stopping at the age cutoff, newest
+// first, joined from three reads: the source's runs on the workflow's newest
+// page from `head`, the filtered listing, and `held`, the window this source
+// returned last. The newest page is current. When the source has runs on it,
+// either the listing or `held` has to reach the oldest of them, so that nothing
+// falls between them; a read that does not was cut from a moment before that
+// run. Each run is taken from whichever read last saw it updated, so a run a
+// lagging read missed joins the window once a current listing carries it.
+async function fetchRuns(
+  source: RunSource,
+  head: Promise<ListedRun[]>,
+  held: readonly Run[] | undefined,
+): Promise<Run[]> {
+  const key = runSourceKey(source);
+  let failure: unknown;
+  const [page, listed] = await Promise.all([
+    head,
+    fetchListed(source).catch((e: unknown) => {
+      failure = e;
+      return undefined;
+    }),
+  ]);
+  const cutoff = Date.now() - CI_RUNS_MAX_AGE_DAYS * 86_400_000;
+  const recent = page.filter((run) =>
+    inScope(run, source.scope) && !startedBefore(run, cutoff)
+  ).map((run) => tileRun(run, source.repo));
+  const joint = recent.at(-1);
+  const reaches = (runs: readonly Run[] | undefined) =>
+    runs !== undefined && (!joint || runs.some((run) => run.id === joint.id));
+  if (!reaches(listed) && !reaches(held)) {
+    if (listed && joint) {
+      console.error(
+        `run source ${key} listing does not reach run ${joint.id} of ` +
+          `${joint.created_at}; its newest run is ` +
+          `${listed[0] ? `${listed[0].id} of ${listed[0].created_at}` : "none"}.`,
+      );
+    }
+    throw failure ?? new Error(STALE_RUNS_ERROR);
+  }
+  if (failure !== undefined) {
+    console.error(`run source ${key} listing failed:`, String(failure));
+  }
+  const runs = new Map<number, Run>();
+  for (const run of [...held ?? [], ...listed ?? [], ...recent]) {
+    const kept = runs.get(run.id);
+    if (!kept || Date.parse(run.updated_at) >= Date.parse(kept.updated_at)) {
+      runs.set(run.id, run);
+    }
+  }
+  return [...runs.values()]
+    .filter((run) => !startedBefore(run, cutoff))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .slice(0, CI_RUNS_MAX);
 }
 
 export function makeCtx(): Ctx {
-  // One memoized fetcher per (repo, workflow), created on first use and shared for
-  // ~20s across every tile that reads it.
+  // One memoized fetcher per source and one per workflow's newest page, each
+  // created on first use and shared for ~20s across every tile that reads it.
   const fetchers = new Map<string, () => Promise<Run[]>>();
-  const runsFor = (repo: string, workflow: string): Promise<Run[]> => {
-    const key = `${repo} ${workflow}`;
-    let f = fetchers.get(key);
-    if (!f) {
-      f = memo(20_000, () => fetchRuns(repo, workflow));
-      fetchers.set(key, f);
-    }
-    return f();
+  const heads = new Map<string, () => Promise<ListedRun[]>>();
+  const held = new Map<string, Run[]>();
+  const runsFor = (source: RunSource): Promise<Run[]> => {
+    const key = runSourceKey(source);
+    const head = shared(
+      heads,
+      `${source.repo} ${source.workflow}`,
+      () => fetchHead(source.repo, source.workflow),
+    );
+    return shared(fetchers, key, async () => {
+      const runs = await fetchRuns(source, head(), held.get(key));
+      held.set(key, runs);
+      return runs;
+    })();
   };
   return {
-    runs: () => runsFor(REPO, CI_WORKFLOW),
+    runs: () => runsFor(runSource(REPO, CI_WORKFLOW, "main")),
     runsFor,
     env: (k) => Deno.env.get(k),
   };
+}
+
+// The memoized fetcher stored under `key`, created from `fetch` on first use.
+function shared<T>(
+  fetchers: Map<string, () => Promise<T>>,
+  key: string,
+  fetch: () => Promise<T>,
+): () => Promise<T> {
+  let f = fetchers.get(key);
+  if (!f) {
+    f = memo(20_000, fetch);
+    fetchers.set(key, f);
+  }
+  return f;
 }

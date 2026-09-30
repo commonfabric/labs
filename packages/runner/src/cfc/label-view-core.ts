@@ -3,11 +3,14 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import {
   cfcReferenceConfidentialityForView,
+  cfcReferenceSelectionWitnessesForView,
   joinCfcReferenceConfidentiality,
+  joinCfcReferenceSelectionWitnesses,
   withCfcReferenceConfidentiality,
 } from "./reference-provenance.ts";
 
 import { carryImmutableReferenceTables } from "./immutable-reference.ts";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -71,12 +74,18 @@ const LABEL_KEYS = [
   "integrity",
 ] as const satisfies readonly (keyof IFCLabel)[];
 
+/**
+ * Returns a mutable copy of a label view's logical path. A view's paths are
+ * relative to the node it describes, so a first segment of `"value"` names a
+ * payload field of that name and is kept.
+ */
 export const canonicalizeCfcLogicalPath = (
   path: readonly string[],
-): string[] => path[0] === "value" ? [...path.slice(1)] : [...path];
+): string[] => [...path];
 
+/** Returns the key under which a label view files an entry at `path`. */
 export const cfcLabelViewPathKey = (path: readonly string[]): string =>
-  encodePointer(canonicalizeCfcLogicalPath(path));
+  encodePointer(path);
 
 export const cfcLabelPathPrefixMatches = (
   prefix: readonly string[],
@@ -117,7 +126,7 @@ const redactCaveatSourceAtom = (atom: unknown): unknown => {
   if (Array.isArray(atom)) {
     return atom.map(redactCaveatSourceAtom);
   }
-  if (atom === null || typeof atom !== "object") {
+  if (!isObjectOrArray(atom)) {
     return atom;
   }
   const obj = atom as Record<string, unknown>;
@@ -189,12 +198,17 @@ export const redactCaveatSourcesForDisplay = (
   }),
 });
 
-const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] =>
-  entries.sort((left, right) => {
-    const leftKey = cfcLabelViewPathKey(left.path);
-    const rightKey = cfcLabelViewPathKey(right.path);
-    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-  });
+const sortEntries = (entries: CfcLabelViewEntry[]): CfcLabelViewEntry[] => {
+  if (entries.length < 2) return entries;
+  // Encoding belongs to the entry, so each path is encoded once per sort.
+  // Equal keys retain input order, including separate observation classes.
+  return entries.map((entry) => ({
+    entry,
+    key: cfcLabelViewPathKey(entry.path),
+  })).sort((left, right) =>
+    left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+  ).map(({ entry }) => entry);
+};
 
 export const mergeLabel = (
   left: IFCLabel | undefined,
@@ -236,6 +250,81 @@ export const mergeLabel = (
   return merged;
 };
 
+/**
+ * The spaces each view was derived from: the spaces of the documents whose
+ * stored labels it was read from. A module policy a view selects has its
+ * manifest installed beside the label that selected it (spec §4.4.1), so these
+ * are where a display boundary reads it, however many cells, proxies, links and
+ * rebases the view travelled through first. The list is a superset: a derived
+ * view keeps the origins of every view it was built from, including one whose
+ * entries a rebase or merge dropped, which can only add a place to look.
+ *
+ * Deliberately outside the view's data: it never enters a view's hash,
+ * equality or serialized form. An ordinary worker or persisted-link view
+ * arrives without origins and names no space. Authenticated Runtime event
+ * receipts carry origins separately in their reference acquisitions and
+ * restore them only after validating the receipt. Keyed by the view object
+ * and carried forward by {@link cloneCfcLabelView},
+ * {@link mergeCfcLabelViews} and {@link rebaseCfcLabelView}, which build every
+ * derived view; a site that builds one another way passes the origins on with
+ * {@link withCfcLabelViewOrigins}. The lists are frozen and shared between
+ * views by reference. The map is process-global; that is sound because an entry
+ * is a fact about how one exact view object was derived, and a `WeakMap`
+ * retains nothing.
+ */
+const viewOrigins = new WeakMap<CfcLabelView, readonly string[]>();
+
+const NO_ORIGINS: readonly string[] = Object.freeze([]);
+
+/** The spaces `view` was derived from; see {@link viewOrigins}. */
+export const cfcLabelViewOriginSpaces = (
+  view: CfcLabelView | undefined,
+): readonly string[] =>
+  view === undefined ? NO_ORIGINS : viewOrigins.get(view) ?? NO_ORIGINS;
+
+const unionOrigins = (
+  known: readonly string[] | undefined,
+  added: readonly string[],
+): readonly string[] => {
+  if (known === undefined || known === added) {
+    return Object.isFrozen(added) ? added : Object.freeze([...added]);
+  }
+  if (added.every((space) => known.includes(space))) return known;
+  const union = [...known];
+  for (const space of added) if (!union.includes(space)) union.push(space);
+  return Object.freeze(union);
+};
+
+/**
+ * Records that `view` was derived from stored labels in `spaces`, besides any
+ * it already names. Returns `view`.
+ */
+export const withCfcLabelViewOrigins = <
+  View extends CfcLabelView | undefined,
+>(
+  view: View,
+  spaces: readonly string[],
+): View => {
+  if (view === undefined || spaces.length === 0) return view;
+  viewOrigins.set(view, unionOrigins(viewOrigins.get(view), spaces));
+  return view;
+};
+
+/** Carries the origins of `sources` onto `derived`, a view built from them. */
+const carryOrigins = (
+  derived: CfcLabelView | undefined,
+  sources: readonly (CfcLabelView | undefined)[],
+): CfcLabelView | undefined => {
+  if (derived === undefined) return derived;
+  let origins: readonly string[] | undefined;
+  for (const source of sources) {
+    const from = source === undefined ? undefined : viewOrigins.get(source);
+    if (from !== undefined) origins = unionOrigins(origins, from);
+  }
+  if (origins !== undefined) viewOrigins.set(derived, origins);
+  return derived;
+};
+
 export const cloneCfcLabelView = (
   view: CfcLabelView | undefined,
 ): CfcLabelView | undefined => {
@@ -249,12 +338,16 @@ export const cloneCfcLabelView = (
       ...(entry.observes !== undefined ? { observes: entry.observes } : {}),
     })).filter((entry) => hasCfcLabelValues(entry.label)),
   );
-  return carryImmutableReferenceTables(
-    [view],
-    withCfcReferenceConfidentiality(
-      entries.length > 0 ? { version: 1, entries } : undefined,
-      cfcReferenceConfidentialityForView(view),
+  return carryOrigins(
+    carryImmutableReferenceTables(
+      [view],
+      withCfcReferenceConfidentiality(
+        entries.length > 0 ? { version: 1, entries } : undefined,
+        cfcReferenceConfidentialityForView(view),
+        cfcReferenceSelectionWitnessesForView(view),
+      ),
     ),
+    [view],
   );
 };
 
@@ -284,12 +377,16 @@ export const mergeCfcLabelViews = (
   const entries = sortEntries(
     [...byKey.values()].filter((entry) => hasCfcLabelValues(entry.label)),
   );
-  return carryImmutableReferenceTables(
-    views,
-    withCfcReferenceConfidentiality(
-      entries.length > 0 ? { version: 1, entries } : undefined,
-      joinCfcReferenceConfidentiality(views),
+  return carryOrigins(
+    carryImmutableReferenceTables(
+      views,
+      withCfcReferenceConfidentiality(
+        entries.length > 0 ? { version: 1, entries } : undefined,
+        joinCfcReferenceConfidentiality(views),
+        joinCfcReferenceSelectionWitnesses(views),
+      ),
     ),
+    views,
   );
 };
 
@@ -306,7 +403,7 @@ export const rebaseCfcLabelView = (
   for (const entry of view.entries) {
     const entryPath = canonicalizeCfcLogicalPath(entry.path);
     if (cfcLabelPathPrefixMatches(logicalPath, entryPath)) {
-      const label = cloneCfcLabel(entry.label);
+      const label = entry.label;
       if (hasCfcLabelValues(label)) {
         entries.push({
           path: entryPath.slice(logicalPath.length),
@@ -327,7 +424,7 @@ export const rebaseCfcLabelView = (
       ) {
         continue;
       }
-      const label = cloneCfcLabel(entry.label);
+      const label = entry.label;
       if (hasCfcLabelValues(label)) {
         entries.push({
           path: [],
@@ -338,14 +435,18 @@ export const rebaseCfcLabelView = (
     }
   }
 
-  return carryImmutableReferenceTables(
-    [view],
-    withCfcReferenceConfidentiality(
-      mergeCfcLabelViews([
-        entries.length > 0 ? { version: 1, entries } : undefined,
-      ]),
-      cfcReferenceConfidentialityForView(view),
+  return carryOrigins(
+    carryImmutableReferenceTables(
+      [view],
+      withCfcReferenceConfidentiality(
+        mergeCfcLabelViews([
+          entries.length > 0 ? { version: 1, entries } : undefined,
+        ]),
+        cfcReferenceConfidentialityForView(view),
+        cfcReferenceSelectionWitnessesForView(view),
+      ),
     ),
+    [view],
   );
 };
 

@@ -8,6 +8,7 @@ import {
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
+import { NAVIGATE_EVENT } from "@commonfabric/navigation";
 import { assert, assertEquals } from "@std/assert";
 import {
   collectSchedulerLoadSummary,
@@ -52,7 +53,7 @@ describe("default-app notebook reload integration test", () => {
     await clickButtonWithText(page, "Notes");
     await awaitViewSettled(page);
     await clickButtonWithText(page, "New Notebook");
-    await waitForCondition(page, async () => {
+    const notebookId = await waitForCondition(page, async () => {
       const commonfabric = globalThis.commonfabric as
         | {
           readCell?: (
@@ -77,8 +78,13 @@ describe("default-app notebook reload integration test", () => {
       } finally {
         console.log = originalLog;
       }
-      return current === true;
+      return current === true ? pieceId : false;
     });
+
+    assert(
+      typeof notebookId === "string",
+      "Expected a notebook piece identity",
+    );
 
     await waitForCondition(
       page,
@@ -103,19 +109,79 @@ describe("default-app notebook reload integration test", () => {
     );
 
     await waitForCondition(page, notebookSourceStateMatches, {
-      args: [noteCreates],
+      args: [noteCreates, notebookId],
     });
 
     await waitForRuntimeSynced(page);
+    // Speculative navigation can remain on a note even when the authoritative
+    // handler stays in the notebook (server-side-execution/speculation.md §2).
+    // Select the captured notebook before measuring its reload.
+    await page.evaluate((eventName, spaceName, pieceId) => {
+      globalThis.dispatchEvent(
+        new CustomEvent(eventName, {
+          detail: { spaceName, pieceId },
+        }),
+      );
+    }, { args: [NAVIGATE_EVENT, notebookSpaceName, notebookId] });
+    await waitForCondition(page, notebookReloadRendered, {
+      args: [noteCreates, notebookId],
+    });
+    const beforeReload = await page.evaluate(() => ({
+      url: location.href,
+      view: globalThis.app?.serialize?.()?.view,
+    }));
+    assertEquals(
+      beforeReload.view && "pieceId" in beforeReload.view
+        ? beforeReload.view.pieceId
+        : undefined,
+      notebookId,
+      `Expected the created notebook before reload: ${
+        JSON.stringify(beforeReload)
+      }`,
+    );
 
     const startedAt = performance.now();
     await page.reload({ waitUntil: "load" });
     await page.applyConsoleFormatter();
     await shell.login(identity);
 
-    await waitForCondition(page, notebookReloadRendered, {
-      args: [noteCreates],
-    });
+    try {
+      const afterLogin = await page.evaluate(() => ({
+        url: location.href,
+        view: globalThis.app?.serialize?.()?.view,
+      }));
+      assertEquals(
+        afterLogin.view && "pieceId" in afterLogin.view
+          ? afterLogin.view.pieceId
+          : undefined,
+        notebookId,
+        `Expected the same notebook after reload: ${
+          JSON.stringify(afterLogin)
+        }`,
+      );
+      await waitForCondition(page, notebookReloadRendered, {
+        args: [noteCreates, notebookId],
+      });
+    } catch (cause) {
+      const current = await page.evaluate(() => ({
+        url: location.href,
+        view: globalThis.app?.serialize?.()?.view,
+      })).catch(() => undefined);
+      const rendered = await collectNotebookRenderState(page)
+        .catch(() => undefined);
+      const diagnostic = JSON.stringify({
+        notebookId,
+        beforeReload,
+        current,
+        rendered,
+      });
+      // Teardown can report browser errors as well. Keep the failed condition's
+      // evidence in the transcript even when teardown replaces its exception.
+      console.log(`Notebook reload condition failed: ${diagnostic}`);
+      throw new Error(`Notebook reload condition failed: ${diagnostic}`, {
+        cause,
+      });
+    }
     await waitForRuntimeIdle(page);
 
     const reloadRenderState = await collectNotebookRenderState(page);
@@ -226,13 +292,13 @@ async function collectBrowserLoadMetrics(page: Page): Promise<{
 }
 
 // Serialized into the page by waitForCondition: drain the worker, read the
-// notebook's argument length and three internal scalars, and report whether
-// the rapidly created notes have all landed — `expectedCount` notes present,
-// the new-note prompt closed, and the "create another" flag cleared. These
-// narrow probes leave the worker available to render while the wait runs.
+// captured notebook's argument length and internal scalars, and report whether
+// all `expectedCount` notes have landed, the new-note prompt is closed, and the
+// "create another" flag is cleared. The selection can independently show a note.
 const notebookSourceStateMatches = async (
   _probe: ProbeApi,
   expectedCount: number,
+  notebookEntityId: string,
 ): Promise<boolean> => {
   const api = globalThis.commonfabric as {
     rt?: { idle?: () => Promise<void> };
@@ -244,12 +310,7 @@ const notebookSourceStateMatches = async (
   } | undefined;
   await api?.rt?.idle?.();
 
-  const view = globalThis.app?.serialize?.()?.view;
-  const notebookEntityId = view && typeof view === "object" &&
-      "pieceId" in view && typeof view.pieceId === "string"
-    ? view.pieceId
-    : undefined;
-  if (!notebookEntityId || !api?.readCell) return false;
+  if (!api?.readCell) return false;
 
   const resolveInternalManifest = async (
     manifest: unknown,
@@ -326,6 +387,7 @@ const notebookSourceStateMatches = async (
 const notebookReloadRendered = async (
   probe: ProbeApi,
   expectedCount: number,
+  expectedId: string,
 ): Promise<boolean> => {
   const commonfabric = globalThis.commonfabric as
     | {
@@ -337,7 +399,7 @@ const notebookReloadRendered = async (
       typeof view.pieceId === "string"
     ? view.pieceId
     : undefined;
-  if (!pieceId || !commonfabric?.readCell) return false;
+  if (pieceId !== expectedId || !commonfabric?.readCell) return false;
   let isNotebook: unknown;
   let noteCount: unknown;
   const originalLog = console.log;

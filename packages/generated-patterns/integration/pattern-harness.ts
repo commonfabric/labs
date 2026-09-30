@@ -86,8 +86,9 @@ function resolveModulePath(moduleRef: string | URL): string {
 export async function runPatternScenario(scenario: PatternIntegrationScenario) {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtimeErrors: Error[] = [];
-  // Same preset as the CLI pattern-test harness (CT-1814): shared CFC pin
-  // and env-honored experimental flags, so the two harnesses cannot drift.
+  // Same preset as the CLI pattern-test harness (CT-1814): shared CFC
+  // posture and env-honored experimental flags, so the two harnesses cannot
+  // drift.
   const runtime = new Runtime(runtimePresets.patternTest({
     apiUrl: new URL(import.meta.url),
     storageManager,

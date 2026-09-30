@@ -32,6 +32,11 @@ export interface DriverCapabilities {
   setMode: boolean;
   setConfigOption: boolean;
   modes?: string[];
+  /** Where a started session can run, for a driver that can start one:
+   * `headless` runs the first prompt in this process; `desktop` opens the
+   * Claude Code desktop app on this Mac with the prompt ready to send.
+   * Absent means headless only. */
+  surfaces?: string[];
   configOptions?: Record<string, unknown>;
 }
 
@@ -56,6 +61,10 @@ export interface SessionSummary {
   updatedAt: string | null;
   archived: boolean | null;
   active: boolean | null;
+  /** The id a `start` command named, for a session that start produced
+   * under another id (a desktop start, whose session the app minted); the
+   * workbench that sent the start confirms it through this. */
+  startedAs?: string;
   raw: Record<string, unknown>;
 }
 
@@ -96,13 +105,33 @@ export interface StartInput {
   cwd?: string;
   /** Title given to the session once it exists. */
   title?: string;
-  /** A mode the driver advertises, applied to the session's first turn. */
+  /**
+   * Driver-advertised mode for a headless session's first turn and later
+   * connector-owned prompts. A desktop start rejects a mode because the app
+   * supplies its own permission setting.
+   */
   mode?: string;
+  /**
+   * Where the session runs. `headless` (the default) runs the first prompt
+   * in this process. `desktop` opens the Claude Code desktop app on this
+   * Mac with the prompt ready to send, so the session exists only once the
+   * person sends it, under an id the app mints; the driver pairs that
+   * session with the start afterwards (`SessionSummary.startedAs`). A driver
+   * advertises the surfaces it offers in `capabilities.surfaces`.
+   */
+  surface?: string;
 }
 
 export interface CommandExecutionOptions {
   force?: boolean;
+
+  /**
+   * Callback reporting when `cancel()` can address a prompt or headless
+   * start. A desktop start never reports readiness: it reads provider
+   * inventory but starts no prompt or turn in the connector.
+   */
   onCancellationReady?: () => void;
+
   onSessionActive?: () => Promise<void>;
 }
 
@@ -116,6 +145,12 @@ export interface CommandExecutionResult {
   providerOperationId?: string;
   result?: Record<string, unknown>;
   error?: { code: string; message: string; retryable: boolean };
+  /**
+   * The session the worker refreshes once the command is done: absent means
+   * the command's own; `null` means none yet, as after a desktop start,
+   * whose session the person has yet to create.
+   */
+  affectedSession?: string | null;
 }
 
 export interface AgentDriver {
@@ -131,7 +166,13 @@ export interface AgentDriver {
   ): Promise<CommandExecutionResult>;
   /**
    * Starts a new session whose provider identity is `nativeSessionId`, chosen
-   * by the caller, and runs `input.text` as its first prompt.
+   * by the caller. A headless start (the default surface) runs `input.text`
+   * as the session's first prompt here. A start on the `desktop` surface
+   * reads provider inventory and opens the Claude Code desktop app with
+   * `input.text` ready to send, but starts no prompt or turn here: the session
+   * exists once the person sends it, under an id the app mints, and the driver
+   * pairs it with this start afterwards (`SessionSummary.startedAs`), answering
+   * with `affectedSession: null` without reporting cancellation readiness.
    */
   startSession(
     nativeSessionId: string,

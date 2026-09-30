@@ -1,0 +1,1 @@
+{"date":"2026-09-09","from":{"k":"unit","s":"runner","n":"traverse-recorder > recordInvocation > records an invocation with its address, selector and meta flag"},"to":{"k":"unit","s":"runner","n":"traverse-recorder > recordInvocation > records an invocation with its address, selector and `traverseCells` flag"}}

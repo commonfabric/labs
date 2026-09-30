@@ -6,6 +6,7 @@ import {
   CFC_CONCEPT_KIND,
   cfcAtom,
 } from "@commonfabric/api/cfc";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   type CfcConfClause,
@@ -51,7 +52,7 @@ const caveat = (kind: string, source: string = "of:hostile") =>
 const materialKinds = new Set(MATERIAL_RISK_DISCHARGE_KINDS);
 const isMaterialRisk = (atom: unknown): boolean => {
   if (typeof atom === "string") return materialKinds.has(atom);
-  return typeof atom === "object" && atom !== null &&
+  return isObjectOrArray(atom) &&
     (atom as { type?: unknown }).type === CFC_ATOM_TYPE.Caveat &&
     typeof (atom as { kind?: unknown }).kind === "string" &&
     materialKinds.has((atom as { kind: string }).kind);
@@ -61,7 +62,7 @@ const legacyStrip = (atoms: readonly CfcConfClause[]): CfcConfClause[] =>
     atoms
       .map((clause) => {
         if (
-          typeof clause !== "object" || clause === null ||
+          !isObjectOrArray(clause) ||
           !Array.isArray((clause as { anyOf?: unknown }).anyOf)
         ) {
           return isMaterialRisk(clause) ? undefined : clause;

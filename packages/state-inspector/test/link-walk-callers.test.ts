@@ -8,33 +8,35 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricValue } from "@commonfabric/data-model";
+
 import { linksWithPaths } from "../decode.ts";
 
 /** A link in the legacy at-rest sigil form. */
 const linkTo = (id: string) => ({ "/": { "link@1": { id } } });
 
 /** A value nested `depth` objects deep, holding `leaf` at the bottom. */
-const nest = (depth: number, leaf: unknown): unknown =>
+const nest = (depth: number, leaf: FabricValue): FabricValue =>
   depth === 0 ? leaf : { down: nest(depth - 1, leaf) };
 
 /** A class instance carrying an enumerable own property. A restored
  * `FabricValue` instance carries its state in private fields instead, which
  * is why reading the enumerable ones is a partial read either way. */
 class Instance {
-  held: unknown;
-  constructor(held: unknown) {
+  held: FabricValue;
+  constructor(held: FabricValue) {
     this.held = held;
   }
 }
 
 /** The graph, space-signal and cross-space bounds: twelve deep, no node cap. */
-const walk = (v: unknown, maxDepth = 12) =>
+const walk = (v: FabricValue, maxDepth = 12) =>
   linksWithPaths(v, { maxDepth, maxNodes: Number.POSITIVE_INFINITY });
 
 /** The entity listing's link count: eight deep, no node cap. */
-const count = (v: unknown) => walk(v, 8).links.length;
+const count = (v: FabricValue) => walk(v, 8).links.length;
 
-const ids = (v: unknown, maxDepth?: number) =>
+const ids = (v: FabricValue, maxDepth?: number) =>
   walk(v, maxDepth).links.map((f) => f.link.id);
 
 describe("the link walk under its callers' bounds", () => {
@@ -72,6 +74,7 @@ describe("the link walk under its callers' bounds", () => {
     });
 
     it("returns a link on a class instance's own enumerable property", () => {
+      // @ts-expect-error A class outside the data model is not a `FabricValue`.
       expect(ids(new Instance(linkTo("of:on-an-instance"))))
         .toEqual(["of:on-an-instance"]);
     });
@@ -90,6 +93,7 @@ describe("the link walk under its callers' bounds", () => {
     });
 
     it("names the path of a value it read only in part", () => {
+      // @ts-expect-error A class outside the data model is not a `FabricValue`.
       const found = walk({ outer: new Instance(linkTo("of:on-an-instance")) });
       expect(found.opaque).toEqual([["outer"]]);
       // Read in part, not skipped: the enumerable property was walked.

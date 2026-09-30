@@ -11,10 +11,8 @@
  * (non-replayable builtins may write through their inputs — e.g. `llmDialog`
  * pushes onto `inputs.key("messages")`).
  *
- * This is deliberately NOT derived from `isEffect` (scheduler semantics,
- * incomplete on the fetch family — do not complete or repurpose it) and NOT
- * merged with the scheduler-facing `EAGER_RESULT_BUILTIN_REFS` set
- * (runner.ts) — same shape, different concern.
+ * This is deliberately NOT derived from `isEffect`, which carries scheduler
+ * semantics — a demand root — rather than anything about replay.
  *
  * Reciprocal note lives at `builtins/index.ts` (`registerBuiltins`): when a
  * builtin is added there, record it here — either as replayable or in the
@@ -30,8 +28,9 @@
  * Known NON-replayable builtins (async and/or externally effectful — must
  * never be added here): `fetchBinary`, `fetchText`, `fetchJson`,
  * `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`, `llmDialog`,
- * `compileAndRun`, `generateObject`, `generateText`, `navigateTo`, `wish`,
- * `sqliteQuery` (server round-trip; an effect like `llm`),
+ * `compileAndRun`, `generateObject`, `generateText`, `agent` (stages a sink
+ * request and creates a run record after commit), `navigateTo`, `wish`,
+ * `sqliteQuery` (server round-trip, like `llm`),
  * `inspectConfLabel` (reads stored label metadata — ambient CFC state that
  * changes independently of the node's inputs), `cellFromUrl` (resolves a
  * space name against the runtime's cache, which is ambient in the same sense,

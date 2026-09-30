@@ -50,9 +50,11 @@ deno task cf piece link ... editor-id/items viewer-id/items
   defines a complete source revision, so omitted test roots are not retained.
 - `setsrc` preserves `WriteAuthorizedBy` authority across changed modules when
   the old and new recursive source closures contain the same normalized module
-  path. The handoff is scoped to the space whose authenticated cache documents
-  record it; loading delegation metadata from another space grants no authority.
-  Renaming or moving a module intentionally does not inherit that authority.
+  path; a piece following a `system:` origin gets the same when it adopts a
+  release. The handoff is scoped to the space whose authenticated cache
+  documents record it; loading delegation metadata from another space grants no
+  authority. Renaming or moving a module intentionally does not inherit that
+  authority.
 - `setsrc` rejects backward-incompatible argument or result schema changes
   before updating the piece. Existing fields must keep compatible types. New
   argument fields must be optional or have defaults, because existing
@@ -98,6 +100,9 @@ deno task cf piece link ... editor-id/items viewer-id/items
   not bypass compilation, normal value validation, atomic stale-update
   checks, or source-history availability (a piece with recorded revisions
   whose current source cannot be restored is still refused).
+  `piece follow` reports a current pattern that cannot be loaded as an
+  incompatibility and takes the same flag to accept it, which puts such a
+  piece on an origin in one step.
   `piece new` accepts the same flag for deploy-script symmetry, but a fresh
   piece has no predecessor schema to compare.
 - Test one feature at a time. Manual CLI and browser checks complement automated

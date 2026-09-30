@@ -2,16 +2,22 @@ import {
   type AgentDriver,
   type AgentSessionCommandReceipt,
   type AgentSourceConfig,
-  type CollectedSource,
-  collectSource,
+  commandIdentity,
   type CommandTarget,
   type CommandTaskFailure,
   CommandWorker,
   type DriverCapabilities,
+  type PublishedSessionState,
+  sessionKey,
+  type SessionSummary,
+  type SourceCollection,
+  type StreamingCollectedSource,
+  streamSource,
 } from "@commonfabric/agents-connector";
 import type { CommandLedger } from "@commonfabric/agents-connector/command-ledger";
 import { abortable } from "./abort.ts";
 import { discoverGitCheckoutDirectories } from "./checkout-discovery.ts";
+import type { BoundCommandProducer } from "./command-producers.ts";
 
 export type AgentsHostStatus =
   | "created"
@@ -69,6 +75,7 @@ export interface AgentsHostTargetDescription {
   spaceDid: string;
   ownerDid: string;
   debugPieceId?: string;
+  commandProducers?: BoundCommandProducer[];
   cells: {
     recentIndex: string;
     allIndex: string;
@@ -96,9 +103,10 @@ export interface AgentsHostHealth {
 }
 
 export interface AgentsHostTarget extends CommandTarget {
+  publishedSessions(): Promise<ReadonlyMap<string, PublishedSessionState>>;
   beginSessionObservation(): number;
   publish(
-    collected: CollectedSource[],
+    collected: SourceCollection[],
     options?: {
       observationSequence?: number;
       checkoutDirectories?: string[];
@@ -112,10 +120,11 @@ export interface AgentsHostTarget extends CommandTarget {
   ): Promise<boolean>;
   publishHealth(value: Record<string, unknown>): Promise<void>;
   subscribeCommands(
-    callback: (commands: unknown[]) => void,
+    callback: (commands: unknown[], producer?: string) => void,
   ): Promise<() => void>;
   readReceipt(
     commandId: string,
+    producer?: string,
   ): Promise<AgentSessionCommandReceipt | undefined>;
 }
 
@@ -156,6 +165,14 @@ export class AgentsHost {
   readonly #drivers = new Map<string, AgentDriver>();
   readonly #cleanupDrivers = new Map<string, AgentDriver>();
   readonly #sources = new Map<string, AgentsHostSourceHealth>();
+  /**
+   * Per source, the sessions the running driver has read since it started.
+   * A driver learns a session's controls (its mode and configuration
+   * options, for Agent Client Protocol drivers) when it reads the session,
+   * so a session is retained only once this driver has read it; the first
+   * collection after a start reads every listed session.
+   */
+  readonly #readSinceStart = new Map<string, Set<string>>();
   readonly #activity: AgentsHostActivity[] = [];
   readonly #commandFailures = new Map<string, string>();
   readonly #startedAt: string;
@@ -302,7 +319,8 @@ export class AgentsHost {
       publishReceipt: (receipt) => this.#publishReceipt(receipt),
       refreshSession: (driver, nativeSessionId) =>
         this.#refreshSession(driver, nativeSessionId),
-      readReceipt: (commandId) => this.#target.readReceipt(commandId),
+      readReceipt: (commandId, producer) =>
+        this.#target.readReceipt(commandId, producer),
     };
     this.#commandWorker = new CommandWorker(
       this.#drivers,
@@ -323,9 +341,10 @@ export class AgentsHost {
       this.#acceptingCommands = true;
       try {
         this.#subscriptionTask = this.#target.subscribeCommands(
-          (commands) => {
+          (commands, producer) => {
             if (!this.#acceptingCommands) return;
-            void this.#commandWorker?.handle(commands).catch((error) => {
+            const worker = this.#commandWorker;
+            void worker?.handle(commands, producer).catch((error) => {
               this.#logger.error(
                 `command admission failed: ${errorMessage(error)}`,
               );
@@ -575,6 +594,7 @@ export class AgentsHost {
       signal?.throwIfAborted();
       this.#cleanupDrivers.delete(config.id);
       this.#drivers.set(config.id, driver);
+      this.#readSinceStart.set(config.id, new Set());
       state.status = "ready";
       state.capabilities = structuredClone(driver.source.capabilities);
       state.lastError = undefined;
@@ -665,10 +685,15 @@ export class AgentsHost {
 
     try {
       await this.#publishHealth(signal);
-      const collected = await Promise.all(
-        [...this.#drivers.entries()].map(([sourceId, driver]) =>
-          this.#collectSource(sourceId, driver, signal)
-        ),
+      const published = await this.#publishedSessions(signal);
+      const collected = [...this.#drivers.entries()].map(
+        ([sourceId, driver]) =>
+          this.#streamSource(
+            sourceId,
+            driver,
+            published,
+            () => publicationCommitted ? undefined : signal,
+          ),
       );
       signal?.throwIfAborted();
       const checkoutDirectories = this.#checkoutRoots.length > 0
@@ -686,6 +711,13 @@ export class AgentsHost {
         signal,
         onCommit: markPublicationCommitted,
       });
+      for (const source of collected) {
+        this.#completeSourceCollection(
+          source.source.id,
+          source,
+          previousSourceStates.get(source.source.id),
+        );
+      }
       const completedAt = this.#now();
       this.#lastSync = {
         reason,
@@ -755,49 +787,113 @@ export class AgentsHost {
     }
   }
 
-  async #collectSource(
+  /**
+   * What the indexes hold, for retaining unchanged sessions. A lookup failure
+   * retains nothing, so the collection reads every session it lists.
+   */
+  async #publishedSessions(
+    signal?: AbortSignal,
+  ): Promise<ReadonlyMap<string, PublishedSessionState>> {
+    try {
+      const published = await this.#target.publishedSessions();
+      signal?.throwIfAborted();
+      return published;
+    } catch (error) {
+      signal?.throwIfAborted();
+      this.#recordActivity(
+        "published-sessions-unavailable",
+        "Published session lookup failed; every listed session will be read",
+        { error: errorMessage(error) },
+      );
+      return new Map();
+    }
+  }
+
+  #streamSource(
     sourceId: string,
     driver: AgentDriver,
-    signal?: AbortSignal,
-  ): Promise<CollectedSource> {
-    const state = this.#sources.get(sourceId)!;
+    published: ReadonlyMap<string, PublishedSessionState>,
+    signal: () => AbortSignal | undefined,
+  ): StreamingCollectedSource {
     this.#recordActivity(
       "source-collection-started",
       "Source collection began",
       undefined,
       sourceId,
     );
-    let collected: CollectedSource;
-    try {
-      collected = await collectSource(driver, signal);
-    } catch (error) {
-      signal?.throwIfAborted();
-      collected = {
-        source: driver.source,
-        sessions: [],
-        errors: [{ message: errorMessage(error) }],
-        complete: false,
-      };
-    }
+    // A session is retained when its inventory summary matches a complete
+    // published copy in every field the summary can change, and this driver
+    // has read it since it started.
+    const readSinceStart = this.#readSinceStart.get(sourceId) ?? new Set();
+    const retain = (summary: SessionSummary): boolean => {
+      const key = sessionKey(sourceId, summary.nativeSessionId);
+      const prior = published.get(key);
+      return prior !== undefined && prior.syncStatus === "complete" &&
+        readSinceStart.has(key) &&
+        prior.driver === driver.source.driver &&
+        // A pairing can arrive after the transcript was published. A driver
+        // that forgot one after restart leaves the durable pairing intact.
+        (summary.startedAs === undefined ||
+          prior.startedAs === summary.startedAs) &&
+        summary.updatedAt !== null && prior.updatedAt === summary.updatedAt &&
+        prior.archived === summary.archived && prior.active === summary.active;
+    };
+    const collected = streamSource(driver, signal, retain);
+    return {
+      ...collected,
+      sessions: (async function* () {
+        for await (const session of collected.sessions) {
+          readSinceStart.add(
+            sessionKey(sourceId, session.summary.nativeSessionId),
+          );
+          yield session;
+        }
+      })(),
+    };
+  }
 
-    state.capabilities = structuredClone(driver.source.capabilities);
-    state.sessionCount = collected.sessions.length;
-    state.complete = collected.complete;
-    state.errors = structuredClone(collected.errors);
+  #completeSourceCollection(
+    sourceId: string,
+    collected: StreamingCollectedSource,
+    previous?: {
+      status: SourceStatus;
+      lastCollectionStartedAt?: string;
+    },
+  ): void {
+    const state = this.#sources.get(sourceId)!;
+    const outcome = collected.outcome;
+    if (!outcome.consumed) {
+      if (previous) {
+        state.status = previous.status;
+        state.lastCollectionStartedAt = previous.lastCollectionStartedAt;
+      }
+      this.#recordActivity(
+        "source-collection-superseded",
+        "Source collection was superseded before it began",
+        undefined,
+        sourceId,
+      );
+      return;
+    }
+    const retainedCount = collected.retained.length;
+    state.capabilities = structuredClone(collected.source.capabilities);
+    state.sessionCount = outcome.sessionCount + retainedCount;
+    state.complete = outcome.complete;
+    state.errors = structuredClone(outcome.errors);
     state.lastCollectionCompletedAt = this.#now();
-    state.lastError = collected.errors[0]?.message;
-    state.status = collected.complete ? "ready" : "degraded";
+    state.lastError = outcome.errors[0]?.message;
+    state.status = outcome.complete ? "ready" : "degraded";
     this.#recordActivity(
       "source-collection-completed",
       "Source collection completed",
       {
-        complete: collected.complete,
-        errorCount: collected.errors.length,
-        sessionCount: collected.sessions.length,
+        complete: outcome.complete,
+        errorCount: outcome.errors.length,
+        sessionCount: outcome.sessionCount,
+        retainedCount,
       },
       sourceId,
     );
-    return collected;
   }
 
   #operationalStatus(): "ready" | "degraded" {
@@ -836,6 +932,9 @@ export class AgentsHost {
       });
       throw error;
     }
+    this.#readSinceStart.get(driver.source.id)?.add(
+      sessionKey(driver.source.id, nativeSessionId),
+    );
     this.#recordActivity(
       "session-refresh-completed",
       "Post-command session refresh completed",
@@ -867,6 +966,9 @@ export class AgentsHost {
         "Command receipt publication failed",
         {
           commandId: receipt.commandId,
+          ...(receipt.producer === undefined
+            ? {}
+            : { producer: receipt.producer }),
           nativeSessionId: receipt.nativeSessionId,
           status: receipt.status,
           error: message,
@@ -885,12 +987,17 @@ export class AgentsHost {
   }
 
   #recordReceipt(receipt: AgentSessionCommandReceipt): void {
-    this.#commandFailures.delete(receipt.commandId);
+    this.#commandFailures.delete(
+      commandIdentity(receipt.commandId, receipt.producer),
+    );
     this.#recordActivity(
       "command-receipt",
       `Command receipt is ${receipt.status}`,
       {
         commandId: receipt.commandId,
+        ...(receipt.producer === undefined
+          ? {}
+          : { producer: receipt.producer }),
         nativeSessionId: receipt.nativeSessionId,
         status: receipt.status,
         ...(receipt.error ? { error: receipt.error } : {}),
@@ -906,7 +1013,10 @@ export class AgentsHost {
 
   #recordCommandFailure(failure: CommandTaskFailure): void {
     const message = errorMessage(failure.error);
-    this.#commandFailures.set(failure.commandId, message);
+    this.#commandFailures.set(
+      commandIdentity(failure.commandId, failure.producer),
+      message,
+    );
     const state = this.#sources.get(failure.sourceId);
     if (state) {
       state.status = "degraded";
@@ -918,6 +1028,9 @@ export class AgentsHost {
       "Command processing failed",
       {
         commandId: failure.commandId,
+        ...(failure.producer === undefined
+          ? {}
+          : { producer: failure.producer }),
         nativeSessionId: failure.nativeSessionId,
         error: message,
       },

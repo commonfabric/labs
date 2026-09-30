@@ -6,7 +6,9 @@ This is the canonical reference for building Common Fabric patterns.
 
 - Plan before building. Scale the plan to the problem size.
 - Start simple and keep the first implementation runnable.
-- Prefer one-file patterns first. Split files only when complexity demands it.
+- Reuse suitable indexed patterns and available data before authoring new behavior.
+- Prefer one source file per small pattern. Compose patterns to achieve a larger
+  goal; file organization does not determine component boundaries.
 - Iterate through `Sketch -> Run -> Verify -> Improve`.
 - Prefer validated docs and references over blindly copying an existing pattern.
 
@@ -24,10 +26,12 @@ Use enough planning for the task, but no more:
   - plan in a short list
 - complex pattern:
   - identify entities, relationships, actions, and boundaries
-  - consider sub-patterns only when concepts are genuinely distinct
+  - compose existing patterns and identify the smallest missing capabilities
   - plan with structure, but do not over-specify the end state
 
-Always start simple. Split only when it helps the next iteration.
+Keep the user's goal in view. A larger goal can have a short implementation when
+existing pieces already provide most of its behavior. If the design keeps
+growing, revisit the available data and component contracts before adding more.
 
 ## Pattern Structure
 
@@ -43,8 +47,13 @@ Only split into `schemas.tsx` or additional modules when:
 - a helper has clear reuse value
 - the main file becomes harder to evolve than to split
 
-Do not split by default. A moderate pattern with a few entities can still live
-comfortably in one file while you discover the right shape.
+These choices organize the source of one pattern. They do not require all of a
+user's goal to live in one pattern. When the host provides a pattern index,
+compose suitable indexed components through its `cf:pattern:<patternId>` imports.
+Otherwise, compose available local patterns through ordinary file imports.
+Connect their inputs and outputs, and author the smallest missing reusable
+piece. A useful new component can then be contributed to the catalog for later
+goals.
 
 ## Multi-User Patterns
 

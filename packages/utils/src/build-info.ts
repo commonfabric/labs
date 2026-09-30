@@ -3,6 +3,8 @@
 // --include`. The values travel with the artifact and identify the commit it
 // was built from.
 
+import { isObjectOrArray } from "./types.ts";
+
 /** Build metadata for a compiled binary. */
 export interface BuildInfo {
   /** Commit the binary was built from, or `null` if not recorded. */
@@ -42,7 +44,7 @@ export function readBuildInfoFrom(path: URL | string): BuildInfo {
   } catch {
     return { commitSha: null, builtAt: null };
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  if (!isObjectOrArray(parsed)) {
     return { commitSha: null, builtAt: null };
   }
   const obj = parsed as Partial<BuildInfo>;

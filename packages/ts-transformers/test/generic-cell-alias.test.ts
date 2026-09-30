@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { collect, emittedSchemas, parseModule } from "./transformed-ast.ts";
@@ -30,7 +31,7 @@ describe("generic cell aliases", () => {
     const indexSchemas = emittedSchemas(parseModule(output)).flatMap(
       (schema) => {
         const properties = schema.properties;
-        return properties !== null && typeof properties === "object" &&
+        return isObjectOrArray(properties) &&
             "index" in properties
           ? [properties.index]
           : [];
@@ -88,7 +89,7 @@ describe("generic cell aliases", () => {
     const pairSchemas = emittedSchemas(parseModule(output)).flatMap(
       (schema) => {
         const properties = schema.properties;
-        return properties !== null && typeof properties === "object" &&
+        return isObjectOrArray(properties) &&
             "pair" in properties
           ? [properties.pair]
           : [];

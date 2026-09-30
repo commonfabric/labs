@@ -1,34 +1,35 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import type { SpaceHostRegistration } from "../space-host.ts";
 import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
 
 const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
 
 /**
- * Build a stock in-process memory server for loopback storage managers: the
- * principal-passthrough authorizer, an emulated audience, and optionally a
- * fan-out cadence — `"manual"` disables timer-driven fan-out entirely:
- * either explicit synchronization point (`flushSessions()`, or `idle()`,
- * which drains held fan-out to keep its quiescence contract) delivers it.
- * The controlled-staleness shape.
+ * Build a stock in-process memory server for loopback storage managers:
+ * {@link authorizeLoopbackSessionOpen} as its authorizer, an emulated
+ * audience, and optionally a fan-out cadence — `"manual"` disables
+ * timer-driven fan-out entirely: either explicit synchronization point
+ * (`flushSessions()`, or `idle()`, which drains held fan-out to keep its
+ * quiescence contract) delivers it. The controlled-staleness shape.
  */
 export const newLoopbackServer = (options?: {
   audience?: string;
   subscriptionRefreshDelayMs?: number | "manual";
   store?: URL;
 
-  /** The session registry's detached-session TTL (tests): how long a
-   * closed connection's sessions — and their watches, i.e. their DEMAND
-   * — linger before pruning. Default 30 s (the server's resume window). */
-  sessionTtlMs?: number;
+  /** A registry the caller owns (tests): the registry's own detached-session
+   * TTL decides how long a closed connection's sessions — and their watches,
+   * i.e. their DEMAND — linger, and pruning against it is lazy, so a test
+   * that has to observe a session GONE removes it rather than waiting the
+   * window out. Absent, the server's default registry and resume window
+   * apply. */
+  sessions?: MemoryV2Server.SessionRegistry;
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
-    authorizeSessionOpen(message) {
-      const principal = (message.authorization as { principal?: unknown })
-        ?.principal;
-      return typeof principal === "string" ? principal : undefined;
-    },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: {
       audience: options?.audience ?? emulatedMemoryAudience,
     },
@@ -36,13 +37,7 @@ export const newLoopbackServer = (options?: {
       ? { subscriptionRefreshDelayMs: options.subscriptionRefreshDelayMs }
       : {}),
     ...(options?.store !== undefined ? { store: options.store } : {}),
-    ...(options?.sessionTtlMs !== undefined
-      ? {
-        sessions: new MemoryV2Server.SessionRegistry({
-          ttlMs: options.sessionTtlMs,
-        }),
-      }
-      : {}),
+    ...(options?.sessions !== undefined ? { sessions: options.sessions } : {}),
   });
 
 class EmulatedSessionFactory implements SessionFactory {
@@ -155,8 +150,8 @@ export class EmulatedStorageManager extends StorageManager {
    * resolve, so a host hint can never take effect. Refuse honestly
    * rather than inherit an acceptance that routes nothing.
    */
-  override registerSpaceHost(): boolean {
-    return false;
+  override registerSpaceHostDetailed(): SpaceHostRegistration {
+    return { accepted: false, reason: "no-remote-resolution" };
   }
 
   override async close(): Promise<void> {

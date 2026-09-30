@@ -12,6 +12,7 @@
  */
 
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -58,6 +59,8 @@ const harness = await MultiRuntimeHarness.create({
   programPath: PROGRAM_PATH,
   rootPath: ROOT_PATH,
   sessions: [mk("drv-alice"), mk("drv-bob"), mk("drv-observer")],
+  // Records every refused commit, which the refusal summary below reads.
+  recordRejections: true,
 });
 const [alice, bob, observer] = harness.sessions;
 await harness.settle();
@@ -65,6 +68,10 @@ await harness.settle();
 // Record the messages doc address up-front (all sessions agree pre-storm).
 const msgLink = await alice.link(["messages"]);
 console.log(`[driver] messages link:`, msgLink);
+
+// Open the refusal window here, so the summary covers the storm rather than
+// the commits that started the harness and opened the piece.
+await Promise.all(harness.sessions.map((session) => session.clearRejections()));
 
 const writers = WRITERS === 1 ? [alice] : [alice, bob];
 await Promise.all(writers.map((w, i) => storm(w, i === 0 ? "alice" : "bob")));
@@ -77,7 +84,7 @@ const views = {
   bob: summarize(await messages(bob)),
   observer: summarize(await messages(observer)),
 };
-console.log(`[driver] result-path views:`, JSON.stringify(views));
+console.log(debugStr`[driver] result-path views: $quote,xlong${views}`);
 
 // Raw replica reads at the messages address — bypass schema/link resolution.
 // Stored doc trees root at ["value", …]; link() reports the logical path.
@@ -113,7 +120,7 @@ for (
     `[driver] rawRead[array] ${name}: ok=${raw.ok} len=${len}` +
       (raw.error ? ` error=${raw.error}` : "") +
       (Array.isArray(v) && v.length > 0
-        ? ` first=${JSON.stringify(v[0]).slice(0, 140)}`
+        ? debugStr` first=$quote,long${v[0]}`
         : ""),
   );
 }
@@ -134,7 +141,7 @@ for (
     });
     const v = raw.value === undefined
       ? "ABSENT"
-      : JSON.stringify(raw.value).slice(0, 80);
+      : debugStr`$quote,long${raw.value}`;
     console.log(`[driver] rawRead[doc] ${name} ${id.slice(-8)}: ${v}`);
   }
 }
@@ -149,9 +156,8 @@ if (chase.length > 0) {
     scope: "space",
   });
   console.log(
-    `[driver] stored element doc (observer, full): ${
-      JSON.stringify(fullDoc.value)
-    }`,
+    `[driver] stored element doc (observer, full): ` +
+      debugStr`$quote,xlong${fullDoc.value}`,
   );
 }
 const probePaths: [string, (string | number)[]][] = [
@@ -164,7 +170,7 @@ for (const [label, path] of probePaths) {
   try {
     const v = await observer.read(path);
     console.log(
-      `[driver] observer read ${label}: ${JSON.stringify(v)?.slice(0, 120)}`,
+      debugStr`[driver] observer read ${label}: $quote,long${v}`,
     );
   } catch (error) {
     console.log(
@@ -173,6 +179,53 @@ for (const [label, path] of probePaths) {
       }`,
     );
   }
+}
+
+// Refusal attribution: what each refused commit was refused OVER, and what it
+// had written. A count says a fixture cost something; this says which document
+// the sessions contended for and whether the refusals are contention at all.
+// The message's leading clause names the kind: a "stale ... read" of a named
+// document is a root conflict, while a "pending dependency ..." is a commit
+// dropped because one it stacked on was dropped.
+const staleOver = (message: string): string | undefined =>
+  message.match(/^stale [a-z]+ read: (\S+) /)?.[1];
+const classifyWrite = (id: string): string =>
+  id === msgLink.id ? "list" : id.startsWith("computed:") ? "computed" : "doc";
+for (
+  const [name, s] of [["alice", alice], ["bob", bob], [
+    "observer",
+    observer,
+  ]] as const
+) {
+  const refusals = await s.rejections();
+  const kinds: Record<string, number> = {};
+  const wrote: Record<string, number> = {};
+  const over: Record<string, number> = {};
+  for (const refusal of refusals) {
+    const stale = staleOver(refusal.message);
+    kinds[stale === undefined ? "cascade" : "root"] =
+      (kinds[stale === undefined ? "cascade" : "root"] ?? 0) + 1;
+    if (stale !== undefined) {
+      // Whether the document that went stale is one this commit also writes,
+      // which separates contending over an input from contending over an
+      // output.
+      const alsoWrote = refusal.writes.includes(stale) ? "alsoWrote-" : "";
+      const key = `${alsoWrote}${classifyWrite(stale)}:${stale.slice(-8)}`;
+      over[key] = (over[key] ?? 0) + 1;
+    }
+    for (const id of new Set(refusal.writes.map(classifyWrite))) {
+      wrote[id] = (wrote[id] ?? 0) + 1;
+    }
+  }
+  const show = (counts: Record<string, number>) =>
+    Object.entries(counts)
+      .sort((left, right) => right[1] - left[1])
+      .map(([key, count]) => `${key}=${count}`)
+      .join(" ") || "(none)";
+  console.log(
+    `[driver] refusals ${name}: ${refusals.length} ` +
+      `kind[${show(kinds)}] wrote[${show(wrote)}] staleOver[${show(over)}]`,
+  );
 }
 
 // Logger-count signal: which categories differ across sessions.

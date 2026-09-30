@@ -7,10 +7,13 @@
  * more on its own than a whole lane's budget, which no packing can place,
  * so a pull request runs it only where its own diff makes it mandatory.
  * It goes red when a lane's projected work is past the bound the whole
- * design rests on.
+ * design rests on, or when the publisher found the cost model the lanes
+ * are packed by broken: a model that has stopped describing what lanes
+ * spend takes tests out of pull requests, or runs lanes long, without
+ * anything else turning red.
  *
- * Two of those three want the sub line, and the red one takes it first.
- * Staleness wants the header facet instead, so it competes for neither.
+ * Three of those four want the sub line, and the red ones take it first.
+ * Staleness wants the header facet instead, so it competes for none.
  *
  * The packing itself — every lane, what each holds, and what each is
  * projected to spend — is a page away, along with every test no lane can
@@ -19,55 +22,70 @@
  * Following the dashboard's values (README.md): it reports on the system.
  */
 
-import type { Status, Tile, TileView } from "../types.ts";
+import type { Manifest } from "@commonfabric/test-support/records";
+
 import { compactSpan, groupDigits } from "../lib.ts";
+import {
+  collectSelectionTile,
+  sharedTestSelection,
+  type TestSelectionSource,
+} from "../test-selection-history.ts";
 import {
   laneBudgetOf,
   MANIFEST_SHARE_MS,
-  type ManifestReader,
   selectedCount,
-  sharedManifest,
 } from "../test-selection-manifest.ts";
 import {
+  HEALTH_SECTION_ID,
   TEST_SELECTION_PATH,
   testSelectionResponse,
 } from "../test-selection-page.ts";
+import { publisherRunning } from "../test-selection-activity.ts";
+import type { Status, Tile, TileView } from "../types.ts";
 
 /** Hours before a manifest is stale enough to say so. */
 export const MANIFEST_STALE_HOURS = 8;
 
-/** Builds the tile against a reader and a clock, so a test can supply both. */
+/** Builds the tile against a data source and a clock. */
 export function makeTestSelection(
-  options: { read?: ManifestReader; now?: () => number } = {},
+  options: { source?: TestSelectionSource; now?: () => number } = {},
 ): Tile {
-  const read = options.read ?? sharedManifest;
+  const source = options.source ?? sharedTestSelection;
   return {
-    id: "test-selection",
+    label: "test selection",
     intervalMs: MANIFEST_SHARE_MS,
     routes: [{
       path: TEST_SELECTION_PATH,
-      handler: () => testSelectionResponse(read, options.now),
+      handler: () => testSelectionResponse(source.latest, options.now),
+      live: true,
     }],
-    collect: () => selectionView(read, options.now),
+    collectActivity: publisherRunning,
+    collect: (_ctx, publish) =>
+      collectSelectionTile(
+        source,
+        "selected",
+        (manifest) => selectionView(manifest, options.now),
+        publish,
+      ),
   };
 }
 
-async function selectionView(
-  read: ManifestReader,
+function selectionView(
+  manifest: Manifest | undefined,
   clock?: () => number,
-): Promise<TileView> {
-  const manifest = await read();
-  if (manifest === undefined) {
+): TileView {
+  if (manifest === undefined || manifest.entries.length === 0) {
     return {
-      label: "test selection",
       status: "unknown",
       value: "—",
-      sub: "no selection manifest yet",
+      sub: manifest === undefined
+        ? "no selection manifest yet"
+        : "selection manifest has no tests",
     };
   }
   const selected = selectedCount(manifest);
   const known = manifest.entries.length;
-  const share = known === 0 ? 0 : (selected / known) * 100;
+  const share = (selected / known) * 100;
   const age = (clock?.() ?? Date.now()) - Date.parse(manifest.generatedAt);
   const ageHours = age / 3_600_000;
   const budget = laneBudgetOf(manifest.dials);
@@ -76,20 +94,22 @@ async function selectionView(
     : Math.max(...manifest.lanes.map((lane) => lane.projectedSeconds));
   const over = fullest > budget;
   const unplaceable = manifest.unschedulable.length;
+  const broken = manifest.health?.alarms.length ?? 0;
   const stale = ageHours > MANIFEST_STALE_HOURS;
-  const status: Status = over
+  const status: Status = broken > 0 || over
     ? "bad"
     : unplaceable > 0 || stale
     ? "warn"
     : "good";
   const badge = `${compactSpan(age)} old`;
   return {
-    label: "test selection",
     status,
     value: `${share.toFixed(0)}%`,
     // The condition the tile is colored for takes this line, worst
     // first, and the corpus count holds it while neither has.
-    sub: over
+    sub: broken > 0
+      ? `cost model broken: ${broken} alarm${broken === 1 ? "" : "s"}`
+      : over
       ? `fullest lane ${fullest.toFixed(0)}s of ${budget}s`
       : unplaceable > 0
       ? `${groupDigits(unplaceable)} test${
@@ -99,7 +119,9 @@ async function selectionView(
     aside: stale
       ? `<span class="hfacet" title="${badge}">${badge}</span>`
       : undefined,
-    href: TEST_SELECTION_PATH,
+    href: broken > 0
+      ? `${TEST_SELECTION_PATH}#${HEALTH_SECTION_ID}`
+      : TEST_SELECTION_PATH,
     hint: "lanes ↗",
   };
 }

@@ -7,7 +7,9 @@ Each item: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
-Status legend: `open` (not yet applied to the spec), `applied`.
+Status legend: `open` (not yet applied to the spec), `adopted` (the spec has
+ruled on the entry and carries the requirement, in the section named),
+`applied`.
 
 ## From the S16 default-transition design
 
@@ -183,7 +185,11 @@ item).
 **SC-11 [normative] Idempotent label persistence — §4.6.4.** Reactive runtimes
 re-derive labels on every recompute; require that persisting an unchanged
 effective label is a no-op (no envelope write, no version bump, no replication
-traffic), with equality defined over the canonical form (§4.1.3 c14n). Without
+traffic), with equality defined over the canonical form (§4.1.3 c14n). One
+exception, taken once per document: a stored version-1 envelope is rewritten
+in version 2 with unchanged labels by a writer selecting version 2
+([content-addressed-cfc-labels.md](content-addressed-cfc-labels.md)), and
+never the reverse. Without
 this, label persistence and reactive scheduling interact pathologically.
 
 **SC-12 [clarify] Degenerate CNF join — §8.9.3.** `concatClauses` over
@@ -684,15 +690,25 @@ in the labs repo): implementation identity is the pair **(content hash of the
 verified code artifact, symbol/binding path within it)**. Same artifact hash
 + same symbol = same identity wherever the artifact is loaded; any code
 change changes the hash and with it every identity within the artifact.
-Rebinding does not inherit authority by default. The narrow temporary exception
-is an explicit `piece setsrc` update: canonical-filename matches in the old and
-new recursive module closures persist a cumulative successor-to-predecessor
-delegation. `writeAuthorizedBy` accepts the current module hash or a predecessor
-reachable through the delegation map authenticated in the target document's
-space, but still requires the same symbol/binding path. A delegation loaded from
-another space grants no authority. Source-file spelling remains diagnostic at
-verification; canonical authored filenames govern whether `setsrc` derives a
-delegation in the first place. Because the delegation list is mutable and
+Rebinding does not inherit authority by default. Two updates are the exception,
+and derive the same delegation: an explicit `piece setsrc` update, and an
+unattended update to a `system:` origin — a release the deployment gated
+through its golden replays (owner decision 2026-09-17; an update to any other
+origin inherits nothing, since nobody promised anything about what it ships).
+In either, the new entry succeeds the old entry
+outright, since the update is what names the pair, and every other module in
+the old and new recursive closures matches by canonical filename — directly,
+or under the root substitution the two entry names define when they share a
+tail (the same authored tree served under `/api/patterns` and supplied from a
+checkout under `/packages/patterns`) — persisting a cumulative
+successor-to-predecessor delegation; an ambiguous match derives none.
+`writeAuthorizedBy` accepts the current module hash or a predecessor reachable
+through the delegation map authenticated in the target document's space, but
+still requires the same symbol/binding path. A delegation loaded from another
+space grants no authority. Source-file spelling remains diagnostic at
+verification; whether `setsrc` derives a delegation for a module below the
+entry is governed by canonical authored filenames under either root. Because
+the delegation list is mutable and
 outside the source Merkle identity, it is authority-bearing only when protected
 by the compiler's integrity attestation (field-level in source documents,
 root-level in compiled documents). Replace §8.15.6's "no separate naming
@@ -1255,3 +1271,301 @@ the link-carried one. Name the observation-class axis in the same breath: the
 cover has to hold under each read class that consumes the entry, since a
 class-scoped declared entry can shadow a covering one for some classes and
 not others.
+
+## From the write-path self-read exclusion (2026-09-15)
+
+**SC-41 [normative] A write path's read of its own destination is a
+runtime-internal read — §18.6.2.** `adopted`: §18.6.2, "Conditional
+exclusions", carries the class as the write-destination read, with its
+unobservability invariant, the runtime-private condition on a guard's control
+state, and the comment it requires at every marking site. §18.6.2 derives two things from the
+attempt's journal minus runtime-internal reads: the consumed set, and the
+conservative flow-path confidentiality. This entry proposes a fifth kind of
+runtime-internal read, and the runner subtracts it from the second alone —
+the boundary at the end of this entry says so, and a runtime that adopts the
+amended list owes either the wider application or that boundary stated.
+§18.6.2 enumerates four kinds today: verifier-internal reads,
+label-metadata reads at the envelope's own metadata paths, program and source
+text loaded to run the handler, and content-addressed schema documents. The
+list does not contemplate a write path that reads its own destination, and the
+omission has a cost a deployment meets as soon as both `cfcFlowLabels` is
+`persist` and `cfcEnforcementMode` is `enforce-strict`: a whole-object
+`Cell.set()` into a document whose fields carry different confidentiality is
+refused by the §8.12.4 writer-fit rule on every write after the first that
+changes any field's value. The runtime's diff reads the destination
+recursively to decide which sub-paths differ, so the transaction's join
+carries every field's label, and the write to each field is then measured
+against that field's own declared ceiling. The stream-marker probe `set()`
+makes before choosing between an event send and a stored write has the same
+effect over a document whose label sits at its root, and reaches further: a
+transaction that rewrites such a document carries its label onto every other
+write it makes, which is how the runner's sqlite commit-evaluation
+integration case fails. What the refusal blocks is a
+whole-object write whose value the program did not read out of the
+destination — an event payload, a form's contents, a computed record. A
+read-modify-write spelled `cell.set({ ...cell.get(), secret: x })` is refused
+before and after this entry alike, and correctly so: the program did read the
+sibling, so §8.9.2's conservative join covers it. Narrowing that case is the
+per-write question SC-23 left transaction-global and SC-24 profiles, not this
+one.
+
+Proposed edit: add a fifth kind to §18.6.2's excluded set — a read the
+runtime's own write machinery makes of the region it is about to write, whose
+result decides how and whether to write rather than what is written. The
+runner has two: the stream-marker probe that chooses between an event send
+and a stored write, and the diff's read of each destination path. Two conditions belong in the text with it, because they are
+what keep the exclusion from being the flow-precision claim §8.9.2 forbids by
+default, gating it exactly as §8.9.1 gates a schema-level claim. The excluded
+read's result MUST reach no written value: where the stored content steers the
+write rather than merely gating it, the runtime takes a separate,
+non-excluded read of the same address. And the marking MUST be runtime
+recording rather than anything executed code can assert, the same discipline
+§8.10.1 already puts on marking verifier-internal reads. The class is scoped
+to the write path rather than to the probe: the runner's `isStream()` takes
+its read metadata from its caller, so the same probe made to decide whether
+to add a listener joins like any other observation.
+
+The residual this admits is the write-elision channel: whether a path was
+written is visible, so dropping a write tells an observer of the write set
+that the writer's value equalled the stored one, and repeated attempts with
+chosen values make that an equality oracle on that path's prior value.
+Elision opens the channel and predates the exclusion; what the exclusion
+changes is that the influence is no longer labeled at all, where before it
+was labeled at the wrong paths. Recording a channel a profile does not close
+is the discipline §18.6.4's conformance checklist asks for, and §4.6.3's
+existence channel (SC-4) is the neighbouring disclosure.
+
+The runner applies the exclusion to the flow join alone. The consumed set the
+egress and sink ceilings read, and the per-write read-prefix gate of SC-23,
+both still count these reads, which over-gates and never under-gates; §18.6.2
+governs both sets, so a runtime that claims the amended list owes either the
+wider application or this boundary stated, as SC-23 stated its own. The design and the runner's
+implementation are in
+[`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md); the
+runtime marks the class with `writeDestinationRead` rather than by address, so
+§18.6.4's "excluded address patterns" obligation is discharged for this class
+by naming the marker.
+
+## From the wiring-probe classification (2026-09-16)
+
+**SC-42 [normative] A runtime wiring read is not an observation — §4.6.3 +
+§18.6.2.** `adopted`: §18.6.2, "Conditional exclusions", carries the class as
+the wiring read, with the condition that the reference found is only written
+unchanged to another slot, and the comment it requires at every marking site.
+§4.6.3's read-API mapping puts the link-carried label on a
+"standalone reference-identity read", and the refinement beneath it defines
+standalone by the dereference trace: a probe covered at or above by a trace
+the same transaction recorded is resolution machinery, and every other probe
+consumes the reference-identity row. No second boundary is named.
+
+The runner has a second class of probe that boundary does not reach. When the
+runtime wires an operation up — binding a node's inputs and outputs,
+resolving a write redirect, plumbing a result, scaffolding a list
+coordinator's container — it reads slots to find out which reference sits
+there, and follows none of them, so no trace covers the read. Those scopes
+carry the `machineryRead` marker and contain no pattern or handler code. What
+the runtime does with the reference is write that same reference into another
+slot, and the link write mints the source document's own label there, so the
+pointer's protection reaches the slot that receives it whatever the probe
+consumed. The per-transaction join is a second, coarser copy of it, stamped
+over every other path the transaction wrote.
+
+The cost of that copy is not theoretical. Setting a piece up rewrites the
+complete result projection, so the copy lands at the ROOT of each sub-piece's
+result document, where a covering entry covers `$UI` and the §8.10.6 display
+ceiling denies the piece's whole user interface rather than the confidential
+field inside it. Measured on
+`packages/patterns/integration/cfc-render-policy-demo.test.ts` at the strict
+dials: the clause reached the flow join through one observation, a `followRef`
+read at the sigil interior carrying the wiring marker, and the §8.12.5 route-2
+declaration then wrote it at `path: []` of four documents at once.
+
+Proposed edit: say in §4.6.3's refinement list that the dereference trace is
+one of two things that make a reference-identity probe something other than a
+standalone observation, and that a read the runtime issues as its own
+plumbing is the other. The table classifies observations a computation makes;
+a runtime moving a reference from one slot to another makes none. State the
+condition the exclusion rests on, which is the same one §18.6.2's list rests
+on: the excluded scopes contain no program code, and a scope that computes
+content from which reference sits at a slot is not one of them. §18.6.2 is
+the other place this could live — its enumerated set already excludes
+"reference resolution performed by the verification machinery itself", and
+wiring reads are the same kind of thing one layer out — so the two sections
+should at least cross-reference whichever carries it.
+
+Section 8.12.8 anticipates this entry. Its existence-channel paragraph says
+closing the per-child half for generic reference-structure containers "first
+requires the runtime to distinguish its own container-scaffolding reads from
+application reads (a machinery-read class beyond those of §18.6.2)", which is
+that marker, named as something the spec does not yet have.
+
+## From the input-witnessed `TransformedBy` (2026-09-23)
+
+Design of record: [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md).
+
+**SC-43 [reconcile] `TransformedBy`'s input witnesses as standalone summary
+atoms — §8.9.3, §8.7.1, §15.** `open`. Three passages give the atom three
+shapes: §15's registry row and §4.5.4 carry `inputs: Array<{ ref, witnesses?
+}>`, §8.7.1 carries parallel `inputs` and `inputIntegrity` arrays, and §8.9.3's
+code sketch carries the §15 form. None says how an exchange rule reads a
+per-input list, and the §4.4.5 pattern calculus has no quantifier to do it with:
+an array pattern matches elementwise at equal length. The runtime mints the
+conservative summary §8.9.3 already permits, as standalone atoms:
+`TransformedBy{identity}` beside one `TransformedBy{identity, inputWitness: W}`
+per atom `W` that held at every confidential input location, with no input
+references. Proposed edit: make the summary form a registered alternative to
+`inputs` in §15, with its meaning stated once (the transformer wrote the value,
+and every confidential input it consumed carried `W`), and give §8.7.1's
+parallel `inputs` and `inputIntegrity` arrays the §15 shape; state in §8.7.2
+that a rule releasing an endorsed transformer's output guards on the
+witness-bearing form, since the identity alone admits any caller's choice of
+input; and note in §8.9.3 that input references are a read-path channel when
+persisted, which is a reason to prefer the summary where no consumer
+dereferences them.
+
+## From the display-boundary module-policy build (2026-09-24)
+
+**SC-44 [normative] A module policy's subject space is a membership candidate
+— §4.9.3 + §18.4.5.** `open`. §4.9.3 discovers the spaces to point-query for
+`HasRole` facts "from the `Space(...)` atoms present in the label being
+evaluated", and §18.4.5 subscribes a gated cell to the ACL documents of exactly
+those spaces. A module policy's rules release on evidence about
+`THIS_POLICY.subject`, and §4.4.2's own example guards on
+`HasRole(reviewer, subject, reader)`. A label selecting that policy carries the
+subject inside the `Policy` reference, not as a `Space(...)` atom, so under the
+text as written no point query is ever addressed to it: the rule can fire for
+a viewer whose own or session space is the subject, and for no other reader.
+
+The runtime adds the plaintext `subject` of each exact module-policy reference
+the label selects to the candidate set, and the reconciler watches that
+space's ACL document as it watches a `Space(X)` atom's. The discipline is
+unchanged: one point query per `(principal, space)`, no member enumeration, and
+no inference from residency.
+
+Two things are left as they are. A subject in commitment form (§4.6.4.1) names
+no space and is not a candidate: a committed subject is never opened (§4.3.6);
+minted facts for other candidates still unify with it. Those are the facts the
+boundary mints for another reason — the viewer's own or session space, or a
+`Space` atom the same label names — so the commitment adds no candidate and no
+new fact. A space a module rule adds from
+any binding other than the subject is not a candidate either, and its `Space`
+alternative stays sealed; consulting spaces that first appear in the rewritten
+label would need a watch set that depends on evaluation, which §18.4.5's
+reactive model does not have.
+
+The same reactive obligation extends to manifests. A label whose manifest
+has not reached the local replica fails closed (§4.4.3), and nothing in
+§18.4.5 re-evaluates it when the manifest arrives. The runtime subscribes a
+gated cell to the manifest document at `policyDigest` in each space its label
+was derived from — the local digest-addressed store of §4.4.1, where the
+persisting transaction installed it — until one verifies. For a label view
+carried on a cell rather than stored on its document, those are the spaces the
+carried view was derived from: the holder's, per §4.4.1, such as the document
+holding a link the cell was resolved through, not the space of the value it
+reaches.
+
+Proposed edit: add the plaintext module-policy subject to §4.9.3's
+candidate-discovery sentence, with the commitment-form carve-out; and add
+subject-space ACL documents and unverified manifest documents to §18.4.5's
+reactive re-render paragraph. Implemented in
+`packages/runner/src/cfc/render-ceiling.ts`
+(`membershipSpacesInConfidentiality`) and
+`packages/html/src/worker/reconciler.ts` (`#watchCellMembership`).
+
+## From the stored write-requirement enforcement (#8024, 2026-09-24)
+
+**SC-45 [normative] A module delegation is a verifier step — §8.15.6.**
+`open`. §8.15.6 says an updated handler MUST NOT inherit its predecessor's
+write authority. The runtime lets a republished module write a field whose
+stored `writeAuthorizedBy` names its predecessor when a delegation from the
+successor to the predecessor is registered, and `piece setsrc` and
+system-origin releases (the source reconciler) register one. Once stored claims
+bind every writer, a successor writing through its own labeled schema needs
+that delegation too. Ruled by Berni on #8024: "Yes, trust setsrc and system
+updates do set up a delegation, that is intended. Spec-wise it's effectively a
+verifier step." Proposed edit: in §8.15.6, say that authority does not pass by
+inheritance, and that a verifier may attest a succession (the update path
+registering the successor as a delegate of the predecessor). The attested
+successor then satisfies claims naming the predecessor. Name who may attest
+(the trusted update paths) and that the attestation is per space.
+
+**SC-46 [normative] Claims beneath a link position belong to the linked
+document — §8.15 + §8.12.** `open`. A schema can describe, beneath a position
+that holds a link, the fields of the document linked there, with their writer
+claims (a home document's profile links carry the profile pattern's field
+claims). Nothing in §8.15 or §8.12 says whose claims those are. The runtime
+treats them as the linked document's: that document's own envelope enforces
+them. The link position's own claims (`writeAuthorizedBy`/`uiContract` at the
+position) govern pointing it at another link, setting it from absent, and
+clearing it. Replacing inline data with a link, or a link with inline data,
+answers to the claims beneath as stored. Link positions are judged from the
+stored and new values, per item for a list. Proposed edit: a §8.15 subsection
+stating these rules, and a note in §8.15.3 ("authority is a property of the
+schema, not the value") that which document a schema position describes
+depends on whether the value there is a link.
+
+**SC-47 [normative] Release — §8.15.12 (new) + §8.12.3.** `open`. §8.12.3's
+strictly additive label evolution has no carve-out for re-describing what a
+store's schema says about other documents. Proposed clause: in the
+runtime-authorized transaction that installs a pattern over its own piece's
+stores (setup, a pattern swap, a start repair), (a) claims the stored schema
+describes beneath a position that, as the document stood before the
+transaction, held only links, or held nothing under a position that itself
+carries a writer claim, belong to the linked documents and are re-described
+by the release; (b) a stamped claim may adopt a stored
+unstamped claim per SC-48. Every other writer is held to strict monotonicity.
+Note that both rules rest on swap authority (who may move a piece's pattern
+pointer), which §8.15 should name.
+
+**SC-48 [normative] Adopting an unstamped writer claim — §8.15.1.** `open`.
+§8.15.1 names a writer by artifact hash and symbol. Claims stored before the
+runtime stamped them carry only a file spelling, which differs across compile
+roots. An unstamped claim authorizes no writer. The runtime lets a stamped
+claim adopt one when both name the same export and the same file below a
+known pattern root, and only when the stamp is one the transaction can vouch
+for: a module of the program a release installs (SC-47), or the verified
+writer the stamp itself names (its module, source file and export). Proposed edit: state that adoption is a
+one-time authenticated migration of legacy claims, and that once stored claims
+are stamped the file-correspondence rules are retired.
+
+## From the row-set member build (2026-09-28)
+
+`sqliteQuery` implements §8.17.6 as
+[`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md) describes ("Where a
+query's selection inputs are labeled"). Three points where the text and the
+runner differ, or where the text leaves a choice open:
+
+**SC-49 [normative] A secret in a member's address — §8.17.6 rule 4.**
+`open`. Rule 4 derives a member's address from its content and payload
+label, and so puts the payload label on the reference identity at each slot,
+since a reader could otherwise confirm a guess at a member by recomputing
+its address. The runner keys each member's address on a per-space secret as
+well (a runtime secret the transaction layer mints, labeled so that no
+ceiling admits a value derived from it), which makes the address say nothing
+about the member to code that cannot read the member. The slot then carries
+`S` alone, and a read of one member through the result carries that
+member's payload label and not another's. Proposed edit: allow a keyed
+derivation whose key untrusted code cannot use, say that the reference
+identity at a slot then need not carry the payload label, and record the
+residual that equal addresses stay observable under `S`: two slots holding
+equal members, and a member kept across a change of the selection, share an
+address.
+
+**SC-50 [normative] A reference built from an id — §8.17.6 rule 4, fifth
+item.** `open`. The item requires that untrusted code obtain a member
+reference only through a result, and offers a namespace untrusted code cannot
+write to as the means. A namespace stops a member's address from being
+received by writing the same content. It does not stop a reference from being
+constructed out of an address the code learned, where the runtime's link
+representation lets code write one as data. With a secret in the address
+(SC-49), an address can no longer be computed from a guess, so what remains
+is an address learned through a result, which is a retained reference.
+Proposed edit: state the requirement over both routes, and allow a secret
+in the address as the means for the second.
+
+**SC-51 [clarify] The existence entry of a member with labels at two levels —
+§8.17.6 rule 4, last item.** `open`. The item says the existence entry
+carries the member's payload label. A member can carry a label at its root
+and further labels on its fields. The runner's existence observation of such
+a member consumes the root label. Proposed edit: say whether the payload
+label here is the root's or the join over the member's fields.

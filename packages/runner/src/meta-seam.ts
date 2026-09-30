@@ -1,4 +1,4 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 export const META_LINK_FIELDS = Object.freeze(
   [
@@ -58,6 +58,28 @@ const META_FIELD_SET: ReadonlySet<string> = new Set(META_FIELDS);
 /** Whether the given field name addresses the raw meta seam. */
 export function isMetaField(field: string): field is MetaField {
   return META_FIELD_SET.has(field);
+}
+
+/**
+ * Narrow a raw meta value to a `{ identity, symbol }` pattern ref, or
+ * undefined.
+ *
+ * This is the one test for "does this document name a pattern", and it lives
+ * here so every reader of the `patternIdentity` field shares it: a cell read
+ * through `getMetaRaw`, and a store read that has the document envelope in
+ * hand and no cell. Two readers that decide the question apart can disagree,
+ * and a disagreement here is a piece that never starts.
+ */
+export function asPatternIdentityRef(
+  raw: unknown,
+): { identity: string; symbol: string } | undefined {
+  if (
+    isObjectOrArray(raw) && typeof raw.identity === "string" &&
+    typeof raw.symbol === "string"
+  ) {
+    return { identity: raw.identity, symbol: raw.symbol };
+  }
+  return undefined;
 }
 
 /**

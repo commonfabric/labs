@@ -57,15 +57,22 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { LoopbackStorageManager } from "../src/executor/loopback-storage.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
+import {
+  type Options,
+  type SessionFactory,
+  StorageManager,
+} from "../src/storage/v2.ts";
+import { createSignedSessionOpenAuth } from "../src/storage/v2-remote-session.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { ACLManager } from "../src/index.ts";
 import { TEST_SESSION_OPEN_AUDIENCE } from "./memory-v2-test-utils.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { ArrivalLog } from "./support/serving-waits.ts";
 
 const serviceSigner = await Identity.fromPassphrase("session remount service");
 const homeSigner = await Identity.fromPassphrase("session remount home");
@@ -87,20 +94,101 @@ type AclChangeNotifier = {
   noteSpaceAclChanged?: (space: MemorySpace) => void;
 };
 
+/**
+ * A gate on the frames a storage manager's sessions send to the memory server.
+ * While it is held, each frame waits, in the order it was sent, until the gate
+ * is released.
+ */
+class RequestGate {
+  #held: PromiseWithResolvers<void> | undefined;
+
+  #heldFrames = new ArrivalLog<string>();
+
+  /** Each frame the gate has held, as it arrives. */
+  get heldFrames(): ArrivalLog<string> {
+    return this.#heldFrames;
+  }
+
+  /** Holds every frame sent from now until `release()`. */
+  hold(): void {
+    this.#held = Promise.withResolvers<void>();
+  }
+
+  /** Lets the held frames through, in the order they were sent. */
+  release(): void {
+    this.#held?.resolve();
+    this.#held = undefined;
+  }
+
+  /** Resolves once `frame` may go to the server. */
+  async pass(frame: string): Promise<void> {
+    if (this.#held === undefined) return;
+    this.#heldFrames.record(frame);
+    await this.#held.promise;
+  }
+}
+
+/**
+ * Like `LoopbackStorageManager`, except that every frame its sessions send
+ * passes through a `RequestGate`, so a test can keep a read in flight while a
+ * commit on another connection lands.
+ */
+class GatedLoopbackManager extends StorageManager {
+  /** Connects to `server` with `options`, behind `gate`. */
+  static connect(
+    server: MemoryV2Server.Server,
+    gate: RequestGate,
+    options: Omit<Options, "memoryHost" | "spaceHostMap">,
+  ): GatedLoopbackManager {
+    const factory: SessionFactory = {
+      supportsAclBootstrap: true,
+      async create(space, signer, mountOptions = {}) {
+        if (signer === undefined) {
+          throw new Error("A loopback session needs a signer.");
+        }
+        const loopback = MemoryV2Client.loopback(server);
+        const client = await MemoryV2Client.connect({
+          transport: {
+            ...loopback,
+            send: async (payload) => {
+              await gate.pass(payload);
+              await loopback.send(payload);
+            },
+          },
+        });
+        const session = await client.mount(
+          space,
+          mountOptions,
+          (_targetSpace, descriptor, context) =>
+            createSignedSessionOpenAuth(signer, space, descriptor, context),
+        );
+        return { client, session };
+      },
+    };
+    return new GatedLoopbackManager(
+      { ...options, memoryHost: new URL("memory://loopback") },
+      factory,
+    );
+  }
+}
+
 describe("the session remount (profile-starvation fifth face)", () => {
   let server: MemoryV2Server.Server;
   let cleanups: Array<() => Promise<void>>;
   let storeSeq = 0;
-
-  /** `session.open` attempts by the SERVING identity — the observable for
-   * "did this remount actually mint a new session?". Scoped to the service
-   * principal because the ACL-setting client runtimes open sessions of
-   * their own on the same server. */
-  let sessionOpens: number;
+  /** Every `session.open` attempt, by issuing principal — the observable
+   * for "did this remount actually mint a new session?", and the event a
+   * test waits on when it has to act after one. The ACL-setting client
+   * runtimes open sessions of their own on the same server, which is why
+   * the counts below name a principal. */
+  let sessionOpens: ArrivalLog<string>;
+  /** How many the SERVING identity has minted. */
+  const servingOpens = (): number =>
+    sessionOpens.count((iss) => iss === serviceSigner.did());
 
   beforeEach(() => {
     storeSeq += 1;
-    sessionOpens = 0;
+    sessionOpens = new ArrivalLog<string>();
     server = new MemoryV2Server.Server({
       store: new URL(`memory://session-remount-${storeSeq}`),
       subscriptionRefreshDelayMs: 0,
@@ -109,11 +197,14 @@ describe("the session remount (profile-starvation fifth face)", () => {
       // `authorization.principal`.
       authorizeSessionOpen: (message) => {
         const iss = (message.invocation as { iss?: unknown } | undefined)?.iss;
-        if (iss === serviceSigner.did()) sessionOpens += 1;
-        if (typeof iss === "string") return iss;
+        if (typeof iss === "string") {
+          sessionOpens.record(iss);
+          return iss;
+        }
         const principal =
           (message.authorization as { principal?: unknown } | undefined)
             ?.principal;
+        if (typeof principal === "string") sessionOpens.record(principal);
         return typeof principal === "string" ? principal : undefined;
       },
       sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
@@ -231,7 +322,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
 
   /** What the replica has materialized for `id`, or undefined. */
   const materialized = (
-    manager: LoopbackStorageManager,
+    manager: StorageManager,
     space: MemorySpace,
     id: URI,
   ): unknown => {
@@ -243,7 +334,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
 
   /** One serving-plane read of a foreign doc: the pull's own verdict. */
   const probeRead = async (
-    manager: LoopbackStorageManager,
+    manager: StorageManager,
     space: MemorySpace,
     id: URI,
   ): Promise<{ error?: { name?: string; message?: string } }> => {
@@ -388,12 +479,13 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // a fix that simply never remounts.
     await setAcl(homeSigner, homeSpace, { [strangerSigner.did()]: "READ" });
     (stranger as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
-    await waitUntil(
-      async () =>
-        (await probeRead(stranger, homeSpace, mintProbeId(minter, homeSpace)))
-          .error === undefined,
+    // The remount is lazy — the next load opens the fresh session — so
+    // one load is the whole observation.
+    expect(
+      (await probeRead(stranger, homeSpace, mintProbeId(minter, homeSpace)))
+        .error,
       "the ACL grant admits the remounted session",
-    );
+    ).toBeUndefined();
   });
 
   it("an ownership CHANGE re-binds the new owner rather than reading on under a stale identity — the outcome the revocation sweep's own comment asks for", async () => {
@@ -420,22 +512,22 @@ describe("the session remount (profile-starvation fifth face)", () => {
       [strangerSigner.did()]: "OWNER",
       [homeSigner.did()]: "READ",
     });
-    await waitUntil(
-      async () =>
-        (await probeRead(serving, homeSpace, mintProbeId(minter, homeSpace)))
-          .error !== undefined,
+    // `setAcl` flushed the commit, and the sweep that revokes runs with
+    // the ACL's own admission, so the next load already sees the verdict.
+    expect(
+      (await probeRead(serving, homeSpace, mintProbeId(minter, homeSpace)))
+        .error,
       "the ownership change revoked the bound session",
-    );
+    ).toBeDefined();
 
     // The remount re-resolves the binding from the landed ACL and serves
     // as the NEW owner.
     (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
-    await waitUntil(
-      async () =>
-        (await probeRead(serving, homeSpace, mintProbeId(minter, homeSpace)))
-          .error === undefined,
+    expect(
+      (await probeRead(serving, homeSpace, mintProbeId(minter, homeSpace)))
+        .error,
       "the remount re-bound the new owner",
-    );
+    ).toBeUndefined();
   });
 
   it("a doc watched on the DEAD session is refetched after the remount, not answered stale from the watch tracker", async () => {
@@ -452,9 +544,17 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // revocation, which the remount does not cause — but "the session is
     // re-established" has to mean the replica can read again, including
     // what it was already watching. So the remount drops the tracker.
-    const stranger = LoopbackStorageManager.connect(server, {
-      as: strangerSigner,
-    });
+    /** This session's own revocation, reported once the session has taken
+     * the frame. The remount latch is consumed only against a session the
+     * revocation has already terminated. */
+    const revocations = new ArrivalLog<void>();
+    const stranger = LoopbackStorageManager.connect(
+      server,
+      { as: strangerSigner },
+      (frame) => {
+        if (frame.includes('"session/revoked"')) revocations.record();
+      },
+    );
     cleanups.push(() => stranger.close());
 
     // Authorized from the start, so the doc is read SUCCESSFULLY and its
@@ -471,6 +571,10 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // session is revoked and stops receiving pushes. Nothing pulls in this
     // window, so the tracker still holds the doc's selector as covered.
     await revokeAcl(homeSigner, homeSpace, strangerSigner.did());
+    // The revocation has reached THIS client: the latch below is consumed
+    // only against a session whose termination has landed, and a probe
+    // that runs first reads the tracker and answers the stale value.
+    await revocations.reached(1);
     // The value moves while the replica is deaf to it.
     await writeDoc(homeSigner, homeSpace, "tracker-stale", "v2");
 
@@ -481,23 +585,20 @@ describe("the session remount (profile-starvation fifth face)", () => {
     });
     (stranger as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
 
-    // The pin: this read must reach the wire on the remounted session and
-    // come back with v2. Pre-fix it returned ok immediately from the
-    // tracker and the replica still read "v1" — a silent stale answer.
     // The pin, and note WHAT it asserts: not that the read errors, but
     // that it returns the CURRENT value. Pre-fix the pull returned
     // `{ok:{}}` — a successful read — while the replica still held "v1".
     // A silent stale answer is the worst shape this could take, which is
     // why the assertion is on the materialized value and not on the
     // pull's verdict.
-    await waitUntil(
-      async () => {
-        const result = await probeRead(stranger, homeSpace, docId);
-        return result.error === undefined &&
-          materialized(stranger, homeSpace, docId) === "v2";
-      },
-      "the remounted session refetched the doc it had been watching",
-    );
+    expect(
+      (await probeRead(stranger, homeSpace, docId)).error,
+      "the remounted session read the doc it had been watching",
+    ).toBeUndefined();
+    expect(
+      materialized(stranger, homeSpace, docId),
+      "the refetch replaced the stale materialization",
+    ).toBe("v2");
   });
 
   it("a HEALTHY session is never churned: an ACL commit that did not terminate it mints no new session.open", async () => {
@@ -519,7 +620,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
         .error,
     ).toBeUndefined();
 
-    const before = sessionOpens;
+    const before = servingOpens();
     // An ACL commit that changes nothing about this session's standing.
     await setAcl(homeSigner, homeSpace, { [servingSigner.did()]: "READ" });
     (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
@@ -528,7 +629,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
         .error,
     ).toBeUndefined();
     expect(
-      sessionOpens - before,
+      servingOpens() - before,
       "a live session must survive an ACL commit untouched",
     ).toBe(0);
   });
@@ -540,7 +641,9 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // is a client committing the genesis ACL: the host's own
     // `commitAdmitted` observer has to carry it to the serving
     // runtime's storage manager.
-    let servingManagerRef: LoopbackStorageManager | undefined;
+    // The construction hook is the event that says the host activated a
+    // serving runtime.
+    const servingUp = new ArrivalLog<LoopbackStorageManager>();
     const host = new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
@@ -552,7 +655,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
           as: serviceSigner,
           servingHomeSpace: space,
         });
-        servingManagerRef = manager;
+        servingUp.record(manager);
         const runtime = new Runtime({
           apiUrl: new URL("http://toolshed.test"),
           storageManager: manager,
@@ -580,11 +683,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
       `of:${servingSpace}` as URI,
       { path: [], schema: false },
     );
-    await waitUntil(
-      () => servingManagerRef !== undefined,
-      "the host activated a serving runtime",
-    );
-    const serving = servingManagerRef!;
+    const serving = await servingUp.matching(() => true);
 
     // Activation before genesis, on the FOREIGN home space.
     await serving.ensureSpaceInitialized(homeSpace);
@@ -593,10 +692,136 @@ describe("the session remount (profile-starvation fifth face)", () => {
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     const docId = await seedDoc(homeSigner, homeSpace, "host-glue", "v1");
 
-    await waitUntil(
-      async () =>
-        (await probeRead(serving, homeSpace, docId)).error === undefined,
+    // The host's observer runs with the ACL commit's own admission, which
+    // `setAcl` flushed, so the heal is already owed by the time the load
+    // below opens its session.
+    expect(
+      (await probeRead(serving, homeSpace, docId)).error,
       "the host's ACL admission healed the foreign session",
+    ).toBeUndefined();
+  });
+
+  it("lands a read that was in flight when the genesis ACL revoked its session", async () => {
+    // The read is issued on the pre-genesis session and reaches the memory
+    // server only after the genesis ACL has revoked that session and the ACL
+    // notice has latched the remount. The server refuses it as a request on
+    // a session it no longer holds. Nothing else reads the space, so the
+    // read that failed is the only load that can consume the latch.
+
+    const gate = new RequestGate();
+    const serving = GatedLoopbackManager.connect(server, gate, {
+      as: serviceSigner,
+      servingHomeSpace: servingSpace,
+    });
+    cleanups.push(() => serving.close());
+    const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
+
+    await serving.ensureSpaceInitialized(homeSpace);
+    gate.hold();
+    const read = probeRead(serving, homeSpace, docId);
+    await gate.heldFrames.reached(1);
+
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
+    gate.release();
+
+    const result = await read;
+    expect(
+      result.error,
+      `the in-flight read must land; got ` +
+        `${result.error?.name}: ${result.error?.message}`,
+    ).toBeUndefined();
+    expect(
+      servingOpens(),
+      "one session before the genesis and one remount after it",
+    ).toBe(2);
+  });
+
+  it("fails a read that was in flight when the genesis ACL revoked its session, when the ACL grants its principal nothing", async () => {
+    // The stranger mounts plainly, so no owner binding applies and the
+    // remounted session is judged as the stranger, whom the genesis ACL does
+    // not name. The one remount the failure makes is refused at
+    // `session.open`, and that refusal is what the read returns.
+
+    const gate = new RequestGate();
+    const stranger = GatedLoopbackManager.connect(server, gate, {
+      as: strangerSigner,
+    });
+    cleanups.push(() => stranger.close());
+    const strangerOpens = () =>
+      sessionOpens.count((iss) => iss === strangerSigner.did());
+    const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
+
+    await stranger.ensureSpaceInitialized(homeSpace);
+    gate.hold();
+    const read = probeRead(stranger, homeSpace, docId);
+    await gate.heldFrames.reached(1);
+
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    (stranger as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
+    gate.release();
+
+    expect((await read).error?.name).toBe("AuthorizationError");
+    expect(
+      strangerOpens(),
+      "one session before the genesis and one refused remount after it",
+    ).toBe(2);
+  });
+
+  it("lands every read that joined a fetch in flight when the genesis ACL revoked its session", async () => {
+    // The second read of the same document joins the first read's fetch, so
+    // both see it fail, and only one of them can be the one that consumes the
+    // latch.
+
+    const gate = new RequestGate();
+    const serving = GatedLoopbackManager.connect(server, gate, {
+      as: serviceSigner,
+      servingHomeSpace: servingSpace,
+    });
+    cleanups.push(() => serving.close());
+    const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
+
+    await serving.ensureSpaceInitialized(homeSpace);
+    gate.hold();
+    const reads = [
+      probeRead(serving, homeSpace, docId),
+      probeRead(serving, homeSpace, docId),
+    ];
+    await gate.heldFrames.reached(1);
+
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
+    gate.release();
+
+    const errors = (await Promise.all(reads)).map((result) => result.error);
+    expect(errors).toEqual([undefined, undefined]);
+    expect(servingOpens()).toBe(2);
+  });
+
+  it("returns the server's refusal for a read that was in flight when its session was revoked, when no ACL change was noted", async () => {
+    // With no ACL notice there is no remount owed, so the read that failed is
+    // not made again: it returns the refusal of the request itself, rather
+    // than the terminated session's own error.
+
+    const gate = new RequestGate();
+    const serving = GatedLoopbackManager.connect(server, gate, {
+      as: serviceSigner,
+      servingHomeSpace: servingSpace,
+    });
+    cleanups.push(() => serving.close());
+    const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
+
+    await serving.ensureSpaceInitialized(homeSpace);
+    gate.hold();
+    const read = probeRead(serving, homeSpace, docId);
+    await gate.heldFrames.reached(1);
+
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    gate.release();
+
+    expect((await read).error?.message).toBe(
+      "Session is not open on this connection",
     );
+    expect(servingOpens()).toBe(1);
   });
 });

@@ -153,7 +153,7 @@ function mintRun(
     status: run.status ?? "completed",
     conclusion: run.conclusion ?? "success",
     created_at: run.created_at ?? "2026-08-21T02:00:00Z",
-    html_url: `https://github.com/commontoolsinc/labs/actions/runs/${id}`,
+    html_url: `https://github.com/commonfabric/labs/actions/runs/${id}`,
     display_title: run.named === false
       ? "Test Records Mint"
       : `Mint reporting key for octocat (${recipient})`,
@@ -168,7 +168,11 @@ interface StubOptions {
   /** What the token endpoint says about the installed key. */
   keyStatus?: number;
 
-  /** One page of runs per listing call; the last repeats. */
+  /**
+   * One page of runs per listing or run read; the last repeats. A watch
+   * that pauses after the last has been served fails rather than waiting
+   * on a page that cannot change.
+   */
   runPages?: Record<string, unknown>[][];
 
   runsStatus?: number;
@@ -182,6 +186,9 @@ interface StubOptions {
   zipStatus?: number;
   dispatchStatus?: number;
   dispatchDate?: string;
+
+  /** The id of the run an accepted dispatch starts; `mintRun`'s by default. */
+  dispatchedRun?: number;
 }
 
 describe("test-records-key", () => {
@@ -203,8 +210,9 @@ describe("test-records-key", () => {
 
   function withStub(options: StubOptions, token = "gh-token"): void {
     let page = 0;
+    const pages = options.runPages ?? [[]];
     withFetch(
-      ((input: URL | RequestInfo) => {
+      ((input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
         if (url.includes("oauth2.googleapis.com/token")) {
           return Promise.resolve(
@@ -225,15 +233,37 @@ describe("test-records-key", () => {
           const headers = options.dispatchDate !== undefined
             ? { date: options.dispatchDate }
             : undefined;
+          // GitHub names the run it started only when asked to.
+          const details = options.dispatchStatus === undefined &&
+            JSON.parse(String(init?.body)).return_run_details === true;
+          const id = options.dispatchedRun ?? 42;
           return Promise.resolve(
-            new Response(null, {
-              status: options.dispatchStatus ?? 204,
-              ...(headers !== undefined ? { headers } : {}),
-            }),
+            new Response(
+              details
+                ? JSON.stringify({
+                  workflow_run_id: id,
+                  run_url: `https://api.github.com/runs/${id}`,
+                  html_url: `https://github.com/runs/${id}`,
+                })
+                : null,
+              {
+                status: options.dispatchStatus ?? (details ? 200 : 204),
+                ...(headers !== undefined ? { headers } : {}),
+              },
+            ),
+          );
+        }
+        const single = url.match(/\/actions\/runs\/(\d+)$/);
+        if (single !== null) {
+          const run = pages[Math.min(page++, pages.length - 1)]!
+            .find((run) => run.id === Number(single[1]));
+          return Promise.resolve(
+            run === undefined
+              ? new Response("not found", { status: 404 })
+              : new Response(JSON.stringify(run), { status: 200 }),
           );
         }
         if (url.includes("/runs?")) {
-          const pages = options.runPages ?? [[]];
           const runs = pages[Math.min(page++, pages.length - 1)]!;
           const headers = options.listDate !== undefined
             ? { date: options.listDate }
@@ -265,6 +295,10 @@ describe("test-records-key", () => {
       }) as typeof fetch,
       token,
     );
+    deps.pause = () =>
+      page < pages.length
+        ? Promise.resolve()
+        : Promise.reject(new Error("the watch outlasted the stubbed runs"));
   }
 
   async function storeIdentity(): Promise<KeyDeliveryIdentity> {
@@ -822,7 +856,6 @@ describe("test-records-key", () => {
       const identity = await storeIdentity();
       const published = await delivery(identity);
       withStub({
-        dispatchDate: "Fri, 21 Aug 2026 01:00:00 GMT",
         runPages: [
           [mintRun(identity.recipient, {
             named: false,
@@ -868,6 +901,7 @@ describe("test-records-key", () => {
         created_at: "2026-08-21T02:00:00Z",
       });
       withStub({
+        dispatchStatus: 403,
         dispatchDate: "Fri, 21 Aug 2026 03:00:00 GMT",
         runPages: [
           [failed],
@@ -900,6 +934,7 @@ describe("test-records-key", () => {
         created_at: "2026-08-21T03:00:00Z",
       });
       withStub({
+        listDate: "Fri, 21 Aug 2026 03:00:01 GMT",
         runPages: [
           [going],
           [going],
@@ -931,7 +966,7 @@ describe("test-records-key", () => {
         created_at: "2026-08-21T02:00:00Z",
       });
       withStub({
-        dispatchDate: "Fri, 21 Aug 2026 03:00:00 GMT",
+        dispatchedRun: 6,
         runPages: [
           [opaque],
           [
@@ -974,6 +1009,77 @@ describe("test-records-key", () => {
 
       await expect(setupCommand(deps)).rejects.toThrow(
         "Dispatching the minting workflow failed: HTTP 500",
+      );
+    });
+
+    it("raises a dispatch that does not say which run it started", async () => {
+      await storeIdentity();
+      withStub({});
+      const inner = deps.fetchImpl;
+      deps.fetchImpl =
+        ((input: URL | RequestInfo, init?: RequestInit) =>
+          String(input).endsWith("/dispatches")
+            ? Promise.resolve(new Response("{}", { status: 200 }))
+            : inner(input, init)) as typeof fetch;
+
+      await expect(setupCommand(deps)).rejects.toThrow(
+        "did not say which run it started",
+      );
+    });
+
+    it("installs the key from a run created before the dispatch answered", async () => {
+      // GitHub creates the run while it handles the dispatch, so the
+      // run's creation time can be a second earlier than the time
+      // GitHub's answers carry from then on.
+      const identity = await storeIdentity();
+      const published = await delivery(identity);
+      const created = "2026-08-21T03:00:00Z";
+      withStub({
+        dispatchDate: "Fri, 21 Aug 2026 03:00:01 GMT",
+        listDate: "Fri, 21 Aug 2026 03:00:01 GMT",
+        runPages: [
+          [],
+          [mintRun(identity.recipient, {
+            status: "in_progress",
+            conclusion: undefined,
+            created_at: created,
+          })],
+          [mintRun(identity.recipient, { created_at: created })],
+        ],
+        ...published,
+      });
+
+      expect(await setupCommand(deps)).toBe(0);
+      expect(
+        await Deno.readTextFile(
+          join(home, "common-fabric", "test-records-key.json"),
+        ),
+      ).toBe(KEY_TEXT);
+    });
+
+    it("names the dispatched run's failure when the run does not name its recipient", async () => {
+      const identity = await storeIdentity();
+      withStub({
+        runPages: [
+          [],
+          [mintRun(identity.recipient, {
+            named: false,
+            conclusion: "failure",
+          })],
+        ],
+      });
+
+      await expect(setupCommand(deps)).rejects.toThrow(
+        "The minting run finished as failure",
+      );
+    });
+
+    it("raises a dispatched run it cannot read", async () => {
+      await storeIdentity();
+      withStub({ runPages: [[]] });
+
+      await expect(setupCommand(deps)).rejects.toThrow(
+        "Reading minting run 42 failed: HTTP 404",
       );
     });
 
@@ -1179,6 +1285,7 @@ describe("test-records-key", () => {
       const identity = await storeIdentity();
       const published = await delivery(identity);
       withStub({
+        dispatchStatus: 403,
         runPages: [[], [], [], [mintRun(identity.recipient)]],
         ...published,
       });
@@ -1198,6 +1305,7 @@ describe("test-records-key", () => {
         created_at: "2026-08-21T03:00:01Z",
       });
       withStub({
+        dispatchStatus: 403,
         dispatchDate: "Fri, 21 Aug 2026 03:00:00 GMT",
         runPages: [
           [],
@@ -1212,7 +1320,9 @@ describe("test-records-key", () => {
       });
 
       expect(await setupCommand(deps)).toBe(0);
-      expect(urls.some((line) => line.includes("/dispatches"))).toBe(true);
+      expect(urls.some((line) => line.includes("/runs/8/artifacts"))).toBe(
+        true,
+      );
     });
 
     it("stops examining runs from before the watch began", async () => {

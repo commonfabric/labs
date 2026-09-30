@@ -3,14 +3,14 @@
 # and read back what it drew.
 #
 # Shuttle's unit suite drives every module with nothing behind it — no server,
-# no piece, and no terminal. `packages/cli/test/shuttle-terminal.test.ts` says
-# so of itself: "A handler that the runtime never runs, and a `setRaw` that the
-# driver never honours, would both pass here." What no case there can see is
+# no piece, and no terminal. `packages/cli/test/shuttle-terminal.serial.test.ts`
+# says so of itself: "A handler that the runtime never runs, and a `setRaw` that
+# the driver never honours, would both pass here." What no case there can see is
 # the composition: whether a `cd` that a stub accepted lands on a cell the
-# fabric holds, whether the reference a listing printed is the one the next
-# line takes, and whether what a read serves is what storage holds. Each of
-# those is a property of the seams together and of no module, so this is where
-# they are asserted.
+# fabric holds, whether the reference a listing printed is the one the next line
+# takes, and whether what a read serves is what storage holds. Each of those is
+# a property of the seams together and of no module, so this is where they are
+# asserted.
 #
 # The terminal is a real one. `cf sh` refuses to start unless both standard
 # streams are terminals, because it reads keys in raw mode and draws lines back
@@ -58,9 +58,9 @@
 # Run standalone against any host:
 #   API_URL=http://localhost:8000 packages/cli/integration/shuttle-over-a-terminal.sh
 #
-# CI runs it through integration.sh's `piece-call` section (the
-# cli-integration matrix in .github/workflows/deno.yml); the `shuttle` section
-# is the standalone selector for running just this script by hand.
+# CI runs it through integration.sh's `shuttle` section, which the test
+# topology's `cli-core` suite makes a unit of. The `piece-call` section runs it
+# too, among the other steps a person running that group by hand gets.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -190,16 +190,37 @@ step "3. Drive a session over a pseudo-terminal"
 # system — no seam below `openEditor` is replaced, which is what would make
 # this a stub rather than a walkthrough.
 #
+# It takes and leaves the alternate screen as a full-screen editor does, which
+# is the half of the round trip the shell has to undo for itself.
+#
 # It has no state and takes no turn: what it saves is decided by what it was
 # given, so each of the three lines below reaches it with a different value and
 # gets a different one of `edit`'s three endings. That is what lets one editor
-# drive all three from a script the driver types in one go.
+# drive all three from a script the driver types in one go. The note has a case
+# of its own for the `e` typed at a view, where what is being shown is that the
+# editor ran at all: leaving the value alone takes the ending that changes
+# nothing, so a step about the view costs the steps after it nothing.
 EDITOR_SCRIPT=$(mktemp)
 cat >"$EDITOR_SCRIPT" <<'EDITS'
 #!/usr/bin/env bash
+# The screen a full-screen editor takes. A terminal keeps no stack of alternate
+# screens, so an editor that takes one and leaves it puts the shell back on its
+# primary screen — the transcript — whatever the shell thought it was holding,
+# and the shell has to take its own screen again before it draws.
+#
+# What this buys and what it does not. It puts the real sequence through the
+# real suspension, so the round trip is exercised rather than described. It
+# does not assert the shell came back to its own screen: which screen a byte
+# landed on is not something a transcript of the bytes can say, and a shell
+# that drew its frame over the transcript would write exactly these records.
+# That assertion is `shuttle-terminal.serial.test.ts`'s, where the escape
+# sequences are what is read.
+printf '\033[?1049h'
+trap 'printf "\033[?1049l"' EXIT
 case "$(cat "$1")" in
   '"garble me"') printf 'not json at all' >"$1" ;;
   '"edited in the editor"') : ;;
+  '"written once and never again"') : ;;
   *) printf '"edited in the editor"' >"$1" ;;
 esac
 EDITS
@@ -253,11 +274,20 @@ set label '"garble me"'
 edit label
 get label
 link /slugs/first/label /slugs/second/label
-link /slugs/first/label#argument /slugs/second/label
+link /slugs/first#argument/label /slugs/second/label
 set label '"pointed at"'
 set settings/note '"written once and never again"'
-link /slugs/first/label /slugs/second/label#argument
+link /slugs/first/label /slugs/second#argument/label
 edit
+watch settings/depth
+@frame q
+watches
+set settings/depth 3
+@said watch first/settings/depth @space: changed
+where
+unwatch %1
+watches
+watch .#argument/label
 cd /pieces
 ls
 cd %1
@@ -266,7 +296,33 @@ cd /slugs/first
 ls settings
 cd %1
 pwd
+cd /slugs/first/settings
+get .#argument/items
+get /slugs/first#argument/items
+get /slugs/first/items#argument
+cd .#argument
+ls .#argument
+get ..#argument/items
+cd ../..
+cd /slugs/first
+watch settings/note
+@drawn written once and never again
+@frame /written\r
+@drawn / written  1 of 1
+@frame :pwd\r
+@drawn position  //
+@frame e
+@drawn Nothing changed
+@frame q
+watches
+unwatch %1
+xpwd
+xcd ../elsewhere
+xpwd
 LINES
+# Read before the session so the claim step 32 makes about the seed is a
+# claim about this directory and not about whatever the shell reported.
+STARTED_IN=$(pwd)
 EDITOR="$EDITOR_SCRIPT" python3 "$DRIVER" "$SCRIPT" "$TRANSCRIPT" -- \
   $CF sh $ARGS >/dev/null
 DRIVE_STATUS=$?
@@ -310,6 +366,8 @@ WHERE=$(said 1 "where")
 contains "api       $API_URL" "$WHERE" "where names the host it connected to"
 contains "space     $SPACE" "$WHERE" "where names the space it connected to"
 contains "identity  $CF_IDENTITY" "$WHERE" "where names the identity it opened"
+contains "external  file://" "$WHERE" \
+  "where names the external working location beside the fabric place"
 
 step "6. ls at the root lists the facets, and cd takes one of them"
 check "%1 slugs
@@ -332,10 +390,12 @@ check "shuttle /slugs/ @space> " "$(prompt 5 "cd nosuchslug")" \
 step "9. A slug the index does record lands on the piece it names"
 check "shuttle first @space> " "$(prompt 6 "cd first")" \
   "the prompt carries the name the index confirmed"
+# The two handlers list as callables off the schema their stored links carry;
+# nothing is stored at either position.
 check "%1 \$NAME
 %2 \$UI
-%3 addItem
-%4 clearItems
+%3 addItem <callable>
+%4 clearItems <callable>
 %5 items
 %6 label
 %7 settings
@@ -420,6 +480,8 @@ check "" "$(said 16 "cd /slugs/first")" \
 check "shuttle first @space> " "$(prompt 16 "cd /slugs/first")" \
   "a rooted facet reference reaches the piece the slug names"
 contains "$FIRST" "$(said 17 "pwd")" "pwd names the handle the deploy printed"
+contains "position  //" "$(said 17 "pwd")" \
+  "pwd writes the complete form, the space after a doubled separator"
 
 step "15. get at a piece stands in for its picture of itself, and more writes the rest"
 WHOLE=$(said 18 "get")
@@ -450,7 +512,7 @@ lacks "names no facet" "$GET_HELP" "--help is not read as a path"
 # step 2 took its stored one — over a connection this session never had, so a
 # write that reached only the running piece and never committed fails there. It
 # reads each cell once, at the end, so which write a reading is evidence for is
-# a question per cell: step 28 names that write beside each of its checks, and
+# a question per cell: step 29 names that write beside each of its checks, and
 # the writes it cannot speak for rest on the shell's own read on the line after
 # each.
 AFTER() { $CF cell get --quiet --cell "$1" "$2" $ARGS 2>/dev/null; }
@@ -462,7 +524,7 @@ check '"a written place"' "$(said 23 "get label")" \
   "the shell serves the value it just wrote"
 # `label` is written five times below, so a reading of it at the end says the
 # last write landed and nothing about the four before it. This one goes to a
-# path nothing else in the session touches, which is what lets step 28 speak
+# path nothing else in the session touches, which is what lets step 29 speak
 # about a particular write rather than about whichever write reached a cell
 # last.
 check "Wrote \`settings/note\` on \`$FIRST\`." \
@@ -537,7 +599,7 @@ step "22. call runs the callable, and what it did is there afterwards"
 # the call settled rather than that it was accepted — a call the fabric took
 # and never ran would say the second and not the first. What the handler did
 # is a separate reading, and this is the only one that takes it: step 23 empties
-# `items` and refills it, so the array step 28 reads ends at `["jam"]` whether
+# `items` and refills it, so the array step 29 reads ends at `["jam"]` whether
 # or not this call's `milk` ever committed.
 CALLED=$(said 31 "call . addItem '{\"text\":\"milk\"}'")
 contains '"status": "settled"' "$CALLED" "the call settled"
@@ -611,22 +673,72 @@ check "Wrote a reference at \`/slugs/second/label\` naming \`/slugs/first/label\
 # Each refusal quotes the operand it was written on, which is also what says
 # the refusal is about the endpoint the line spelled rather than about
 # whichever of the two happens to be resolved first.
-contains "\`/slugs/first/label#argument\` selects a piece's arguments cell" \
-  "$(said 46 "link /slugs/first/label#argument /slugs/second/label")" \
-  "the source endpoint does not take the argument-cell suffix"
-contains "\`/slugs/second/label#argument\` selects a piece's arguments cell" \
-  "$(said 49 "link /slugs/first/label /slugs/second/label#argument")" \
-  "the target endpoint does not take the argument-cell suffix"
+contains "\`/slugs/first#argument/label\` selects a piece's arguments cell" \
+  "$(said 46 "link /slugs/first#argument/label /slugs/second/label")" \
+  "the source endpoint does not take the arguments member"
+contains "\`/slugs/second#argument/label\` selects a piece's arguments cell" \
+  "$(said 49 "link /slugs/first/label /slugs/second#argument/label")" \
+  "the target endpoint does not take the arguments member"
 
-step "26. The pieces facet numbers rows cd takes, and shows what each piece is called"
+step "26. watch arms a subscription, opens a view over it, and outlives it"
+# The half no unit case can reach. Every sink in the unit suite is stood in
+# for, so what is asserted there is what shuttle does with a settle it was
+# handed; here the subscription is taken over the connection this session
+# holds, on a cell the fabric resolved, and the line it writes is one a real
+# runtime settled.
+#
+# The view is asserted by the driver rather than by a check: it waits for the
+# shell to take the alternate screen before it types `q`, so a `watch` that
+# opened no view leaves a wait that never comes back, and the session's own
+# backstop reports it with everything drawn so far. Nothing below could stand in for
+# that — with no view, the `q` would have been typed as a line and refused,
+# and the records after it would read as they do here.
+check "%1 first/settings/depth @space" "$(said 51 "watch settings/depth")" \
+  "watch numbers what it armed, so unwatch needs no listing first"
+check "%1 first/settings/depth @space" "$(said 52 "watches")" \
+  "the view closing left the watch armed"
+# The line the settle wrote, which the driver waited for by name before it
+# typed anything else. That is what puts it in the transcript; which record it
+# landed in is not something to assert, since a settled change arrives when the
+# runtime is quiet rather than when the line that caused it answered, and the
+# prompt that ends a record can fall either side of that.
+WATCHED=$(jq -r '[.[].said] | join("\n")' "$TRANSCRIPT")
+contains "watch first/settings/depth @space: changed" "$WATCHED" \
+  "a settled change wrote one line naming the cell that changed"
+# The other half of "a change is what is reported", and the half only a real
+# runtime can show: the subscription fires once on registration with what the
+# cell already holds, and a watch that reported that would have written a line
+# the moment it was armed. Counted rather than looked for, because the line a
+# baseline would write is the line a change writes — one write was made here,
+# so one line is what the whole transcript may hold.
+WROTE=$(printf '%s' "$WATCHED" |
+  grep -c "watch first/settings/depth @space: changed")
+check "1" "$WROTE" "the reading the subscription opened with wrote no line"
+contains "watches   first/settings/depth @space" "$(said 54 "where")" \
+  "the ambient record names what this run is watching"
+check "Disarmed the watch on \`first/settings/depth @space\`." \
+  "$(said 55 "unwatch %1")" "unwatch disarms the watch the row was minted for"
+check "<no watches are armed>" "$(said 56 "watches")" \
+  "nothing is armed once the one watch is disarmed"
+# The arm this shell does not serve, asserted where the unit suite cannot see
+# it: a subscription on a piece's arguments cell reports the link stored at the
+# member rather than the value behind it, and a write through that link settles
+# nothing it can see. That was measured against a live runtime rather than
+# reasoned about, and until `packages/piece` offers a resolved cell for an
+# arguments path the spelling is refused rather than served silently.
+contains "does not serve a piece's arguments cell" \
+  "$(said 57 "watch .#argument/label")" \
+  "watch turns down the arguments cell rather than watching it silently"
+
+step "27. The pieces facet numbers rows cd takes, and shows what each piece is called"
 # The composition no unit case reaches, because each half of it is stubbed out
 # where the other is under test: a listing mints a row, `%n` expands to what
 # that row printed, and `cd` moves onto the piece the row named. The spelling
 # is the piece's own id, which carries no `of:` scheme — so what is asserted
 # here is that the facet and the mover read one spelling between them.
-check "shuttle /pieces/ @space> " "$(prompt 51 "cd /pieces")" \
+check "shuttle /pieces/ @space> " "$(prompt 58 "cd /pieces")" \
   "cd into the piece facet moves the prompt onto it"
-LISTED=$(said 52 "ls")
+LISTED=$(said 59 "ls")
 contains "$FIRST" "$LISTED" "the facet lists the first deployed piece"
 contains "$SECOND" "$LISTED" "the facet lists the second deployed piece"
 # The fixture names itself, so a facet that showed no name would show none
@@ -640,13 +752,13 @@ ROW=$(printf '%s' "$LISTED" | sed -n '1s/^ *%1 \([^ ]*\).*/\1/p')
 if [ -z "$ROW" ]; then
   bad "the listing's first row printed no operand for the next line to reach"
 else
-  check "" "$(said 53 "cd %1")" "cd %1 is not refused on the row ls printed"
-  check "shuttle $ROW @space> " "$(prompt 53 "cd %1")" \
+  check "" "$(said 60 "cd %1")" "cd %1 is not refused on the row ls printed"
+  check "shuttle $ROW @space> " "$(prompt 60 "cd %1")" \
     "cd %1 lands on the piece the first row named"
-  contains "$ROW" "$(said 54 "pwd")" "pwd names the piece the row named"
+  contains "$ROW" "$(said 61 "pwd")" "pwd names the piece the row named"
 fi
 
-step "27. ls reads a child without standing on it, and its numbers bind"
+step "28. ls reads a child without standing on it, and its numbers bind"
 # The other composition no unit case reaches, and the one `ls <target>` is
 # for: the listing is read at a place the shell is not standing at, and the
 # `%n` it hands out has to name a row of *that* place. Numbered against where
@@ -658,28 +770,28 @@ step "27. ls reads a child without standing on it, and its numbers bind"
 # standing on it means; that `cd %1` then stood two segments in; and that the
 # segment it stood on is the row the listing printed rather than a key this
 # script guessed.
-check "shuttle first @space> " "$(prompt 55 "cd /slugs/first")" \
+check "shuttle first @space> " "$(prompt 62 "cd /slugs/first")" \
   "the shell is standing on the piece before the child is listed"
-NESTED=$(said 56 "ls settings")
+NESTED=$(said 63 "ls settings")
 contains "depth" "$NESTED" "the listing names a key of the target"
 lacks "label" "$NESTED" \
   "the listing is the target's rather than the place's"
-check "shuttle first @space> " "$(prompt 56 "ls settings")" \
+check "shuttle first @space> " "$(prompt 63 "ls settings")" \
   "listing a child leaves the shell standing where it was"
-# The row `%1` named, read off the listing rather than assumed, as step 26
+# The row `%1` named, read off the listing rather than assumed, as step 27
 # reads its own: what is asserted is that the listing and the mover agree,
 # which a hard-coded key would turn into a claim about the fixture.
 NESTED_ROW=$(printf '%s' "$NESTED" | sed -n '1s/^ *%1 \([^ ]*\).*/\1/p')
 if [ -z "$NESTED_ROW" ]; then
   bad "the listing of the child printed no operand for the next line to reach"
 else
-  check "shuttle first/settings/$NESTED_ROW @space> " "$(prompt 57 "cd %1")" \
+  check "shuttle first/settings/$NESTED_ROW @space> " "$(prompt 64 "cd %1")" \
     "cd %1 lands on the row the listing of the child numbered"
-  contains "settings/$NESTED_ROW" "$(said 58 "pwd")" \
+  contains "settings/$NESTED_ROW" "$(said 65 "pwd")" \
     "pwd names the path the row stands at"
 fi
 
-step "28. What the fabric holds, read from outside the session that wrote it"
+step "29. What the fabric holds, read from outside the session that wrote it"
 # The half no transcript can make: every reading is taken over a connection
 # this session never had, after the shell has gone, so a write that reached
 # only the running piece and never committed fails here and nowhere above.
@@ -715,6 +827,125 @@ check '"jam"' "$(AFTER first summary)" \
 # would hold the value `first` had when the link was made.
 check '"pointed at"' "$(AFTER second label)" \
   "the linked cell reads the value written at the cell it names"
+
+step "30. The arguments member reads one cell on a head and on a piece segment, and no place stands in it"
+# The unit suite pins where each spelling points and which cell it selects;
+# what it cannot see is that the read the seam makes is of that cell. So one
+# arguments cell is read twice back to back, through the member on the head
+# and through the member on a piece segment, and the two must agree. Written
+# after a path segment instead, `items#argument` is one result key. The
+# fixture's result holds no key by that name, so the read fails naming it, and
+# the keys the failure lists are the result's: `addItem`, `clearItems`,
+# `settings` and `summary` are outputs the pattern's arguments do not take.
+# The rooted walk in front of them stands two segments inside the piece, which
+# is what makes the head's reading from the arguments cell's root a claim.
+check "shuttle first/settings @space> " \
+  "$(prompt 66 "cd /slugs/first/settings")" \
+  "a rooted walk stands two segments inside the piece"
+FROM_HEAD=$(said 67 "get .#argument/items")
+FROM_SEGMENT=$(said 68 "get /slugs/first#argument/items")
+contains "[" "$FROM_HEAD" "the member on the head reads the arguments cell's items"
+check "$FROM_HEAD" "$FROM_SEGMENT" \
+  "the member on the head and on the piece segment read one cell from its root"
+check 'Cannot access path "items#argument" - property "items#argument" not found. Available keys: addItem, clearItems, items, label, settings, summary' \
+  "$(said 69 "get /slugs/first/items#argument")" \
+  "a path ending in #argument names a result key, and the read of the result names that key among the result's own"
+contains "A place is result-rooted, so \`cd\` selects no \`#argument\` member" \
+  "$(said 70 "cd .#argument")" "cd refuses the member on its head"
+check "shuttle first/settings @space> " "$(prompt 70 "cd .#argument")" \
+  "the refused cd leaves the place where it stood"
+contains "\`#argument\` selects one of a piece's two cells" \
+  "$(said 71 "ls .#argument")" "ls refuses the member on its head"
+contains "climbs and selects the \`#argument\` member in one head" \
+  "$(said 72 "get ..#argument/items")" \
+  "a head that climbs and selects the member in one is refused"
+# The route, not the address: the rooted walk left a trail through `slugs/`,
+# so two climbs from `first/settings` land on the facet rather than the root.
+check "shuttle /slugs/ @space> " "$(prompt 73 "cd ../..")" \
+  "two climbs walk the route back out of the piece to the facet it came through"
+
+step "31. A line typed at a view runs where a typed line runs, and the editor takes the screen from one"
+# The half no unit case can reach, for the keys a view answers to. Every key
+# in the unit suite arrives decoded and every frame comes back as lines, so
+# what is asserted there is what the lens does with a key it was handed; here
+# the keys are bytes a real terminal decoded, the frame is on a real alternate
+# screen, and the editor `e` reaches is a program that takes that screen while
+# the frame is holding it.
+#
+# One record carries all of it. A frame holds back what is written above the
+# prompt until it gives the screen up (`announce`, `terminal.ts`), so the three
+# lines below are written while the view is up and reach the transcript in the
+# order they happened, inside the record of the line that opened the view.
+#
+# What the record says, in order: the watch was armed and numbered before the
+# view opened; `:pwd` ran against the place the shell stands at, which is where
+# a typed line runs and not where the view is pointed; and `e` opened the
+# watched cell in the editor, which saved it unchanged.
+#
+# Each of the two lines is waited for by what it drew in the view before the
+# next key is typed. The keys of a `@frame` are typed in one go, so without
+# that wait the `q` is read while the line before it is still in flight — and a
+# view with a line in flight takes no second one, so the `e` would ask for
+# nothing and the `q` would close the view out from under the answer.
+#
+# The first wait is for the value itself, and it is not decoration: a view
+# opens before the cell it watches has settled — the frame is drawn as soon as
+# the lens is handed over, and the first reading arrives on the subscription,
+# one quiet runtime later. A search typed into that window finds `<nothing has
+# settled yet>`, draws `no match`, and waits out the session. Typing at a view
+# is the one place in this script where the keys can outrun what they are
+# about, because every line elsewhere is answered before the next is typed.
+#
+# The `/written` after it is waited for by what the search drew, which is
+# the one of the three the transcript cannot carry: where a search stands is
+# drawn on the alternate screen, and `@drawn` is what reads there. `1 of 1` is
+# the whole assertion — the pattern was found, once, in the rendering of a cell
+# holding `"written once and never again"` — and a search that found nothing
+# would draw `no match` and wait out the session instead.
+#
+# It also holds the two after it to their own subject. A `/` that left the view
+# in a state where a key is text would have taken the `:`, the `e` and the `q`
+# into a search line, and the view would never have closed.
+FRAMED=$(said 75 "watch settings/note")
+# Read by position rather than by presence, because the order is half of what
+# is being shown: the listing was written before the view took the screen and
+# the other two while it held it, so the record heads with the one and ends
+# with the last of the others.
+check "%1 first/settings/note @space" "$(printf '%s\n' "$FRAMED" | head -1)" \
+  "the watch was armed and numbered before the view took the screen"
+contains "position  //" "$FRAMED" \
+  "a line typed at the view reached the transcript the view held back"
+contains "/$FIRST@space" "$FRAMED" \
+  "the line ran against the place the shell stands at, not where the view points"
+check "Nothing changed, so nothing was written." \
+  "$(printf '%s\n' "$FRAMED" | tail -1)" \
+  "e opened the watched cell in the editor while the view held the screen"
+check "%1 first/settings/note @space" "$(said 76 "watches")" \
+  "the view closing left the watch armed, as it does when nothing was typed at it"
+check "Disarmed the watch on \`first/settings/note @space\`." \
+  "$(said 77 "unwatch %1")" "unwatch disarms the watch the view was opened onto"
+
+step "32. The external working location starts at the process's own directory, and xcd moves it"
+# The half no unit test reaches: the location is seeded from `Deno.cwd()` at
+# startup, so what proves the seeding is a shell started from a real directory
+# rather than one handed a location by a case.
+#
+# The expected address is built from the directory this harness was standing
+# in, not matched against a shape. A shape would pass for any `file:` seed at
+# all — a fixed path, or the home directory — which is every way the seeding
+# could regress while still writing something that looks right.
+EXPECT_SEED=$(python3 -c \
+  'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_SEED" "$(said 78 "xpwd")" \
+  "xpwd writes the directory the shell was started from, whole"
+EXPECT_MOVED=$(python3 -c \
+  'import pathlib, sys; print((pathlib.Path(sys.argv[1]).parent / "elsewhere").as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_MOVED" "$(said 79 "xcd ../elsewhere")" \
+  "xcd writes where it landed, the walk taken against that directory"
+check "$EXPECT_MOVED" "$(said 80 "xpwd")" \
+  "xpwd afterwards writes what the move wrote, the two being one spelling"
 
 # What step 11 does not reach: a piece that changes under a shell already
 # standing on it. Step 11 reads storage before the session and the shell's own

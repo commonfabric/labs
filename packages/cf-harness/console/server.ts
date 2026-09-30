@@ -21,9 +21,19 @@
  * What a task runs under is not decided here. This server resolves flags, the
  * environment and the request body into a `HarnessSessionConfig` — the same
  * description the batch CLI resolves argv into — and `src/session-assembly.ts`
- * turns that into the run. So a capability configurable on the CLI is
- * configurable here by the same name, and the tools a session offers are
- * derived from what it can back rather than listed by this file.
+ * turns that into the run. Where this surface takes a capability the CLI also
+ * takes, it takes it by the CLI's name, and the tools a session offers are
+ * derived from what it can back rather than listed by this file. Not every
+ * CLI capability is taken here: the Docker image and the Docker runtime name
+ * are not.
+ *
+ * The sandbox runtime is selected as the interactive entrypoints select it:
+ * from the environment alone, by the variables the CLI reads
+ * (`CF_HARNESS_SANDBOX_RUNTIME` and its companions), through the derivation
+ * every entrypoint shares. The CLI's three selection flags are refused rather
+ * than ignored, because `console:launch` reads the same environment to decide
+ * whether Docker is involved at all, and a flag it cannot see would leave the
+ * launch and the server describing two different sandboxes.
  *
  * The one piece of configuration this surface insists on is the fabric
  * session, whose space has to be a name rather than a `did:key`: `assign_slug`
@@ -33,6 +43,7 @@
 
 import { readLoomAuthoringConfig } from "../src/loom-authoring.ts";
 import { parseArgs } from "@std/cli/parse-args";
+import { isDID } from "@commonfabric/identity/did";
 import {
   dirname,
   extname,
@@ -57,13 +68,16 @@ import {
   resolveHarnessModelProviderPreference,
 } from "../src/auth/provider-settings.ts";
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
-import type {
-  HarnessFabricCfcEnforcementMode,
-  HarnessFabricCfcFlowLabelsMode,
-  HarnessFabricSessionConfig,
-  HarnessModelProviderId,
+import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
+import {
+  type HarnessFabricCfcEnforcementMode,
+  type HarnessFabricCfcFlowLabelsMode,
+  type HarnessFabricSessionConfig,
+  type HarnessModelProviderId,
+  resolveCfcEnforcementMode,
 } from "../src/config.ts";
 import type { CfcPosture } from "@commonfabric/runner";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type HarnessChatError,
   type HarnessChatEventEnvelope,
@@ -75,11 +89,19 @@ import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
+  connectorGrantLabel,
+  connectorGrantName,
+} from "../src/well-known-grants.ts";
+import {
   DEFAULT_SUBAGENT_PROFILE,
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
 } from "../src/contracts/subagent.ts";
+import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
-import { parseInputCellArgument } from "../src/input-cells.ts";
+import {
+  checkInputCellSpec,
+  parseInputCellArgument,
+} from "../src/input-cells.ts";
 import type { HarnessPatternRefSpec } from "../src/contracts/pattern-refs.ts";
 import {
   checkPatternRefSpec,
@@ -113,9 +135,33 @@ import {
   CFC_INVOCATION_CONTEXT_DIR_ENV,
   CFC_RESULT_DIR_ENV,
 } from "../src/sandbox/docker-runsc.ts";
+import {
+  assertRunscCfcPolicyForMode,
+  resolveRunscSandboxConfig,
+  type RunscSandboxConfig,
+} from "../src/sandbox/runsc.ts";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  resolveSandboxRuntimeSelection,
+  RUNSC_CFC_POLICY_ENV,
+  SANDBOX_ROOTFS_ENV,
+  SANDBOX_RUNTIME_ENV,
+} from "../src/sandbox/runtime-selection.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
+import {
+  ConsoleHealth,
+  type ConsoleHealthRow,
+  consoleHealthUrl,
+  type ConsoleObservedLaunchHealth,
+  type ConsoleResolvedValue,
+} from "./health.ts";
+import {
+  consolePatternIndexHealthProbes,
+  consoleRunscHealthProbe,
+  consoleSandboxHealthProbe,
+} from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
 import {
@@ -215,9 +261,9 @@ const DEFAULT_FABRIC_API_URL = "http://localhost:8000";
  * sinks. `--fabric-cfc-posture none` turns it off for a run that wants the
  * first-party default instead.
  *
- * The bundle leaves the enforcement pin at `enforce-explicit`; raising to
- * `enforce-strict` stays a deliberate per-session move, so it has its own flag
- * and no default here.
+ * The bundle names no enforcement mode, so the session keeps the core's
+ * `enforce-strict` pin. Lowering to `enforce-explicit` is a deliberate
+ * per-session move, so it has its own flag and no default here.
  */
 const DEFAULT_FABRIC_CFC_POSTURE: CfcPosture = "max-enforcement";
 
@@ -246,9 +292,9 @@ const CONSOLE_CREDENTIAL_OWNER = {
  * `includeSource`, which is why a pattern's source cannot arrive at the page
  * whatever the page sends.
  *
- * The console's one write to the index is `/api/index/feedback`, which takes a
- * pattern id and a verdict and composes the event itself. Widening this
- * allowlist is not how a second write is added.
+ * Index writes have dedicated routes: `/api/index/feedback` composes a vote,
+ * and `/api/index/retract` submits an owner retraction. Each composes its own
+ * request under the console's signer; neither widens this read allowlist.
  */
 const INDEX_FUNCTIONS = [
   "searchPatterns",
@@ -317,10 +363,19 @@ const callPatternIndex = (
  * the CLI refuses is refused here too. A body that names no cells yields
  * none, which is the ordinary task.
  *
+ * A reference may also be a piece's NAME — `pattern:<space>/<slug>`, or a bare
+ * slug meaning this console's own space — which is what a surface showing a
+ * rendered piece holds. `spaceName` is this console's space, and an address
+ * naming another one is refused here: the caller cannot see which space this
+ * console runs against, so a mismatch is this side's to explain. Whether the
+ * space holds the slug is the turn's to find out, like every other reference
+ * that parses and may still not mint.
+ *
  * @throws Error naming the defect, which the route answers 400 with.
  */
 const parseTaskInputCells = (
   value: unknown,
+  spaceName: string,
 ): readonly HarnessInputCellSpec[] => {
   if (value === undefined || value === null) {
     return [];
@@ -331,7 +386,7 @@ const parseTaskInputCells = (
   const specs: HarnessInputCellSpec[] = [];
   const names = new Set<string>();
   for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) {
+    if (!isObjectOrArray(entry)) {
       throw new Error("each input cell must be an object");
     }
     const { name, ref } = entry as { name?: unknown; ref?: unknown };
@@ -341,6 +396,12 @@ const parseTaskInputCells = (
     // Checked through the flag's own parser, so the two surfaces cannot come
     // to accept different references under the same name.
     const spec = parseInputCellArgument(`${name}=${ref}`);
+    // And then once more against this console's own space, which the flag's
+    // parser cannot know. A named piece address spelling another space is a
+    // caller mistake decidable from the text alone, so it is answered now
+    // rather than spent on a turn; whether this space HOLDS the slug is not
+    // decidable from the text, and the turn answers that one.
+    checkInputCellSpec(spec, undefined, spaceName);
     if (names.has(spec.name)) {
       throw new Error(`inputCells names \`${spec.name}\` twice`);
     }
@@ -404,7 +465,7 @@ const parseTaskPatternRefs = (
   const specs: HarnessPatternRefSpec[] = [];
   const ids = new Set<string>();
   for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) {
+    if (!isObjectOrArray(entry)) {
       throw new Error("each pattern reference must be an object");
     }
     const { patternId } = entry as { patternId?: unknown };
@@ -436,16 +497,21 @@ interface ConsoleConfig extends HarnessSessionConfig {
   port: number;
   harnessHome: string;
 
+  /** Active configuration values and the source selected by this resolver. */
+  healthFacts: readonly ConsoleResolvedValue[];
+
   /** A fabric session is required here; see `resolveConsoleConfig`. */
   fabricSession: HarnessFabricSessionConfig;
 
   /**
-   * The sandbox's two CFC sidecar transports, always sited: this surface
-   * creates them under its own data directory rather than asking an operator
-   * to name a path before their first run.
+   * The Docker driver's two CFC sidecar transports, sited whenever that
+   * driver is selected: this surface creates them under its own data
+   * directory rather than asking an operator to name a path before their
+   * first run. Absent under the direct runsc driver, which carries its CFC
+   * transport on descriptors it opens for each call.
    */
-  cfcResultDir: string;
-  cfcInvocationContextDir: string;
+  cfcResultDir?: string;
+  cfcInvocationContextDir?: string;
 
   sessionDbPath?: string;
 
@@ -503,6 +569,38 @@ const positiveInteger = (value: string, flag: string): number => {
 };
 
 /**
+ * The batch CLI's sandbox selection flags, each with the variable that selects
+ * the same thing here.
+ */
+const BATCH_SANDBOX_FLAGS = [
+  ["sandbox-runtime", SANDBOX_RUNTIME_ENV],
+  ["sandbox-rootfs", SANDBOX_ROOTFS_ENV],
+  ["sandbox-cfc-policy", RUNSC_CFC_POLICY_ENV],
+] as const;
+
+/**
+ * Refuses the batch CLI's sandbox selection flags in any spelling, naming the
+ * variable to set instead. The console and its launcher select the sandbox
+ * from the environment alone: a flag one of them read and the other did not
+ * would leave the launch and the console describing two different sandboxes.
+ *
+ * @throws Error when `parsed` holds any of the three flags.
+ */
+export const refuseBatchSandboxFlags = (
+  parsed: Readonly<Record<string, unknown>>,
+): void => {
+  for (const [name, variable] of BATCH_SANDBOX_FLAGS) {
+    if (parsed[name] !== undefined) {
+      throw new Error(
+        `--${name} is a flag of the batch CLI; the console selects its ` +
+          `sandbox from the environment, as the interactive entrypoints do, ` +
+          `so set ${variable} instead`,
+      );
+    }
+  }
+};
+
+/**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
  * and never hand back an address for it, which is the one outcome this surface
@@ -519,10 +617,13 @@ export const resolveConsoleConfig = async (
       "workspace",
       "artifact-root",
       "model",
+      "reasoning-effort",
+      "research-reasoning-effort",
       "loom-authoring-config",
       "fabric-api-url",
       "fabric-identity",
       "fabric-space",
+      "fabric-foreign-spaces",
       "pattern-index-url",
       "skills-registry-url",
       "skills-root",
@@ -539,11 +640,20 @@ export const resolveConsoleConfig = async (
       "no-child-composition-guidance",
       "no-pattern-index-publish",
       "pattern-index-publish-discoverable",
+      "allow-skill-scripts",
     ],
     collect: ["host-mount"],
   });
   const flag = (name: string): string | undefined =>
     typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
+
+  refuseBatchSandboxFlags(parsed);
+  // The one derivation every entrypoint shares, over this server's own
+  // environment. Nothing beyond the runtime kind is returned unless the
+  // runtime is runsc, so a console that names no runtime hands the engine no
+  // sandbox option at all, and the engine builds the Docker driver.
+  const sandbox = await resolveSandboxRuntimeSelection(env, {}, { cwd });
+  const onDocker = sandbox.sandboxRuntimeKind !== "runsc";
 
   const loomAuthoring = await readLoomAuthoringConfig(
     flag("loom-authoring-config") ??
@@ -573,19 +683,24 @@ export const resolveConsoleConfig = async (
       join(dataDir, "runs"),
   );
 
-  // The sandbox's two CFC sidecar transports. The harness refuses to start an
-  // enforcing run without them, and they are scratch directories the host and
-  // the sandbox exchange files through, so this surface sites them itself
-  // rather than asking an operator to name a path before their first run.
-  const cfcResultDir = resolve(
-    cwd,
-    nonEmpty(env[CFC_RESULT_DIR_ENV]) ?? join(dataDir, "cfc", "results"),
-  );
-  const cfcInvocationContextDir = resolve(
-    cwd,
-    nonEmpty(env[CFC_INVOCATION_CONTEXT_DIR_ENV]) ??
-      join(dataDir, "cfc", "invocation-context"),
-  );
+  // The Docker driver's two CFC sidecar transports. The harness refuses to
+  // start an enforcing run on that driver without them, and they are scratch
+  // directories the host and the sandbox exchange files through, so this
+  // surface sites them itself rather than asking an operator to name a path
+  // before their first run. The direct runsc driver reads neither.
+  const cfcSidecars = onDocker
+    ? {
+      cfcResultDir: resolve(
+        cwd,
+        nonEmpty(env[CFC_RESULT_DIR_ENV]) ?? join(dataDir, "cfc", "results"),
+      ),
+      cfcInvocationContextDir: resolve(
+        cwd,
+        nonEmpty(env[CFC_INVOCATION_CONTEXT_DIR_ENV]) ??
+          join(dataDir, "cfc", "invocation-context"),
+      ),
+    }
+    : {};
 
   const identityKeyPath = flag("fabric-identity") ??
     nonEmpty(env.CF_HARNESS_FABRIC_IDENTITY);
@@ -595,7 +710,7 @@ export const resolveConsoleConfig = async (
       "a fabric session is required: set --fabric-identity/CF_HARNESS_FABRIC_IDENTITY and --fabric-space/CF_HARNESS_FABRIC_SPACE",
     );
   }
-  if (space.startsWith("did:")) {
+  if (isDID(space)) {
     throw new Error(
       `--fabric-space must be a space name rather than a DID: assign_slug composes a URL from the name, and offers none for ${space}`,
     );
@@ -637,6 +752,10 @@ export const resolveConsoleConfig = async (
     ),
     identityKeyPath: resolve(cwd, identityKeyPath),
     space,
+    foreignSpaces: parseHarnessForeignSpaces(
+      flag("fabric-foreign-spaces") ??
+        nonEmpty(env.CF_HARNESS_FABRIC_FOREIGN_SPACES),
+    ),
     ...(posture === "none"
       ? {}
       : { cfcPosture: (posture ?? DEFAULT_FABRIC_CFC_POSTURE) as CfcPosture }),
@@ -678,21 +797,30 @@ export const resolveConsoleConfig = async (
   // round; the interactive default of 8 strands a session mid-build.
   const maxModelTurns = flag("max-model-turns") ??
     nonEmpty(env.CF_HARNESS_CONSOLE_MAX_MODEL_TURNS) ?? "32";
+  // Unset, a turn names no effort and the provider applies its own default.
+  const reasoningEffort = flag("reasoning-effort") ??
+    nonEmpty(env.CF_HARNESS_REASONING_EFFORT);
+  const researchReasoningEffort = flag("research-reasoning-effort") ??
+    nonEmpty(env.CF_HARNESS_RESEARCH_REASONING_EFFORT);
 
   const spaceDb = flag("space-db") ?? nonEmpty(env.CF_HARNESS_SPACE_DB);
   const spaceDbPath = spaceDb === undefined ? undefined : resolve(cwd, spaceDb);
 
-  return {
+  const config: Omit<ConsoleConfig, "healthFacts"> = {
     port,
     workspace: workspacePath,
     artifactRoot,
-    cfcResultDir,
-    cfcInvocationContextDir,
+    ...cfcSidecars,
+    ...sandbox,
     harnessHome: resolve(
       nonEmpty(env.CF_HARNESS_HOME) ??
         join(nonEmpty(env.HOME) ?? cwd, ".cf-harness"),
     ),
     model: flag("model") ?? nonEmpty(env.CF_HARNESS_MODEL) ?? DEFAULT_MODEL,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(researchReasoningEffort !== undefined
+      ? { researchReasoningEffort }
+      : {}),
     fabricSession,
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -732,9 +860,14 @@ export const resolveConsoleConfig = async (
       parsed["host-mount"] as string[] | undefined,
       cwd,
     ),
+    // Whether a skill this console holds may have its scripts run in the
+    // sandbox: the operator's one decision, taken at launch rather than per
+    // task, since it is about the server rather than about the work.
+    allowSkillScripts: parsed["allow-skill-scripts"] === true ||
+      nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1",
     // The rest of the session description this surface does not vary. Skills
-    // are scanned rather than preloaded by name, scripts are not allowlisted,
-    // handles materialize nowhere, and a task's input cells and pattern
+    // are scanned rather than preloaded by name, no individual script is
+    // named, handles materialize nowhere, and a task's input cells and pattern
     // references arrive per task on `/api/task` rather than at startup.
     skillNames: [],
     allowedSkillScripts: [],
@@ -759,6 +892,71 @@ export const resolveConsoleConfig = async (
     ...(parsed["no-child-composition-guidance"] === true
       ? { subagentCompositionGuidance: false }
       : {}),
+  };
+  const source = (name: string, variable: string): string =>
+    flag(name) !== undefined
+      ? `--${name}`
+      : nonEmpty(env[variable]) !== undefined
+      ? variable
+      : "console default";
+  return {
+    ...config,
+    healthFacts: [{
+      name: "port",
+      value: String(port),
+      source: source("port", "CF_HARNESS_CONSOLE_PORT"),
+    }, {
+      name: "space",
+      value: space,
+      source: source("fabric-space", "CF_HARNESS_FABRIC_SPACE"),
+    }, {
+      name: "store",
+      value: spaceDbPath ?? nonEmpty(env.MEMORY_DIR) ?? "automatic discovery",
+      source: spaceDbPath !== undefined
+        ? source("space-db", "CF_HARNESS_SPACE_DB")
+        : nonEmpty(env.MEMORY_DIR) !== undefined
+        ? "MEMORY_DIR"
+        : "space database discovery at read time",
+    }, {
+      name: "sandbox",
+      value: sandbox.sandboxRuntimeKind ?? "docker",
+      source: nonEmpty(env[SANDBOX_RUNTIME_ENV]) !== undefined
+        ? SANDBOX_RUNTIME_ENV
+        : "console default",
+    }, {
+      name: "skill scripts",
+      value: config.allowSkillScripts ? "run in the sandbox" : "not run",
+      source: parsed["allow-skill-scripts"] === true
+        ? "--allow-skill-scripts"
+        : nonEmpty(env.CF_HARNESS_ALLOW_SKILL_SCRIPTS) === "1"
+        ? "CF_HARNESS_ALLOW_SKILL_SCRIPTS"
+        : "console default",
+    }, {
+      name: "index",
+      value: patternIndexUrl ?? "not configured",
+      source: source("pattern-index-url", "CF_HARNESS_PATTERN_INDEX_URL"),
+    }, {
+      name: "model",
+      value: config.model ?? DEFAULT_MODEL,
+      source: source("model", "CF_HARNESS_MODEL"),
+    }, {
+      name: "reasoning effort",
+      value: reasoningEffort ?? "provider default",
+      // An unnamed effort is the provider's choice rather than a console
+      // default, so its source says so.
+      source: reasoningEffort === undefined
+        ? "provider default"
+        : source("reasoning-effort", "CF_HARNESS_REASONING_EFFORT"),
+    }, {
+      name: "research reasoning effort",
+      value: researchReasoningEffort ?? "provider default",
+      source: researchReasoningEffort === undefined
+        ? "provider default"
+        : source(
+          "research-reasoning-effort",
+          "CF_HARNESS_RESEARCH_REASONING_EFFORT",
+        ),
+    }],
   };
 };
 
@@ -850,6 +1048,250 @@ const openSessionStore = async (
   });
 };
 
+/** Projects the active configuration and retained launch decisions for operators. */
+export const consoleHealthRows = (
+  config: ConsoleConfig,
+  launch?: ConsoleObservedLaunchHealth,
+  modelOptions?: CreateHarnessPromptLoopOptions,
+  env: Record<string, string | undefined> = {},
+): readonly ConsoleHealthRow[] => {
+  const checkedAt = new Date().toISOString();
+  const groups: Readonly<Record<string, string>> = {
+    "skill scripts": "skills",
+    index: "index",
+    model: "model",
+    sandbox: "sandbox",
+  };
+  const rows: ConsoleHealthRow[] = config.healthFacts.map((fact) => {
+    // A server flag can override a launch value. Only an equal active value
+    // retains the launch record as its source.
+    const original = fact.source.startsWith("--")
+      ? undefined
+      : launch?.resolved.find((entry) =>
+        entry.name === fact.name && entry.value === fact.value
+      );
+    return {
+      id: `config.${fact.name.replaceAll(" ", "-")}`,
+      group: groups[fact.name] ?? "console",
+      label: fact.name.split(" ").map((word) =>
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(" "),
+      value: fact.name === "index" && config.patternIndex !== undefined
+        ? consoleHealthUrl(fact.value)
+        : fact.value,
+      source: original !== undefined
+        ? "console launch record"
+        : fact.source.startsWith("--")
+        ? "console launch flag"
+        : "console configuration",
+      detail: original?.source ?? fact.source,
+      state: fact.name === "store" && fact.value === "automatic discovery"
+        ? "unknown"
+        : fact.name === "index" && config.patternIndex === undefined
+        ? "degraded"
+        : "ok",
+      checkedAt: original === undefined
+        ? checkedAt
+        : launch?.checkedAt ?? checkedAt,
+      ...(fact.name === "index" && config.patternIndex === undefined
+        ? {
+          remedy:
+            "Start the console with --pattern-index-url or CF_HARNESS_PATTERN_INDEX_URL.",
+        }
+        : {}),
+    };
+  });
+  rows.unshift({
+    id: "console.base",
+    group: "console",
+    label: "Console Address",
+    value: `http://${HOSTNAME}:${config.port}`,
+    source: "console listen configuration",
+    state: "ok",
+    checkedAt,
+  });
+  if (config.patternIndex === undefined) {
+    for (const name of ["reachable", "enrolled"]) {
+      rows.push({
+        id: `index.${name}`,
+        group: "index",
+        label: name === "reachable"
+          ? "Pattern Index Reachability"
+          : "Pattern Index Enrollment",
+        value: "not verified",
+        source: "console index configuration",
+        state: "unknown",
+        checkedAt,
+        reason: "No pattern index URL is configured.",
+      });
+    }
+  }
+  if (launch !== undefined && launch.connectors.length > 0) {
+    rows.push(...launch.connectors.map((row): ConsoleHealthRow => ({
+      ...row,
+      checkedAt: launch.checkedAt,
+    })));
+  } else {
+    rows.push({
+      id: "connectors.inventory",
+      group: "connectors",
+      label: "Connector Inventory",
+      state: "unknown",
+      checkedAt,
+      value: `${config.connectorGrants.length} explicit grants configured`,
+      source: "console connector configuration",
+      detail: "CF_HARNESS_CONNECTOR_GRANTS; no Loom launch decision record",
+      reason:
+        "Refused or uninjected connectors cannot be enumerated from the accepted grants alone.",
+      remedy:
+        "Launch the console for its Loom instance to retain the full connector decision report.",
+    });
+    rows.push(...config.connectorGrants.map((grant): ConsoleHealthRow => ({
+      id: `connector.granted.${grant.name}`,
+      group: "connectors",
+      label: connectorGrantName(grant.source),
+      value: `granted: ${connectorGrantLabel(grant)}`,
+      source: "console connector configuration",
+      detail: "CF_HARNESS_CONNECTOR_GRANTS",
+      state: "ok",
+      checkedAt,
+    })));
+  }
+  if (modelOptions === undefined) {
+    rows.push({
+      id: "model.auth",
+      group: "model",
+      label: "Model Authentication",
+      value: "not checked",
+      source: "model credential preflight",
+      state: "unknown",
+      checkedAt: null,
+    });
+  } else {
+    const provider = modelOptions.modelProvider ?? "openai-compatible-gateway";
+    const missingKey = provider === "openai-compatible-gateway" &&
+      modelOptions.gatewayAuthMode !== "none" &&
+      modelOptions.apiKey === undefined;
+    rows.push({
+      id: "model.provider",
+      group: "model",
+      label: "Model Provider",
+      value: provider,
+      source: "harness provider settings",
+      detail: defaultHarnessProviderSettingsPath(config.harnessHome),
+      state: "ok",
+      checkedAt,
+    }, {
+      id: "model.auth",
+      group: "model",
+      label: "Model Authentication",
+      value: missingKey
+        ? "bearer API key not configured"
+        : provider === "openai-codex"
+        ? "cf-harness-local-store connected"
+        : modelOptions.gatewayAuthMode === "none"
+        ? "gateway authentication disabled"
+        : "API key configured; provider acceptance not checked",
+      source: provider === "openai-codex"
+        ? "harness credential store"
+        : "console environment",
+      detail: provider === "openai-codex"
+        ? defaultHarnessCredentialStorePath(config.harnessHome)
+        : modelOptions.gatewayAuthMode === "none"
+        ? "CF_HARNESS_GATEWAY_AUTH_MODE"
+        : missingKey
+        ? "CF_HARNESS_API_KEY / OPENAI_API_KEY"
+        : nonEmpty(env.CF_HARNESS_API_KEY) !== undefined
+        ? "CF_HARNESS_API_KEY"
+        : "OPENAI_API_KEY",
+      state: missingKey ? "failed" : "ok",
+      checkedAt,
+      ...(missingKey
+        ? {
+          remedy:
+            "Set CF_HARNESS_API_KEY for the configured model gateway, then restart the console.",
+        }
+        : {}),
+    });
+  }
+  return rows;
+};
+
+/**
+ * The direct driver's configuration for this console's turns, resolved from
+ * the options every turn is built with, as the engine resolves them. Throws
+ * where a turn would be refused.
+ */
+const resolveConsoleRunscConfig = (
+  config: ConsoleConfig,
+): RunscSandboxConfig => {
+  const options = harnessSessionEngineOptions(config);
+  return resolveRunscSandboxConfig({
+    workspaceHostPath: config.workspace,
+    rootfs: options.sandboxRootfs,
+    runscBinary: options.sandboxRunscBinary,
+    cfcPolicyPath: options.sandboxCfcPolicy,
+    networkMode: options.sandboxRunscNetworkMode,
+    additionalMounts: options.additionalMounts,
+    homeDir: Deno.env.get("HOME"),
+  });
+};
+
+/**
+ * The CFC enforcement mode every turn of this console runs at, resolved the
+ * way the engine resolves it from the options a turn is built from.
+ */
+export const consoleTurnEnforcementMode = (
+  config: ConsoleConfig,
+): CfcEnforcementMode =>
+  resolveCfcEnforcementMode(harnessSessionEngineOptions(config));
+
+/**
+ * Whether the engine refuses every turn at `mode` of a console on the direct
+ * runsc driver with no CFC policy, decided by the engine's own floor rather
+ * than a copy of it. Where it does not refuse, commands run untracked.
+ */
+export const runscWithoutPolicyRefusesTurns = (
+  mode: CfcEnforcementMode,
+): boolean => {
+  try {
+    assertRunscCfcPolicyForMode(mode, {});
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * Combines retained decisions with independently cached host probes. The
+ * sandbox probe is the selected driver's: a console on the direct runsc
+ * driver never asks Docker anything, and is judged at the enforcement mode
+ * its turns resolve from the options each is built with. `readDockerRuntimes`
+ * replaces the Docker driver's `docker info` reading.
+ */
+export const createConsoleHealth = (
+  config: ConsoleConfig,
+  launch?: ConsoleObservedLaunchHealth,
+  modelOptions?: CreateHarnessPromptLoopOptions,
+  env?: Record<string, string | undefined>,
+  indexFactory?: HarnessPatternIndexClientFactory,
+  readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
+): ConsoleHealth =>
+  new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
+    config.sandboxRuntimeKind === "runsc"
+      ? consoleRunscHealthProbe(
+        () => resolveConsoleRunscConfig(config),
+        consoleTurnEnforcementMode(config),
+      )
+      : consoleSandboxHealthProbe(readDockerRuntimes),
+    ...(indexFactory !== undefined && config.patternIndex !== undefined
+      ? consolePatternIndexHealthProbes(
+        config.patternIndex.baseUrl,
+        indexFactory,
+      )
+      : []),
+  ]);
+
 /**
  * One connected browser. `deliveredSequence` is what it has been written so
  * far, and `pending` holds envelopes that arrived while its backfill was still
@@ -882,6 +1324,7 @@ export class ConsoleServer {
   readonly #clients = new Set<StreamClient>();
   readonly #config: ConsoleConfig;
   readonly #service: HarnessInteractiveChatService;
+  readonly #health: ConsoleHealth;
   readonly #patternIndexClientFactory:
     | HarnessPatternIndexClientFactory
     | undefined;
@@ -912,6 +1355,7 @@ export class ConsoleServer {
       onEvent: HarnessInteractiveChatEventListener,
     ) => HarnessInteractiveChatService,
     patternIndexClientFactory?: HarnessPatternIndexClientFactory,
+    health?: ConsoleHealth,
   ) {
     this.#config = config;
     this.#service = createService((envelope) => this.broadcast(envelope));
@@ -925,6 +1369,13 @@ export class ConsoleServer {
     this.#patternIndexClientFactory = factory === undefined
       ? undefined
       : cacheHarnessPatternIndexClientFactory(factory);
+    this.#health = health ?? createConsoleHealth(
+      config,
+      undefined,
+      undefined,
+      undefined,
+      this.#patternIndexClientFactory,
+    );
   }
 
   /** The chat service this server fronts, for startup and shutdown. */
@@ -971,13 +1422,25 @@ export class ConsoleServer {
       envelope.sessionId,
       envelope.event.turnId,
     ) ?? {
+      ...(envelope.event.outcome === "question"
+        ? { outcome: "question" as const, question: envelope.event.question }
+        : envelope.event.outcome === "gave-up"
+        ? { outcome: "gave-up" as const, reason: envelope.event.reason }
+        : { outcome: "completed" as const }),
+      sessionId: envelope.sessionId,
+      continuable: this.#sessionContinuable(envelope.sessionId),
       pieces: [],
       looms: [],
       spaceName: this.#config.fabricSession.space,
       finalText: envelope.event.finalText ?? "",
     };
+    const taskOutcome = readHarnessTaskOutcome(result);
+    if (taskOutcome === undefined) {
+      throw new Error("console result contains an invalid task outcome");
+    }
     const event: ConsoleTurnCompletedEvent = {
       ...envelope.event,
+      ...taskOutcome,
       result,
     };
     return {
@@ -986,20 +1449,27 @@ export class ConsoleServer {
     };
   }
 
+  #sessionContinuable(sessionId: string): boolean {
+    const [session] = this.#service.status(sessionId).sessions;
+    return session?.status === "idle" && session.reusable;
+  }
+
   async #readTurnResult(
     sessionId: string,
     turnId: string,
   ): Promise<ConsoleTurnResult | undefined> {
     const [session] = this.#service.status(sessionId).sessions;
     const turns = await this.#service.listTurnsForReplay({ sessionId });
-    const originLoomId = turns.turns.find((entry) =>
-      entry.turn.turnId === turnId
-    )?.input.loomId;
+    const turn = turns.turns.find((entry) => entry.turn.turnId === turnId);
+    const originLoomId = turn?.input.loomId;
     return await readConsoleTurnResult({
+      sessionId,
+      continuable: this.#sessionContinuable(sessionId),
       ...(originLoomId !== undefined ? { originLoomId } : {}),
       artifactRoot: session?.artifactRoot ?? this.#config.artifactRoot,
       turnId,
       spaceName: this.#config.fabricSession.space,
+      timing: turn?.turn,
     });
   }
 
@@ -1054,6 +1524,9 @@ export class ConsoleServer {
         fabricSession: "unverified",
       });
     }
+    if (request.method === "GET" && url.pathname === "/api/health/detail") {
+      return Response.json(this.#health.snapshot());
+    }
     if (
       request.method === "GET" &&
       (ASSET_PATH.test(url.pathname) || LIVE_PATH.test(url.pathname))
@@ -1073,6 +1546,9 @@ export class ConsoleServer {
     }
     if (request.method === "POST" && url.pathname === "/api/index/feedback") {
       return await this.#indexFeedback(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/index/retract") {
+      return await this.#indexRetract(request);
     }
     if (request.method === "POST" && url.pathname === "/api/cancel") {
       return await this.#cancel(request);
@@ -1346,7 +1822,7 @@ export class ConsoleServer {
       inputCells?: unknown;
       patternRefs?: unknown;
       loomId?: unknown;
-    } = typeof parsed === "object" && parsed !== null ? parsed : {};
+    } = isObjectOrArray(parsed) ? parsed : {};
     if (
       body.loomId !== undefined &&
       (typeof body.loomId !== "string" ||
@@ -1368,7 +1844,10 @@ export class ConsoleServer {
     let inputCells: readonly HarnessInputCellSpec[];
     let patternRefs: readonly HarnessPatternRefSpec[];
     try {
-      inputCells = parseTaskInputCells(body.inputCells);
+      inputCells = parseTaskInputCells(
+        body.inputCells,
+        this.#config.fabricSession.space,
+      );
       checkTaskInputCellNames(inputCells, this.#config.connectorGrants);
       patternRefs = parseTaskPatternRefs(body.patternRefs);
     } catch (error) {
@@ -1395,7 +1874,9 @@ export class ConsoleServer {
         text,
         ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
       },
-      ...(inputCells.length > 0 ? { inputCells } : {}),
+      ...(body.inputCells !== undefined && body.inputCells !== null
+        ? { inputCells }
+        : {}),
       ...(patternRefs.length > 0 ? { patternRefs } : {}),
     });
     if (!turn.ok) {
@@ -1404,8 +1885,15 @@ export class ConsoleServer {
     return Response.json({ sessionId, turnId: turn.result.turnId });
   }
 
+  /**
+   * Cancels a session's active turn, or only the named turn when the request
+   * names one. The caller says what stopped the turn in `reason`, which becomes
+   * the reason on the turn's `turn_canceled` event and is quoted in its run's
+   * outcome. A request without one records only that the cancel came through
+   * this route, since nothing in the request says who sent it.
+   */
   async #cancel(request: Request): Promise<Response> {
-    let body: { sessionId?: unknown; turnId?: unknown };
+    let body: { sessionId?: unknown; turnId?: unknown; reason?: unknown };
     try {
       body = await request.json();
     } catch {
@@ -1416,11 +1904,24 @@ export class ConsoleServer {
     if (typeof body.sessionId !== "string") {
       return Response.json({ error: "sessionId is required" }, { status: 400 });
     }
+    if (body.turnId !== undefined && typeof body.turnId !== "string") {
+      return Response.json({ error: "turnId, when given, must be a string" }, {
+        status: 400,
+      });
+    }
+    if (
+      body.reason !== undefined &&
+      (typeof body.reason !== "string" || body.reason.trim() === "")
+    ) {
+      return Response.json({
+        error: "reason, when given, must be a non-empty string",
+      }, { status: 400 });
+    }
     const response = await this.#service.cancelTurn(
       crypto.randomUUID(),
       body.sessionId,
-      typeof body.turnId === "string" ? body.turnId : undefined,
-      "canceled from the console page",
+      body.turnId,
+      body.reason ?? "canceled by a request to the console",
     );
     return response.ok
       ? Response.json(response.result)
@@ -1448,17 +1949,17 @@ export class ConsoleServer {
         status: 400,
       });
     }
-    const envelope: { fn?: unknown; body?: unknown } =
-      typeof parsed === "object" && parsed !== null ? parsed : {};
+    const envelope: { fn?: unknown; body?: unknown } = isObjectOrArray(parsed)
+      ? parsed
+      : {};
     if (!isIndexFunction(envelope.fn)) {
       return Response.json({
         error: `fn must be one of ${INDEX_FUNCTIONS.join(", ")}`,
       }, { status: 400 });
     }
-    const body: Record<string, unknown> =
-      typeof envelope.body === "object" && envelope.body !== null
-        ? envelope.body as Record<string, unknown>
-        : {};
+    const body: Record<string, unknown> = isObjectOrArray(envelope.body)
+      ? envelope.body as Record<string, unknown>
+      : {};
     if (envelope.fn === "getPattern" && typeof body.patternId !== "string") {
       return Response.json({ error: "patternId is required" }, { status: 400 });
     }
@@ -1477,10 +1978,7 @@ export class ConsoleServer {
    * the `record_feedback` tool records through, so the two surfaces cannot
    * come to vote differently.
    *
-   * Separate from `#indexCall` rather than another name in its allowlist.
-   * That route is reads, composed from what a caller asked for; this one is
-   * the console's only write to the index, and keeping it a route of its own
-   * is what leaves the allowlist meaning what it says.
+   * This dedicated write route leaves `#indexCall`'s allowlist read-only.
    */
   async #indexFeedback(request: Request): Promise<Response> {
     const factory = this.#patternIndexClientFactory;
@@ -1495,11 +1993,10 @@ export class ConsoleServer {
         status: 400,
       });
     }
-    const { patternId, verdict } =
-      (typeof parsed === "object" && parsed !== null ? parsed : {}) as {
-        patternId?: unknown;
-        verdict?: unknown;
-      };
+    const { patternId, verdict } = (isObjectOrArray(parsed) ? parsed : {}) as {
+      patternId?: unknown;
+      verdict?: unknown;
+    };
     if (typeof patternId !== "string" || patternId === "") {
       return Response.json({ error: "patternId is required" }, { status: 400 });
     }
@@ -1520,6 +2017,60 @@ export class ConsoleServer {
         : Response.json({ error: recorded.message }, { status: 502 });
     } catch (error) {
       return this.#indexFailure(error, "index feedback");
+    }
+  }
+
+  /**
+   * Retracts one owned generation through the index's existing authorization
+   * and successor checks. Identity and timestamps come from the signed call
+   * and index receipt, while the caller supplies only the two ids and reason.
+   */
+  async #indexRetract(request: Request): Promise<Response> {
+    const factory = this.#patternIndexClientFactory;
+    if (factory === undefined) {
+      return Response.json({ error: NO_PATTERN_INDEX }, { status: 503 });
+    }
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "request body is not JSON" }, {
+        status: 400,
+      });
+    }
+    const { patternId, successorPatternId, reason } =
+      (isObjectOrArray(parsed) ? parsed : {}) as {
+        patternId?: unknown;
+        successorPatternId?: unknown;
+        reason?: unknown;
+      };
+    if (typeof patternId !== "string" || patternId.trim() === "") {
+      return Response.json({ error: "patternId is required" }, { status: 400 });
+    }
+    if (
+      typeof successorPatternId !== "string" || successorPatternId.trim() === ""
+    ) {
+      return Response.json({
+        error:
+          "successorPatternId is required: retraction needs an existing same-owner direct successor; standalone deletion is not supported",
+      }, {
+        status: 400,
+      });
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      return Response.json({ error: "reason is required" }, { status: 400 });
+    }
+    try {
+      const client = await factory();
+      return Response.json(
+        await client.retractPattern({
+          patternId,
+          successorPatternId,
+          reason,
+        }),
+      );
+    } catch (error) {
+      return this.#indexFailure(error, "index retraction");
     }
   }
 
@@ -1697,6 +2248,83 @@ export const createConsoleInteractiveServiceOptions = (
 });
 
 /**
+ * The lines naming what a turn's sandbox depends on, printed at startup for
+ * the same reason the posture is.
+ *
+ * Under the Docker driver that is the two sidecar transports a run's
+ * mediation moves over. The engine's guard asks only that they are named, so
+ * a console pointed at directories no sandbox sidecar writes starts cleanly
+ * and then denies every observation of the run; printing them is what lets an
+ * operator read at startup which directories that depends on. Under the
+ * direct driver it is the `runsc` binary, the rootfs and the CFC policy the
+ * environment selected; an unnamed binary is looked for on `PATH`, and an
+ * unnamed rootfs is the driver's own default, when a turn resolves them.
+ */
+export const consoleSandboxBanner = (
+  config: ConsoleConfig,
+): readonly string[] =>
+  config.sandboxRuntimeKind === "runsc"
+    ? [
+      "  sandbox:    runsc, the direct driver (no Docker)",
+      `  runsc:      ${config.sandboxRunscBinary ?? "runsc, on PATH"}`,
+      `  rootfs:     ${config.sandboxRootfs ?? "(the driver's default)"}`,
+      `  policy:     ${
+        config.sandboxCfcPolicy ??
+          (runscWithoutPolicyRefusesTurns(consoleTurnEnforcementMode(config))
+            ? `(none: every turn is refused at ${
+              consoleTurnEnforcementMode(config)
+            })`
+            : "(none: runsc runs without --cfc)")
+      }`,
+    ]
+    : [
+      `  results:    ${config.cfcResultDir}`,
+      `  contexts:   ${config.cfcInvocationContextDir}`,
+    ];
+
+/**
+ * The directories the server creates before it serves: the workspace, the
+ * artifact root, and the Docker driver's two sidecar transports where that
+ * driver is selected. A console on the direct runsc driver creates no sidecar
+ * directory, because nothing would read one.
+ */
+export const consoleDataDirectories = (
+  config: Pick<
+    ConsoleConfig,
+    | "workspace"
+    | "artifactRoot"
+    | "cfcResultDir"
+    | "cfcInvocationContextDir"
+  >,
+): readonly string[] => [
+  config.workspace,
+  config.artifactRoot,
+  ...(config.cfcResultDir !== undefined ? [config.cfcResultDir] : []),
+  ...(config.cfcInvocationContextDir !== undefined
+    ? [config.cfcInvocationContextDir]
+    : []),
+];
+
+/**
+ * What the server prints once it is listening: its address, the fabric it
+ * runs against, the index and registry, the posture, what a turn's sandbox
+ * depends on ({@link consoleSandboxBanner}), and where its state lives.
+ */
+export const consoleStartupBanner = (
+  config: ConsoleConfig,
+): readonly string[] => [
+  `\n  cf-harness console: http://${HOSTNAME}:${config.port}`,
+  `  space:      ${config.fabricSession.space}`,
+  `  fabric:     ${config.fabricSession.apiUrl}`,
+  `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
+  `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
+  ...harnessFabricSessionPostureBanner(config.fabricSession),
+  ...consoleSandboxBanner(config),
+  `  workspace:  ${config.workspace}`,
+  `  artifacts:  ${config.artifactRoot}\n`,
+];
+
+/**
  * Builds the service and starts serving. The fabric session and the pattern
  * index reach the engine as resolved configuration on the base prompt-loop
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
@@ -1708,22 +2336,25 @@ export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
   env: Record<string, string | undefined> = Deno.env.toObject(),
   cwd: string = Deno.cwd(),
+  launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
   const config = await resolveConsoleConfig(args, env, cwd);
-  for (
-    const directory of [
-      config.workspace,
-      config.artifactRoot,
-      config.cfcResultDir,
-      config.cfcInvocationContextDir,
-    ]
-  ) {
+  for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });
   }
   const modelOptions = await resolveModelOptions(config, env);
   const sessionStore = config.sessionDbPath === undefined
     ? undefined
     : await openSessionStore(config.sessionDbPath);
+
+  const indexFactory = config.patternIndex === undefined
+    ? undefined
+    : cacheHarnessPatternIndexClientFactory(
+      createHarnessPatternIndexClientFactory(
+        config.patternIndex,
+        config.fabricSession.identityKeyPath,
+      ),
+    );
 
   const server = new ConsoleServer(
     config,
@@ -1736,6 +2367,8 @@ export const startConsoleServer = async (
           sessionStore,
         ),
       ),
+    indexFactory,
+    createConsoleHealth(config, launchHealth, modelOptions, env, indexFactory),
   );
   await server.service.initializeFromStore();
 
@@ -1744,30 +2377,9 @@ export const startConsoleServer = async (
     hostname: HOSTNAME,
     port: config.port,
     onListen: () => {
-      console.log(`\n  cf-harness console: http://${HOSTNAME}:${config.port}`);
-      console.log(`  space:      ${config.fabricSession.space}`);
-      console.log(`  fabric:     ${config.fabricSession.apiUrl}`);
-      console.log(
-        `  index:      ${config.patternIndex?.baseUrl ?? "(not configured)"}`,
-      );
-      console.log(
-        `  skills:     ${config.skillsSh?.baseUrl ?? "(not configured)"}`,
-      );
-      for (
-        const line of harnessFabricSessionPostureBanner(config.fabricSession)
-      ) {
+      for (const line of consoleStartupBanner(config)) {
         console.log(line);
       }
-      // The two sidecar transports a run's mediation moves over. The engine's
-      // guard asks only that they are named, so a console pointed at
-      // directories no sandbox sidecar writes starts cleanly and then denies
-      // every observation of the run; printing them is what lets an operator
-      // read at startup which directories that depends on, for the same
-      // reason the posture is printed rather than left to be inferred.
-      console.log(`  results:    ${config.cfcResultDir}`);
-      console.log(`  contexts:   ${config.cfcInvocationContextDir}`);
-      console.log(`  workspace:  ${config.workspace}`);
-      console.log(`  artifacts:  ${config.artifactRoot}\n`);
     },
     onError: (error) => {
       console.error(error instanceof Error ? error.message : String(error));

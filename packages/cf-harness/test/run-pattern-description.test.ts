@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { runPatternToolDescriptor } from "../src/tools/run-pattern.ts";
 
@@ -11,13 +12,13 @@ describe("run-pattern description", () => {
   it("states that the post-run pointer check is authoritative", () => {
     const schema = runPatternToolDescriptor.inputSchema;
     if (
-      typeof schema !== "object" || schema === null ||
+      !isObjectOrArray(schema) ||
       schema.type !== "object" || schema.properties === undefined
     ) {
       throw new Error("expected `run_pattern` object input schema");
     }
     const sourceText = schema.properties.sourceText as JSONSchema;
-    const description = typeof sourceText === "object" && sourceText !== null
+    const description = isObjectOrArray(sourceText)
       ? sourceText.description
       : undefined;
 
@@ -32,7 +33,7 @@ describe("run-pattern description", () => {
       "Bound every query's rows with a LIMIT",
     );
     expect(runPatternToolDescriptor.description).toContain(
-      "an ordinary result row is materialized as its own document in the space",
+      "every result row is materialized as its own document in the space",
     );
   });
 

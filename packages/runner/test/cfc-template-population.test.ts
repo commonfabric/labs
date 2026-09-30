@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -74,6 +75,8 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       // Persisting the flow labels is what mints the `*`-child templates
       // every `entriesOf` assertion below counts and reads.
       cfcFlowLabels: "persist",
+      // These fixtures inspect persisted stamps even for undeclared stores.
+      cfcEnforcementMode: "observe",
     });
     return runtime;
   };
@@ -88,7 +91,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -152,7 +155,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
       path: [],
     });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return listId;
   };
 
@@ -166,7 +169,7 @@ describe("CFC template population (Stage A): the two under-taints", () => {
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return join;
   };
 
@@ -575,6 +578,8 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
       // Persisting the flow labels is what mints the `*`-child templates
       // every `entriesOf` assertion below counts and reads.
       cfcFlowLabels: "persist",
+      // These fixtures inspect persisted stamps even for undeclared stores.
+      cfcEnforcementMode: "observe",
     });
     return runtime;
   };
@@ -589,7 +594,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -639,7 +644,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     }, tx);
     list.set(members);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return list.getAsNormalizedFullLink().id;
   };
 
@@ -653,7 +658,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return join;
   };
 
@@ -731,16 +736,7 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     expect(join).toContainEqual("memb-secret");
   });
 
-  it("machineryRead-marked wiring reads consume no templates; the same reads unmarked consume the J", async () => {
-    // The machinery-read boundary, pinned as a consumed-set asymmetry: the
-    // exact read set that consumes the membership J as an application
-    // observation consumes NOTHING when it carries the machineryRead marker —
-    // the wiring reads (slot probe, slot scalar, existence probe, `length`)
-    // keep their ordinary consumption (none here: the elements are unlabeled,
-    // so templates are the only consumable below the root) and skip the
-    // templates. This is what keeps the generic route from re-importing the
-    // pointwise smear.
-
+  it("retains private reference selection history during machinery reads", async () => {
     const rt = makeRuntime();
     await seedDoc(rt, "gp-el-mach", { n: 1 }, []);
     const criteriaId = await seedDoc(rt, "gp-criteria-mach", { keep: true }, [
@@ -760,14 +756,81 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
     const marked = await flowJoinOf(rt, (tx) => {
       tx.runWithAmbientReadMeta(machineryRead, () => wiringReads(tx));
     });
-    // Consumed-set equality with a read-free transaction: the marked wiring
-    // reads contribute NOTHING to the join.
-    expect(marked).toEqual([]);
+    // The pointer itself was selected under the private criteria. Suppressing
+    // synthetic membership templates does not erase that acquisition history.
+    expect(marked).toEqual(["memb-secret"]);
 
     const unmarked = await flowJoinOf(rt, (tx) => {
       wiringReads(tx);
     });
     expect(unmarked).toContainEqual("memb-secret");
+  });
+
+  it("consumes the membership template at a followed slot, unless the probe is machinery", async () => {
+    // A dereference retains the restrictions of the reference it follows
+    // (CFC §4.6.3, §8.2.4): the probe of the followed slot consumes what a
+    // standalone probe of it does, the pointer label and the membership
+    // template. A probe carrying `machineryRead` consumes nothing, traced or
+    // not.
+
+    const rt = makeRuntime();
+    const elId = await seedDoc(rt, "gp-el-tc", { n: 4 }, [
+      { path: [], label: { confidentiality: ["el-label"] } },
+    ]);
+    const criteriaId = await seedDoc(rt, "gp-criteria-tc", { keep: true }, [
+      { path: [], label: { confidentiality: ["memb-secret"] } },
+    ]);
+    const listId = await buildGenericList(rt, "gp-list-tc", criteriaId, [
+      "gp-el-tc",
+    ]);
+
+    const tracedProbe = (tx: ReturnType<Runtime["edit"]>) => {
+      tx.read(readAddress(listId, ["0"]), { meta: linkResolutionProbe });
+      tx.recordCfcDereferenceTrace({
+        source: { space, id: listId, scope: "space", path: ["0"] },
+        target: { space, id: elId, scope: "space", path: [] },
+        kind: "value",
+      });
+    };
+
+    const followed = await flowJoinOf(rt, tracedProbe);
+    expect(followed).toContainEqual("memb-secret");
+    expect(followed).not.toContainEqual("el-label");
+    expect(
+      await flowJoinOf(
+        rt,
+        (tx) => tx.runWithAmbientReadMeta(machineryRead, () => tracedProbe(tx)),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps target content confidentiality off a public member reference", async () => {
+    const rt = makeRuntime();
+    await seedDoc(rt, "gp-el-lab", { n: 1 }, [
+      { path: [], label: { confidentiality: ["el-label"] } },
+    ]);
+    const criteriaId = await seedDoc(rt, "gp-criteria-lab", { keep: true }, []);
+    const listId = await buildGenericList(rt, "gp-list-lab", criteriaId, [
+      "gp-el-lab",
+    ]);
+
+    const slotEntries = entriesOf(listId).filter((entry) =>
+      entry.origin === "link" && entry.path.join("/") === "0"
+    );
+    expect(slotEntries.flatMap((entry) => entry.label.confidentiality ?? []))
+      .toEqual([]);
+
+    const probeSlot = (tx: ReturnType<Runtime["edit"]>) =>
+      tx.read(readAddress(listId, ["0"]), { meta: linkResolutionProbe });
+
+    const marked = await flowJoinOf(rt, (tx) => {
+      tx.runWithAmbientReadMeta(machineryRead, () => probeSlot(tx));
+    });
+    expect(marked).toEqual([]);
+
+    // A pointer probe does not consume the target's content label.
+    const unmarked = await flowJoinOf(rt, (tx) => probeSlot(tx));
+    expect(unmarked).not.toContainEqual("el-label");
   });
 });
 
@@ -805,7 +868,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
     const cell = rt.getCell(space, cause, undefined, seed);
     const id = cell.getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(seed, space);
-    seed.writeOrThrow({ space, scope: "space", id, path: [] }, {
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
       value,
       cfc: {
         version: 1,
@@ -844,7 +907,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
     observe(tx);
     const join = deriveFlowJoin(tx).confidentiality;
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return join;
   };
 
@@ -1023,7 +1086,7 @@ describe("CFC template population (Stage A): class-split resolution", () => {
     const cell = rt.getCell(space, "tp-declared-star", guarded.schema, tx);
     cell.set({ items: [{ n: 1 }] });
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     const id = cell.getAsNormalizedFullLink().id;
 
     const declared = entriesOf(id).filter((e) => e.origin === "declared");
@@ -1085,7 +1148,7 @@ describe("CFC template population (Stage A): record-only additionalProperties wa
     const cell = rt.getCell(space, cause, interned.schema, tx);
     cell.set(value as never);
     tx.prepareCfc();
-    expect((await tx.commit()).ok).toBeDefined();
+    expect((await tx.commit()).error).toBeUndefined();
     return cell.getAsNormalizedFullLink().id;
   };
 
@@ -1192,6 +1255,8 @@ describe("CFC template population (Stage A): cross-space label protection", () =
       // Persisting the flow labels is what mints the template entries this
       // test reads back out of the envelope.
       cfcFlowLabels: "persist",
+      // These fixtures inspect persisted stamps even for undeclared stores.
+      cfcEnforcementMode: "observe",
       // `containsCfcFieldCommitment` below reads the commitment form this
       // rung transforms a cross-space membership join into.
       cfcLabelMetadataProtection: "enforce",
@@ -1207,20 +1272,22 @@ describe("CFC template population (Stage A): cross-space label protection", () =
       );
       const criteriaId = criteria.getAsNormalizedFullLink().id;
       writeSeedEnvelopeDoc(seed, foreignSpace);
-      seed.writeOrThrow(
-        { space: foreignSpace, scope: "space", id: criteriaId, path: [] },
-        {
-          value: { keep: true },
-          cfc: {
+      seedStoredEnvelope(seed, {
+        space: foreignSpace,
+        scope: "space",
+        id: criteriaId,
+        path: [],
+      }, {
+        value: { keep: true },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
             version: 1,
-            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-            labelMap: {
-              version: 1,
-              entries: [{ path: [], label: { confidentiality: [userAtom] } }],
-            },
+            entries: [{ path: [], label: { confidentiality: [userAtom] } }],
           },
         },
-      );
+      });
       expect((await seed.commit()).ok).toBeDefined();
 
       // Declared container in the local space whose membership J consumed
@@ -1247,7 +1314,7 @@ describe("CFC template population (Stage A): cross-space label protection", () =
         path: [],
       });
       tx.prepareCfc();
-      expect((await tx.commit()).ok).toBeDefined();
+      expect((await tx.commit()).error).toBeUndefined();
 
       const replica = storageManager.open(space).replica as unknown as {
         getDocument(id: string): {

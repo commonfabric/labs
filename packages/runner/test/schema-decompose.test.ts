@@ -5,14 +5,21 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import {
   collectExternalSchemaRefHashes,
-  type DecomposedSchema,
-  decomposeSchema,
   formatExternalSchemaRef,
   isExternalSchemaRef,
   parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
+  type DecomposedSchema,
+  decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
 } from "../src/schema-decompose.ts";
+import {
+  acquireSchemaRegistryLease,
+  lookupSchemaDocument,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 
 /** A lookup over a decomposition's own documents. */
 const lookupIn =
@@ -422,6 +429,55 @@ describe("schema-decompose", () => {
       for (const hash of inner.documents.keys()) {
         expect(documents.has(hash)).toBe(true);
       }
+    });
+
+    it("refuses a later call whose resolver misses, after an earlier one resolved the same ref", () => {
+      // A decomposition that resolved an external ref reflects what that
+      // resolver held then. Memoizing it would hand the closure to a caller
+      // whose resolver no longer holds it — the registry after its lease
+      // epoch cleared — and that caller registers what comes back.
+      const inner = decomposeSchema({
+        type: "object",
+        properties: { epochLeaf: { type: "string" } },
+      });
+      const outer: JSONSchemaObj = { $ref: inner.rootRef };
+      expect(
+        decomposeSchema(outer, {
+          resolveDocument: (hash) => inner.documents.get(hash),
+        }).documents.size,
+      ).toBe(inner.documents.size);
+      expect(() => decomposeSchema(outer, { resolveDocument: () => undefined }))
+        .toThrow(SchemaNotDecomposableError);
+      expect(() => decomposeSchema(outer)).toThrow(SchemaNotDecomposableError);
+    });
+
+    it("refuses through the registry once the epoch that resolved the ref has cleared", () => {
+      const inner = decomposeSchema({
+        type: "object",
+        properties: { clearedLeaf: { type: "string" } },
+      });
+      const outer: JSONSchemaObj = { $ref: inner.rootRef };
+      const release = acquireSchemaRegistryLease();
+      try {
+        for (const [hash, document] of inner.documents) {
+          registerSchemaDocument(hash, document);
+        }
+        expect(
+          decomposeSchema(outer, { resolveDocument: lookupSchemaDocument })
+            .documents.size,
+        ).toBe(inner.documents.size);
+      } finally {
+        release();
+      }
+      // Assert the precondition, not just the outcome: the registry no
+      // longer holds the document, so only a stale memo could answer.
+      expect(
+        lookupSchemaDocument(parseExternalSchemaRef(inner.rootRef)!.taggedHash),
+      )
+        .toBeUndefined();
+      expect(() =>
+        decomposeSchema(outer, { resolveDocument: lookupSchemaDocument })
+      ).toThrow(SchemaNotDecomposableError);
     });
 
     it("throws when the resolver supplies a document that does not match its id", () => {

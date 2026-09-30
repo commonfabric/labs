@@ -15,11 +15,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricPrimitive } from "@/interface.ts";
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
+import { FabricPrimitive } from "@";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 
 /**
  * Minimal `BaseFabricPrimitive` subclass for exercising the static guard in
@@ -28,6 +25,10 @@ import {
 class ProbePrimitive extends BaseFabricPrimitive {
   get [VALUE_TAG](): never {
     throw new Error("Called VALUE_TAG on probe.");
+  }
+
+  get schemaType(): never {
+    throw new Error("Unimplemented.");
   }
 }
 
@@ -48,6 +49,10 @@ class StatefulProbe extends BaseFabricPrimitive {
     throw new Error("Unimplemented.");
   }
 
+  get schemaType(): never {
+    throw new Error("Unimplemented.");
+  }
+
   get value(): bigint {
     return this.#value;
   }
@@ -59,7 +64,11 @@ class StatefulProbe extends BaseFabricPrimitive {
  * witness `isInstance()`'s enforcement throw; no production class is built this
  * way.
  */
-class RoguePrimitive extends FabricPrimitive {}
+class RoguePrimitive extends FabricPrimitive {
+  get schemaType(): never {
+    throw new Error("Unimplemented.");
+  }
+}
 
 describe("BaseFabricPrimitive", () => {
   describe("inheritance", () => {

@@ -1,3 +1,5 @@
+import { parseCellReference, type ReferenceMember } from "./cell-reference.ts";
+import type { CellScope } from "@commonfabric/api";
 import { isSlugAddress, isValidSlug } from "./slugs.ts";
 
 /**
@@ -13,6 +15,8 @@ export interface FabricUrlTarget {
   id?: string;
   slug?: string;
   path: string[];
+  member?: ReferenceMember;
+  scope?: CellScope;
 }
 
 export interface FabricUrlOptions {
@@ -77,9 +81,8 @@ function asEntityId(segment: string): string | undefined {
  * The space a marked path segment carries, or `undefined` where the segment
  * carries no mark and so is not the space at all.
  *
- * A leading `@` is what marks a segment as the space, in every reference this
- * repository writes: it keeps a space from competing for the slot the piece
- * would otherwise hold. What the mark carries is only held to a form by the
+ * In the `/@space/` alias, a leading `@` marks a segment as the space: it keeps
+ * a space from competing for the slot the piece would otherwise hold. What the mark carries is only held to a form by the
  * reader — a DID resolves from the string alone, a name needs a session — so
  * the rest of the segment comes back unexamined.
  *
@@ -127,34 +130,37 @@ export function parseFabricUrl(
   url: string,
   options: FabricUrlOptions = {},
 ): FabricUrlTarget | undefined {
-  const trimmed = (url ?? "").trim();
+  const trimmed = (url ?? "").trimStart();
   if (trimmed.length === 0) return undefined;
 
   // A bare or schemed tagged hash, with no path around it.
   if (!trimmed.startsWith("/") && !trimmed.includes("://")) {
-    const id = asEntityId(trimmed);
+    const id = asEntityId(trimmed.trimEnd());
     return id ? { id, path: [] } : undefined;
   }
 
-  let segments: string[];
-  let space: string | undefined;
-
   if (trimmed.startsWith("/")) {
-    segments = splitPath(trimmed);
-    const asSpace = segments.length > 0
-      ? asSpaceSegment(segments[0])
-      : undefined;
-    if (asSpace !== undefined) {
-      space = asSpace;
-      segments = segments.slice(1);
+    try {
+      const reference = trimmed.split("/").map((segment) => {
+        const decoded = decode(segment);
+        return decoded?.replace(/\//g, "~1");
+      });
+      if (reference.some((segment) => segment === undefined)) return undefined;
+      const parts = parseCellReference(reference.join("/"));
+      const id = asEntityId(
+        parts.path.length === 0 ? parts.id.trimEnd() : parts.id,
+      );
+      if (id === undefined) return undefined;
+      return {
+        space: parts.space,
+        id,
+        path: parts.path,
+        ...(parts.member && { member: parts.member }),
+        ...(parts.scope && { scope: parts.scope }),
+      };
+    } catch {
+      return undefined;
     }
-    // A rooted path names a cell only by carrying an id; `/notes/mine` is a
-    // path on some website, not an address here.
-    if (segments.length === 0) return undefined;
-    const id = asEntityId(segments[0]);
-    if (id === undefined) return undefined;
-    const path = decodePath(segments.slice(1));
-    return path === undefined ? undefined : { space, id, path };
   }
 
   let parsed: URL;
@@ -167,12 +173,12 @@ export function parseFabricUrl(
   const hosts = options.hosts ?? [];
   if (!hosts.includes(parsed.host)) return undefined;
 
-  segments = splitPath(parsed.pathname);
+  const segments = splitPath(parsed.pathname);
   // `/<space>/<piece>` is the page URL shape. A host of ours with anything
   // shorter is one of its own pages rather than a piece.
   if (segments.length < 2) return undefined;
 
-  space = decode(segments[0]);
+  const space = decode(segments[0]);
   if (space === undefined) return undefined;
 
   const target = segments[1];

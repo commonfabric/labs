@@ -159,7 +159,7 @@ describe("engine-connector-grants", () => {
         await engine.establishWellKnownGrants(),
       );
 
-      expect(message).toContain("`email` connector database");
+      expect(message).toContain("gmail-work (email)");
       expect(message).not.toContain(MAIL_ID);
       expect(message).not.toContain(REGISTRY_ID);
     });

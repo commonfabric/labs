@@ -80,7 +80,10 @@ closes the pointer-identity residual**: a probe or dereference at a
 computed slot consumes the assignment decision (`J` decided *which*
 element the reader resolves through — inv-9 flow-path confidentiality),
 while still consuming nothing of the container's *content* classes and
-nothing of the target beyond its own link entry. The pointer/content
+nothing of the target beyond its own link entry. A dereference consumes
+it through the probe of the slot it follows, once per followed slot
+(spec §4.6.3 "Dereference retains the reference restrictions", §8.2.4);
+the target's content arrives through the ordinary reads of the target. The pointer/content
 split that today hangs on the exact-path anchoring hack moves onto the
 class axis, where it belongs — refined, not dissolved: probes stay clean
 of content taint (`shape`/`value` templates are not followRef-consumable)
@@ -287,6 +290,22 @@ minted into the same entries, not the mechanism.
      bookkeeping reads with `machineryRead`; predicate and operation outputs
      stay application observations. Dereferencing a selected slot consumes its
      membership confidentiality and the current target's applicable labels.
+  3. **A pointer observation consumes the templates at its slot, not
+     those beneath it.** A probe asks which reference sits at one slot,
+     and a runtime-minted `*` template beneath that slot labels which
+     reference sits at a child. Read at the sigil's path
+     (`linkProbeSubPath()`), a probe of a container matches the
+     container's own child template through the sigil key; in the atomic
+     layout, where the probe reads the slot itself, recursion reaches it.
+     `Cell.set` probes the root of the store it writes, so a probe that
+     consumed the templates beneath its slot would carry the label a
+     store was created under onto every other document its later
+     writers write. Dropping them takes nothing from a reader of the
+     children: following a child's slot consumes the template there
+     (item 2), reading a child's content or existence consumes the
+     `value`/`shape` twins, and a probe of a child's own slot consumes
+     the template at that slot. Declared `*` entries are the schema's
+     policy, not runtime templates, and stay consumed.
 - **Stage B (Stage-2 full population; one PR, after A):** the
   `/cfc/labels/...` template mints per §5 + `inspectConfLabel` consuming
   them (upgrading WP7's computed-in-hand labels to persisted templates),

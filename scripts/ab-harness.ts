@@ -65,9 +65,11 @@ const ju: any = await (async () => {
   }
 })();
 const md: any = await import(`${R}/builder/pattern-metadata.ts`);
-const { fabricFromNativeValue } = await import(
-  "@commonfabric/data-model"
-);
+// The deep converter, under whichever NAME the tree spells it, for the same
+// reason as the encodable-form builders above.
+const dm: any = await import("@commonfabric/data-model");
+const fabricFromConvertibleJsValue = dm.fabricFromConvertibleJsValue ??
+  dm.fabricFromNativeValue;
 const { dataUriFromValue } = await import(
   "@commonfabric/data-model/codec-data-uri"
 );
@@ -90,7 +92,7 @@ const patternForm = (pattern: unknown): unknown =>
 const say = (k: string, v: unknown) => console.log(`${k}: ${v}`);
 const encoded = (v: unknown) => {
   try {
-    return dataUriFromValue(fabricFromNativeValue(v));
+    return dataUriFromValue(fabricFromConvertibleJsValue(v));
   } catch (e) {
     return `THREW ${(e as Error).message}`;
   }

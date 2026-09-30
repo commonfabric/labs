@@ -12,6 +12,7 @@ import { isCell } from "../src/cell.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -46,10 +47,10 @@ describe("cfc-eager-reference-context", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -65,12 +66,14 @@ describe("cfc-eager-reference-context", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: ["middle-selection"] },
       }]);
       const array = await seed("array-container", [intermediate.getAsLink()], [{
         path: ["0"],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [selection] },
       }]);
       const read = runtime.edit();
@@ -108,6 +111,7 @@ describe("cfc-eager-reference-context", () => {
           path: [],
           origin: "link",
           observes: "followRef",
+          referenceAcquisition: "complete",
           label: { confidentiality: [selection] },
         }]);
         const inputs = runtime.getImmutableCell(
@@ -177,6 +181,7 @@ describe("cfc-eager-reference-context", () => {
       path: ["child"],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: {},
     }]);
     const schema = {
@@ -302,6 +307,7 @@ describe("cfc-eager-reference-context", () => {
         path: ["child"],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: {},
       }]);
       const schema = {

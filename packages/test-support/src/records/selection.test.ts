@@ -2,11 +2,13 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  declaredSchema,
   digestIdentities,
   type Manifest,
   MANIFEST_SCHEMA_VERSION,
   parseManifest,
   serializeManifest,
+  writtenAhead,
 } from "./selection.ts";
 import { sampleManifest } from "./selection-testing.ts";
 
@@ -14,7 +16,6 @@ const TEST = { k: "unit", s: "memory", n: "space > writes" };
 const CALIBRATION = {
   setupCost: {},
   suites: {},
-  unitOverhead: {},
   prologue: 0,
 };
 
@@ -54,12 +55,272 @@ describe("selection", () => {
       ]);
     });
 
+    it("round-trips the health of the cost model", () => {
+      const manifest: Manifest = {
+        ...sampleManifest(),
+        health: {
+          suites: {
+            "pattern-unit": {
+              fixed: 350.4,
+              tooLong: 181,
+              batches: 36,
+              ratio: { median: 0.36, p90: 0.82 },
+            },
+            "cli-core": { fixed: 28, tooLong: 0, batches: 0 },
+          },
+          lanes: {
+            observed: 40,
+            pastBound: 3,
+            projectedInside: 38,
+            overran: 2,
+          },
+          previous: {
+            generatedAt: "2026-09-25T16:30:00.000Z",
+            suites: { "pattern-unit": { fixed: 184.2, tooLong: 0 } },
+          },
+          tooLongBaseline: 3,
+          alarms: ["pattern-unit: a lane pays 5m50s before it runs any of it"],
+        },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a manifest carrying no health as having none", () => {
+      const parsed = parseManifest(serializeManifest(sampleManifest()));
+      expect(parsed).toBeDefined();
+      expect(Object.hasOwn(parsed!, "health")).toBe(false);
+    });
+
+    it("reads a manifest whose health it cannot read, without the health", () => {
+      // Nothing obeys the health, so a figure this reader cannot read
+      // costs the figures and not the packing every lane obeys.
+      const healthy = {
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+      };
+      for (
+        const health of [
+          7,
+          { ...healthy, suites: [] },
+          {
+            ...healthy,
+            suites: { unit: { fixed: -1, tooLong: 0, batches: 0 } },
+          },
+          {
+            ...healthy,
+            suites: { unit: { fixed: 3, tooLong: 0.5, batches: 0 } },
+          },
+          {
+            ...healthy,
+            suites: { unit: { fixed: 3, tooLong: 0, batches: 1, ratio: 2 } },
+          },
+          { ...healthy, lanes: { observed: 1 } },
+          {
+            ...healthy,
+            lanes: {
+              observed: 1,
+              pastBound: 2,
+              projectedInside: 1,
+              overran: 0,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 1,
+              pastBound: 0,
+              projectedInside: 2,
+              overran: 0,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 3,
+              pastBound: 1,
+              projectedInside: 3,
+              overran: 2,
+            },
+          },
+          {
+            ...healthy,
+            lanes: {
+              observed: 3,
+              pastBound: 3,
+              projectedInside: 1,
+              overran: 2,
+            },
+          },
+          { ...healthy, previous: { generatedAt: "yesterday", suites: {} } },
+          {
+            ...healthy,
+            previous: {
+              generatedAt: "2026-09-25T16:30:00.000Z",
+              suites: { unit: { fixed: 3 } },
+            },
+          },
+          { ...healthy, alarms: "none" },
+          { ...healthy, tooLongBaseline: -1 },
+          { ...healthy, alarms: [3] },
+          { ...healthy, alarms: undefined },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.health = health;
+        const parsed = parseManifest(JSON.stringify(object));
+        expect(parsed).toBeDefined();
+        expect(Object.hasOwn(parsed!, "health")).toBe(false);
+      }
+    });
+
+    it("drops a health figure it does not know, keeping the rest", () => {
+      const object = JSON.parse(serializeManifest(sampleManifest()));
+      object.health = {
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2, drift: 9 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+        verdict: "fine",
+      };
+      expect(parseManifest(JSON.stringify(object))?.health).toEqual({
+        suites: { unit: { fixed: 3, tooLong: 0, batches: 2 } },
+        lanes: { observed: 1, pastBound: 0, projectedInside: 1, overran: 0 },
+        alarms: [],
+      });
+    });
+
     it("returns undefined for a schema version it does not know", () => {
       const ahead = {
         ...sampleManifest(),
         schema: MANIFEST_SCHEMA_VERSION + 1,
       };
       expect(parseManifest(JSON.stringify(ahead))).toBeUndefined();
+    });
+
+    it("refuses a body that does not say which shape it is", () => {
+      // The shapes differ in what a field means, so a body that names
+      // none is one no reader can say it understands. Reading it as the
+      // current shape would obey a body nobody claimed was current.
+      for (const schema of [undefined, "1", 1.5, 0, -1, null]) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        if (schema === undefined) delete object.schema;
+        else object.schema = schema;
+        expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+      }
+    });
+
+    it("round-trips what suites cost with coverage on", () => {
+      const manifest = sampleManifest();
+      manifest.calibration.suitesWithCoverage = {
+        unit: { overhead: 9, correction: 2, unitOverhead: 1 },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a manifest carrying no coverage fits as having none", () => {
+      const parsed = parseManifest(serializeManifest(sampleManifest()));
+      expect(parsed).toBeDefined();
+      expect(Object.hasOwn(parsed!.calibration, "suitesWithCoverage"))
+        .toBe(false);
+    });
+
+    it("refuses a coverage fit it cannot read", () => {
+      // What a lane measuring the suite is charged comes from here, so a
+      // figure that will not read is a body this reader cannot read.
+      for (
+        const suitesWithCoverage of [
+          [],
+          { unit: 7 },
+          { unit: { overhead: 3, correction: 0, unitOverhead: 0 } },
+          { unit: { overhead: 3, correction: 1 } },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.calibration.suitesWithCoverage = suitesWithCoverage;
+        expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+      }
+    });
+
+    it("refuses a suite of this shape carrying no unit overhead", () => {
+      // Absent from the shape that introduced it is a body this reader
+      // cannot read. Reading it as charging nothing would hide the
+      // fault while the packer under-charged every unit a lane opens.
+      const object = JSON.parse(serializeManifest(sampleManifest()));
+      object.calibration.suites = { unit: { overhead: 3, correction: 1 } };
+      expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+    });
+
+    it("reads a manifest written in an earlier shape forward", () => {
+      // Every manifest in the store was written in the shape of its own
+      // day. Refusing the ones behind this reader would leave it with
+      // none the moment a shape changed, and a consumer with no manifest
+      // runs the whole corpus.
+      const older = JSON.parse(serializeManifest(sampleManifest()));
+      older.schema = MANIFEST_SCHEMA_VERSION - 1;
+      older.calibration.suites = { unit: { overhead: 3, correction: 1 } };
+      const parsed = parseManifest(JSON.stringify(older));
+      expect(parsed?.calibration.suites.unit)
+        .toEqual({ overhead: 3, correction: 1, unitOverhead: 0 });
+    });
+
+    it("round-trips a suite's fit with its processes' setup measured", () => {
+      const manifest = sampleManifest();
+      manifest.calibration.suites = {
+        unit: {
+          overhead: 30,
+          correction: 1,
+          unitOverhead: 1,
+          process: { setup: 8, overhead: 2, correction: 0.5, unitOverhead: 0 },
+        },
+      };
+      expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+
+    it("reads a suite carrying no process fit as having none", () => {
+      // A fit made where no process marks when its units begin carries none.
+      const manifest = sampleManifest();
+      manifest.calibration.suites = {
+        unit: { overhead: 3, correction: 1, unitOverhead: 0 },
+      };
+      const parsed = parseManifest(serializeManifest(manifest));
+      expect(parsed?.calibration.suites.unit).toEqual({
+        overhead: 3,
+        correction: 1,
+        unitOverhead: 0,
+      });
+    });
+
+    it("refuses a process fit it cannot read", () => {
+      for (
+        const process of [
+          7,
+          { setup: -1, overhead: 0, correction: 1, unitOverhead: 0 },
+          { setup: 1, overhead: 0, correction: 0, unitOverhead: 0 },
+          { setup: 1, overhead: 0, correction: 1 },
+        ]
+      ) {
+        const object = JSON.parse(serializeManifest(sampleManifest()));
+        object.calibration.suites = {
+          unit: { overhead: 0, correction: 1, unitOverhead: 0, process },
+        };
+        expect(parseManifest(JSON.stringify(object))).toBeUndefined();
+      }
+    });
+
+    it("refuses a unit overhead an earlier shape carries unreadably", () => {
+      // Absent and unreadable are different, and the difference only
+      // arises in a shape whose absent figure has a reading: a fit made
+      // before it existed charged nothing per unit, where a figure that
+      // will not read as one is a body this reader cannot read, and
+      // charging nothing for that would hide it.
+      for (const unitOverhead of ["free", null, -1]) {
+        const older = JSON.parse(serializeManifest(sampleManifest()));
+        older.schema = MANIFEST_SCHEMA_VERSION - 1;
+        older.calibration.suites = {
+          unit: { overhead: 3, correction: 1, unitOverhead },
+        };
+        expect(parseManifest(JSON.stringify(older))).toBeUndefined();
+      }
     });
 
     it("returns undefined rather than obeying part of a manifest", () => {
@@ -159,6 +420,7 @@ describe("selection", () => {
       manifest.calibration.suites["workspace-unit"] = {
         overhead: 0,
         correction: 0,
+        unitOverhead: 0,
       };
       expect(parseManifest(JSON.stringify(manifest))).toBeUndefined();
     });
@@ -256,7 +518,6 @@ describe("selection", () => {
         withField("calibration", {
           setupCost: { a: -1 },
           suites: {},
-          unitOverhead: {},
           prologue: 0,
         }),
       ],
@@ -265,7 +526,6 @@ describe("selection", () => {
         withField("calibration", {
           setupCost: {},
           suites: {},
-          unitOverhead: {},
           prologue: -1,
         }),
       ],
@@ -273,8 +533,7 @@ describe("selection", () => {
         "a suite overhead below zero",
         withField("calibration", {
           setupCost: {},
-          suites: { s: { overhead: -1, correction: 1 } },
-          unitOverhead: {},
+          suites: { s: { overhead: -1, correction: 1, unitOverhead: 0 } },
           prologue: 0,
         }),
       ],
@@ -307,10 +566,6 @@ describe("selection", () => {
           churn: 0,
           lastCatch: 7,
         }, "entry"),
-      ],
-      [
-        "an independence flag that is not one",
-        withField("independent", "yes", "entry"),
       ],
       [
         "a last run that is not a day",
@@ -402,8 +657,8 @@ describe("selection", () => {
         withField("unschedulable", [{ test: TEST, suite: "s", cost: "lots" }]),
       ],
 
-      // The calibration, which is what turns a planned second into the
-      // second a lane really pays.
+      // The calibration, which is what turns a second of test time into
+      // the second a lane really pays.
       ["a calibration that is not a record", withField("calibration", 7)],
       [
         "a setup cost that is not a record",
@@ -428,19 +683,24 @@ describe("selection", () => {
         "a suite overhead that is not a number",
         withField("calibration", {
           ...CALIBRATION,
-          suites: { unit: { overhead: "some", correction: 1 } },
+          suites: {
+            unit: { overhead: "some", correction: 1, unitOverhead: 0 },
+          },
         }),
       ],
       [
         "a suite correction that is not a number",
         withField("calibration", {
           ...CALIBRATION,
-          suites: { unit: { overhead: 0, correction: null } },
+          suites: { unit: { overhead: 0, correction: null, unitOverhead: 0 } },
         }),
       ],
       [
-        "a unit overhead that is not a record",
-        withField("calibration", { ...CALIBRATION, unitOverhead: 7 }),
+        "a suite unit overhead below zero",
+        withField("calibration", {
+          ...CALIBRATION,
+          suites: { unit: { overhead: 0, correction: 1, unitOverhead: -1 } },
+        }),
       ],
       [
         "a prologue that is not a number",
@@ -526,8 +786,13 @@ describe("selection", () => {
         }],
         calibration: {
           setupCost: { toolshed: 60 },
-          suites: { "pattern-integration": { overhead: 50, correction: 1.2 } },
-          unitOverhead: { "packages/patterns/one.test.ts": 10 },
+          suites: {
+            "pattern-integration": {
+              overhead: 50,
+              correction: 1.2,
+              unitOverhead: 10,
+            },
+          },
           prologue: 3,
         },
         lanes: [{
@@ -539,10 +804,46 @@ describe("selection", () => {
           }],
         }],
       });
-      manifest.entries[0]!.independent = true;
       manifest.entries[0]!.lastRun = "2026-08-20";
       manifest.entries[0]!.inputs.lastCatch = "2026-08-20";
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
+    });
+  });
+
+  describe("declaredSchema()", () => {
+    it("reads the shape a body declares in its own field", () => {
+      expect(declaredSchema({ schema: 3 })).toBe(3);
+      expect(declaredSchema({ schema: 0 })).toBeUndefined();
+      expect(declaredSchema({ schema: 1.5 })).toBeUndefined();
+      expect(declaredSchema({ schema: "2" })).toBeUndefined();
+      expect(declaredSchema({})).toBeUndefined();
+      expect(declaredSchema(null)).toBeUndefined();
+      expect(declaredSchema([])).toBeUndefined();
+    });
+
+    it("reads nothing from a shape a body only inherits", () => {
+      // A body declares a shape in its own field or not at all. Taking an
+      // inherited one would have every reader pass over an object that is
+      // not a manifest, and a reader that passes over its whole store
+      // reports nothing where it should report a fault.
+      const polluted = Object.prototype as unknown as { schema?: number };
+      polluted.schema = MANIFEST_SCHEMA_VERSION + 1;
+      try {
+        expect(declaredSchema(JSON.parse('{"not":"a manifest"}')))
+          .toBeUndefined();
+        expect(writtenAhead(JSON.parse('{"not":"a manifest"}'))).toBe(false);
+      } finally {
+        delete polluted.schema;
+      }
+    });
+  });
+
+  describe("writtenAhead()", () => {
+    it("is true only of a shape past the one this reader is built for", () => {
+      expect(writtenAhead({ schema: MANIFEST_SCHEMA_VERSION + 1 })).toBe(true);
+      expect(writtenAhead({ schema: MANIFEST_SCHEMA_VERSION })).toBe(false);
+      expect(writtenAhead({ schema: MANIFEST_SCHEMA_VERSION - 1 })).toBe(false);
+      expect(writtenAhead({})).toBe(false);
     });
   });
 

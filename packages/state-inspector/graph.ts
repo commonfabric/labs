@@ -27,6 +27,7 @@ import {
   type ModuleEntry,
   type ScanExtent,
   scanLimit,
+  spaceDocumentReader,
   visibleEntityRows,
 } from "./model.ts";
 
@@ -185,8 +186,10 @@ export function buildSpaceGraph(
     return key;
   };
 
+  const readSpaceDocument = spaceDocumentReader(space, { branch, scope });
+  const readDocument = (id: string) => docs.get(id) ?? readSpaceDocument(id);
   for (const [id, doc] of docs) {
-    const m = modelFromDocument(doc, { id, scope, moduleIndex });
+    const m = modelFromDocument(doc, { id, scope, moduleIndex, readDocument });
     nodes.set(id, {
       id,
       entityId: id,
@@ -197,7 +200,7 @@ export function buildSpaceGraph(
   }
 
   for (const [id, doc] of docs) {
-    const c = classifyDocument(doc);
+    const c = classifyDocument(doc, { id, readDocument });
     // pattern: piece → module (resolve patternIdentity via the module index;
     // classifyDocument leaves moduleId unset — that's modelFromDocument's job).
     const moduleId = c.lineage.pattern

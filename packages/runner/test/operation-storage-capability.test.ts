@@ -74,6 +74,7 @@ describe("operation storage capability", () => {
                 close: () => Promise.resolve(),
               } as unknown as MemoryV2Client.Client;
               const session = {
+                subscribeAccessLoss: () => () => {},
                 watchAddSync: () => {
                   watchAdds++;
                   return Promise.resolve({
@@ -193,6 +194,7 @@ describe("operation storage capability", () => {
                 close: () => Promise.resolve(),
               } as unknown as MemoryV2Client.Client;
               const session = {
+                subscribeAccessLoss: () => () => {},
                 watchAddSync: () => {
                   additions++;
                   if (sessionNumber === 1) {
@@ -309,6 +311,7 @@ describe("operation storage capability", () => {
                   close: () => Promise.resolve(),
                 } as unknown as MemoryV2Client.Client,
                 session: {
+                  subscribeAccessLoss: () => () => {},
                   watchAddSync: () => Promise.reject(new Error("watch failed")),
                 } as unknown as MemoryV2Client.SpaceSession,
               }),
@@ -395,7 +398,9 @@ describe("operation storage capability", () => {
             create: () =>
               Promise.resolve({
                 client: unsupportedClient,
-                session: {} as MemoryV2Client.SpaceSession,
+                session: {
+                  subscribeAccessLoss: () => () => {},
+                } as unknown as MemoryV2Client.SpaceSession,
               }),
           },
         );
@@ -416,6 +421,7 @@ describe("operation storage capability", () => {
       close: () => Promise.resolve(),
     } as unknown as MemoryV2Client.Client;
     const session = {
+      subscribeAccessLoss: () => () => {},
       transact: () => Promise.resolve({}),
     } as unknown as MemoryV2Client.SpaceSession;
     const storage = new (class extends V2StorageManager {
@@ -463,6 +469,7 @@ describe("operation storage capability", () => {
     const view = MemoryV2Client.WatchView.fromSync(sync);
     let attempts = 0;
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => {
         attempts++;
         if (attempts === 1) return Promise.reject(new Error("watch failed"));
@@ -605,6 +612,7 @@ describe("operation storage capability", () => {
     };
     let removalCount = 0;
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: (_watches: WatchSpec[]) =>
         Promise.resolve({ view, sync, precedingSyncs: [] }),
       watchRemoveSync: (watchIds: readonly string[]) => {
@@ -717,6 +725,7 @@ describe("operation storage capability", () => {
     });
     let additions = 0;
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => {
         additions++;
         return Promise.resolve(
@@ -808,6 +817,7 @@ describe("operation storage capability", () => {
     const additionStarted = defer<void>();
     const lateAdditionView = MemoryV2Client.WatchView.fromSync(sync);
     const addingStorage = createStorage({
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => {
         additionStarted.resolve();
         return addition.promise;
@@ -837,6 +847,7 @@ describe("operation storage capability", () => {
     const activeView = MemoryV2Client.WatchView.fromSync(sync);
     const lateRemovalView = MemoryV2Client.WatchView.fromSync(sync);
     const removingStorage = createStorage({
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () =>
         Promise.resolve({ view: activeView, sync, precedingSyncs: [] }),
       watchRemoveSync: () => removal.promise,
@@ -869,6 +880,7 @@ describe("operation storage capability", () => {
     };
     const view = MemoryV2Client.WatchView.fromSync(sync);
     const session = {
+      subscribeAccessLoss: () => () => {},
       watchAddSync: () => Promise.resolve({ view, sync, precedingSyncs: [] }),
       watchRemoveSync: () => Promise.reject(new Error("remove failed")),
     } as unknown as MemoryV2Client.SpaceSession;

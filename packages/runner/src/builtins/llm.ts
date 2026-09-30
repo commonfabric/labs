@@ -4,12 +4,8 @@ import {
   BuiltInLLMMessage,
   BuiltInLLMParams,
 } from "@commonfabric/api";
-import { cfcAtom } from "@commonfabric/api/cfc";
 import type { Schema } from "@commonfabric/api/schema";
-import {
-  internSchema,
-  toDeepFrozenSchema,
-} from "@commonfabric/data-model-schema";
+import { toDeepFrozenSchema } from "@commonfabric/data-model-schema";
 import { hashOf } from "@commonfabric/data-model";
 import {
   DEFAULT_GENERATE_OBJECT_MODEL,
@@ -29,7 +25,7 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { CellScope, JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import { cfcLabelViewForCellFailClosed } from "../cfc/label-view.ts";
@@ -53,7 +49,6 @@ import {
 } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
-import { mapSubschemas } from "../schema-walk.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { llmToolExecutionHelpers } from "./llm-dialog.ts";
 import {
@@ -61,12 +56,16 @@ import {
   GenerateObjectResultSchema,
   GenerateTextParamsSchema,
   GenerateTextResultSchema,
-  LLM_DERIVED_RESULT_STAMP_SCHEMA,
   LLMParamsSchema,
   LLMResultSchema,
   LLMToolSchema,
 } from "./llm-schemas.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
+import {
+  LLM_DERIVED_RESULT_STAMP_SCHEMA,
+  withLlmDerivedStamp,
+} from "../cfc/llm-derived-stamp.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("llm", {
   enabled: true,
@@ -115,7 +114,7 @@ function attributeModelOutputWrite(
   builtinId: string,
 ): void {
   if (runtime.cfcEnforcementMode === "disabled") return;
-  tx.setCfcImplementationIdentity({ kind: "builtin", builtinId });
+  setCfcImplementationIdentity(tx, { kind: "builtin", builtinId });
 }
 
 /**
@@ -134,68 +133,6 @@ function setStampedModelOutput(
     ? resultCell.key(field)
     : resultCell.key(field).asSchema(LLM_DERIVED_RESULT_STAMP_SCHEMA);
   cell.withTx(tx).set(value);
-}
-
-/** Merge `LlmDerived` into one schema node's `ifc.addIntegrity`, idempotently. */
-function mergeLlmDerivedIntoNode(
-  node: Record<string, unknown>,
-): Record<string, unknown> {
-  const ifc = isObjectOrArray(node.ifc) ? node.ifc : {};
-  const addIntegrity = Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : [];
-  const stamp = cfcAtom.llmDerived();
-  const already = addIntegrity.some((atom) =>
-    isObjectOrArray(atom) && isObjectOrArray(stamp) && atom.type === stamp.type
-  );
-  return {
-    ...node,
-    ifc: {
-      ...ifc,
-      addIntegrity: already ? addIntegrity : [...addIntegrity, stamp],
-    },
-  };
-}
-
-/**
- * Deep-merge the `LlmDerived` stamp into every object subschema in a
- * generateObject result schema. Storage-addressable nodes (properties,
- * additional properties, items / prefix items, compound branches, and `$defs`
- * targets) need the stamp so it rides the possibly custom / injection-safe
- * resultSchema to wherever the model bytes land, whether inline at `["result"]`
- * or in a SPLIT CHILD DOCUMENT. The shared walker's complete vocabulary is
- * stamped too: this runs once per model result, so defensive completeness for
- * caller-supplied schemas has no noticeable cost and preserves provenance if
- * more keywords become storage-addressable later.
- *
- * A root-only merge is not enough: when a nested value redirects/splits into its
- * own document (an `asCell` field, an ID-anchored array item), the child write
- * descends via `ContextualFlowControl.getSchemaAtPath`, which carries ancestor
- * confidentiality but NOT `ifc.addIntegrity`. The child doc that stores the
- * model bytes would then persist as unstamped/ordinary output and the D1b
- * provenance guarantee would be lost for structured results (codex P1). Stamping
- * every node keeps `getSchemaAtPath` at any split-child path carrying the mark,
- * so `walkIfcSchema` mints the `LlmDerived` labelMap entry on that child doc too.
- *
- * The merge is idempotent (an injection-safe schema that already carries the
- * stamp on a node is left unchanged). The recursion follows the finite, acyclic
- * JSON-Schema tree — `$ref` is a string this function does not dereference, so a
- * recursive `$defs` self-reference is a leaf here — and the result is interned.
- * An absent resultSchema defaults to a plain object schema.
- */
-function withLlmDerivedStamp(schema: JSONSchema | undefined): JSONSchema {
-  // Stamp this node, then every structural subschema, including `$defs` and the
-  // keywords our generators do not currently emit. `$ref` is a string, not a
-  // subschema, so a `$defs` self-reference stays a leaf.
-  const stampNode = (node: Record<string, unknown>): JSONSchema =>
-    mapSubschemas(
-      mergeLlmDerivedIntoNode(node) as JSONSchemaObj,
-      (child) => (isObjectOrArray(child) ? stampNode(child) : child),
-      { includeDefs: true, includeUnused: true },
-    );
-
-  const base: Record<string, unknown> = isObjectOrArray(schema)
-    ? schema
-    : { type: "object" };
-  return internSchema(stampNode(base));
 }
 
 /**
@@ -1047,7 +984,6 @@ export function llm(
       )
       : undefined;
 
-    const thisRun = ++state.currentRun;
     const pendingWithLog = resultCell.key("pending").withTx(tx);
     const resultWithLog = resultCell.key("result").withTx(tx);
     const errorWithLog = resultCell.key("error").withTx(tx);
@@ -1090,13 +1026,15 @@ export function llm(
       | undefined;
 
     // Return if the same request is being made again, either concurrently (same
-    // as state.previousCallHash) or when rehydrated from storage (same as the
-    // contents of the requestHash doc).
+    // as state.previousCallHash) or already settled (same as the contents of
+    // the requestHash doc, with its result or error landed). A stored hash with
+    // neither belongs to a request that was cleared away, and the same
+    // messages are a new one.
     const currentRequestHash = requestHashWithLog.get();
     if (
       (!served && hash === state.previousCallHash) ||
-      (hash === currentRequestHash && (!served ||
-        resultWithLog.get() !== undefined || errorWithLog.get() !== undefined))
+      (hash === currentRequestHash &&
+        (resultWithLog.get() !== undefined || errorWithLog.get() !== undefined))
     ) {
       // The §4 memo hit, gated on SETTLED state like the sibling
       // builtins (generateText/generateObject; round-2 thread 8): a
@@ -1118,6 +1056,18 @@ export function llm(
     }
 
     if (!Array.isArray(messages) || messages.length === 0) {
+      // Abandon a request already in flight, where abandoning one is possible.
+      // Advancing the run makes its response fail the guard on the way back, so
+      // nothing of it reaches the cell, and dropping the remembered hash lets
+      // the same messages go out again rather than match the in-flight check
+      // and never be sent. A queued request is neither of those: the queue
+      // owns its lifecycle and runs it to completion, so forgetting its hash
+      // would enqueue a second copy of a call that is still going to arrive.
+      // The mode is the one the request in flight was issued under.
+      if (!state.lastRequestQueued) {
+        state.currentRun++;
+        state.previousCallHash = undefined;
+      }
       resultWithLog.set(undefined);
       errorWithLog.set(undefined);
       partialWithLog.set(undefined);
@@ -1137,6 +1087,13 @@ export function llm(
       },
       () => state.lastRequestQueued = previousRequestQueued,
     );
+
+    // The generation the plain path's cancellation token compares against. A
+    // run advances it only once it issues a request; a re-evaluation that
+    // finds this request in flight has returned above and leaves it alone.
+    // The batched partial's own commit is one such re-evaluation — this node
+    // read `partial` in resetting it — and is not a newer request.
+    const thisRun = ++state.currentRun;
 
     resultWithLog.set(undefined);
     errorWithLog.set(undefined);
@@ -1216,6 +1173,12 @@ export function llm(
         requestGuard,
         lifecycle?.owns,
       );
+
+    // The ending for a request refused before it started.
+    const settleRefused = (error: Error) => {
+      cleanupPartial();
+      return settleAbandoned(error);
+    };
 
     // Build tool catalog if tools are present, then start execution after the
     // transaction commits.
@@ -1307,10 +1270,7 @@ export function llm(
 
         return resultPromise.catch(settleWithError);
       },
-      (error) => {
-        cleanupPartial();
-        return settleAbandoned(error);
-      },
+      settleRefused,
       lifecycle,
     );
   };
@@ -1694,6 +1654,12 @@ export function generateText(
         lifecycle?.owns,
       );
 
+    // The ending for a request refused before it started.
+    const settleRefused = (error: Error) => {
+      cleanupPartial();
+      return settleAbandoned(error);
+    };
+
     enqueuePostCommitLLMWork(
       tx,
       runtime,
@@ -1775,10 +1741,7 @@ export function generateText(
 
         return resultPromise.catch(settleWithError);
       },
-      (error) => {
-        cleanupPartial();
-        return settleAbandoned(error);
-      },
+      settleRefused,
       lifecycle,
     );
   };
@@ -2227,6 +2190,12 @@ export function generateObject<T extends Record<string, unknown>>(
           lifecycle?.owns,
         );
 
+      // The ending for a request refused before it started.
+      const settleRefused = (error: Error) => {
+        cleanupPartial();
+        return settleAbandoned(error);
+      };
+
       logGenerateObject("enqueue", toolsRequestSummary);
 
       enqueuePostCommitLLMWork(
@@ -2427,7 +2396,7 @@ export function generateObject<T extends Record<string, unknown>>(
                 // the persist-time evidence gate trusts them (audit S4). The
                 // same attribution keeps the D1b LlmDerived stamp merged into
                 // the result schema root below.
-                tx.setCfcImplementationIdentity({
+                setCfcImplementationIdentity(tx, {
                   kind: "builtin",
                   builtinId: "generateObject",
                 });
@@ -2462,10 +2431,7 @@ export function generateObject<T extends Record<string, unknown>>(
 
           return resultPromise.catch(settleWithError);
         },
-        (error) => {
-          cleanupPartial();
-          return settleAbandoned(error);
-        },
+        settleRefused,
         lifecycle,
       );
     } else {
@@ -2740,7 +2706,7 @@ export function generateObject<T extends Record<string, unknown>>(
                 // so the persist-time evidence gate trusts them (audit S4).
                 // The same attribution keeps the D1b LlmDerived stamp merged
                 // into the result schema root below.
-                tx.setCfcImplementationIdentity({
+                setCfcImplementationIdentity(tx, {
                   kind: "builtin",
                   builtinId: "generateObject",
                 });
@@ -2776,9 +2742,7 @@ export function generateObject<T extends Record<string, unknown>>(
             })
             .catch(settleWithError);
         },
-        (error) => {
-          return settleAbandoned(error);
-        },
+        settleAbandoned,
         lifecycle,
       );
     }

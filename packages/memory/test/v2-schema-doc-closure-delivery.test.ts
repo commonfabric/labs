@@ -37,13 +37,13 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
-import { taggedHashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
   collectExternalSchemaRefHashes,
   collectSchemaMetaRefHashes,
-} from "../../runner/src/schema-decompose.ts";
-import { isSubschema } from "../../runner/src/schema-walk.ts";
+} from "@commonfabric/data-model-schema/schema-refs";
+import { taggedHashStringOf } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { mapLinkSchemas } from "../v2/schema-table-links.ts";
 import { Server } from "../v2/server.ts";
 import {

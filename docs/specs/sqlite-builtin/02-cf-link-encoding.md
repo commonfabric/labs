@@ -138,6 +138,31 @@ The decoded `Cell` is a normal reactive cell: reading it later subscribes to
 *its* contents independently of the SQL query's own reactivity (Section
 [05](./05-reactivity.md)).
 
+Typed query decoding acquires each address with the SQL row and column
+confidentiality. The result contract version participates in the request hash,
+so a cached result from a different contract triggers a fresh SQL read. Existing
+row documents can be reused only when their bytes match that authenticated SQL
+result; ordinary CFC checks retain their stored restrictions. Target content labels remain on the target and apply when it
+is read. Query selection confidentiality protects the result-to-row slot.
+Each confidential reference is materialized in its own transaction under its
+row and column policy. A scaffold holds the non-reference columns at the row's
+salted, content-and-policy identity; reference fields remain null until their
+acquisitions commit. An existing complete row retains its content throughout a
+reissue. These internal stages retain the query's scoped effect identity and
+check that the request is current before writing. The serving outbox retains
+the effect carriage until the entire materialization and publication settle
+and every completion commit is readable. A pending result after a serving
+restart reissues its SQL read and resumes matching unpublished scaffolds.
+
+One final transaction publishes the result references and settled control state.
+Required authorization reads verify each row's exact decoded bytes and complete
+reference-acquisition metadata before publication. A stale request stops; a
+failed stage reports an error without publishing partial rows. Target content is
+never read by materialization, and acquiring one field does not add its column
+confidentiality to another field or row. Result membership keeps the query's
+selection and aggregate output labels described in [06](./06-cfc.md).
+
+
 ## Why a naming convention rather than schema-only
 
 The `*_cf_link` suffix makes the contract legible directly in SQL and in raw

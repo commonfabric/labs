@@ -1,7 +1,7 @@
 /** Validates session-owned view interests at the Memory protocol boundary. */
 
 import { cloneIfNecessary } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
   DEFAULT_BRANCH,
@@ -13,22 +13,22 @@ import {
 /** Parses a live query; explicit foreign instances and historical reads refuse. */
 export function parseViewQuery(value: unknown): ViewQuery | null {
   if (
-    !isObjectNotArray(value) || !Array.isArray(value.roots) ||
+    !isPlainObject(value) || !Array.isArray(value.roots) ||
     value.atSeq !== undefined || value.excludeSent !== undefined ||
     (value.branch !== undefined && value.branch !== DEFAULT_BRANCH)
   ) return null;
   for (const root of value.roots) {
     if (
-      !isObjectNotArray(root) || typeof root.id !== "string" ||
+      !isPlainObject(root) || typeof root.id !== "string" ||
       root.id.length === 0 ||
       root.entityScopeKey !== undefined ||
       (root.scope !== undefined && root.scope !== "space" &&
         root.scope !== "user" && root.scope !== "session") ||
-      !isObjectNotArray(root.selector) || !Array.isArray(root.selector.path) ||
+      !isPlainObject(root.selector) || !Array.isArray(root.selector.path) ||
       !root.selector.path.every((part) => typeof part === "string") ||
       !(root.selector.schema === undefined ||
         typeof root.selector.schema === "boolean" ||
-        isObjectNotArray(root.selector.schema))
+        isPlainObject(root.selector.schema))
     ) return null;
   }
   return cloneIfNecessary(value as ViewQuery, { frozen: false });
@@ -44,7 +44,7 @@ export function parseViewInterests(
   const result: ViewInterest[] = [];
   for (const view of value) {
     if (
-      !isObjectNotArray(view) || typeof view.id !== "string" ||
+      !isPlainObject(view) || typeof view.id !== "string" ||
       view.id.length === 0 ||
       ids.has(view.id) || !Number.isSafeInteger(view.revision) ||
       (view.revision as number) < 0 ||

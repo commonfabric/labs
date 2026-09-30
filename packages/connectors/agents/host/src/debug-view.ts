@@ -17,9 +17,17 @@ import {
   deepEqual,
   type Pattern,
 } from "@commonfabric/runner";
+import { applyCfcPolicyToExistingValue } from "@commonfabric/runner/cfc/policy-application";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import type { AgentsHostTargetDescription } from "./host.ts";
+import {
+  commandWriterAuthorization,
+  recordValue,
+} from "./command-authorization.ts";
+import type { BoundCommandProducer } from "./command-producers.ts";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 
 const AGENT_SESSIONS_DEBUG_CAUSE_PREFIX = "agent-sessions-debug";
 const SHALLOW_PIECE_LINK_LIST_SCHEMA = internSchema({
@@ -32,30 +40,6 @@ const SHALLOW_DEBUG_PIECE_SCHEMA = internSchema({
   properties: {},
 });
 
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-export function debugCommandWriterAuthorization(
-  pattern: Pattern,
-): unknown | undefined {
-  const root = recordValue(pattern.resultSchema);
-  const properties = recordValue(root?.properties);
-  let authorization = recordValue(properties?.commandAuthorization);
-  const reference = authorization?.$ref;
-  if (typeof reference === "string" && reference.startsWith("#/$defs/")) {
-    const definitions = recordValue(root?.$defs);
-    authorization = recordValue(
-      definitions?.[decodeURIComponent(reference.slice("#/$defs/".length))],
-    );
-  }
-  const ifc = recordValue(authorization?.ifc);
-  const writers = ifc?.writeAuthorizedBy;
-  return writers === null ? undefined : writers;
-}
-
 async function protectOwnerDebugCells(
   manager: PiecesController,
   cells: readonly Cell<unknown>[],
@@ -63,7 +47,7 @@ async function protectOwnerDebugCells(
   expectedDocuments?: ReadonlyMap<Cell<unknown>, unknown>,
 ): Promise<void> {
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -76,8 +60,9 @@ async function protectOwnerDebugCells(
       ) {
         throw new Error("debug view changed before owner protection");
       }
-      cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid))
-        .applyCfcSchemaToExistingValue();
+      applyCfcPolicyToExistingValue(
+        cell.withTx(tx).asSchema(agentOwnerSchema(ownerDid)),
+      );
     }
     tx.prepareCfc();
   } catch (error) {
@@ -317,9 +302,7 @@ function asDebugRegistration(
   value: FabricValue,
 ): DebugRegistration | undefined {
   if (value === undefined) return undefined;
-  if (
-    typeof value !== "object" || value === null || Array.isArray(value)
-  ) {
+  if (!isObjectNotArray(value)) {
     throw new Error("debug view registration is malformed");
   }
   const candidate = value as unknown as Record<string, unknown>;
@@ -428,7 +411,7 @@ async function debugRegistration(
   );
   await syncDocumentRoot(manager, registration);
   const tx = manager.runtime.edit();
-  tx.setCfcImplementationIdentity({
+  setCfcImplementationIdentity(tx, {
     kind: "builtin",
     builtinId: AGENT_CONNECTOR_WRITER_ID,
   });
@@ -442,8 +425,9 @@ async function debugRegistration(
         `refusing to adopt an unprotected debug registration for ${ownerDid}`,
       );
     }
-    protectedRegistration.asSchema(agentOwnerSchema(ownerDid))
-      .applyCfcSchemaToExistingValue();
+    applyCfcPolicyToExistingValue(
+      protectedRegistration.asSchema(agentOwnerSchema(ownerDid)),
+    );
     tx.prepareCfc();
   } catch (error) {
     tx.abort(error);
@@ -601,7 +585,7 @@ async function registerDebugPiece(
     throw error;
   }
   const privateUpdate = await manager.runtime.editWithRetry((tx) => {
-    tx.setCfcImplementationIdentity({
+    setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: AGENT_CONNECTOR_WRITER_ID,
     });
@@ -692,7 +676,7 @@ async function registerDebugPiece(
       }
     }
     const registrationRollback = await manager.runtime.editWithRetry((tx) => {
-      tx.setCfcImplementationIdentity({
+      setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: AGENT_CONNECTOR_WRITER_ID,
       });
@@ -831,14 +815,11 @@ async function deployAgentSessionsDebugViewNow(
     pattern,
   );
   if (!patternRef) throw new Error("debug view pattern has no identity");
-  const commandWriterAuthorization = debugCommandWriterAuthorization(pattern);
-  if (commandWriterAuthorization === undefined) {
+  const writerAuthorization = commandWriterAuthorization(pattern);
+  if (writerAuthorization === undefined) {
     throw new Error("debug view has no verified command writer authorization");
   }
-  await target.bindCommandCell(
-    target.cells.commands,
-    commandWriterAuthorization,
-  );
+  await target.bindCommandCell(target.cells.commands, writerAuthorization);
   const cause = debugPieceCause(target.conn.ownerDid, patternRef);
   const setupArguments = {
     ownerDid: target.conn.ownerDid,
@@ -974,11 +955,15 @@ export function describeAgentFabricTarget(
   target: AgentFabricTarget,
   spaceDid: string,
   debugPieceId?: string,
+  commandProducers: readonly BoundCommandProducer[] = [],
 ): AgentsHostTargetDescription {
   return {
     spaceDid,
     ownerDid: target.conn.ownerDid,
     ...(debugPieceId ? { debugPieceId } : {}),
+    ...(commandProducers.length > 0
+      ? { commandProducers: [...commandProducers] }
+      : {}),
     cells: {
       recentIndex: stableCellId(target.cells.index),
       allIndex: stableCellId(target.cells.allIndex),

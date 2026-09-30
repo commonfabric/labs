@@ -56,7 +56,7 @@ describe("Path operations", () => {
       expect(changed).toBe(false);
     });
 
-    it("is Fabric-aware: a differing FabricBytes is a real change (CT-1770)", () => {
+    it("is Fabric-aware: a differing `FabricBytes` is a real change", () => {
       // Two distinct `FabricBytes` differing only in their (private `#fields`)
       // byte content: a real change, not a no-op, so the write must happen and
       // `true` be returned.

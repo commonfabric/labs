@@ -3,7 +3,7 @@
 import type { JSONSchema } from "@commonfabric/api";
 import type { ScopeKeyIdentity, ViewInterest } from "@commonfabric/memory/v2";
 import { PathKeyMap } from "@commonfabric/utils/path-key-map";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { type Cell, deepTraverse, isCell } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
@@ -91,7 +91,7 @@ export function collectViewRenderReads(
         } else if (isCell(prop)) {
           readProperty(prop.withTx(tx), schema ?? true);
         } else if (
-          name !== "style" && prop !== null && typeof prop === "object"
+          name !== "style" && isObjectOrArray(prop)
         ) {
           // The worker renderer deep-resolves ordinary object/array props.
           if (propsCell !== undefined) readProperty(propsCell.key(name), true);

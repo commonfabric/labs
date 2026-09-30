@@ -26,7 +26,12 @@ import type {
   HarnessToolActivity,
 } from "../../src/contracts/run-report.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
-import type { HarnessTranscriptOmissions } from "../../src/contracts/transcript-omissions.ts";
+import { createToolOutputId } from "../../src/contracts/tool-result.ts";
+import {
+  annotateHarnessUserResultOmissions,
+  createHarnessTranscriptOmissions,
+  type HarnessTranscriptOmissions,
+} from "../../src/contracts/transcript-omissions.ts";
 import type { HarnessRunState } from "../../src/run-state.ts";
 import {
   type AuditCheck,
@@ -909,6 +914,54 @@ describe("structural", () => {
   });
 
   describe("AUD-20 omission accounting", () => {
+    it("requires an exact omission entry for a host-carried research result", () => {
+      const message = annotateHarnessUserResultOmissions({
+        role: "user",
+        content: "Opening research handoff.",
+        toolResultProvenance: {
+          type: "cf-harness.tool-result-provenance",
+          toolCallId: "opening-research",
+          toolId: "research",
+          outputId: createToolOutputId(RUN_ID, "research", 1),
+        },
+      }, [{
+        rule: "artifact-only",
+        locations: [{
+          artifactPath: "tool-outputs/research.json",
+          jsonPointer: "/researchRecord",
+        }],
+      }]);
+      const transcript = [message];
+      const omissions = createHarnessTranscriptOmissions(transcript);
+      const valid = inspect("AUD-20", {
+        transcript,
+        transcriptOmissions: omissions,
+      });
+      const missing = inspect("AUD-20", {
+        transcript,
+        transcriptOmissions: { ...omissions, results: [] },
+      });
+      const mismatched = inspect("AUD-20", {
+        transcript,
+        transcriptOmissions: {
+          ...omissions,
+          results: omissions.results.map((entry) => ({
+            ...entry,
+            toolCallId: "another-call",
+          })),
+        },
+      });
+
+      expect(valid.verdict).toBe("pass");
+      expect(valid.message).toContain("`artifact-only` 1");
+      expect(missing.verdict).toBe("fail");
+      expect(detailsOf(missing)).toContain("maps to 0 omission entries");
+      expect(mismatched.verdict).toBe("fail");
+      expect(detailsOf(mismatched)).toContain(
+        "result identity does not match its transcript message",
+      );
+    });
+
     it("counts each recorded omission rule", () => {
       const outcome = inspect("AUD-20", {
         transcript: [{ role: "user", content: "Run it." }, {

@@ -73,7 +73,8 @@ import {
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
 import { readWatermarkSeq as readWatermark } from "../src/executor/watermark.ts";
-import { waitUntil } from "./support/wait-until.ts";
+
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 const spaceSigner = await Identity.fromPassphrase("arrival gate space");
 const space = spaceSigner.did() as MemorySpace;
@@ -281,9 +282,11 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     await alice.idle();
     await alice.storageManager.synced();
     // The ECHO: the client's speculative run rendered it, with NO server.
-    await waitUntil(
-      () => result.key("echo").get() === "echo:A",
-      "the speculative echo to render",
+    await waitForCellValue<string>(
+      alice,
+      result.key("echo"),
+      (echo) => echo === "echo:A",
+      { stuckLabel: "the speculative echo of A to render" },
     );
     const overlay = alice.speculationOverlay!;
     expect(overlay.entryCount(space)).toBeGreaterThanOrEqual(1);
@@ -296,9 +299,11 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     await pushWatermark(writer, coverSeq);
     await alice.idle();
     await alice.storageManager.synced();
-    // Give a would-be loop time to show itself (pre-fix: ~80 ms cycles,
-    // MAX_ITERS per pass, then backoff — dozens of runs in this window).
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // A would-be loop shows itself in the pass this drains, not over a
+    // window: retire-to-nothing re-runs the lift, which re-speculates,
+    // which the same sweep retires again — scheduler work, so the pass
+    // runs it to the non-settling guard's cap. Dozens of runs against
+    // the bound of two below, and `isNonSettling` goes true with them.
     await alice.idle();
 
     // THE GATE: the echo stays — the entry is live, the client value
@@ -368,32 +373,24 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = aliceAgain.edit();
       authoritative.withTx(tx).set("echo:server" as never);
       authoritativeSlot.withTx(tx).set(
-        {
-          "/": {
-            "link@1": {
-              id: echoDocId,
-              overwrite: "redirect",
-              path: [],
-              scope: "user",
-            },
-          },
-        } as never,
+        authoritative.withTx(tx).getAsWriteRedirectLink() as never,
       );
       expect((await tx.commit()).error).toBeUndefined();
     }
     await aliceAgain.storageManager.synced();
     const runsBeforeArrival = echoRunCount(alice);
     await pushWatermark(writer, Engine.serverSeq(engine));
-    await waitUntil(
-      () => overlay.entryCount(space) === 0,
-      "the entry to retire on arrival",
+    // Retirement is what reveals the authoritative value, so the render
+    // is the retirement's own edge; the entry count reads it back.
+    await waitForCellValue<string>(
+      alice,
+      result.key("echo"),
+      (echo) => echo === "echo:server",
+      { stuckLabel: "the server's echo to replace the speculative one" },
     );
-    await waitUntil(
-      () => result.key("echo").get() === "echo:server",
-      "the authoritative value to render",
-    );
-    await alice.idle();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(overlay.entryCount(space)).toBe(0);
+    // A re-speculate/re-retire loop would be scheduler work off the same
+    // flip, and this pass runs it to the non-settling cap.
     await alice.idle();
     // The flip to the (divergent) authoritative value did not start a
     // re-speculate/re-retire loop: no re-derivation, no live entry, the
@@ -611,19 +608,22 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     }
     await alice.idle();
     await alice.storageManager.synced();
-    await waitUntil(
-      () => result.key("echo").get() === "echo:A",
-      "the speculative echo to render",
+    await waitForCellValue<string>(
+      alice,
+      result.key("echo"),
+      (echo) => echo === "echo:A",
+      { stuckLabel: "the speculative echo of A to render" },
     );
     const overlay = alice.speculationOverlay!;
     expect(overlay.entryCount(space)).toBeGreaterThanOrEqual(1);
 
     // W covers the basis; the instance is unserved → the entry stands.
+    // A retirement would ride the watermark push this flushes, and the
+    // sweep it schedules is work the drain below runs.
     const writer = openClient(spaceSigner);
     await pushWatermark(writer, Engine.serverSeq(engine));
-    await alice.idle();
     await alice.storageManager.synced();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await alice.idle();
     expect(overlay.entryCount(space)).toBeGreaterThanOrEqual(1);
     expect(result.key("echo").get()).toBe("echo:A");
     const arrivalSweepsBefore = overlay.arrivalSweepCount;
@@ -670,16 +670,7 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
       const tx = aliceAgain.edit();
       authoritative.withTx(tx).set("echo:server" as never);
       authoritativeSlot.withTx(tx).set(
-        {
-          "/": {
-            "link@1": {
-              id: echoDocId,
-              overwrite: "redirect",
-              path: [],
-              scope: "user",
-            },
-          },
-        } as never,
+        authoritative.withTx(tx).getAsWriteRedirectLink() as never,
       );
       expect((await tx.commit()).error).toBeUndefined();
     }
@@ -687,16 +678,13 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     // The arrival's seq is above W and W does not move.
     expect(Engine.serverSeq(engine)).toBeGreaterThan(watermarkAtArrival);
     // THE PIN: retired and rendered off the arrival alone.
-    await waitUntil(
-      () => overlay.entryCount(space) === 0,
-      "the entry to retire on the decoupled arrival",
-      10_000,
+    await waitForCellValue<string>(
+      alice,
+      result.key("echo"),
+      (echo) => echo === "echo:server",
+      { stuckLabel: "the server's echo to replace the speculative one" },
     );
-    await waitUntil(
-      () => result.key("echo").get() === "echo:server",
-      "the authoritative value to render",
-      10_000,
-    );
+    expect(overlay.entryCount(space)).toBe(0);
     expect(overlay.arrivalSweepCount).toBeGreaterThan(arrivalSweepsBefore);
     expect(readWatermark(engine)).toBe(watermarkAtArrival);
     await alice.idle();
@@ -1575,10 +1563,13 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     // The stored-cid entries retire (the identity witness; without it
     // their covers sit below the floor forever and this wait times
     // out); the unstored entry is the one that must remain.
-    await waitUntil(
-      () => destination.entryCount(space) === 1,
-      "the stored-cid speculations to retire",
+    await waitForCellValue<{ v: string }>(
+      alice,
+      cellFor(alice, divergentId),
+      (value) => value?.v === "stored",
+      { stuckLabel: "the divergent cell to render its stored value" },
     );
+    expect(destination.entryCount(space)).toBe(1);
     expect(cellFor(alice, identicalId).get()?.v).toBe("stored");
     // THE PIN: the store wins — retirement replaced the divergent
     // speculative bytes with the immutable stored value.

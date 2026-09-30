@@ -26,6 +26,18 @@
 // reads keep the connection and the values they have always had: widening
 // them is a change to every consumer's data, which belongs to its own
 // change rather than riding in on a labeling fix.
+//
+// Both modes open with `parseJson: false`, so TEXT arrives as the text SQLite
+// holds. `@db/sqlite` otherwise parses a TEXT column that carries SQLite's
+// JSON subtype into a JS object or array. The JSON functions attach that
+// subtype to what they return (`json_object`, `json_group_array`, `json()`,
+// `->`, `json_extract` of a container path), and it belongs to the query plan
+// rather than to the statement: a sorter, a materialized subquery, and a CTE
+// each drop it. One statement would hand its consumer a string under one plan
+// and an object under another, and a consumer whose `Row` type says `string`
+// never runs on the object. A query's `Row` type is what decodes a column, as
+// it does for a `_cf_link`, so a JSON function's text reaches it as text under
+// every plan.
 
 import { Database } from "@db/sqlite";
 import type { SqliteNativeRow } from "../../v2.ts";
@@ -59,7 +71,11 @@ export class ReadConnectionPool {
       this.#byPath.set(key, existing);
       return existing;
     }
-    const db = new Database(path, { readonly: true, int64 });
+    const db = new Database(path, {
+      readonly: true,
+      int64,
+      parseJson: false,
+    });
     // Match the engine connection's busy_timeout (engine.ts PRAGMAS). A pooled
     // read uses a SEPARATE OS connection from the writer's engine connection, so
     // a read that races a writer holding the file lock (another process over the

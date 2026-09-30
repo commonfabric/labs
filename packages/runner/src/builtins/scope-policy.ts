@@ -6,10 +6,7 @@ import type { CellScope } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawNodeCause } from "../module.ts";
 import { readMaybeLink, resolveLink } from "../link-resolution.ts";
-import {
-  linkResolutionProbe,
-  machineryRead,
-} from "../storage/reactivity-log.ts";
+import { machineryRead } from "../storage/reactivity-log.ts";
 import { narrowestScope, scopeRank } from "../scope.ts";
 import { createSigilLinkFromParsedLink, getMetaLink } from "../link-utils.ts";
 import { rawMetaWriteAuthorization } from "../meta-seam.ts";
@@ -128,7 +125,7 @@ export function exposedResultCell<T>(
   // Resolve topology without reading a scalar result's content. Observing
   // the value here would subscribe the list coordinator to every child value.
   const link = tx.runWithAmbientReadMeta(
-    { ...linkResolutionProbe, ...machineryRead },
+    machineryRead,
     () => readMaybeLink(tx, target) ?? target,
   );
   if (

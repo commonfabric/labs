@@ -1,14 +1,16 @@
 /**
  * The exemplar member of a named collection: a title, a body, a filing time,
- * and the name its board calls it by. The name is not the item's to hold — it
- * lives in the board's namespace — so the item reads its own row out of the
- * board's names table by identity, and an item no board has named shows no
- * name and needs nothing else. The body is edited through `cf-code-editor`,
- * which completes `#42` over the board's mention universe and mints a
- * reference-form mention into the item's own map. The prose and that map are
- * drafted per session and written together by one save, because a body is a
- * single string with whole-value conflict semantics and a live-bound editor on
- * one would conflict per keystroke.
+ * and the name its board calls it by. The board allocates the name in the
+ * transaction that creates the item and passes it in, and the item stores it
+ * with the rest of its input. A name is permanent and never reused, so the
+ * stored copy is the name the board's namespace holds for the item, and the
+ * item reads nothing of its board to show it. An item whose input holds no
+ * name shows none and does not fail. The body is edited through
+ * `cf-code-editor`, which completes `#42` over the board's mention universe
+ * and mints a reference-form mention into the item's own map. The prose and
+ * that map are drafted per session and written together by one save, because
+ * a body is a single string with whole-value conflict semantics and a
+ * live-bound editor on one would conflict per keystroke.
  */
 
 import {
@@ -17,14 +19,11 @@ import {
   NAME,
   pattern,
   type ReadonlyCell,
-  SELF,
   Stream,
   UI,
   type VNode,
   Writable,
 } from "commonfabric";
-
-import { type NamesTableRow, ownName } from "./naming.ts";
 
 /**
  * What the body editor's mention autocomplete needs of a universe entry: the
@@ -88,13 +87,19 @@ export interface ItemInput {
   createdAt?: number | Default<0>;
 
   /**
-   * The board's names table, one row per named member. The item reads its
-   * own row out of it and nothing else; absent, the item shows no name.
+   * The name the board calls this item by, allocated by the board's create in
+   * the transaction that creates the item and stored here. A name is
+   * permanent and never reused, so this copy stays the name the board's
+   * namespace holds for the item.
    *
-   * Readable, not writable: the table is the board's derivation, and an item
-   * has no business writing into it.
+   * Absent on an item whose creator passed no name: one filed before its
+   * board passed a name in at create, one filed past the create — which
+   * includes every member a backfill names — and one composed with no board.
+   * Such an item shows no name and does not fail. Writing a name onto one is
+   * not built: a board writes a member's result and never its argument, so no
+   * verb of the board can reach this input once the item exists.
    */
-  boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>;
+  shortName?: string;
 
   /**
    * The board's mention universe — what the body editor completes over.
@@ -102,8 +107,8 @@ export interface ItemInput {
    * rows (`MentionableRow` in `mentionable.ts`). Absent, the editor simply
    * offers no completions.
    *
-   * Readable, not writable, for the reason `boardNames` above states, and
-   * with a cost a writable handle carries besides: a writable binding puts
+   * Readable, not writable: the universe is the board's derivation, and an
+   * item has no business writing into it. A writable binding would also put
    * the board's whole published row inside the retained link's proof, and
    * this demand names three of that row's fields, so the write-back leg
    * fails on a field the demand does not declare and the item can no longer
@@ -148,29 +153,26 @@ export interface ItemOutput {
   createdAt: number;
 
   /**
-   * The name the board calls this item by, read out of the board's names
-   * table.
+   * The name the board calls this item by: the one its input stores, as the
+   * board's create passed it in.
    *
    * Published under the name a mention pill reads it by
    * (`Mentionable.shortName` in `packages/ui/src/v2/core/mentionable.ts`), so
-   * a mention of this item elsewhere gains the number as soon as the board
-   * names it.
+   * a mention of this item elsewhere shows the number.
    *
-   * Absent for an item no board has named, or one wired to no board: the
-   * lookup produces nothing and the property is simply not there. Every
-   * consumer treats that as no name — the badge renders nothing, a universe
-   * row matches no `#42` query, and a mention pill shows no number
+   * Absent for an item whose input holds no name: the property is simply not
+   * there. Every consumer treats that as no name — the badge renders nothing,
+   * a universe row matches no `#42` query, and a mention pill shows no number
    * (`_trackRefShortName` in
    * `packages/ui/src/v2/components/cf-code-editor/cf-code-editor.ts` reads an
    * absent name exactly as it reads a blank one).
    *
-   * Optional rather than defaulted, and the derivation settles half of it:
-   * `ownName` produces no value for an item no board has named, so whatever
-   * stands here has to admit that absence. Two spellings do, and this takes
-   * the one `TopicPiece` ships. The other — a required property whose type
-   * admits `undefined` — keeps the property in the schema's `required` list,
-   * so a member with no name reads as present-and-undefined rather than as
-   * absent.
+   * Optional rather than defaulted, and the input settles half of it: an item
+   * whose input holds no name has no value to publish, so whatever stands
+   * here has to admit that absence. Two spellings do, and this takes the one
+   * `TopicPiece` ships. The other — a required property whose type admits
+   * `undefined` — keeps the property in the schema's `required` list, so a
+   * member with no name reads as present-and-undefined rather than as absent.
    *
    * The board's row demand is optional for a reason of its own, and the
    * constraint between the two does NOT pair their spellings. A required
@@ -217,10 +219,9 @@ export default pattern<ItemInput, ItemOutput>(
       title,
       body,
       createdAt,
-      boardNames,
+      shortName,
       mentionable,
       references,
-      [SELF]: self,
     },
   ) => {
     // Session-local: a second tab opens on the stored body, not on this view.
@@ -228,9 +229,6 @@ export default pattern<ItemInput, ItemOutput>(
     const bodyDraft = new Writable.perSession("");
     const referencesDraft = new Writable.perSession<ItemMentionRefMap>({});
 
-    // The board has already derived the table; this is a lookup by identity,
-    // and it is written as one.
-    const shortName = ownName({ table: boardNames, self });
     const itemName = title.get().trim() || "(untitled item)";
     const hasBody = body.get().trim().length > 0;
 

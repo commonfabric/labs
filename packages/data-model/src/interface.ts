@@ -1,10 +1,11 @@
 /**
- * The `FabricSpecialObject` class hierarchy and the conversion-layer types of
- * the fabric data model, together with the pattern-visible value types that
- * `api.ts` declares, re-exported here so that this module carries the whole
- * `FabricValue` vocabulary. It is intentionally free of runtime imports (only
- * `import type` is used) so that any module can import it without creating a
- * circular dependency.
+ * The two special-object classes, `FabricInstance` and `FabricPrimitive`, and
+ * the conversion-layer types of the fabric data model, together with the
+ * pattern-visible value types that `api.ts` declares, re-exported here so that
+ * this module carries the whole `FabricValue` vocabulary. Its runtime imports
+ * are two leaves that import nothing, `api.ts` for the brand symbols and the
+ * module holding the classes' common root, so any module can import this one
+ * without creating a circular dependency.
  *
  * The classes here and the declarations in `api.ts` describe the same shapes,
  * and `api-agreement.ts` stops compiling when they drift. The concrete classes
@@ -13,11 +14,14 @@
  */
 
 import type {
-  FabricArray,
-  FabricPlainObject,
-  FabricValue,
+  FabricArrayPlus,
+  FabricInstancePlus,
+  FabricPlainObjectPlus,
+  FabricPrimitiveSchemaType,
   FabricValuePlus,
 } from "./api.ts";
+import { FABRIC_INSTANCE_PLUS_BRAND, FABRIC_PRIMITIVE_BRAND } from "./api.ts";
+import { BaseFabricSpecialObject } from "./fabric-bases/BaseFabricSpecialObject.ts";
 
 // We re-`export` all the _types_ from `./api.ts`, so that they're consistently
 // available internally to `data-model` without having to `import ... from
@@ -28,11 +32,9 @@ export type * from "./api.ts";
 // "Layer" types
 //
 // A layer type is a `FabricValue`-like type whose claim stops at the root
-// container. `FabricValueLayer` leaves what the root holds untyped, and the
-// `Mutable*Layer` types keep what it holds as ordinary `FabricValue`s but
-// leave the root itself writable. In each case the root still carries the
-// other `FabricValue` restrictions on its kind of container (e.g., for an
-// array, no synthetic keys and no named properties other than `length`).
+// container. As with the main definitions, these have both "pure" and
+// `PlusType` variants, and the former is defined in terms of the latter, while
+// also being primary in terms of documentation.
 //
 
 /**
@@ -42,15 +44,15 @@ export type * from "./api.ts";
  * requires deep immutability -- the type is deeply `readonly` -- while actual
  * deep-freezing happens only tactically.
  */
-export type FabricValueLayer = FabricValuePlus<
-  Readonly<unknown[] | Record<string, unknown>>
->;
+export type FabricValueLayer = FabricValuePlusLayer<never>;
 
 /** A mutable array root whose elements remain `FabricValue`s. */
-export type MutableFabricArrayLayer = FabricValue[];
+export type MutableFabricArrayLayer = MutableFabricArrayPlusLayer<never>;
 
 /** A mutable record root whose values remain `FabricValue`s. */
-export type MutableFabricPlainObjectLayer = Record<string, FabricValue>;
+export type MutableFabricPlainObjectLayer = MutableFabricPlainObjectPlusLayer<
+  never
+>;
 
 /**
  * A `FabricContainerValue` with a mutable root. Nested containers remain
@@ -60,92 +62,52 @@ export type MutableFabricPlainObjectLayer = Record<string, FabricValue>;
  * something a type can layer over it.
  */
 export type MutableFabricContainerValueLayer =
-  | FabricInstance
-  | MutableFabricArrayLayer
-  | MutableFabricPlainObjectLayer;
+  MutableFabricContainerValuePlusLayer<never>;
 
 /**
  * A `FabricValue` with a mutable root container. Nested containers remain
  * ordinary (readonly) `FabricValue`s, so this models a single construction
  * layer rather than a deep thaw.
  */
-export type MutableFabricValueLayer =
-  | Exclude<FabricValue, FabricArray | FabricPlainObject>
-  | MutableFabricArrayLayer
-  | MutableFabricPlainObjectLayer;
+export type MutableFabricValueLayer = MutableFabricValuePlusLayer<never>;
 
-//
-// Types for dealing with native (non-fabric, a/k/a "wild west") values
-//
+/** `PlusType` equivalent of `FabricValueLayer`. */
+export type FabricValuePlusLayer<PlusType> = FabricValuePlus<
+  | PlusType
+  | Readonly<unknown[] | Record<string, unknown>>
+>;
 
-/**
- * Union of raw native JS **object** types that the fabric type system can
- * convert into `FabricInstance` wrappers or `FabricPrimitive` values. These
- * are the inputs to the "sausage grinder" -- `shallowFabricFromNativeValue()`
- * accepts `unknown`, so callers can hand it `FabricValue`s or raw native JS
- * objects alike, and whatever it cannot represent is rejected there rather
- * than excluded by the signature. The conversion produces `FabricInstance`
- * wrappers or `FabricPrimitive` values that live inside `FabricValue`.
- *
- * Note: `bigint` is NOT included here -- it is a primitive (like `undefined`)
- * and belongs directly in `FabricValue` without wrapping.
- */
-export type FabricNativeObject =
-  | Error
-  | Map<unknown, unknown>
-  | Set<unknown>
-  | Date
-  | RegExp
-  | Uint8Array;
+/** `PlusType` equivalent of `MutableFabricArrayLayer`. */
+export type MutableFabricArrayPlusLayer<PlusType> = FabricValuePlus<PlusType>[];
 
-/**
- * A `FabricValue`, a `FabricNativeObject`, or a deep tree thereof -- the values
- * that convert to and from fabric form. This is the precondition of
- * `fabricFromNativeValue()` (which fails on anything else), the result of
- * `nativeFromFabricValue()`, and what `isValidFabricConvertibleValue()` tests
- * for.
- *
- * Distinct from `FabricValue`: containers here may hold `FabricNativeObject`s.
- * Converting a `FabricError` yields an `Error`, so an array of them is an array
- * of natives, which has no `FabricValue` name.
- */
-export type FabricConvertibleValue = FabricValuePlus<FabricNativeObject>;
+/** `PlusType` equivalent of `MutableFabricPlainObjectLayer`. */
+export type MutableFabricPlainObjectPlusLayer<PlusType> = Record<
+  string,
+  FabricValuePlus<PlusType>
+>;
+
+/** `PlusType` equivalent of `MutableFabricContainerValueLayer`. */
+export type MutableFabricContainerValuePlusLayer<PlusType> =
+  | FabricInstancePlus<PlusType>
+  | MutableFabricArrayPlusLayer<PlusType>
+  | MutableFabricPlainObjectPlusLayer<PlusType>;
+
+/** `PlusType` equivalent of `MutableFabricValueLayer`. */
+export type MutableFabricValuePlusLayer<PlusType> =
+  | Exclude<
+    FabricValuePlus<PlusType>,
+    FabricArrayPlus<PlusType> | FabricPlainObjectPlus<PlusType>
+  >
+  | MutableFabricArrayPlusLayer<PlusType>
+  | MutableFabricPlainObjectPlusLayer<PlusType>;
 
 //
 // Abstract base classes
 //
 // The _class_ definitions corresponding to the _interface_ definitions in
-// `api.ts` of `FabricSpecialObject` and its only two direct subclasses.
+// `api.ts` of `FabricInstance` and `FabricPrimitive`, the two special-object
+// classes; `FabricSpecialObject` there is their union.
 //
-
-/**
- * Common base class for `FabricInstance` and `FabricPrimitive`, which are the
- * only two kinds of `FabricValue` beyond the JavaScript built-ins. The two
- * differ along one axis: whether the data model treats an instance as a
- * primitive. A `FabricPrimitive` is treated the way a built-in `string` or
- * `number` is; a `FabricInstance` is treated the way an `object` is. What
- * follows from that, and what a caller sees of it, is that a `FabricInstance`
- * may hold and expose arbitrary outgoing `FabricValue` references, and a
- * `FabricPrimitive` may not. Enables a single `instanceof FabricSpecialObject`
- * check wherever code needs to recognize any fabric-system value without
- * caring which branch of the hierarchy it belongs to.
- *
- * The `@commonfabric/FabricSpecialObject` member is a nominal brand, and
- * exists only in the type system: `declare` emits no runtime member, and
- * nothing ever reads the key. Without it the class is structurally empty, so
- * *every* object satisfies `FabricSpecialObject` — which in turn makes every
- * object satisfy `FabricValue`, since that union includes this type. The brand
- * is what makes `FabricValue` mean anything as a static claim.
- *
- * It is a well-known string key rather than a `unique symbol` because that
- * would require importing a symbol *value*, and this file is deliberately free
- * of runtime imports (see the file header). `api.ts` declares the identical
- * member, and `api-agreement.ts` stops compiling if the two stop agreeing; a
- * value branded by one would otherwise not satisfy the other.
- */
-export abstract class FabricSpecialObject {
-  declare readonly "@commonfabric/FabricSpecialObject": true;
-}
 
 /**
  * Abstract base class for the `FabricValue`s that participate in the fabric
@@ -175,22 +137,25 @@ export abstract class FabricSpecialObject {
  * declared on `BaseFabricInstance`, not here: they are implementation plumbing
  * and are kept off this pure-protocol class.
  */
-export abstract class FabricInstance extends FabricSpecialObject {
+export abstract class FabricInstance extends BaseFabricSpecialObject {
   /**
-   * The nominal brand that carries a `FabricInstancePlus`'s `PlusType`, at
-   * `never` here since an instance of this class holds only `FabricValue`s.
-   * Declared the way the `FabricSpecialObject` brand is, and for the same
-   * reasons; `api.ts` declares the identical member.
+   * The nominal brand that tells a `FabricInstance` from any other object with
+   * the two clone methods, in the type system, at `never` since an instance of
+   * this class holds only `FabricValue`s; the runtime root carries no brand,
+   * so this member is what makes the class nominal. `declare` emits no runtime
+   * member, and nothing ever reads the key. `api.ts` declares the identical
+   * member, and `api-agreement.ts` stops compiling if the two stop agreeing.
    */
-  declare readonly "@commonfabric/FabricInstancePlus"?: never;
+  declare readonly [FABRIC_INSTANCE_PLUS_BRAND]: never;
 
   /**
    * Returns a new deep clone of this instance with equivalent data but no
    * shared structure for any unfrozen data in the original. When `frozen ===
    * true`, produces a frozen instance with maximal structural sharing,
    * including returning `this` if it is already deep-frozen. When `frozen ===
-   * false`, produces a deeply-mutable instance with no visible shared reference
-   * structure with the original.
+   * false`, produces an instance which is mutable at every layer its class
+   * lets change, and which has no visible shared reference structure with the
+   * original.
    *
    * The concrete template-method implementation lives on `BaseFabricInstance`
    * (deferring to the `[DEEP_CLONE_CORE]` sibling, mirroring the
@@ -220,24 +185,80 @@ export abstract class FabricInstance extends FabricSpecialObject {
  * any `FabricPrimitive` uniformly.
  *
  * Instances are always frozen (like true primitives, they are immutable), pass
- * through the native conversions unchanged, and hold no arbitrary outgoing
- * `FabricValue` reference. `BaseFabricPrimitive` freezes each instance at
- * construction; a subclass keeps its state in private fields, which the freeze
- * does not reach.
+ * through the convertible-JS conversions unchanged, and hold no arbitrary
+ * outgoing `FabricValue` reference. `BaseFabricPrimitive` freezes each instance
+ * at construction; a subclass keeps its state in private fields, which the
+ * freeze does not reach.
  *
  * See Section 1.4.6 of the formal spec.
  */
-export abstract class FabricPrimitive extends FabricSpecialObject {
+export abstract class FabricPrimitive extends BaseFabricSpecialObject {
   /**
    * The nominal brand that tells a `FabricPrimitive` from a `FabricInstance`
-   * in the type system; without it this class is structurally the
-   * `FabricSpecialObject` brand alone. Declared the way that brand is, and for
-   * the same reasons; `api.ts` declares the identical member.
+   * and from every other object, in the type system; without it this class is
+   * structurally empty. `declare` emits no runtime member, and nothing ever
+   * reads the key. `api.ts` declares the identical member, and
+   * `api-agreement.ts` stops compiling if the two stop agreeing.
    */
-  declare readonly "@commonfabric/FabricPrimitive": true;
+  declare readonly [FABRIC_PRIMITIVE_BRAND]: true;
 
   /** Constructs an instance. */
   constructor() {
     super();
   }
+
+  /**
+   * Name of this instance's class in the schema `type` vocabulary: the `type`
+   * a schema names to admit this value by its class. Every instance of a class
+   * reports the same name, which need not be the name of the class. Each
+   * concrete class supplies its own, and the getter reads no instance state,
+   * so that it returns the same name when read off the class's `prototype`.
+   */
+  abstract get schemaType(): FabricPrimitiveSchemaType;
 }
+
+//
+// Types for dealing with convertible JS (non-fabric, a/k/a "wild west") values
+//
+
+/**
+ * Union of convertible JS **object** types that the fabric type system can
+ * convert into `FabricInstance` wrappers or `FabricPrimitive` values. These are
+ * the inputs to the "sausage grinder" --
+ * `shallowFabricFromConvertibleJsValue()` accepts `unknown`, so callers can
+ * hand it `FabricValue`s or convertible JS objects alike, and whatever it
+ * cannot represent is rejected there rather than excluded by the signature. The
+ * conversion produces `FabricInstance` wrappers or `FabricPrimitive` values
+ * that live inside `FabricValue`.
+ *
+ * Note: `bigint` is NOT included here -- it is a primitive (like `undefined`)
+ * and belongs directly in `FabricValue` without wrapping.
+ *
+ * `tags-agreement.ts` stops compiling when this and
+ * `FABRIC_CONVERTIBLE_JS_OBJECT_TAGS` stop agreeing, and it reads each class
+ * from its declared `prototype`, so a member here is written the way the
+ * class's `prototype` is declared.
+ */
+export type FabricConvertibleJsObject =
+  | Error
+  | Map<unknown, unknown>
+  | Set<unknown>
+  | Date
+  | RegExp
+  | Uint8Array;
+
+/**
+ * A `FabricValue`, a `FabricConvertibleJsObject`, or a deep tree thereof -- the
+ * values that convert to and from fabric form. This is the precondition of
+ * `fabricFromConvertibleJsValue()` (which fails on anything else), the result
+ * of `convertibleJsFromFabricValue()`, and what
+ * `isValidFabricConvertibleJsValue()` tests for.
+ *
+ * Distinct from `FabricValue`: containers here may hold
+ * `FabricConvertibleJsObject`s. Converting a `FabricError` yields an `Error`,
+ * so an array of them is an array of JS objects, which has no `FabricValue`
+ * name.
+ */
+export type FabricConvertibleJsValue = FabricValuePlus<
+  FabricConvertibleJsObject
+>;

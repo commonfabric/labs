@@ -161,7 +161,7 @@ corrected HTML suite passed 28 tests and 287 steps.
 ## Q9 decision and consequences
 
 Mike approved a separate lazy-materialization fast-follow on September 12 UTC.
-The [follow-up plan](../../../plans/lazy-materialization-fast-follow.md) owns
+The [follow-up plan](../../plans/lazy-materialization-fast-follow.md) owns
 handler investigation/integration, rollout evidence, flag retirement, and
 remeasurement in stages F0–F5. This allows the collection implementation and
 copy-based acceptance to close without claiming those runtime stages are done.

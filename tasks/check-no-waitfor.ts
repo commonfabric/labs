@@ -48,9 +48,6 @@ export const ALLOWLIST: ReadonlySet<string> = new Set([
   // Env-gated profiling scaffolding: one-shot waits that arm a trace or reset a
   // logger baseline, gated behind CF_CAPTURE_* variables that default to off.
   "packages/patterns/integration/default-app.test.ts",
-  // Human-in-the-loop OAuth flow: a person completes the consent step in a real
-  // browser, and no CI lane runs the file.
-  "packages/patterns/google/core/integration/google-calendar-importer.test.ts",
 ]);
 
 // Matches an import of the `@commonfabric/integration` package and captures the

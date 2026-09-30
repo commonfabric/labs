@@ -1,10 +1,8 @@
 import ts from "typescript";
-import {
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-  FABRIC_SPECIAL_OBJECT_BRAND,
-  type MutableJSONSchema,
-} from "@commonfabric/api";
+import type { MutableJSONSchema } from "@commonfabric/api";
+import { fabricPrimitiveClassesByName } from "@commonfabric/data-model/fabric-primitives";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 
 const NATIVE_TYPE_SCHEMAS: Record<string, MutableJSONSchema> = {
   // This schema is embedded in the code, so we can have simpler links.
@@ -22,16 +20,16 @@ const NATIVE_TYPE_SCHEMAS: Record<string, MutableJSONSchema> = {
   RegExp: { type: "object" },
   Uint8Array: { type: "object" },
   // Fields authored against the `FabricPrimitive` classes themselves emit
-  // the `FabricPrimitive` schema vocabulary (`FABRIC_PRIMITIVE_SCHEMA_TYPES` in
-  // `@commonfabric/api`): a value matches by prototype, not by structure.
-  // Guarded in `supportsType` by the `FabricSpecialObject` brand so an
-  // unrelated user type sharing a name keeps its structural schema.
-  FabricBytes: { type: "FabricBytes" },
-  FabricEpochDay: { type: "FabricEpochDay" },
-  FabricEpochNsec: { type: "FabricEpochNsec" },
-  FabricHash: { type: "FabricHash" },
-  FabricKeyPair: { type: "FabricKeyPair" },
-  FabricRegExp: { type: "FabricRegExp" },
+  // the `FabricPrimitive` schema vocabulary: a value matches by prototype, not
+  // by structure. Each class is keyed by the name a pattern declares it under,
+  // and maps to the `.schemaType` its instances report. Guarded in
+  // `supportsType` by the `FabricPrimitive` brand so an unrelated user type
+  // sharing a name keeps its structural schema.
+  ...Object.fromEntries(
+    Object.entries(fabricPrimitiveClassesByName()).map((
+      [name, cls],
+    ) => [name, { type: cls.prototype.schemaType }]),
+  ),
   // A `URL` converts to a plain string, so this one is accurate as written.
   URL: { type: "string", format: "uri" },
   ArrayBuffer: true,
@@ -89,7 +87,7 @@ const SQLITE_DB_BRAND_PREFIX = "__@SQLITE_DB_BRAND@";
 
 const NATIVE_TYPE_NAMES = new Set(Object.keys(NATIVE_TYPE_SCHEMAS));
 const FABRIC_PRIMITIVE_TYPE_NAMES: ReadonlySet<string> = new Set(
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  Object.keys(fabricPrimitiveClassesByName()),
 );
 const LIB_DECLARED_NATIVE_TYPES = new Set([
   "Date",
@@ -134,7 +132,7 @@ export class NativeTypeFormatter implements TypeFormatter {
       return NativeTypeFormatter.#hasLibraryDeclaration(type, context);
     }
     if (NativeTypeFormatter.isFabricPrimitiveTypeName(typeName)) {
-      return NativeTypeFormatter.declaresFabricSpecialObjectBrand(type);
+      return NativeTypeFormatter.declaresFabricPrimitiveBrand(type);
     }
     return true;
   }
@@ -208,7 +206,8 @@ export class NativeTypeFormatter implements TypeFormatter {
   }
 
   /**
-   * Whether the name is one of the `FabricPrimitive` schema-vocabulary names.
+   * Whether the name is one a concrete `FabricPrimitive` class is declared
+   * under, which is the name a TypeScript type referring to the class has.
    */
   public static isFabricPrimitiveTypeName(
     typeName: string | undefined,
@@ -217,16 +216,24 @@ export class NativeTypeFormatter implements TypeFormatter {
   }
 
   /**
-   * Whether the type carries the `FabricSpecialObject` nominal brand
-   * (directly or by inheritance). This is what makes a type named e.g.
-   * `FabricBytes` actually BE the `FabricPrimitive` class rather than an
-   * unrelated user type that happens to share the name. Both this formatter's
-   * `supportsType` and named-type hoisting (`getNamedTypeKey`,
-   * `type-utils.ts`) classify by it, so an unbranded name-sharer keeps its
-   * structural schema AND its normal `$defs` hoisting.
+   * Whether the type carries the `FabricPrimitive` nominal brand (directly or
+   * by inheritance). This is what makes a type named e.g. `FabricBytes`
+   * actually BE the `FabricPrimitive` class rather than an unrelated user type
+   * that happens to share the name. Both this formatter's `supportsType` and
+   * named-type hoisting (`getNamedTypeKey`, `type-utils.ts`) classify by it,
+   * so an unbranded name-sharer keeps its structural schema AND its normal
+   * `$defs` hoisting.
+   *
+   * The brand is keyed by the `FABRIC_PRIMITIVE_BRAND` symbol, whose property
+   * TypeScript names `__@FABRIC_PRIMITIVE_BRAND@<id>`; the name of the
+   * constant is what identifies it, as with the other symbol-keyed markers.
    */
-  public static declaresFabricSpecialObjectBrand(type: ts.Type): boolean {
-    return type.getProperty(FABRIC_SPECIAL_OBJECT_BRAND) !== undefined;
+  public static declaresFabricPrimitiveBrand(type: ts.Type): boolean {
+    return type.getProperties().some((prop) =>
+      String(prop.escapedName as string).startsWith(
+        "__@FABRIC_PRIMITIVE_BRAND@",
+      )
+    );
   }
 
   /**
@@ -248,24 +255,9 @@ export class NativeTypeFormatter implements TypeFormatter {
     context: GenerationContext,
   ): boolean {
     const symbol = NativeTypeFormatter.#getTypeSymbol(type);
-    return symbol?.declarations?.some((declaration) => {
-      const sourceFile = declaration.getSourceFile();
-      const program = (
-        context.typeChecker as ts.TypeChecker & {
-          getProgram?: () => ts.Program;
-        }
-      ).getProgram?.();
-      if (program?.isSourceFileDefaultLibrary(sourceFile)) {
-        return true;
-      }
-
-      const fileName = sourceFile.fileName;
-      return fileName === "lib.d.ts" ||
-        fileName.endsWith("/lib.d.ts") ||
-        /(^|\/)lib\.[^/]+\.d\.ts$/i.test(fileName) ||
-        /(^|\/)(es\d+(?:\.[^/]+)?|dom|jsx)\.d\.ts$/i.test(fileName) ||
-        /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
-    }) ?? false;
+    return symbol?.declarations?.some((declaration) =>
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+    ) ?? false;
   }
 
   /** Returns whether `typeName` names a native type, which gets no `$defs`. */

@@ -23,7 +23,10 @@ import {
   HARNESS_SUBAGENT_PROFILES,
   type HarnessSubagentProfile,
 } from "./contracts/subagent.ts";
-import type { BuiltinToolId } from "./contracts/tool-descriptor.ts";
+import {
+  type BuiltinToolId,
+  isSubagentOnlyToolId,
+} from "./contracts/tool-descriptor.ts";
 import type { HarnessFabricSessionConfig } from "./config.ts";
 import {
   HARNESS_FABRIC_SESSION_OPTION_NAMES,
@@ -37,7 +40,11 @@ import {
   type HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
 } from "./interactive-chat-service.ts";
-import type { HarnessChatSessionStore } from "./session-store.ts";
+import {
+  type HarnessChatSessionStore,
+  HarnessChatStoreHeldError,
+  type HarnessChatStoreHolder,
+} from "./session-store.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
 import type { HarnessCredentialOwnerRef } from "./contracts/run-manifest.ts";
 
@@ -60,6 +67,9 @@ export interface RunHarnessInteractiveChatNdjsonTransportOptions {
 export interface RunHarnessInteractiveChatStdioOptions {
   input?: ReadableStream<Uint8Array>;
   output?: WritableStream<Uint8Array>;
+
+  /** Where a `HarnessChatStoreHeldRefusal` line is written; stderr by default. */
+  errorOutput?: WritableStream<Uint8Array>;
   sessionDbPath?: string;
   maxInMemoryEvents?: number;
 
@@ -299,6 +309,39 @@ export const parseHarnessInteractiveChatStdioCliOptions = (
   };
 };
 
+/** The `kind` of the line written to stderr when the session store is held. */
+export const HARNESS_CHAT_STORE_HELD_REFUSAL_KIND = "cf-harness.store-held";
+
+/**
+ * The one line written to stderr, as JSON, when the session store named on
+ * the command line is held by another live process. It is the first thing on
+ * stderr, nothing has been written to stdout, and the process then exits with
+ * status 1.
+ */
+export interface HarnessChatStoreHeldRefusal {
+  kind: typeof HARNESS_CHAT_STORE_HELD_REFUSAL_KIND;
+  version: 1;
+
+  /** The database's path, resolved through every link. */
+  store: string;
+
+  /** Who holds it, or `null` where the record beside it could not be read. */
+  holder: HarnessChatStoreHolder | null;
+}
+
+/** Returns the refusal line for `error`, without its newline. */
+export const harnessChatStoreHeldRefusalLine = (
+  error: HarnessChatStoreHeldError,
+): string =>
+  JSON.stringify(
+    {
+      kind: HARNESS_CHAT_STORE_HELD_REFUSAL_KIND,
+      version: 1,
+      store: error.store,
+      holder: error.holder ?? null,
+    } satisfies HarnessChatStoreHeldRefusal,
+  );
+
 const openSessionStore = async (
   sessionDbPath: string,
 ): Promise<HarnessChatSessionStore> => {
@@ -330,11 +373,15 @@ const SUPPORTED_TURN_STATUSES = new Set([
   "completed",
   "failed",
 ]);
-// Every tool the harness defines, taken from the registry that defines them:
-// a client naming a tool this build offers is submitting a policy this build
-// can honour, and a second list here would refuse one the run advertises.
-const SUPPORTED_POLICY_TOOL_IDS = new Set<BuiltinToolId>(
-  BUILTIN_TOOLS.map((tool) => tool.descriptor.toolId),
+// Every tool the harness defines, taken from the registry that defines them,
+// less the ones no parent surface may offer: a client naming a tool this build
+// offers is submitting a policy this build can honour, and a second list here
+// would refuse one the run advertises — but a policy configures a PARENT, so a
+// subagent-only tool named in one is refused rather than granted.
+export const SUPPORTED_POLICY_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set(
+  BUILTIN_TOOLS.map((tool) => tool.descriptor.toolId).filter((toolId) =>
+    !isSubagentOnlyToolId(toolId)
+  ),
 );
 const SUPPORTED_POLICY_SUBAGENT_PROFILES = new Set<HarnessSubagentProfile>(
   HARNESS_SUBAGENT_PROFILES,
@@ -704,6 +751,27 @@ export const runHarnessInteractiveChatStdio = async (
         await writer.write(encoder.encode(`${line}\n`));
       },
     });
+  } catch (error) {
+    if (error instanceof HarnessChatStoreHeldError) {
+      // A host reading stderr can act on the refusal without parsing prose;
+      // the error itself still reaches the entry point's own handler. The
+      // line is best effort: a sink that is locked or fails to take it must
+      // not replace the refusal with a failure of its own.
+      try {
+        const errorWriter = (options.errorOutput ?? Deno.stderr.writable)
+          .getWriter();
+        try {
+          await errorWriter.write(
+            encoder.encode(`${harnessChatStoreHeldRefusalLine(error)}\n`),
+          );
+        } finally {
+          errorWriter.releaseLock();
+        }
+      } catch {
+        // The refusal below is what the caller acts on.
+      }
+    }
+    throw error;
   } finally {
     writer.releaseLock();
   }
@@ -733,6 +801,7 @@ export const runHarnessInteractiveChatStdioCli = async (
   const provisioning = await resolveInteractiveProvisioning(
     options,
     cwd ?? Deno.cwd(),
+    Deno.env.toObject(),
   );
   await run({
     ...(options.sessionDbPath !== undefined

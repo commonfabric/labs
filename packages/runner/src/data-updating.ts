@@ -7,24 +7,28 @@ import {
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
-  cloneIfNecessary,
-  fabricFromNativeValue,
+  debugStr,
+  fabricFromConvertibleJsValue,
   type FabricPlainObject,
   type FabricValue,
+  isDeepFrozen,
   isFabricSpecialObject,
   isKeyableObjectNotArray,
-  shallowFabricFromNativeObjectElseUndefined,
-  toCompactDebugString,
+  shallowFabricFromConvertibleJsObjectElseUndefined,
 } from "@commonfabric/data-model";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { isFabricDataUri } from "@commonfabric/data-model/codec-data-uri";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isNontrivialSchema } from "@commonfabric/data-model-schema";
+import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
 import { type CellScope, type JSONSchema } from "./builder/types.ts";
 import {
   CellImpl,
+  getCarriedCfcLabelView,
   isCell,
   recordRelevantSchemaWritePolicyInput,
 } from "./cell.ts";
@@ -34,7 +38,6 @@ import type { CfcConfClause } from "./cfc/clause.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,
-  getCarriedCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import {
   type CfcCellLinkRefPayload,
@@ -43,11 +46,11 @@ import {
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
-  UnknownCfcMetadataVersionError,
+  StoredCfcMetadataError,
 } from "./cfc/metadata.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcAddress,
   runtimeWritePolicyAuthorization,
@@ -68,17 +71,18 @@ import {
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import { resolveLink } from "./link-resolution.ts";
 import {
-  areLinksSame,
-  areMaybeLinkAndNormalizedLinkSame,
   areNormalizedLinksSame,
   type CellLink,
   createSigilLinkFromParsedLink,
+  declareStreamSchema,
   isCellLink,
   isPrimitiveCellLink,
   isSigilLink,
   isWriteRedirectLink,
   type NormalizedFullLink,
   parseLink,
+  type PrimitiveCellLink,
+  toMemorySpaceAddress,
 } from "./link-utils.ts";
 import {
   getCellOrThrow,
@@ -89,7 +93,11 @@ import {
   allowMutableTransactionRead,
   markReadAsAttemptedWrite,
 } from "./scheduler.ts";
-import { forEachSubschema } from "./schema-walk.ts";
+import { schemaHasIfc } from "./schema-ifc.ts";
+import {
+  externalResolutionMissCount,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -100,6 +108,11 @@ import type {
 import {
   authorizationRead,
   ignoreReadForScheduling,
+  internalVerifierRead,
+  linkResolutionProbe,
+  mergeableOpRead,
+  withoutAttemptedWriteMark,
+  writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import { resolveSchemaRefsCanonical, schemaAcceptsType } from "./traverse.ts";
 import { toURI } from "./uri-utils.ts";
@@ -230,6 +243,78 @@ export const schemaIfcOverlapsPath = (
   return visit(schema, basePath);
 };
 
+// The unconditional write-authorization paths of each schema, keyed by schema
+// object. Only deep-frozen schemas are cached, since a mutable one could be
+// edited after its paths were taken, and only paths computed without a `cid:`
+// resolution miss, since a claim behind a document that has not arrived is
+// missing from them. The paths embed resolved content, so a registry clear
+// swaps the cache.
+let writeAuthorizationPathsCache = new WeakMap<
+  object,
+  readonly (readonly string[])[]
+>();
+onSchemaRegistryClear(() => {
+  writeAuthorizationPathsCache = new WeakMap();
+});
+
+/**
+ * Reports whether a writer claim in `schema` — a `writeAuthorizedBy` or a
+ * `writePolicyAnyOf` — rooted at `basePath`, covers `targetPath` for every
+ * value that can land there. The claims are those {@link cfcSchemaEntries}
+ * finds, references resolved. A claim inside an `anyOf` or `oneOf` branch is
+ * not counted, because it holds only for the values that branch matches; a
+ * location protected only by such a claim is therefore reported as uncovered.
+ * Exported for unit testing; not part of the public surface.
+ */
+export const writeAuthorizationCoversPath = (
+  schema: JSONSchema | undefined,
+  basePath: readonly string[],
+  targetPath: readonly string[],
+): boolean => {
+  if (!isObjectOrArray(schema)) return false;
+  let paths = writeAuthorizationPathsCache.get(schema);
+  if (paths === undefined) {
+    const missesBefore = externalResolutionMissCount();
+    paths = cfcSchemaEntries(schema)
+      .filter((entry) =>
+        entry.conditional !== true &&
+        isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+        (entry.schema.ifc.writeAuthorizedBy !== undefined ||
+          entry.schema.ifc.writePolicyAnyOf !== undefined)
+      )
+      .map((entry) => entry.path);
+    if (
+      isDeepFrozen(schema) && externalResolutionMissCount() === missesBefore
+    ) {
+      writeAuthorizationPathsCache.set(schema, paths);
+    }
+  }
+  return paths.some((path) =>
+    pathPrefixMatches([...basePath, ...path], targetPath)
+  );
+};
+
+/**
+ * Helper for {@link recordLinkWritePolicyInput}, which reports whether a
+ * write authorization arriving with this transaction covers `target`. A claim
+ * a commit has already stored is found by `storedCfcMetadataAppliesToPath`;
+ * this finds one that is not stored yet, as on the write that creates a
+ * protected list.
+ */
+const hasPendingWriteAuthorization = (
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+): boolean => {
+  const targetPath = canonicalizeLogicalPath(target.path);
+  return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
+    writeAuthorizationCoversPath(
+      input.schema,
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    )
+  );
+};
+
 const hasPendingSchemaPolicyInput = (
   tx: IExtendedStorageTransaction,
   source: NormalizedFullLink,
@@ -257,24 +342,38 @@ const recordLinkWritePolicyInput = (
   }
   const carriedCfcLabelView = cloneCfcLabelView(cfcLabelView);
   if (tx.getCfcState().flowLabelsMode !== "persist") {
-    // Legacy link labeling consults target metadata, which CID documents do
-    // not carry. Precise references retain acquisition history independently
-    // of target metadata, including private selection of public code bytes.
     if (source.id.startsWith("cid:")) return;
-    let sourceRelevant = false;
+    let sourceMetadata: ReturnType<typeof readStoredCfcMetadata>;
+    let sourceEnvelopeUninterpretable = false;
     try {
-      sourceRelevant = readStoredCfcMetadata(tx, source) !== undefined;
+      sourceMetadata = readStoredCfcMetadata(tx, source);
     } catch (error) {
-      if (!(error instanceof UnknownCfcMetadataVersionError)) throw error;
-      sourceRelevant = true;
+      // A source envelope this build cannot produce labels from still makes
+      // the link CFC-relevant (fail closed): recording the policy input
+      // routes the write to prepare, where the unreadable envelope rejects
+      // it in enforcing modes instead of the labels silently not carrying.
+      if (!(error instanceof StoredCfcMetadataError)) throw error;
+      sourceEnvelopeUninterpretable = true;
     }
-    if (
-      !sourceRelevant && !schemaIfcOverlapsPath(source.schema, [], []) &&
-      !hasPendingSchemaPolicyInput(tx, source) &&
-      !cfcLabelViewHasValues(carriedCfcLabelView) &&
-      !storedCfcMetadataAppliesToPath(tx, target) &&
-      !hasPendingSchemaPolicyInput(tx, target)
-    ) return;
+    const sourceRelevant = schemaIfcOverlapsPath(source.schema, [], []) ||
+      sourceMetadata !== undefined || sourceEnvelopeUninterpretable ||
+      hasPendingSchemaPolicyInput(tx, source) ||
+      cfcLabelViewHasValues(carriedCfcLabelView);
+    // A link stored below a document's root under a write authorization that
+    // arrives with this write is held to the same source check as one stored
+    // under the claim once a commit has persisted it: otherwise the write that
+    // creates a protected list admits a first entry every later one is refused.
+    // A link AT the root is excluded — the document then aliases its source and
+    // stores no entry of its own. The stored labels that the pointer this write
+    // replaces brought to the slot do not count: they leave with it (see
+    // `storedCfcMetadataAppliesToPath`).
+    const targetRelevant =
+      storedCfcMetadataAppliesToPath(tx, target, { replacingLink: true }) ||
+      hasPendingSchemaPolicyInput(tx, target) ||
+      (target.path.length > 0 && hasPendingWriteAuthorization(tx, target));
+    if (!sourceRelevant && !targetRelevant) {
+      return;
+    }
   }
   if (
     reference !== undefined && !cfcReferenceBindingMatches(reference, source)
@@ -488,8 +587,10 @@ export interface DiffWalkState {
   /**
    * When present, a plain object sitting in an array that is not already a
    * link gets anchored into an entity document of its own, its id drawn from
-   * this source. Writers running under a builder frame supply the frame's id
-   * counter; frameless writes leave it unset, and such elements store inline.
+   * this source. The `Cell` write paths that can put a plain object into an
+   * array — `set()`, `push()`, `addUnique()` — draw it from the frame their
+   * cell was made in (`frameAnchorIds()`). A walk reached without it stores
+   * such elements inline.
    */
   nextAnchorId?: () => string | number;
 
@@ -498,6 +599,22 @@ export interface DiffWalkState {
     array: unknown;
     values: readonly unknown[];
   };
+  /**
+   * Each array element this walk anchored: the slot that holds the
+   * reference, and the entity document it refers to. `diffAndUpdate` records
+   * both as whole-value roots once the walk's changes are applied
+   * (`CfcTxState.assertedValueRoots`).
+   */
+  anchored?: { slot: NormalizedFullLink; entity: NormalizedFullLink }[];
+
+  /**
+   * Whether the value this walk writes at each position it reaches, keyed by
+   * `writtenPositionKey()`, is an array. An anchored element's identity
+   * derives from how far arrays enclose it, and within what the walk writes
+   * that is a fact about the written value rather than about what the
+   * position held before.
+   */
+  writtenKinds?: Map<string, boolean>;
 }
 
 /** Records the comparison interval for an unchanged root output reference. */
@@ -523,6 +640,16 @@ function recordOutputReissue(
     readEnd,
   }, runtimeWritePolicyAuthorization);
 }
+
+/**
+ * The key `DiffWalkState.writtenKinds` holds a position under. It leaves the
+ * scope out: an element whose schema narrows its scope is written at the same
+ * position in the narrower instance, inside the array this walk wrote at the
+ * broader one, so its parent is judged by that array whichever instance holds
+ * the element.
+ */
+const writtenPositionKey = (link: NormalizedFullLink): string =>
+  JSON.stringify([link.space, link.id, link.path]);
 
 /**
  * Traverses newValue and updates `current` and any relevant linked documents.
@@ -574,6 +701,16 @@ export function diffAndUpdate(
   const normalizedValue = flattenBuilderArtifacts(newValue, {
     isLeaf: isCellResultForDereferencing,
   });
+  const anchored: NonNullable<DiffWalkState["anchored"]> = [];
+  const state: DiffWalkState = {
+    seen: new Map(),
+    nextAnchorId: anchorIds,
+    anchored,
+    unchangedArrayPrefix: options?.unchangedArrayPrefix === undefined
+      ? undefined
+      : { array: normalizedValue, values: options.unchangedArrayPrefix },
+    writtenKinds: new Map(),
+  };
   const changes = normalizeAndDiff(
     runtime,
     tx,
@@ -581,23 +718,130 @@ export function diffAndUpdate(
     normalizedValue,
     context,
     readOptions,
-    {
-      seen: new Map(),
-      nextAnchorId: anchorIds,
-      unchangedArrayPrefix: options?.unchangedArrayPrefix === undefined
-        ? undefined
-        : { array: normalizedValue, values: options.unchangedArrayPrefix },
-    },
+    state,
   );
   diffLogger.debug(
     "diff",
-    () => `[diffAndUpdate] changes: ${toCompactDebugString(changes)}`,
+    () => debugStr`[diffAndUpdate] changes: $quote,long${changes}`,
   );
   applyChangeSet(tx, changes);
+  // Each anchored element is a plain object the writer supplied, split into
+  // an entity document and a reference to it, so both halves hold what the
+  // writer supplied: the entity's root holds the object, and the slot the
+  // reference to it. Recorded once the changes are applied, as `Cell.set`
+  // records its own destination; whether each stamps is preparation's
+  // decision (`assertedValueRootPaths` in `cfc/prepare.ts`).
+  for (const { slot, entity } of anchored) {
+    const entityRoot = {
+      space: entity.space,
+      id: entity.id,
+      scope: entity.scope,
+      path: [],
+    };
+    tx.recordCfcAssertedValueRoot(entityRoot, runtimeWritePolicyAuthorization);
+    tx.recordCfcAssertedValueRoot(
+      {
+        space: slot.space,
+        id: slot.id,
+        scope: slot.scope,
+        path: [...slot.path],
+      },
+      runtimeWritePolicyAuthorization,
+      entityRoot,
+    );
+  }
   return changes.length > 0;
 }
 
-/** Materialize absent scoped input slots behind a pattern's argument reference. */
+/** Declared input fields whose default storage continues through a user row. */
+export function sessionScopedArgumentKeys(
+  schema: JSONSchema | undefined,
+): string[] {
+  const resolved = resolveSchema(schema);
+  if (!isObjectOrArray(resolved) || !isObjectOrArray(resolved.properties)) {
+    return [];
+  }
+  return Object.keys(resolved.properties).filter((key) =>
+    declaredCellScope(ContextualFlowControl.getSchemaAtPath(schema, [key])) ===
+      "session"
+  );
+}
+
+/** The default initialization declaration carried by a stored link value. */
+function scopeInitialization(value: unknown): "session" | undefined {
+  if (!isPrimitiveCellLink(value)) return undefined;
+  return (linkRefPayload(value) as Record<string, unknown>)
+      .scopeInitialization === "session"
+    ? "session"
+    : undefined;
+}
+
+/** A space-to-user default link whose missing user instances continue to session. */
+function sessionInitializationLink(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  target: NormalizedFullLink,
+  base: NormalizedFullLink,
+) {
+  const reference = scopedRedirect(runtime, tx, target, base);
+  return carryCfcReferenceProvenance(
+    reference,
+    linkRefFrom({
+      ...linkRefPayload(reference),
+      scopeInitialization: "session",
+    }),
+  );
+}
+
+/** The canonical user continuation named by an automatic session default. */
+function sessionInitializationTarget(
+  value: unknown,
+  source: NormalizedFullLink,
+): NormalizedFullLink | undefined {
+  if (source.scope !== "space" || scopeInitialization(value) !== "session") {
+    return undefined;
+  }
+  const target = parseLink(value, source);
+  return target && areNormalizedLinksSame(target, { ...source, scope: "user" })
+    ? target
+    : undefined;
+}
+
+/** User slots whose presence must be loaded before initializing a session default. */
+export function scopedArgumentInitializationTargets(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  schema: JSONSchema | undefined,
+): NormalizedFullLink[] {
+  if (!getServerExecutionConfig()) return [];
+  let blocked = false;
+  const container = resolveLink(runtime, tx, argument, "value", {
+    onScopeBlocked: () => blocked = true,
+  });
+  if (
+    blocked || container.pendingHopDoc || container.scope !== "space" ||
+    isFabricDataUri(container.id)
+  ) return [];
+  // Reads which slots exist; the writes it leads to land in those slots.
+  const value = tx.readValueOrThrow(container, {
+    nonRecursive: true,
+    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+  });
+  if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return [];
+  return sessionScopedArgumentKeys(schema).flatMap((key) => {
+    const source = { ...container, path: [...container.path, key] };
+    const target = Object.hasOwn(value, key)
+      ? sessionInitializationTarget(
+        tx.readValueOrThrow(source, { meta: linkResolutionProbe }),
+        source,
+      )
+      : { ...source, scope: "user" as const };
+    return target ? [target] : [];
+  });
+}
+
+/** Materialize absent scoped input slots and declared session continuations. */
 export function initializeScopedArgumentSlots(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
@@ -620,7 +864,12 @@ export function initializeScopedArgumentSlots(
     nonRecursive: true,
     meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
   };
-  const value = tx.readValueOrThrow(container, options);
+  // Reads which slots exist; the writes it leads to land in those slots, and
+  // the diffs below attempt them under `options`.
+  const value = tx.readValueOrThrow(container, {
+    nonRecursive: true,
+    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+  });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return;
   const changes: ChangeSet = [];
   for (const key of Object.keys(resolvedSchema.properties)) {
@@ -629,12 +878,88 @@ export function initializeScopedArgumentSlots(
     if (scope === undefined || scopeRank(scope) <= scopeRank(container.scope)) {
       continue;
     }
-    if (Object.hasOwn(value, key)) continue;
     const childLink: NormalizedFullLink = {
       ...container,
       path: [...container.path, key],
       schema: childSchema,
     };
+    const present = Object.hasOwn(value, key);
+    if (
+      getServerExecutionConfig() && scope === "session" &&
+      container.scope === "space"
+    ) {
+      // The declaration is a link-value dependency, including changes that
+      // preserve the containing object's key set and the reference address.
+      const target = present
+        ? sessionInitializationTarget(
+          tx.readValueOrThrow(childLink, { meta: linkResolutionProbe }),
+          childLink,
+        )
+        : { ...childLink, scope: "user" as const };
+      if (!target) continue;
+      let targetBlocked = false;
+      const resolvedTarget = resolveLink(runtime, tx, target, "top", {
+        onScopeBlocked: () => targetBlocked = true,
+      });
+      if (
+        targetBlocked || resolvedTarget.pendingHopDoc ||
+        !areNormalizedLinksSame(target, resolvedTarget)
+      ) continue;
+      if (!present) {
+        changes.push(...normalizeAndDiff(
+          runtime,
+          tx,
+          childLink,
+          sessionInitializationLink(runtime, tx, target, childLink),
+          argumentLink,
+          options,
+          { seen: new Map() },
+          undefined,
+        ));
+      }
+      const parent = tx.readValueOrThrow({
+        ...target,
+        path: target.path.slice(0, -1),
+      }, options);
+      // The leaf absence remains a commit dependency when a concurrent write
+      // fills the slot without changing its parent's nonrecursive shape.
+      tx.readValueOrThrow(target, options);
+      if (
+        parent !== undefined && (
+          !isKeyableObjectNotArray(parent) || isPrimitiveCellLink(parent) ||
+          Object.hasOwn(parent, target.path.at(-1)!)
+        )
+      ) continue;
+      if (parent === undefined) {
+        // Missing containers may be created, but an explicitly undefined
+        // ancestor is an authored value and must not be replaced by a record.
+        const address = toMemorySpaceAddress(target);
+        let presentAncestor = false;
+        for (let depth = address.path.length - 1; depth > 0; depth--) {
+          const owner = tx.readOrThrow({
+            ...address,
+            path: address.path.slice(0, depth - 1),
+          }, options);
+          if (owner === undefined) continue;
+          presentAncestor = !isKeyableObjectNotArray(owner) ||
+            Object.hasOwn(owner, address.path[depth - 1]);
+          break;
+        }
+        if (presentAncestor) continue;
+      }
+      changes.push(...normalizeAndDiff(
+        runtime,
+        tx,
+        target,
+        scopedRedirect(runtime, tx, { ...target, scope: "session" }, target),
+        argumentLink,
+        options,
+        { seen: new Map() },
+        undefined,
+      ));
+      continue;
+    }
+    if (present) continue;
     changes.push(...scopedRedirectChanges(
       runtime,
       tx,
@@ -658,7 +983,7 @@ function scopedRedirectChanges(
   context: unknown,
   options: DiffAndUpdateOptions | undefined,
   state: DiffWalkState,
-  currentValue: unknown,
+  currentValue: FabricValue,
 ): ChangeSet {
   const scopedLink: NormalizedFullLink = { ...link, scope };
   const viaUser = getServerExecutionConfig() && scope === "session" &&
@@ -679,7 +1004,9 @@ function scopedRedirectChanges(
     runtime,
     tx,
     link,
-    scopedRedirect(runtime, tx, target, link),
+    viaUser
+      ? sessionInitializationLink(runtime, tx, target, link)
+      : scopedRedirect(runtime, tx, target, link),
     context,
     options,
     state,
@@ -706,12 +1033,14 @@ export type ChangeSet = {
  * Turns `content` into an entity document of its own: the slot at `link` gets
  * a link to a (possibly new) document whose id derives from `idSeed`, the
  * slot's location, and the passed context, and `content` is diffed into that
- * document. When the slot is an element of a STORED array, the id derives
- * from the nearest non-array ancestor location, so the element's identity
- * does not depend on its position. Array ancestry is read from transaction
- * pre-state, so on a fresh array's first write the indices remain in the
- * derivation and identity IS position-bearing there -- a long-standing
- * limitation.
+ * document. When the slot is an array element, the id derives from the
+ * nearest non-array ancestor location, so the element's identity does not
+ * depend on its position. Under a context, array ancestry within what the
+ * walk writes is the written value's (`DiffWalkState.writtenKinds`), so a
+ * fresh array's first write derives the same identities a rewrite of a
+ * stored one does. Elsewhere, and above what the walk writes, the stored
+ * ancestor's type is read, so without a context a fresh array's first write
+ * keeps its indices in the derivation.
  *
  * `registerKey` is the caller's original value, and `content` a distinct
  * shallow copy of it; `registerKey` is registered in `state.seen` so shared
@@ -730,15 +1059,37 @@ function anchorValueAsEntity(
 ): ChangeSet {
   let path = link.path;
 
+  // Each read below finds the id's context, as the write machinery reads to
+  // build its write; the write lands at `link`, not at what these read.
+  const probeOptions = {
+    ...options,
+    meta: { ...withoutAttemptedWriteMark(options?.meta), ...mergeableOpRead },
+  };
+
   // If we're setting an array element, make the array the context for the
   // derived id, not the array index. If it's a nested array, take the parent
   // array as context, recursively.
-  while (
-    path.length > 0 &&
-    Array.isArray(
-      tx.readValueOrThrow({ ...link, path: path.slice(0, -1) }, options),
-    )
-  ) {
+  //
+  // Under a context, which a handler's or a lift's frame supplies, the
+  // parents this walk writes are judged by what it writes there, so the
+  // identity is a function of the written value and its place, not of what
+  // the place held before: a fresh array's elements take the identities a
+  // stored one's would, and nothing the write replaces reaches the
+  // reference it stores. A writer that sets a list of objects therefore
+  // reads nothing of the list it replaces, which is what lets an input
+  // witness hold for it. Without a context, the runtime's own frame, whose
+  // counter restarts with every runtime, keeps judging by the stored
+  // parent: there the index a fresh array's elements keep is what separates
+  // them from what another runtime anchors later. Above what the walk
+  // writes, the stored parent decides either way.
+  while (path.length > 0) {
+    const parent = { ...link, path: path.slice(0, -1) };
+    const written = context === undefined
+      ? undefined
+      : state.writtenKinds?.get(writtenPositionKey(parent));
+    if (
+      !(written ?? Array.isArray(tx.readValueOrThrow(parent, probeOptions)))
+    ) break;
     path = path.slice(0, -1);
   }
 
@@ -748,15 +1099,22 @@ function anchorValueAsEntity(
     context,
   });
 
+  // This link is persisted, so it carries a schema only where the schema is a
+  // shape: a `true` or `{}` on the parent is left off rather than written into
+  // the stored link. `false` is left off by the same test, and cannot reach
+  // here in any case — the diff walk hands a child slot its schema through
+  // `getSchemaAtPath`, which reads a `false` slot as no schema.
+  const entrySchema = resolveSchemaForValue(link.schema, content);
   const newEntryLink: NormalizedFullLink = {
     id: toURI(entityId),
     space: link.space,
     scope: link.scope,
     path: [],
-    schema: resolveSchemaForValue(link.schema, content),
+    schema: isNontrivialSchema(entrySchema) ? entrySchema : undefined,
   };
 
   state.seen.set(registerKey, newEntryLink);
+  state.anchored?.push({ slot: link, entity: newEntryLink });
 
   // This helper handles both creation and later writes to an anchored entity.
   // Carry the child schema on every visit so CFC can merge the candidate
@@ -867,6 +1225,21 @@ function anchorValueAsEntity(
 }
 
 /**
+ * Reads the slot again, without the write-destination exclusion, at the
+ * points where what is stored there decides where the write lands rather
+ * than only whether it happens. The comparison read this repeats leaves the
+ * transaction's flow join; this one joins it, so the slot's own label gates
+ * every write the redirect carries the walk to.
+ */
+function consumeSteeringSlot(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  options: DiffAndUpdateOptions | undefined,
+): void {
+  tx.readValueOrThrow(link, options);
+}
+
+/**
  * Traverses objects and returns an array of changes that should be written. An
  * empty array means no changes.
  *
@@ -896,7 +1269,7 @@ export function normalizeAndDiff(
   context?: unknown,
   options?: DiffAndUpdateOptions,
   state: DiffWalkState = { seen: new Map() },
-  precomputedCurrent: unknown = NO_PRECOMPUTED,
+  precomputedCurrent: FabricValue | typeof NO_PRECOMPUTED = NO_PRECOMPUTED,
   // Whether the PARENT object's schema lists this slot in `required`
   // (threaded one hop by the object branch below; undefined = unknown).
   // Consumed by the scope-isolation warn: a missing cell only voids the
@@ -918,9 +1291,7 @@ export function normalizeAndDiff(
   diffLogger.debug(
     "diff",
     () =>
-      `[DIFF_ENTER] path=${pathStr} type=${valueType} newValue=${
-        toCompactDebugString(newValue)
-      }`,
+      debugStr`[DIFF_ENTER] path=${pathStr} type=${valueType} newValue=$quote,long${newValue}`,
   );
 
   // When detecting a circular reference on JS objects, turn it into a cell,
@@ -1073,7 +1444,7 @@ export function normalizeAndDiff(
           runtime,
           tx,
           link,
-          scopedRedirect(runtime, tx, userLink, link),
+          sessionInitializationLink(runtime, tx, userLink, link),
           context,
           options,
           state,
@@ -1166,9 +1537,13 @@ export function normalizeAndDiff(
     // The seed belongs to this handle's schema. Looking up an inherited
     // schema would observe the referenced document during serialization.
     const cellSchema = newValue.getAsNormalizedFullLink().schema;
+    let initializedSeed = false;
     const seedDefault = isObjectOrArray(cellSchema)
       ? cellSchema.default
       : undefined;
+    // A descriptor from before streams were declared by schema spells the
+    // declaration as a default of `{ $stream: true }`. That is not a value a
+    // stream holds, and a stream's document holds none, so it seeds nothing.
     const seedTarget = seedDefault !== undefined &&
         !(isObjectOrArray(seedDefault) &&
           (seedDefault as Record<string, unknown>).$stream === true)
@@ -1215,78 +1590,126 @@ export function normalizeAndDiff(
         );
       }
       if (absent) {
-        let materialized = false;
-        try {
-          tx.writeValueOrThrow(
-            seedTarget,
-            fabricFromNativeValue(seedDefault),
-          );
-          // Trusted initialization covers the new cell and, for an action's
-          // root result, the new reference to it. Each document retains its
-          // own declared policy. Prepare independently requires creation of
-          // the value root before exempting either from writeAuthorizedBy.
-          tx.recordCfcWritePolicyInput({
-            kind: "structural-provenance",
-            target: {
-              space: seedTarget.space,
-              id: seedTarget.id,
-              scope: seedTarget.scope,
-              path: [],
-            },
-            claim: CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
-            sources: [
-              {
-                space: seedTarget.space,
-                id: seedTarget.id,
-                scope: seedTarget.scope,
-                path: [],
-              },
-              ...(options?.schemaRole === "output" && link.path.length === 0
-                ? [{
-                  space: link.space,
-                  id: link.id,
-                  scope: link.scope,
-                  path: [],
-                }]
-                : []),
-            ],
-          }, runtimeWritePolicyAuthorization);
-          materialized = true;
-          // Deliberately NOT memoized here: if this tx aborts, the doc stays
-          // absent and the next serialization must seed again. Once the
-          // write commits, the next check finds the doc present and settles.
-        } catch (error) {
-          // Fail open: a seed-materialization failure must not abort the
-          // serialization that references the cell — the link (with its
-          // schema default) still gets written below.
-          diffLogger.warn(
-            "diff",
-            () => [
-              `[BRANCH_CELL] seed materialization failed for`,
-              seedTarget.id,
-              error,
-            ],
-          );
-        }
-        if (materialized) {
-          // The seed is content written to this document. Its constructor
-          // policy belongs here independently of the receiving reference's
-          // projection. A policy failure must abort the initialized write.
-          recordRelevantSchemaWritePolicyInput(tx, seedTarget, cellSchema);
-        }
+        recordRelevantSchemaWritePolicyInput(tx, seedTarget, cellSchema);
+        tx.writeValueOrThrow(
+          seedTarget,
+          fabricFromConvertibleJsValue(seedDefault),
+        );
+        // Only the exact seed written into an absent slot is initialization.
+        // The private mark prevents a caller from manufacturing this authority
+        // through the public transaction interface.
+        tx.recordCfcWritePolicyInput({
+          kind: "initialization",
+          mode: "seed",
+          target: {
+            space: seedTarget.space,
+            id: seedTarget.id,
+            scope: seedTarget.scope,
+            path: [],
+          },
+          value: fabricFromConvertibleJsValue(seedDefault),
+        }, runtimeWritePolicyAuthorization);
+        initializedSeed = true;
+        // Deliberately NOT memoized here: if this tx aborts, the doc stays
+        // absent and the next serialization must seed again. Once the
+        // write commits, the next check finds the doc present and settles.
       }
     }
+    const streamHandle = newValue.kind === "stream";
+    // A rerun can return the same protected cell with a different, unused
+    // default. Record the unchanged root reference for CFC to verify alongside
+    // its final protection. Materialization runs first so an existing reference
+    // cannot hide an absent backing document.
+    if (
+      tx.getCfcState().flowLabelsMode !== "persist" &&
+      options?.schemaRole === "output" && !streamHandle &&
+      link.path.length === 0 &&
+      seedTarget !== undefined && seedTarget.path.length === 0 &&
+      !initializedSeed && schemaHasIfc(cellSchema) &&
+      !cfcLabelViewHasValues(carriedCfcLabelView)
+    ) {
+      const probeOptions = {
+        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      };
+      const currentReference = tx.readValueOrThrow(link, probeOptions);
+      if (
+        isPrimitiveCellLink(currentReference) &&
+        !isWriteRedirectLink(currentReference) &&
+        scopeInitialization(currentReference) === undefined &&
+        areNormalizedLinksSame(parseLink(currentReference, link), seedTarget) &&
+        tx.readValueOrThrow(seedTarget, probeOptions) !== undefined
+      ) {
+        // Preserve this attempt: preparation must refuse changed policy or any
+        // additional write attempt, even when the reference bytes stay equal.
+        //
+        // A write-destination read (spec §18.6.2): it records the attempt at
+        // the destination, and its result is discarded, so no written value
+        // or address is taken from it. The reference recorded below comes
+        // from the verifier read above.
+        tx.readValueOrThrow(link, {
+          ...options,
+          meta: {
+            ...options?.meta,
+            ...markReadAsAttemptedWrite,
+            ...writeDestinationRead,
+          },
+        });
+        tx.recordCfcWritePolicyInput({
+          kind: "preserved-output",
+          target: {
+            space: link.space,
+            id: link.id,
+            scope: link.scope,
+            path: [],
+          },
+          value: currentReference,
+        }, runtimeWritePolicyAuthorization);
+        tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
+        return [];
+      }
+    }
+    // A stream handle's own schema is the event schema it accepts. The link
+    // that stands for the handle declares the stream, so a reader following
+    // it to a document that holds nothing still knows what the position is.
+    // The handle's kind decides, with nothing read: a read of the target here
+    // would join its label into this write.
+    const cellLink = newValue.getAsNormalizedFullLink();
     newValue = carryCfcReferenceProvenance(
       newValue,
       attachCfcLabelViewToSigilLink(
-        createSigilLinkFromParsedLink(newValue.getAsNormalizedFullLink(), {
-          base: link,
-          includeSchema: true,
-        }),
+        createSigilLinkFromParsedLink(
+          streamHandle
+            ? { ...cellLink, schema: declareStreamSchema(cellLink.schema) }
+            : cellLink,
+          {
+            base: link,
+            includeSchema: true,
+          },
+        ),
         carriedCfcLabelView,
-      ) as object,
+      ),
     );
+    if (initializedSeed && !streamHandle && options?.schemaRole === "output") {
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "projection",
+        target: {
+          space: link.space,
+          id: link.id,
+          scope: link.scope,
+          path: [...link.path],
+        },
+        value: newValue as FabricValue,
+      }, runtimeWritePolicyAuthorization);
+    }
   }
+
+  // The incoming value's link, parsed once for every check below that asks
+  // whether the value is a link or where it points, and `undefined` where it
+  // is not a sigil link.
+  const newValueLink = isPrimitiveCellLink(newValue)
+    ? parseLink(newValue, link)
+    : undefined;
 
   // Check for links that are data: URIs and inline them, by calling
   // normalizeAndDiff on the contents of the link. This re-entry REPLACES the
@@ -1298,10 +1721,7 @@ export function normalizeAndDiff(
   // The re-entry hands on what `findAndInlineDataUriLinks` produced, so the
   // check accepts exactly the media type that call inlines: this codec's
   // own. A `data:` URI of any other media type stores as an ordinary link.
-  const newValueLinkId = isCellLink(newValue)
-    ? parseLink(newValue, link).id
-    : undefined;
-  if (newValueLinkId !== undefined && isFabricDataUri(newValueLinkId)) {
+  if (newValueLink !== undefined && isFabricDataUri(newValueLink.id)) {
     return normalizeAndDiff(
       runtime,
       tx,
@@ -1324,7 +1744,9 @@ export function normalizeAndDiff(
   }
 
   // If we're about to create a reference to ourselves, no-op
-  if (areMaybeLinkAndNormalizedLinkSame(newValue, link, link)) {
+  if (
+    newValueLink !== undefined && areNormalizedLinksSame(link, newValueLink)
+  ) {
     diffLogger.debug(
       "diff",
       () =>
@@ -1343,26 +1765,39 @@ export function normalizeAndDiff(
     ? tx.readValueOrThrow(
       link,
       outputComparison
-        ? { ...options, meta: { ...options?.meta, ...authorizationRead } }
-        : options,
+        ? {
+          ...options,
+          meta: {
+            ...options?.meta,
+            ...authorizationRead,
+            ...writeDestinationRead,
+          },
+        }
+        : { ...options, meta: { ...options?.meta, ...writeDestinationRead } },
     )
     : precomputedCurrent;
   const readEnd = outputComparison ? tx.currentActivityIndex?.() : undefined;
 
+  // Whether the stored value is a link, asked once. Where it points is parsed
+  // only by a check that needs to know: a write redirect replaces a stored
+  // link without reading its target, even one whose path does not parse. The
+  // casts below lean on this answer, which the type of the reassignable
+  // `currentValue` cannot carry.
+  const currentValueIsLink = isPrimitiveCellLink(currentValue);
+
   // A new alias can overwrite a previous alias. No-op if the same.
-  if (isWriteRedirectLink(newValue)) {
+  if (newValueLink?.overwrite === "redirect") {
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
-    const parsedLink = parseLink(newValue, link);
     if (
       isWriteRedirectLink(currentValue) &&
       areNormalizedLinksSame(
         parseLink(currentValue, link),
-        parsedLink,
+        newValueLink,
       ) &&
       (tx.getCfcState().flowLabelsMode !== "persist" ||
         storedReferenceRetainsScope(
           parseLink(currentValue, link),
-          parsedLink,
+          newValueLink,
           getCfcReferenceProvenance(newValue),
         ))
     ) {
@@ -1378,11 +1813,12 @@ export function normalizeAndDiff(
         recordLinkWritePolicyInput(
           tx,
           link,
-          parsedLink,
+          newValueLink,
           carriedCfcLabelView,
           getCfcReferenceProvenance(newValue),
         );
       }
+      tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
       return [];
     } else {
       diffLogger.debug(
@@ -1393,7 +1829,7 @@ export function normalizeAndDiff(
       recordLinkWritePolicyInput(
         tx,
         link,
-        parsedLink,
+        newValueLink,
         carriedCfcLabelView,
         getCfcReferenceProvenance(newValue),
       );
@@ -1406,7 +1842,8 @@ export function normalizeAndDiff(
   }
 
   // Handle alias in current value (at this point: if newValue is not an alias)
-  if (isWriteRedirectLink(currentValue)) {
+  if (currentValueIsLink && isWriteRedirectLink(currentValue)) {
+    consumeSteeringSlot(tx, link, options);
     diffLogger.debug(
       "diff",
       () =>
@@ -1443,9 +1880,10 @@ export function normalizeAndDiff(
   // per-session state at the shared base scope. Reference values are exempt:
   // writing a link re-binds the slot (and the schema-declared narrowing above
   // already handled scoped re-binds before reaching here).
-  if (isPrimitiveCellLink(currentValue) && !isCellLink(newValue)) {
-    const storedLink = parseLink(currentValue, link);
+  if (currentValueIsLink && newValueLink === undefined) {
+    const storedLink = parseLink(currentValue as PrimitiveCellLink, link);
     if (scopeRank(storedLink.scope) > scopeRank(link.scope)) {
+      consumeSteeringSlot(tx, link, options);
       diffLogger.debug(
         "diff",
         () =>
@@ -1468,16 +1906,13 @@ export function normalizeAndDiff(
     }
   }
 
-  if (isPrimitiveCellLink(newValue)) {
+  if (newValueLink !== undefined) {
     diffLogger.debug(
       "diff",
       () =>
-        `[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=${
-          toCompactDebugString(newValue)
-        }`,
+        debugStr`[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=$quote,long${newValue}`,
     );
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
-    const parsedLink = parseLink(newValue, link);
 
     // Collapse same-document self/parent links created by query-result dereferencing.
     // Example: "internal.__#1.next" -> "internal.__#1". Writing that link would
@@ -1485,16 +1920,16 @@ export function normalizeAndDiff(
     // (a plain JSON snapshot). Do not collapse when the link came from converting
     // a seen cycle to a Cell, and only collapse when the target is the immediate
     // parent path.
-    if (!linkOriginFromCell && isImmediateParent(parsedLink, link)) {
+    if (!linkOriginFromCell && isImmediateParent(newValueLink, link)) {
       diffLogger.debug(
         "diff",
         () =>
           `[CELL_LINK_COLLAPSE] Same-doc ancestor/self link detected at path=${pathStr} -> embedding snapshot from ${
-            parsedLink.path.join(".")
+            newValueLink.path.join(".")
           }`,
       );
       const snapshot = tx.readValueOrThrow(
-        parsedLink,
+        newValueLink,
         options,
       ) as unknown;
       // This re-entry REPLACES the value (the snapshot, not the link), so
@@ -1511,12 +1946,16 @@ export function normalizeAndDiff(
       );
     }
     if (
-      isPrimitiveCellLink(currentValue) &&
-      areLinksSame(newValue, currentValue, link) &&
+      currentValueIsLink &&
+      areNormalizedLinksSame(
+        newValueLink,
+        parseLink(currentValue as PrimitiveCellLink, link),
+      ) &&
+      scopeInitialization(newValue) === scopeInitialization(currentValue) &&
       (tx.getCfcState().flowLabelsMode !== "persist" ||
         storedReferenceRetainsScope(
-          parseLink(currentValue, link),
-          parsedLink,
+          parseLink(currentValue as PrimitiveCellLink, link),
+          newValueLink,
           getCfcReferenceProvenance(newValue),
         ))
     ) {
@@ -1532,11 +1971,12 @@ export function normalizeAndDiff(
         recordLinkWritePolicyInput(
           tx,
           link,
-          parsedLink,
+          newValueLink,
           carriedCfcLabelView,
           getCfcReferenceProvenance(newValue),
         );
       }
+      tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
       return [];
     } else {
       // Scope-isolation guard (spec: docs/specs/scoped-cell-instances.md,
@@ -1575,11 +2015,11 @@ export function normalizeAndDiff(
       // re-scope walks) flow through. This is a WARN, not a throw, pending
       // review; see #4561. Authors: share the value, or a space-scoped cell
       // with a PerUser pointer to "mine" (pitfall #6 shows the idiom).
-      if (scopeRank(parsedLink.scope) > scopeRank(link.scope)) {
+      if (scopeRank(newValueLink.scope) > scopeRank(link.scope)) {
         const declared = declaredCellScope(link.schema);
         if (
           (declared === undefined ||
-            scopeRank(declared) < scopeRank(parsedLink.scope)) &&
+            scopeRank(declared) < scopeRank(newValueLink.scope)) &&
           !schemaToleratesMissing(link.schema) &&
           // Optional slots (parent schema present, key not in `required`)
           // degrade harmlessly when the cell is missing — only a required
@@ -1590,14 +2030,14 @@ export function normalizeAndDiff(
           diffLogger.warn(
             "diff",
             () => [
-              `Storing a ${parsedLink.scope}-scoped link in ` +
+              `Storing a ${newValueLink.scope}-scoped link in ` +
               `${link.scope}-scoped data at path "${pathStr}": scoped links ` +
               `do not carry a principal, so every reader resolves it to ` +
-              `their own ${parsedLink.scope} instance. If this write meant ` +
+              `their own ${newValueLink.scope} instance. If this write meant ` +
               `to SHARE data, it cannot propagate — share the value itself, ` +
               `or a space-scoped cell (keep a PerUser pointer to "mine"), ` +
               `or declare the slot's schema with scope ` +
-              `"${parsedLink.scope}" if per-reader resolution is intended. ` +
+              `"${newValueLink.scope}" if per-reader resolution is intended. ` +
               `See docs/development/debugging/gotchas/` +
               `scoped-cell-pitfalls.md (pitfall 6).`,
             ],
@@ -1612,7 +2052,7 @@ export function normalizeAndDiff(
       recordLinkWritePolicyInput(
         tx,
         link,
-        parsedLink,
+        newValueLink,
         carriedCfcLabelView,
         getCfcReferenceProvenance(newValue),
       );
@@ -1626,14 +2066,14 @@ export function normalizeAndDiff(
     }
   }
 
-  // Mint the fabric form of a native object -- a `Date`, a `Uint8Array`, an
+  // Mint the fabric form of a JS object -- a `Date`, a `Uint8Array`, an
   // `Error`. Anything else comes back `undefined`, which says only that
   // nothing needed minting; the value then has to be storable as it stands,
   // and the vet is what holds it to that. Nothing minted here is a container,
   // so a container keeps its own identity all the way through the walk below
   // -- and that identity is the one shared references and cycles arrive
   // under, which is what `state.seen` is keyed on.
-  const minted = shallowFabricFromNativeObjectElseUndefined(newValue);
+  const minted = shallowFabricFromConvertibleJsObjectElseUndefined(newValue);
   if (minted === undefined) {
     assertValidFabricValueLayer(newValue);
   } else {
@@ -1644,6 +2084,10 @@ export function normalizeAndDiff(
     );
     newValue = minted as FabricValue;
   }
+
+  // Which positions this walk writes an array at, for the identity an
+  // anchored element beneath one takes (`anchorValueAsEntity`).
+  state.writtenKinds?.set(writtenPositionKey(link), Array.isArray(newValue));
 
   // Anchor a plain object sitting in an array into an entity document of its
   // own, so mutable arrays hold links rather than inline objects. Only a
@@ -1669,7 +2113,7 @@ export function normalizeAndDiff(
   // content equality: the ops build their combined arrays by carrying the
   // stored elements through by reference (the stored tree is frozen, so the
   // reference IS the stored value), while the written value here is only
-  // shallowly normalized -- its nested contents (Cells, native objects) are
+  // shallowly normalized -- its nested contents (Cells, JS objects) are
   // converted later in the recursion, so a deep comparison would inspect
   // values whose canonical form does not exist yet.
   //
@@ -1883,14 +2327,13 @@ export function normalizeAndDiff(
     // emitted nothing; identical re-asserts are idempotent at the
     // store (serving-loop.md §5).
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // With nothing emitted, the slot already holds the written array in
+      // stored form, with each `Cell` in `newValue` held as a link, so that is
+      // what gets asserted. It is the transaction's own read of the slot, so
+      // the caller holds no reference to it.
+      changes.push({ location: link, value: currentValue });
+    } else if (changes.length === 0) {
+      tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }
 
     return changes;
@@ -1923,15 +2366,15 @@ export function normalizeAndDiff(
     // of the same coordinated pass. We don't support that descent yet, so the
     // wrapper's internals could otherwise reach storage improperly converted.
     //
-    // As a stopgap we run the deep `fabricFromNativeValue()`, which converts
-    // the internals via a *separate, uncoordinated* pass. The cost: any
-    // `FabricValue` reachable both inside the wrapper and elsewhere in the
+    // As a stopgap we run the deep `fabricFromConvertibleJsValue()`, which
+    // converts the internals via a *separate, uncoordinated* pass. The cost:
+    // any `FabricValue` reachable both inside the wrapper and elsewhere in the
     // outer tree gets de-shared (the outer walk handles one copy; this deep
-    // call mints an independent, separately-frozen copy with no shared `seen`
-    // / ID bookkeeping). That is invisible for `FabricError` today only
-    // because an error's `cause` / custom props aren't, in practice, shared
-    // with the rest of the tree -- but `FabricSet` / `FabricMap` (collections
-    // of arbitrary, routinely-shared `FabricValue`s) WILL break here once they
+    // call mints an independent, separately-frozen copy with no shared `seen` /
+    // ID bookkeeping). That is invisible for `FabricError` today only because
+    // an error's `cause` / custom props aren't, in practice, shared with the
+    // rest of the tree -- but `FabricSet` / `FabricMap` (collections of
+    // arbitrary, routinely-shared `FabricValue`s) WILL break here once they
     // carry real traffic. Proper fix: coordinated descent into wrapper
     // internals, after which a shallow conversion suffices.
     //
@@ -1940,7 +2383,7 @@ export function normalizeAndDiff(
     // instances short-circuit by identity.
     changes.push({
       location: link,
-      value: fabricFromNativeValue(newValue),
+      value: fabricFromConvertibleJsValue(newValue),
     });
     return changes;
   }
@@ -1964,7 +2407,7 @@ export function normalizeAndDiff(
     // slots whose stored parent is still the special object.
     if (
       !isKeyableObjectNotArray(currentValue) ||
-      isPrimitiveCellLink(currentValue)
+      currentValueIsLink
     ) {
       diffLogger.debug(
         "diff",
@@ -1979,7 +2422,7 @@ export function normalizeAndDiff(
     state.seen.set(newValue, link);
 
     // At this point currentValue is guaranteed to be a record
-    const currentRecord = currentValue as Record<string, unknown>;
+    const currentRecord = currentValue as FabricPlainObject;
 
     // Requiredness of each child slot, for the scope-isolation warn: only a
     // parent-`required` property makes a missing cell void the read.
@@ -2127,20 +2570,20 @@ export function normalizeAndDiff(
     // completion's equal-`{}` result riding a doomed overlay is never
     // asserted durably. See the array branch for the full rationale.
     if (changes.length === 0 && tx.isAuthoritativeWrites?.() === true) {
-      // Written whole rather than by its members, and this is the only branch
-      // that does so, which makes it the only one that owes the store a value
-      // the caller cannot go on mutating. Already-frozen input is handed
-      // through by identity.
-      changes.push({
-        location: link,
-        value: cloneIfNecessary(newValue as FabricValue, { deep: false }),
-      });
+      // As in the array branch, the slot already holds the written record in
+      // stored form, which is what gets asserted.
+      changes.push({ location: link, value: currentRecord });
+    } else if (changes.length === 0) {
+      tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
     }
 
     return changes;
   }
 
-  // When setting array length, also update the removed/added elements.
+  // A write to an array's `length` is emitted alone, and the write layer's
+  // length coercion decides what it leaves: a negative length counts from the
+  // end, a fraction is floored, and a grow adds holes. Unlike the array
+  // branch's shrink above, it names none of the slots a truncation removes.
   if (
     link.path.length > 0 && link.path[link.path.length - 1] === "length"
   ) {
@@ -2149,26 +2592,8 @@ export function normalizeAndDiff(
       path: link.path.slice(0, -1),
     }, options);
     if (Array.isArray(maybeCurrentArray)) {
-      const currentLength = maybeCurrentArray.length;
-      const newLength = newValue as number;
-      if (currentLength !== newLength) {
-        changes.push({ location: link, value: newLength });
-        for (
-          let i = Math.min(currentLength, newLength);
-          i < Math.max(currentLength, newLength);
-          i++
-        ) {
-          // Slots beyond the shorter length are removed (or, on growth,
-          // were never present): explicit deletes, not `undefined` values.
-          changes.push({
-            location: {
-              ...link,
-              path: [...link.path.slice(0, -1), i.toString()],
-            },
-            value: undefined,
-            delete: true,
-          });
-        }
+      if (maybeCurrentArray.length !== newValue) {
+        changes.push({ location: link, value: newValue as FabricValue });
         return changes;
       }
     } // else, i.e. parent is not an array: fall through to the primitive case
@@ -2193,6 +2618,8 @@ export function normalizeAndDiff(
     tx.isAuthoritativeWrites?.() === true
   ) {
     changes.push({ location: link, value: newValue as FabricValue });
+  } else {
+    tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
   }
 
   return changes;
@@ -2205,7 +2632,7 @@ export function normalizeAndDiff(
 function hasPath(value: unknown, path: readonly string[]): boolean {
   if (path.length === 0) return true;
 
-  if (value === null || value === undefined || typeof value !== "object") {
+  if (!isObjectOrArray(value)) {
     return false;
   }
 
@@ -2247,10 +2674,10 @@ function hasPath(value: unknown, path: readonly string[]): boolean {
 export function compactChangeSet(changes: ChangeSet): ChangeSet {
   if (changes.length <= 1) return changes;
 
-  // Group by document using safe separator (JSON.stringify avoids key collisions)
+  // Group by document without conflating boundaries between address fields.
   const byDocument = new Map<string, ChangeSet>();
   for (const change of changes) {
-    const key = JSON.stringify([
+    const key = stringTupleKey([
       change.location.space,
       change.location.id,
     ]);

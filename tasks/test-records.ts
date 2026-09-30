@@ -33,6 +33,11 @@ import {
   tryAdoptSpool,
 } from "@commonfabric/test-support/records";
 import {
+  commitMoment,
+  parseSeed,
+  SHUFFLE_SEED_VARIABLE,
+} from "@commonfabric/test-support/shuffle";
+import {
   localSubmissionsPrefix,
   parsePersonalKeyFile,
   type PersonalKeyFile,
@@ -72,6 +77,9 @@ interface CheckoutFacts {
 
   /** Output of `git status --porcelain`; empty when the tree is clean. */
   status?: string;
+
+  /** The seed the run's test runners shuffle their order by. */
+  shuffleSeed?: number;
 }
 
 /**
@@ -100,6 +108,7 @@ export function composeLocalContext(
   if (facts.branch !== undefined && facts.branch.length > 0) {
     context.branch = facts.branch;
   }
+  if (facts.shuffleSeed !== undefined) context.shuffleSeed = facts.shuffleSeed;
   const agent = agentLabel(env);
   if (agent !== undefined) context.agent = agent;
   return context;
@@ -108,16 +117,25 @@ export function composeLocalContext(
 /**
  * The context of a local run, captured at start: the commit and branch the
  * run actually began against, so a branch switch mid-run cannot mis-stamp
- * it. Runs git in `cwd` and composes the context from its answers.
+ * it, and the seed its test runners shuffle by. Runs git in `cwd` and
+ * composes the context from its answers.
  */
 export async function buildLocalContext(
   cwd: string,
   env: Environment = Deno.env.get,
 ): Promise<RunContext> {
+  const commit = await git(cwd, "rev-parse", "HEAD");
   return composeLocalContext({
-    commit: await git(cwd, "rev-parse", "HEAD"),
+    commit,
     branch: await git(cwd, "branch", "--show-current"),
     status: await git(cwd, "status", "--porcelain"),
+    // The seed of the commit already read, so a checkout that moves
+    // while the run starts cannot pair one commit with another's order.
+    shuffleSeed: parseSeed(
+      readEnv(SHUFFLE_SEED_VARIABLE, env),
+      (commit === undefined ? undefined : commitMoment(cwd, commit)) ??
+        new Date(),
+    ),
   }, env);
 }
 

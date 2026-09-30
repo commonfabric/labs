@@ -8,6 +8,8 @@
  * surfaced, and the retry decision keys off the same fields everywhere.
  */
 
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 /** A provider's stated reason for a failed exchange. */
 export interface HarnessProviderError {
   /** Provider error class, such as `service_unavailable_error`. */
@@ -21,7 +23,7 @@ export interface HarnessProviderError {
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  isObjectNotArray(value);
 
 const nonEmptyString = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;

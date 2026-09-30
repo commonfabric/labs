@@ -12,6 +12,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   BRIDGE_PROTOCOL,
@@ -29,6 +30,7 @@ import {
   GUEST_PORT_ORDERED,
   type GuestError,
   type GuestFlush,
+  type GuestPortRequest,
   isBridgeHostMessage,
 } from "./ipc.ts";
 
@@ -255,7 +257,7 @@ export class RemoteCell<T = FabricValue> {
     let value: unknown = this.get();
     let hasValue = this.#snapshot.status === "ready";
     for (const key of keys) {
-      if (value === null || typeof value !== "object") {
+      if (!isObjectOrArray(value)) {
         hasValue = false;
         break;
       }
@@ -503,6 +505,16 @@ export class FabricClient {
 
   constructor() {
     globalThis.addEventListener("message", this.#onHandoff);
+    // The host hands a port over once this document has loaded. Listening
+    // from before then, this client hears it. Listening from after, it may
+    // have missed it, so it asks for another; if the first is still on its
+    // way, whichever arrives first is the one it keeps.
+    if (globalThis.document?.readyState === "complete") {
+      globalThis.parent?.postMessage(
+        { type: "port-request" } satisfies GuestPortRequest,
+        "*",
+      );
+    }
   }
 
   describe(): Promise<BridgeManifest> {

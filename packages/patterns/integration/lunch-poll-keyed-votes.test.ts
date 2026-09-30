@@ -105,6 +105,28 @@ async function reverts(
   return each.reduce((sum, n) => sum + n, 0);
 }
 
+/**
+ * The refused commits of every session that wrote into `document`, one line
+ * each, naming what refused them.
+ *
+ * `reverts` counts what a session threw away; this says which of those
+ * commits touched a particular document. The two answer different questions,
+ * and for the burst below the second is the one about the vote write.
+ */
+async function refusalsWriting(
+  sessions: readonly MultiRuntimeSession[],
+  document: string,
+): Promise<string[]> {
+  const lines = await Promise.all(
+    sessions.map(async (session) =>
+      (await session.rejections())
+        .filter((rejection) => rejection.writes.includes(document))
+        .map((rejection) => `  ${session.label}: ${rejection.message}`)
+    ),
+  );
+  return lines.flat();
+}
+
 describe("lunch poll: a vote is a keyed, mergeable write", () => {
   let harness: MultiRuntimeHarness;
   let everyone: MultiRuntimeSession[];
@@ -116,6 +138,8 @@ describe("lunch poll: a vote is a keyed, mergeable write", () => {
       programPath: PROGRAM_PATH,
       rootPath: ROOT_PATH,
       sessions: NAMES.map((name) => ({ label: name.toLowerCase() })),
+      // Records each refused commit, which is what `refusalsWriting` reads.
+      recordRejections: true,
     });
     everyone = NAMES.map((name) => harness.session(name.toLowerCase()));
     host = everyone[0];
@@ -217,6 +241,8 @@ describe("lunch poll: a vote is a keyed, mergeable write", () => {
 
     await harness.settle();
     const before = await reverts(everyone);
+    await Promise.all(everyone.map((session) => session.clearRejections()));
+    const votes = (await host.link(["votes"])).id;
     const rounds = 3;
     for (let round = 1; round <= rounds; round++) {
       await Promise.all(
@@ -257,5 +283,20 @@ describe("lunch poll: a vote is a keyed, mergeable write", () => {
         "voter's recast and costs almost nothing. A count near this bound " +
         "means the vote write is contending on the whole list again",
     ).toBeLessThan(cast * rounds);
+
+    // The count above is every optimistic write these sessions had rolled
+    // back, whatever refused it, which is what makes it a bound. The refusals
+    // themselves carry what each commit wrote, so this asks the narrower
+    // question the count cannot: did any commit refused during the burst
+    // write the list every voter shares? A recast writes one voter's own vote
+    // document and leaves the list alone, so none of them did, and a refusal
+    // from elsewhere on the host does not move this.
+    const contended = await refusalsWriting(everyone, votes);
+    expect(
+      contended,
+      "commits refused during a burst of recasts wrote the shared vote " +
+        "list, so a recast is changing its membership after all:\n" +
+        contended.join("\n"),
+    ).toEqual([]);
   });
 });

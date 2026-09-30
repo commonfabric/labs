@@ -14,6 +14,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { nothing } from "lit";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { markdownTemplate } from "./markdown-template.ts";
 
@@ -29,11 +30,11 @@ interface Directive {
 }
 
 function isTemplate(value: unknown): value is Template {
-  return typeof value === "object" && value !== null && "_$litType$" in value;
+  return isObjectOrArray(value) && "_$litType$" in value;
 }
 
 function isDirective(value: unknown): value is Directive {
-  return typeof value === "object" && value !== null &&
+  return isObjectOrArray(value) &&
     "_$litDirective$" in value;
 }
 

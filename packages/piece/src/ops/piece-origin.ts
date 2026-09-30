@@ -7,6 +7,7 @@
  * `docs/specs/piece-source-lifecycle.md` is the design of record.
  */
 
+import { isDID } from "@commonfabric/identity/did";
 import {
   type Cell,
   fabricAuthorityMatchesSpaceHost,
@@ -35,6 +36,7 @@ import {
 } from "@commonfabric/runner/entity-kind";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
  * How an origin URL resolves.
@@ -221,7 +223,7 @@ export async function resolvePieceOriginSource(
     );
   }
   const stableRef = ref as StableFabricRef;
-  if (ref.space !== undefined && !ref.space.startsWith("did:")) {
+  if (ref.space !== undefined && !isDID(ref.space)) {
     throw new PieceOriginError(
       "piece origins require an explicit space DID",
     );
@@ -647,7 +649,7 @@ function tryClassifyOrigin(
 function isPatternRef(
   value: unknown,
 ): value is { identity: string; symbol: string } {
-  return typeof value === "object" && value !== null &&
+  return isObjectOrArray(value) &&
     typeof (value as { identity?: unknown }).identity === "string" &&
     typeof (value as { symbol?: unknown }).symbol === "string";
 }

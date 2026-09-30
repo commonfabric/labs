@@ -1,28 +1,29 @@
 /**
  * The repository type check, run per package. Each owning scope's paths are
  * checked as their own `deno check` invocation, timed and recorded as that
- * scope's `typecheck`-kind test, the way cfcheck already shards pattern
- * type-checking; the invocations run concurrently and any failure fails
- * the whole task. tasks/check.sh owns the Deno version gate and delegates
+ * scope's `typecheck`-kind test, the way cfcheck records each pattern it
+ * checks; the invocations run concurrently and any failure fails the whole
+ * task. tasks/check.sh owns the Deno version gate and delegates
  * here.
  *
- * This list is the only type check a path gets whose tests run under
- * `--no-check`: those runs lean on this task, via the Check job's "Type
- * check codebase" step, for type safety. A package whose test task checks
- * its own files instead — `packages/patterns` among them — is reached both
- * ways. Before adding `--no-check` to a test invocation, make sure every
- * file it loads is under a path listed here, because that flag is what
- * moves the file's type checking here. Removing a path removes the checking
- * this task gives it.
+ * Every `deno test` runs under `--no-check`, so the paths listed here are
+ * the only type check a test file, and anything it loads, gets; the lanes
+ * run this task as the `typecheck` suite. `UNCHECKED_TREES` records what
+ * the list leaves out, and why. Removing a path removes the checking this
+ * task gives it.
  */
 
-import { expandGlob } from "@std/fs";
+import { expandGlob, walkSync } from "@std/fs";
+import { parse as parseJsonc } from "@std/jsonc";
+import * as path from "@std/path";
 import { FragmentWriter } from "@commonfabric/test-support/records";
+import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 // Directory paths (no glob expansion needed).
 const DIRS = [
+  ".claude/scripts",
+  "docs",
   "packages/api",
-  "packages/background-piece-service",
   "packages/cf-harness",
   "packages/cli",
   "packages/connectors/agents/connector",
@@ -50,14 +51,11 @@ const DIRS = [
   "packages/llm",
   "packages/memory",
   "packages/navigation",
-  "packages/patterns/auth",
   "packages/patterns/battleship",
   "packages/patterns/budget-tracker",
   "packages/patterns/contacts",
   "packages/patterns/examples",
   "packages/patterns/gideon-tests",
-  "packages/patterns/google/core/integration",
-  "packages/patterns/google/core/util",
   "packages/patterns/integration",
   "packages/patterns/notes",
   "packages/patterns/scrabble",
@@ -83,11 +81,14 @@ const DIRS = [
   "packages/ts-transformers/test/reactive",
   "packages/ui",
   "packages/utils",
+  "skills",
   "tasks",
+  "tools",
 ];
 
 // Paths reached by pattern rather than named outright.
 const GLOBS = [
+  "packages/connectors/*.ts",
   "scripts/*.ts",
   "packages/static/*.ts",
   "packages/patterns/*.ts",
@@ -104,11 +105,11 @@ const GLOBS = [
   "packages/patterns/iframe-*/**/guest.ts",
   "packages/patterns/iframe-*/**/guest.tsx",
   "packages/patterns/iframe-*/**/contract.ts",
-  // A `.browser.test.ts` reaches the browser through `deno bundle`, which
-  // transpiles rather than type-checks, and `packages/patterns` keeps it out
-  // of the `deno test` pass that would have. This task is the only thing that
-  // opens it.
-  "packages/patterns/**/*.browser.test.ts",
+  // The tests of the pattern tree's plain modules. A `.test.ts` runs under
+  // `deno test --no-check`, and a `.browser.test.ts` reaches its browser
+  // through `deno bundle`, which transpiles rather than type-checks, so this
+  // task is the only thing that opens either.
+  "packages/patterns/**/*.test.ts",
   // `deno check` takes no exclusion, so a tree holding a `test/fixtures`
   // subtree it must not open is reached by glob rather than as one directory
   // entry: per tree, a pattern for the test files at any depth and another
@@ -120,38 +121,11 @@ const GLOBS = [
   "packages/ts-transformers/test/**/*.test.ts",
   "packages/schema-generator/test/*.ts",
   "packages/schema-generator/test/**/*.test.ts",
-  "packages/patterns/google/core/*.ts",
-  "packages/patterns/google/core/*.tsx",
-  "packages/patterns/google/core/experimental/*.ts",
-  "packages/patterns/google/core/experimental/*.tsx",
-  "packages/patterns/google/extractors/*.ts",
-  "packages/patterns/google/extractors/*.tsx",
-  "packages/patterns/google/WIP/*.ts",
-  "packages/patterns/google/WIP/*.tsx",
 ];
 
 /** Whether a repository-relative path is a test rather than a source file. */
 export function isTestModule(file: string): boolean {
   return /\.test\.[cm]?[jt]sx?$/.test(file);
-}
-
-/**
- * Whether a path is a pattern test that one of the two lanes type-checks.
- *
- * `packages/patterns` runs a `.test.ts` under `deno test` without
- * `--no-check`, and `cf test` compiles a `.test.tsx` through the runtime
- * harness. The exclusions are the places where a file's shape and those lanes
- * part company, and each leaves a file for a checked path to name instead: an
- * extension outside the two has no lane at all; a `.browser.test.ts` is kept
- * out of the `deno test` pass and bundled to its browser by a step that
- * transpiles without checking; and a nested `integration` tree is excluded
- * from that pass by the package's own test config, while the `integration`
- * task names top-level paths explicitly rather than globbing for them.
- */
-function isPatternTest(file: string): boolean {
-  if (file.includes("/integration/")) return false;
-  if (file.endsWith(".browser.test.ts")) return false;
-  return file.endsWith(".test.ts") || file.endsWith(".test.tsx");
 }
 
 /** A tree of modules the checked paths leave out, and why. */
@@ -178,8 +152,8 @@ export interface UncheckedTree {
  * decided to leave out from one the list forgot: both are simply absent, and
  * the task reports a clean run over either. Recording the decision is what
  * tells them apart, and `typecheck.test.ts` holds the pair to being
- * exhaustive — a workspace file that is neither checked nor named by an entry
- * here fails that test, naming the file.
+ * exhaustive — a file anywhere in the repository that is neither checked nor
+ * named by an entry here fails that test, naming the file.
  */
 export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   {
@@ -195,25 +169,14 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   },
   {
     tree: "packages/patterns",
-    matches: isPatternTest,
-    because: "a file under `packages/patterns` shaped like what the test " +
-      "lanes take, whatever it holds — many are patterns driven through " +
-      "`action(...)`, and others are plain `Deno.test` unit tests of a " +
-      "pattern's helpers. What decides is the suffix rather than the " +
-      "contents: `isPatternSource()` in `tasks/pattern-files.ts` turns a " +
-      "file away on the test suffix alone, so `deno task cfcheck` walks " +
-      "none of them. The lane that runs one type-checks it instead: " +
-      "`packages/patterns` runs a `.test.ts` under `deno test` without " +
-      "`--no-check`, and `cf test` compiles a `.test.tsx` through the " +
-      "runtime harness, which reports a type error as a failed test. This " +
-      "reaches only what those lanes take, which is why the predicate turns " +
-      "three cases away: another extension has no lane at all; a " +
-      "`.browser.test.ts` is excluded from the `deno test` pass and bundled " +
-      "to its browser by a step that transpiles without checking; and a " +
-      "nested `integration` tree is excluded from that pass by the package's " +
-      "test config while the `integration` tasks name their top-level paths " +
-      "outright. The last two are checked because paths above name them, and " +
-      "anything else in those shapes is reported rather than excused here.",
+    matches: (file) => file.endsWith(".test.tsx"),
+    because: "a pattern test: a pattern driven through `action(...)` that " +
+      "`cf test` compiles through the runtime harness, as a pattern is " +
+      "compiled when it runs, and which fails as a test on a type error. " +
+      "That compile is the behavior the test exercises rather than a check " +
+      "done on the way to running it. `isPatternSource()` in " +
+      "`tasks/pattern-files.ts` turns a file away on the test suffix alone, " +
+      "so `deno task cfcheck` walks none of them.",
   },
   {
     tree: "packages/schema-generator/test/fixtures",
@@ -243,11 +206,17 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   },
 ];
 
-/** The owning scope of a checked path: the workspace member's name. */
+/**
+ * The owning scope of a checked path: the workspace member's name, or the
+ * top-level directory of a path no member owns.
+ */
 export function scopeOfPath(checkPath: string): string {
   const parts = checkPath.split("/");
   if (parts[0] === "packages") {
-    if (parts[1] === "connectors") {
+    // A connector's members sit two levels under `packages/connectors`. A
+    // module directly under it belongs to no member, and all such modules
+    // share the `connectors` scope.
+    if (parts[1] === "connectors" && parts.length >= 4) {
       return parts.slice(1, 4).join("/");
     }
     return parts[1] ?? "repo";
@@ -264,11 +233,9 @@ export async function collectPathsByScope(
     for await (
       const entry of expandGlob(pattern, { root, includeDirs: false })
     ) {
-      paths.push(
-        entry.path.startsWith(root)
-          ? entry.path.slice(root.length + 1)
-          : entry.path,
-      );
+      const file = path.relative(path.resolve(root), entry.path);
+      // A file a directory entry already names is checked through it.
+      if (!DIRS.some((dir) => file.startsWith(`${dir}/`))) paths.push(file);
     }
   }
   const byScope = new Map<string, string[]>();
@@ -282,6 +249,287 @@ export async function collectPathsByScope(
     }
   }
   return byScope;
+}
+
+/**
+ * The extensions a checked path can put in front of the type checker.
+ *
+ * JavaScript earns its place here: `deno check` opens a `.js` or `.jsx` file
+ * a checked path names, and type-checks the ones carrying `// @ts-check`,
+ * which is a diagnostic this repository would want and would otherwise lose
+ * in silence. A coverage claim stated over a narrower population than the
+ * gate actually reads is the defect `typecheck.test.ts` exists to catch, so
+ * the population is every module extension the checker accepts rather than
+ * the ones the tree happens to hold today.
+ */
+export const MODULE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+];
+
+/** What this task reads from a manifest. */
+interface Manifest {
+  exclude?: string[];
+  compilerOptions?: { types?: string[] };
+}
+
+/**
+ * The manifest in `directory` under `root`, or nothing where it holds none.
+ * `deno.json` wins where both exist, and Deno ignores the other whole.
+ */
+async function readManifest(
+  root: string,
+  directory: string,
+): Promise<{ file: string; manifest: Manifest } | undefined> {
+  for (const name of ["deno.json", "deno.jsonc"]) {
+    const file = path.join(directory, name);
+    const text = await Deno.readTextFile(path.join(root, file))
+      .catch(() => undefined);
+    if (text === undefined) continue;
+    return { file, manifest: parseJsonc(text) as Manifest };
+  }
+  return undefined;
+}
+
+/**
+ * The paths a manifest's `exclude` keeps `deno check` from opening.
+ *
+ * A checked path names a directory, which covers the tree beneath it only as
+ * far as the files the checker itself would reach. Deno drops these before it walks, so a module under one is opened by
+ * nothing however a path above it reads. Every manifest is consulted rather
+ * than the root alone, because a member declares its own and the checker
+ * honors it.
+ *
+ * These are matched against a repository-relative path, so they filter the
+ * walk's results rather than steering it: `walk()` takes a `skip`, but it
+ * tests the absolute path an entry carries, which an anchored pattern from
+ * `globToRegExp` never matches, and the exclusion would quietly stop firing.
+ *
+ * Only the top-level `exclude` counts. A `fmt`, `lint` or `test` block
+ * carries one for its own subcommand, and reading such a block as though it
+ * reached the type check would drop files the checker does open — the same
+ * defect pointed the other way, and the worse direction, since it shrinks
+ * what the gate is held to rather than widening it.
+ */
+export async function excludedByManifest(
+  root: string,
+  members: readonly string[],
+): Promise<RegExp[]> {
+  const patterns: RegExp[] = [];
+  for (const directory of ["", ...members]) {
+    const read = await readManifest(root, directory);
+    for (const pattern of read?.manifest.exclude ?? []) {
+      // Deno un-excludes on a bare leading `!` and on nothing else: measured
+      // against 2.9.4, `!build/keep.ts` restores that file to the check while
+      // `./!build/keep.ts` restores nothing and matches nothing, so the prefix
+      // is not stripped before the negation is looked for. `globToRegExp`
+      // reads `!` as a literal either way, which for the spelling Deno
+      // negates lands on the shrinking side: the entry matches nothing, the
+      // broader exclusion goes on firing, and a file the checker opens is
+      // counted as excused. Refusing it fails this file instead. Read on the
+      // pattern as written, which is what Deno reads.
+      if (pattern.startsWith("!")) {
+        throw new Error(
+          `${
+            path.join(directory, "deno.json(c)")
+          } un-excludes ${pattern}, which ` +
+            `this check cannot read; teach it the negation or the census is ` +
+            `short by whatever the entry restores.`,
+        );
+      }
+      const stripped = pattern.replace(/^\.\//, "");
+      const scoped = directory === "" ? stripped : `${directory}/${stripped}`;
+      patterns.push(
+        path.globToRegExp(scoped.endsWith("/") ? `${scoped}**` : scoped, {
+          globstar: true,
+        }),
+      );
+    }
+  }
+  return patterns;
+}
+
+/** One module of the graph `deno info --json` prints. */
+interface GraphModule {
+  specifier: string;
+  dependencies?: {
+    code?: { specifier?: string };
+    type?: { specifier?: string };
+  }[];
+  typesDependency?: { dependency?: { specifier?: string } };
+}
+
+/**
+ * The local modules importing each local module, directly, as Deno resolves
+ * the imports of `files` and of everything they reach: repository-relative
+ * paths on both sides. Remote and `npm:` modules are left unresolved, so the
+ * graph is read from the working tree alone, and a module Deno cannot parse
+ * contributes no imports of its own.
+ */
+function localImporters(
+  root: string,
+  files: readonly string[],
+): Map<string, string[]> {
+  const base = path.toFileUrl(`${root}/`).href;
+  // The graph is read from one module importing every file. It sits outside
+  // the tree, so the tree is left as it was, and it names each file by URL,
+  // so it resolves nothing itself.
+  const entry = Deno.makeTempFileSync({ suffix: ".ts" });
+  try {
+    Deno.writeTextFileSync(
+      entry,
+      files.map((file) => `import "${new URL(file, base).href}";\n`).join(""),
+    );
+    const { success, stdout, stderr } = new Deno.Command(Deno.execPath(), {
+      args: ["info", "--json", "--no-remote", "--no-npm", "--no-lock", entry],
+      cwd: root,
+      stdout: "piped",
+      stderr: "piped",
+    }).outputSync();
+    if (!success) {
+      throw new Error(
+        `deno info could not read the checked modules' imports:\n` +
+          new TextDecoder().decode(stderr),
+      );
+    }
+    const graph: { modules: GraphModule[] } = JSON.parse(
+      new TextDecoder().decode(stdout),
+    );
+    // A query or a fragment names the same file to the type checker.
+    const local = (specifier: string | undefined) =>
+      specifier?.startsWith(base)
+        ? specifier.slice(base.length).replace(/[?#].*$/, "")
+        : undefined;
+    const importers = new Map<string, string[]>();
+    for (const module of graph.modules) {
+      const importer = local(module.specifier);
+      if (importer === undefined) continue;
+      const imported = new Set([
+        ...(module.dependencies ?? []).flatMap((dependency) => [
+          local(dependency.code?.specifier),
+          local(dependency.type?.specifier),
+        ]),
+        local(module.typesDependency?.dependency?.specifier),
+      ]);
+      for (const file of imported) {
+        if (file === undefined) continue;
+        const known = importers.get(file);
+        if (known === undefined) importers.set(file, [importer]);
+        else known.push(importer);
+      }
+    }
+    return importers;
+  } finally {
+    Deno.removeSync(entry);
+  }
+}
+
+/**
+ * How a change maps onto the scopes whose check it can alter, for the paths
+ * `byScope` holds in the tree at `root`.
+ *
+ * A scope's check opens the files its paths name and every local module
+ * those import, so a change reaches the scope when it touches one of them:
+ * the file itself, or any module it imports, directly or through other
+ * modules, whatever package that module sits in. A changed path the scope
+ * owns reaches it too, module or not, since a manifest the check reads or a
+ * module that was deleted alters it as surely as an edit does.
+ *
+ * A manifest decides how the modules under it resolve, what they export,
+ * and which declaration files every check of them loads, so a change to a
+ * member's manifest, or to a declaration file it names in
+ * `compilerOptions.types`, reaches whatever imports the member's modules as
+ * well. The root manifest and the lock file decide that for every module,
+ * and reach every scope.
+ *
+ * The returned function answers from the imports as they stand in the
+ * tree; the graph is read, once, the first time it is asked.
+ */
+export async function scopesReached(
+  root: string,
+  byScope: ReadonlyMap<string, readonly string[]>,
+): Promise<(changed: ReadonlySet<string>) => string[]> {
+  const members = (await readWorkspaceMembers(path.join(root, "deno.jsonc")))
+    .map((member) => member.replace(/^\.\//, ""));
+  const excluded = await excludedByManifest(root, members);
+  // Each declaration file a manifest names, against that manifest.
+  const ambient = new Map<string, string>();
+  for (const directory of ["", ...members]) {
+    const read = await readManifest(root, directory);
+    for (const types of read?.manifest.compilerOptions?.types ?? []) {
+      ambient.set(path.join(directory, types), read!.file);
+    }
+  }
+  const everyScope = [...byScope.keys()].sort();
+
+  let read:
+    | { scopeOf: Map<string, string>; importers: Map<string, string[]> }
+    | undefined;
+  const graph = () => {
+    if (read !== undefined) return read;
+    const scopeOf = new Map<string, string>();
+    for (const [scope, paths] of byScope) {
+      for (const checkPath of paths) {
+        const absolute = path.join(root, checkPath);
+        if (Deno.statSync(absolute).isFile) {
+          scopeOf.set(checkPath, scope);
+          continue;
+        }
+        for (
+          const entry of walkSync(absolute, {
+            includeDirs: false,
+            exts: MODULE_EXTENSIONS,
+          })
+        ) {
+          const file = path.relative(root, entry.path);
+          if (excluded.some((pattern) => pattern.test(file))) continue;
+          scopeOf.set(file, scope);
+        }
+      }
+    }
+    read = {
+      scopeOf,
+      importers: localImporters(root, [...scopeOf.keys(), ...ambient.keys()]),
+    };
+    return read;
+  };
+
+  return (changed) => {
+    if (changed.size === 0) return [];
+    const { scopeOf, importers } = graph();
+    const reached = new Set<string>();
+    const seen = new Set<string>();
+    const pending = [...changed];
+    while (pending.length > 0) {
+      const at = pending.pop()!;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      if (["deno.json", "deno.jsonc", "deno.lock"].includes(at)) {
+        return everyScope;
+      }
+      const manifest = /(^|\/)deno\.jsonc?$/.test(at);
+      const scope = scopeOf.get(at) ??
+        (changed.has(at) || manifest ? scopeOfPath(at) : undefined);
+      if (scope !== undefined && byScope.has(scope)) {
+        reached.add(scope);
+        if (manifest) {
+          for (const [file, owner] of scopeOf) {
+            if (owner === scope) pending.push(file);
+          }
+        }
+      }
+      const naming = ambient.get(at);
+      if (naming !== undefined) pending.push(naming);
+      pending.push(...importers.get(at) ?? []);
+    }
+    return [...reached].sort();
+  };
 }
 
 interface GroupResult {

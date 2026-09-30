@@ -3,10 +3,14 @@ import {
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
 import { type CellBrand } from "@commonfabric/schema-generator/cell-brand";
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 
 import {
   classifyArrayCallbackContainerCall,
+  detectCallKind,
+  detectNewExpressionKind,
   getNodeText,
   isCellLikeType,
   isWildcardTraversalCall,
@@ -15,7 +19,6 @@ import {
   type CapabilityParamSummary,
   type FunctionCapabilitySummary,
   type ReactiveCapability,
-  resolvesToCommonFabricSymbol,
   type UnreadableCellArgument,
 } from "../core/mod.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";
@@ -373,10 +376,7 @@ function getExplicitCellKindFromTypeNode(
   // The depth guard bounds the type-parameter-constraint recursion below
   // against a circular constraint on ill-typed input.
   if (!typeNode || depth > 16) return undefined;
-
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getExplicitCellKindFromTypeNode(typeNode.type, checker, depth + 1);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
 
   if (ts.isUnionTypeNode(typeNode)) {
     const kinds = new Set<CellBrand>();
@@ -472,10 +472,7 @@ function isAmbiguousCellWrapperUnion(
   typeNode: ts.TypeNode | undefined,
   checker: ts.TypeChecker,
 ): boolean {
-  let node = typeNode;
-  while (node && ts.isParenthesizedTypeNode(node)) {
-    node = node.type;
-  }
+  const node = typeNode && unwrapTypeParentheses(typeNode);
   if (!node || !ts.isUnionTypeNode(node)) return false;
   // If the union collapses to a single capability it is readable; only flag when
   // it does not, yet at least one member is a recognized cell wrapper.
@@ -505,9 +502,7 @@ function getRestParameterElementTypeNode(
   typeNode: ts.TypeNode | undefined,
 ): ts.TypeNode | undefined {
   if (!typeNode) return undefined;
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getRestParameterElementTypeNode(typeNode.type);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
   if (
     ts.isTypeOperatorNode(typeNode) &&
     typeNode.operator === ts.SyntaxKind.ReadonlyKeyword
@@ -812,6 +807,323 @@ function isPassThroughIdentifierUsage(node: ts.Identifier): boolean {
   }
 
   return false;
+}
+
+/**
+ * The outermost expression whose value is `node`'s own, reached by climbing
+ * every parent that forwards an operand's value unchanged: a transparent
+ * wrapper, either branch of a conditional, either operand of `??` and `||`,
+ * and the right operand of `&&` or a comma. The left operand of `??` and `||`
+ * is the value the expression takes whenever it is there at all, so it
+ * travels as far as the expression does. The left operand of `&&` is not
+ * climbed: the expression takes it only when it is falsy, and a falsy value
+ * has no members to lose.
+ */
+function outermostValueForwarder(node: ts.Expression): ts.Expression {
+  let current: ts.Expression = node;
+  while (true) {
+    const parent = current.parent;
+    if (!parent) return current;
+    if (isTransparentWrapper(parent) && parent.expression === current) {
+      current = parent;
+      continue;
+    }
+    if (
+      ts.isConditionalExpression(parent) &&
+      (parent.whenTrue === current || parent.whenFalse === current)
+    ) {
+      current = parent;
+      continue;
+    }
+    if (ts.isBinaryExpression(parent)) {
+      const kind = parent.operatorToken.kind;
+      const fallback = kind === ts.SyntaxKind.QuestionQuestionToken ||
+        kind === ts.SyntaxKind.BarBarToken;
+      const forwardsRight = fallback ||
+        kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        kind === ts.SyntaxKind.CommaToken;
+      if (
+        (parent.right === current && forwardsRight) ||
+        (parent.left === current && fallback)
+      ) {
+        current = parent;
+        continue;
+      }
+    }
+    return current;
+  }
+}
+
+/**
+ * Whether an object literal is one alias resolution can model: static keys
+ * and no spread, which is what `buildAliasBindingFromExpression` requires
+ * before it records the literal's properties as an alias shape.
+ */
+function isAliasableObjectLiteral(
+  literal: ts.ObjectLiteralExpression,
+): boolean {
+  return literal.properties.every((property) =>
+    !ts.isSpreadAssignment(property) &&
+    !(
+      (ts.isPropertyAssignment(property) ||
+        ts.isShorthandPropertyAssignment(property)) &&
+      ts.isComputedPropertyName(property.name)
+    )
+  );
+}
+
+/**
+ * Whether the function directly enclosing `from` declares `name`, as one of
+ * its parameters or as a variable in its body outside any nested function.
+ *
+ * An alias set by an assignment lives as long as the scope that made it, and
+ * a nested callback's aliases are dropped when the callback ends. So an
+ * assignment follows a value only into a variable its own function declares;
+ * assigned to a variable of an enclosing function, the value outlives the
+ * alias that tracked it. A node with no function above it — synthesized, with
+ * parent links that stop short — returns `true`: what cannot be placed is not
+ * widened.
+ */
+function isDeclaredByEnclosingFunction(name: string, from: ts.Node): boolean {
+  let enclosing: ts.Node | undefined = from.parent;
+  while (enclosing && !ts.isFunctionLike(enclosing)) {
+    enclosing = enclosing.parent;
+  }
+  if (!enclosing || !ts.isFunctionLike(enclosing)) return true;
+
+  const declares = (binding: ts.BindingName): boolean =>
+    ts.isIdentifier(binding)
+      ? binding.text === name
+      : binding.elements.some((element) =>
+        !ts.isOmittedExpression(element) && declares(element.name)
+      );
+
+  if (enclosing.parameters.some((parameter) => declares(parameter.name))) {
+    return true;
+  }
+  const body = (enclosing as { body?: ts.Node }).body;
+  if (!body) return false;
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found || (node !== body && ts.isFunctionLike(node))) return;
+    if (ts.isVariableDeclaration(node) && declares(node.name)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+/**
+ * Whether every target an assignment pattern writes is a local the function
+ * directly enclosing `from` declares. A target that is a member
+ * (`holder.row`), or a variable of an enclosing function, takes the value
+ * somewhere alias resolution stops following it.
+ */
+function assignmentTargetsAreOwnLocals(
+  pattern: ts.Expression,
+  from: ts.Node,
+): boolean {
+  const target = unwrapExpression(pattern);
+  if (ts.isIdentifier(target)) {
+    return isDeclaredByEnclosingFunction(target.text, from);
+  }
+  if (ts.isObjectLiteralExpression(target)) {
+    return target.properties.every((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) {
+        return isDeclaredByEnclosingFunction(property.name.text, from);
+      }
+      if (ts.isPropertyAssignment(property)) {
+        return assignmentTargetsAreOwnLocals(property.initializer, from);
+      }
+      if (ts.isSpreadAssignment(property)) {
+        return assignmentTargetsAreOwnLocals(property.expression, from);
+      }
+      return false;
+    });
+  }
+  if (ts.isArrayLiteralExpression(target)) {
+    return target.elements.every((element) =>
+      ts.isOmittedExpression(element) ||
+      assignmentTargetsAreOwnLocals(
+        ts.isSpreadElement(element) ? element.expression : element,
+        from,
+      )
+    );
+  }
+  // A target with a default, `{ row: last = fallback }`, is written as an
+  // assignment whose left side is the target.
+  if (
+    ts.isBinaryExpression(target) &&
+    target.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  ) {
+    return assignmentTargetsAreOwnLocals(target.left, from);
+  }
+  return false;
+}
+
+/**
+ * Where a value used whole ends up, once every value-forwarding parent and
+ * every enclosing object literal that alias resolution models has been
+ * climbed. A parent link that stops short — a synthesized node — answers
+ * `consumed` wherever it is met: what cannot be placed is not widened.
+ *
+ * `tracked` is a local binding, reached directly or through such literals:
+ * reads through the alias go on resolving to the paths they touch, so the
+ * value has not left the analysis. `argument` is a call or `new` argument,
+ * which the caller decides by whether the callee charged it. `result` is the
+ * value a function returns, from a `return` or an arrow's expression body,
+ * which the caller decides by which function: the analyzed builder's own
+ * result hands the value on by reference, since the runner writes a proxy in
+ * a result as a link, while an inline callback's result is a value the body
+ * goes on to read. `escaped` is a position the analysis stops following the
+ * value at, where every member it declares may be read: an array literal, an
+ * object literal alias resolution cannot model, an assignment to anything but
+ * a local its own function declares. `consumed` is every other position — a
+ * member access, an operand, a condition — which reads through the value
+ * where it stands and is charged by the handler for that position.
+ */
+function wholeValueDestination(
+  node: ts.Expression,
+):
+  | { kind: "tracked" }
+  | { kind: "consumed" }
+  | {
+    kind: "argument";
+    call: ts.CallExpression | ts.NewExpression;
+    argument: ts.Expression;
+  }
+  | { kind: "result"; of: ts.Node }
+  | { kind: "escaped" } {
+  let current: ts.Expression = outermostValueForwarder(node);
+  while (true) {
+    const parent = current.parent;
+    if (!parent) return { kind: "consumed" };
+    if (
+      (ts.isPropertyAssignment(parent) && parent.initializer === current) ||
+      (ts.isShorthandPropertyAssignment(parent) && parent.name === current)
+    ) {
+      const literal = parent.parent;
+      if (
+        !literal || !ts.isObjectLiteralExpression(literal) ||
+        !isAliasableObjectLiteral(literal)
+      ) {
+        return { kind: "escaped" };
+      }
+      current = outermostValueForwarder(literal);
+      continue;
+    }
+    if (ts.isArrayLiteralExpression(parent)) return { kind: "escaped" };
+    if (ts.isVariableDeclaration(parent) && parent.initializer === current) {
+      return { kind: "tracked" };
+    }
+    if (
+      ts.isBinaryExpression(parent) && parent.right === current &&
+      isAssignmentOperator(parent.operatorToken.kind)
+    ) {
+      const local = parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        assignmentTargetsAreOwnLocals(parent.left, parent);
+      return { kind: local ? "tracked" : "escaped" };
+    }
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      parent.arguments?.includes(current)
+    ) {
+      return { kind: "argument", call: parent, argument: current };
+    }
+    if (ts.isReturnStatement(parent) && parent.expression === current) {
+      let enclosing: ts.Node | undefined = parent.parent;
+      while (enclosing && !ts.isFunctionLike(enclosing)) {
+        enclosing = enclosing.parent;
+      }
+      // A return with no function above it is inside a synthesized callback
+      // whose parent links stop short — a lowered builder callback — and a
+      // builder's result is handed on by reference.
+      return enclosing
+        ? { kind: "result", of: enclosing }
+        : { kind: "consumed" };
+    }
+    if (ts.isArrowFunction(parent) && parent.body === current) {
+      return { kind: "result", of: parent };
+    }
+    return { kind: "consumed" };
+  }
+}
+
+/**
+ * Whether a call is `Array.isArray`, which decides its answer off the value's
+ * shape and reads nothing below it. Recognized the way
+ * `classifyWildcardTraversalCall` recognizes `JSON.stringify`: with a checker
+ * by the member's declaration sitting on the `ArrayConstructor` interface,
+ * whichever library file declares it; without one, or where the callee is
+ * synthesized and has no symbol, by its spelling.
+ */
+function isArrayIsArrayCall(
+  call: ts.CallExpression | ts.NewExpression,
+  checker: ts.TypeChecker | undefined,
+): boolean {
+  if (!ts.isCallExpression(call)) return false;
+  const target = unwrapExpression(call.expression);
+  if (
+    !ts.isPropertyAccessExpression(target) || target.name.text !== "isArray"
+  ) {
+    return false;
+  }
+  const spelledArray = ts.isIdentifier(target.expression) &&
+    target.expression.text === "Array";
+  const symbol = checker?.getSymbolAtLocation(target.name);
+  if (symbol === undefined) return spelledArray;
+  return (symbol.getDeclarations() ?? []).some((declaration) => {
+    let owner: ts.Node | undefined = declaration.parent;
+    while (
+      owner && !ts.isInterfaceDeclaration(owner) &&
+      !ts.isClassDeclaration(owner)
+    ) {
+      owner = owner.parent;
+    }
+    return owner !== undefined &&
+      (ts.isInterfaceDeclaration(owner) || ts.isClassDeclaration(owner)) &&
+      owner.name?.text === "ArrayConstructor";
+  });
+}
+
+/**
+ * Whether a function hands what it returns straight back to a caller's body:
+ * a function declaration or method, or a function bound to a variable or a
+ * property. A builder's callback is none of these. It is an argument of the
+ * builder call, and the runtime writes its result, storing a proxy in it as a
+ * link. A synthesized function with no parent is not taken to be a helper
+ * either: only positive evidence makes one.
+ *
+ * The test is the function's own shape, so a function bound to a name and
+ * handed to a builder by that name (`lift(bump)`) reads as a helper too. That
+ * costs such a builder nothing: schema injection does not shrink a callback it
+ * is handed by name, whose schema comes from the builder's type arguments or
+ * is not emitted at all, so this summary never reaches its schema.
+ */
+function returnsToACaller(fn: ts.Node): boolean {
+  if (ts.isFunctionDeclaration(fn) || ts.isMethodDeclaration(fn)) return true;
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return false;
+  const holder = outermostTransparentWrapper(fn).parent;
+  return holder !== undefined &&
+    (ts.isVariableDeclaration(holder) || ts.isPropertyAssignment(holder) ||
+      ts.isPropertyDeclaration(holder));
+}
+
+/** Calls `visit` on every source reference an alias binding reaches. */
+function forEachSourceRefLeaf(
+  binding: AliasBinding,
+  visit: (ref: SourceRef) => void,
+): void {
+  if (isSourceRefBinding(binding)) {
+    visit(binding);
+    return;
+  }
+  for (const child of binding.properties.values()) {
+    forEachSourceRefLeaf(child, visit);
+  }
 }
 
 function isCallOrNewArgumentUsage(
@@ -1711,7 +2023,125 @@ export function analyzeFunctionCapabilities(
     const aliasesWithSpecificPaths = new Set<string>();
     const identityArrayLocals = collectArrayLocalsPassedToSet(fn.body, checker);
     const signatureCapabilityArgumentUses = new WeakSet<ts.Expression>();
+    // Arguments a callee's own summary charged, so the identifier handler
+    // does not also treat them as values that left the analysis.
+    const summaryHandledArgumentUses = new WeakSet<ts.Expression>();
     const unreadableCellArguments: UnreadableCellArgument[] = [];
+
+    // Whether a call writes its argument into a local collection — a `push`,
+    // `unshift` or `splice` payload on a local array, or the value of a `set`
+    // on a local map — which the local collection bindings below follow, so
+    // a read through the collection resolves to the value's own paths.
+    const isLocalCollectionWrite = (
+      call: ts.CallExpression | ts.NewExpression,
+      argument: ts.Expression,
+    ): boolean => {
+      if (!ts.isCallExpression(call)) return false;
+      const target = unwrapExpression(call.expression);
+      if (
+        !ts.isPropertyAccessExpression(target) &&
+        !ts.isElementAccessExpression(target)
+      ) {
+        return false;
+      }
+      const receiverName = getIdentifierName(target.expression);
+      if (
+        !receiverName || aliases.has(receiverName) ||
+        aliasShapes.has(receiverName)
+      ) {
+        return false;
+      }
+      const methodName = getCallMethodName(call.expression);
+      if (!methodName) return false;
+      if (ARRAY_IDENTITY_WRITER_METHODS.has(methodName)) {
+        return isArrayIdentityWriterValueArgument(methodName, call, argument);
+      }
+      return methodName === "set" && call.arguments[1] === argument;
+    };
+
+    // Whether a call is one the runtime answers — a builder, a lift applied
+    // to inputs, `ifElse`, a cell factory. Such a call binds its arguments by
+    // reference: what reaches it is a link to the value, and whatever reads
+    // through that link does so under a schema of its own. Undecidable
+    // without a checker, in which case no call is taken to be one.
+    const isRuntimeCall = (
+      call: ts.CallExpression | ts.NewExpression,
+    ): boolean =>
+      checker !== undefined &&
+      (ts.isCallExpression(call)
+          ? detectCallKind(call, checker)
+          : detectNewExpressionKind(call, checker)) !== undefined;
+
+    // Whether a call is a write through a cell — `set`, `update`, `send`,
+    // `push` and the rest of the writer methods on a cell-like receiver. A
+    // write stores a proxy in its payload as a link, the way a result does,
+    // so the payload is handed on by reference. Undecidable without a
+    // checker, in which case no call is taken to be one.
+    const isCellWrite = (
+      call: ts.CallExpression | ts.NewExpression,
+    ): boolean => {
+      if (!ts.isCallExpression(call)) return false;
+      const target = unwrapExpression(call.expression);
+      if (
+        !ts.isPropertyAccessExpression(target) &&
+        !ts.isElementAccessExpression(target)
+      ) {
+        return false;
+      }
+      const methodName = getCallMethodName(call.expression);
+      return methodName !== undefined &&
+        (WRITER_METHODS.has(methodName) ||
+          ARRAY_IDENTITY_WRITER_METHODS.has(methodName)) &&
+        isCellLikeExpression(unwrapAssertCapture(target.expression));
+    };
+
+    // Whether a function is the callback of a builder call — `lift(cb)`,
+    // `pattern(cb)`, `handler(cb)` — whose result the runtime writes the way
+    // it writes this function's own: a proxy in it becomes a link.
+    const isBuilderCallback = (node: ts.Node): boolean => {
+      const call = node.parent;
+      return checker !== undefined && call !== undefined &&
+        ts.isCallExpression(call) &&
+        call.arguments.some((argument) =>
+          unwrapExpression(argument) === node
+        ) &&
+        detectCallKind(call, checker)?.kind === "builder";
+    };
+
+    // Whether what this function returns goes straight back into a caller's
+    // body, where the caller reads it as a value, and not into the runtime,
+    // which would store a proxy in it as a link.
+    const helperReturnsToCaller = returnsToACaller(fn);
+
+    // Whether an identifier's value leaves the analysis whole. A value bound
+    // to a local, or written into a local collection, stays tracked. An
+    // argument stays tracked when the callee's summary or declared signature
+    // charged it, when the callee binds it by reference — a runtime call, a
+    // write through a cell — or when the callee only asks its shape. A value
+    // a builder's callback returns is handed on by reference, this function's
+    // own included when it is one; a helper's return is a value its caller
+    // goes on to read. A value read where it stands is charged there.
+    const escapesWhole = (node: ts.Expression): boolean => {
+      const destination = wholeValueDestination(node);
+      switch (destination.kind) {
+        case "tracked":
+        case "consumed":
+          return false;
+        case "escaped":
+          return true;
+        case "result":
+          return destination.of === fn
+            ? helperReturnsToCaller
+            : !isBuilderCallback(destination.of);
+        case "argument":
+          return !summaryHandledArgumentUses.has(destination.argument) &&
+            !signatureCapabilityArgumentUses.has(destination.argument) &&
+            !isLocalCollectionWrite(destination.call, destination.argument) &&
+            !isRuntimeCall(destination.call) &&
+            !isCellWrite(destination.call) &&
+            !isArrayIsArrayCall(destination.call, checker);
+      }
+    };
 
     const getIdentifierName = (
       expression: ts.Expression,
@@ -1921,7 +2351,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveBinding(receiverExpr);
         }
@@ -2021,7 +2451,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveArrayElementBinding(receiverExpr);
         }
@@ -2659,8 +3089,20 @@ export function analyzeFunctionCapabilities(
               markWildcard(leftRef.root);
             } else if (leftRef.path.length === 0) {
               markPassthrough(leftRef.root);
+              if (helperReturnsToCaller && escapesWhole(node.left)) {
+                trackFullShapeRead(leftRef.root, []);
+              }
             } else {
               trackReadRef(leftRef);
+              // The identifier or member on the left is never visited, so
+              // this is where it is asked whether its value, which is the
+              // fallback expression's whenever it is there, leaves whole.
+              if (
+                !isPrimitiveLikeExpression(node.left) &&
+                escapesWhole(node.left)
+              ) {
+                trackFullShapeReadRef(leftRef);
+              }
             }
             // Resolving the ref stood in for walking the operand, so a call on
             // its spine has gone unvisited and the reads inside that call's
@@ -2729,10 +3171,51 @@ export function analyzeFunctionCapabilities(
           // Ignore key names and non-value positions.
         } else {
           const source = aliases.get(node.text);
+          const held = source === undefined
+            ? aliasShapes.get(node.text) ??
+              localArrayElementBindings.get(node.text) ??
+              localMapValueBindings.get(node.text)
+            : undefined;
+          if (
+            held !== undefined && !isMemberRootIdentifier(node) &&
+            // An array the body fills and hands to `.set()` is written by
+            // identity, which the identity accounting above records.
+            !identityArrayLocals.has(node.text) &&
+            escapesWhole(node)
+          ) {
+            // A local built from tracked values — an object literal, an
+            // array or map the body filled — leaves whole: returned, put in
+            // an array, handed to a callee with no summary. Each value it
+            // holds may be read in full where it lands. A member read
+            // through the local resolves to its own path instead and is
+            // charged where it occurs.
+            forEachSourceRefLeaf(held, (leaf) => {
+              const ref = materializeSourceRef(leaf);
+              if (ref.path.length === 0 && !ref.dynamic) {
+                markPassthrough(ref.root);
+                if (helperReturnsToCaller) trackFullShapeRead(ref.root, []);
+              } else {
+                trackReadRef(ref);
+                trackFullShapeReadRef(ref);
+              }
+            });
+          }
           if (source && !isMemberRootIdentifier(node)) {
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
+            // A value below the root that leaves the analysis whole is read
+            // in full wherever it lands, so it is charged as a full-shape
+            // read rather than a plain one: a plain read at a path keeps the
+            // whole value only while nothing below that path is read, and
+            // a member the body did read would otherwise narrow the escaped
+            // value to that member. A builder's root is left to the
+            // passthrough accounting below. A helper's root is charged as
+            // well, so that its summary tells a caller the argument left
+            // whole, at whatever path the caller passed it from.
+            const wholeValueEscape = !resolvedSource.dynamic &&
+              (resolvedSource.path.length > 0 || helperReturnsToCaller) &&
+              escapesWhole(node);
             if (!parent) {
               // Synthetic identifiers can temporarily be detached from parent links.
               // Preserve narrowed-path reads while avoiding false root-read expansion.
@@ -2837,6 +3320,7 @@ export function analyzeFunctionCapabilities(
               } else if (
                 isCallOrNewArgumentUsage(usage) ||
                 isPassThroughIdentifierUsage(node) ||
+                wholeValueEscape ||
                 identityOnlyArrayElementUse ||
                 identityOnlyArrayWriterArgumentUse
               ) {
@@ -2854,6 +3338,9 @@ export function analyzeFunctionCapabilities(
                       ? { identityOnly: true }
                       : undefined,
                   );
+                  if (wholeValueEscape && !identityOnlyArgumentUse) {
+                    trackFullShapeRead(resolvedSource.root, []);
+                  }
                 } else if (
                   identityOnlyArgumentUse && !resolvedSource.dynamic
                 ) {
@@ -2869,6 +3356,12 @@ export function analyzeFunctionCapabilities(
                     cellLike: isCellLikeExpression(usage) ||
                       !isPrimitiveLikeExpression(usage),
                   });
+                } else if (wholeValueEscape) {
+                  // Both: the plain read is what the value's capability and
+                  // every consumer of `readPaths` see; the full-shape read is
+                  // what keeps the value whole through shrinking.
+                  trackReadRef(resolvedSource);
+                  trackFullShapeReadRef(resolvedSource);
                 } else {
                   trackReadRef(
                     resolvedSource,
@@ -2905,6 +3398,16 @@ export function analyzeFunctionCapabilities(
             const ref = resolveSourceRef(node);
             if (ref) {
               trackReadRef(ref);
+              // A member that leaves the analysis whole is read in full
+              // wherever it lands, exactly as an identifier is; the identifier
+              // handler above states the reason. A primitive has nothing
+              // below it to keep whole.
+              if (
+                !ref.dynamic && !isPrimitiveLikeExpression(node) &&
+                escapesWhole(node)
+              ) {
+                trackFullShapeReadRef(ref);
+              }
               // If this resolution went through a .get() call, record the
               // alias name so the identifier handler can skip redundant
               // blanket reads.  Only suppress for actual .get() bases —
@@ -2982,6 +3485,7 @@ export function analyzeFunctionCapabilities(
             const source = resolveSourceRef(argument);
             if (!source) continue;
             capabilityHandledArgs.add(index);
+            summaryHandledArgumentUses.add(argument);
 
             if (source.dynamic || paramSummary.wildcard) {
               markWildcard(source.root, source.path);
@@ -2993,6 +3497,15 @@ export function analyzeFunctionCapabilities(
 
             for (const readPath of paramSummary.readPaths) {
               trackRead(source.root, [...source.path, ...readPath]);
+            }
+            // What the callee let leave whole leaves the caller's value whole
+            // too: its own members the caller never sees are read wherever
+            // the callee sent them.
+            for (const fullShapePath of paramSummary.fullShapePaths ?? []) {
+              trackFullShapeRead(source.root, [
+                ...source.path,
+                ...fullShapePath,
+              ]);
             }
             for (const writePath of paramSummary.writePaths) {
               trackWrite(source.root, [...source.path, ...writePath]);

@@ -18,6 +18,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -80,12 +81,15 @@ describe("commit-read-validation", () => {
         const stream = runtime.getCell<string>(space, "stream");
         const seed = runtime.edit();
         writeSeedEnvelopeDoc(seed, space);
-        seed.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+        seedStoredEnvelope(seed, {
+          ...source.getAsNormalizedFullLink(),
+          path: [],
+        }, {
           value: "observed",
           ...(usesMetadata
             ? {
               cfc: {
-                version: 2,
+                version: 3,
                 schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
                 labelMap: { version: 1, entries: [] },
               },

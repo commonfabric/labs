@@ -16,6 +16,7 @@ import {
   type SessionSync,
   type SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,
@@ -51,9 +52,7 @@ const getObjectValue = (
   uri: URI,
 ): Record<string, unknown> | undefined => {
   const value = provider.get(uri)?.value;
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  return isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 };
 
 // Answers the watch.add with a sync that upserts every requested root and then

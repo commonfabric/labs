@@ -6,11 +6,12 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import type { CellScope } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { Result, Unit } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import {
-  TEST_MEMORY_SERVER_AUTH,
+  newSharedServer,
   testPrincipalSessionOpenAuthFactory,
   TestStorageManager,
 } from "./memory-v2-test-utils.ts";
@@ -25,13 +26,7 @@ class PendingSessionFactory implements SessionFactory {
 }
 
 function makeServer(): MemoryV2Server.Server {
-  return new MemoryV2Server.Server({
-    authorizeSessionOpen(m) {
-      const p = (m.authorization as { principal?: unknown })?.principal;
-      return typeof p === "string" ? p : undefined;
-    },
-    sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
-  });
+  return newSharedServer();
 }
 
 // A session whose transport delivers the handshake and commits normally but
@@ -85,11 +80,10 @@ type DestroyNowProvider = {
 function hasDestroyNowProvider(
   provider: unknown,
 ): provider is DestroyNowProvider {
-  return typeof provider === "object" && provider !== null &&
+  return isObjectOrArray(provider) &&
     "destroy" in provider && typeof provider.destroy === "function" &&
     "destroyNow" in provider && typeof provider.destroyNow === "function" &&
-    "replica" in provider && typeof provider.replica === "object" &&
-    provider.replica !== null &&
+    "replica" in provider && isObjectOrArray(provider.replica) &&
     "sync" in provider && typeof provider.sync === "function";
 }
 

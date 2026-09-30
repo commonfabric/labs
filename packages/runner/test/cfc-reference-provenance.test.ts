@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
 import {
   linkRefPayload,
@@ -15,7 +15,12 @@ import {
 } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 
-import { type Cell, convertCellsToLinks, isCell } from "../src/cell.ts";
+import {
+  type Cell,
+  convertCellsToLinks,
+  getCarriedCfcLabelView,
+  isCell,
+} from "../src/cell.ts";
 import { ifElse as runtimeIfElse } from "../src/builtins/if-else.ts";
 import {
   llmDialogTestHelpers,
@@ -23,17 +28,26 @@ import {
 } from "../src/builtins/llm-dialog.ts";
 import { normalizeClause } from "../src/cfc/clause.ts";
 import {
+  cfcLabelViewOriginSpaces,
   mergeCfcLabelViews,
   redactCaveatSourcesForDisplay,
+  withCfcLabelViewOrigins,
 } from "../src/cfc/label-view-core.ts";
-import { getCarriedCfcLabelView } from "../src/cfc/label-view-state.ts";
+
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
-import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
+import {
+  cfcConfidentialityForObservationNode,
+  cfcIntegrityForObservationNode,
+} from "../src/cfc/observation.ts";
+import { containsCfcFieldCommitment } from "../src/cfc/label-representation.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import {
   carryCfcReferenceProvenance,
   getCfcReferenceProvenance,
+  getCfcReferenceView,
   joinCfcReferenceConfidentiality,
+  recordCfcReferenceObservation,
   withCfcReferenceConfidentiality,
 } from "../src/cfc/reference-provenance.ts";
 import {
@@ -57,7 +71,10 @@ import { diffAndUpdate } from "../src/data-updating.ts";
 import { findAndInlineDataUriLinks } from "../src/data-uri.ts";
 import { unwrapOneLevelAndBindToDoc } from "../src/pattern-binding.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { createNonReactiveTransaction } from "../src/storage/extended-storage-transaction.ts";
+import {
+  createNonReactiveTransaction,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import {
   authorizationRead,
   isAuthorizationRead,
@@ -65,6 +82,7 @@ import {
 } from "../src/storage/reactivity-log.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 
@@ -99,12 +117,12 @@ describe("cfc-reference-provenance", () => {
     cause: string,
     value: FabricValue,
     entries: LabelMapEntry[] = [],
-    version: 1 | 2 = 2,
+    version: 1 | 2 | 3 = 3,
   ) => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
         version,
@@ -129,6 +147,7 @@ describe("cfc-reference-provenance", () => {
     const selected = await seed("selected", target.getAsLink(), [{
       path: [],
       observes: "followRef",
+      referenceAcquisition: "complete",
       origin: "link",
       label: { confidentiality: [selection] },
     }]);
@@ -185,6 +204,112 @@ describe("cfc-reference-provenance", () => {
     expect(childReference.confidentiality).toContainEqual(selection);
     expect(reference.binding.path).toEqual([]);
     tx.abort();
+  });
+
+  for (const mode of ["proxy", "schema", "eager"] as const) {
+    it(`keeps policy origins distinct in ${mode} views over the same address`, async () => {
+      const target = await seed("origin-view-target", { public: "visible" });
+      const other = (await Identity.fromPassphrase("other-origin-space")).did();
+      const tx = runtime.edit();
+      try {
+        const values = [space, other].map((origin) => {
+          const view = withCfcLabelViewOrigins(
+            withCfcReferenceConfidentiality(undefined, [selection]),
+            [origin],
+          );
+          const cell = runtime.getCellFromLink(
+            target.getAsNormalizedFullLink(),
+            undefined,
+            tx,
+            view,
+          );
+          const projected = mode === "proxy" ? cell : cell.asSchema({
+            type: "object",
+            properties: { public: { type: "string" } },
+          });
+          const value = projected.get({ traverseCells: mode === "eager" });
+          expect(getCfcReferenceProvenance(value)?.originSpaces).toContain(
+            origin,
+          );
+          expect(cfcLabelViewOriginSpaces(getCfcReferenceView(value)))
+            .toContain(origin);
+          return value;
+        });
+        expect(values[0]).not.toBe(values[1]);
+        expect(getCfcReferenceProvenance(values[0])?.originSpaces)
+          .not.toContain(other);
+        expect(
+          tx.getCfcState().referenceObservations.some((observation) =>
+            observation.originSpaces?.includes(other)
+          ),
+        ).toBe(true);
+      } finally {
+        tx.abort();
+      }
+    });
+  }
+
+  for (const origin of ["local", "foreign", "unknown", "forged"] as const) {
+    it(`protects reference label fields according to authenticated ${origin} origins`, async () => {
+      const target = await seed("origin-persist-target", "public");
+      const foreign = (await Identity.fromPassphrase("foreign-origin-persist"))
+        .did();
+      const confidentiality = [normalizeClause({
+        anyOf: [cfcAtom.user("private-selector"), cfcAtom.space(space)],
+      })];
+      const tx = runtime.edit();
+      const originSpaces = origin === "unknown"
+        ? undefined
+        : [origin === "foreign" ? foreign : space];
+      if (origin === "forged") {
+        tx.recordCfcReferenceObservation({
+          target: target.getAsNormalizedFullLink(),
+          confidentiality,
+          originSpaces,
+          purpose: "identity",
+          journalIndex: 0,
+        });
+      } else {
+        recordCfcReferenceObservation(tx, {
+          binding: target.getAsNormalizedFullLink(),
+          confidentiality,
+          originSpaces,
+        }, "identity");
+      }
+      const output = runtime.getCell(
+        space,
+        "origin-persist-output",
+        undefined,
+        tx,
+      );
+      output.set("chosen");
+      expect((await tx.commit()).error).toBeUndefined();
+      const read = runtime.edit();
+      const entries = readStoredCfcMetadata(
+        read,
+        output.getAsNormalizedFullLink(),
+      )
+        ?.labelMap.entries.filter((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+      expect(entries).toHaveLength(1);
+      expect(containsCfcFieldCommitment(entries![0].label.confidentiality))
+        .toBe(origin !== "local");
+      read.abort();
+    });
+  }
+
+  it("retains policy origins on raw links acquired from stored slots", async () => {
+    const { selected } = await selectedTarget();
+    const tx = runtime.edit();
+    try {
+      const raw = selected.withTx(tx).getRawUntyped();
+      expect(getCfcReferenceProvenance(raw)?.originSpaces).toContain(space);
+      expect(cfcLabelViewOriginSpaces(getCfcReferenceView(raw)))
+        .toContain(space);
+    } finally {
+      tx.abort();
+    }
   });
 
   it("keeps passive proxy conversion and finished then probes out of the observation journal", async () => {
@@ -324,14 +449,10 @@ describe("cfc-reference-provenance", () => {
         const acquire = runtime.edit();
         const held = selected.withTx(acquire).resolveAsCell().withTx(undefined);
         acquire.abort();
-        const inner = runtime.edit();
-        const tx = useActivityClock ? inner : new Proxy(inner, {
-          get(target, property) {
-            if (property === "currentActivityIndex") return undefined;
-            const value = Reflect.get(target, property, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
+        const tx = runtime.edit();
+        using _activityClock = useActivityClock
+          ? undefined
+          : stub(tx, "currentActivityIndex", () => undefined);
         const output = runtime.getCell(space, "reference-gated-write", {
           type: "string",
           ifc: { maxConfidentiality: [] },
@@ -419,6 +540,7 @@ describe("cfc-reference-provenance", () => {
         path: ["0"],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [selection] },
       }])).asSchema({ type: "array", items: {} });
       const append = runtime.edit();
@@ -550,6 +672,7 @@ describe("cfc-reference-provenance", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: {},
       }],
     );
@@ -892,6 +1015,7 @@ describe("cfc-reference-provenance", () => {
           path: ["0", "candidate"],
           origin: "link",
           observes: "followRef",
+          referenceAcquisition: "complete",
           label: { confidentiality: [selection] },
         }]);
       const snapshot = source.withTx(acquire).key("0").resolveAsCell();
@@ -922,6 +1046,39 @@ describe("cfc-reference-provenance", () => {
       }
     });
   }
+
+  it("projects scalar array fields while refusing an unproved sibling reference", async () => {
+    const { target } = await selectedTarget();
+    const source = await seed(
+      "projected-legacy-array-source",
+      [{ name: "visible", candidate: target.getAsLink() }],
+      [],
+      1,
+    );
+    const tx = runtime.edit();
+    try {
+      expect(
+        source.withTx(tx).asSchema({
+          type: "array",
+          items: {
+            type: "object",
+            properties: { name: { type: "string" } },
+          },
+        }).get(),
+      ).toEqual([{ name: "visible" }]);
+      expect(() =>
+        source.withTx(tx).asSchema({
+          type: "array",
+          items: {
+            type: "object",
+            properties: { candidate: { type: "object" } },
+          },
+        }).get()
+      ).toThrow("Reference acquisition lacks complete legacy provenance");
+    } finally {
+      tx.abort();
+    }
+  });
 
   it("refuses incomplete nested provenance when boxing an array item", async () => {
     const { target } = await selectedTarget();
@@ -995,6 +1152,7 @@ describe("cfc-reference-provenance", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: { confidentiality: [selection] },
       }],
     );
@@ -1087,6 +1245,7 @@ describe("cfc-reference-provenance", () => {
     }, [{
       path: ["groups", "0", "candidate"],
       observes: "followRef",
+      referenceAcquisition: "complete",
       origin: "link",
       label: {},
     }]);
@@ -1130,16 +1289,17 @@ describe("cfc-reference-provenance", () => {
       tx,
     );
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...source.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...source.getAsNormalizedFullLink(), path: [] }, {
       value: [{ candidate: target.key("public").getAsLink() }],
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
           entries: [{
             path: ["0", "candidate"],
             observes: "followRef",
+            referenceAcquisition: "complete",
             origin: "link",
             label: {},
           }],
@@ -1324,6 +1484,7 @@ describe("cfc-reference-provenance", () => {
       undefined,
       creation,
     );
+    expect(getCfcReferenceProvenance(literal)?.originSpaces).toContain(space);
     creation.abort();
     const tx = runtime.edit();
     expect(literal.withTx(tx).getRawUntyped()).toEqual(["constant"]);
@@ -1342,6 +1503,7 @@ describe("cfc-reference-provenance", () => {
       undefined,
       getCarriedCfcLabelView(held),
     );
+    expect(getCfcReferenceProvenance(empty)?.originSpaces).toContain(space);
     acquire.abort();
     expect(getCfcReferenceProvenance(empty)?.confidentiality)
       .toContainEqual(selection);
@@ -1939,6 +2101,7 @@ describe("cfc-reference-provenance", () => {
         path: ["0"],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: {},
       }],
     );
@@ -1992,6 +2155,7 @@ describe("cfc-reference-provenance", () => {
       [{
         path: [],
         observes: "followRef",
+        referenceAcquisition: "complete",
         origin: "link",
         label: { confidentiality: [selection] },
       }],
@@ -2061,6 +2225,38 @@ describe("cfc-reference-provenance", () => {
     tx.abort();
   });
 
+  it("preserves inline object identity while isolating raw reference acquisitions", async () => {
+    const { target } = await selectedTarget();
+    const holder = await seed("raw-structural-sharing", {
+      rows: [{ title: "inline" }],
+      link: target.getAsLink(),
+    }, [{
+      path: ["link"],
+      observes: "followRef",
+      referenceAcquisition: "complete",
+      origin: "link",
+      label: { confidentiality: [selection] },
+    }]);
+    const tx = runtime.edit();
+    const cell = holder.withTx(tx);
+    const first = cell.getRawUntyped() as {
+      rows: { title: string }[];
+      link: FabricValue;
+    };
+    const second = cell.getRawUntyped() as typeof first;
+    expect(second.rows).toBe(first.rows);
+    expect(second.rows[0]).toBe(first.rows[0]);
+    expect(second.link).not.toBe(first.link);
+    expect(getCfcReferenceProvenance(second.link)?.confidentiality)
+      .toContainEqual(selection);
+    const mutable = cell.getRawUntyped({ frozen: false }) as typeof first;
+    mutable.rows[0].title = "changed";
+    expect(first.rows[0].title).toBe("inline");
+    expect(getCfcReferenceProvenance(mutable.link)?.confidentiality)
+      .toContainEqual(selection);
+    tx.abort();
+  });
+
   for (const frozen of [false, true]) {
     it(`retains nested stored reference history in a raw read (frozen=${frozen})`, async () => {
       const { target } = await selectedTarget();
@@ -2069,6 +2265,7 @@ describe("cfc-reference-provenance", () => {
       }, [{
         path: ["links", "0"],
         observes: "followRef",
+        referenceAcquisition: "complete",
         origin: "link",
         label: { confidentiality: [selection] },
       }]);
@@ -2110,6 +2307,7 @@ describe("cfc-reference-provenance", () => {
       const holder = await seed("shared-raw-holder", [target.getAsLink()], [{
         path: ["0"],
         observes: "followRef",
+        referenceAcquisition: "complete",
         origin: "link",
         label: {},
       }]);
@@ -2119,6 +2317,7 @@ describe("cfc-reference-provenance", () => {
         [{
           path: [],
           observes: "followRef",
+          referenceAcquisition: "complete",
           origin: "link",
           label: { confidentiality: [selection] },
         }],
@@ -2200,6 +2399,7 @@ describe("cfc-reference-provenance", () => {
     const reference = await seed("endorsed-reference", content.getAsLink(), [{
       path: [],
       observes: "followRef",
+      referenceAcquisition: "complete",
       origin: "link",
       label: { integrity: [endorsement] },
     }]);
@@ -2235,19 +2435,72 @@ describe("cfc-reference-provenance", () => {
       "Reference acquisition lacks complete legacy provenance",
     );
 
-    const mixed = await seed(
-      "mixed-legacy",
-      { legacy: target.getAsLink() },
-      [],
-      1,
-    );
+    for (const version of [1, 2] as const) {
+      const mixed = await seed(
+        `mixed-legacy-${version}`,
+        { legacy: target.getAsLink() },
+        [{
+          path: ["legacy"],
+          origin: "link",
+          observes: "followRef",
+          label: { confidentiality: [selection] },
+        }],
+        version,
+      );
+      const update = runtime.edit();
+      mixed.withTx(update).key("fresh").set(target);
+      expect((await update.commit()).ok).toBeDefined();
+      expect(() => mixed.key("legacy").resolveAsCell()).toThrow(
+        "Reference acquisition lacks complete legacy provenance",
+      );
+      expect(() => mixed.key("fresh").resolveAsCell()).not.toThrow();
+      const read = runtime.edit();
+      const metadata = read.readOrThrow({
+        ...mixed.getAsNormalizedFullLink(),
+        path: ["cfc"],
+      }) as { version: number; labelMap: { entries: LabelMapEntry[] } };
+      expect(metadata.version).toBe(3);
+      const legacyEntry = metadata.labelMap.entries.find((entry) =>
+        entry.origin === "link" && entry.path.join("/") === "legacy"
+      );
+      expect(legacyEntry?.referenceAcquisition).toBeUndefined();
+      expect(legacyEntry?.label.confidentiality).toContainEqual(selection);
+      read.abort();
+    }
+  });
+
+  it("retains a complete public reference entry when an unrelated slot changes", async () => {
+    const target = await seed("public-complete-target", "public");
+    const holder = await seed("public-complete-holder", {
+      ref: target.getAsLink(),
+      other: "before",
+    }, [{
+      path: ["ref"],
+      origin: "link",
+      observes: "followRef",
+      referenceAcquisition: "complete",
+      label: {},
+    }]);
     const update = runtime.edit();
-    mixed.withTx(update).key("fresh").set(target);
+    holder.withTx(update).key("other").set("after");
     expect((await update.commit()).ok).toBeDefined();
-    expect(() => mixed.key("legacy").resolveAsCell()).toThrow(
-      "Reference acquisition lacks complete legacy provenance",
-    );
-    expect(() => mixed.key("fresh").resolveAsCell()).not.toThrow();
+    expect(holder.key("ref").get()).toBe("public");
+    const read = runtime.edit();
+    try {
+      const metadata = read.readOrThrow({
+        ...holder.getAsNormalizedFullLink(),
+        path: ["cfc"],
+      }) as { labelMap: { entries: LabelMapEntry[] } };
+      expect(metadata.labelMap.entries).toContainEqual({
+        path: ["ref"],
+        origin: "link",
+        observes: "followRef",
+        referenceAcquisition: "complete",
+        label: {},
+      });
+    } finally {
+      read.abort();
+    }
   });
 
   it("persists complete provenance at each trusted raw output reference slot", async () => {
@@ -2501,6 +2754,7 @@ describe("cfc-reference-provenance", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: {},
     }]);
     const secret = await seed("staged-selection", true, [{
@@ -2558,6 +2812,7 @@ describe("cfc-reference-provenance", () => {
       path: [],
       origin: "link",
       observes: "followRef",
+      referenceAcquisition: "complete",
       label: {},
     }, {
       path: [],
@@ -2584,6 +2839,7 @@ describe("cfc-reference-provenance", () => {
         path: [],
         origin: "link",
         observes: "followRef",
+        referenceAcquisition: "complete",
         label: {},
       }]);
       const secret = await seed("same-value-selection", true, [{
@@ -2630,5 +2886,216 @@ describe("cfc-reference-provenance", () => {
     acquired.withTx(next).getAsLink();
     expect(deriveFlowJoin(next).confidentiality).toContainEqual(selection);
     next.abort();
+  });
+  for (const matching of [true, false]) {
+    it(`retains ${matching ? "matching" : "no mismatched"} source selection witnesses without endorsing target contents`, async () => {
+      const target = await seed(
+        `selection-evidence-target-${matching}`,
+        "unendorsed",
+      );
+      const other = await seed(`selection-evidence-other-${matching}`, "other");
+      const chosen = (matching ? target : other).getAsNormalizedFullLink();
+      const selectionWitness = {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: { kind: "builtin", builtinId: "selected-reference" },
+      };
+      const selected = await seed(
+        `selection-evidence-slot-${matching}`,
+        target.getAsLink(),
+        [{
+          path: [],
+          origin: "link",
+          observes: "followRef",
+          referenceAcquisition: "complete",
+          label: { confidentiality: [selection] },
+        }, {
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: [selection],
+            integrity: [selectionWitness, {
+              type: CFC_ATOM_TYPE.LinkReference,
+              source: { space, id: chosen.id, path: chosen.path },
+              target: { space, id: "unused", path: [] },
+            }],
+          },
+        }],
+      );
+      const acquisition = runtime.edit();
+      const held = selected.withTx(acquisition).resolveAsCell().withTx(
+        undefined,
+      );
+      acquisition.abort();
+      expect(getCfcReferenceProvenance(held)?.selectionWitnesses ?? []).toEqual(
+        matching ? [selectionWitness] : [],
+      );
+      expect(cfcIntegrityForObservationNode(getCarriedCfcLabelView(held)))
+        .not.toContainEqual(selectionWitness);
+      const read = runtime.edit();
+      setCfcImplementationIdentity(read, {
+        kind: "builtin",
+        builtinId: "consumer",
+      });
+      held.withTx(read).getAsLink();
+      runtime.getCell(
+        space,
+        `selection-evidence-output-${matching}`,
+        undefined,
+        read,
+      )
+        .set("result");
+      const resultingWitness = {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: { kind: "builtin", builtinId: "consumer" },
+        inputWitness: selectionWitness,
+      };
+      if (matching) {
+        expect(deriveFlowJoin(read).integrity).toContainEqual(resultingWitness);
+      } else {
+        expect(deriveFlowJoin(read).integrity).not.toContainEqual(
+          resultingWitness,
+        );
+      }
+      read.abort();
+    });
+  }
+
+  it("refuses selection witnesses supplied through the public observation recorder", async () => {
+    const target = await seed("forged-selection-target", "public");
+    const forged = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "builtin", builtinId: "invented-selector" },
+    };
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: "consumer",
+    });
+    tx.recordCfcReferenceObservation({
+      target: target.getAsNormalizedFullLink(),
+      confidentiality: [selection],
+      selectionWitnesses: [forged],
+      purpose: "identity",
+      journalIndex: 0,
+    });
+    runtime.getCell(space, "forged-selection-output", undefined, tx).set(
+      "value",
+    );
+    const flow = deriveFlowJoin(tx);
+    expect(flow.confidentiality).toContainEqual(selection);
+    expect(flow.integrity).not.toContainEqual({
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "builtin", builtinId: "consumer" },
+      inputWitness: forged,
+    });
+    tx.abort();
+  });
+
+  it("retains fresh selection flow for an application-selected immutable reference", async () => {
+    const target = await seed("dynamic-immutable-target", "public");
+    const secret = await seed("dynamic-immutable-selector", "chosen", [{
+      path: [],
+      label: { confidentiality: [selection] },
+    }]);
+    const choices = runtime.getImmutableCell(space, { chosen: target });
+    const read = runtime.edit();
+    const key = secret.withTx(read).get() as "chosen";
+    const held = choices.withTx(read).key(key).resolveAsCell().withTx(
+      undefined,
+    );
+    expect(getCfcReferenceProvenance(held)?.confidentiality).toContainEqual(
+      selection,
+    );
+    expect(getCfcReferenceProvenance(held)?.selectionWitnesses ?? []).toEqual(
+      [],
+    );
+    read.abort();
+    const later = runtime.edit();
+    held.withTx(later).getAsLink();
+    expect(deriveFlowJoin(later).confidentiality).toContainEqual(selection);
+    later.abort();
+  });
+
+  it("keeps static node wiring pointwise without inheriting unrelated construction flow", async () => {
+    const target = await seed("node-wiring-public", "visible");
+    const selected = await seed("node-wiring-selected", target.getAsLink(), [{
+      path: [],
+      origin: "link",
+      observes: "followRef",
+      referenceAcquisition: "complete",
+      label: { confidentiality: [selection] },
+    }]);
+    const secret = await seed("node-wiring-unrelated", "private", [{
+      path: [],
+      label: { confidentiality: [content] },
+    }]);
+    const acquisition = runtime.edit();
+    const held = selected.withTx(acquisition).resolveAsCell();
+    acquisition.abort();
+    const tx = runtime.edit();
+    secret.withTx(tx).get();
+    const node = {
+      module: { type: "passthrough" as const },
+      inputs: { public: target.getAsLink(), selected: held.getAsLink() },
+      outputs: {},
+    };
+    const pattern = {
+      argumentSchema: true,
+      resultSchema: true,
+      nodes: [node],
+      result: {},
+    } as Pattern;
+    const plan = runtime.runner.accessForTestingOnly.nodePlan(
+      tx,
+      node,
+      target.withTx(tx),
+      pattern,
+    );
+    if (plan?.kind !== "passthrough") {
+      throw new Error("Expected passthrough plan");
+    }
+    const authored = runtime.getImmutableCell(
+      space,
+      ["authored"],
+      undefined,
+      tx,
+    );
+    tx.abort();
+    const reversed = runtime.edit();
+    const selectedFirst = plan.inputsCell.withTx(reversed).key("selected")
+      .resolveAsCell();
+    expect(getCfcReferenceProvenance(selectedFirst)?.confidentiality)
+      .toContainEqual(selection);
+    selectedFirst.get();
+    const publicSecond = plan.inputsCell.withTx(reversed).key("public")
+      .resolveAsCell();
+    expect(getCfcReferenceProvenance(publicSecond)?.confidentiality).toEqual(
+      [],
+    );
+    reversed.abort();
+    const read = runtime.edit();
+    try {
+      const publicInput = plan.inputsCell.withTx(read).key("public")
+        .resolveAsCell();
+      expect(publicInput.get()).toBe("visible");
+      expect(getCfcReferenceProvenance(publicInput)?.confidentiality).toEqual(
+        [],
+      );
+      expect(deriveFlowJoin(read).confidentiality).toEqual([]);
+      const selectedInput = plan.inputsCell.withTx(read).key("selected")
+        .resolveAsCell();
+      expect(getCfcReferenceProvenance(selectedInput)?.confidentiality)
+        .toContainEqual(selection);
+      expect(getCfcReferenceProvenance(selectedInput)?.confidentiality).not
+        .toContainEqual(content);
+      expect(selectedInput.get()).toBe("visible");
+      expect(deriveFlowJoin(read).confidentiality).toContainEqual(selection);
+      expect(deriveFlowJoin(read).confidentiality).not.toContainEqual(content);
+      authored.withTx(read).getRawUntyped();
+      expect(deriveFlowJoin(read).confidentiality).toContainEqual(content);
+    } finally {
+      read.abort();
+    }
   });
 });

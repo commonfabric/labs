@@ -86,6 +86,10 @@ async function getServerMemoryMB(): Promise<number> {
 
 // Main test function
 async function runTest() {
+  // The space-name derivation, which supports the legacy space names used
+  // during development and nothing else. It is removed once those
+  // development-only spaces have been migrated
+  // (docs/plans/random-space-identities.md).
   const account = await Identity.fromPassphrase("common user");
   const spaceName = `${SPACE_NAME_PREFIX}-${crypto.randomUUID()}`;
   const space_thingy = await account.derive(spaceName);

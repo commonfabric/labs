@@ -13,7 +13,7 @@
 
 import type { Constructor } from "@commonfabric/utils/types";
 
-import type { FabricInstance, FabricValue } from "@/interface.ts";
+import type { FabricInstance, FabricValuePlus } from "@/interface.ts";
 
 /**
  * Well-known symbol for binding the getter
@@ -75,10 +75,13 @@ export const REALM_CODEC: unique symbol = Symbol("data-model.realmCodec");
  * also take such "essential state" and produce values that are equivalent (in
  * a context-dependent sense) to the values that state was extracted from.
  *
- * `Encoded` is the domain that essential state lives in. Every codec has the
- * same shape whatever that domain is -- the same matching members, the same
- * pair of transformations -- and the domain is the only thing that varies.
- * {@link NonterminalCodec} and {@link TerminalCodec} name the two ways it is
+ * `PlusType` is what the values this codec works on may hold beyond
+ * `FabricValue`: the value side of every member is `FabricValuePlus<PlusType>`,
+ * so a codec at `never` works over `FabricValue` exactly. `Encoded` is the
+ * domain that essential state lives in. Every codec has the same shape
+ * whatever those two are -- the same matching members, the same pair of
+ * transformations -- and they are the only things that vary. {@link
+ * NonterminalCodec} and {@link TerminalCodec} name the two ways the pair is
  * instantiated in practice, and are where the consequences are written down.
  *
  * The domain does not by itself say what the codec system should do with a
@@ -87,8 +90,19 @@ export const REALM_CODEC: unique symbol = Symbol("data-model.realmCodec");
  * by which base class a codec extends, which is where it stays: a registry
  * refuses a codec extending neither and otherwise stores it unaltered, and a
  * walker reads the class when it dispatches.
+ *
+ * `State` is the codec's own state type, a subtype of `Encoded`: what {@link
+ * #encode} emits, what {@link #canDecode} narrows to, and the only thing {@link
+ * #decode} is handed. One declaration serving all three members is what says
+ * the three agree. A codec that works over the whole of `Encoded` leaves it at
+ * the default, and so does whatever holds codecs that agree on nothing
+ * narrower, as a registry does.
  */
-export interface FabricCodec<Encoded> {
+export interface FabricCodec<
+  PlusType,
+  Encoded,
+  State extends Encoded = Encoded,
+> {
   /**
    * The unique _direct_ class of instances, if any, that is associated with the
    * format this instance encodes. The codec system uses this to make a quick
@@ -110,16 +124,25 @@ export interface FabricCodec<Encoded> {
   /**
    * Returns `true` if this handler can encode the state of the given value.
    *
-   * May take `value` as a valid `FabricValue`; see `BaseCodecEngine.encode()`
-   * for the input contract that makes that safe to assume.
+   * May take `value` as a valid `FabricValuePlus<PlusType>`; see
+   * `BaseCodecEngine.encode()` for the input contract that makes that safe to
+   * assume.
    */
-  canEncode(value: FabricValue): boolean;
+  canEncode(value: FabricValuePlus<PlusType>): boolean;
 
   /**
    * Returns `true` if the given state is one this codec knows how to decode:
    * the decode side's counterpart to {@link #canEncode}, answering the same
    * kind of question about whether a value is in the domain this codec works
    * over.
+   *
+   * `state` is a member of `Encoded` already. Whether it is one at all is
+   * settled by whatever produced it -- a wire format's parser, a realm
+   * crossing, the codec engine's own walk -- and is not asked again here. What
+   * is asked is narrower: whether that member has the shape of this codec's
+   * `State`. So a part of the state which `State` allows to be any member of
+   * `Encoded`, as an external reference such as a `FabricError`'s `cause` is,
+   * leaves this method nothing to check.
    *
    * What belongs here is what is cheap to ask and not already asked by the
    * decoding: the state's type, the presence and types of the parts a decode
@@ -129,14 +152,14 @@ export interface FabricCodec<Encoded> {
    * twice; {@link #decode} keeps such a question and is where a state failing
    * it is refused.
    *
-   * An implementation states this as a type predicate over its own state type,
-   * which is what lets its {@link #decode} declare that same type and read the
-   * state's parts without re-checking them. See {@link BaseFabricCodec}.
+   * Stated as a type predicate over `State`, which is what makes the check
+   * pay: the narrowing carries across to {@link #decode}, which then reads the
+   * state's parts as the types this method established them to be.
    *
    * Called on every state before {@link #decode} sees it, so an implementation
    * of the latter may take the check as done.
    */
-  canDecode(state: Encoded): boolean;
+  canDecode(state: Encoded): state is State;
 
   /**
    * Returns the wire type tag to use when encoding the given value. Only ever
@@ -145,7 +168,7 @@ export interface FabricCodec<Encoded> {
    * one -- this is the concrete tag for a _specific_ value; a codec whose
    * instances each carry their own per-instance tag reads it from the value.
    */
-  tagForValue(value: FabricValue): string;
+  tagForValue(value: FabricValuePlus<PlusType>): string;
 
   /**
    * Decodes a value from the given essential state, which is (alleged /
@@ -160,16 +183,35 @@ export interface FabricCodec<Encoded> {
    *
    * Only ever called on a state for which {@link #canDecode} has returned
    * `true`, which is the decode side's counterpart to the way {@link
-   * #canEncode} precedes {@link #encode}. That is what lets an implementation
-   * declare the narrower state type it actually decodes and read its parts as
-   * such. `state` is the whole of `Encoded` here because this interface is what
-   * a registry holds, and the codecs in one agree on nothing narrower.
+   * #canEncode} precedes {@link #encode}. That is what makes `state` a `State`,
+   * whose parts an implementation reads as such. Where a codec is held at a
+   * wider `State` than its own, as a registry holds every codec at `Encoded`,
+   * the types do not carry that ordering, and it rests on the caller.
+   *
+   * A `state` need not come from {@link #encode}, so a nonterminal codec's
+   * implementation which keeps a container from `state` as part of the value it
+   * builds may do so only when that container is frozen and stays frozen in
+   * that value. Anything else it keeps, it copies. A mutable value may keep
+   * frozen state this way, so long as nothing that makes it mutable depends on
+   * changing that state. A value from `state` which the codec's values hold as
+   * an external reference is not a container of theirs, and is kept as it is.
+   * What a terminal codec may keep from its state is its wire format's
+   * business, as a transferred `ArrayBuffer` taken over whole shows.
+   *
+   * `mutable` decides the frozenness of the value built, and of nothing else:
+   * when `false`, the default, the result is frozen, and when `true`, it is
+   * left mutable. Either way a decode freezes only what it builds itself,
+   * never a value it keeps from `state`; freezing what `state` holds belongs to
+   * whatever built it. A codec whose values are immutable whatever their
+   * construction, such as a `FabricPrimitive`'s, has nothing to decide and may
+   * leave `mutable` undeclared.
    */
   decode(
     typeTag: string,
-    state: Encoded,
+    state: State,
     env: LiveEnvironment,
-  ): FabricValue;
+    mutable?: boolean,
+  ): FabricValuePlus<PlusType>;
 
   /**
    * Encodes the given value, returning its essential state. This is only ever
@@ -178,33 +220,62 @@ export interface FabricCodec<Encoded> {
    * codec system handles recursion as necessary.
    *
    * Two things an implementation may take as given: that `value` is a valid
-   * `FabricValue`, and that this instance's own {@link #canEncode} has
-   * returned `true` for it. Re-checking either is work spent on input that is
-   * correct by contract; see `BaseCodecEngine.encode()`.
+   * `FabricValuePlus<PlusType>`, and that this instance's own {@link
+   * #canEncode} has returned `true` for it. Re-checking either is work spent
+   * on input that is correct by contract; see `BaseCodecEngine.encode()`.
    *
    * `env` is what a codec reaches the running system through, the same one
    * {@link #decode} is handed.
+   *
+   * For a nonterminal codec, the result is a snapshot of `value`: it
+   * represents `value`'s internal state as frozen data, and its external
+   * references as themselves, with their frozenness left as it is. This holds
+   * whether or not `value` is itself frozen. A mutable value's internal state
+   * is copied into the result, never frozen in place, and a result may be
+   * cached so long as it is dropped when the value changes. A value whose
+   * state effectively is an external reference may return that reference as
+   * itself, frozen or not; so a caller must not freeze a result in place, or
+   * otherwise change it.
+   *
+   * A terminal codec's result is in its wire format's own domain, and what it
+   * may be is that format's business. It is best made as frozen as the format
+   * allows: a record is frozen, though an `ArrayBuffer` in it cannot be.
    */
-  encode(value: FabricValue, env: LiveEnvironment): Encoded;
+  encode(value: FabricValuePlus<PlusType>, env: LiveEnvironment): State;
 }
 
 /**
  * A codec whose essential state is **nonterminal**: it is itself made of
- * `FabricValue`s, which the walker goes on to expand in turn. The sense is the
- * one formal grammars give the word -- a state that arrives here is not an
- * answer but something that must be rewritten further before it is one.
+ * `FabricValuePlus<PlusType>`s, which the walker goes on to expand in turn.
+ * The sense is the one formal grammars give the word -- a state that arrives
+ * here is not an answer but something that must be rewritten further before it
+ * is one.
  *
- * Instantiating {@link FabricCodec} at `FabricValue` is what says so, because
- * that is the walker's own input domain: handing the walker a state of that
- * type is handing it more work of exactly the kind it already does. A codec of
- * this kind therefore settles nothing about how those values are ultimately
- * written down, and one instance serves every wire format.
+ * Instantiating {@link FabricCodec} with its state domain equal to its value
+ * domain is what says so: a state of that type is exactly what the walker
+ * takes as input, so handing it one is handing it more work of the kind it
+ * already does. A codec of this kind therefore settles nothing about how those
+ * values are ultimately written down, and one instance serves every wire
+ * format.
+ *
+ * `PlusType` is what the instances this codec exposes may hold, and its state
+ * holds the same. At `never`, the default, both sides are `FabricValue`, which
+ * is the one kind a wire format's registry takes. At any other `PlusType` the
+ * codec exposes an instance's contents, that type included, to a walker that
+ * admits it, and has no wire form.
+ *
+ * `State` is as {@link FabricCodec} describes it, bounded by that same domain.
+ * It comes after `PlusType` so that it can default to the whole of the domain
+ * it bounds.
  *
  * `FabricError` is the clearest case. Its state carries `cause` and every
  * `extraEntries()` pair, so it can hold arbitrary nested values -- including
  * other instances -- and only the walker can know what to do with them.
  */
-export type NonterminalCodec = FabricCodec<FabricValue>;
+export type NonterminalCodec<
+  PlusType = never,
+  State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
+> = FabricCodec<PlusType, FabricValuePlus<PlusType>, State>;
 
 /**
  * A codec whose essential state is **terminal**: it is already in the domain of
@@ -227,8 +298,15 @@ export type NonterminalCodec = FabricCodec<FabricValue>;
  * `Encoded` ranges over the wire formats' own value types. `FabricValue` is not
  * among them, and instantiating at it is unsound; see {@link
  * BaseTerminalCodec}.
+ *
+ * The value side is at `never`: a wire format carries `FabricValue`s, and a
+ * value holding anything beyond those has no wire form to terminate into.
+ *
+ * `State` is as {@link FabricCodec} describes it: this codec's own states,
+ * within the one format it serves.
  */
-export type TerminalCodec<Encoded> = FabricCodec<Encoded>;
+export type TerminalCodec<Encoded, State extends Encoded = Encoded> =
+  FabricCodec<never, Encoded, State>;
 
 /**
  * A codec usable for the wire format whose value type is `Encoded`: either
@@ -236,10 +314,19 @@ export type TerminalCodec<Encoded> = FabricCodec<Encoded>;
  * serves every format, and both are "for" this one. This is what a mixed
  * roster holds, what {@link CodecRegistry} stores, and what it hands back.
  *
- * Writing the union out is unavoidable. {@link FabricCodec} is invariant in
- * `Encoded` -- the parameter sits in both an argument and a return position --
- * so a `NonterminalCodec` is assignable to no format's instantiation, and the
- * two arms have to be named separately.
+ * Writing the union out is unavoidable. {@link FabricCodec} is covariant in
+ * `Encoded`: its members are methods, whose parameters TypeScript compares
+ * bivariantly, so the return position of `encode()` is what decides, and a
+ * codec is assignable to an instantiation at a wider `Encoded` and to none at
+ * a narrower one. `FabricValue` is a subtype of no format's value type, so a
+ * `NonterminalCodec` is assignable to no format's instantiation, and the two
+ * arms have to be named separately.
+ *
+ * The nonterminal arm is at `never`, the one `PlusType` with a wire form. That
+ * is a claim about what a registry holds, not a check on what a class binds:
+ * {@link CodecRegistry} reads a class's `[CODEC]` through a cast, so a codec at
+ * another `PlusType` registers as this type, and what refuses its state is the
+ * encode walk, which finds a value no codec claims.
  */
 export type CodecForFormat<Encoded> =
   | NonterminalCodec
@@ -273,10 +360,15 @@ export interface WireFormat<Encoded> {
  * codec serves every wire format. A class the formats want to treat
  * differently -- in the state produced, in the kind of codec, or both -- binds
  * one per format under that format's own symbol instead.
+ *
+ * `PlusType` is the class's own: a class whose instances are
+ * `FabricInstancePlus<PlusType>` binds its codec at that same `PlusType`, so
+ * that the state the codec exposes is typed for what the instances hold.
+ * `codecOf()` types its result on that agreement and does not check it.
  */
-export interface FabricClassWithNonterminalCodec {
+export interface FabricClassWithNonterminalCodec<PlusType = never> {
   /** The codec instance to use for instances of this class. */
-  get [CODEC](): NonterminalCodec;
+  get [CODEC](): NonterminalCodec<PlusType>;
 }
 
 /**
@@ -295,21 +387,4 @@ export interface LiveEnvironment {
   getCell(
     ref: { id: string; path: string[]; space: string },
   ): FabricInstance;
-
-  /**
-   * Signals whether a decode call should produce a deep-frozen result: `true`
-   * means the decoded value should be deep-frozen, `false` means a mutable
-   * result is acceptable. Same contract as `frozen` passed to
-   * `cloneIfNecessary()` (see `value-clone.ts`): `shouldDeepFreeze === true`
-   * corresponds to `cloneIfNecessary(value, { frozen: true })`.
-   *
-   * Required (not optional): every live environment declares it, and gets it
-   * for free by extending `BaseLiveEnvironment`, which centralizes the getter;
-   * the `cloneIfNecessary`-style `true` default lives there.
-   *
-   * Enforcement: a decode deep-freezes its result, and a codec that builds a
-   * value cheaper when it may stay thawed reads this to decide, producing a
-   * deep-frozen result when it is `true`.
-   */
-  get shouldDeepFreeze(): boolean;
 }

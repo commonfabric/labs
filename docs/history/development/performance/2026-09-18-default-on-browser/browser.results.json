@@ -1,0 +1,564 @@
+{
+  "environment": {
+    "revision": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+    "machine": "macOS-27.0-arm64-arm-64bit",
+    "deno": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3",
+    "apiMeta": {
+      "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+      "gitSha": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+      "shellServerExecutionDefine": null,
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": false
+      },
+      "cfc": {
+        "provenance": "resolved",
+        "enforcementMode": {
+          "rung": "enforce-explicit",
+          "diagnosticOnly": false,
+          "decidesOn": "a recorded reason, which rejects the commit"
+        },
+        "flowLabels": {
+          "rung": "off",
+          "diagnosticOnly": true,
+          "decidesOn": "nothing; no derived label component comes into existence"
+        },
+        "writeFloor": {
+          "rung": "off",
+          "diagnosticOnly": true,
+          "decidesOn": "nothing; the write-side integrity floor is not checked"
+        },
+        "triggerReadGating": false,
+        "decomposedEnvelopes": false,
+        "contentAddressedLabels": false,
+        "policyEvaluation": {
+          "rung": "off",
+          "diagnosticOnly": true,
+          "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+        },
+        "labelMetadataProtection": {
+          "rung": "off",
+          "diagnosticOnly": true,
+          "decidesOn": "nothing; label metadata writes are not gated"
+        },
+        "declaredMonotonicity": {
+          "rung": "off",
+          "diagnosticOnly": true,
+          "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+        },
+        "policyDigest": null,
+        "sinks": [
+          {
+            "sink": "fetchBinary",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "fetchText",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "fetchJson",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "fetchJsonUnchecked",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "fetchProgram",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "streamData",
+            "ungated": "no confidentiality ceiling is configured for this sink"
+          },
+          {
+            "sink": "llm",
+            "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+          },
+          {
+            "sink": "llmDialog",
+            "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+          },
+          {
+            "sink": "generateText",
+            "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+          },
+          {
+            "sink": "generateObject",
+            "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+          }
+        ],
+        "deviations": [
+          {
+            "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+            "owner": "CFC runtime (Epic B, sink governance)",
+            "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+          },
+          {
+            "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+            "owner": "CFC runtime (Epic B, sink governance)",
+            "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+          },
+          {
+            "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+            "owner": "CFC runtime (Epic B, sink governance)",
+            "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+          },
+          {
+            "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+            "owner": "CFC runtime (Epic B, sink governance)",
+            "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+          }
+        ]
+      }
+    },
+    "store": "/tmp/b13-f5-browser-memory-20260918"
+  },
+  "runs": [
+    {
+      "voteCount": 74,
+      "profileLocation": "same-space",
+      "diagnosticSamples": [
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 98635000.0,
+        "max": 173910209.0,
+        "avg": 139707292.0,
+        "p75": 172278292.0,
+        "p99": 173910209.0,
+        "p995": 173910209.0,
+        "p999": 173910209.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 74,
+        "spaceName": "9a10ab30-2164-47f4-8f9c-59b797b83266-same-space-read-74",
+        "pieceId": "fid1:lhqLybC73StUlbZoJNXPr6cjPeXm5qVYC2ZYpMxV6hg",
+        "profileLocation": "same-space",
+        "profileSpace": "did:key:z6MkmemdCumEwUz5iRcE6hKpmnkEJRSpCNQxm8fU8RTRa2C3",
+        "sample": {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    },
+    {
+      "voteCount": 74,
+      "profileLocation": "cross-space",
+      "diagnosticSamples": [
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 91256958.0,
+        "max": 115605209.0,
+        "avg": 104855074.0,
+        "p75": 112025834.0,
+        "p99": 115605209.0,
+        "p995": 115605209.0,
+        "p999": 115605209.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 74,
+        "spaceName": "ce18caee-3447-44e8-922d-63b47d9d290e-cross-space-read-74",
+        "pieceId": "fid1:qJJ4fReHNSjCXjxLHuAGFiNYXY5QwOvIvqpGyM_oRWM",
+        "profileLocation": "cross-space",
+        "profileSpace": "did:key:z6MkfGestc1Gfiux6mjSBKqhB4GBMLEDNdhpYZZo5bHxwJPK",
+        "sample": {
+          "runs": 58,
+          "accesses": 734,
+          "maxAccesses": 143,
+          "linkHops": 929,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    },
+    {
+      "voteCount": 296,
+      "profileLocation": "same-space",
+      "diagnosticSamples": [
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 133111375.0,
+        "max": 155309542.0,
+        "avg": 140227782.0,
+        "p75": 136915500.0,
+        "p99": 155309542.0,
+        "p995": 155309542.0,
+        "p999": 155309542.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 296,
+        "spaceName": "32a1214f-0a36-4fd7-9321-94f4283a6893-same-space-read-296",
+        "pieceId": "fid1:tlPaCYlkuDjKwev0dsVYZ12fq1XtPjcyOwFduag3h5U",
+        "profileLocation": "same-space",
+        "profileSpace": "did:key:z6MkiLJmxWAzj1oz1t22MMEC7VHSPuyc69ubeiTmNpnJoTMj",
+        "sample": {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    },
+    {
+      "voteCount": 296,
+      "profileLocation": "cross-space",
+      "diagnosticSamples": [
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 141888917.0,
+        "max": 164264917.0,
+        "avg": 152676542.0,
+        "p75": 158339459.0,
+        "p99": 164264917.0,
+        "p995": 164264917.0,
+        "p999": 164264917.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 296,
+        "spaceName": "dfcc6d6a-1c4e-4570-8540-2ee5659ae482-cross-space-read-296",
+        "pieceId": "fid1:jkfRlOX4QF-VGSIwu3-70b9HjMqlMifTt9pSrPDcxVA",
+        "profileLocation": "cross-space",
+        "profileSpace": "did:key:z6MkvcxZNKAASD7jdvf7fE2AVNBVEr4t2X56mPNGFtRM8dox",
+        "sample": {
+          "runs": 52,
+          "accesses": 1062,
+          "maxAccesses": 302,
+          "linkHops": 1249,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    },
+    {
+      "voteCount": 1184,
+      "profileLocation": "same-space",
+      "diagnosticSamples": [
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 474520250.0,
+        "max": 607705917.0,
+        "avg": 559942761.0,
+        "p75": 580514417.0,
+        "p99": 607705917.0,
+        "p995": 607705917.0,
+        "p999": 607705917.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 1184,
+        "spaceName": "7066bebf-56cd-490b-995d-b1d237b70dc3-same-space-read-1184",
+        "pieceId": "fid1:iUx_CCfDz0vbYU-rIbpDEG7sFJVvkPWO8EgU9N_G5yw",
+        "profileLocation": "same-space",
+        "profileSpace": "did:key:z6Mknypv7NJgc3vfcfxeF1qrXuzk64V4X6fUJsuWLWgE2gG8",
+        "sample": {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    },
+    {
+      "voteCount": 1184,
+      "profileLocation": "cross-space",
+      "diagnosticSamples": [
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 1438667875.0,
+        "max": 2288821958.0,
+        "avg": 1735816042.0,
+        "p75": 1691328291.0,
+        "p99": 2288821958.0,
+        "p995": 2288821958.0,
+        "p999": 2288821958.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      },
+      "artifact": {
+        "voteCount": 1184,
+        "spaceName": "07c91fea-337a-459d-b307-e423eb0fbecc-cross-space-read-1184",
+        "pieceId": "fid1:auzj6f4hhkTzBlclbYLPR2amtPIGTDRCIU6vVCmUcPw",
+        "profileLocation": "cross-space",
+        "profileSpace": "did:key:z6Mkpuo3D9YpQRyVbr41u9N7s9pYwWnrV9vJ4Giasa2g3Gnn",
+        "sample": {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      }
+    }
+  ]
+}

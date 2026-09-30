@@ -3,8 +3,8 @@
  *
  * The functions exercised here are on the hot path of the CFC commit-boundary
  * gate (`preparedDigestFor` is called from
- * `extended-storage-transaction.ts` on every prepare and again during commit
- * re-check) and on the storage subscription path (`watchIdForEntry` is hit
+ * `extended-storage-transaction.ts` on prepare and during commit rechecks
+ * whose activity epoch changed) and on the storage subscription path (`watchIdForEntry` is hit
  * once per watch registration).
  *
  * The `benchmarks.yml` workflow runs this file on main and publishes the

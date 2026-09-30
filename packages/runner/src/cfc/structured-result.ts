@@ -4,7 +4,7 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { isSubschema } from "../schema-walk.ts";
+import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { cfcOpaqueLinkForPath } from "./observation.ts";
 import {
   cfcCombinatorObjectSurface,

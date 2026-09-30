@@ -81,9 +81,11 @@ describe("streamData under EXPERIMENTAL_SERVER_EXECUTION", () => {
       undefined,
       tx,
     );
+    // The stream is a computation: a reader has to demand it, and the
+    // runtime's disposal ends the subscription.
     runtime.run(tx, testPattern, {
       url: "http://mock-test-server.local/stream",
-    }, resultCell);
+    }, resultCell).sink(() => {});
     await tx.commit();
 
     const error = await firstError.promise;
@@ -110,9 +112,11 @@ describe("streamData under EXPERIMENTAL_SERVER_EXECUTION", () => {
       undefined,
       tx,
     );
+    // The stream is a computation: a reader has to demand it, and the
+    // runtime's disposal ends the subscription.
     runtime.run(tx, testPattern, {
       url: "http://mock-test-server.local/stream",
-    }, resultCell);
+    }, resultCell).sink(() => {});
     await tx.commit();
     await runtime.settled();
 

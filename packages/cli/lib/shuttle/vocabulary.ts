@@ -27,6 +27,7 @@ import type {
   listPieceCallables,
   PieceConfig,
   setCellValue,
+  sinkCellValue,
   SpaceConfig,
   warmPiece,
 } from "../piece.ts";
@@ -34,8 +35,10 @@ import type { readWish } from "../wish.ts";
 import { type Announce } from "./announce.ts";
 import { type HeldConnection } from "./connection.ts";
 import { type Editing } from "./editor.ts";
+import { type ExternalLocation } from "./external.ts";
 import { resolveHandle } from "./handles.ts";
-import { type ListingDeps } from "./listing.ts";
+import type { ValueLens } from "./lens.ts";
+import { type ListingDeps, type RowKind } from "./listing.ts";
 import { type VerbOptions } from "./options.ts";
 import {
   ASSUMED_COLUMNS,
@@ -47,7 +50,7 @@ import {
   statusLine,
 } from "./page.ts";
 import {
-  type Aimed,
+  type Aim,
   CurrentPlace,
   type FacetPosition,
   type HandleMove,
@@ -68,6 +71,20 @@ export type Outcome =
   | { readonly kind: "text"; readonly text: string }
   /** The verb read `value` out of the fabric. */
   | { readonly kind: "value"; readonly value: unknown }
+  /**
+   * The verb armed a watch and opened `lens` onto it, having composed `armed`
+   * — the listing of what is now armed — on the way.
+   *
+   * The two are one outcome and not two because they happened in one line and
+   * in that order, and because only the caller that owns the keyboard can open
+   * a lens: a verb composes what it did and hands the frame over, exactly as
+   * it hands back the text of a line it merely wrote (`prompt.ts`).
+   */
+  | {
+    readonly kind: "watching";
+    readonly lens: ValueLens;
+    readonly armed: string;
+  }
   /** The line is refused, for the reason given. */
   | { readonly kind: "refused"; readonly reason: string }
   | Interruption;
@@ -92,6 +109,16 @@ export interface Shuttle {
 
   /** Where shuttle stands, which `cd` moves and every other verb reads. */
   readonly place: CurrentPlace;
+
+  /**
+   * The one working position outside the fabric, which `xcd` moves.
+   *
+   * It stands beside the place rather than inside it because the two move
+   * independently: the fabric is the ambient plane, so a bare relative
+   * operand is read against the place and never against this one
+   * (`external.ts`).
+   */
+  readonly external: ExternalLocation;
 
   /** The one connection this process holds. */
   readonly connection: HeldConnection;
@@ -129,6 +156,17 @@ export interface VerbDeps {
 
   /** Writes a reference at a cell path, which is what `link` does. */
   readonly linkPieces?: typeof linkPieces;
+
+  /**
+   * Subscribes to a cell and reports what it settles at, which is what a
+   * watch and the lens onto it are each built from.
+   *
+   * It is one seam serving both because the two want the same thing and differ
+   * only in how long they want it: the settling discipline is the seam's
+   * (`sinkCellValue`, `lib/piece.ts`), and which of them cancels when is the
+   * caller's.
+   */
+  readonly sinkCellValue?: typeof sinkCellValue;
 
   /**
    * Starts the piece a verb is about to act on, which is reaching in warms
@@ -245,8 +283,8 @@ export interface VerbDeps {
    *
    * The rule is what a caller can check, and it is checked: a case cancels
    * from inside each read there is and at each line's first suspension, and
-   * asserts that nothing was read afterwards (`shuttle-verbs.test.ts`). That
-   * observes the property instead of enumerating the boundaries, so a
+   * asserts that nothing was read afterwards (`shuttle-verbs.serial.test.ts`).
+   * That observes the property instead of enumerating the boundaries, so a
    * boundary nobody thought of fails it too.
    *
    * What it cannot stop is a read already sent: the runtime's reads take no
@@ -254,6 +292,17 @@ export interface VerbDeps {
    * checks are what stop it taking effect on the way back.
    */
   readonly signal?: AbortSignal;
+
+  /**
+   * Takes charge of a lens the line has opened, from the moment it is opened.
+   *
+   * What runs the line closes, as the line settles, every lens it opened that
+   * its outcome does not carry, and on the way out every lens it opened at all.
+   * A lens holds a subscription from the moment it adopts one, so it needs an
+   * owner before there is an outcome to find it in: an outcome can lose its
+   * race to a cancel, or arrive after nothing is left to take it (`prompt.ts`).
+   */
+  readonly adoptLens?: (lens: ValueLens) => void;
 }
 
 /**
@@ -300,7 +349,7 @@ export type Ran<T> = { readonly kind: "ran"; readonly answer: T };
  * So this is a guarantee against the edit somebody makes, not against the
  * edit somebody constructs, and the cases are what cover the second: a line
  * cancelled at its first suspension reaches this function before its read,
- * and every verb that reads has such a case (`shuttle-verbs.test.ts`).
+ * and every verb that reads has such a case (`shuttle-verbs.serial.test.ts`).
  *
  * There are two checks and not one, and the second is what a caller relies on
  * without knowing it. The first stops the act; the second stops its *answer*,
@@ -397,9 +446,7 @@ export async function aimed(
   if (operand === undefined) {
     return { kind: "place", place: shuttle.place.place, input: false };
   }
-  const aim = shuttle.place.aim(operand, verb);
-  const at = await reading(shuttle, aim.move, verb, deps);
-  return at.kind === "refused" ? at : { ...at, input: aim.input };
+  return await reading(shuttle, shuttle.place.aim(operand, verb), verb, deps);
 }
 
 /** Where a handle's row stands, or the reason it stands nowhere. */
@@ -417,6 +464,27 @@ export type Rowed =
   | Refusal;
 
 /**
+ * What a row of each kind that no place stands at is reached by instead, as
+ * the clause a refusal adds, and nothing for a kind that stands somewhere.
+ *
+ * A projection over every kind rather than a test for the two that carry a
+ * clause, closed by the compiler: a kind added to {@link RowKind} without a
+ * line here does not compile, so whether it names a verb of its own is a
+ * decision somebody made rather than an absence nobody noticed. Three kinds
+ * stand at a place and one that does not is a row a listing gave no operand,
+ * which is what the sentence in front of the clause already says.
+ */
+const REACHED_BY = {
+  container: undefined,
+  value: undefined,
+  callable: ", it being one of the piece's callables. `call` is what " +
+    "invokes one",
+  piece: undefined,
+  slug: undefined,
+  watch: ", it being a watch. `unwatch` is what disarms one",
+} satisfies Record<RowKind, string | undefined>;
+
+/**
  * Helper for {@link landing} and {@link reading}, which is the row `move`
  * names and the operand that reaches it, or the reason it reaches nothing.
  *
@@ -426,33 +494,23 @@ export type Rowed =
  *
  * A row with no operand is a row no place stands at, and the refusal says that
  * rather than that the handle named nothing — the handle named a row, and the
- * row is the part that is not somewhere to go. A callable is the row that is
- * always so, and it is the row `call` reads through a door of its own.
+ * row is the part that is not somewhere to go. Two kinds are always so and
+ * each has a verb of its own, which {@link REACHED_BY} is what names.
  */
 export function rowFor(shuttle: Shuttle, move: HandleMove): Rowed {
   const bound = resolveHandle(shuttle.session.handles, move.handle);
   if (bound.kind === "refused") return bound;
   const toward = bound.row.operand;
+  const instead: string | undefined = REACHED_BY[bound.row.kind];
   return toward === undefined
     ? refuse(
-      `\`${move.handle}\` names a row no place stands at${
-        bound.row.kind === "callable"
-          ? ", it being one of the piece's callables. `call` is what invokes " +
-            "one"
-          : ""
-      }.`,
+      `\`${move.handle}\` names a row no place stands at${instead ?? ""}.`,
     )
     : { kind: "row", at: bound.at, toward };
 }
 
 /** A refusal, which is an arm of every outcome this module has. */
 export type Refusal = { readonly kind: "refused"; readonly reason: string };
-
-/** Where an operand names, or the reason it names nothing to read. */
-type Reading =
-  /** The operand names `place`. */
-  | { readonly kind: "place"; readonly place: Place }
-  | Refusal;
 
 /**
  * Where an operand points and which of the piece's two cells it names, or the
@@ -468,33 +526,37 @@ export type Aiming =
   | Refusal;
 
 /**
- * Helper for {@link get}, which finishes `move` without moving, `verb` naming
+ * Helper for {@link aimed}, which finishes `aim` without moving, `verb` naming
  * the verb whose line it came off.
  *
- * A space written as a name is settled the way {@link landing} settles one. A
- * `#name` target is not: `cf cell get` takes no such target and `cf wish`
- * does, and a data verb here means what it means there, so the refusal names
- * the verb that reads one. Resolving it here would answer a second way as
- * well as a second time — `wish` hands back what the fabric resolved with its
- * handles written as markers, and a cell read of the same address hands back
- * the raw value.
+ * A space written as a name is settled the way {@link landing} settles one,
+ * and keeps the selection its reference carried. A handle is looked up, and
+ * which cell it selects comes back with the row it reached, since a member on
+ * a handle's head, or on a piece segment the path after it enters, is read
+ * against that row. A `#name` target is not settled: `cf cell get` takes no
+ * such target and `cf wish` does, and a data verb here means what it means
+ * there, so the refusal names the verb that reads one. Resolving it here would
+ * answer a second way as well as a second time — `wish` hands back what the
+ * fabric resolved with its handles written as markers, and a cell read of the
+ * same address hands back the raw value.
  *
- * That is the `#argument` suffix's opposite and for a reason that is not
- * arbitrary. The suffix says which of a piece's two cells to read and the
- * place it rides is reachable either way, so refusing it would put a cell out
+ * That is the `#argument` member's opposite and for a reason that is not
+ * arbitrary. The member says which of a piece's two cells to read and the
+ * piece it rides is reachable either way, so refusing it would put a cell out
  * of reach; a `#name` is a whole target with a verb of its own, so taking it
  * would put a second answer in reach. The two share the character and nothing
  * else (`docs/plans/shuttle/grammar.md`).
  */
 async function reading(
   shuttle: Shuttle,
-  move: Aimed,
+  aim: Aim,
   verb: string,
   deps: VerbDeps,
-): Promise<Reading> {
+): Promise<Aiming> {
+  const move = aim.move;
   switch (move.kind) {
     case "moved":
-      return { kind: "place", place: move.place };
+      return { kind: "place", place: move.place, input: aim.input };
     case "refused":
       return move;
     case "wish":
@@ -508,7 +570,10 @@ async function reading(
       const named = await connectedSpace(shuttle, move.name);
       return named.kind === "refused" ? named : await reading(
         shuttle,
-        shuttle.place.resolveNamedSpace(move, named.space),
+        {
+          input: aim.input,
+          move: shuttle.place.resolveNamedSpace(move, named.space),
+        },
         verb,
         deps,
       );
@@ -543,10 +608,10 @@ export type Named =
  *
  * The comparison is exact, and that is not an approximation of the derivation
  * but its own answer. A named space's key hangs off the name's bytes and
- * nothing else, so two names denote one space when they are one string; and
- * the reference reading has already put the operand's name in the form the
- * connection recorded, `decodeJsonPointer` having read back the `~1` a name
- * holding the separator is written with.
+ * nothing else, so two names denote one space when they are one string. The
+ * reference reader reads the space slot as written, with no escape undone —
+ * the grammar admits no separator in a space name — so a name is compared in
+ * the characters the operand wrote.
  *
  * A session opened by a DID recorded no name, and then there is no answer to
  * give: what the name denotes would take the derivation, and whether it
@@ -636,6 +701,11 @@ export function pieceConfigAt(
  * what clears a continuation the line before it left: `more` after a listing
  * that fit is `more` with nothing waiting, not `more` writing the tail of the
  * listing before it.
+ *
+ * It comes back as the one arm of {@link Outcome} a rendering can be rather
+ * than as the union, so a caller that wants the lines rather than the outcome
+ * — one composing a page into a line of its own — reads them without a test
+ * that could not fail.
  */
 export function paged(
   shuttle: Shuttle,
@@ -643,7 +713,7 @@ export function paged(
   entries: readonly string[],
   bound: PageBound,
   hint?: string,
-): Outcome {
+): { readonly kind: "text"; readonly text: string } {
   const page: Page = pageOf(
     header,
     entries,

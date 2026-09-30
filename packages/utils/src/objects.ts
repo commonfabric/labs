@@ -4,6 +4,7 @@
  */
 
 import type { ReadonlyRecord } from "./types.ts";
+import { isObjectOrArray } from "./types.ts";
 
 /**
  * Indicates whether the given value is an *inert* plain object -- a direct
@@ -53,7 +54,7 @@ export function isInertPlainObject(value: unknown): value is ReadonlyRecord;
 export function isInertPlainObject(
   value: unknown,
 ): boolean {
-  if ((value === null) || (typeof value !== "object")) {
+  if (!isObjectOrArray(value)) {
     return false;
   }
 

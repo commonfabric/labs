@@ -1,8 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { stub } from "@std/testing/mock";
 
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { WorkerReconciler } from "@commonfabric/html/worker";
@@ -10,6 +9,8 @@ import type { VDomOp } from "@commonfabric/html/vdom-ops";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
+  type Cell,
+  cellWriteSchema,
   convertCellsToLinks,
   lookupSchemaDocument,
   Runtime,
@@ -40,13 +41,19 @@ import {
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import { $conn, $onCellUpdate, CellHandle, RuntimeClient } from "@/mod.ts";
 import { createSigilLinkFromParsedLink } from "../../../runner/src/link-utils.ts";
+import { getCellOrThrow } from "../../../runner/src/query-result-proxy.ts";
 import { decomposeSchema } from "../../../runner/src/schema-decompose.ts";
 import type { URI } from "@commonfabric/memory/interface";
 import { deriveFlowJoin } from "../../../runner/src/cfc/prepare.ts";
+import {
+  getCfcReferenceView,
+  withCfcReferenceConfidentiality,
+} from "../../../runner/src/cfc/reference-provenance.ts";
 import { normalizeClause } from "../../../runner/src/cfc/clause.ts";
 import type { LabelMapEntry } from "../../../runner/src/cfc/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
 import { cellRefToKey } from "@/shared/utils.ts";
@@ -91,10 +98,10 @@ describe("reference-registry", () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(space, cause, undefined, tx);
     writeSeedEnvelopeDoc(tx, space);
-    tx.writeOrThrow({ ...cell.getAsNormalizedFullLink(), path: [] }, {
+    seedStoredEnvelope(tx, { ...cell.getAsNormalizedFullLink(), path: [] }, {
       value,
       cfc: {
-        version: 2,
+        version: 3,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: { version: 1, entries },
       },
@@ -109,6 +116,7 @@ describe("reference-registry", () => {
       path: [],
       observes: "followRef",
       origin: "link",
+      referenceAcquisition: "complete",
       label: { confidentiality: [selection] },
     }]);
     const tx = runtime.edit();
@@ -152,17 +160,19 @@ describe("reference-registry", () => {
         name: "cycle target",
         self: linkRefFrom({ ...link, path }),
       };
-      await seed("cycle", path.length === 0 ? value : { branch: value });
+      await seed("cycle", path.length === 0 ? value : { branch: value }, [{
+        path: [...path, "self"],
+        origin: "link",
+        observes: "followRef",
+        referenceAcquisition: "complete",
+        label: {},
+      }]);
       const processor = buildProcessor({ runtime, identity: signer, space });
       const ref = processor.handleAcquireCell({
         type: RequestType.AcquireCell,
         address: {
           ...link,
           path,
-          schema: {
-            type: "object",
-            properties: { name: { type: "string" }, self: { $ref: "#" } },
-          },
         },
       }).cell;
       const client = {
@@ -175,18 +185,10 @@ describe("reference-registry", () => {
         client,
         wireCopy(ref),
       );
-      const cyclic: Record<string, unknown> = { name: "cycle target" };
-      cyclic.self = cyclic;
-      const read = stub(Object.getPrototypeOf(target), "get", () => cyclic);
-      let response;
-      try {
-        response = processor.handleCellGet({
-          type: RequestType.CellGet,
-          cell: ref,
-        });
-      } finally {
-        read.restore();
-      }
+      const response = processor.handleCellGet({
+        type: RequestType.CellGet,
+        cell: ref,
+      });
       handle[$onCellUpdate](wireCopy(response.value));
       const self = handle.get()!.self;
       expect(self.ref().cfcReferenceToken).toBeDefined();
@@ -223,6 +225,135 @@ describe("reference-registry", () => {
     });
     expect(() => registry.exportLink(capped.getAsLink(), uncapped))
       .toThrow("Retained cell does not match its reference acquisition");
+  });
+
+  it("rejects a retained cell whose policy origins were discarded", async () => {
+    const acquired = await acquireSelected();
+    const provenance = getCfcReferenceProvenance(acquired)!;
+    expect(provenance.originSpaces).toContain(space);
+    const withoutOrigins = runtime.getCellFromLink(
+      wireCopy(acquired.getAsNormalizedFullLink()),
+      undefined,
+      undefined,
+      withCfcReferenceConfidentiality(undefined, provenance.confidentiality),
+    );
+    expect(getCfcReferenceProvenance(withoutOrigins)?.confidentiality)
+      .toEqual(provenance.confidentiality);
+    expect(() => registry.exportLink(acquired.getAsLink(), withoutOrigins))
+      .toThrow("Retained cell does not match its reference acquisition");
+  });
+
+  it("keeps materialized mutation declarations distinct from explicit scope declarations", async () => {
+    const target = runtime.getCell<{ count: number }>(
+      space,
+      "scope-mutation-target",
+    );
+    const seed = runtime.edit();
+    target.withTx(seed).set({ count: 1 });
+    expect((await seed.commit()).error).toBeUndefined();
+    const held = target.asSchema<Cell<{ count: number }>>({
+      type: "object",
+      properties: { count: { type: "number" } },
+      asCell: [{ kind: "cell", scope: "user" }],
+    }).get();
+    const declared = held.asSchema<{ count: number }>(held.schema);
+    expect(held.getAsNormalizedFullLink()).toEqual(
+      declared.getAsNormalizedFullLink(),
+    );
+    expect(cellWriteSchema(held)).not.toEqual(cellWriteSchema(declared));
+    const heldRef = createCellRef(held, undefined, registry);
+    const declaredRef = createCellRef(declared, undefined, registry);
+    expect(heldRef.cfcReferenceToken).not.toBe(declaredRef.cfcReferenceToken);
+    expect(
+      createCellRef(held.withTx(undefined), undefined, registry)
+        .cfcReferenceToken,
+    )
+      .toBe(heldRef.cfcReferenceToken);
+    expect(cellWriteSchema(registry.importCell(wireCopy(heldRef))))
+      .toEqual(cellWriteSchema(held));
+    expect(cellWriteSchema(registry.importCell(wireCopy(declaredRef))))
+      .toEqual(cellWriteSchema(declared));
+    const childProjection = registry.importCell({
+      ...wireCopy(heldRef),
+      path: [...heldRef.path, "count"],
+    });
+    expect(childProjection.schema).toEqual(heldRef.schema);
+    expect(cellWriteSchema(childProjection)).toEqual(heldRef.schema);
+    const write = runtime.edit();
+    registry.importCell(wireCopy(heldRef)).withTx(write).set({ count: 2 });
+    expect((await write.commit()).error).toBeUndefined();
+    expect(target.get()).toEqual({ count: 2 });
+    expect(
+      runtime.getCell(
+        space,
+        "scope-mutation-target",
+        undefined,
+        undefined,
+        "user",
+      ).getRaw(),
+    ).toBeUndefined();
+  });
+
+  it("keeps references with distinct selection witnesses in separate acquisitions", async () => {
+    const acquired = await acquireSelected();
+    const provenance = getCfcReferenceProvenance(acquired)!;
+    const witness = {
+      type: CFC_ATOM_TYPE.TransformedBy,
+      identity: { kind: "builtin", builtinId: "worker-selector" },
+    } as const;
+    const witnessed = runtime.getCellFromLink(
+      wireCopy(acquired.getAsNormalizedFullLink()),
+      undefined,
+      undefined,
+      withCfcReferenceConfidentiality(
+        getCfcReferenceView(acquired),
+        provenance.confidentiality,
+        [witness],
+      ),
+    );
+    expect(getCfcReferenceProvenance(witnessed)?.selectionWitnesses)
+      .toEqual([witness]);
+    for (const lazy of [false, true]) {
+      const read = runtime.edit();
+      try {
+        read.markLazyMaterialize(lazy);
+        const schema = {
+          type: "object",
+          properties: { public: { type: "string" } },
+        } as const;
+        const plainView = acquired.withTx(read).asSchema(schema).get();
+        const witnessedView = witnessed.withTx(read).asSchema(schema).get();
+        expect(
+          getCfcReferenceProvenance(getCellOrThrow(plainView))
+            ?.selectionWitnesses ?? [],
+        )
+          .toEqual([]);
+        expect(
+          getCfcReferenceProvenance(getCellOrThrow(witnessedView))
+            ?.selectionWitnesses,
+        )
+          .toEqual([witness]);
+      } finally {
+        read.abort();
+      }
+    }
+    expect(() => registry.exportLink(acquired.getAsLink(), witnessed))
+      .toThrow("Retained cell does not match its reference acquisition");
+    expect(() => registry.exportLink(witnessed.getAsLink(), acquired))
+      .toThrow("Retained cell does not match its reference acquisition");
+    const plainRef = createCellRef(acquired, undefined, registry);
+    const witnessedRef = createCellRef(witnessed, undefined, registry);
+    expect(plainRef.cfcReferenceToken).not.toBe(witnessedRef.cfcReferenceToken);
+    expect(
+      getCfcReferenceProvenance(registry.importCell(witnessedRef))
+        ?.selectionWitnesses,
+    )
+      .toEqual([witness]);
+    expect(
+      getCfcReferenceProvenance(registry.importCell(plainRef))
+        ?.selectionWitnesses ?? [],
+    )
+      .toEqual([]);
   });
 
   it("rejects exporting a carrier after its binding is changed", async () => {
@@ -402,6 +533,7 @@ describe("reference-registry", () => {
         [{
           path: [],
           origin: "link",
+          referenceAcquisition: "complete",
           observes: "followRef",
           label: { confidentiality: [selection] },
         }],
@@ -473,6 +605,7 @@ describe("reference-registry", () => {
     }, [{
       path: ["slot"],
       origin: "link",
+      referenceAcquisition: "complete",
       observes: "followRef",
       label: {},
     }]);
@@ -490,7 +623,13 @@ describe("reference-registry", () => {
     const slug = await seed(
       "piece-get-scope-slug",
       capped.getAsWriteRedirectLink({ includeSchema: true }),
-      [{ path: [], origin: "link", observes: "followRef", label: {} }],
+      [{
+        path: [],
+        origin: "link",
+        referenceAcquisition: "complete",
+        observes: "followRef",
+        label: {},
+      }],
     );
     const processor = buildProcessor({
       runtime,
@@ -679,6 +818,7 @@ describe("reference-registry", () => {
       path: ["props", "$value"],
       observes: "followRef",
       origin: "link",
+      referenceAcquisition: "complete",
       label: { confidentiality: [selection] },
     }]);
     const output = await seed("event-output", {});

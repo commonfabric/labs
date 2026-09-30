@@ -1,0 +1,4 @@
+{"date":"2026-09-18","from":{"k":"unit","s":"tasks","n":"check-test-aliases gate > passes an appended line and a file created after the base"},"to":{"k":"unit","s":"tasks","n":"check-test-aliases > passes a line appended to a committed file"}}
+{"date":"2026-09-18","from":{"k":"unit","s":"tasks","n":"check-test-aliases gate > fails a rewrite of committed history"},"to":{"k":"unit","s":"tasks","n":"check-test-aliases > fails a rewrite of committed history"}}
+{"date":"2026-09-18","from":{"k":"unit","s":"tasks","n":"check-test-aliases gate > fails a malformed appended line, naming it"},"to":{"k":"unit","s":"tasks","n":"check-test-aliases > fails a malformed appended line, naming its file and line"}}
+{"date":"2026-09-18","from":{"k":"unit","s":"tasks","n":"check-test-aliases gate > treats a missing merge base as a setup error"},"to":{"k":"unit","s":"tasks","n":"check-test-aliases > treats a missing merge base as a setup error"}}

@@ -43,6 +43,53 @@ as policy decisions. A helper can build atoms like `PromptSlotBound` or
 `UserSurfaceInput`, but the caller must supply the user, surface, source, role,
 digest, and route-specific integrity requirements.
 
+## Binding Private Stores To Their Creator
+
+A `Confidential` declaration with a direct `User` clause whose subject is
+`CurrentPrincipal` restricts a fresh store to the authenticated principal whose
+transaction creates it. Commit preparation resolves that subject to a concrete
+DID and persists it in the store's schema and label. A transaction without an
+authenticated principal cannot create that declaration.
+`CurrentPrincipal` inside alternatives or other confidentiality atom shapes is
+not supported.
+
+Later writes with the same symbolic declaration retain the concrete stored user
+clauses. A different writer does not become the store's reader by writing to it,
+and an explicit replacement of those clauses remains subject to the ordinary
+monotonic schema-merge checks. This binding concerns confidentiality; it does
+not grant write authority or mint a principal attestation.
+
+A placeholder already present in a stored schema or confidentiality label is
+not an authenticated creator identity. Commit preparation and schema-update
+preflight refuse that unresolved stored policy. Writing the store or passing a
+held reference does not bind it to the current writer; it requires an explicitly
+authorized migration instead of automatic creator binding.
+
+Private declarations behind local or external schema references merge at their
+value paths. Reusing one definition at two fields does not combine their stored
+creators. Unchanged IFC policy and reference structure retain recursive
+references through public value-shape changes, including optional fields inside
+private objects. Changed recursive policy graphs that require expansion are
+refused; unrelated recursive schemas remain supported.
+Held references derive their labels from the source's creator binding during
+commit, including when the source is created in that transaction. A later writer
+holding the reference does not replace the source's bound principal.
+
+Scopes and confidentiality serve different purposes. `PerUser` selects a user's
+state instance; a confidentiality declaration restricts who can read that
+instance under a bounded runtime read ceiling. Space ACLs do not enforce these
+per-cell labels on raw server reads. `PerSpace` selects one shared instance. For a creator-private shared
+inbox, initialize that instance under its intended owner's authenticated
+transaction before accepting visitor writes. Binding uses the principal creating
+the store, not a profile displayed by the pattern or the first person intended
+to read it.
+
+To publish a reviewed copy of private data, use the native
+[`cf-share-snapshot`](../components/COMPONENTS.md#cf-share-snapshot) surface. An
+ordinary handler or authored trusted-action label does not itself grant
+confidentiality release authority. Snapshot sharing retains the source labels
+and creates a separate copy for the confirmed audience.
+
 ## Authoring Direct Exchange Rules
 
 Import rule declarations from `commonfabric/cfc`. Keep every rule and its
@@ -78,8 +125,15 @@ export type ProtectedText = Confidential<
 
 `cfcPattern` builds match patterns and accepts `v(...)` /
 `THIS_POLICY.subject`; `cfcAtom` builds concrete runtime atoms. Do not mix the
-two. The compiler rejects dynamic content, unbound variables, unguarded rules,
-non-exported declarations, and reused rules. At label creation the runtime
+two. To release what one function of the policy's own module computed, match
+the runtime-minted `TransformedBy` atom and name the module with
+`THIS_POLICY.moduleIdentity` rather than a pasted hash; see
+`packages/patterns/cfc-exchange-rules/blessed-computation.tsx`. The runtime
+mints that atom only when every write of a transaction comes from one verified
+function, and the pattern's `symbol` must be that function's export name — the
+function exported under that one name — or the rule never fires. The compiler
+rejects dynamic content, unbound variables, unguarded rules, non-exported
+declarations, and reused rules. At label creation the runtime
 binds the owning space and durably installs the exact digest-addressed manifest
 in the destination; an unresolved or mismatched artifact fails closed.
 
@@ -140,6 +194,51 @@ reviewed values after the write.
 
 Keep action and surface constants local to the helper file. Export the surface
 identity constant; do not export local demo vocabulary as shared policy.
+
+### More than one writer
+
+A policy names one writer, and a record that several handlers write — a message
+that one handler sends and another edits — needs a policy naming each of them.
+`WritePolicyAnyOf<T, [P, …]>` lists the writer policies, and a write is
+admitted when any one of them admits it whole: its handler wrote, through its
+own reviewed action if it names one. The pairing is the point. One handler's
+action never admits another handler's write, so each writer keeps exactly the
+authority its own policy gives it.
+
+```ts
+import {
+  handler,
+  type TrustedActionWrite,
+  Writable,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const NOTE_SURFACE = "NoteSurface";
+const SEND_ACTION = "SendNote";
+const EDIT_ACTION = "EditNote";
+
+export type Note = WritePolicyAnyOf<string, [
+  TrustedActionWrite<unknown, typeof send, typeof SEND_ACTION, typeof NOTE_SURFACE>,
+  TrustedActionWrite<unknown, typeof edit, typeof EDIT_ACTION, typeof NOTE_SURFACE>,
+]>;
+
+export const send = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("sent");
+});
+
+export const edit = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("edited");
+});
+```
+
+Each member is a whole policy over `unknown`: a `WriteAuthorizedBy`, a
+`TrustedActionWrite`, or a `TrustedActionWriteWithIntegrity`. Write the tuple in
+place, not through an alias of its own. Once stored, the list is fixed, so a
+later version of the pattern cannot add a writer to it, drop one, or change
+one's action, and a record whose policy names one writer cannot move to a list
+or back. Settle the writers before the record holds data that matters.
+`AuthoredByCurrentUser` combines with it only when every member names an
+action, so that every admitted write carries a reviewed gesture.
 
 ## Authoring Trusted Surfaces
 

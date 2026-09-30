@@ -1,4 +1,4 @@
-import { resolve } from "@std/path";
+import { join } from "@std/path";
 
 import { StaticCache } from "@commonfabric/static";
 import {
@@ -105,7 +105,9 @@ const commonfabric = await staticCache.getText("types/commonfabric.d.ts");
 const commonfabricSchema = await staticCache.getText(
   "types/commonfabric-schema.d.ts",
 );
-const FIXTURES_ROOT = "./test/fixtures";
+// Anchored to this file so the suite loads from any cwd: `deno task test`
+// runs from the package root, `deno test packages/ts-transformers` does not.
+const FIXTURES_ROOT = join(import.meta.dirname!, "fixtures");
 
 // Environment variable filtering for faster iteration
 // Usage: FIXTURE=map-array-destructured deno task test
@@ -125,12 +127,8 @@ async function loadAllFixturesInDirectory(
   for await (const entry of Deno.readDir(directory)) {
     if (entry.isFile && entry.name.includes(".input.")) {
       const fullPath = `${directory}/${entry.name}`;
-      const content = await Deno.readTextFile(fullPath);
-      // Normalize path: remove leading ./ if present
-      const normalizedPath = fullPath.startsWith("./")
-        ? fullPath.slice(2)
-        : fullPath;
-      fixtures[normalizedPath] = content;
+      // Keyed by the absolute path; `execute` below rebuilds the same key.
+      fixtures[fullPath] = await Deno.readTextFile(fullPath);
     }
   }
 
@@ -179,7 +177,7 @@ if (!Deno.env.get("SKIP_INPUT_CHECK")) {
     if (fixtureFilter || fixturePattern) {
       const filteredFixtures: Record<string, string> = {};
       for (const [path, content] of Object.entries(allFixtures)) {
-        // Extract base name from path (e.g., "test/fixtures/closures/map-basic.input.tsx" -> "map-basic")
+        // Extract base name from path (e.g., ".../fixtures/closures/map-basic.input.tsx" -> "map-basic")
         const fileName = path.split("/").pop() || "";
         const baseName = fileName.replace(/\.input\.(tsx?|ts)$/, "");
 
@@ -248,10 +246,9 @@ for (const config of configs) {
       return false;
     },
     async execute(fixture: { relativeInputPath: string }) {
-      // Construct full path matching the keys in batchedDiagnostics (remove leading ./)
+      // Construct full path matching the keys in batchedDiagnostics
       const fullPath =
-        `${FIXTURES_ROOT}/${config.directory}/${fixture.relativeInputPath}`
-          .replace(/^\.\//, "");
+        `${FIXTURES_ROOT}/${config.directory}/${fixture.relativeInputPath}`;
 
       // Get precomputed diagnostics if available
       const diagnosticsMap = batchedDiagnosticsByConfig.get(config.describe);
@@ -305,16 +302,10 @@ for (const config of configs) {
       let message =
         `\n\nTransformation output does not match expected for: ${fixture.baseName}\n`;
       message += `\nFiles:\n`;
-      message += `  Input:    ${
-        resolve(
-          `${FIXTURES_ROOT}/${config.directory}/${fixture.relativeInputPath}`,
-        )
-      }\n`;
-      message += `  Expected: ${
-        resolve(
-          `${FIXTURES_ROOT}/${config.directory}/${fixture.relativeExpectedPath}`,
-        )
-      }\n`;
+      message +=
+        `  Input:    ${FIXTURES_ROOT}/${config.directory}/${fixture.relativeInputPath}\n`;
+      message +=
+        `  Expected: ${FIXTURES_ROOT}/${config.directory}/${fixture.relativeExpectedPath}\n`;
       message += `\n${"=".repeat(80)}\n`;
       message += `UNIFIED DIFF (expected vs actual):\n`;
       message += `${"=".repeat(80)}\n`;

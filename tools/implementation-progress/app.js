@@ -131,6 +131,7 @@ async function refresh() {
     );
     byId("interval").value = selected || "5";
     byId("command").textContent = demo.command;
+    byId("recorded-command").textContent = demo.recordedCommand;
     byId("provenance").textContent = `Recorded ${demo.date} · ${demo.revision}`;
     byId("budget-provenance").textContent = demo.budgets?.provenance ??
       "Recording budget enforcement demo…";

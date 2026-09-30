@@ -1,10 +1,13 @@
 /** Exercises schema path admission independently of whether input data exists. */
 
+import { Identity } from "@commonfabric/identity";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
 import { schemaPathSelection } from "../src/schema-path.ts";
 import {
   acquireSchemaRegistryLease,
@@ -20,6 +23,99 @@ function schemaSelectsPath(
 }
 
 describe("schemaPathSelection", () => {
+  it("retains outer properties beside alternative properties", () => {
+    for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { outer: { type: "number" } },
+        [keyword]: [{
+          type: "object",
+          properties: { inner: { type: "string" } },
+        }],
+      };
+      expect(schemaSelectsPath(schema, ["outer"])).toBe(true);
+      expect(schemaSelectsPath(schema, ["inner"])).toBe(true);
+      expect(schemaSelectsPath(schema, ["missing"])).toBe(false);
+    }
+  });
+
+  it("admits complete paths exposed by either eager or lazy alternatives", async () => {
+    const signer = await Identity.fromPassphrase("schema-path-projection");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const write = runtime.edit();
+      runtime.getCell(signer.did(), "projection", undefined, write).set({
+        outer: "outer",
+        inner: "inner",
+        shared: { outer: "outer", inner: "inner" },
+      });
+      expect((await write.commit()).error).toBeUndefined();
+      for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
+        for (const mixed of [false, true]) {
+          const schema: JSONSchema = {
+            type: mixed ? ["object", "null"] : "object",
+            properties: {
+              outer: { type: "string" },
+              shared: {
+                type: "object",
+                properties: { outer: { type: "string" } },
+              },
+            },
+            [keyword]: [{
+              type: "object",
+              properties: {
+                inner: { type: "string" },
+                shared: {
+                  type: "object",
+                  properties: { inner: { type: "string" } },
+                },
+              },
+            }],
+          };
+          expect(schemaSelectsPath(schema, ["inner"])).toBe(true);
+          expect(schemaSelectsPath(schema, ["shared", "inner"])).toBe(true);
+          expect(schemaSelectsPath(schema, ["shared", "missing"])).toBe(false);
+          for (const lazy of [false, true]) {
+            const tx = runtime.edit();
+            try {
+              if (lazy) tx.markLazyMaterialize(true);
+              const value = runtime.getCell<Record<string, unknown>>(
+                signer.did(),
+                "projection",
+                schema,
+                tx,
+              ).get();
+              for (
+                const path of [["outer"], ["inner"], ["shared", "outer"], [
+                  "shared",
+                  "inner",
+                ]]
+              ) {
+                let selected: unknown = value;
+                for (const segment of path) {
+                  selected = (selected as Record<string, unknown> | undefined)
+                    ?.[segment];
+                }
+                if (selected !== undefined) {
+                  expect(schemaSelectsPath(schema, path)).toBe(true);
+                }
+              }
+              if (!lazy) expect(value.inner).toBe("inner");
+            } finally {
+              tx.abort("projection inspected");
+            }
+          }
+        }
+      }
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("selects declared optional inputs and excludes undeclared ancestors", () => {
     const schema: JSONSchema = {
       type: "object",

@@ -28,9 +28,12 @@ import {
   canRenderDiffLines,
   decodeLanguageInput,
   languageForFile,
+  languageMatchingFilename,
+  languageMatchingSources,
   readOnlyReasonFor,
   renderedLinesFor,
 } from "./languages/language.ts";
+import { plainTextLanguage } from "./languages/plain-text/language.ts";
 import { computeLineStarts, lineIndexOf } from "./lines.ts";
 import type {
   Definition,
@@ -62,7 +65,7 @@ export interface DiffWorkspace {
   /** Report the UTF-8 BOM state recorded for a successfully read Git blob. */
   blobHasUtf8Bom?(object: string): boolean | undefined;
 
-  /** Read available Git blobs in one local Git operation. */
+  /** Read available Git blobs in bounded local Git batches. */
   readBlobs?(
     objects: readonly string[],
   ): ReadonlyMap<string, string>;
@@ -209,7 +212,12 @@ type GitBatchRunner = (
   options: GitBatchOptions,
 ) => { status: number | null; stdout: Uint8Array | null };
 
-/** Read several locally available Git objects in one batch. */
+// Deno's Node-compatible `spawnSync()` writes all of its input before draining
+// the child's output. One request therefore stays within POSIX's minimum atomic
+// pipe capacity, so Git can accept it when a large first blob fills its output.
+const MAX_GIT_BATCH_REQUEST_BYTES = 512;
+
+/** Read several locally available Git objects in bounded batches. */
 function readGitBlobs(
   repoRoot: string,
   objects: readonly string[],
@@ -220,19 +228,59 @@ function readGitBlobs(
   const blobs = new Map<string, string>();
   if (objects.length === 0) return blobs;
   return tryOrNull(() => {
-    const result = run("git", ["cat-file", "--batch"], {
-      cwd: repoRoot,
-      env: { ...Deno.env.toObject(), GIT_NO_LAZY_FETCH: "1" },
-      input: `${objects.join("\n")}\n`,
-      maxBuffer: Number.MAX_SAFE_INTEGER,
-    });
-    if (result.status !== 0 || !result.stdout) return blobs;
-    return parseGitBatchOutput(
+    const loadedBomStates = new Map<string, boolean>();
+    let batch: string[] = [];
+    let inputBytes = 0;
+    for (const object of objects) {
+      const objectBytes = object.length + 1;
+      if (
+        batch.length > 0 &&
+        inputBytes + objectBytes > MAX_GIT_BATCH_REQUEST_BYTES
+      ) {
+        if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
+          return new Map<string, string>();
+        }
+        batch = [];
+        inputBytes = 0;
+      }
+      batch.push(object);
+      inputBytes += objectBytes;
+    }
+    if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
+      return new Map<string, string>();
+    }
+    for (const [object, hasBom] of loadedBomStates) {
+      bomStates?.set(object, hasBom);
+    }
+    return blobs;
+  }) ?? new Map<string, string>();
+}
+
+/** Read one request small enough to fit in an empty process input pipe. */
+function readGitBlobBatch(
+  repoRoot: string,
+  objects: readonly string[],
+  blobs: Map<string, string>,
+  run: GitBatchRunner,
+  bomStates?: Map<string, boolean>,
+): boolean {
+  const result = run("git", ["cat-file", "--batch"], {
+    cwd: repoRoot,
+    env: { ...Deno.env.toObject(), GIT_NO_LAZY_FETCH: "1" },
+    input: `${objects.join("\n")}\n`,
+    maxBuffer: Number.MAX_SAFE_INTEGER,
+  });
+  if (result.status !== 0 || !result.stdout) return false;
+  for (
+    const [object, blob] of parseGitBatchOutput(
       objects,
       new Uint8Array(result.stdout),
       bomStates,
-    );
-  }) ?? blobs;
+    )
+  ) {
+    blobs.set(object, blob);
+  }
+  return true;
 }
 
 function parseGitBatchOutput(
@@ -317,6 +365,12 @@ export interface DiffEdit {
    * The live highlighter uses these spans when an edit creates a removed line. */
   readonly oldFileLines: readonly (readonly Line[] | null)[];
 
+  /**
+   * The languages of each file's two sides, aligned with the parsed diff's
+   * files, which recoloring an edited line and counting changes both use.
+   */
+  readonly languages: readonly DiffFileLanguages[];
+
   /** Every hunk, in document order, with the file and new-side range it covers
    * and whether its new side matched the workspace (so the captured content is
    * known to be the hunk's new side). Save matches the edited diff's hunks to
@@ -348,8 +402,11 @@ export interface DiffHunkInfo {
 
 /** Maps between diff-text offsets and workspace-file offsets, for semantics. */
 export interface DiffMaps {
-  /** Absolute paths of the diff's files that exist in the workspace. */
-  readonly rootFiles: readonly string[];
+  /**
+   * Absolute paths of the diff's files that exist in the workspace, in diff
+   * order, each with the language its new side is read in.
+   */
+  readonly rootFiles: ReadonlyMap<string, Language>;
 
   /** Diff offset → (file, file offset), when the offset sits on code that is
    * present (and unchanged) in the current workspace file. */
@@ -361,6 +418,7 @@ export interface DiffMaps {
 
 interface FileMapping {
   readonly absPath: string;
+  readonly language: Language;
   readonly fileText: string;
   readonly fileLineStarts: number[];
 
@@ -382,6 +440,9 @@ interface LoadedFile {
   fileDoc: Document | null;
   fileLineStarts: number[];
 
+  /** The language `fileDoc` was parsed in. */
+  language?: Language;
+
   /** The encoding state kept outside the BOM-stripped parser text. */
   hasUtf8Bom?: boolean;
 
@@ -398,8 +459,11 @@ function loadFile(
   ws: DiffWorkspace,
   cache?: WorkspaceCache,
 ): LoadedFile {
+  // Two sections of `git log -p` output can read one workspace file in two
+  // languages when each shows a different first line, so a cached parse
+  // serves only the language it was parsed in.
   const hit = cache?.get(absPath);
-  if (hit) return hit;
+  if (hit?.language === language) return hit;
   const fileText = ws.read(absPath);
   const fileDoc = fileText !== null
     ? language.parseDocument(fileText, absPath)
@@ -409,6 +473,7 @@ function loadFile(
     fileText,
     fileDoc,
     fileLineStarts,
+    language,
     hasUtf8Bom: fileText === null ? undefined : ws.hasUtf8Bom?.(absPath),
   };
   cache?.set(absPath, entry);
@@ -761,25 +826,21 @@ function loadOldFile(
     rawLines,
     modelLines,
   ) ?? newFile?.hasUtf8Bom;
-  if (
-    file.oldObject && validGitObject(file.oldObject) &&
-    (oldBlobs !== undefined || ws.readBlob)
-  ) {
+  const object = file.oldObject;
+  if (object !== undefined) {
     const blobKey = `\0diff-old-blob:${
-      JSON.stringify([fileName, file.oldObject])
+      JSON.stringify([fileName, object, language.id])
     }`;
     let blob = cache?.get(blobKey);
     if (!blob) {
-      const blobText = oldBlobs
-        ? oldBlobs.get(file.oldObject) ?? null
-        : ws.readBlob!(file.oldObject);
+      const blobText = oldBlobText(object, oldBlobs, ws);
       blob = highlightedFile(
         blobText,
         fileName,
         language,
         blobText === null
           ? undefined
-          : ws.blobHasUtf8Bom?.(file.oldObject) ?? inferredOldHasUtf8Bom,
+          : ws.blobHasUtf8Bom?.(object) ?? inferredOldHasUtf8Bom,
       );
       cache?.set(blobKey, blob);
     }
@@ -819,13 +880,124 @@ function loadOldFile(
   return entry;
 }
 
+/**
+ * The text of the old Git blob `object`, or null when it is not a blob name or
+ * the workspace cannot read it.
+ */
+function oldBlobText(
+  object: string,
+  oldBlobs: ReadonlyMap<string, string> | undefined,
+  ws: DiffWorkspace,
+): string | null {
+  if (!validGitObject(object)) return null;
+  return oldBlobs
+    ? oldBlobs.get(object) ?? null
+    : ws.readBlob?.(object) ?? null;
+}
+
+/** The languages the two sides of one diff file are read in. */
+export interface DiffFileLanguages {
+  readonly oldLanguage: Language;
+  readonly newLanguage: Language;
+}
+
+/**
+ * Decides the language of both sides of every file in a diff, aligned with
+ * `model.files`. A language that claims a side's path settles that side.
+ * Otherwise the side's content does: a hunk that starts at its first line,
+ * which shows that side exactly, and then its complete file when `ws` has one
+ * (the workspace file for the new side, the old Git blob for the old side). A
+ * side that neither settles takes the other side's language, and plain text
+ * when that is unsettled too.
+ */
+export function diffLanguages(
+  text: string,
+  model: DiffModel,
+  ws: DiffWorkspace = { resolve: () => null, read: () => null },
+): DiffFileLanguages[] {
+  const rawLines = text.split("\n");
+  const oldBlobs = ws.readBlobs?.(
+    oldObjects(
+      model,
+      (file) =>
+        languageMatchingFilename(file.oldPath ?? file.newPath) === undefined,
+    ),
+  );
+  const firstLines = function* (file: DiffFile, side: "old" | "new") {
+    const hunk = file.hunks.find((hunk) =>
+      side === "old"
+        ? hunk.oldStart === 1 && hunk.oldCount > 0
+        : hunk.newStart === 1 && hunk.newCount > 0
+    );
+    if (hunk) {
+      yield hunkSideLines(hunk, side, rawLines, model.lines).join("\n");
+    }
+  };
+  const newSources = function* (file: DiffFile) {
+    yield* firstLines(file, "new");
+    const absPath = file.newPath ? ws.resolve(file.newPath) : null;
+    const fileText = absPath ? ws.read(absPath) : null;
+    if (fileText !== null) yield fileText;
+  };
+  const oldSources = function* (file: DiffFile) {
+    yield* firstLines(file, "old");
+    const blob = file.oldObject
+      ? oldBlobText(file.oldObject, oldBlobs, ws)
+      : null;
+    if (blob !== null) yield blob;
+  };
+  return model.files.map((file) => {
+    const newLanguage = languageMatchingSources(
+      file.newPath ?? file.oldPath,
+      newSources(file),
+    );
+    const oldLanguage = languageMatchingSources(
+      file.oldPath ?? file.newPath,
+      oldSources(file),
+    );
+    return {
+      oldLanguage: oldLanguage ?? newLanguage ?? plainTextLanguage,
+      newLanguage: newLanguage ?? oldLanguage ?? plainTextLanguage,
+    };
+  });
+}
+
+/**
+ * The old Git objects of the files `wanted` selects whose old side a hunk
+ * shows.
+ */
+function oldObjects(
+  model: DiffModel,
+  wanted: (file: DiffFile, fileIndex: number) => boolean,
+): string[] {
+  return model.files.flatMap((file, fileIndex) =>
+    file.hunks.length > 0 && file.oldObject &&
+      validGitObject(file.oldObject) && wanted(file, fileIndex)
+      ? [file.oldObject]
+      : []
+  );
+}
+
+/**
+ * Builds the document, semantic maps, and edit targets for a diff, reading
+ * each file side in the language `languages` gives it.
+ *
+ * @throws {Error} When `languages` does not hold one entry for each of the
+ * diff's files.
+ */
 export function buildDiffDocument(
   text: string,
   model: DiffModel,
   ws: DiffWorkspace,
   cache?: WorkspaceCache,
   viewMode: ViewMode = "source",
+  languages: readonly DiffFileLanguages[] = diffLanguages(text, model, ws),
 ): { doc: Document; maps: DiffMaps; edit: DiffEdit } {
+  if (languages.length !== model.files.length) {
+    throw new Error(
+      `A diff of ${model.files.length} files was given languages for ${languages.length}.`,
+    );
+  }
   const rawLines = text.split("\n");
   const diffLineStarts = computeLineStarts(text);
   const lines: MutableLine[] = rawLines.map((t) => ({ text: t, spans: [] }));
@@ -835,13 +1007,10 @@ export function buildDiffDocument(
   const hunks: DiffHunkInfo[] = [];
   const oldFileLines: (readonly Line[] | null)[] = [];
   const oldBlobs = ws.readBlobs?.(
-    model.files.flatMap((file) =>
-      file.hunks.length > 0 && file.oldObject &&
-        validGitObject(file.oldObject) &&
-        readOnlyReasonFor(languageForFile(file.oldPath ?? file.newPath)) ===
-          undefined
-        ? [file.oldObject]
-        : []
+    oldObjects(
+      model,
+      (_file, fileIndex) =>
+        readOnlyReasonFor(languages[fileIndex].oldLanguage) === undefined,
     ),
   );
 
@@ -854,12 +1023,9 @@ export function buildDiffDocument(
   }
 
   for (const [fileIndex, file] of model.files.entries()) {
-    // The language is chosen once per file, from its path, and every operation
-    // on the file — parsing the workspace copy, coloring fragments, projecting
-    // structure — dispatches through it. A rename can change the extension, so
-    // the old and new sides resolve separately.
-    const newLanguage = languageForFile(file.newPath ?? file.oldPath);
-    const oldLanguage = languageForFile(file.oldPath ?? file.newPath);
+    // Every operation on a file side — parsing the workspace copy, coloring
+    // fragments, projecting structure — dispatches through its language.
+    const { oldLanguage, newLanguage } = languages[fileIndex];
     const absPath = file.newPath ? ws.resolve(file.newPath) : null;
     const loaded = absPath && readOnlyReasonFor(newLanguage) === undefined
       ? loadFile(absPath, newLanguage, ws, cache)
@@ -902,6 +1068,7 @@ export function buildDiffDocument(
     if (absPath && fileText !== null) {
       mapping = mappings.get(absPath) ?? {
         absPath,
+        language: newLanguage,
         fileText,
         fileLineStarts,
         newToDiff: new Map(),
@@ -980,7 +1147,14 @@ export function buildDiffDocument(
   return {
     doc,
     maps: buildMaps(diffLineStarts, rawLines, mappings),
-    edit: buildEdit(text, rawLines, mappings, hunks, oldFileLines),
+    edit: buildEdit(
+      text,
+      rawLines,
+      mappings,
+      hunks,
+      oldFileLines,
+      languages,
+    ),
   };
 }
 
@@ -993,6 +1167,7 @@ function buildEdit(
   mappings: Map<string, FileMapping>,
   hunks: DiffHunkInfo[],
   oldFileLines: readonly (readonly Line[] | null)[],
+  languages: readonly DiffFileLanguages[],
 ): DiffEdit {
   const lines = new Map<
     number,
@@ -1006,7 +1181,7 @@ function buildEdit(
       lines.set(diffLine, { absPath: m.absPath, newLine, markerLen });
     }
   }
-  return { sourceText, lines, fileText, oldFileLines, hunks };
+  return { sourceText, lines, fileText, oldFileLines, languages, hunks };
 }
 
 //
@@ -1577,7 +1752,9 @@ function buildMaps(
     }
   }
   return {
-    rootFiles: [...mappings.keys()],
+    rootFiles: new Map(
+      [...mappings.values()].map((m) => [m.absPath, m.language]),
+    ),
     toFile(diffOffset) {
       const d = lineIndexOf(diffLineStarts, diffOffset);
       const hit = byDiffLine.get(d);

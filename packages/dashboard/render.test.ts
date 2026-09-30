@@ -3,7 +3,12 @@
  * in the page. Pure string work — no server, no network, no subprocess.
  */
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertStringIncludes,
+} from "@std/assert";
 import type { Status, TileView } from "./types.ts";
 import {
   FAVICON_CRY_AFTER_MS,
@@ -19,13 +24,14 @@ import {
   TEXTURE_WIDTH,
 } from "./palette.ts";
 import { FAVICON_VERSION } from "./favicon.ts";
-import { liveUpdateStream } from "./stream-client.ts";
+import { followUpdates, liveUpdateStream } from "./stream-client.ts";
+import { reconcileTiles } from "./tiles-client.ts";
 import { TILE_LABEL_RULE } from "./chart-layout.ts";
 
 const TEST_VERSION = "1".repeat(40);
 
 function view(over: Partial<TileView> = {}): TileView {
-  return { label: "labs ci", status: "good", ...over };
+  return { status: "good", ...over };
 }
 
 Deno.test("renderTile: status drives the tile class, the dot color and the headline color", () => {
@@ -36,7 +42,7 @@ Deno.test("renderTile: status drives the tile class, the dot color and the headl
     unknown: "gray",
   };
   for (const [status, dot] of Object.entries(dots) as [Status, string][]) {
-    const html = renderTile(view({ status, value: "passing" }));
+    const html = renderTile("labs ci", view({ status, value: "passing" }));
     assertStringIncludes(html, `class="tile ${status}"`);
     assertStringIncludes(html, `<span class="dot ${dot}"></span>`);
     assertStringIncludes(html, `<p class="big ${status}">passing</p>`);
@@ -44,29 +50,32 @@ Deno.test("renderTile: status drives the tile class, the dot color and the headl
 });
 
 Deno.test("renderTile: no href -> a plain div, not a link", () => {
-  const html = renderTile(view());
-  assert(html.startsWith(`<div class="tile good">`), html);
+  const html = renderTile("labs ci", view());
+  assert(html.startsWith(`<div class="tile good" data-tile-label="labs ci">`), html);
   assert(html.endsWith("</div>"));
   assert(!html.includes("<a "), "nothing to drill into, so no anchor");
   assert(!html.includes(" link"), "the link class is only for tiles that link");
 });
 
-Deno.test("renderTile: a server-supplied id becomes the stable update key", () => {
-  assertStringIncludes(renderTile(view(), "labs-ci"), `data-tile-id="labs-ci"`);
+Deno.test("renderTile: the label becomes the key an update matches the tile by", () => {
   assertStringIncludes(
-    renderTile(view({ href: "/ci" }), "labs-ci-duration"),
-    `data-tile-id="labs-ci-duration"`,
+    renderTile("labs ci", view()),
+    `<div class="tile good" data-tile-label="labs ci">`,
+  );
+  assertStringIncludes(
+    renderTile("labs ci duration", view({ href: "/ci" })),
+    `<a class="tile good link" data-tile-label="labs ci duration" href="/ci">`,
   );
 });
 
 Deno.test("renderTile: an http href is an anchor that opens a new tab; a local one stays in place", () => {
-  const external = renderTile(view({ href: "https://github.com/o/r/actions" }));
+  const external = renderTile("labs ci", view({ href: "https://github.com/o/r/actions" }));
   assertStringIncludes(
     external,
-    `<a class="tile good link" href="https://github.com/o/r/actions" target="_blank" rel="noopener">`,
+    `<a class="tile good link" data-tile-label="labs ci" href="https://github.com/o/r/actions" target="_blank" rel="noopener">`,
   );
-  const local = renderTile(view({ href: "/bench" }));
-  assertStringIncludes(local, `<a class="tile good link" href="/bench">`);
+  const local = renderTile("labs ci", view({ href: "/bench" }));
+  assertStringIncludes(local, `<a class="tile good link" data-tile-label="labs ci" href="/bench">`);
   assert(
     !local.includes("target="),
     "a drill-down on this server replaces the page",
@@ -75,32 +84,36 @@ Deno.test("renderTile: an http href is an anchor that opens a new tab; a local o
 
 Deno.test("renderTile: wide adds the class the shell lays out below the grid", () => {
   assertStringIncludes(
-    renderTile(view(), undefined, true),
+    renderTile("labs ci", view(), true),
     `class="tile good wide"`,
   );
   assertStringIncludes(
-    renderTile(view({ href: "/x" }), undefined, true),
+    renderTile("labs ci", view({ href: "/x" }), true),
     `class="tile good link wide"`,
   );
-  assert(!renderTile(view()).includes("wide"));
+  assert(!renderTile("labs ci", view()).includes("wide"));
 });
 
 Deno.test("renderTile: an absent value/sub/hint/aside renders nothing rather than an empty element", () => {
-  const html = renderTile(view());
+  const html = renderTile("labs ci", view());
   assertEquals(
     html,
-    `<div class="tile good"><div class="texture"></div><p class="lbl"><span class="dot green"></span> labs ci<span class="spacer"></span></p></div>`,
+    `<div class="tile good" data-tile-label="labs ci"><div class="texture"></div><p class="lbl"><span class="dot green"></span> labs ci<span class="spacer"></span></p></div>`,
   );
 });
 
 Deno.test("renderTile: label and sub are escaped — a hostile label cannot inject markup", () => {
-  const html = renderTile(view({
-    label: `<img src=x onerror="alert(1)">`,
-    sub: `a & b "quoted" <script>`,
-  }));
+  const html = renderTile(
+    `<img src=x onerror="alert(1)">`,
+    view({ sub: `a & b "quoted" <script>` }),
+  );
   assert(!html.includes("<img"), "the label's tag is defanged");
   assert(!html.includes("<script>"), "the sub line's tag is defanged");
   assertStringIncludes(html, "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+  assertStringIncludes(
+    html,
+    `data-tile-label="&lt;img src=x onerror=&quot;alert(1)&quot;&gt;"`,
+  );
   assertStringIncludes(
     html,
     `<p class="sub" title="a &amp; b &quot;quoted&quot; &lt;script&gt;">a &amp; b &quot;quoted&quot; &lt;script&gt;</p>`,
@@ -108,11 +121,12 @@ Deno.test("renderTile: label and sub are escaped — a hostile label cannot inje
 });
 
 Deno.test("renderTile: value, extra and aside are trusted html; hint is escaped", () => {
-  const html = renderTile(view({
+  const html = renderTile("labs ci", view({
+    href: "/commits",
     value: `<b>42</b>`,
     aside: `<span class="hfacet">$12</span>`,
     extra: `<svg viewBox="0 0 1 1"></svg>`,
-    hint: `commits ↗ <not a tag>`,
+    hint: `commits ↗ <not a "tag">`,
   }));
   // A tile builds these itself, escaping any data it puts in them.
   assertStringIncludes(html, `<p class="big good"><b>42</b></p>`);
@@ -122,12 +136,16 @@ Deno.test("renderTile: value, extra and aside are trusted html; hint is escaped"
   // The hint is plain text from the tile, so the renderer escapes it.
   assertStringIncludes(
     html,
-    `<span class="drill" title="commits ↗ &lt;not a tag&gt;">commits ↗ &lt;not a tag&gt;</span>`,
+    `<span class="drill" title="commits ↗ &lt;not a &quot;tag&quot;&gt;" aria-hidden="true">↗</span>`,
+  );
+  assertStringIncludes(
+    html,
+    `<a class="tile good link" data-tile-label="labs ci" href="/commits" aria-description="commits ↗ &lt;not a &quot;tag&quot;&gt;" title="commits ↗ &lt;not a &quot;tag&quot;&gt;">`,
   );
 });
 
 Deno.test("renderTile: a plain headline label supplies truncated text", () => {
-  const html = renderTile(view({
+  const html = renderTile("labs ci", view({
     value: `<b>42</b>`,
     valueLabel: `42 "requests"`,
   }));
@@ -138,15 +156,16 @@ Deno.test("renderTile: a plain headline label supplies truncated text", () => {
 });
 
 Deno.test("renderTile: the aside and hint sit after the label, separated by the spacer", () => {
-  const html = renderTile(view({ aside: "<i>mtd</i>", hint: "runs" }));
+  const html = renderTile("labs ci", view({ aside: "<i>mtd</i>", hint: "runs" }));
   assertStringIncludes(
     html,
-    `<p class="lbl"><span class="dot green"></span> labs ci<span class="spacer"></span><i>mtd</i><span class="drill" title="runs">runs</span></p>`,
+    `<p class="lbl"><span class="dot green"></span> labs ci<span class="spacer"></span><i>mtd</i><span class="drill" title="runs" aria-hidden="true">↗</span></p>`,
   );
 });
 
 Deno.test("renderTile: a duration wraps the chart so the span can be pinned to its corner", () => {
   const html = renderTile(
+    "labs ci",
     view({ extra: "<svg></svg>", duration: 25 * 86_400_000 }),
   );
   assertStringIncludes(
@@ -159,7 +178,7 @@ Deno.test("renderTile: a duration wraps the chart so the span can be pinned to i
 });
 
 Deno.test("renderTile: no duration leaves extra unwrapped", () => {
-  const html = renderTile(view({ extra: "<svg></svg>" }));
+  const html = renderTile("labs ci", view({ extra: "<svg></svg>" }));
   assertStringIncludes(html, "<svg></svg>");
   assert(
     !html.includes("position:relative"),
@@ -171,7 +190,7 @@ Deno.test("renderTile: a duration with no chart draws nothing to label", () => {
   // The span labels the chart's corner. With no chart the wrapper has no height, so
   // the label would sit on top of the sub line. A tile whose series is too short to
   // plot still reports a span, so this happens: dau's first day, for one.
-  const html = renderTile(view({ sub: "things", duration: 90 * 60_000 }));
+  const html = renderTile("labs ci", view({ sub: "things", duration: 90 * 60_000 }));
   assert(
     !html.includes("position:relative"),
     "nothing to position, so no wrapper",
@@ -182,6 +201,7 @@ Deno.test("renderTile: a duration with no chart draws nothing to label", () => {
 
 Deno.test("renderTile: the body order is label, headline, sub, chart", () => {
   const html = renderTile(
+    "labs ci",
     view({ value: "42", sub: "things", extra: "<svg></svg>" }),
   );
   const at = (needle: string) => html.indexOf(needle);
@@ -210,7 +230,7 @@ Deno.test("shell: the grid and the wide tiles land in their own slots", () => {
   // Wide tiles sit after the grid, not inside it.
   assert(html.indexOf(`class="grid"`) < html.indexOf(`tile bad wide`));
   assert(html.startsWith("<!doctype html>"), "a whole page, not a fragment");
-  assertStringIncludes(html, "<title>Fabric wall — LIVE</title>");
+  assertStringIncludes(html, "<title>Dashboard — LIVE</title>");
   assertStringIncludes(
     html,
     `href="/favicon.png?status=bad&v=${FAVICON_VERSION}"`,
@@ -240,7 +260,7 @@ Deno.test("shell: labeled cell grids share the sparkline label baseline", () => 
 });
 
 Deno.test("renderTile: a bottom-aligned chart can absorb a taller grid row", () => {
-  const html = renderTile(view({
+  const html = renderTile("labs ci", view({
     extra: "<svg></svg>",
     duration: 86_400_000,
     alignChartBottom: true,
@@ -341,15 +361,17 @@ Deno.test("shell: the freshness age and the refresh interval reach both the text
   );
   assertStringIncludes(html, "let base = 7;");
   assertStringIncludes(html, `new EventSource('/events')`);
-  assertStringIncludes(html, `es.addEventListener('update'`);
-  assertStringIncludes(html, `es.addEventListener('ping', alive)`);
-  assertStringIncludes(html, `es.addEventListener('open', alive)`);
   assertStringIncludes(
     html,
-    `es.addEventListener('error', () => { updates.lost(); paint(); });`,
+    `const updates = followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {`,
   );
-  assertStringIncludes(html, `reconcileTiles(grid, update.gridHtml)`);
-  assertStringIncludes(html, `reconcileTiles(wide, update.wideHtml)`);
+  assertStringIncludes(html, `update: (data) => {`);
+  assertStringIncludes(
+    html,
+    `const followUpdates = ${followUpdates.toString()};`,
+  );
+  assertStringIncludes(html, `updateTiles(grid, update.gridHtml)`);
+  assertStringIncludes(html, `updateTiles(wide, update.wideHtml)`);
   assertStringIncludes(
     html,
     `if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }`,
@@ -361,11 +383,8 @@ Deno.test("shell: the freshness age and the refresh interval reach both the text
   );
   assertStringIncludes(
     html,
-    `if (current.outerHTML === next.outerHTML) return current;`,
+    `const reconcileTiles = ${reconcileTiles.toString()};`,
   );
-  assertStringIncludes(html, `nextScroller.scrollTop = scrollTop`);
-  assertStringIncludes(html, `active.dataset.focusKey ?? null`);
-  assertStringIncludes(html, `link.dataset.focusKey === focusedKey`);
 });
 
 Deno.test("shell: the page watches its own stream and reopens one that stops delivering", () => {
@@ -373,7 +392,7 @@ Deno.test("shell: the page watches its own stream and reopens one that stops del
   // The silence the page reconnects on is the silence that turns the dot red.
   assertStringIncludes(html, "const RED_AFTER = REFRESH + 10000;");
   assertStringIncludes(html, `ago * 1000 <= RED_AFTER ? 'amber' : 'red'`);
-  assertStringIncludes(html, `const updates = liveUpdateStream(RED_AFTER, () => {`);
+  assertStringIncludes(html, `followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {`);
   assertStringIncludes(
     html,
     `badge.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';`,
@@ -399,7 +418,7 @@ Deno.test("shell: the injected script is JavaScript, and each injected function 
   // Evaluated on its own, outside its module, so a reference to anything at
   // module scope throws instead of quietly resolving.
   const source = script.match(
-    /const liveUpdateStream = ([\s\S]*?);\n {2}const badge =/,
+    /const liveUpdateStream = ([\s\S]*?);\n {2}const followUpdates =/,
   )![1];
   const injected = new Function(`return (${source});`)() as typeof liveUpdateStream;
 
@@ -424,6 +443,22 @@ Deno.test("shell: the injected script is JavaScript, and each injected function 
   assertEquals(live.check(55_000), false, "and one that goes quiet is replaced");
   assertEquals(opened.length, 2);
   assert(opened[0].closed);
+
+  // The only name it reaches outside itself is the one injected before it.
+  const follow = new Function(
+    "liveUpdateStream",
+    `return (${script.match(/const followUpdates = ([\s\S]*?);\n {2}const badge =/)![1]});`,
+  )(injected) as typeof followUpdates;
+  const listeners = new Map<string, (event: { data: string }) => void>();
+  let painted = 0;
+  const followed = follow(() => ({
+    readyState: 1,
+    close() {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+  }), 55_000, () => painted++, {});
+  followed.check(Date.now());
+  listeners.get("ping")!({ data: "1" });
+  assertEquals(painted, 1, "a heartbeat repaints the page");
 });
 
 Deno.test("shell: live data and runtime settings keep the compatibility version", () => {
@@ -486,7 +521,7 @@ Deno.test("shell: the browser runs the viewer-time formatter", () => {
     `formatViewerTimes(template.content.querySelectorAll('time[data-viewer-time][datetime]'));`,
   );
   const compareMarkup = html.indexOf(
-    "if (current.outerHTML === next.outerHTML)",
+    "reconcileTiles(container, Array.from(template.content.children));",
   );
   assert(localizeUpdate >= 0, "live updates localize their timestamps");
   assert(
@@ -496,7 +531,7 @@ Deno.test("shell: the browser runs the viewer-time formatter", () => {
 });
 
 Deno.test("shell: the texture fades out towards the bottom of its own tile", () => {
-  const html = shell(renderTile(view({ status: "bad" }), "labs-ci"), "", 0, 30_000, TEST_VERSION, "bad");
+  const html = shell(renderTile("labs ci", view({ status: "bad" })), "", 0, 30_000, TEST_VERSION, "bad");
   assertStringIncludes(html, `<div class="texture"></div>`);
   // Measured against the tile: whole for its top seventh, gone seven tenths
   // of the way down.
@@ -569,8 +604,8 @@ Deno.test("shell: the turned texture layer still covers a tile far wider than it
   // Turning a square about its center sweeps its corners inward, so the layer
   // covers the tile only while half its side still reaches the tile's corner.
   // That reach is the tile's half-diagonal. The layer is measured off the
-  // tile's width alone, so the shape that strains it is a tall narrow tile:
-  // the tightest the wall's grid gets is a tile 0.94 as tall as it is wide,
+  // tile's width alone, so the shape that strains it is a tall narrow tile: the
+  // tightest the dashboard's grid gets is a tile 0.94 as tall as it is wide,
   // and this asks for room well past that.
   const tallest = 1.5;
   const halfSide = Number(layer[1]) / 100 / 2;
@@ -583,7 +618,7 @@ Deno.test("shell: the turned texture layer still covers a tile far wider than it
 });
 
 Deno.test("shell: the header dot takes a shape per status, not just a color", () => {
-  const html = shell(renderTile(view(), "labs-ci"), "", 0, 30_000, TEST_VERSION, "good");
+  const html = shell(renderTile("labs ci", view()), "", 0, 30_000, TEST_VERSION, "good");
   // The dot is empty and its shape is drawn by a layer inside it.
   assertStringIncludes(html, `.dot::before{content:"";position:absolute;inset:0}`);
   const shapes = (["good", "warn", "bad", "unknown"] as Status[]).map((status) => {
@@ -687,11 +722,30 @@ Deno.test("shell: server-measured red age changes the favicon after one hour", (
   assert(!html.includes("faviconSvg"));
 });
 
-Deno.test("shell: the header names the Fabric Wall shortcut", () => {
+Deno.test("shell: the header carries the shortcut and no name of its own", () => {
   const html = shell("", "", 0, 1000, TEST_VERSION, "good");
-  assertStringIncludes(html, "<span>go/fabricwall</span>");
+  const brand = html.match(/<div class="brand">(.*?)<\/div>/s);
+  assertExists(brand, "the header's brand row");
+  assertEquals(
+    brand[1],
+    `<span class="badge" id="livebadge">● LIVE</span>` +
+      `<span class="shortcut">go/fabricwall</span>`,
+    "the badge and the shortcut, and nothing naming the page",
+  );
+  // The shortcut is the only thing in the row that says which page this is, so
+  // a narrow viewport keeps it rather than dropping it as a second label.
+  assert(
+    !/\.brand[^{]*\{[^}]*display:none/.test(html),
+    "nothing in the brand row is hidden at any width",
+  );
   assertStringIncludes(
     html,
     ".badge{font-size:11px;color:var(--status-good-text);border:1px solid color-mix(in srgb,var(--status-good) 40%,transparent)",
+  );
+  // `.shortcut` rather than `.brand span`, which would outrank `.badge` and
+  // set the badge's size and color from the shortcut's rule.
+  assertStringIncludes(
+    html,
+    ".shortcut{font-size:12px;color:var(--text-faint)}",
   );
 });

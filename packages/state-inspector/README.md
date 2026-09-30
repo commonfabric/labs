@@ -19,16 +19,16 @@ plus the meta paths `argument` / `result` / `patternIdentity` / `internal` /
 `schema` / `cfc`. The tool classifies an entity by **which top-level paths
 exist** and resolves lineage from them:
 
-| Kind         | Signal                                                                   |
-| ------------ | ------------------------------------------------------------------------ |
-| `piece`      | `patternIdentity` (modern) or a legacy `$TYPE`/`resultRef` process value |
-| `module`     | value carries `{ code, identity }` (pattern source/compiled)             |
-| `stream`     | `value.$stream === true`                                                 |
-| `schema`     | value is a JSONSchema (`{ type, properties\|$defs }`)                    |
-| `owned-cell` | carries a `result` ownership back-link                                   |
-| `free-cell`  | a bare `value`, owned by no piece                                        |
-| `deleted`    | the visible head row is a `delete` — a tombstone                         |
-| `unknown`    | here but unreadable, or a path-set nothing above recognizes              |
+| Kind         | Signal                                                                                               |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| `piece`      | `patternIdentity` (modern) or a legacy `$TYPE`/`resultRef` process value                             |
+| `module`     | value carries `{ code, identity }` (pattern source/compiled)                                         |
+| `stream`     | the manifest link its owner keeps for it declares `asCell: ["stream"]` (or a legacy `value.$stream`) |
+| `schema`     | value is a JSONSchema (`{ type, properties\|$defs }`)                                                |
+| `owned-cell` | carries a `result` ownership back-link                                                               |
+| `free-cell`  | a bare `value`, owned by no piece                                                                    |
+| `deleted`    | the visible head row is a `delete` — a tombstone                                                     |
+| `unknown`    | here but unreadable, or a path-set nothing above recognizes                                          |
 
 Lineage: a piece → its input (`argument`), its pattern (`patternIdentity` → the
 module entity), its owned cells (`internal`); an owned cell → its owner

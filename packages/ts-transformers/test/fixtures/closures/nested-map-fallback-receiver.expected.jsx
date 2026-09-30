@@ -35,7 +35,7 @@ const __cfHandler_1 = __cfHelpers.handler({
         assignName: {
             type: "string",
             asCell: [{
-                    kind: "cell",
+                    kind: "writeonly",
                     scope: "space"
                 }]
         }
@@ -53,7 +53,7 @@ const __cfLift_1 = __cfHelpers.lift<{
                 $ref: "#/$defs/Person"
             },
             asCell: [{
-                    kind: "cell",
+                    kind: "readonly",
                     scope: "space"
                 }]
         }
@@ -213,7 +213,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                         $ref: "#/$defs/Person"
                     },
                     asCell: [{
-                            kind: "cell",
+                            kind: "readonly",
                             scope: "space"
                         }]
                 },

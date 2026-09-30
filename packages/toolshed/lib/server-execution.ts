@@ -11,35 +11,28 @@
 
 import {
   type EnvReader,
-  type ExperimentalOptions,
   experimentalOptionsFromEnv,
-  Runtime,
 } from "@commonfabric/runner";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
-import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import {
+  SERVING_RUNTIME_EXPERIMENTAL,
+  servingRuntimeFactory,
+} from "@commonfabric/runner/executor/serving-runtime";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Identity } from "@commonfabric/identity";
 
 let host: ExecutorHost | undefined;
-
-/**
- * The flags a SERVING runtime runs regardless of the environment. Written
- * once because two consumers need the same answer: the runtime factory
- * below, and `/api/meta`, which reports the posture this deployment actually
- * serves at so a client adopting it does not run a flag the deployment
- * abandoned (docs/development/EXPERIMENTAL_OPTIONS.md).
- */
-const SERVING_RUNTIME_EXPERIMENTAL = {
-  serverExecution: true,
-} as const satisfies ExperimentalOptions;
 
 /** The production default for the per-space outstanding-network-effect
  * cap (serving-loop.md §5; README §3.8's multi-tenancy contract needs a
  * bound ON by default — a runaway LLM fan-out must degrade only its own
  * space). An operator-tunable posture, not a spec constant. */
 export const DEFAULT_MAX_OUTSTANDING_EFFECTS = 16;
+
+/** The longest delay `setTimeout()` honors, in milliseconds. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /** The Phase-6 policy knobs the toolshed bootstrap threads into the
  * ExecutorHost (`SpaceServerPolicy`'s env-overridable subset). */
@@ -48,6 +41,7 @@ export type ServerExecutionEnvPolicy = {
   maxOutstandingEffects?: number;
   egressRatePerSecond?: number;
   storeReadThrough?: boolean;
+  parkedRuntimeRetentionMs?: number;
 };
 
 /**
@@ -64,7 +58,12 @@ export type ServerExecutionEnvPolicy = {
  *   value is a deliberate operator choice);
  * - the store read-through (`SpaceServerPolicy.storeReadThrough`,
  *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults OFF; only the literal
- *   `true` turns it on.
+ *   `true` turns it on;
+ * - how long an idle-parked space's runtime is kept for its next tenure
+ *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
+ *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
+ *   built-in default unless overridden; the literal `0` keeps none, and
+ *   a value past the longest delay a timer honors reads as unset.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -130,6 +129,27 @@ export function serverExecutionPolicyFromEnv(
       maxOutstandingEffects = value;
     }
   }
+  const retentionRaw = readRaw(
+    "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+  );
+  // The retention arms a timer, and a delay past the timer's range fires
+  // at once, so such a value reads as unset rather than as "keep long".
+  const retentionValue = retentionRaw === undefined
+    ? undefined
+    : strictNonNegativeInt(retentionRaw);
+  const parkedRuntimeRetentionMs = retentionValue !== undefined &&
+      retentionValue <= MAX_TIMER_DELAY_MS
+    ? retentionValue
+    : undefined;
+  if (retentionRaw !== undefined && parkedRuntimeRetentionMs === undefined) {
+    warn(
+      "Server-execution v2: ignoring " +
+        "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS=" +
+        `${JSON.stringify(retentionRaw)} (expected a non-negative integer ` +
+        `of at most ${MAX_TIMER_DELAY_MS}; the literal 0 keeps no parked ` +
+        "runtime); using the built-in default",
+    );
+  }
   const readThroughRaw = readRaw("SERVER_EXECUTION_STORE_READ_THROUGH");
   let storeReadThrough: boolean | undefined;
   if (readThroughRaw === "true") {
@@ -146,6 +166,9 @@ export function serverExecutionPolicyFromEnv(
     ...(maxOutstandingEffects !== undefined ? { maxOutstandingEffects } : {}),
     ...(egressRatePerSecond !== undefined ? { egressRatePerSecond } : {}),
     ...(storeReadThrough !== undefined ? { storeReadThrough } : {}),
+    ...(parkedRuntimeRetentionMs !== undefined
+      ? { parkedRuntimeRetentionMs }
+      : {}),
   };
 }
 
@@ -223,44 +246,15 @@ export function startServerExecutionHost(options: {
     ensureSpaceRoots,
     server: options.server,
     serviceIdentity: options.identity.did(),
-    createRuntime: (space, context) => {
-      const storageManager = LoopbackStorageManager.connect(options.server, {
-        as: options.identity,
-        // Phase 5 (protocol.md §2's grant-scoped read design): the
-        // serving manager's FOREIGN-space providers refuse scoped
-        // reads fail-closed — the producer half of the
-        // delegated-scoped-read precondition.
-        servingHomeSpace: space,
-      });
-      // Installed ahead of the runtime, so no read this factory could ever
-      // perform reaches the session.
-      if (context.storeReadThrough !== undefined) {
-        storageManager.installStoreReadThrough(
-          space,
-          context.storeReadThrough,
-        );
-      }
-      const runtime = new Runtime({
-        apiUrl: options.apiUrl,
-        storageManager,
-        // The SpaceServer's own runtime (serving-loop.md §3): never the
-        // Phase-2 speculation-overlay default — its factory-time loads
-        // commit through the loopback plane, and the wave destination
-        // takes over at activation.
-        servingPosture: true,
-        // Precise clients require complete acquisition history on served writes.
-        cfcFlowLabels: "persist",
-        experimental: { ...experimental, ...SERVING_RUNTIME_EXPERIMENTAL },
-      });
-      void space;
-      return Promise.resolve({
-        runtime,
-        dispose: async () => {
-          await runtime.dispose();
-          await storageManager.close();
-        },
-      });
-    },
+    // The serving runtimes' own flags: the environment's, with the ones
+    // every serving runtime forces on top. `/api/meta` publishes those same
+    // forced flags below.
+    createRuntime: servingRuntimeFactory({
+      server: options.server,
+      identity: options.identity,
+      apiUrl: options.apiUrl,
+      experimental,
+    }),
   });
   // Only now, with the loop actually up: what `/api/meta` adds to the base
   // posture, so a client adopting this deployment's flags gets the ones the

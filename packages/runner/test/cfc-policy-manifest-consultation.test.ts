@@ -9,9 +9,10 @@ import {
   CFC_POLICY_MANIFEST_ID_PREFIX,
   cfcPolicyManifestDocId,
 } from "../src/cfc/policy.ts";
-import { parseLink } from "../src/link-utils.ts";
+import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../src/cfc/mod.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { snapshotQueryResult } from "../src/query-result-proxy.ts";
+import { isAuthorizationRead } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("manifest-consultation");
 const reference = cfcAtom.modulePolicyRef(
@@ -75,7 +77,7 @@ const seedSecretSource = async (runtime: Runtime, name: string) => {
   );
   const sourceId = parseLink(sourceCell.getAsLink()).id!;
   writeSeedEnvelopeDoc(seed, signer.did());
-  seed.writeOrThrow({
+  seedStoredEnvelope(seed, {
     space: signer.did(),
     scope: "space",
     id: sourceId,
@@ -272,7 +274,14 @@ describe("module-policy manifest consultation", () => {
       symbol: "rules",
       template: {
         templateVersion: 1,
-        exchangeRules: [],
+        exchangeRules: [{
+          name: "release",
+          preCondition: {
+            confidentiality: [{ thisPolicy: true }],
+            integrity: ["release-guard"],
+          },
+          postCondition: { confidentiality: [], integrity: [] },
+        }],
         dependencies: { authorityOnly: [], dataBearing: [] },
         integrityRequirements: {},
       },
@@ -326,6 +335,12 @@ describe("module-policy manifest consultation", () => {
       expect((await install.commit()).ok).toBeDefined();
 
       const scan = runtime.edit();
+      expect(scan.readValueOrThrow({
+        space: signer.did(),
+        scope: "space",
+        id: cfcPolicyManifestDocId(artifact.policyDigest),
+        path: [],
+      })).toEqual(artifact);
       runtime.getCell(signer.did(), "manifest-scan-probe", undefined, scan)
         .get();
       expect(
@@ -401,6 +416,94 @@ describe("module-policy manifest consultation", () => {
     }
   });
 
+  it("verifies factored manifest contents and rejects a changed referenced rule", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+    });
+    const rule = {
+      name: "release",
+      preCondition: {
+        confidentiality: [{ thisPolicy: true }],
+        integrity: ["release-guard"],
+      },
+      postCondition: { confidentiality: [], integrity: [] },
+    };
+    const artifact = buildCfcPolicyArtifactManifest({
+      formatVersion: 1,
+      moduleIdentity: "sha256:factored-module",
+      symbol: "rules",
+      template: {
+        templateVersion: 1,
+        exchangeRules: [rule],
+        dependencies: { authorityOnly: [], dataBearing: [] },
+        integrityRequirements: {},
+      },
+    });
+    const ref = cfcAtom.modulePolicyRef(
+      artifact.manifest.moduleIdentity,
+      artifact.manifest.symbol,
+      artifact.policyDigest,
+      signer.did(),
+    );
+    const child = runtime.getCell(signer.did(), "factored-rule")
+      .getAsNormalizedFullLink();
+    try {
+      const seed = storageManager.edit();
+      seed.write({ ...child, path: [] }, { value: rule });
+      seed.write({
+        space: signer.did(),
+        scope: "space",
+        id: cfcPolicyManifestDocId(artifact.policyDigest),
+        path: [],
+      }, {
+        value: {
+          ...artifact,
+          manifest: {
+            ...artifact.manifest,
+            template: {
+              ...artifact.manifest.template,
+              exchangeRules: [createSigilLinkFromParsedLink(child)],
+            },
+          },
+        },
+      });
+      expect((await seed.commit()).error).toBeUndefined();
+      const read = runtime.edit();
+      expect(runtime.resolveCfcPolicyManifest(ref, read, signer.did())).toEqual(
+        artifact,
+      );
+      expect(read.getCfcState().referenceObservations).toEqual([]);
+      expect(
+        [...read.getReadActivities!()].some((activity) =>
+          activity.id === child.id && activity.path[0] === "value" &&
+          isAuthorizationRead(activity.meta)
+        ),
+      ).toBe(true);
+      read.writeValueOrThrow(
+        runtime.getCell(signer.did(), "manifest-dependent-write")
+          .getAsNormalizedFullLink(),
+        "verified",
+      );
+
+      const tamper = storageManager.edit();
+      tamper.write({ ...child, path: ["value", "name"] }, "different rule");
+      expect((await tamper.commit()).error).toBeUndefined();
+      expect((await read.commit()).error).toMatchObject({
+        name: "StorageTransactionInconsistent",
+        address: { id: child.id },
+      });
+      const changed = runtime.edit();
+      expect(runtime.resolveCfcPolicyManifest(ref, changed, signer.did()))
+        .toBeUndefined();
+      changed.abort();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("fails closed on malformed and colliding durable artifacts", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -459,6 +562,18 @@ describe("module-policy manifest consultation", () => {
       ).toThrow("invalid destination artifact");
       malformed.abort();
 
+      await writeRawManifest(malformedSpace, ["not a manifest object"]);
+      const wrongShape = runtime.edit();
+      expect(() =>
+        runtime.installCfcPolicyManifest(
+          malformedSpace,
+          reference,
+          wrongShape,
+        )
+      ).toThrow("invalid destination artifact");
+      expect(wrongShape.getReactivityLog?.().writes).toEqual([]);
+      wrongShape.abort();
+
       const collisionSpace = (await Identity.fromPassphrase(
         "colliding manifest destination",
       )).did();
@@ -493,14 +608,15 @@ describe("module-policy manifest consultation", () => {
       ).toBeUndefined();
       malformedReference.abort();
 
+      // A transaction over storage that cannot take a commit precondition.
+      class NoPrecondition extends TransactionWrapper {}
+      Object.defineProperty(
+        NoPrecondition.prototype,
+        "addCommitPrecondition",
+        { value: undefined },
+      );
       const binding = runtime.edit();
-      const noPrecondition = new Proxy(binding, {
-        get(target, property, receiver) {
-          if (property === "addCommitPrecondition") return undefined;
-          const value = Reflect.get(target, property, receiver);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const noPrecondition = new NoPrecondition(binding);
       expect(() =>
         runtime.resolveCfcPolicyManifest(
           reference,

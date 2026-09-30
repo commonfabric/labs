@@ -1094,7 +1094,6 @@ describe("deferred-start-catchup-start", () => {
           trustExecutable(runtime, Piece),
           { value: 3 },
           false,
-          false,
         );
         expect((await tx.commit()).error).toBeUndefined();
 

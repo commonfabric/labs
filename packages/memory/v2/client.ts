@@ -1,12 +1,16 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
-import { unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isPlainObject,
+  unsafeObjectKeyIn,
+} from "@commonfabric/utils/types";
 
 import {
   type ClientCommit,
   compatibleMemoryProtocolFlags,
-  decodeMemoryBoundary,
+  decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -14,6 +18,7 @@ import {
   type EntityIdLookupResult,
   type EntitySnapshot,
   type EventAttentionResolveResult,
+  type GenesisRoot,
   getMemoryProtocolFlags,
   type GraphQuery,
   type GraphQueryResult,
@@ -23,16 +28,23 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  type PresenceJoinResult,
+  type PresencePublication,
+  type PresenceRecord,
+  type PresenceRemoveMessage,
+  type PresenceUpsertMessage,
   type ResponseMessage,
   type SessionEffectMessage,
   type SessionHolding,
   type SessionOpenAuthMetadata,
   type SessionOpenChallenge,
   type SessionOpenResult,
+  type SessionReadCeiling,
   type SessionRevokedMessage,
   type SessionSync,
   type SqliteDbRef,
   type SqliteParamsWire,
+  type SqliteQueryReader,
   type SqliteQueryResult,
   type SqliteQueryWireResult,
   type SqliteRegisterDiskSourceResult,
@@ -45,10 +57,23 @@ import {
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
+import {
+  isPresenceRoom,
+  PresenceError,
+  validatePresencePublication,
+} from "./presence.ts";
 import type { Server } from "./server.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
+
+/**
+ * Passed to `SpaceSession.watchSetSync()` by `restore()` alone, marking the
+ * watch set a restore re-establishes, which is sent without waiting for its
+ * session to reopen. It is not exported, so no other caller can skip that
+ * wait.
+ */
+const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
 const logger = getLogger("memory.v2.client", {
   enabled: true,
@@ -66,6 +91,14 @@ export type Transport = {
 
   /** Enables compression after a successful capability handshake. */
   setMessageCompressionEnabled?(enabled: boolean): void;
+
+  /**
+   * Resolves once every server frame this transport held at the call has been
+   * handed to the receiver, and at once when it held none or has closed.
+   * Frames that arrive after the call do not extend the wait. A transport
+   * that hands each frame over as it arrives holds none and leaves this out.
+   */
+  delivered?(): Promise<void>;
 };
 
 export type ConnectOptions = {
@@ -86,6 +119,8 @@ export type ConnectionState =
   | "closed";
 
 export type MountOptions = {
+  /** Require the space's complete persisted custom-root intent. */
+  genesisRoot?: GenesisRoot;
   sessionId?: string;
   seenSeq?: number;
   sessionToken?: string;
@@ -96,6 +131,12 @@ export type MountOptions = {
    * principals only. Carried on reopen so a route replacement keeps
    * the binding. */
   actingAs?: "space-owner";
+
+  /** The session's declared read ceiling (the wire
+   * `SessionDescriptor.readCeiling`): set by a client runtime under server
+   * execution that is configured with one, and carried on every reopen so
+   * a resumed session is bounded exactly as the first open was. */
+  readCeiling?: SessionReadCeiling;
 };
 
 export type SessionOpenAuth = {
@@ -113,6 +154,63 @@ export type SessionOpenAuthFactory = (
   session: MountOptions,
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
+
+/**
+ * What a presence room delivers to an observer, in the order it happens. A
+ * `snapshot` opens the membership and reopens it after every reconnect, each
+ * time with the participant id the relay assigned for that connection; a
+ * `failure` carries a refused publication or the session's termination, and
+ * nothing follows the latter.
+ */
+export type PresenceEvent =
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: PresenceRecord[];
+  }
+  | { kind: "upsert"; participant: PresenceRecord }
+  | { kind: "remove"; participantId: string }
+  | { kind: "failure"; error: Error };
+
+/** One observer's membership in one presence room. */
+export interface PresenceMembership {
+  /** The id the relay assigned this connection in the room; changes on reconnect. */
+  readonly participantId: string;
+
+  /**
+   * Replaces the record this session holds in the room, at the next
+   * revision. It does not wait for the relay: a refused publication reaches
+   * the observer as a `failure`. Throws a `PresenceError` for a publication
+   * outside the relay's bounds, before anything is sent.
+   */
+  publish(publication: PresencePublication): void;
+
+  /**
+   * Ends this observer's membership. The session leaves the room once its
+   * last observer has left; calling it again does nothing.
+   */
+  leave(): Promise<void>;
+}
+
+/**
+ * What one session holds for one room: its observers, the relay's view of the
+ * room as the session last applied it, and the record it last published.
+ */
+type PresenceRoomState = {
+  room: string;
+  observers: Set<(event: PresenceEvent) => void>;
+  participantId: string;
+  participants: Map<string, PresenceRecord>;
+
+  /** Revision of the last publication; `0` until one is made. */
+  revision: number;
+
+  /** The last publication, republished after a reconnect. */
+  publication: PresencePublication | null;
+
+  /** Settles when the relay has responded to the current join. */
+  joined: Promise<void>;
+};
 
 export type WatchMutationResult = {
   view: WatchView;
@@ -266,6 +364,15 @@ export class Client {
     return this.#serverFlags;
   }
 
+  /**
+   * Resolves once every server frame the transport held at the call has
+   * reached this client. What a frame goes on to do from there — a response resolving, a
+   * sync frame handed to its session — is microtask work after that.
+   */
+  delivered(): Promise<void> {
+    return this.#transport.delivered?.() ?? Promise.resolve();
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
     this.#connected = false;
@@ -284,6 +391,12 @@ export class Client {
     openAuthFactory?: SessionOpenAuthFactory,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    options = {
+      ...options,
+      ...(options.genesisRoot === undefined ? {} : {
+        genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
+      }),
+    };
     const auth = await runWithAbortSignal(
       signal,
       "memory session mount cancelled",
@@ -319,6 +432,8 @@ export class Client {
       openAuthFactory,
       signal,
       options.actingAs,
+      options.readCeiling,
+      options.genesisRoot,
     );
     this.#spaces.add(session);
     return session;
@@ -394,6 +509,29 @@ export class Client {
     auth?: SessionOpenAuth,
     holdings?: SessionHolding[],
   ): Promise<SessionOpenResult> {
+    // Every open passes through here — a first mount and each reopen after
+    // a dropped connection alike — so this is where a declared ceiling is
+    // held to the server it is declared to. A server that does not
+    // advertise `sessionReadCeiling` would accept the descriptor and serve
+    // every query unbounded.
+    if (
+      session.readCeiling !== undefined &&
+      this.serverFlags?.sessionReadCeiling !== true
+    ) {
+      throw protocolError(
+        "memory server does not record a session's read ceiling " +
+          "(`sessionReadCeiling` is not among its protocol flags), so a " +
+          "session declaring one cannot be bounded by it",
+      );
+    }
+    if (
+      session.genesisRoot !== undefined &&
+      this.serverFlags?.genesisRoot !== true
+    ) {
+      throw protocolError(
+        "memory server does not support a custom root intent",
+      );
+    }
     const result = await this.request<SessionOpenResult>({
       type: "session.open",
       requestId: this.#nextRequestId(),
@@ -517,7 +655,7 @@ export class Client {
     let message: unknown;
     try {
       const decodeStart = performance.now();
-      message = decodeMemoryBoundary(payload);
+      message = decodeTrustedMemoryBoundary(payload);
       logger.time(decodeStart, "receive", "decodeBoundary");
       logIncomingFrame(message, memoryMessageFrameBytes(payload));
       // A frame whose raw text lacks every reserved reference prefix cannot
@@ -559,9 +697,7 @@ export class Client {
           // reconnect that hits it gives up rather than retrying a doomed
           // handshake.
           const error = permanentProtocolError(
-            `memory flag mismatch: client=${
-              toCompactDebugString(expectedFlags)
-            } server=${toCompactDebugString(helloOk.flags)}`,
+            debugStr`memory flag mismatch: client=$quote,long${expectedFlags} server=$quote,long${helloOk.flags}`,
           );
           this.#helloPending.reject(error);
           return;
@@ -627,6 +763,17 @@ export class Client {
           session.space === message.space
         ) {
           session.handleRevoked(message.reason);
+        }
+      }
+      return;
+    }
+    if (isPresencePush(message)) {
+      for (const session of this.#spaces) {
+        if (
+          session.sessionId === message.sessionId &&
+          session.space === message.space
+        ) {
+          session.handlePresence(message);
         }
       }
       return;
@@ -789,6 +936,7 @@ export class SpaceSession {
   #viewIntentVersion = 0;
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
+  #accessLossObservers = new Set<(error: Error) => void>();
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
@@ -804,7 +952,9 @@ export class SpaceSession {
   /**
    * Serializes the _application_ of watch responses (the `#watchSpecs` /
    * `#watchView` mutations) in call order, so application stays ordered even
-   * when round trips overlap on the wire.
+   * when round trips overlap on the wire. The watch set `restore()`
+   * re-establishes is issued and applied outside this chain and
+   * `#watchIssue`; see `#sendRestoreWatchMutation()`.
    */
   #watchApply: Promise<void> = Promise.resolve();
 
@@ -815,6 +965,13 @@ export class SpaceSession {
    * each mutation's request and apply run together on `#watchApply`.
    */
   #watchIssue: Promise<void> = Promise.resolve();
+
+  /**
+   * The most recent watch mutation to put its request on the wire, settling
+   * once its response has been applied. The watch set a restore re-establishes
+   * is sent after it.
+   */
+  #lastSentWatchMutation: Promise<unknown> | undefined;
 
   /**
    * Whether watch-refresh round trips may overlap (default off). Per-session,
@@ -829,6 +986,7 @@ export class SpaceSession {
   #readyOnConnection = true;
   #restoring = false;
   #caughtUpLocalSeq = 0;
+  #presenceRooms = new Map<string, PresenceRoomState>();
 
   /** Invoked when a restore REPLACES the session (a new session id, or the
    * same id re-opened without resume): the marker epoch reset, so
@@ -866,6 +1024,8 @@ export class SpaceSession {
   readonly #openAuthFactory?: SessionOpenAuthFactory;
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
+  readonly #readCeiling?: SessionReadCeiling;
+  readonly #genesisRoot?: GenesisRoot;
 
   constructor(
     client: Client,
@@ -876,11 +1036,17 @@ export class SpaceSession {
     openAuthFactory?: SessionOpenAuthFactory,
     routeSignal?: AbortSignal,
     actingAs?: "space-owner",
+    readCeiling?: SessionReadCeiling,
+    genesisRoot?: GenesisRoot,
   ) {
     this.#client = client;
     this.#openAuthFactory = openAuthFactory;
     this.#routeSignal = routeSignal;
     this.#actingAs = actingAs;
+    this.#readCeiling = readCeiling;
+    this.#genesisRoot = genesisRoot === undefined
+      ? undefined
+      : cloneIfNecessary(genesisRoot, { frozen: false });
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1001,6 +1167,122 @@ export class SpaceSession {
     return result;
   }
 
+  /**
+   * Joins the presence room `room` under this session's space and returns
+   * the membership, after delivering the relay's current snapshot to
+   * `observer`. Several observers may join one room; they share one
+   * membership and one published record. Throws a `ProtocolError` when the
+   * server does not advertise `presenceV1`, and a `PresenceError` for a
+   * malformed room id.
+   */
+  async joinPresenceRoom(
+    room: string,
+    observer: (event: PresenceEvent) => void,
+  ): Promise<PresenceMembership> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.presenceV1 !== true) {
+      throw protocolError("memory server does not support presence");
+    }
+    if (!isPresenceRoom(room)) {
+      throw new PresenceError("Presence room id is invalid");
+    }
+    // The room's last observer may leave while the join is awaited, taking
+    // the state with it; a state that is no longer the room's is not one to
+    // attach to, so the join starts over on a fresh one.
+    let state: PresenceRoomState;
+    for (;;) {
+      const existing = this.#presenceRooms.get(room);
+      if (existing === undefined) {
+        const created: PresenceRoomState = {
+          room,
+          observers: new Set(),
+          participantId: "",
+          participants: new Map(),
+          revision: 0,
+          publication: null,
+          joined: Promise.resolve(),
+        };
+        created.joined = this.#joinPresence(created);
+        this.#presenceRooms.set(room, created);
+        state = created;
+      } else {
+        state = existing;
+      }
+      try {
+        await state.joined;
+      } catch (error) {
+        if (
+          this.#presenceRooms.get(room) === state && state.observers.size === 0
+        ) {
+          this.#presenceRooms.delete(room);
+        }
+        throw error;
+      }
+      this.#assertOpen();
+      if (this.#presenceRooms.get(room) === state) break;
+    }
+    state.observers.add(observer);
+    this.#deliverPresenceTo(observer, {
+      kind: "snapshot",
+      participantId: state.participantId,
+      participants: [...state.participants.values()],
+    });
+    const joined = state;
+    let left = false;
+    return {
+      get participantId() {
+        return joined.participantId;
+      },
+      publish: (publication) => {
+        if (left || this.#closed) return;
+        validatePresencePublication(publication);
+        joined.publication = publication;
+        joined.revision += 1;
+        this.#publishPresence(joined, joined.revision);
+      },
+      leave: async () => {
+        if (left) return;
+        left = true;
+        joined.observers.delete(observer);
+        if (joined.observers.size > 0) return;
+        if (this.#presenceRooms.get(room) === joined) {
+          this.#presenceRooms.delete(room);
+        }
+        if (this.#closed) return;
+        await joined.joined.catch(() => undefined);
+        await this.#client.request({
+          type: "presence.leave",
+          requestId: crypto.randomUUID(),
+          space: this.space,
+          sessionId: this.#sessionId,
+          room,
+        }).catch(() => undefined);
+      },
+    };
+  }
+
+  /** Applies one presence push from the relay to its room's observers. */
+  handlePresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
+    const state = this.#presenceRooms.get(message.room);
+    if (state === undefined) return;
+    if (message.type === "presence/upsert") {
+      const { participant } = message;
+      const held = state.participants.get(participant.participantId);
+      // The relay pushes only a revision above the one it last accepted for
+      // a membership, so an older one here arrived out of order; the newer
+      // record already shown is kept.
+      if (held !== undefined && held.revision >= participant.revision) return;
+      state.participants.set(participant.participantId, participant);
+      this.#deliverPresence(state, { kind: "upsert", participant });
+      return;
+    }
+    if (!state.participants.delete(message.participantId)) return;
+    this.#deliverPresence(state, {
+      kind: "remove",
+      participantId: message.participantId,
+    });
+  }
+
   async resolveEventAttention(
     eventId: string,
     seq: number,
@@ -1074,8 +1356,17 @@ export class SpaceSession {
     db: SqliteDbRef,
     sql: string,
     params?: SqliteParamsWire,
+    reader?: SqliteQueryReader,
   ): Promise<SqliteQueryResult> {
     await this.#ensureSessionRestored();
+    if (
+      reader !== undefined &&
+      this.#client.serverFlags?.sqliteQueryReader !== true
+    ) {
+      throw new Error(
+        "sqlite: server does not support carried reader authorization",
+      );
+    }
     const paramFields = params === undefined
       ? {}
       : !Array.isArray(params) && unsafeObjectKeyIn(params) !== undefined
@@ -1089,6 +1380,7 @@ export class SpaceSession {
       db,
       sql,
       ...paramFields,
+      ...(reader === undefined ? {} : { reader }),
     });
     return {
       rows: result.rows.map(sqliteRowFromWire),
@@ -1133,11 +1425,16 @@ export class SpaceSession {
     return result.view;
   }
 
-  /** Replaces watches, or replays the owned set after queued changes apply. */
+  /**
+   * Replaces watches, or replays the owned set after queued changes apply.
+   * `restore` is passed by `restore()` alone, for the watch set it
+   * re-establishes.
+   */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
     holdings?: SessionHolding[],
     views?: ViewInterest[],
+    restore?: typeof RESTORE_WATCH_SET,
   ): Promise<WatchMutationResult> {
     this.#assertOpen();
     if (
@@ -1169,7 +1466,11 @@ export class SpaceSession {
       },
       (result) => {
         this.#noteResult(result.serverSeq);
-        this.#replaceWatchSpecs(requestedWatches);
+        // A replay sends `#watchSpecs` as it stands. The restore's replay does
+        // not queue with other mutations, so one of them can change
+        // `#watchSpecs` while its request is on the wire, and writing the sent
+        // set back would undo that change.
+        if (watches !== undefined) this.#replaceWatchSpecs(requestedWatches);
         if (viewIntentVersion === this.#viewIntentVersion) {
           this.#viewsDirty = false;
         }
@@ -1187,6 +1488,7 @@ export class SpaceSession {
         };
       },
       watches === undefined ? "apply" : "issue",
+      { restoring: restore === RESTORE_WATCH_SET },
     );
   }
 
@@ -1194,6 +1496,25 @@ export class SpaceSession {
   subscribeViewCapabilityLost(observer: () => void): () => void {
     this.#viewCapabilityLostObservers.add(observer);
     return () => this.#viewCapabilityLostObservers.delete(observer);
+  }
+
+  /**
+   * Observes an authoritative loss of this session's access. A permanent
+   * denial is replayed synchronously to late observers; normal closure,
+   * takeover, and transient connection failures do not report access loss.
+   */
+  subscribeAccessLoss(observer: (error: Error) => void): () => void {
+    if (isPermanentAuthorizationError(this.#closeError)) {
+      try {
+        observer(this.#closeError!);
+      } catch (cause) {
+        console.error("session-access-loss subscriber threw:", cause);
+      }
+      return () => {};
+    }
+    if (this.#closed) return () => {};
+    this.#accessLossObservers.add(observer);
+    return () => this.#accessLossObservers.delete(observer);
   }
 
   /**
@@ -1322,22 +1643,16 @@ export class SpaceSession {
     watchIds: readonly string[],
   ): Promise<WatchMutationResult> {
     const removed = new Set(watchIds);
+    let watches: WatchSpec[] = [];
     return await this.#runWatchMutation(
-      () => {
-        // Cancellation is local intent even when the request fails: a later
-        // reconnect must not restore a watch its last subscriber removed.
-        const watches = this.#watchSpecs.filter((watch) =>
-          !removed.has(watch.id)
-        );
-        this.#replaceWatchSpecs(watches);
-        return this.#client.request<WatchSetResult>({
+      () =>
+        this.#client.request<WatchSetResult>({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
           sessionId: this.#sessionId,
           watches,
-        });
-      },
+        }),
       (result) => {
         this.#noteResult(result.serverSeq);
         this.#noteOperationWatchCursors(result.sync);
@@ -1354,6 +1669,16 @@ export class SpaceSession {
         };
       },
       "apply",
+      {
+        // Cancellation is local intent from the moment this removal's turn
+        // comes, while it waits for a restore and even when its request
+        // fails: a reconnect must not restore a watch its last subscriber
+        // removed.
+        onTurn: () => {
+          watches = this.#watchSpecs.filter((watch) => !removed.has(watch.id));
+          this.#replaceWatchSpecs(watches);
+        },
+      },
     );
   }
 
@@ -1512,11 +1837,13 @@ export class SpaceSession {
           this.#viewsDirty || this.#viewInterests.length > 0
             ? this.#viewInterests
             : undefined,
+          RESTORE_WATCH_SET,
         );
         if (!isEmptySync(sync)) {
           view.emit(sync);
         }
       }
+      this.#rejoinPresenceRooms();
       await Promise.all(replayTasks);
       this.#restoreComplete?.resolve();
       this.#restoreComplete = undefined;
@@ -1547,6 +1874,19 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
+    // The relay keeps a membership until it hears otherwise, and a closed
+    // session sends nothing further on its own, so each room is left now;
+    // the leave is not waited for. Observers hear the close as a failure.
+    for (const state of this.#presenceRooms.values()) {
+      void this.#client.request({
+        type: "presence.leave",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        room: state.room,
+      }).catch(() => undefined);
+    }
+    this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
     this.#readyOnConnection = false;
@@ -1562,6 +1902,7 @@ export class SpaceSession {
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
+    this.#accessLossObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -1571,7 +1912,9 @@ export class SpaceSession {
       return;
     }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = "SessionRevokedError";
+    error.name = reason === "unauthorized"
+      ? "AuthorizationError"
+      : "SessionRevokedError";
     this.#terminateSession(error);
   }
 
@@ -1601,6 +1944,18 @@ export class SpaceSession {
     this.#viewCapabilityLostObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
+    this.#endPresenceRooms(error);
+    const observers = [...this.#accessLossObservers];
+    this.#accessLossObservers.clear();
+    if (isPermanentAuthorizationError(error)) {
+      for (const observer of observers) {
+        try {
+          observer(error);
+        } catch (cause) {
+          console.error("session-access-loss subscriber threw:", cause);
+        }
+      }
+    }
   }
 
   /** Terminates the session when its client cannot restore the connection. */
@@ -1614,6 +1969,127 @@ export class SpaceSession {
       return;
     }
     this.#readyOnConnection = false;
+  }
+
+  async #joinPresence(state: PresenceRoomState): Promise<void> {
+    const result = await this.#client.request<PresenceJoinResult>({
+      type: "presence.join",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      room: state.room,
+    });
+    state.participantId = result.participantId;
+    state.participants = new Map(
+      result.participants.map((participant) => [
+        participant.participantId,
+        participant,
+      ]),
+    );
+  }
+
+  /**
+   * Sends the room's record at `revision` once the session is restored and
+   * the current join has settled — a reconnect in progress reopens the
+   * session and rejoins the room, and a publication sent before either has
+   * completed would be refused as not joined. A publication overtaken by a
+   * newer one while it waited is not sent: the relay wants only the latest,
+   * and it refuses a revision that does not advance. A connection error is
+   * not reported, since the reconnect that follows rejoins and republishes;
+   * any other refusal reaches the observers.
+   */
+  #publishPresence(state: PresenceRoomState, revision: number): void {
+    const publication = state.publication;
+    if (publication === null) return;
+    const send = async (): Promise<void> => {
+      // A restore that begins while the join is awaited replaces it, so the
+      // wait is repeated until the join awaited is still the room's.
+      for (;;) {
+        const joined = state.joined;
+        await this.#ensureSessionRestored();
+        await joined;
+        if (state.joined === joined) break;
+      }
+      if (
+        this.#closed || state.revision !== revision ||
+        this.#presenceRooms.get(state.room) !== state
+      ) {
+        return;
+      }
+      await this.#client.request({
+        type: "presence.publish",
+        requestId: crypto.randomUUID(),
+        space: this.space,
+        sessionId: this.#sessionId,
+        room: state.room,
+        revision,
+        name: publication.name,
+        facets: publication.facets,
+      });
+    };
+    void send().catch((error) => {
+      if (isConnectionError(error) || this.#closed) return;
+      this.#deliverPresence(state, {
+        kind: "failure",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+  }
+
+  /**
+   * Rejoins every room after the session is re-established, delivering the
+   * new snapshot and republishing the last record at a fresh revision. The
+   * relay assigned a new participant id with the new connection, so a
+   * snapshot rather than an upsert is what tells the observers.
+   */
+  #rejoinPresenceRooms(): void {
+    for (const state of this.#presenceRooms.values()) {
+      state.joined = this.#joinPresence(state);
+      void state.joined.then(() => {
+        if (this.#presenceRooms.get(state.room) !== state) return;
+        this.#deliverPresence(state, {
+          kind: "snapshot",
+          participantId: state.participantId,
+          participants: [...state.participants.values()],
+        });
+        if (state.publication !== null) {
+          state.revision += 1;
+          this.#publishPresence(state, state.revision);
+        }
+      }).catch((error) => {
+        if (isConnectionError(error) || this.#closed) return;
+        this.#deliverPresence(state, {
+          kind: "failure",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      });
+    }
+  }
+
+  #deliverPresence(state: PresenceRoomState, event: PresenceEvent): void {
+    for (const observer of state.observers) {
+      this.#deliverPresenceTo(observer, event);
+    }
+  }
+
+  #deliverPresenceTo(
+    observer: (event: PresenceEvent) => void,
+    event: PresenceEvent,
+  ): void {
+    try {
+      observer(event);
+    } catch (cause) {
+      console.error("presence observer threw:", cause);
+    }
+  }
+
+  /** Ends every room with `error`, telling each observer once. */
+  #endPresenceRooms(error: Error): void {
+    const rooms = [...this.#presenceRooms.values()];
+    this.#presenceRooms.clear();
+    for (const state of rooms) {
+      this.#deliverPresence(state, { kind: "failure", error });
+    }
   }
 
   #queueBackground(task: Promise<void>): void {
@@ -1705,13 +2181,24 @@ export class SpaceSession {
    * which also holds `send` until every preceding response has been applied;
    * it still claims its place in issue order, so later mutations wait behind
    * it.
+   *
+   * A mutation whose turn comes while its session is disconnected or has not
+   * reopened keeps the turn and waits in it until the restore completes, so
+   * mutations reach the wire in call order across a reconnect. `onTurn` runs
+   * when the turn comes, before that wait. `restoring` marks the watch set
+   * `restore()` re-establishes, which does not queue here at all.
    */
   async #runWatchMutation<R, T>(
     send: () => Promise<R>,
     apply: (result: R) => T,
     sendAfter: "issue" | "apply" = "issue",
+    options: { restoring?: boolean; onTurn?: () => void } = {},
   ): Promise<T> {
     this.#assertOpen();
+    if (options.restoring === true) {
+      return await this.#sendRestoreWatchMutation(send, apply);
+    }
+    const { onTurn } = options;
     if (!this.#concurrentWatchRefresh) {
       // Single-flight (default): send + apply run together, chained on the
       // prior mutation's completion. Nothing is issued until the previous
@@ -1721,8 +2208,16 @@ export class SpaceSession {
       // until that cascade completes — so no handleEffect can mutate the
       // watch view between the response resolving and `apply` running.
       const previous = this.#watchApply;
-      const current = previous.catch(() => undefined).then(async () =>
-        apply(await send())
+      const current: Promise<T> = previous.catch(() => undefined).then(
+        async () => {
+          onTurn?.();
+          while (this.#watchMutationWaitsForRestore()) {
+            await this.#waitForSessionRestore();
+          }
+          this.#assertOpen();
+          this.#lastSentWatchMutation = current;
+          return apply(await send());
+        },
       );
       this.#watchApply = current.then(() => undefined, () => undefined);
       return await current;
@@ -1744,7 +2239,13 @@ export class SpaceSession {
       ? Promise.all([this.#watchIssue, previousApply])
       : this.#watchIssue;
     let response!: Promise<R>;
-    const issued = readyToIssue.catch(() => undefined).then(() => {
+    const issued = readyToIssue.catch(() => undefined).then(async () => {
+      onTurn?.();
+      while (this.#watchMutationWaitsForRestore()) {
+        await this.#waitForSessionRestore();
+      }
+      this.#assertOpen();
+      this.#lastSentWatchMutation = current;
       response = send();
       // Attach a rejection handler immediately: a later request may reject
       // while an earlier mutation is still pending, which would otherwise
@@ -1754,12 +2255,77 @@ export class SpaceSession {
     });
     this.#watchIssue = issued.then(() => undefined, () => undefined);
 
-    const current = Promise.all([
+    const current: Promise<T> = Promise.all([
       previousApply.catch(() => undefined),
       issued,
     ]).then(() => response).then((result) => apply(result));
     this.#watchApply = current.then(() => undefined, () => undefined);
     return await current;
+  }
+
+  /**
+   * Whether a watch mutation sent now would reach a session its server does
+   * not have open: the connection is down, or this session has not reopened
+   * on the current connection. The second is separate because a reconnect
+   * restores its client's sessions one after another, so a session can sit
+   * connected with its restore not yet begun. `#readyOnConnection` is false
+   * only while a reconnect is running, while this session's restore is
+   * pending, or once the session has closed, and `#waitForSessionRestore()`
+   * waits on the first two and throws on the third, so a turn waiting on this
+   * never spins.
+   */
+  #watchMutationWaitsForRestore(): boolean {
+    return !this.#client.isConnected() || !this.#readyOnConnection;
+  }
+
+  /**
+   * Helper for `#runWatchMutation()`, which waits for the reconnect in
+   * progress, if any, and then for this session's restore, if one is pending.
+   * The caller checks `#watchMutationWaitsForRestore()` again afterwards, in
+   * the same synchronous step as its send, since the connection can drop in
+   * between. Throws the session's close error when the session closes, and the
+   * client's error when it gives up reconnecting.
+   */
+  async #waitForSessionRestore(): Promise<void> {
+    this.#assertOpen();
+    await this.#client.restoreConnection();
+    await this.#restoreComplete?.promise;
+  }
+
+  /**
+   * Helper for `restore()`, which sends the watch set it re-establishes
+   * without queuing on the watch-mutation chain. Mutations waiting on that
+   * chain hold their turns until the restore completes, so queuing behind
+   * them would wait on the restore itself; they follow it instead, in call
+   * order. The re-establishment is sent after the last mutation already on the
+   * wire has been applied.
+   */
+  async #sendRestoreWatchMutation<R, T>(
+    send: () => Promise<R>,
+    apply: (result: R) => T,
+  ): Promise<T> {
+    for (;;) {
+      const last = this.#lastSentWatchMutation;
+      await last?.then(() => undefined, () => undefined);
+      if (this.#lastSentWatchMutation === last) break;
+    }
+    this.#throwIfDisconnectedDuringRestore();
+    return apply(await send());
+  }
+
+  /**
+   * Helper for `restore()`, which throws a connection error when the client
+   * is no longer connected. A request `restore()` made then would wait for
+   * the reconnect that is running this restore; the error makes the reconnect
+   * retry instead. Called synchronously before each such request, so no drop
+   * can land between the check and the request's own.
+   */
+  #throwIfDisconnectedDuringRestore(): void {
+    if (!this.#client.isConnected()) {
+      throw toConnectionError(
+        new Error("memory connection lost while restoring the session"),
+      );
+    }
   }
 
   #noteResult(serverSeq: number): void {
@@ -1878,12 +2444,21 @@ export class SpaceSession {
   async #reopen(): Promise<SessionOpenResult> {
     const oldSessionId = this.#sessionId;
     const session = {
+      ...(this.#genesisRoot === undefined
+        ? {}
+        : { genesisRoot: this.#genesisRoot }),
       sessionId: this.#sessionId,
       seenSeq: this.#serverSeq,
       sessionToken: this.#sessionToken,
       // The delegated READ binding survives a route replacement (OW31):
       // a reopen without it would silently drop to envelope-only READ.
       ...(this.#actingAs !== undefined ? { actingAs: this.#actingAs } : {}),
+      // The server takes a session's ceiling from the descriptor of its
+      // LAST open: a reopen without it would leave the session reading
+      // unbounded from the first dropped connection on.
+      ...(this.#readCeiling !== undefined
+        ? { readCeiling: this.#readCeiling }
+        : {}),
     };
     const auth = await runWithAbortSignal(
       this.#routeSignal,
@@ -1899,7 +2474,10 @@ export class SpaceSession {
     const restored = await runWithAbortSignal(
       this.#routeSignal,
       "memory session route cancelled",
-      () => this.#client.openSession(this.space, session, auth, holdings),
+      () => {
+        this.#throwIfDisconnectedDuringRestore();
+        return this.#client.openSession(this.space, session, auth, holdings);
+      },
     );
     const sessionChanged = restored.sessionId !== oldSessionId;
     const sessionReplaced = sessionChanged || restored.resumed !== true;
@@ -2309,13 +2887,30 @@ export const loopback = (server: Server): Transport => {
   let closed = false;
   const queue: string[] = [];
   let turn: ArmedTurn | null = null;
+  // Frames queued and frames handed over since the transport opened. A
+  // `delivered()` caller waits for `handedOver` to reach the `queued` it saw,
+  // so frames queued after its call never extend its wait.
+  let queued = 0;
+  let handedOver = 0;
+  // Callers of `delivered()`, in call order and so in order of their targets.
+  const deliveryWaiters: { target: number; resolve: () => void }[] = [];
+  const releaseWaiters = () => {
+    while (
+      deliveryWaiters.length > 0 &&
+      (closed || deliveryWaiters[0].target <= handedOver)
+    ) {
+      deliveryWaiters.shift()!.resolve();
+    }
+  };
   const drainOne = () => {
     turn = null;
     if (closed) return;
     const frame = queue.shift();
     if (frame === undefined) return;
+    handedOver++;
     receiver(frame);
     if (queue.length > 0) schedule();
+    releaseWaiters();
   };
   const schedule = () => {
     turn ??= armTurn(drainOne);
@@ -2323,6 +2918,7 @@ export const loopback = (server: Server): Transport => {
   const connection = server.connect((message) => {
     if (closed) return;
     queue.push(encodeMemoryBoundary(message));
+    queued++;
     schedule();
   });
   return {
@@ -2334,6 +2930,7 @@ export const loopback = (server: Server): Transport => {
       turn?.cancel();
       turn = null;
       queue.length = 0;
+      releaseWaiters();
       connection.close();
       return Promise.resolve();
     },
@@ -2341,6 +2938,12 @@ export const loopback = (server: Server): Transport => {
       receiver = next;
     },
     setCloseReceiver() {},
+    delivered() {
+      if (closed || handedOver >= queued) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      deliveryWaiters.push({ target: queued, resolve });
+      return promise;
+    },
   };
 };
 
@@ -2394,7 +2997,7 @@ const requireSessionOpenAuthMetadata = (
       "memory server did not provide session.open authentication metadata",
     );
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isObjectNotArray(value)) {
     throw protocolError(
       "memory server sent malformed session.open authentication metadata",
     );
@@ -2419,11 +3022,7 @@ const requireSessionOpenAuthMetadata = (
       "memory server sent malformed session.open authentication metadata",
     );
   }
-  if (
-    typeof sessionOpen.challenge !== "object" ||
-    sessionOpen.challenge === null ||
-    Array.isArray(sessionOpen.challenge)
-  ) {
+  if (!isObjectNotArray(sessionOpen.challenge)) {
     throw protocolError(
       "memory server sent malformed session.open authentication metadata",
     );
@@ -2455,52 +3054,50 @@ const parseHelloOk = (
   flags: MemoryProtocolFlags;
   sessionOpen?: unknown;
 } | null => {
-  if (typeof message !== "object" || message === null) {
+  if (!isPlainObject(message)) {
     return null;
   }
-  const obj = message as {
-    type?: unknown;
-    protocol?: unknown;
-    flags?: unknown;
-    sessionOpen?: unknown;
-  };
-  if (obj.type !== "hello.ok" || obj.protocol !== MEMORY_PROTOCOL) {
+  if (message.type !== "hello.ok" || message.protocol !== MEMORY_PROTOCOL) {
     return null;
   }
-  const parsed = parseMemoryProtocolFlags(obj.flags);
+  const parsed = parseMemoryProtocolFlags(message.flags);
   if (parsed === null) {
     return null;
   }
-  return { flags: parsed, sessionOpen: obj.sessionOpen };
+  return { flags: parsed, sessionOpen: message.sessionOpen };
 };
 
 const isSessionEffect = (
   message: unknown,
 ): message is SessionEffectMessage => {
-  return typeof message === "object" && message !== null &&
-    (message as { type?: string }).type === "session/effect";
+  return isPlainObject(message) && message.type === "session/effect";
 };
 
 const isSessionRevoked = (
   message: unknown,
 ): message is SessionRevokedMessage => {
-  if (typeof message !== "object" || message === null) return false;
-  const { type, space, sessionId, reason } = message as {
-    type?: string;
-    space?: string;
-    sessionId?: string;
-    reason?: string;
-  };
+  if (!isPlainObject(message)) return false;
+  const { type, space, sessionId, reason } = message;
   return type === "session/revoked" &&
     typeof space === "string" &&
     typeof sessionId === "string" &&
     (reason === "taken-over" || reason === "unauthorized");
 };
 
+const isPresencePush = (
+  message: unknown,
+): message is PresenceUpsertMessage | PresenceRemoveMessage => {
+  if (!isPlainObject(message)) return false;
+  const { type, space, sessionId, room } = message;
+  return (type === "presence/upsert" || type === "presence/remove") &&
+    typeof space === "string" &&
+    typeof sessionId === "string" &&
+    typeof room === "string";
+};
+
 const isResponse = (message: unknown): message is ResponseMessage<unknown> => {
-  return typeof message === "object" && message !== null &&
-    (message as { type?: string }).type === "response" &&
-    typeof (message as { requestId?: string }).requestId === "string";
+  return isPlainObject(message) && message.type === "response" &&
+    typeof message.requestId === "string";
 };
 
 const isEmptySync = (sync: SessionSync): boolean =>

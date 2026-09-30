@@ -7,6 +7,7 @@
 // the on-disk source with the server, and link it into the target field.
 
 import { createRef } from "@commonfabric/runner";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 const SQLITE_SCHEME = "sqlite:";
 
@@ -78,7 +79,7 @@ export interface DiskHandleValue {
  * to nothing, silently, so the repair refuses instead.
  */
 function inlineTables(id: string, tables: unknown): Record<string, unknown> {
-  if (tables === null || typeof tables !== "object" || Array.isArray(tables)) {
+  if (!isObjectNotArray(tables)) {
     return {};
   }
   let copy: unknown;
@@ -91,7 +92,7 @@ function inlineTables(id: string, tables: unknown): Record<string, unknown> {
         `labels: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (copy === null || typeof copy !== "object" || Array.isArray(copy)) {
+  if (!isObjectNotArray(copy)) {
     throw new Error(
       `cf piece link: the contract on handle ${id} did not copy as an ` +
         `object, so the handle is left as it stands rather than re-seeded ` +

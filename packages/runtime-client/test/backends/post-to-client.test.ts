@@ -105,8 +105,8 @@ describe("post-to-client", () => {
   describe("a message the encoding refuses", () => {
     it("answers a reply as a failure, so the request settles", () => {
       // The client is awaiting this `msgId`. Dropping the message would leave
-      // that request hanging until it times out, so it is answered rather
-      // than reported.
+      // that request pending until disposal, so it is answered rather than
+      // reported.
       const { posted, restore } = capturing();
 
       try {

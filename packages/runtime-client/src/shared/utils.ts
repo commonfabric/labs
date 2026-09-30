@@ -21,7 +21,26 @@ export function describeFailure(error: unknown): string {
   }
 }
 
-/** A stored cell's address, excluding schema and display-label metadata. */
+/**
+ * A stored cell's address, excluding schema and display-label metadata.
+ *
+ * All four fields are needed to tell two cells apart: an id alone names a
+ * document in every space that stores it, one id in two scopes is two
+ * documents, and two paths into one document are two cells.
+ *
+ * The two exclusions are what separate this from `CellHandle.equals()`, which
+ * weighs `cfcLabelView` as well. That view is a display copy which drifts
+ * while CFC settles, so two handles on one cell can carry different views;
+ * a caller asking whether it has the same cell wants those to agree, and
+ * weighing the view would have it decide they are different cells for as
+ * long as the drift lasted. Schema is out for the converse reason:
+ * `asSchema()` answers with another handle on the same cell, and a lens over
+ * a cell is not a different cell. Equality that weighs either belongs to a
+ * caller comparing HANDLES; this answers about cells.
+ *
+ * Structural rather than joined text, so a path segment holding a separator
+ * cannot spell another cell's key.
+ */
 export function cellRefToIdentityKey(cell: CellRef): string {
   return JSON.stringify({
     space: cell.space,

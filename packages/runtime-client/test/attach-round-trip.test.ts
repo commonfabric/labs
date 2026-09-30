@@ -55,6 +55,7 @@ function clientOptions(as: Identity): RuntimeAttachOptions {
  */
 function workerSide() {
   const requests: Array<{ type: RequestType; client: WorkerClient }> = [];
+  const asserted: RuntimeSecurityContext[] = [];
   const running: RuntimeSecurityContext = {
     identity: identity.did(),
     apiUrl: "http://attach-round-trip.test/",
@@ -63,8 +64,9 @@ function workerSide() {
   };
   const processor = {
     isDisposed: () => false,
-    assertAttachable: (asserted: RuntimeSecurityContext) => {
-      if (asserted.identity === running.identity) return;
+    assertAttachable: (context: RuntimeSecurityContext) => {
+      asserted.push(context);
+      if (context.identity === running.identity) return;
       throw new Error(
         "Attach refused: the asserted security context differs from the " +
           "runtime's at `identity`.",
@@ -84,7 +86,7 @@ function workerSide() {
     initializeRuntime: () =>
       Promise.resolve(processor as unknown as RuntimeProcessor),
   });
-  return { clients, requests };
+  return { clients, requests, asserted };
 }
 
 /** A registry with its runtime already standing. */
@@ -117,6 +119,57 @@ function joiningSide(clients: RuntimeClients) {
 }
 
 describe("attach-round-trip", () => {
+  it("reports the trust snapshot actor on an attached client", async () => {
+    const worker = await runningWorker();
+    const client = await RuntimeClient.attach(
+      joiningSide(worker.clients),
+      {
+        ...clientOptions(identity),
+        trustSnapshot: {
+          id: "delegated",
+          actingPrincipal: otherIdentity.did(),
+        },
+      },
+    );
+    try {
+      expect(client.actingPrincipalDid()).toBe(otherIdentity.did());
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("keeps a page setting on the client and sends none of it to the runtime", async () => {
+    const worker = await runningWorker();
+    const client = await RuntimeClient.attach(
+      joiningSide(worker.clients),
+      { ...clientOptions(identity), iframeOuterFrameUrl: "/outer-frame" },
+    );
+    try {
+      expect(client.iframeOuterFrameUrl()).toBe("/outer-frame");
+      // What the runtime was asked to agree to is posture, and where a page
+      // serves a frame is none of it: a runtime two pages share would
+      // otherwise have to hold one page's answer for both.
+      expect(worker.asserted).toHaveLength(1);
+      expect("iframeOuterFrameUrl" in worker.asserted[0]).toBe(false);
+      expect(JSON.stringify(worker.asserted[0])).not.toContain("outer-frame");
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("says a page that named no outer frame serves none", async () => {
+    const worker = await runningWorker();
+    const client = await RuntimeClient.attach(
+      joiningSide(worker.clients),
+      clientOptions(identity),
+    );
+    try {
+      expect(client.iframeOuterFrameUrl()).toBeUndefined();
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("joins a running runtime over a port and carries the joining client", async () => {
     const worker = await runningWorker();
     const client = await RuntimeClient.attach(

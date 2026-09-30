@@ -17,6 +17,7 @@
 
 import type { PatternInstantiation } from "@commonfabric/runner";
 import { PatternManager } from "@commonfabric/runner";
+import type { NormalizedFullLink } from "@commonfabric/runner/shared";
 import { comparableEntityHash } from "./fabric-observations.ts";
 
 export interface FabricInstantiationRecord {
@@ -35,6 +36,13 @@ export interface FabricInstantiationRecord {
    * which is what an invocation matches its own piece and result against.
    */
   cell: string;
+
+  /**
+   * The link to that same result cell, for an invocation that needs to READ
+   * what the pattern produced rather than only identify it. A hash answers
+   * which cell; this answers what is in it.
+   */
+  link: NormalizedFullLink;
 }
 
 export interface FabricPatternInstantiations {
@@ -85,6 +93,7 @@ export const createFabricInstantiationRecorder =
           identity: instantiation.identity,
           symbol: instantiation.symbol,
           cell,
+          link: instantiation.cell,
         };
         records.push(record);
         if (records.length > BUFFER_LIMIT) {

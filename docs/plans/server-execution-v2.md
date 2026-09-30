@@ -90,7 +90,7 @@ pre-hygiene emergency rollback and can be superseded by that smaller follow-up
 when appropriate.**
 
 **Delta 2026-08-28, last updated 2026-08-29 (the FLIP PR —
-[#6535](https://github.com/commontoolsinc/labs/pull/6535), now MERGED; the
+[#6535](https://github.com/commonfabric/labs/pull/6535), now MERGED; the
 soak started at its merge): `SERVER_EXECUTION_DEFAULT_ENABLED` →
 `true`. This is the flip's execution record; it does not establish the current
 OW28 gate verdict. Its recorded checks included the
@@ -106,7 +106,7 @@ longer leaked, the CLI health probes bounded, and the CLI lane's gate
 now cross-checking `cf`'s resolved arm against the server's published
 one). The OFF-world half of those same findings landed separately on
 main as
-[#6545](https://github.com/commontoolsinc/labs/pull/6545) — the GitHub
+[#6545](https://github.com/commonfabric/labs/pull/6545) — the GitHub
 connector host adopting the deployment's posture, and the pattern
 shard selectors failing loudly on an empty selection — which landed before
 the flip. The PR carries,
@@ -398,7 +398,7 @@ every entry, not only the file that provoked it. Both campaigns ran at main
 97xx port + ON posture probe per run, ensure defaulting ON, toolshed
 self-sourced, quiet and loaded interleaved; the probe was head `95f313835`
 (both entries and the default-app guard removed in one commit), CI run
-[33138358110](https://github.com/commontoolsinc/labs/actions/runs/33138358110)
+[33138358110](https://github.com/commonfabric/labs/actions/runs/33138358110)
 — 8 of 10 ON pattern shards green, red on exactly the two shards carrying
 the two probed files.
 **default-app's reload STEP: 10/10 local AND its CI probe of the step
@@ -695,7 +695,7 @@ followed as #6156 `9d989c0c1`); the phase is the register's OW rows
 
 Prior state (kept for the trail — the paragraphs below describe the
 land itself): **LAND-OFF — the integration PR was
-[#6096](https://github.com/commontoolsinc/labs/pull/6096)
+[#6096](https://github.com/commonfabric/labs/pull/6096)
 (`claude/server-exec-v2-land-off` = the train tip `45cca4167` + the
 merge of `origin/main` `bbcc7a348` + the reconciliation + the catch-up
 merges), and its FIRST CI RUN — the stack's first-ever CI execution —
@@ -780,7 +780,7 @@ ordered gates (Phase 7 task 1), which no longer gate landing.
   the dossier is the PR's Flag 1; the invariant RULED 2026-08-18 and
   the late-echo rule RATIFIED (below); the arrival gate KEEP.
 - **The tuning trio (#5991) — DONE, ledger comment POSTED 2026-08-18
-  (<https://github.com/commontoolsinc/labs/pull/5991#issuecomment-5337935897>;
+  (<https://github.com/commonfabric/labs/pull/5991#issuecomment-5337935897>;
   the second review round's report recovered on-branch beside the
   closeout, `stage-c/stage-c-tuning-independent-review.md`)**: T1 one CFC
   probe per commit; T2 retirement on arrival + the late-echo rule; T3
@@ -1091,7 +1091,7 @@ stays the owner's;
 the owner — the W4 readout carried it, and the owner approved the
 landing strategy; (7) land the train on main with
 the flag OFF — **IN PROGRESS 2026-08-21: integration PR
-[#6096](https://github.com/commontoolsinc/labs/pull/6096) OPEN (one
+[#6096](https://github.com/commonfabric/labs/pull/6096) OPEN (one
 merge of main into the train tip, both intents preserved; the
 reconciliation report beside the closeout carries the ledger,
 findings, and verification), and the FIRST-ON-CI GATE is in
@@ -1821,7 +1821,9 @@ Tasks:
       sessions refuse loudly, and the deterministic nonce
       (`effectIntentNonce(eventId, instance)`) is what the flag-ON
       client's OPTIMISTIC enactment records so the authoritative
-      intent converges without re-enacting; the client half
+      intent converges without re-enacting — and what stands that
+      optimistic enactment down when the intent got there first, so
+      the journey navigates once in either order; the client half
       (`speculation/effects-channel.ts`) subscribes per space, enacts
       unacked intents, re-reads on resubscribe (the LT8 reload
       journey), and acks by nonce.
@@ -2061,7 +2063,8 @@ Tasks:
       OFF baseline by construction (EXPERIMENTAL_OPTIONS.md). CI
       (testing.md §2) now uses stable `default` and `opposite` roles:
       default follows the constant with its shell define unset, and
-      opposite is the explicit inverse on `build-toolshed-opposite`.
+      opposite is the explicit inverse, which the `toolshed-baked-opposite`
+      capability serves and the `binaries-opposite` suite builds.
       Both postures are verified before each suite: `/api/meta` must match
       the resolved role and `/api/health/stats.servingLoop` must be present
       exactly on the ON arm. Deno-side test clients declare the posture from
@@ -2137,7 +2140,7 @@ Tasks:
       via posture adoption; `PiecesController` hosts on the default
       package/pattern lanes)*;
       then (6) the flip PR, and the soak starts at ITS merge — **DONE:
-      [#6535](https://github.com/commontoolsinc/labs/pull/6535) is MERGED;
+      [#6535](https://github.com/commonfabric/labs/pull/6535) is MERGED;
       the default has since been a data-only toggle, each flip a dated
       delta in the coordination block above (whichever arm is not the
       default stays selectable explicitly).
@@ -2164,10 +2167,11 @@ Tasks:
       the flip: BUILT 2026-08-21 (the register's OW31 row).
 - [ ] Retire the flag; OFF path removed; `EXPERIMENTAL_OPTIONS.md` entry
       closed out — **SPLIT OUT: the post-soak removal PR** (named here as
-      the flip's follow-up; it also removes the OFF regression-guard CI
-      lanes and the opposite-built binary job —
-      `build-toolshed-opposite` — while the `deployed-topology-gate` job
-      STAYS: it gates the surviving default posture, not the OFF path).
+      the flip's follow-up; it also removes the OFF regression-guard suites of
+      the test topology (the `*-opposite` suites, the `binaries-opposite` suite
+      among them) and the `toolshed-baked-opposite` capability, while the
+      `deployed-topology` suite STAYS: it gates the surviving default posture,
+      not the OFF path).
 - [ ] Archive this plan to `docs/history/plans/` per the lifecycle
       (close-out, after the soak and the removal PR).
 
@@ -2179,10 +2183,10 @@ Success criteria:
       been EMPTY across all four suites since #6528, and the flip PR
       swaps the lane roles: the DEFAULT lanes ARE the ON arm and run the
       full suite carrying that empty list. What stays untrue is
-      ON-ONLY — the explicit-`false` OFF regression-guard lanes are the
-      soak's rollback lever and run beside them by design. They retire
-      with the post-soak removal PR, which is when this box can be
-      ticked.)
+      ON-ONLY — the `*-opposite` suites, the explicit-`false` OFF
+      regression guard, are the soak's rollback lever and run beside them
+      by design. They retire with the post-soak removal PR, which is when
+      this box can be ticked.)
 - [ ] Cross-user propagation beats the client-computed baseline on the
       byte-identical workloads (the §1 "faster, not tolerably slower"
       requirement). (NOT ticked — UNMEASURED: the measurement leg is

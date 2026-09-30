@@ -72,8 +72,8 @@ describe("generate-commonfabric-types", () => {
       // The pattern compiler resolves a relative specifier by path-join and a
       // bare one not at all, so a bare specifier surviving into the generated
       // file names a module the sandbox cannot load. Parsed rather than
-      // grepped: `FABRIC_SPECIAL_OBJECT_BRAND`'s own value is the string
-      // "@commonfabric/FabricSpecialObject", which a substring test reads as a
+      // grepped: the interned-symbol brands are made from strings such as
+      // "@commonfabric/FabricPrimitive", which a substring test reads as a
       // specifier.
       const source = ts.createSourceFile(
         "commonfabric.d.ts",

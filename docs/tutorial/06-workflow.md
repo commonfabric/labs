@@ -192,9 +192,10 @@ deno task cf piece set-slug myslug <ID>                   # pretty URL
 ```
 
 A reference names the target, and one grammar covers every part of the name:
-`/[@<space>/]<piece>[@<scope>][/<path>]`. The space is a name or a DID, the
-piece a slug or a handle, so `/@my-space/tracker/items` and
-`/@did:key:.../of:fid1:.../items` are the same shape. A reference carrying its
+`//<space>/<piece>[#member][@qualifier…][/<path>]`. The space is a name or a
+DID, the piece a slug or a handle, so `//my-space/tracker@space/items` and
+`//did:key:.../of:fid1:...@space/items` are the same shape. Within the current
+space, `/tracker/items` omits the space and inherits the context scope. A reference carrying its
 space needs no `-s` beside it: the embedded space supplies the target, and a
 `-s` that disagrees with it is refused. So an address copied off one command's
 output drives the next command unchanged, even from a shell configured for a

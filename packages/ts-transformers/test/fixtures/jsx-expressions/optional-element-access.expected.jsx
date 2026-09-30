@@ -18,12 +18,12 @@ const __cfLift_1 = __cfHelpers.lift<{
     properties: {
         list: {
             anyOf: [{
+                    type: "undefined"
+                }, {
                     type: "array",
                     items: {
                         type: "string"
                     }
-                }, {
-                    type: "undefined"
                 }],
             asCell: ["readonly"]
         }

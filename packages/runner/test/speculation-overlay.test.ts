@@ -23,12 +23,16 @@
 //   kind still enacts (optimistic navigation, speculation.md §2);
 // - the runner's own piece-start instantiation reads the DURABLE view,
 //   so its bookkeeping commit never names an overlay layer and the
-//   piece keeps the registration its event handlers hang off.
+//   piece keeps the registration its event handlers hang off, and a
+//   list coordinator's resume seed reads it for the same reason — with
+//   nothing to re-derive behind it, a refused seed strands the
+//   coordinator on a container that never arrives.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import { Logger, type LogMessage } from "@commonfabric/utils/logger";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -42,10 +46,19 @@ import type {
 import { ExecutorHost } from "../src/executor/host.ts";
 import { waitForSettled } from "../src/executor/watermark.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { seedResultContainerWhenPullSettles } from "../src/builtins/list-result-container-seed.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitReplica,
+} from "./support/serving-waits.ts";
+import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   SpeculationOverlayDestination,
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
+import { EffectsChannel } from "../src/speculation/effects-channel.ts";
 import {
   ignoreReadForScheduling,
   internalVerifierRead,
@@ -63,8 +76,8 @@ import { isTerminalRejection } from "../src/storage/rejection.ts";
 import type { PostCommitSideEffect } from "../src/cfc/types.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
-import type { Cell } from "../src/cell.ts";
-import { waitUntil } from "./support/wait-until.ts";
+import { type Cell, cellTx, sendEvent } from "../src/cell.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const spaceSigner = await Identity.fromPassphrase("speculation overlay space");
 const space = spaceSigner.did() as MemorySpace;
@@ -72,6 +85,21 @@ const serviceSigner = await Identity.fromPassphrase(
   "speculation overlay service",
 );
 const aliceSigner = await Identity.fromPassphrase("speculation overlay alice");
+
+/**
+ * A logger that keeps each report as the key it was filed under and the name
+ * of the error it carried, so a test that expects none names the refusal it
+ * got instead of only that something was reported.
+ */
+class RecordingLogger extends Logger {
+  readonly reports: Array<{ key: string; error?: string }> = [];
+
+  override warn(key: string, ...messages: LogMessage[]): void {
+    const carried = (messages[1] as { error?: { name?: string } } | undefined)
+      ?.error;
+    this.reports.push({ key, ...(carried ? { error: carried.name } : {}) });
+  }
+}
 
 describe("Phase 2 speculation overlay", () => {
   let server: MemoryV2Server.Server;
@@ -107,14 +135,25 @@ describe("Phase 2 speculation overlay", () => {
         };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      onActivationSettled: (activatedSpace, outcome) =>
+        activations.record({ space: activatedSpace, outcome }),
     });
 
+  /** Resolves once `activatedSpace` has an ACTIVE tenure — activation
+   * finishes on no admission or session edge of its own. */
+  const activated = (activatedSpace: MemorySpace): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === activatedSpace && entry.outcome === "active"
+    );
+
+  let activations: ArrivalLog<{ space: string; outcome: string }>;
   let onServingRuntime: ((runtime: Runtime) => Promise<void>) | undefined;
 
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     _servingRuntime = undefined;
     onServingRuntime = undefined;
+    activations = new ArrivalLog();
   });
 
   afterEach(async () => {
@@ -237,9 +276,11 @@ describe("Phase 2 speculation overlay", () => {
 
     // The ECHO: the client's speculative run rendered 42 with no server
     // executor in existence.
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the speculative echo to render",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     const overlay = clientRuntime.speculationOverlay;
     expect(overlay).toBeDefined();
@@ -277,19 +318,18 @@ describe("Phase 2 speculation overlay", () => {
         "spec-result",
         served.resultSchema,
       );
-      for (let attempt = 0;; attempt++) {
-        await argument.sync();
-        await result.sync();
-        const tx = runtime.edit();
-        runtime.run(tx, served, argument, result);
-        const committed = await tx.commit();
-        if (committed.error === undefined) break;
-        if (attempt >= 4) {
-          throw new Error(
-            `serving pattern run failed: ${committed.error.message}`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      await argument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, served, argument, result);
+      const committed = await tx.commit();
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
       }
       await runtime.idle();
     };
@@ -298,21 +338,18 @@ describe("Phase 2 speculation overlay", () => {
     clientArg.withTx(pokeTx).set({ n: 8 });
     expect((await pokeTx.commit()).error).toBeUndefined();
     const pokeSeq = Engine.serverSeq(engine);
-    await waitUntil(
-      () => host!.spaceServer(space)?.active === true,
-      "space activation",
-    );
-    await waitForSettled(clientRuntime, space, pokeSeq, {
-      timeoutMs: 30_000,
-    });
+    await activated(space);
+    await waitForSettled(clientRuntime, space, pokeSeq);
 
     // Retirement (speculation.md §4): the covering watermark retires
     // every entry; the STORE value renders through the same path.
     await overlay!.waitForSpaceQuiescence(space);
     expect(overlay!.entryCount(space)).toBe(0);
-    await waitUntil(
-      () => clientResult.key("total").get() === 56,
-      "the authoritative value to render",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 56,
+      { stuckLabel: "the authoritative total to render as 56" },
     );
 
     // The single-deriver envelope (testing.md §4): every derived-class
@@ -402,15 +439,12 @@ describe("Phase 2 speculation overlay", () => {
     result.key("bump").send({});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => {
-        const records = Engine.selectCommitsSince(engine, {
-          fromSeq: before,
-        });
-        return records.some((record) => record.class === "authored");
-      },
-      "the authored event-append commit",
-    );
+    await awaitAdmitted(server, () => {
+      const records = Engine.selectCommitsSince(engine, {
+        fromSeq: before,
+      });
+      return records.some((record) => record.class === "authored");
+    });
     // The store's ONLY new state is the event: the sidecar entry is
     // stamped from the authenticated envelope (firedAt = the firing
     // session — protocol.md §2's authored event-append row), and the
@@ -429,12 +463,11 @@ describe("Phase 2 speculation overlay", () => {
     expect(afterFire[0].class).toBe("authored");
     // The ECHO: the handler ran locally and its write renders through
     // the overlay — a live entry tagged with the fired event's id.
-    await waitUntil(
-      () => {
-        const value = argument.key("value").get() as number | undefined;
-        return (value ?? 0) >= 1;
-      },
-      "the handler echo to render",
+    await waitForCellValue(
+      clientRuntime,
+      argument.key("value"),
+      (value: number | undefined) => (value ?? 0) >= 1,
+      { stuckLabel: "the argument's value to take the handler's write" },
     );
     expect(overlay!.entryCount(space)).toBeGreaterThanOrEqual(1);
     // The durable half of the doc the handler wrote did NOT change:
@@ -506,26 +539,16 @@ describe("Phase 2 speculation overlay", () => {
       // Arm 1 — REFUSED at admission: the callback's tx reads ERROR.
       replica.enqueueEventAppend = () =>
         Promise.resolve({ delivered: false, refused: "admission said no" });
+      const refusedAcks = new ArrivalLog<void>();
       let refusedStatus:
         | { status: string; error?: { message?: string } }
         | undefined;
-      (result.key("bump") as unknown as {
-        send(
-          value: unknown,
-          onCommit?: (
-            tx: {
-              status(): { status: string; error?: { message?: string } };
-            },
-          ) => void,
-        ): unknown;
-      }).send({}, (ackTx) => {
+      sendEvent(result.key("bump"), {}, (ackTx) => {
         refusedStatus = ackTx.status();
+        refusedAcks.record();
       });
       await clientRuntime.idle();
-      await waitUntil(
-        () => refusedStatus !== undefined,
-        "the refused ack to settle",
-      );
+      await refusedAcks.reached(1);
       expect(refusedStatus!.status).toBe("error");
       expect(refusedStatus!.error?.message).toContain("admission said no");
 
@@ -534,13 +557,12 @@ describe("Phase 2 speculation overlay", () => {
       // ran: handler dispatch is local either way.)
       replica.enqueueEventAppend = () => new Promise(() => {});
       let heldFired = false;
-      (result.key("bump") as unknown as {
-        send(value: unknown, onCommit?: (tx: unknown) => void): unknown;
-      }).send({}, () => {
+      sendEvent(result.key("bump"), {}, () => {
         heldFired = true;
       });
-      await clientRuntime.idle();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // The ack fires from the append's own commit, which the held
+      // enqueue never issues; a stray one would be this runtime's work,
+      // and the drain runs it.
       await clientRuntime.idle();
       expect(heldFired).toBe(false);
     } finally {
@@ -557,11 +579,13 @@ describe("Phase 2 speculation overlay", () => {
     } as unknown as Runtime;
     const destination = new SpeculationOverlayDestination(runtime);
     const flushed: string[] = [];
+    const flushArrivals = new ArrivalLog<string>();
     const effectOf = (kind: string): PostCommitSideEffect => ({
       id: `${kind}:1`,
       kind,
       flush: () => {
         flushed.push(kind);
+        flushArrivals.record(kind);
       },
     });
     const derivationTx = {} as unknown as IExtendedStorageTransaction;
@@ -575,11 +599,7 @@ describe("Phase 2 speculation overlay", () => {
       effectOf("sqlite-query"),
     ]);
     expect(owned).toBe(true);
-    await waitUntil(
-      () => flushed.length === 1,
-      "the navigateTo enactment to flush",
-      2_000,
-    );
+    await flushArrivals.reached(1);
     expect(flushed).toEqual(["navigateTo"]);
 
     // An event-handler echo follows the SAME egress rule since Phase 3
@@ -600,6 +620,175 @@ describe("Phase 2 speculation overlay", () => {
     expect(
       destination.deferSealedEffects(bookkeepingTx, [effectOf("fetch")]),
     ).toBe(false);
+  });
+
+  // The two convergence tests below drive the destination directly: the
+  // allowlist decision and the nonce arbitration are the units under
+  // test, and neither needs a server.
+
+  const destinationWithChannel = (): {
+    destination: SpeculationOverlayDestination;
+    channel: EffectsChannel;
+  } => {
+    const runtime = {
+      storageManager: { open: () => ({ replica: {} }) },
+    } as unknown as Runtime;
+    const channel = new EffectsChannel(runtime);
+    (runtime as { effectsChannel?: EffectsChannel }).effectsChannel = channel;
+    return {
+      destination: new SpeculationOverlayDestination(runtime),
+      channel,
+    };
+  };
+
+  const navigateEffect = (
+    nonce: string,
+    flush: () => void,
+  ): PostCommitSideEffect => ({
+    id: `navigateTo:${nonce}`,
+    kind: "navigateTo",
+    nonce,
+    flush,
+  });
+
+  it("converges an optimistic `navigateTo` on an enactment the effects channel already made (protocol.md §5; T2.Q7)", async () => {
+    // Convergence runs both ways. The overlay records an optimistic
+    // enactment's nonce on the channel so a later authoritative
+    // delivery converges on it; this is the other direction — the
+    // authoritative intent reaching the channel first, which happens
+    // whenever the served round trip beats the client's own
+    // speculative run of the same handler. Enacting here navigates a
+    // second time for one journey, and to the client's speculative
+    // target rather than the served one, because the overlay dropped
+    // the writes that target's piece would have needed.
+    const { destination, channel } = destinationWithChannel();
+    const enacted = "nav:already-enacted";
+    // What the channel's authoritative arm does with an arriving
+    // intent: take the nonce and navigate.
+    expect(await channel.enactOnce(enacted, () => Promise.resolve())).toBe(
+      true,
+    );
+
+    // Both effects seal in one transaction, so the second one's flush
+    // is an ordered barrier: the loop decides the first before it
+    // reaches the second. A fresh nonce is a different journey, and
+    // still enacts.
+    const fresh = "nav:not-yet-enacted";
+    const flushed: string[] = [];
+    const reachedFresh = Promise.withResolvers<void>();
+    const derivationTx = {} as unknown as IExtendedStorageTransaction;
+    stampSpeculationRunContext(derivationTx, {
+      actionId: "spec-converge-on-authoritative",
+      kind: "derivation",
+    });
+    expect(
+      destination.deferSealedEffects(derivationTx, [
+        navigateEffect(enacted, () => {
+          flushed.push(enacted);
+        }),
+        navigateEffect(fresh, () => {
+          flushed.push(fresh);
+          reachedFresh.resolve();
+        }),
+      ]),
+    ).toBe(true);
+    await reachedFresh.promise;
+    expect(flushed).toEqual([fresh]);
+  });
+
+  it("enacts an optimistic `navigateTo` whose in-flight enactment failed, and stands down for one that succeeds (protocol.md §5)", async () => {
+    // A record taken before its enactment settles is a prediction, not
+    // a fact: a failed enactment retracts its record and leaves the
+    // durable entry unacked for a later delivery. Standing down on a
+    // prediction that did not come true loses the navigation, since a
+    // quiet space commits nothing else to deliver that entry on.
+    const { destination, channel } = destinationWithChannel();
+    const failing = "nav:in-flight-fails";
+    const succeeding = "nav:in-flight-succeeds";
+    const failure = Promise.withResolvers<void>();
+    const success = Promise.withResolvers<void>();
+    const authoritative = Promise.all([
+      channel.enactOnce(failing, () => failure.promise),
+      channel.enactOnce(succeeding, () => success.promise),
+    ]);
+
+    const flushed: string[] = [];
+    const reachedBarrier = Promise.withResolvers<void>();
+    const derivationTx = {} as unknown as IExtendedStorageTransaction;
+    stampSpeculationRunContext(derivationTx, {
+      actionId: "spec-converge-in-flight",
+      kind: "derivation",
+    });
+    expect(
+      destination.deferSealedEffects(derivationTx, [
+        navigateEffect(failing, () => {
+          flushed.push(failing);
+        }),
+        navigateEffect(succeeding, () => {
+          flushed.push(succeeding);
+        }),
+        navigateEffect("nav:barrier", () => {
+          reachedBarrier.resolve();
+        }),
+      ]),
+    ).toBe(true);
+    // Both enactments are still in flight, so the overlay is waiting on
+    // the first rather than assuming its outcome.
+    expect(flushed).toEqual([]);
+
+    failure.reject(new Error("enactment failed (test-injected)"));
+    success.resolve();
+    expect(await authoritative).toEqual([false, true]);
+    await reachedBarrier.promise;
+    expect(flushed).toEqual([failing]);
+  });
+
+  it("records the nonce before the enactment runs, so work that enacts synchronously cannot be enacted twice (protocol.md §5)", async () => {
+    // The record has to be installed before the callback can observe
+    // it. A navigation callback that enacts synchronously, or that
+    // re-enters a delivery before returning its promise, meets the
+    // record rather than a gap; a callback that throws synchronously
+    // resolves as a failed enactment rather than escaping as a throw.
+    const { destination, channel } = destinationWithChannel();
+    const nonce = "nav:synchronous";
+    const seen: boolean[] = [];
+    const enacted = await channel.enactOnce(nonce, () => {
+      // What a re-entrant delivery would find mid-enactment.
+      seen.push(channel.hasEnacted(nonce));
+      return Promise.resolve();
+    });
+    expect(enacted).toBe(true);
+    expect(seen).toEqual([true]);
+
+    const flushed: string[] = [];
+    const reachedBarrier = Promise.withResolvers<void>();
+    const derivationTx = {} as unknown as IExtendedStorageTransaction;
+    stampSpeculationRunContext(derivationTx, {
+      actionId: "spec-record-before-work",
+      kind: "derivation",
+    });
+    expect(
+      destination.deferSealedEffects(derivationTx, [
+        navigateEffect(nonce, () => {
+          flushed.push(nonce);
+        }),
+        navigateEffect("nav:barrier", () => {
+          reachedBarrier.resolve();
+        }),
+      ]),
+    ).toBe(true);
+    await reachedBarrier.promise;
+    expect(flushed).toEqual([]);
+
+    // A synchronous throw is the enactment failing, not an escaping
+    // exception, so the record retracts and a caller may enact again.
+    const throwing = "nav:throws-synchronously";
+    expect(
+      await channel.enactOnce(throwing, () => {
+        throw new Error("enactment failed (test-injected)");
+      }),
+    ).toBe(false);
+    expect(channel.hasEnacted(throwing)).toBe(false);
   });
 
   it("the llm-dialog tool loop's egress is dropped under speculation (review 2026-08-11 m5): the claimed updateArgument mitigation, asserted", async () => {
@@ -632,7 +821,7 @@ describe("Phase 2 speculation overlay", () => {
     expect(destination.deferSealedEffects(handlerTx, [dialogStart])).toBe(
       true,
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await flushMicrotasks();
     expect(flushed).toEqual([]);
   });
 
@@ -735,9 +924,11 @@ describe("Phase 2 speculation overlay", () => {
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the speculative echo to render",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     const overlay = clientRuntime.speculationOverlay!;
     expect(overlay.entryCount(space)).toBeGreaterThanOrEqual(1);
@@ -837,9 +1028,11 @@ describe("Phase 2 speculation overlay", () => {
     }
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the speculative echo to render",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
     const overlay = clientRuntime.speculationOverlay!;
     const echoEntries = overlay.entryCount(space);
@@ -895,9 +1088,11 @@ describe("Phase 2 speculation overlay", () => {
         compiled.resultSchema,
       );
       await readerResult.sync();
-      await waitUntil(
-        () => readerResult.key("total").get() === 777,
-        "the typed value to be durable",
+      await waitForCellValue(
+        readerRuntime,
+        readerResult.key("total"),
+        (total: number | undefined) => total === 777,
+        { stuckLabel: "the reader's total to reach 777" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -1064,9 +1259,11 @@ describe("Phase 2 speculation overlay", () => {
         DRAFT_SCHEMA,
       );
       await readerDraft.sync();
-      await waitUntil(
-        () => readerDraft.key("name").get() === "typed-name",
-        "the typed value to be durable",
+      await waitForCellValue(
+        readerRuntime,
+        readerDraft.key("name"),
+        (name: string | undefined) => name === "typed-name",
+        { stuckLabel: "the reader to see the typed draft name" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -1170,11 +1367,12 @@ describe("Phase 2 speculation overlay", () => {
       };
       const current = seedTx.readOrThrow(docAddress);
       const base = current && typeof current === "object" ? current : {};
-      seedTx.writeOrThrow(docAddress, {
+      seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
           version: 1,
           labelMap: {
+            version: 1,
             entries: [{ path: [], label: {}, origin: "declared" }],
           },
           schemaHash: stagedHash,
@@ -1255,9 +1453,11 @@ describe("Phase 2 speculation overlay", () => {
         DRAFT_SCHEMA,
       );
       await readerDraft.sync();
-      await waitUntil(
-        () => readerDraft.key("name").get() === "typed-name",
-        "the typed value to be durable",
+      await waitForCellValue(
+        readerRuntime,
+        readerDraft.key("name"),
+        (name: string | undefined) => name === "typed-name",
+        { stuckLabel: "the reader to see the typed draft name" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -1354,11 +1554,12 @@ describe("Phase 2 speculation overlay", () => {
       };
       const current = seedTx.readOrThrow(docAddress);
       const base = current && typeof current === "object" ? current : {};
-      seedTx.writeOrThrow(docAddress, {
+      seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
           version: 1,
           labelMap: {
+            version: 1,
             entries: [{ path: [], label: {}, origin: "declared" }],
           },
           schemaHash: registryOnlyHash,
@@ -1430,9 +1631,11 @@ describe("Phase 2 speculation overlay", () => {
         DRAFT_SCHEMA,
       );
       await readerDraft.sync();
-      await waitUntil(
-        () => readerDraft.key("name").get() === "typed-name",
-        "the typed value to be durable",
+      await waitForCellValue(
+        readerRuntime,
+        readerDraft.key("name"),
+        (name: string | undefined) => name === "typed-name",
+        { stuckLabel: "the reader to see the typed draft name" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -1530,11 +1733,12 @@ describe("Phase 2 speculation overlay", () => {
       };
       const current = seedTx.readOrThrow(docAddress);
       const base = current && typeof current === "object" ? current : {};
-      seedTx.writeOrThrow(docAddress, {
+      seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
           version: 1,
           labelMap: {
+            version: 1,
             entries: [{ path: [], label: {}, origin: "declared" }],
           },
           schemaHash: installedHash,
@@ -1606,9 +1810,11 @@ describe("Phase 2 speculation overlay", () => {
         DRAFT_SCHEMA,
       );
       await readerDraft.sync();
-      await waitUntil(
-        () => readerDraft.key("name").get() === "typed-name",
-        "the typed value to be durable",
+      await waitForCellValue(
+        readerRuntime,
+        readerDraft.key("name"),
+        (name: string | undefined) => name === "typed-name",
+        { stuckLabel: "the reader to see the typed draft name" },
       );
     } finally {
       await readerRuntime.dispose();
@@ -1706,11 +1912,12 @@ describe("Phase 2 speculation overlay", () => {
         }, { value: lateSchema });
         const current = seedTx.readOrThrow(docAddress);
         const base = current && typeof current === "object" ? current : {};
-        seedTx.writeOrThrow(docAddress, {
+        seedStoredEnvelope(seedTx, docAddress, {
           ...base,
           cfc: {
             version: 1,
             labelMap: {
+              version: 1,
               entries: [{ path: [], label: {}, origin: "declared" }],
             },
             schemaHash: lateHash,
@@ -1725,12 +1932,12 @@ describe("Phase 2 speculation overlay", () => {
     }
     // The metadata integrated over the watch; the kick's empty pull has
     // settled (the pull joins the synced() barrier).
-    await waitUntil(
+    await awaitReplica(
+      clientManager,
       () =>
         (replica.getDocument(draftLink.id, draftLink.scope) as {
           cfc?: { schemaHash?: string };
         } | undefined)?.cfc?.schemaHash === lateHash,
-      "frame 1's metadata to integrate",
     );
     // The kick's pull joins the replica's inbound settle: after this,
     // frame 1's pull has fully completed. (The doc may already be at
@@ -1787,9 +1994,9 @@ describe("Phase 2 speculation overlay", () => {
     }
 
     // The heal: the reference resolves on this replica via the re-kick.
-    await waitUntil(
+    await awaitReplica(
+      clientManager,
       () => replica.getDocument(`cid:${lateHash}` as never) !== undefined,
-      "the re-armed kick to deliver the stored schema document",
     );
 
     // The hook's remaining CONSTRUCTIBLE skip arms, coverage-verified
@@ -1830,7 +2037,7 @@ describe("Phase 2 speculation overlay", () => {
         await writerDraft.sync();
         const tx = writerRuntime.edit();
         for (const write of writes) {
-          tx.writeOrThrow({
+          seedStoredEnvelope(tx, {
             space,
             id: write.id as never,
             scope: write.scope as never,
@@ -1879,7 +2086,10 @@ describe("Phase 2 speculation overlay", () => {
     const pairHash = internSchemaAsTaggedHashString(pairSchema);
     const pairCfc = {
       version: 1,
-      labelMap: { entries: [{ path: [], label: {}, origin: "declared" }] },
+      labelMap: {
+        version: 1,
+        entries: [{ path: [], label: {}, origin: "declared" }],
+      },
       schemaHash: pairHash,
     };
     const docBValue = replica.getDocument(
@@ -1903,7 +2113,7 @@ describe("Phase 2 speculation overlay", () => {
         value: { ...docBValue, cfc: pairCfc },
       },
     ]);
-    await waitUntil(readerSees("pair-frame"), "the pair frame to integrate");
+    await awaitReplica(clientManager, readerSees("pair-frame"));
 
     // The schemaHash-less metadata frame (the string-shape guard).
     await writeDocFrame([{
@@ -1914,11 +2124,14 @@ describe("Phase 2 speculation overlay", () => {
         value: { name: "fourth-frame" },
         cfc: {
           version: 1,
-          labelMap: { entries: [{ path: [], label: {}, origin: "declared" }] },
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: {}, origin: "declared" }],
+          },
         },
       },
     }]);
-    await waitUntil(readerSees("fourth-frame"), "frame 4 to integrate");
+    await awaitReplica(clientManager, readerSees("fourth-frame"));
 
     // The doc-shape guard (a non-object root) is NOT constructible:
     // the write path refuses any non-object full-document root
@@ -2227,7 +2440,7 @@ describe("Phase 2 speculation overlay", () => {
             const parentCell = args[4] as Cell<Record<string, unknown>>;
             instantiations += 1;
             readPerInstantiation.push(
-              shared.withTx(parentCell.tx).key("n").get(),
+              shared.withTx(cellTx(parentCell)).key("n").get(),
             );
             parentCell.key("witness").set(instantiations);
             return { action: () => {} };
@@ -2368,7 +2581,7 @@ describe("Phase 2 speculation overlay", () => {
             const parentCell = args[4] as Cell<Record<string, unknown>>;
             instantiations += 1;
             readPerInstantiation.push(
-              shared.withTx(parentCell.tx).key("n").get(),
+              shared.withTx(cellTx(parentCell)).key("n").get(),
             );
             parentCell.key("witness").set(instantiations);
             return { action: () => {} };
@@ -2451,6 +2664,160 @@ describe("Phase 2 speculation overlay", () => {
     }
   });
 
+  it("a list coordinator's resume seed reads the durable view while a speculative echo stands on its container: the seed lands, and the coordinator's wait ends (speculation.md §6)", async () => {
+    // A list coordinator that resumes onto a result container with no
+    // value defers its reconcile and pulls the container, so that the
+    // value's arrival re-triggers it. A container that was never
+    // persisted has no value to arrive, and the seed is what ends that
+    // wait: it writes the empty array a fresh coordinator would have
+    // written, and that write is the arrival.
+    //
+    // The recovery the terminal refusal names — re-deriving once the
+    // authoritative value lands — is therefore unavailable to the seed,
+    // whose own write is that value. A refused seed leaves the
+    // coordinator waiting for a re-trigger nothing sends: it starts no
+    // element run, and the list it renders stays empty for the life of
+    // the piece.
+    //
+    // The window is the ordinary one. An echo stands on the container's
+    // document while the list it holds has never been persisted, so a
+    // seed reading through the overlay names a process-local layer in
+    // its commit basis and is refused terminally.
+    clientManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const engine = await server.engineForSpace(space);
+
+    const container = clientRuntime.getCell<unknown[]>(
+      space,
+      "resume-seed-speculative-container",
+      undefined,
+    );
+    await container.sync();
+    const containerId = container.getAsNormalizedFullLink().id;
+
+    const replica = clientManager.open(space).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id: containerId,
+          type: "application/json",
+          value: { cfc: { version: 1, labelMap: { entries: [] } } },
+        }],
+      },
+      undefined,
+      verdict.promise,
+      { speculative: true },
+    );
+    // The layer carries no value for the container, so the overlay view
+    // agrees with the durable one that the list is still absent: what
+    // separates the two is the basis a commit reading either would name.
+    expect(container.get()).toBeUndefined();
+
+    const logger = new RecordingLogger("resume seed durable view");
+    try {
+      await seedResultContainerWhenPullSettles(
+        clientRuntime,
+        container,
+        () => true,
+        () => {},
+        Promise.resolve(),
+        logger,
+        "map/resume-seed/of:resume-seed-speculative-container",
+      );
+
+      // The seed reached the store, so the container now holds the
+      // value whose arrival re-triggers the deferred reconcile.
+      await clientRuntime.storageManager.synced();
+      expect(logger.reports).toEqual([]);
+      expect(Engine.read(engine, { id: containerId })?.value).toEqual([]);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "test complete" } });
+      await sealed.settled.catch(() => {});
+    }
+  });
+
+  it("a list coordinator's resume seed still reads a DURABLE in-flight layer: a container another writer has already filled is left alone (speculation.md §6)", async () => {
+    // The reverse pin of the case above, and the one that catches the
+    // wrong implementation of it. The seed's precondition is that the
+    // container holds nothing, and a durable in-flight layer is a real
+    // value on its way to the store. Written as "read past every pending
+    // layer", the case above still passes and this one replaces a filled
+    // container with an empty list, which discards every element run
+    // that coordinator had.
+    //
+    // The two seals differ in exactly one token, the `speculative`
+    // option, so what the container ends up holding is what separates
+    // the two layer classes.
+    clientManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+
+    const engine = await server.engineForSpace(space);
+    const container = clientRuntime.getCell<unknown[]>(
+      space,
+      "resume-seed-durable-container",
+      undefined,
+    );
+    await container.sync();
+    const containerId = container.getAsNormalizedFullLink().id;
+
+    const replica = clientManager.open(space).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id: containerId,
+          type: "application/json",
+          value: { value: ["already here"] },
+        }],
+      },
+      undefined,
+      verdict.promise,
+    );
+    expect(container.get()).toEqual(["already here"]);
+    const commitsBefore = Engine.selectCommitsSince(engine, { fromSeq: 0 })
+      .length;
+
+    const logger = new RecordingLogger("resume seed durable layer");
+    try {
+      await seedResultContainerWhenPullSettles(
+        clientRuntime,
+        container,
+        () => true,
+        () => {},
+        Promise.resolve(),
+        logger,
+        "map/resume-seed/of:resume-seed-durable-container",
+      );
+      // The seed stood down: it wrote nothing, so the store received no
+      // commit from it, and the container still holds the layer's value.
+      // The value alone would not say so, because the layer stands above
+      // whatever the seed wrote.
+      expect(Engine.selectCommitsSince(engine, { fromSeq: 0 }).length).toBe(
+        commitsBefore,
+      );
+      expect(container.get()).toEqual(["already here"]);
+      expect(logger.reports).toEqual([]);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "test complete" } });
+      await sealed.settled.catch(() => {});
+    }
+  });
+
   it("under a standing overlay layer whose writes include /cfc, a blind-write tx's verifier-shaped read sees the DURABLE doc while an ordinary read sees the overlay — verify-durable and name-durable travel together (RULED 2026-08-21)", async () => {
     // The consistency pin for the ruled arm (b): the value the
     // verifier consumes must match the basis named for it. The echo
@@ -2496,6 +2863,7 @@ describe("Phase 2 speculation overlay", () => {
     const overlayCfc = {
       version: 1,
       labelMap: {
+        version: 1,
         entries: [{ path: ["total"], label: {}, origin: "declared" }],
       },
     };
@@ -2637,9 +3005,11 @@ describe("Phase 2 speculation overlay", () => {
     const cancelDemand = clientResult.sink(() => {});
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
-    await waitUntil(
-      () => clientResult.key("total").get() === 42,
-      "the speculative echo to render",
+    await waitForCellValue(
+      clientRuntime,
+      clientResult.key("total"),
+      (total: number | undefined) => total === 42,
+      { stuckLabel: "the client's total to reach 42" },
     );
 
     const engine = await server.engineForSpace(space);
@@ -2648,9 +3018,11 @@ describe("Phase 2 speculation overlay", () => {
     handlerRuns = 0;
     clientResult.key("copy").send({});
     await clientRuntime.idle();
-    // Observation window: the handler runs exactly once; a backoff loop
-    // would re-run it many times here.
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    // The handler runs exactly once. A re-run is this runtime's own
+    // scheduler work — the pre-fix defect was a backoff loop, which
+    // keeps the scheduler busy — so the drain and the store round trip
+    // below are ordered after one.
+    await clientRuntime.storageManager.synced();
     await clientRuntime.idle();
     expect(handlerRuns).toBe(1);
     // Events-down (F10 deleted): the handler's write DIVERTED to the
@@ -2848,7 +3220,7 @@ describe("Phase 2 speculation overlay", () => {
     // entry consumed) — but the origin's verdict is still in flight, so
     // the sweep skips the entry as blocked.
     watermarkCallback!({ seq: 50 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushMicrotasks();
     expect(destination.entryCount(space)).toBe(1);
 
     // The verdict lands: origin 10 acked at store seq 5; its layer
@@ -2952,7 +3324,7 @@ describe("Phase 2 speculation overlay", () => {
       },
     }]);
     expect(owned).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushMicrotasks();
     expect(flushed).toBe(0);
 
     // The rejection half (r3739139536), on a fresh destination: a
@@ -3045,8 +3417,8 @@ describe("Phase 2 speculation overlay", () => {
     expect((await tx.commit()).error).toBeUndefined();
     const cancelDemand = result.sink(() => {});
     await clientRuntime.idle();
-    // Give any (wrong) floating egress every chance to fire.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // A floating egress would be this runtime's own tracked work.
+    await clientRuntime.idle();
     expect(calls).toEqual([]);
     // And the branch RENDERS PENDING (speculation.md §2: on a memo
     // miss the node reads as pending — the ordinary loading state —
@@ -3131,9 +3503,11 @@ describe("Phase 2 speculation overlay", () => {
       seeded.argument.withTx(tx).set({ items: [1, 2] });
       expect((await tx.commit()).error).toBeUndefined();
       await seeder.runtime.idle();
-      await waitUntil(
-        () => (seeded.result.key("doubled").get() ?? []).length === 2,
-        "the seeded two-element array",
+      await waitForCellValue(
+        seeder.runtime,
+        seeded.result.key("doubled"),
+        (doubled: number[] | undefined) => (doubled ?? []).length === 2,
+        { stuckLabel: "the seeded two-element array to render" },
       );
       await seeder.runtime.storageManager.synced();
       // The derived document itself, so the arrival below lands on the
@@ -3160,9 +3534,14 @@ describe("Phase 2 speculation overlay", () => {
     });
     const client = await install(clientRuntime);
     await clientRuntime.idle();
-    await waitUntil(
-      () => (client.result.key("doubled").get() ?? []).length === 2,
-      "the stored two-element array at the flag-ON client",
+    await waitForCellValue(
+      clientRuntime,
+      client.result.key("doubled"),
+      (doubled: number[] | undefined) => (doubled ?? []).length === 2,
+      {
+        stuckLabel:
+          "the stored two-element array to render at the flag-ON client",
+      },
     );
     // The same derived document both sides derive into, so the arrival
     // below lands under the entry this client seals rather than beside it.
@@ -3183,9 +3562,11 @@ describe("Phase 2 speculation overlay", () => {
       expect((await tx.commit()).error).toBeUndefined();
     }
     await clientRuntime.idle();
-    await waitUntil(
-      () => (client.result.key("doubled").get() ?? []).length === 3,
-      "the speculative three-element echo",
+    await waitForCellValue(
+      clientRuntime,
+      client.result.key("doubled"),
+      (doubled: number[] | undefined) => (doubled ?? []).length === 3,
+      { stuckLabel: "the speculative three-element echo to render" },
     );
     expect(clientRuntime.speculationOverlay!.entryCount(space))
       .toBeGreaterThanOrEqual(1);
@@ -3213,7 +3594,8 @@ describe("Phase 2 speculation overlay", () => {
       await writer.manager.close();
     }
     const replica = clientRuntime.storageManager.open(space).replica;
-    await waitUntil(
+    await awaitReplica(
+      clientManager,
       () =>
         JSON.stringify(
           (replica.getNonSpeculativeDocument!(
@@ -3221,7 +3603,6 @@ describe("Phase 2 speculation overlay", () => {
             derivedLink.scope,
           ) as { value?: unknown } | undefined)?.value,
         ) === JSON.stringify([7, 8, 9]),
-      "the authoritative array to reach the client's confirmed view",
     );
 
     // The entry still stands, so what renders is the entry's own value —

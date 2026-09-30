@@ -365,3 +365,79 @@ Deno.test("parseAgentsHostCliOptions does not expose invalid URL credentials", (
   assertEquals(error.cause, undefined);
   assertEquals(String(error).includes(secret), false);
 });
+
+Deno.test("parseAgentsHostConfig accepts normalized command producers and rejects malformed ones", () => {
+  const base = {
+    schema: AGENTS_HOST_CONFIG_SCHEMA,
+    ownerDid: "did:key:test-owner",
+    sources: [{ id: "claude", driver: "claude-agent-sdk", enabled: true }],
+  };
+  assertEquals(
+    parseAgentsHostConfig({
+      ...base,
+      commandProducers: [{ id: "workbench", piece: " fid1:piece " }],
+    }).commandProducers,
+    [{ id: "workbench", piece: "fid1:piece" }],
+  );
+  assertEquals(parseAgentsHostConfig(base).commandProducers, undefined);
+  assertEquals(
+    parseAgentsHostConfig({ ...base, commandProducers: [] }).commandProducers,
+    undefined,
+  );
+  assertThrows(
+    () => parseAgentsHostConfig({ ...base, commandProducers: {} }),
+    Error,
+    "configuration.commandProducers must be an array",
+  );
+  assertThrows(
+    () =>
+      parseAgentsHostConfig({
+        ...base,
+        commandProducers: [{ id: "Workbench", piece: "fid1:piece" }],
+      }),
+    Error,
+    'commandProducers[0].id must already be normalized as "workbench"',
+  );
+  assertThrows(
+    () =>
+      parseAgentsHostConfig({
+        ...base,
+        commandProducers: [{ id: "workbench", piece: "fid1:piece", extra: 1 }],
+      }),
+    Error,
+    "commandProducers[0] has an unknown field: extra",
+  );
+  assertThrows(
+    () =>
+      parseAgentsHostConfig({
+        ...base,
+        commandProducers: [{ id: "workbench" }],
+      }),
+    Error,
+    "commandProducers[0].piece must be a non-empty string",
+  );
+  assertThrows(
+    () =>
+      parseAgentsHostConfig({
+        ...base,
+        commandProducers: [
+          { id: "workbench", piece: "fid1:one" },
+          { id: "workbench", piece: "fid1:two" },
+        ],
+      }),
+    Error,
+    "configuration has duplicate command producer id: workbench",
+  );
+  assertThrows(
+    () =>
+      parseAgentsHostConfig({
+        ...base,
+        commandProducers: [
+          { id: "workbench", piece: "fid1:one" },
+          { id: "dashboard", piece: "fid1:one" },
+        ],
+      }),
+    Error,
+    "configuration has duplicate command producer piece: fid1:one",
+  );
+});

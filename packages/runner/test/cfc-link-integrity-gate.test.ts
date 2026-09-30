@@ -12,7 +12,7 @@ const INJECTION_SAFE_ATOM = {
 };
 
 describe("CFC link-write integrity gate", () => {
-  // Regression guard for runtime-evidence atoms on the link-write path (audit
+  // Legacy link-label derivation gates runtime-evidence atoms (audit
   // S4 review follow-up). The integrity mint gate originally covered only
   // schema-derived labels; an author could persist a forged InjectionSafe
   // through a link's carried label view (or embedded link schema) and later
@@ -24,6 +24,7 @@ describe("CFC link-write integrity gate", () => {
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
       storageManager,
+      cfcFlowLabels: "off",
     });
     try {
       const tx = runtime.edit();
@@ -41,7 +42,7 @@ describe("CFC link-write integrity gate", () => {
         space: signer.did(),
         scope: "space",
         id: targetId,
-        path: ["value", "field"],
+        path: ["field"],
       }, "v");
 
       // Forge a link-write policy input whose carried label view attaches an
@@ -52,13 +53,13 @@ describe("CFC link-write integrity gate", () => {
           space: signer.did(),
           scope: "space",
           id: targetId,
-          path: ["value", "field"],
+          path: ["field"],
         },
         source: {
           space: signer.did(),
           scope: "space",
           id: "of:cfc-link-integrity-source",
-          path: ["value"],
+          path: [],
         },
         cfcLabelView: {
           version: 1,
@@ -106,6 +107,120 @@ describe("CFC link-write integrity gate", () => {
       expect(
         allIntegrity.some((a) => a?.type?.endsWith("/InjectionSafe")),
       ).toBe(false);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("refuses a carried CurrentPrincipal reader without a stored source reader", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcFlowLabels: "off",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    try {
+      const tx = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "unbound-link-reader",
+        undefined,
+        tx,
+      );
+      const targetId = target.getAsNormalizedFullLink().id;
+      tx.markCfcRelevant("test");
+      tx.writeValueOrThrow({
+        space: signer.did(),
+        scope: "space",
+        id: targetId,
+        path: ["field"],
+      }, "v");
+      tx.recordCfcWritePolicyInput({
+        kind: "link-write",
+        target: {
+          space: signer.did(),
+          scope: "space",
+          id: targetId,
+          path: ["field"],
+        },
+        source: {
+          space: signer.did(),
+          scope: "space",
+          id: "of:cfc-link-reader-source",
+          path: [],
+        },
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/User",
+                subject: { __ctCurrentPrincipal: true },
+              }],
+            },
+          }],
+        },
+      });
+      tx.prepareCfc();
+      expect((await tx.commit()).error?.message).toContain(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("refuses a link schema CurrentPrincipal reader without a stored source reader", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcFlowLabels: "off",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    try {
+      const tx = runtime.edit();
+      const target = runtime.getCell(
+        signer.did(),
+        "unbound-schema-reader",
+        undefined,
+        tx,
+      );
+      const address = {
+        space: signer.did(),
+        scope: "space" as const,
+        id: target.getAsNormalizedFullLink().id,
+        path: ["field"],
+      };
+      tx.markCfcRelevant("test");
+      tx.writeValueOrThrow(address, "v");
+      tx.recordCfcWritePolicyInput({
+        kind: "link-write",
+        target: address,
+        source: {
+          space: signer.did(),
+          scope: "space",
+          id: "of:cfc-link-schema-reader-source",
+          path: [],
+        },
+        linkSchema: {
+          type: "string",
+          ifc: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/User",
+              subject: { __ctCurrentPrincipal: true },
+            }],
+          },
+        },
+      });
+      tx.prepareCfc();
+      expect((await tx.commit()).error?.message).toContain(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      );
     } finally {
       await runtime.dispose();
       await storageManager.close();

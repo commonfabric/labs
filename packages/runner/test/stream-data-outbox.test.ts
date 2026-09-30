@@ -113,6 +113,9 @@ describe("stream-data outbox mechanism", () => {
     const result = runtime.run(tx, testPattern, {
       url: "http://mock-test-server.local/stream",
     }, resultCell);
+    // The stream is a computation: a reader has to demand it, and the
+    // runtime's disposal ends the subscription.
+    result.sink(() => {});
 
     try {
       expect(fetchCalls).toEqual([]);
@@ -167,6 +170,7 @@ describe("stream-data outbox mechanism", () => {
       const result = runtime.run(tx, testPattern, {
         url: "http://mock-test-server.local/stream-idempotency",
       }, resultCell);
+      result.sink(() => {});
       const commitPromise = tx.commit();
       await commitPromise;
       await runtime.settled();

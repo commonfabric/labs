@@ -27,6 +27,23 @@ almost no information per failure; a test that failed four times in two
 years, each time because somebody broke something, carries a great deal.
 Flakiness is dealt with separately, below.
 
+### Two runs under the same conditions
+
+Every test run shuffles the order its tests run in, by a seed that is fixed
+for a commit: the Pacific day the commit was committed on, unless an override
+names another
+([TESTING.md](../development/TESTING.md#every-test-run-shuffles-its-order)).
+Each record's context carries the seed as `shuffleSeed`, and a context without
+one records a run in declaration order. Two of the rules below compare one
+run's outcome with another's: a pass and a failure of the same identity read
+as a flake, and a failure on the default branch judged by the pass that
+follows it. Both compare runs at **one point** only: the same commit, with the
+same seed or both without one. A test that depends on the order its siblings
+run in passes in one order and fails in another, which is a bug in the test
+rather than chance, so outcomes at one commit in different orders are not
+compared. The rules that read the default branch's most recent outcome, and
+those that count failures across sources, take runs in any order.
+
 ### What a catch is
 
 For every failing record, the publisher asks whether the failure says
@@ -35,9 +52,9 @@ something about a change or something about the test. A failure is a
 
 - The identity was already failing in the most recent run on the default
   branch. The test was already broken and this run learned nothing.
-- The identity both passed and failed at the same commit, with nothing
-  between the two runs but chance. That is a flake observation, and it is
-  counted as one.
+- The identity both passed and failed at one point, with nothing between
+  the two runs but chance. That is a flake observation, and it is counted as
+  one.
 - The identity failed across at least `ENVIRONMENTAL_MIN_SOURCES` distinct
   sources within `CATCH_BREADTH_WINDOW_DAYS`. That is the environment or a
   dependency, not any one change.
@@ -53,11 +70,16 @@ there never contradicts itself, and counting each such failure as a catch
 would make the least valuable test in the repository look like the most
 valuable. Such a failure waits for the next run on that branch. Still
 failing is the same breakage continuing, and nothing new is learned.
-Passing at the same commit is the test disagreeing with itself, and counts
-as a flake observation. Passing at a later commit counts as a catch: the
-change between the two commits fixed what the test found. A run of
-failures ended by one pass counts one catch, dated to the first of them,
-so a week of the branch being red is worth one catch and not seven.
+Passing at the same point is the test disagreeing with itself, and counts
+as a flake observation. Passing at a later commit with the same seed counts
+as a catch: the change between the two commits fixed what the test found.
+Passing with a different seed is neither, and the failure is dropped: the
+order moved on, and an order-dependent test stops failing when it does, so
+the pass says nothing about whether a change fixed anything. That drops the
+catch of a real breakage whose fix landed on a later Pacific day than the
+breakage did, which is the price of not crediting an order change as a fix.
+A run of failures ended by one pass counts one catch, dated to the first of
+them, so a week of the branch being red is worth one catch and not seven.
 
 Nothing separates a failure a change fixed from one that healed itself, so
 a test flaky on the default branch is credited for its own noise. The
@@ -142,31 +164,90 @@ One set of run counts serves both `churn` and `flakeRate`, so it is kept
 for the longer of the two windows and each term reads back only as far as
 its own.
 
-`cost` is the largest of the days' ninetieth percentiles inside its
-window: the ninetieth rather than the maximum, because one unlucky runner
-should not permanently inflate an estimate, and the largest across days
-rather than an average, because a cost model that under-estimates blows
-the time budget.
+`cost` is the ninetieth percentile of every passing execution inside its
+window, taken together: the ninetieth rather than the maximum, because
+one unlucky runner should not permanently inflate an estimate, and rather
+than the mean, because a cost model that under-estimates blows the time
+budget. Each execution counts once however the days fall, so a slow day,
+whether a loaded runner or a regression since fixed, raises the cost by
+as much of the window as it holds rather than setting it for a week.
 
-A day is one population, whatever order its records reached the store in
-and however many runs read them. A day is therefore held as its slowest
-executions and the count of all of them, so that the parts a day arrives
-in combine into the percentile of the whole. Holding a percentile of each
-part instead would let a part carrying one execution report that
-execution as the percentile of every execution beside it.
+The window is one population, whatever order its records reached the
+store in and however many runs read them. A day is therefore held as
+counts of its executions by duration, so that the parts a day arrives in,
+and the days a window spans, combine into the percentile of the whole.
+Holding a percentile of each part instead would let a part carrying one
+execution report that execution as the percentile of every execution
+beside it.
+
+The counts are kept in buckets, 32 to each doubling of a duration, and a
+percentile is read as the largest duration its bucket counts. The cost is
+therefore never below the exact percentile and at most one bucket, about
+2.2%, above it, and what a day holds grows with how widely its durations
+spread rather than with how many ran.
 
 Only executions that passed are measured. A cost predicts what a lane
 will spend running the test again, and a failure measures something else.
 It ended where the failure was reached. Where a wait's safety net ended
 it, its duration is that net's bound. The bound a safety net carries and
-the bound a lane is killed at are the same order of magnitude, so a test
-that hits one is otherwise reported as fitting no lane and held out of
-every pull request that does not touch it.
+a lane's bound are the same order of magnitude, so a test that hits one is
+otherwise reported as fitting no lane and held out of every pull request that
+does not touch it.
+
+A day records which set of these rules sealed it, and a day carrying no
+such record was sealed before any set was recorded, which reads as
+another set. These rules change, and a day sealed under earlier ones did
+not measure what these measure, so such a day answers only until these
+rules have sealed a day for that test, and is dropped the moment they
+do. Carried instead, it would
+decide what runs for the whole of the window, and a safety net's bound
+is the figure that outcome is worst for.
+
+Two things follow that are worth stating. The window refills over its
+own length after a change, charging fewer days' figures while it does.
+And a test that keeps hitting a safety net seals no day at all, so it
+keeps the earlier set's figure until that figure ages out; what answers
+that case is the rule above it, that a failure is not measured.
 
 A test with no passing execution inside the window has no measured cost
 and is charged nothing. Such a test has either barely run or is failing
 everywhere, and one failing everywhere holds up the default branch, which
 is a louder alarm than any lane's budget and is answered first.
+
+That rule is about an identity the store holds, whose executions inside
+the window all failed. A unit the store holds no identity for at all — a
+file that is new, or one whose every test was renamed — is a different
+case and is not charged nothing.
+
+Such a unit is charged from what its own suite's measured units cost, as
+the larger of two readings of them: their mean, and their ninetieth
+percentile. The suites are orders of magnitude apart, so one figure across
+all of them describes none of them, and a suite's own units are the whole
+of the evidence about what another of them will take. A suite holding no
+measured unit has none of that evidence, and each of its units takes
+`UNMEASURED_COST_SECONDS`, which is above zero so that a packer treats a
+suite it knows nothing about as taking time.
+
+Both readings, because a lane holding one such unit and a lane holding
+twenty are short of time for different reasons.
+
+A suite's units are bimodal: many fast ones, a few slow ones, and little
+in between. The middle of them therefore falls where no unit sits, and
+describes neither the fast units nor the slow. The ninetieth percentile is
+where a test's own cost is read, and against one unit it is short one time
+in ten.
+
+What a lane holding twenty is packed against is their total, which sits
+near twenty times the mean whatever shape they came from. So a figure
+under the mean falls short of that total with a probability that climbs
+towards one as the count grows, however safe the same figure is against
+one unit. Which of the two readings is the larger is decided by how heavy
+the suite's tail is.
+
+No one figure covers a unit from the far end of a tail, and one that did
+would charge a lane many times what it holds. What answers that is the
+rule below, that a consumer reporting a projected time says how much of it
+rests on stand-ins.
 
 ## Flakes
 
@@ -193,7 +274,7 @@ sharpens itself on exactly the tests it is least sure of.
 
 Nothing is charged against the count, and no belief about how tests
 usually behave survives into it. **A disagreement is a proof rather than a
-sample**: a test that is deterministic cannot pass and fail at one commit,
+sample**: a test that is deterministic cannot pass and fail at one point,
 so an observation of one rules out the possibility the share would
 otherwise be shrunk toward. A test seen twice that disagreed once reads a
 half, and a test that disagreed once in ten thousand runs reads a
@@ -222,11 +303,11 @@ the recent part of its counts.
 
 Above `FLAKE_EXCLUSION_RATE` an identity leaves the selectable set
 entirely: it is too noisy to judge a change by. It keeps running on the
-default branch, it appears on the wall, and the exclusion reverses on its
-own as those runs stop disagreeing, which is what makes this better than a
-quarantine list somebody has to remember to empty. Reversing on evidence
-takes one thing of the default branch in return, which [what the default
-branch does with an excluded
+default branch, it appears on the dashboard, and the exclusion reverses
+on its own as those runs stop disagreeing, which is what makes this
+better than a quarantine list somebody has to remember to empty.
+Reversing on evidence takes one thing of the default branch in return,
+which [what the default branch does with an excluded
 identity](#what-the-default-branch-does-with-an-excluded-identity) sets
 out.
 
@@ -340,15 +421,37 @@ fails for these identities once per commit, and the first rule multiplies
 that. A consumer decides it per identity and never per invocation, since
 one invocation reports one status for many identities.
 
-It is a rule for tests. An identity that is a repository gate goes on
-failing the run whatever its share, because a gate's failure is a
-statement about the tree rather than about one change. A consumer reads
-the withheld entry's reason rather than its membership of the set, so a
-reason added later does not become non-gating without anybody deciding it.
+It is a rule for every identity the store holds back, and a repository
+gate is one of those. A gate introspects the tree where a test runs the
+code. That decides what a gate reads and how it is invoked, and nothing
+about what its failures are worth: a gate that disagrees with itself
+fails somebody's change for something its author cannot act on, which is
+the whole of what this rule is answering. A consumer reads the withheld
+entry's reason rather than its membership of the set, so a reason added
+later does not become non-gating without anybody deciding it.
+
+What asks for a flaky gate to be fixed is the same thing that asks for a
+flaky test to be fixed, which is a consumer's report of what the store
+holds back rather than a red run. A rule that kept gates gating would buy
+that prompt by failing a change for a reason its author cannot act on,
+which is the cost this whole section exists to avoid paying.
 
 An invocation is excused only when it accounted for every identity it was
 asked to run, since one that recorded a withheld failure and then stopped
-has run almost nothing while satisfying any weaker test. That is the rule
+has run almost nothing while satisfying any weaker test. A stand-in for a
+unit the store has never seen is accounted for by that unit recording
+anything at all, because no record can carry a stand-in's name: a record
+is named for a test and a stand-in for a file. And a unit that recorded
+nothing recorded nothing under any name, which fails the run whether or
+not anything was there to excuse.
+
+The rule is per invocation and not per set of them. A consumer that runs
+an identity several times, or that reaches one unit through several
+commands, has several invocations whose records arrive in one place, and
+one that ended badly having recorded no failure accounted for nothing
+whatever the others recorded. Reading them together would excuse a run
+that died part way through on the strength of the part that finished,
+which is the case the rule is for. That is the rule
 under [what a run owes the change behind
 it](#what-a-run-on-the-default-branch-owes-the-change-behind-it) applied
 here, that a conclusion rests on a record that is there and never on one
@@ -386,18 +489,49 @@ how it runs there.
 **A mandatory identity runs, whatever it costs.** Nothing weighs it
 against a budget, a lane's capacity, or the time the run is trying to
 hold to, and no rule anywhere takes one out. An identity whose own cost
-is past what a lane is killed at is placed in a lane regardless, and what
-that produces is a lane that runs long and says by how much. The
-alternative is a run that reports a pass over a test it decided not to
-run, which is the one failure this design will not have: a consumer is
-told a test did not run, never left to infer it from a green result.
-Weighing cost is for the identities nothing requires, and the list of
-work no lane can hold names those alone.
+is past a lane's bound is placed in a lane regardless, and what that produces is
+a lane that runs long and says by how much. The alternative is a run that
+reports a pass over a test it decided not to run, which is the one failure this
+design will not have: a consumer is told a test did not run, never left to infer
+it from a green result. Weighing cost is for the identities nothing requires,
+and the list of work no lane can hold names those alone.
 
 The count of runs is the one thing that bends. An identity that would be
 repeated and fits nowhere runs fewer times, down to once, since all of
 one identity's runs go in one lane and one observation beats none. Down
 to once and never to nothing.
+
+A plan says what a suite costs it, as well as what a test does. A lane
+pays a suite's overhead, what one of its units costs to open, and its
+capabilities' setup before it runs anything of that suite, and that
+charge is the same for every identity the suite has. A lane that runs a suite
+with coverage on pays what that suite's batches have cost with coverage on,
+where such a fit exists, and otherwise its fit without coverage. The two are
+fitted apart, since instrumenting a run costs it time and how much is a
+property of the suite. Where it alone passes
+what a lane holding two things may take, nothing can share a lane with one of
+the suite's identities, so the suite takes a whole lane for each one it places;
+where it passes a lane's bound, no lane can hold the suite and every
+discretionary identity it has fits nowhere. Both are reported once for the
+suite, and the identities of a suite in the second case are left out of the
+report that names identities, since the suite's line says what every one of them
+would.
+
+**A unit that runs whole is one choice.** Some units have a runner that
+runs every identity in them, whatever it is asked. The topology lists
+these, and the packer places each as one choice rather than one choice
+per identity. That choice costs what all its identities cost together.
+It is held back when any of its identities is held back. It runs when
+any of its identities must run. The plan still lists each identity,
+under the reason that put it there. The manifest and every record
+therefore name identities, never units.
+
+Neither reading changes what the packer does. What they change is what a
+plan can be asked. A plan that reported only the identities says nothing
+at all in the first case, and in the second says the same thing once per
+identity — thousands of times where a report is unbounded, and where one
+is bounded, filling the whole of what it has room for with tests that
+each cost a thousandth of the figure beside them.
 
 Two rules force a test in.
 
@@ -429,6 +563,14 @@ Two rules force a test in.
   declaration rather than by what it has caught. Nothing about a changed
   source file forces a test in except through a declaration that reaches
   it. Which tests run for it otherwise is what the score decides.
+
+  The type check is not bounded that way. A change reaches every
+  type-check group whose files import a changed file, directly or through
+  other modules, however many groups that is; a manifest, a declaration
+  file it loads into every check, or the lock file reaches the groups whose
+  modules it governs. The change can alter each of those groups' verdicts,
+  and no `deno test` type-checks anything, so a group left to the score is
+  a type error the change may have made that nothing looks for.
 
 ## Coverage
 
@@ -496,19 +638,23 @@ Newest is settled by the order of those commits in the default branch's
 own history, and never by when the run that measured one was created: a
 re-run of an older commit produces a later run of an earlier tree.
 
-Five states report rather than fail, and each is one where the
+Three states report rather than fail, and each is one where the
 comparison would be against something other than the change: a set with
 no baseline the change contains, a set the cap left unforced that no run
-measured, a set no report was written for, a set whose reports name no
-line of its member and so measured nothing, and a run with a failing
-test, whose coverage was measured through that failure.
+measured, and a run with a failing test, whose coverage was measured
+through that failure.
+
+A forced set that no report measured fails, whatever else happened in
+the run: one no report was written for, and one whose reports name no
+line of its member. The change was made to measure it, so a rise in it
+cannot be ruled out.
 
 A rise is accepted by an `ACCEPT_COVERAGE_DEBT` marker in the change's
 description, which names the member and the lines, and accepts the rise
 for every measured set over that member. Two markers naming one thing
 are refused, since the author meant one number and would be given the
-other. A marker naming neither a workspace member nor a coverage source
-group fails, because nothing would ever consult it.
+other. A marker naming anything but a workspace member fails, because nothing
+consults it.
 
 ## The manifest
 
@@ -523,13 +669,56 @@ withheld set with its reason, the
 tests a configuration deliberately does not run, a reference packing into
 lanes, the unschedulable list, a count and digest of known identities, and
 the coverage baselines, one per measured set per default-branch run
-inside `LOCAL_COVERAGE_BASELINE_DAYS`.
+inside `LOCAL_COVERAGE_BASELINE_DAYS`. It may carry the cost model's
+health as well: per suite, its fixed charge and its tests too long for
+any lane beside those of the manifest before, and what its batches spent
+over what they were charged; how many lanes ran past their bound; and
+what the publisher found broken in those figures.
 
-A manifest is **untrusted input**. It is validated whole, and one bad
-field rejects the object rather than leaving a consumer obeying half of
-it. A manifest whose schema version a reader does not know is treated as
-absent, because a reader that does not know a field cannot know what
-obeying the rest would mean.
+A manifest is **untrusted input**. It is validated whole, and one bad field
+rejects the object rather than leaving a consumer obeying half of it. The health
+is the one exception, because nothing obeys it: a health a reader cannot read is
+dropped and the rest of the manifest is read. A manifest declaring a shape from
+further ahead than the reader is treated as absent, because a reader that does
+not know a field cannot know what obeying the rest would mean. A reader whose
+answer decides what runs takes the newest one behind it instead, since a figure
+hours old is what it costs and the whole corpus is what refusing costs. It looks
+back over a bounded number of them, since every candidate is a whole corpus to
+fetch. A reader that reaches the end of that bound says so rather than reporting
+the store as holding none: it holds several, and this reader can read none of
+the ones it looked at.
+
+A manifest declaring an earlier shape is read forward field by field. So
+is the publisher's own rolling aggregate, and for a stronger reason: the
+aggregate is where every catch a test has been credited with lives, over
+unbounded history, and no window of records gives those back.
+
+A stored aggregate the publisher cannot read is passed over for the
+newest one behind it that it can. Nothing but the publisher creates an
+aggregate and it creates one only where it folded, so refusing over the
+newest would be refusing for good, which is why this goes further than a
+consumer does with a manifest: a consumer passes over only a body
+written ahead of it, where the publisher passes over a corrupt body too.
+A body that fails to arrive is not passed over by either, since a read
+that did not happen says nothing about what it would have read.
+
+The walk reaches back over the days the run reads and no further, since
+what a passed-over aggregate holds and the one behind it does not comes
+back from the records the run reads. That bound is approximate in one
+direction, because the runs that wrote the passed-over aggregates read
+windows reaching earlier than their own day, and a run states what it
+passed over and what it folded onto rather than claiming the gap was
+closed. A run that can read no aggregate at all refuses, naming each and
+what stopped it. Refusing costs a stale manifest; starting from an empty
+aggregate would cost a manifest scoring every test at the floor, so a
+run never does that on its own.
+
+The area of the store both are written under is named rather than
+numbered, and does not move when a shape changes. An area that moved
+with the shape would leave the aggregate behind in the old one, which
+costs the catches and puts a manual cold start between one shape and the
+next, during which nothing publishes and every consumer runs the whole
+corpus.
 
 A withheld entry naming a reason the reader has no rule for is the one
 thing dropped rather than refused. Refusing it would refuse the whole
@@ -548,7 +737,8 @@ takes the shape of the topology instead. The same holds for a manifest
 that arrives and knows none of the tree, which is why the question is
 whether anything is measured rather than whether a manifest was found. A
 consumer that reports a projected time says how much of it rests on
-stand-ins.
+stand-ins. A lane that could not ask the store at all is the exception to
+running, for the reason under [Determinism](#determinism).
 
 That the manifest may be an ordinary public object rather than a signed
 artifact follows from what it can do. It can only change *which* tests
@@ -564,12 +754,52 @@ worst possible place: `catches` accumulates over unbounded history and is
 the whole of what makes a test worth running, so the best test in an area
 drops to the floor at the exact moment somebody is working there.
 
-`tasks/test-identity-aliases.jsonl` is what bridges the two halves, and
+`tasks/test-identity-aliases/` is what bridges the two halves, and
 every reader of the store resolves through it, the publisher included. A
 rename is never inferred: a wrong bridge silently credits one test with
 another's record, and since the whole score rests on catch attribution
 there is no downstream check that would notice. Suggesting a line is help;
 writing one unasked is not.
+
+## Removals
+
+A test deleted from the repository keeps its records, because the store
+is append-only and a record is a fact about a run that happened. So every
+consumer has to be able to hold an identity nothing will ever run again,
+and a consumer that keeps a rolling aggregate has to be able to let one
+go.
+
+Nothing selects such an identity. What decides where a test runs is the
+working tree, and an identity the topology has no unit for is left out of
+the manifest rather than carried under a name nothing can run. A manifest
+published before the deletion still names it, and a consumer reconciles
+the manifest against the tree before packing, so the entry drops out
+there too.
+
+A deletion is never bridged. The alias file joins a test's history to the
+name it now has, and a deleted test has no such name; an alias to one
+would credit another test with its record. Nothing declares a removal
+either. What says a test is gone is the tree not holding it, which is the
+same thing that says where every other test runs.
+
+A consumer that keeps a rolling aggregate drops an identity on two
+conditions together. No suite claims it, and no run of it has been
+recorded inside the longest window the aggregate keeps counters for.
+Either alone is not enough: an identity whose records never say which
+unit they came from is claimed by nobody and is running, and a topology
+that reads the tree wrongly stops claiming tests that are running. An
+identity more than one suite claims is a defect over a test the tree
+holds twice and is not a departure at all. A unit a configuration
+declares unavailable, under the variant that declares it, is accounted
+for rather than lost, and every identity in it is kept. Until the window
+has passed over it a deleted identity is one nobody claims and which has
+run, which is what it is.
+
+A guard that compares a tree against a set of records compares it against
+the records that tree produced. A tree read against an earlier run's
+records disagrees with them over every test deleted in between, and over
+every test renamed on the same day, since an alias reaches records from
+earlier days only. Both are the repository working as intended.
 
 ## What a run on the default branch owes the change behind it
 
@@ -609,23 +839,32 @@ it is not a first failure. An excluded identity that failed every one of
 its runs at a commit and passed every one at the parent is the one
 statement about such a test that several runs at one commit make
 available, and a consumer reporting it says that the test is a known flaky
-one and that the run was not failed by it. That a test is new is likewise
-a claim about the store rather than about one run: an identity the store
-has never seen is new, and an identity absent from one run's records is
-only absent from that run.
+one and that the run was not failed by it. Whether a run excused an identity is
+a fact about that run, and a consumer reads it from what the run recorded rather
+than working it out again from the manifest. A run that did not apply the rule
+excused nothing, and one that did withdraws an excusal wherever an invocation
+left an identity it was asked to run unaccounted for. That a
+test is new is likewise a claim about the store rather than about one run: an
+identity the store has never seen is new, and an identity absent from one run's
+records is only absent from that run.
 
 Whether a change's own run ran a test is settled by that run's records
 and by nothing else. The manifest it resolved answers the next question,
 which is why it did not: held back as too flaky, or passed over by the
-packing. Only a resolved manifest that holds the identity can support
-that last answer, and a report without one says the run did not run the
-test rather than crediting the selector with a decision nothing made.
-Where the manifest says the test was to have run — the packing reached
-it, or the store has never seen it, which makes it mandatory — a run
-with no record of it recorded less than it ran, and that is a different
-statement from a run that did not reach it. A test the packing did not
-reach is coverage this design traded away rather than something the
-change missed, and it must be described that way. The failure raises the
+packing. That manifest is the one resolved at the moment the run's lanes
+resolved it, which is when the commit the run tested was made. For a pull
+request that commit is the merge its records name, and not the tip of its
+branch, since a manifest published between the two would explain a selection the
+lanes never made. A report that cannot establish that moment has no resolved
+manifest. Nor does a run whose tests did not run in lanes, since no manifest
+chose what it ran. Only a resolved manifest that holds the identity can support that last
+answer, and a report without one says the run did not run the test rather than
+crediting the selector with a decision nothing made. Where the manifest says the
+test was to have run — the packing reached it, or the store has never seen it,
+which makes it mandatory — a run with no record of it recorded less than it ran,
+and that is a different statement from a run that did not reach it. A test the
+packing did not reach is coverage this design traded away rather than something
+the change missed, and it must be described that way. The failure raises the
 test's score, so the next change in that area runs it.
 
 A report addresses the change and never a person. No author is named, no
@@ -695,7 +934,7 @@ two are different moments: a publisher names its manifest from the moment
 it started and creates the object when it finishes, so the name carries a
 moment at which the object was not yet there to be read. A listing that
 will not say when it created an object fails rather than standing a value
-in, and the lane goes on with no manifest.
+in, and a lane whose listing fails does not pack, for the reason below.
 
 That difference is what keeps the eligible set closed. Every manifest is
 created at a real moment, and the lanes list after the commit was made, so
@@ -722,14 +961,23 @@ still permits that run to be re-run, which is a lifecycle rule on the
 bucket rather than anything a reader controls. Where the re-run window is
 the longer of the two, the retention is what to raise.
 
-A lane that resolves no manifest still agrees with its siblings, because
-what it packs is decided by the tree rather than by what it failed to
-read. Nothing has records in that state, so every unit the tree holds is
-an identity with none and the whole corpus is mandatory. The lanes divide
-that between them and say what they are doing.
+A lane that resolves no manifest because the store answered that it holds
+none, or none this reader understands, still agrees with its siblings. The
+store gives every lane that answer, and what the lanes then pack is decided
+by the tree. Nothing has records in that state, so every unit the tree
+holds is an identity with none and the whole corpus is mandatory. The
+lanes divide that between them and say what they are doing.
 
-A consumer with no commit to read falls back to the newest manifest there
-is and reports that it has done so. That is the answer for a tool invoked
-outside a checkout, where there is no tree under test and no other lane to
-agree with. A lane holds a checkout by construction, so the moment it
-resolves for comes from the commit rather than from this fallback.
+A store that could not be asked is different. A listing or a read can fail
+for one lane and succeed for the next. A lane that packed without the
+manifest its siblings read would lay out a plan they are not following,
+and a test each plan put in the other's lanes would run in neither while
+the run passed. So a lane whose listing or read fails refuses to pack, and
+says why. A count of lanes planned from the same reading refuses too.
+
+A lane that cannot read the committer date refuses for the same reason,
+and says why. A lane holds a checkout by construction, so failing to read
+the date is a fault in one lane rather than a property of the run. Its
+siblings may well have read the date, and no other moment the lane could
+take is one they are sure to share. A count of lanes planned from the same
+reading refuses too.
