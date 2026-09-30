@@ -55,6 +55,9 @@ const ACCESS_PATTERN = [
   "    notes.push(`revoked ${event.principal}`);",
   "  },",
   ");",
+  "const relay = handler<Change, { grant: Stream<Change> }>(",
+  "  (event, { grant }) => { grant.send(event); },",
+  ");",
   "export default pattern<",
   "  { notes: Writable<string[]> },",
   "  {",
@@ -62,8 +65,11 @@ const ACCESS_PATTERN = [
   "    probe: string;",
   "    grant: Stream<Change>;",
   "    revoke: Stream<Change>;",
+  "    relay: Stream<Change>;",
   "  }",
-  ">(({ notes }) => ({",
+  ">(({ notes }) => {",
+  "  const grantStream = grant({ notes });",
+  "  return {",
   "  notes,",
   "  probe: computed(() => {",
   "    try {",
@@ -73,9 +79,11 @@ const ACCESS_PATTERN = [
   "      return `threw ${(error as Error).message}`;",
   "    }",
   "  }),",
-  "  grant: grant({ notes }),",
+  "  grant: grantStream,",
   "  revoke: revoke({ notes }),",
-  "}));",
+  "  relay: relay({ grant: grantStream }),",
+  "  };",
+  "});",
 ].join("\n");
 
 /** The result cell of a running `ACCESS_PATTERN`. */
@@ -84,6 +92,7 @@ type AccessPatternResult = Cell<{
   probe: string;
   grant: unknown;
   revoke: unknown;
+  relay: unknown;
 }>;
 
 /** `payload` as an event the renderer marked as a trusted gesture. */
@@ -287,7 +296,7 @@ describe("space-access-change", () => {
   async function send(
     runtime: Runtime,
     result: AccessPatternResult,
-    stream: "grant" | "revoke",
+    stream: "grant" | "revoke" | "relay",
     event: Record<string, unknown>,
   ): Promise<void> {
     result.key(stream).send(event);
@@ -429,6 +438,18 @@ describe("space-access-change", () => {
       const result = await runAccessPattern(runtime, space);
 
       await send(runtime, result, "grant", { principal: bob.did() });
+
+      expect(errors.join("\n")).toContain("requires the handler's event");
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+      expect(result.key("notes").get()).toEqual([]);
+    });
+
+    it("refuses a grant from a handler another handler passed the gesture on to", async () => {
+      const { runtime, errors } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const result = await runAccessPattern(runtime, space);
+
+      await send(runtime, result, "relay", gesture({ principal: bob.did() }));
 
       expect(errors.join("\n")).toContain("requires the handler's event");
       expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
@@ -667,6 +688,29 @@ describe("space-access-change", () => {
       ).toThrow(`which ${bob.did()} does not hold`);
     });
 
+    it("stages nothing for a grant of the level the list this runtime holds already gives", async () => {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "READ"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toBeUndefined();
+
+      // The same call with another level is what does stage a change.
+      const control = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "WRITE"),
+      );
+      expect(control.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+    });
+
     it("throws for lowering the last concrete `OWNER`", async () => {
       // Bob holds `OWNER` through the `*` entry alone, so alice is the list's
       // only concrete `OWNER`.
@@ -745,6 +789,31 @@ describe("space-access-change", () => {
         `which ${bob.did()} does not hold`,
       );
       expect(aclCommitCount(factory, space)).toBe(0);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+    });
+
+    it("commits nothing for a change the list it replaces already holds, though staging could not tell", async () => {
+      const owner = clientRuntime(alice);
+      const space = await createSpace(owner.runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const { runtime, factory } = clientRuntime(alice);
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "WRITE"),
+      );
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+      const before = factory.commits.length;
+
+      await commitSpaceAccessChanges(frame);
+
+      expect(factory.commits.length).toBe(before);
       expect(await storedAcl(space)).toEqual({
         [alice.did()]: "OWNER",
         [bob.did()]: "WRITE",

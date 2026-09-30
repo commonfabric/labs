@@ -594,6 +594,48 @@ regardless, and a rule a pattern enforces only by consulting
 that must be refused, use a write policy as described above.
 [`space-access.md`](../../features/space-access.md) has the details.
 
+### Granting and revoking access to a space
+
+`grantSpaceAccess(target, principal, level)` sets `principal`'s entry in the
+access list of the space `target`'s value lives in to exactly `level`:
+`"READ"`, `"WRITE"`, or `"OWNER"`, raising or lowering it.
+`revokeSpaceAccess(target, principal)` removes the entry. `target` is a cell in
+the space, as for `spaceAccess(target)`.
+
+**A grant exposes everything already in the space.** Adding a member changes
+no value's label, so the new member can read what was written before they
+were added, not only what comes after. Put data a new member must not see in
+another space before granting.
+
+```tsx
+// Shown at module scope.
+const addMember = handler<
+  { member: DID },
+  { members: Writable<DID[]> }
+>(({ member }, { members }) => {
+  grantSpaceAccess(members, member, "WRITE");
+  members.push(member);
+});
+```
+
+Both calls work only in a handler whose event is a trusted gesture, a person's
+action on a rendered surface; anywhere else, or for an event without one, they
+throw. The person who sent the event must hold `OWNER` in the space, and
+`principal` must be a DID other than theirs, the space's own, and `"*"`. A
+change that would leave the space with no concrete `OWNER` is refused. Every
+refusal throws, and a throw drops the handler's whole transaction, so the
+handler's other writes are dropped too.
+
+Granting a level someone already holds, or revoking an entry that is not
+there, does nothing, so a handler that runs again for the same event is safe.
+The change to the access list commits on its own, just before the handler's
+other writes, so if those fail the change still stands; the handler running
+again for the same event repairs that.
+
+Both calls throw on a serving runtime for now.
+[`space-access-changes.md`](../../features/space-access-changes.md) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell

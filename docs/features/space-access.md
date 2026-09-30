@@ -114,6 +114,12 @@ its own. The session opens again when something reads a document of that space
 that the replica has not asked for, and a refused principal who has since been
 granted access sees a level only from then on.
 
+## Changing the level
+
+`spaceAccess(target)` only reads. A handler changes a principal's entry with
+`grantSpaceAccess()` and `revokeSpaceAccess()`, which
+[`space-access-changes.md`](space-access-changes.md) describes.
+
 ## What it discloses
 
 The answer names no principal. It tells a member only what a member can

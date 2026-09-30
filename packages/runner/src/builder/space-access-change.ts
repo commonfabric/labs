@@ -79,8 +79,9 @@ export function revokeSpaceAccess(target: unknown, principal: unknown): void {
  * Commits the access-list changes the handler run of `frame` staged, one
  * commit per space, each holding the space's changes applied in call order to
  * the list as the memory server last confirmed it. A space whose changes
- * leave its list as it was commits nothing. The runner calls this after the
- * handler body returns and before the handler's own transaction commits.
+ * leave its list as it was sends nothing, since writing the value a document
+ * already holds changes nothing. The runner calls this after the handler body
+ * returns and before the handler's own transaction commits.
  *
  * Each commit reads the list it replaces, so a concurrent change to the list
  * makes it conflict; that throws `RetryImmediately`, and the handler runs
@@ -100,20 +101,11 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
     await runtime.getCellFromLink(aclLink(space)).sync();
     const tx = runtime.edit();
     tx.tx.immediate = true;
-    let unchanged = false;
     try {
-      writeAcl(tx, space, (current) => {
-        const next = applyChanges(space, current, changes);
-        unchanged = current !== null && sameAcl(current, next);
-        return next;
-      });
+      writeAcl(tx, space, (current) => applyChanges(space, current, changes));
     } catch (error) {
       tx.abort(error);
       throw error;
-    }
-    if (unchanged) {
-      tx.abort();
-      continue;
     }
     runtime.prepareTxForCommit(tx);
     const { error } = await tx.commit();
