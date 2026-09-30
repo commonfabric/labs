@@ -1384,14 +1384,16 @@ therefore emitted from the type node its author wrote
 (`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
 name counts only where it resolves to the declaration `commonfabric` exports: a
 type of the author's own named `Default` is an ordinary type, and its binding is
-typed by inference. At any of those positions, a reference to a non-generic type
-alias whose type carries a wrapper is replaced by the type the alias names, so
+typed by inference. At any of those positions, and in the argument of a scope
+wrapper, a reference to a non-generic type alias whose type carries a wrapper
+is replaced by the type the alias names, so
 `type Draft = Writable<string | Default<"">>` captures with the schema of the
 wrapper written in place, including when the alias is imported from another
-module. A reference to an alias that carries no wrapper stays a reference, which
-schema generation emits under the alias's name. A reference to a generic alias
-also stays as written, and when nothing else in the declared type carries a
-wrapper the capture is typed by inference.
+module and when it is scoped, as `PerSession<Draft>`. A reference to an alias
+that carries no wrapper stays a reference, which schema generation emits under
+the alias's name. A reference to a generic alias also stays as written, and when
+nothing else in the declared type carries a wrapper the capture is typed by
+inference.
 
 A property of a generic input is declared in terms of the input's type
 parameters. The pattern builder's type argument supplies the caller's arguments,

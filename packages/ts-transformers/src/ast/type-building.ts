@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
 import {
   readAuthoredTypeNodeOnce,
   readMemberAnnotation,
@@ -1041,10 +1042,9 @@ export function getPreservedBindingTypeNode(
 /**
  * Helper for `getPreservedBindingTypeNode()`, which replaces each reference to
  * a type alias that names a wrapper-carrying type with the type node the alias
- * names, at the positions `shouldPreserveBindingDeclaredTypeNode()` inspects:
- * the node itself, a member of a union or an intersection, and an argument of
- * `Writable`. Returns the node it was given when none of those is such a
- * reference.
+ * names, at the node itself, a member of a union or an intersection, and an
+ * argument of `Writable` or of a scope wrapper. Returns the node it was given
+ * when none of those is such a reference.
  *
  * Two kinds of reference stay as written. One names a type that carries no
  * wrapper: nothing in it needs the authored spelling, so the alias keeps its
@@ -1103,9 +1103,16 @@ function resolveTypeAliasReferences(
   }
 
   if (typeNode.typeArguments) {
-    const typeArguments = getWrapperName(typeNode, checker) === "Writable"
-      ? resolveAll(typeNode.typeArguments)
-      : undefined;
+    // A scope wrapper is preserved whatever it holds, so its argument is read
+    // through as well. The pass that narrows a captured cell prints an alias
+    // it finds there from the alias's type, where a `Default<typeof X>` is
+    // left holding only `X`'s declared type, and so loses its value unless
+    // that type is a literal one.
+    const wrapperName = getWrapperName(typeNode, checker);
+    const typeArguments =
+      wrapperName === "Writable" || scopeForWrapperName(wrapperName)
+        ? resolveAll(typeNode.typeArguments)
+        : undefined;
     return typeArguments
       ? ts.factory.updateTypeReferenceNode(
         typeNode,
