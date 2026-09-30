@@ -107,7 +107,9 @@ export function scopeCallerEventId(
  * Derives the event key a handler reads through `eventKey()`: a stable name
  * for one event as one actor sent it to one stream. Every run of the same event
  * derives the same key, in any process, so a handler can use it as an
- * idempotence key or as the address of what the event creates.
+ * idempotence key or as the address of what the event creates. The key is
+ * distinct per event id, actor and stream, and no finer: a stream entry that
+ * re-admits an id derives the key the first entry did.
  *
  * The durable event id alone is not enough. It is visible to anyone who can
  * read the stream, and after the stream's watermark passes it, the same raw id

@@ -9,9 +9,10 @@ request, and a record it names is written at one address by the echo and at
 another by the served run.
 
 `eventKey()`, exported to patterns through the `commonfabric` module, returns a
-string that is the same on every run of one event, and different for every
-other event. A handler uses it as an idempotence key, or as the id of what the
-event creates. This document says what the key is derived from, what changes
+string that is the same on every run of one event. It is distinct per durable
+event id, actor and stream, and so different for every other event except one
+that re-admits the same id, which the section on re-admission below covers. A
+handler uses it as an idempotence key, or as the id of what the event creates. This document says what the key is derived from, what changes
 it, how far it can be trusted, and why it is available only in a handler.
 
 "Handler" here means any event handler a pattern defines, `action()` included.
@@ -60,6 +61,22 @@ It differs for:
   ran, so the retry is a new request, not a second run of the old one;
 - one event id reaching two streams;
 - one event id sent by two actors.
+
+### Re-admission of the same id
+
+A stream refuses an append whose event id matches an entry it has not yet
+handled, but once its watermark has passed that entry, the same id is admitted
+again as a new entry. Sent by the same actor to the same stream, that entry
+derives the same key as the first one, and so do the ids of the cells its
+handler creates, which derive from the raw event id.
+
+A handler that keys a record on `eventKey()` therefore finds, on a re-admitted
+event, the record the first handling made. For an idempotence key that is the
+point: the re-admission reads as the repeat it is. For a record address it
+means the address is not guaranteed fresh. Create the record only if it is
+absent, and never overwrite one found there as though the event were new.
+
+### A handler called directly
 
 A handler called directly, with no dispatched event behind it, has no durable
 id. It gets a fresh random one, the same one the handler frame's cause uses, and

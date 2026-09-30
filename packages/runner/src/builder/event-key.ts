@@ -10,6 +10,11 @@ import { topFrame } from "./frame-context.ts";
  * for, a different stream, or another actor sending the same event id each
  * get a different key. Nothing in the event's payload can choose the value.
  *
+ * The key is distinct per durable event id, actor and stream, not per stream
+ * entry. A stream that has handled an event can admit the same id again, and
+ * the same actor sending it there gets the same key, so a record addressed by
+ * the key may already exist: create it only if it is absent.
+ *
  * The key is unlabeled runtime output and carries no trust. It says only that
  * one event is one event: not who sent it, and not that a person asked for it.
  *

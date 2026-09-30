@@ -4164,6 +4164,10 @@ export declare function currentPrincipal(): DID | undefined;
  * the id of what the event creates. A new gesture, a new stream or another
  * actor gets a new key, and nothing in the event's payload can choose it.
  *
+ * The key is distinct per durable event id, actor and stream. A stream that
+ * has handled an event can admit the same id again, which gets the same key
+ * from the same actor, so a record addressed by the key may already exist.
+ *
  * The key is unlabeled and carries no trust: it says that one event is one
  * event, not who sent it or that a person asked for it.
  *
