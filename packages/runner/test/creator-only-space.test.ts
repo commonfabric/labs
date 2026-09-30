@@ -80,7 +80,7 @@ const gesture = (payload: Record<string, unknown>): Record<string, unknown> => {
   return event;
 };
 
-describe("creator-only inSpace()", () => {
+describe("creator-only-space", () => {
   let server: MemoryV2Server.Server;
   let cleanups: Array<() => Promise<void>>;
   let storeSeq = 0;
