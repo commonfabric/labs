@@ -8,6 +8,7 @@
  */
 
 import { fromFileUrl } from "@std/path";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   type Route,
   type Run,
@@ -769,8 +770,7 @@ function makeCiDuration(
       // How long the sparkline spans (oldest to newest run), for the corner label.
       const times = passed.map((run) => run.createdAt);
       const spanMs = times.length >= 2
-        ? times.reduce((a, b) => Math.max(a, b)) -
-          times.reduce((a, b) => Math.min(a, b))
+        ? maxOf(times) - minOf(times)
         : 0;
       const s: Status = window.length === 0
         ? "unknown"

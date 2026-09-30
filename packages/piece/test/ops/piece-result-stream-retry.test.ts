@@ -36,9 +36,9 @@ async function runRetryScenario(
       storageManager,
       experimental: { serverExecution },
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "piece-result-stream-retry-" + crypto.randomUUID(),
+      spaceDid: await activeRuntime.createSpace(),
     });
     const pieces = new PiecesController(session, activeRuntime);
     await pieces.synced();

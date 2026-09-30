@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { createSession, Identity } from "@commonfabric/identity";
+import { createSession, type DID, Identity } from "@commonfabric/identity";
 import { Runtime, setPatternSource } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -52,7 +52,7 @@ function memberSource(version: string): string {
 
 describe("bulk-retarget", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
-  let spaceName: string;
+  let space: DID;
   let runtimes: Runtime[];
   let opens: number;
   let closes: number;
@@ -61,7 +61,7 @@ describe("bulk-retarget", () => {
 
   beforeEach(async () => {
     storageManager = StorageManager.emulate({ as: signer });
-    spaceName = `bulk-retarget-${crypto.randomUUID()}`;
+    space = await storageManager.createSpace({ [signer.did()]: "OWNER" });
     runtimes = [];
     opens = 0;
     closes = 0;
@@ -92,7 +92,7 @@ describe("bulk-retarget", () => {
    * comparable however a test bends the factory.
    */
   async function openSession(
-    name: string = spaceName,
+    spaceDid: DID = space,
   ): Promise<PiecesController> {
     opens += 1;
     const runtime = new Runtime({
@@ -101,7 +101,7 @@ describe("bulk-retarget", () => {
     });
     runtimes.push(runtime);
     const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: name }),
+      createSession({ identity: signer, spaceDid }),
       runtime,
     );
     await pieces.synced();
@@ -714,10 +714,9 @@ describe("bulk-retarget", () => {
 
   it("stops when a group's session serves another space", async () => {
     const { plan, ids } = await seed(3);
-    const elsewhere = `${spaceName}-elsewhere`;
-    const namer = await openSession(elsewhere);
-    const strayDid = namer.getSpace();
-    await sessions.close(namer);
+    const elsewhere = await storageManager.createSpace({
+      [signer.did()]: "OWNER",
+    });
     const before = { opens, closes };
     let attempts = 0;
     const strayGroup: ApplySessions = {
@@ -748,7 +747,7 @@ describe("bulk-retarget", () => {
     expect(report.applied).toBe(2);
     expect(report.complete).toBe(false);
     expect(report.stopReason).toContain(plan.header.space);
-    expect(report.stopReason).toContain(strayDid);
+    expect(report.stopReason).toContain(elsewhere);
     // The session opened, so it is released like any other.
     expect(opens - before.opens).toBe(3);
     expect(closes - before.closes).toBe(3);
@@ -805,7 +804,9 @@ describe("bulk-retarget", () => {
 
   it("releases a wrong-space group's session when a row callback throws", async () => {
     const { plan } = await seed(3);
-    const elsewhere = `${spaceName}-elsewhere`;
+    const elsewhere = await storageManager.createSpace({
+      [signer.did()]: "OWNER",
+    });
     const before = { opens, closes };
     let attempts = 0;
     const strayGroup: ApplySessions = {

@@ -58,8 +58,6 @@ const SENT = {
   spaceHostMap: { [federatedSpace]: federatedHost },
   identity: signer.keyPair,
   spaceDid: space,
-  spaceName: "reach",
-  spaceIdentity: spaceSigner.keyPair,
   experimental: {
     agentBuiltin: false,
     webViewScopedReplication: true,
@@ -141,17 +139,6 @@ const REACH = {
   },
   spaceDid: {
     reads: (o) => o.processor.accessForTestingOnly.cc.getSpace(),
-    expected: space,
-  },
-  spaceName: {
-    reads: (o) => o.processor.accessForTestingOnly.cc.getSpaceName(),
-    expected: "reach",
-  },
-  spaceIdentity: {
-    // A space's key pair derives the space, so this reads back the same DID
-    // `spaceDid` does. What the case pins is that the key pair reached
-    // storage, not which space it names.
-    reads: (o) => o.storage.spaceIdentity?.did(),
     expected: space,
   },
   experimental: {
@@ -247,7 +234,7 @@ const owner: WorkerClient = { id: 0, post: () => true };
  * Storage is emulated and the backend is stood down, since what these cases
  * turn on is where each declared value arrives rather than whether a backend
  * answers. The options storage is opened with are recorded, which is the only
- * place two of the fields reach.
+ * place one of the fields reaches.
  */
 async function observeWorkerInitialization(): Promise<{
   observed: Observed;

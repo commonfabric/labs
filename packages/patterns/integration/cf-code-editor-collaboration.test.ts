@@ -1,5 +1,6 @@
 import { debugStr } from "@commonfabric/data-model";
 import {
+  createTestSpace,
   env,
   type Page,
   type ProbeApi,
@@ -7,8 +8,6 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
 import { assert, assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -23,7 +22,7 @@ import {
   waitForRuntimeIdle,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 type EditorHost = Element & {
   collaborative?: boolean;
@@ -616,7 +615,7 @@ describe("cf-code-editor collaboration", () => {
     identity: Identity,
     piece: PieceController,
   ): Promise<void> => {
-    const view = { spaceName: SPACE_NAME, pieceId: piece.id };
+    const view = { spaceDid: cc.getSpace(), pieceId: piece.id };
     await shell.goto({ frontendUrl: FRONTEND_URL, view, identity });
     await waitForActiveSpaceRoot(shell.page(), cc.getSpace());
     await waitForRuntimeIdle(shell.page());
@@ -639,7 +638,9 @@ describe("cf-code-editor collaboration", () => {
       Identity.generate({ implementation: "noble" }),
     ]);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(alice, {
+        grants: { [bob.did()]: "WRITE" },
+      }),
       apiUrl: new URL(API_URL),
       identity: alice,
     });
@@ -699,7 +700,6 @@ describe("cf-code-editor collaboration", () => {
       }),
     };
 
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     for (const [name, piece] of Object.entries(pieces)) {
       const result = cc.getResult(piece.getCell());
       sinkCancels.push(result.sink((value) => {

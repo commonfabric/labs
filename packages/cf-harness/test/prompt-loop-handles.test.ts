@@ -835,9 +835,9 @@ describe("prompt-loop address handles", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-handles-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );

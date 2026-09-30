@@ -21,7 +21,6 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { isDID } from "@commonfabric/identity";
-import { CompilerStackLoadError } from "@commonfabric/runner";
 import {
   type InitializationData,
   type IPCClientMessage,
@@ -32,13 +31,13 @@ import {
   isIPCClientNotification,
   NotificationType,
   RequestType,
-  RuntimeErrorCode,
 } from "@/protocol/mod.ts";
 import { RuntimeProcessor } from "@/backends/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
 import { describeFailure } from "@/shared/utils.ts";
 import { postThrough } from "./post-to-client.ts";
+import { runtimeErrorCode } from "./runtime-error.ts";
 import {
   type ClientId,
   OWNER_CLIENT_ID,
@@ -411,9 +410,7 @@ export class RuntimeClients {
       console.error("[RuntimeWorker] Error:", error);
       const type = isIPCClientMessage(message) ? message.data.type : "invalid";
       ipcLogger.debug(`responded-error/${type}`, () => []);
-      const code = error instanceof CompilerStackLoadError
-        ? RuntimeErrorCode.CompilerStackLoadFailed
-        : undefined;
+      const code = runtimeErrorCode(error);
 
       // A reply is addressed by `msgId`, and what reaches here need not have
       // one: the decode above admits every `FabricValue`, `undefined` and a

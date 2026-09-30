@@ -470,11 +470,11 @@ export class XRootView extends BaseView implements ShellApp {
     const identity = app?.identity;
     const view = app?.view;
     if (identity && view && "spaceName" in view) {
-      // The name alone decides the space: a named space's key is derived from
-      // the name and a fixed passphrase, so every identity on one name
-      // addresses the same space. A change of identity leaves the answer
-      // alone. The home view below is the case that does turn on identity,
-      // and it recomputes on every change.
+      // The name alone decides the space: a legacy name resolves to one DID
+      // whoever resolves it, so every identity on one name addresses the same
+      // space. A change of identity leaves the answer alone. The home view
+      // below is the case that does turn on identity, and it recomputes on
+      // every change.
       if (view.spaceName === this.#resolvedSpaceName) return;
       this.#resolveNamedSpace(identity, view.spaceName);
       return;

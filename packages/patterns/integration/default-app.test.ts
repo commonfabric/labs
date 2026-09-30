@@ -3,6 +3,7 @@ import {
   attachWorkerProfiler,
   awaitViewSettled,
   type CdpWorkerProfiler,
+  createLegacyTestSpace,
   env,
   Page,
   type ProbeApi,
@@ -25,7 +26,6 @@ import {
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { assert, assertEquals } from "@std/assert";
-import { resolveSpaceDid } from "@commonfabric/lib-shell";
 
 // Every step in this file runs under both server-execution postures: no step
 // here is listed in the ON arm's skip registry
@@ -248,10 +248,16 @@ describe("default-app flow test", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
-  const spaceName = SPACE_NAME;
+  // The space is opened by a legacy name, so this flow also covers a name URL
+  // reaching the space the name has always named. `SPACE_NAME` targets a
+  // legacy space that already exists; otherwise the test makes one.
+  const spaceName = SPACE_NAME ?? globalThis.crypto.randomUUID();
 
   it("should create and navigate to a note", async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    if (SPACE_NAME === undefined) {
+      await createLegacyTestSpace(identity, spaceName);
+    }
 
     const page = shell.page();
 
@@ -647,7 +653,7 @@ describe("default-app flow test", () => {
     async () => {
       identity = await Identity.generate({ implementation: "noble" });
       const notebookSpaceName = globalThis.crypto.randomUUID();
-      const notebookSpaceDid = await resolveSpaceDid(
+      const notebookSpaceDid = await createLegacyTestSpace(
         identity,
         notebookSpaceName,
       );

@@ -201,4 +201,45 @@ describe("CLI runtime creation", () => {
       await Deno.remove(keyPath);
     }
   });
+
+  it("gives the controller the legacy name `--space` named, and none for a DID", async () => {
+    const identity = await Identity.fromPassphrase(
+      "piece manager space name test",
+      { implementation: "noble" },
+    );
+    const keyPath = await Deno.makeTempFile();
+    await Deno.writeFile(keyPath, identity.toPkcs8());
+
+    const originalHealthCheck = Runtime.prototype.healthCheck;
+    const originalEnsureSpaceSession =
+      PiecesController.prototype.ensureSpaceSession;
+    const managers: PiecesController[] = [];
+    Runtime.prototype.healthCheck = () => Promise.resolve(true);
+    PiecesController.prototype.ensureSpaceSession = () => Promise.resolve();
+
+    try {
+      const byName = await loadPieces({
+        apiUrl: "https://toolshed.test",
+        identity: keyPath,
+        space: "team-lunch",
+      });
+      managers.push(byName);
+      const byDid = await loadPieces({
+        apiUrl: "https://toolshed.test",
+        identity: keyPath,
+        space: byName.getSpace(),
+      });
+      managers.push(byDid);
+
+      expect(byName.getSpaceName()).toBe("team-lunch");
+      expect(byDid.getSpace()).toBe(byName.getSpace());
+      expect(byDid.getSpaceName()).toBeUndefined();
+    } finally {
+      Runtime.prototype.healthCheck = originalHealthCheck;
+      PiecesController.prototype.ensureSpaceSession =
+        originalEnsureSpaceSession;
+      for (const manager of managers) await manager.dispose();
+      await Deno.remove(keyPath);
+    }
+  });
 });

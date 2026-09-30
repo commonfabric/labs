@@ -451,9 +451,9 @@ describe("bulk-repair", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `bulk-repair-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );

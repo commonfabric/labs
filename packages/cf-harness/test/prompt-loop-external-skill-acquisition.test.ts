@@ -175,9 +175,9 @@ describe("prompt-loop external skill acquisition", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity,
-        spaceName: `external-skill-canary-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -345,9 +345,9 @@ describe("prompt-loop external skill acquisition", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity,
-        spaceName: `external-skill-custody-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );

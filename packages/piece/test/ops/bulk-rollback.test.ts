@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { createSession, Identity } from "@commonfabric/identity";
+import { createSession, type DID, Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -49,14 +49,14 @@ function memberSource(version: string): string {
 
 describe("bulk-rollback", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
-  let spaceName: string;
+  let space: DID;
   let runtimes: Runtime[];
   let sessions: ApplySessions;
   let dir: string;
 
   beforeEach(async () => {
     storageManager = StorageManager.emulate({ as: signer });
-    spaceName = `bulk-rollback-${crypto.randomUUID()}`;
+    space = await storageManager.createSpace({ [signer.did()]: "OWNER" });
     runtimes = [];
     sessions = {
       open: () => openSession(),
@@ -76,7 +76,7 @@ describe("bulk-rollback", () => {
   });
 
   async function openSession(
-    name: string = spaceName,
+    spaceDid: DID = space,
   ): Promise<PiecesController> {
     const runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
@@ -84,7 +84,7 @@ describe("bulk-rollback", () => {
     });
     runtimes.push(runtime);
     const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: name }),
+      createSession({ identity: signer, spaceDid }),
       runtime,
     );
     await pieces.synced();
@@ -545,7 +545,10 @@ describe("bulk-rollback", () => {
     const { plan } = await retargeted(2);
     const rollback = deriveRollbackPlan(plan, "later");
     const elsewhere: ApplySessions = {
-      open: () => openSession(`bulk-rollback-other-${crypto.randomUUID()}`),
+      open: async () =>
+        openSession(
+          await storageManager.createSpace({ [signer.did()]: "OWNER" }),
+        ),
       close: () => Promise.resolve(),
     };
     // The preflight's mismatch refuses the run outright: there is no report

@@ -121,7 +121,10 @@ describe("loom-authoring", () => {
         storageManager,
       });
       const pieces = new PiecesController(
-        await createSession({ identity, spaceName: "loom-tools" }),
+        createSession({
+          identity,
+          spaceDid: (await Identity.generate()).did(),
+        }),
         runtime,
       );
       try {
@@ -131,9 +134,9 @@ describe("loom-authoring", () => {
         await runtime.idle();
         await pieces.synced();
         const link = created.getCell().getAsNormalizedFullLink();
-        const foreign = await createSession({
+        const foreign = createSession({
           identity,
-          spaceName: "another-space",
+          spaceDid: (await Identity.generate()).did(),
         });
         const cases = [
           {

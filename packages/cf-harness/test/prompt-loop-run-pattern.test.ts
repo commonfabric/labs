@@ -37,6 +37,7 @@ import type {
 } from "../src/sandbox/types.ts";
 import { scrubBareFabricIdentifiers } from "../src/fabric-identifier-scrub.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 
 // Marks each prompt below as one a person typed. `run_pattern` and
@@ -182,9 +183,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-schema-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -281,10 +282,7 @@ describe("prompt-loop run_pattern model boundary", () => {
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
-      fabricRuntime,
-    );
+    const pieces = await openLegacySpace(signer, fabricRuntime, spaceName);
     await pieces.synced();
     try {
       // A real default pattern, so the space has a piece registry to join.
@@ -518,9 +516,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-scrub-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -622,9 +620,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-collapse-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -794,9 +792,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-source-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -925,9 +923,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-batch-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -1046,9 +1044,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-batch-final-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );
@@ -1142,9 +1140,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       storageManager,
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-no-store-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       fabricRuntime,
     );

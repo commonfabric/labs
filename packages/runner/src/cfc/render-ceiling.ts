@@ -114,10 +114,10 @@ export type RenderConfidentialityResolverConfig = {
    * spaces whose data is locally resident: residency is not read authority
    * (a runtime can sync a space's bytes under an ACL-off deployment without
    * the acting user being an authorized reader), so the cell's own storage
-   * space is deliberately NOT trusted as a membership fact. The acting user's
-   * own space (space DID == principal DID) is the one always-verifiable member
-   * — a principal definitionally reads its own space regardless of ACL mode;
-   * broader cross-space membership arrives with the §4.9.3 membership lookup.
+   * space is deliberately NOT trusted as a membership fact. Neither is a
+   * space's DID being the acting user's own: a Home space's user reads it
+   * because its ACL says so. Cross-space membership arrives with the §4.9.3
+   * membership lookup.
    */
   readonly memberSpaces?: readonly string[];
 
@@ -127,8 +127,8 @@ export type RenderConfidentialityResolverConfig = {
    * rendered. When it verifies the
    * acting principal reads that space (its declared ACL grants READ+, never
    * residency), the resolver mints `HasRole(actingPrincipal, id, reader)` so
-   * the clause resolves — the dynamic complement to the static `memberSpaces`
-   * fast path (own space + session space, which need no ACL read).
+   * the clause resolves — the dynamic complement to `memberSpaces`, which
+   * the caller has already verified and so needs no ACL read here.
    *
    * The cross-space guarantee is exactly as strong as the deployment's
    * `MEMORY_ACL_MODE`: under `enforce` the ACL is authoritative; under
@@ -278,17 +278,17 @@ export const createRenderConfidentialityResolver = (
       return label.confidentiality as readonly CfcConfClause[];
     }
     // §4.9.3: role facts come ONLY from verified membership, never from the
-    // cell's residency. The static fast-path members (own space + session
-    // space — implicit reads, no ACL lookup) plus each space
-    // `membershipSpacesInConfidentiality` lists that the provider confirms the
-    // acting principal reads. A space the user cannot prove reader access to
-    // mints nothing and fails closed.
+    // cell's residency: the caller-supplied `memberSpaces`, verified before
+    // they reached us, plus each space `membershipSpacesInConfidentiality`
+    // lists whose ACL the provider confirms grants the acting principal READ.
+    // A space the user cannot prove reader access to mints nothing and fails
+    // closed.
     const memberSpaces = new Set(staticMemberSpaces);
     if (provider !== undefined && actingPrincipal !== undefined) {
       for (
         const id of membershipSpacesInConfidentiality(label.confidentiality)
       ) {
-        if (memberSpaces.has(id)) continue; // already a static fast-path member
+        if (memberSpaces.has(id)) continue; // already a caller-verified member
         if (provider.readerRole(id) !== null) memberSpaces.add(id);
       }
     }

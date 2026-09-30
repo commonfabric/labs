@@ -49,6 +49,7 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import type {
@@ -243,7 +244,6 @@ export async function runMultiUserTestPattern(
   let runResult: TestRunResult | undefined;
 
   const server = StandaloneMemoryServer.start();
-  const spaceName = crypto.randomUUID();
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
@@ -258,6 +258,22 @@ export async function runMultiUserTestPattern(
           }),
         );
       }
+    }
+
+    // The first participant creates the shared space, and every participant
+    // may write to it.
+    const owner = identities.get(meta.participants[0].user)!;
+    const creator = StorageManager.open({ as: owner, memoryHost: server.url });
+    let spaceDid: string;
+    try {
+      spaceDid = await creator.createSpace({
+        ...Object.fromEntries(
+          [...identities.values()].map((identity) => [identity.did(), "WRITE"]),
+        ),
+        [owner.did()]: "OWNER",
+      });
+    } finally {
+      await creator.close();
     }
 
     // Sequential init: the first worker materializes the shared setup
@@ -276,7 +292,7 @@ export async function runMultiUserTestPattern(
           identity: realmValueFromKeyPair(
             identities.get(spec.user)!.keyPair,
           ),
-          spaceName,
+          spaceDid,
           apiUrl: server.url.href,
           testPath,
           root: options.root,

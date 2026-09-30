@@ -274,8 +274,13 @@ export enum RequestType {
    */
   RuntimeSynced = "runtime:synced",
 
-  /** Resolves a space's name to its DID. */
-  ResolveSpaceName = "runtime:resolveSpaceName",
+  /**
+   * Creates a space owned by the worker's identity and records it in that
+   * identity's Home space list, answering with its DID once the memory server
+   * has confirmed the space's genesis commit. The space's key is generated in
+   * the worker, signs that one commit, and is dropped.
+   */
+  CreateSpace = "runtime:createSpace",
 
   /**
    * Routes one space's storage to a named host, answering with whether the
@@ -653,6 +658,13 @@ export enum RuntimeErrorCode {
    * answers; a client that attaches later is not told.
    */
   HostUnreachable = "host-unreachable",
+
+  /**
+   * The request opened a space DID that has no history. Opening a space
+   * creates nothing, so the client's remedy is to tell the reader that no
+   * space answers to the address, and to offer to create one.
+   */
+  SpaceNotFound = "space-not-found",
 }
 
 /**
@@ -767,14 +779,6 @@ export type InitializationData = {
    * The space this connection opens on.
    */
   spaceDid: DID;
-
-  /**
-   * The space's name, where the client knows it. Temporary.
-   */
-  spaceName?: string;
-
-  /** Temporary key pair for the space, carried as `identity` above is. */
-  spaceIdentity?: FabricKeyPair;
 
   /**
    * Experimental space-model feature flags, declared by the host. The worker
@@ -1816,15 +1820,14 @@ export type RuntimeSyncedRequest = BaseRequest & {
   type: RequestType.RuntimeSynced;
 };
 
-/** Resolve a legacy named space inside the worker so its derived identity can
- * be retained as fresh-space ACL bootstrap authority. */
-export type ResolveSpaceNameRequest = BaseRequest & {
-  type: RequestType.ResolveSpaceName;
+/** Create a space owned by the worker's identity, and return its DID once
+ * the space's genesis commit is confirmed. The worker records the space in
+ * its user's Home space list, under `label`. */
+export type CreateSpaceRequest = BaseRequest & {
+  type: RequestType.CreateSpace;
 
-  /**
-   * The name to resolve.
-   */
-  name: string;
+  /** What the space is called in the Home space list. */
+  label?: string;
 };
 
 /**
@@ -3267,7 +3270,7 @@ export type IPCClientRequest =
   | SpaceSetAclEntryRequest
   | SpaceRemoveAclEntryRequest
   | RuntimeSyncedRequest
-  | ResolveSpaceNameRequest
+  | CreateSpaceRequest
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
   | VDomMountRequest
@@ -4207,8 +4210,8 @@ export type Commands = {
     request: RuntimeSyncedRequest;
     response: EmptyResponse;
   };
-  [RequestType.ResolveSpaceName]: {
-    request: ResolveSpaceNameRequest;
+  [RequestType.CreateSpace]: {
+    request: CreateSpaceRequest;
     response: SpaceResponse;
   };
   [RequestType.RegisterSpaceHost]: {

@@ -49,9 +49,9 @@ describe("piece-controller", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `controller-edit-${crypto.randomUUID()}`,
+          spaceDid: await runtime.createSpace(),
         }),
         runtime,
       );

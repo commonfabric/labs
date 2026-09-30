@@ -1,11 +1,11 @@
-import { env, Page } from "@commonfabric/integration";
+import { createTestSpace, env, Page } from "@commonfabric/integration";
 import { sleep } from "@commonfabric/utils/sleep";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForText } from "./cfc-browser-helpers.ts";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { TEST_HTTP } from "./flags.ts";
 import {
   initializePiecesController,
@@ -13,7 +13,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const ignore = !TEST_HTTP;
 
 // Fetch data tests may require network access and are skipped in CI until we handle external dependencies properly in CI environments.
@@ -25,14 +25,16 @@ describe("fetch json integration test", () => {
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let piece: PieceController;
 
   if (!ignore) {
     beforeAll(async () => {
       identity = await Identity.generate({ implementation: "noble" });
+      spaceDid = await createTestSpace(identity);
       cc = await initializePiecesController({
-        space: SPACE_NAME,
+        space: spaceDid,
         apiUrl: new URL(API_URL),
         identity: identity,
       });
@@ -62,7 +64,7 @@ describe("fetch json integration test", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceId: piece.id,
         },
         identity,
@@ -94,7 +96,7 @@ describe("fetch json integration test", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceId: piece.id,
         },
         identity,

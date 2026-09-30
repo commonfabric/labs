@@ -3,6 +3,7 @@
  * rendered `cf-cell-link`, click it, and wait for the destination view.
  */
 
+import type { DID } from "@commonfabric/identity";
 import {
   type Page,
   type ProbeApi,
@@ -226,28 +227,28 @@ export function clickCardOpenLink(
 }
 
 /**
- * Wait until the shell's selected view is `pieceId` in `spaceName`. A piece is
+ * Wait until the shell's selected view is `pieceId` in `spaceDid`. A piece is
  * addressed both bare (`fid1:…`, as a URL carries it) and in storage form
  * (`of:fid1:…`, as a rendered link carries it); either spelling is accepted on
  * both sides of the comparison.
  */
 export async function waitForPieceView(
   page: Page,
-  spaceName: string,
+  spaceDid: DID,
   pieceId: string,
 ): Promise<void> {
   await waitForShellReady(page);
   await waitForCondition(
     page,
-    (_probe, expectedSpaceName: string, expectedPieceId: string) => {
+    (_probe, expectedSpaceDid: string, expectedPieceId: string) => {
       const fid = (id: string | undefined) =>
         id === undefined ? undefined : id.replace(/^of:/, "");
       const state = globalThis.app?.serialize() as
-        | { view?: { spaceName?: string; pieceId?: string } }
+        | { view?: { spaceDid?: string; pieceId?: string } }
         | undefined;
-      return state?.view?.spaceName === expectedSpaceName &&
+      return state?.view?.spaceDid === expectedSpaceDid &&
         fid(state.view.pieceId) === fid(expectedPieceId);
     },
-    { args: [spaceName, pieceId] },
+    { args: [spaceDid, pieceId] },
   );
 }

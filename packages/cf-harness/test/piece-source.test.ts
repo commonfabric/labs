@@ -144,9 +144,9 @@ describe("piece-source", () => {
       fetch: patternFetch,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `piece-source-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );

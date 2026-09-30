@@ -22,9 +22,14 @@
  * holds through the browser stack.
  */
 
-import { env, type Page, waitFor } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitFor,
+} from "@commonfabric/integration";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -51,7 +56,7 @@ import {
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const PROPAGATION_TIMEOUT = 60_000;
 // The opt-in sender-echo instrument (W4): time each authored click to the
 // SENDER's own speculative render, beside the cross-browser waits. Off by
@@ -182,6 +187,7 @@ describe("lunch poll: two users vote on a shared option", () => {
 
   let hostIdentity: Identity;
   let guestIdentity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let pieceId: string;
   let resultSinkCancel: (() => void) | undefined;
@@ -191,8 +197,11 @@ describe("lunch poll: two users vote on a shared option", () => {
       Identity.generate({ implementation: "noble" }),
       Identity.generate({ implementation: "noble" }),
     ]);
+    spaceDid = await createTestSpace(hostIdentity, {
+      grants: { [guestIdentity.did()]: "WRITE" },
+    });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: hostIdentity,
     });
@@ -233,10 +242,9 @@ describe("lunch poll: two users vote on a shared option", () => {
 
   it("both users' votes on the same option survive, and a second option tallies independently", async () => {
     const timer = new StepTimer();
-    const view = { spaceName: SPACE_NAME, pieceId };
+    const view = { spaceDid, pieceId };
     const hostPage = hostShell.page();
     const guestPage = guestShell.page();
-    const spaceDid = cc.getSpace();
 
     try {
       await timer.run(
@@ -256,7 +264,7 @@ describe("lunch poll: two users vote on a shared option", () => {
           ]),
       );
       // ShellIntegration.goto() waits for URL/login state, while RootView
-      // resolves the named space and AppView loads its active pattern
+      // resolves the space and AppView loads its active pattern
       // independently. A runtime can report idle during that handoff, with the
       // previous or provisional root still rendered. Wait for the PieceHandle
       // on each browser to belong to this poll's space before interacting with

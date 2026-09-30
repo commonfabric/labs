@@ -25,7 +25,6 @@ import { property, state } from "lit/decorators.js";
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
-import { prepareNamedSpace } from "../lib/named-space.ts";
 import {
   RuntimeInternals,
   type SlugReferenceRefusal,
@@ -401,7 +400,6 @@ export class XAppView extends BaseView {
     > => {
       if (!rt || !space) return;
       try {
-        await prepareNamedSpace(app, rt, space);
         // The space home renders the root, so there it has to run. A
         // piece-focused view reads NOTHING from it — so it is not fetched
         // at all, and none of what the root's result reaches is demanded.
@@ -462,7 +460,6 @@ export class XAppView extends BaseView {
       // under the current address.
       this.#namedAMember = false;
       try {
-        await prepareNamedSpace(app, rt, space);
         if ("pieceSlug" in app.view && app.view.pieceSlug) {
           // The reference is resolved before the piece is asked for, because
           // which piece a slug names is a question about the space and not
@@ -1154,6 +1151,9 @@ export class XAppView extends BaseView {
           : []}"
         .loadError="${loadError}"
         .runtimeError="${runtimeLoadError}"
+        .spaceName="${"spaceName" in this.app.view
+          ? this.app.view.spaceName
+          : undefined}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

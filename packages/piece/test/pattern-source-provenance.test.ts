@@ -92,9 +92,9 @@ describe("ensureDefaultPattern stamps patternSource", () => {
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "provenance-space-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     controller = new PiecesController(session, runtime);
     await controller.synced();

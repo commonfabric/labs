@@ -3,7 +3,8 @@
  * protocol: what each `acl` mode admits and refuses, how a session is
  * revoked when its grant goes away, the genesis and shape rules an ACL
  * document is held to, the delegated READ binding a delegating principal
- * opens with `actingAs: "space-owner"`, and `sameAcl()`.
+ * opens with `actingAs: "space-owner"`, the serving plane's
+ * `foreignWriteAuthorityFor()`, and `sameAcl()`.
  */
 
 import { expect } from "@std/expect";
@@ -218,8 +219,8 @@ const graphQuery = async (
   return nextResponse<GraphQueryResult>(messages);
 };
 
-/** Initialize a fresh space through the space identity, then transfer OWNER
- *  to the normal user. This mirrors the named-space bootstrap path. */
+/** Write a fresh space's genesis ACL as the space identity, the one write
+ *  that identity may make without a grant, as creating a space does. */
 const initializeSpaceAcl = async (
   server: Server,
   space: string,
@@ -707,6 +708,120 @@ describe("v2-server-acl", () => {
           2,
         );
         expectExists(write.ok);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses the space DID whatever its space's ACL does not grant it once genesis lands", async () => {
+      const server = createAclServer(
+        "memory://acl-enforce-space-after-genesis",
+        {
+          mode: "enforce",
+        },
+      );
+      const space = "did:key:z6Mk-acl-space-after-genesis";
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        const refused = await openSession(await connect(server), space, space);
+        expect(refused.error?.name).toBe("AuthorizationError");
+
+        const alice = await connect(server);
+        const aliceSession = await openSession(alice, space, ALICE);
+        expectExists(aliceSession.ok);
+        expectExists(
+          (await transactSet(
+            alice,
+            space,
+            aliceSession.ok.sessionId,
+            `of:${space}`,
+            { [ALICE]: "OWNER", [space]: "READ" },
+            1,
+          )).ok,
+        );
+
+        const holder = await connect(server);
+        const opened = await openSession(holder, space, space);
+        expectExists(opened.ok, "a `READ` grant admits the space DID's open");
+        expectExists(
+          (await graphQuery(holder, space, opened.ok.sessionId, `of:${space}`))
+            .ok,
+        );
+        const write = await transactSet(
+          holder,
+          space,
+          opened.ok.sessionId,
+          "of:doc:holder",
+          { holder: true },
+          1,
+        );
+        expect(write.error?.name).toBe("AuthorizationError");
+        const claim = await transactSet(
+          holder,
+          space,
+          opened.ok.sessionId,
+          `of:${space}`,
+          { [space]: "OWNER" },
+          2,
+        );
+        expect(claim.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("grants a Home space's user, whose DID is the space, full access through the `OWNER` entry its genesis ACL names", async () => {
+      const server = createAclServer("memory://acl-enforce-home", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-acl-home";
+      try {
+        await initializeSpaceAcl(server, space, { [space]: "OWNER" });
+        const user = await connect(server);
+        const opened = await openSession(user, space, space);
+        expectExists(opened.ok);
+        expectExists(
+          (await transactSet(
+            user,
+            space,
+            opened.ok.sessionId,
+            "of:doc:home",
+            { home: true },
+            1,
+          )).ok,
+        );
+        const read = await graphQuery(
+          user,
+          space,
+          opened.ok.sessionId,
+          "of:doc:home",
+        );
+        expect(read.ok?.entities[0]?.document?.value).toEqual({ home: true });
+        expectExists(
+          (await transactSet(
+            user,
+            space,
+            opened.ok.sessionId,
+            `of:${space}`,
+            { [space]: "OWNER", [BOB]: "READ" },
+            2,
+          )).ok,
+        );
+
+        const bob = await connect(server);
+        const bobSession = await openSession(bob, space, BOB);
+        expectExists(bobSession.ok);
+        const bobWrite = await transactSet(
+          bob,
+          space,
+          bobSession.ok.sessionId,
+          "of:doc:bob",
+          { from: "bob" },
+          1,
+        );
+        expect(bobWrite.error?.name).toBe("AuthorizationError");
+        const carol = await openSession(await connect(server), space, CAROL);
+        expect(carol.error?.name).toBe("AuthorizationError");
       } finally {
         await server.close();
       }
@@ -1388,7 +1503,7 @@ describe("v2-server-acl", () => {
       }
     });
 
-    it("accepts the space identity's claim on a legacy home space and revokes its public readers", async () => {
+    it("returns `AuthorizationError` for the space identity's claim on a populated space without an ACL, and revokes its public readers once a service DID claims it", async () => {
       const directory = await Deno.makeTempDir({ prefix: "memory-acl-home-" });
       const store = toFileUrl(`${directory}/`);
       const space = ALICE;
@@ -1412,7 +1527,10 @@ describe("v2-server-acl", () => {
           await seedServer.close();
         }
 
-        const server = createAclServer(store, { mode: "enforce" });
+        const server = createAclServer(store, {
+          mode: "enforce",
+          serviceDids: [SERVICE],
+        });
         try {
           const legacyReader = await connect(server);
           const legacySession = await openSession(legacyReader, space, BOB);
@@ -1429,7 +1547,41 @@ describe("v2-server-acl", () => {
             { [space]: "OWNER" },
             1,
           );
-          expectExists(claim.ok);
+          expect(
+            claim.error?.name,
+            "the space identity holds no more than any authenticated principal",
+          ).toBe("AuthorizationError");
+          const write = await transactSet(
+            holder,
+            space,
+            opened.ok.sessionId,
+            "of:doc:holder",
+            { holder: true },
+            2,
+          );
+          expectExists(write.ok, "public compatibility includes WRITE");
+          const acl = await graphQuery(
+            holder,
+            space,
+            opened.ok.sessionId,
+            `of:${space}`,
+          );
+          expectExists(acl.ok);
+          expect(acl.ok.entities[0]?.document ?? null).toBeNull();
+          expect(legacyReader.messages).toEqual([]);
+
+          const service = await connect(server);
+          const serviceSession = await openSession(service, space, SERVICE);
+          expectExists(serviceSession.ok);
+          const serviceClaim = await transactSet(
+            service,
+            space,
+            serviceSession.ok.sessionId,
+            `of:${space}`,
+            { [space]: "OWNER" },
+            1,
+          );
+          expectExists(serviceClaim.ok);
 
           expect(shiftMessage(legacyReader.messages)).toEqual({
             type: "session/revoked",
@@ -1441,6 +1593,8 @@ describe("v2-server-acl", () => {
           const bob = await connect(server);
           const denied = await openSession(bob, space, BOB);
           expect(denied.error?.name).toBe("AuthorizationError");
+          const owner = await connect(server);
+          expectExists((await openSession(owner, space, space)).ok);
         } finally {
           await server.close();
         }
@@ -2015,6 +2169,88 @@ describe("v2-server-acl", () => {
         await Deno.remove(directory, { recursive: true });
       }
     });
+
+    it("refuses the space DID on a malformed or retracted ACL, which a service DID repairs, in `observe` mode as well", async () => {
+      for (const label of ["malformed", "retracted"] as const) {
+        for (const mode of ["observe", "enforce"] as const) {
+          const directory = await Deno.makeTempDir({
+            prefix: `memory-acl-repair-${label}-${mode}-`,
+          });
+          const store = toFileUrl(`${directory}/`);
+          const space = `did:key:z6Mk-acl-repair-${label}`;
+          try {
+            const seedServer = createAclServer(store, { mode: "off" });
+            try {
+              if (label === "malformed") {
+                await seedServer.writeDocument(space, `of:${space}`, {
+                  [space]: "ADMIN",
+                });
+              } else {
+                await seedServer.writeDocument(space, `of:${space}`, {
+                  [space]: "OWNER",
+                });
+                const holder = await connect(seedServer);
+                const opened = await openSession(holder, space, space);
+                expectExists(opened.ok);
+                expectExists(
+                  (await transactOperation(
+                    holder,
+                    space,
+                    opened.ok.sessionId,
+                    { op: "delete", id: `of:${space}` },
+                    1,
+                  )).ok,
+                );
+              }
+            } finally {
+              await seedServer.close();
+            }
+
+            const server = createAclServer(store, {
+              mode,
+              serviceDids: [SERVICE],
+            });
+            try {
+              const refused = await openSession(
+                await connect(server),
+                space,
+                space,
+              );
+              expect(refused.error?.name, `${label} ${mode}`).toBe(
+                "AuthorizationError",
+              );
+
+              const service = await connect(server);
+              const serviceSession = await openSession(
+                service,
+                space,
+                SERVICE,
+              );
+              expectExists(serviceSession.ok, `${label} ${mode}`);
+              expectExists(
+                (await transactSet(
+                  service,
+                  space,
+                  serviceSession.ok.sessionId,
+                  `of:${space}`,
+                  { [space]: "OWNER" },
+                  1,
+                )).ok,
+                `${label} ${mode}`,
+              );
+              expectExists(
+                (await openSession(await connect(server), space, space)).ok,
+                `${label} ${mode}`,
+              );
+            } finally {
+              await server.close();
+            }
+          } finally {
+            await Deno.remove(directory, { recursive: true });
+          }
+        }
+      }
+    });
   });
 
   describe("`observe` mode", () => {
@@ -2069,6 +2305,110 @@ describe("v2-server-acl", () => {
         await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
         const reopened = await openSession(await connect(server), space, ALICE);
         expectExists(reopened.ok);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns `AuthorizationError` for an ACL write by a principal lacking `OWNER`, a stranger or a space's own DID", async () => {
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-observe-owner-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const owned = "did:key:z6Mk-acl-observe-owned";
+      const unclaimed = "did:key:z6Mk-acl-observe-unclaimed";
+      try {
+        const seedServer = createAclServer(store, { mode: "off" });
+        try {
+          const seeder = await connect(seedServer);
+          const opened = await openSession(seeder, unclaimed, BOB);
+          expectExists(opened.ok);
+          expectExists(
+            (await transactSet(
+              seeder,
+              unclaimed,
+              opened.ok.sessionId,
+              "of:doc:legacy",
+              { legacy: true },
+              1,
+            )).ok,
+          );
+        } finally {
+          await seedServer.close();
+        }
+
+        const server = createAclServer(store, { mode: "observe" });
+        try {
+          await initializeSpaceAcl(server, owned, { [ALICE]: "OWNER" });
+          const bob = await connect(server);
+          const bobSession = await openSession(bob, owned, BOB);
+          expectExists(bobSession.ok, "observe mode admits the open");
+          const takeover = await transactSet(
+            bob,
+            owned,
+            bobSession.ok.sessionId,
+            `of:${owned}`,
+            { [BOB]: "OWNER" },
+            1,
+          );
+          expect(takeover.error?.name).toBe("AuthorizationError");
+
+          const holder = await connect(server);
+          const holderSession = await openSession(holder, unclaimed, unclaimed);
+          expectExists(holderSession.ok);
+          const claim = await transactSet(
+            holder,
+            unclaimed,
+            holderSession.ok.sessionId,
+            `of:${unclaimed}`,
+            { [unclaimed]: "OWNER" },
+            1,
+          );
+          expect(claim.error?.name).toBe("AuthorizationError");
+          expect(await server.readDocument(owned, `of:${owned}`)).toEqual({
+            value: { [ALICE]: "OWNER" },
+          });
+          expect(await server.readDocument(unclaimed, `of:${unclaimed}`))
+            .toBeNull();
+        } finally {
+          await server.close();
+        }
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
+    it("admits the space DID's access beyond its space's ACL once genesis lands, and counts each would-deny", async () => {
+      const server = createAclServer(
+        "memory://acl-observe-space-after-genesis",
+        {
+          mode: "observe",
+        },
+      );
+      const space = "did:key:z6Mk-acl-observe-space-after-genesis";
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        expect(server.aclStats.wouldDeny, "genesis is within its grant").toBe(
+          0,
+        );
+
+        const holder = await connect(server);
+        const opened = await openSession(holder, space, space);
+        expectExists(opened.ok);
+        const afterOpen = server.aclStats.wouldDeny;
+        expect(afterOpen).toBeGreaterThan(0);
+
+        const write = await transactSet(
+          holder,
+          space,
+          opened.ok.sessionId,
+          "of:doc:holder",
+          { holder: true },
+          1,
+        );
+        expectExists(write.ok);
+        expect(server.aclStats.wouldDeny).toBeGreaterThan(afterOpen);
+        expect(server.aclStats.denied).toBe(0);
       } finally {
         await server.close();
       }
@@ -2300,9 +2640,9 @@ describe("v2-server-acl", () => {
           delegatingDids: [SERVICE],
         });
         // A SELF-OWNED (home-shaped) space: the binding resolves the space
-        // DID itself, whose implicit-OWNER short-circuit would keep READ
-        // forever — the stale-binding hazard's worst case (Codex P1 review
-        // finding on #6156).
+        // DID itself, and the transfer below leaves that DID a `READ` grant —
+        // the stale-binding hazard's worst case (Codex P1 review finding on
+        // #6156).
         const space = "did:key:z6Mk-acl-ow31-space-7";
         await initializeSpaceAcl(server, space, { [space]: "OWNER" });
         const service = await connect(server);
@@ -2313,11 +2653,11 @@ describe("v2-server-acl", () => {
           });
           expectExists(bound.ok, bound.error?.message);
 
-          // The space identity transfers ownership wholly to BOB. The bound
-          // session's stored acting principal (the space DID) still holds
-          // implicit OWNER by identity — but it is no longer what the
-          // binding WOULD resolve, so the session must be revoked and the
-          // next mount re-binds the new owner.
+          // The space identity transfers ownership to BOB and keeps `READ`.
+          // The bound session's stored acting principal (the space DID) can
+          // still read, but it is no longer what the binding WOULD resolve,
+          // so the session must be revoked and the next mount re-binds the
+          // new owner.
           const spaceSession = await openSession(authority, space, space);
           expectExists(spaceSession.ok);
           const transferred = await transactSet(
@@ -2325,7 +2665,7 @@ describe("v2-server-acl", () => {
             space,
             spaceSession.ok.sessionId,
             `of:${space}`,
-            { [BOB]: "OWNER" },
+            { [BOB]: "OWNER", [space]: "READ" },
             1,
           );
           expectExists(transferred.ok, transferred.error?.message);
@@ -2509,6 +2849,55 @@ describe("v2-server-acl", () => {
           await server.close();
         }
       });
+    });
+  });
+
+  describe("foreignWriteAuthorityFor()", () => {
+    it("refuses every principal, the space's own DID included, a space with no store, and creates none", async () => {
+      const server = createAclServer("memory://foreign-write-creation", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-foreign-write-creation";
+      try {
+        for (const principal of [space, ALICE]) {
+          expect(await server.foreignWriteAuthorityFor(space, principal))
+            .toEqual({
+              granted: false,
+              reason: `no space has the DID ${space} — a space exists once ` +
+                "its genesis ACL commit lands (protocol.md §2b)",
+            });
+        }
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns a grant to the space's own DID only when its space's ACL grants it `WRITE`", async () => {
+      const server = createAclServer("memory://foreign-write-acl", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-foreign-write-acl";
+      const home = "did:key:z6Mk-foreign-write-home";
+      try {
+        await initializeSpaceAcl(server, space, {
+          [ALICE]: "OWNER",
+          [space]: "READ",
+        });
+        expect(await server.foreignWriteAuthorityFor(space, space)).toEqual({
+          granted: false,
+          reason: `the ACL of ${space} grants ${space} READ (WRITE required)`,
+        });
+        expect(await server.foreignWriteAuthorityFor(space, ALICE)).toEqual({
+          granted: true,
+        });
+
+        await initializeSpaceAcl(server, home, { [home]: "OWNER" });
+        expect(await server.foreignWriteAuthorityFor(home, home)).toEqual({
+          granted: true,
+        });
+      } finally {
+        await server.close();
+      }
     });
   });
 

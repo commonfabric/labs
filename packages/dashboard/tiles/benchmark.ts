@@ -65,6 +65,7 @@
  * tile's collection keeps their history warm.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -432,7 +433,7 @@ async function pageBenchmarkRuns(
     );
     const batch = response.workflow_runs ?? [];
     if (!batch.length) break;
-    runs.push(...batch.filter((run) => run.head_branch === "main"));
+    for (const run of batch) if (run.head_branch === "main") runs.push(run);
     if (
       batch.length < 100 ||
       Date.parse(batch[batch.length - 1].created_at) < cutoff
@@ -1124,8 +1125,8 @@ function benchmarkIndexView(
       count === 1 ? "" : "s"
     }${windowLabel}</div>`;
   const allPoints = indices.flatMap((series) => series.points);
-  const chartStart = Math.min(...allPoints.map((point) => point.at));
-  const chartEnd = Math.max(...allPoints.map((point) => point.at));
+  const chartStart = minOf(allPoints.map((point) => point.at));
+  const chartEnd = maxOf(allPoints.map((point) => point.at));
   const chartSpan = chartEnd - chartStart;
   const chartAxis = chartSpan || 1;
   const chart = multiSparkline(
@@ -1874,8 +1875,8 @@ export function benchPage(
       const status = representative.status;
       const pct = representative.pct;
       const allPoints = cpus.flatMap((series) => series.points);
-      const firstAt = Math.min(...allPoints.map((point) => point.at));
-      const lastAt = Math.max(...allPoints.map((point) => point.at));
+      const firstAt = minOf(allPoints.map((point) => point.at));
+      const lastAt = maxOf(allPoints.map((point) => point.at));
       const spark = multiSparkline(
         cpus.map((series) => ({
           vals: series.values,

@@ -94,6 +94,18 @@ type AclChangeNotifier = {
   noteSpaceAclChanged?: (space: MemorySpace) => void;
 };
 
+/** Mounts `manager`'s session on `space`, before anything reads there. */
+async function mountSession(
+  manager: StorageManager,
+  space: MemorySpace,
+): Promise<void> {
+  const provider = manager.open(space);
+  if (provider.ensureSession === undefined) {
+    throw new Error("This storage provider cannot mount a session on its own");
+  }
+  await provider.ensureSession();
+}
+
 /**
  * A gate on the frames a storage manager's sessions send to the memory server.
  * While it is held, each frame waits, in the order it was sent, until the gate
@@ -371,7 +383,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // (1) Activation before genesis: the serving plane opens its session
     // on a space with no ACL at all. Admitted — a fresh space grants
     // authenticated READ, and OW31's binding resolves nothing to bind.
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
 
     // (2) The genesis ACL lands, naming the user OWNER and no `"*"`.
     // `#revokeDeauthorizedSessions` de-authorizes the pre-genesis
@@ -451,7 +463,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
 
     // Pre-genesis open, then the genesis ACL revokes it: the stranger
     // holds no READ and there is no `"*"` grant.
-    await stranger.ensureSpaceInitialized(homeSpace);
+    await mountSession(stranger, homeSpace);
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     const docId = await seedDoc(homeSigner, homeSpace, "fail-closed", "v1");
     expect(
@@ -500,7 +512,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     // decides in favour of the space's current owner.
     const serving = servingManager();
     const minter = clientRuntime(homeSigner);
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     const docId = await seedDoc(homeSigner, homeSpace, "rebind", "v1");
 
@@ -614,7 +626,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     // Opened AFTER the genesis, so it is authorized from the start and
     // nothing ever revokes it.
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     expect(
       (await probeRead(serving, homeSpace, mintProbeId(minter, homeSpace)))
         .error,
@@ -686,7 +698,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     const serving = await servingUp.matching(() => true);
 
     // Activation before genesis, on the FOREIGN home space.
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     // The genesis lands through a real client transact — the host's own
     // admission observer is the only thing that learns of it.
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
@@ -716,7 +728,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     gate.hold();
     const read = probeRead(serving, homeSpace, docId);
     await gate.heldFrames.reached(1);
@@ -752,7 +764,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
       sessionOpens.count((iss) => iss === strangerSigner.did());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
-    await stranger.ensureSpaceInitialized(homeSpace);
+    await mountSession(stranger, homeSpace);
     gate.hold();
     const read = probeRead(stranger, homeSpace, docId);
     await gate.heldFrames.reached(1);
@@ -781,7 +793,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     gate.hold();
     const reads = [
       probeRead(serving, homeSpace, docId),
@@ -811,7 +823,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
-    await serving.ensureSpaceInitialized(homeSpace);
+    await mountSession(serving, homeSpace);
     gate.hold();
     const read = probeRead(serving, homeSpace, docId);
     await gate.heldFrames.reached(1);

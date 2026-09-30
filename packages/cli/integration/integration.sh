@@ -179,18 +179,22 @@ setup_space() {
     error "API_URL must be defined."
   fi
 
-  SPACE=$(mktemp -u XXXXXXXXXX) # generates a random space
   IDENTITY=$(mktemp)
-  SPACE_ARGS="--api-url=$API_URL --identity=$IDENTITY --space=$SPACE"
   WORK_DIR=$(mktemp -d)
+
+  # Create a key, and a space it owns. Opening a space never creates one, so
+  # the space comes from `cf space create`, which prints its DID.
+  cf id new > "$IDENTITY"
+  SPACE=$(cf space create --quiet --api-url="$API_URL" --identity="$IDENTITY")
+  if [[ "$SPACE" != did:key:* ]]; then
+    error "cf space create printed no DID: $SPACE"
+  fi
+  SPACE_ARGS="--api-url=$API_URL --identity=$IDENTITY --space=$SPACE"
 
   echo "API_URL=$API_URL"
   echo "SPACE=$SPACE"
   echo "IDENTITY=$IDENTITY"
   echo "WORK_DIR=$WORK_DIR"
-
-  # Create a key
-  cf id new > "$IDENTITY"
 
   # Check space is empty
   if [ "$(cf piece ls $SPACE_ARGS)" != "" ]; then
@@ -277,6 +281,23 @@ create_stepped_counter_piece() {
 
 run_piece_values() {
   setup_space
+
+  # A name nobody has created a space for reaches no space, and filing a piece
+  # there is refused with a message saying so, rather than creating the space.
+  local fresh_name
+  fresh_name="no-space-$(new_invocation_id)"
+  local refused
+  if refused=$(cf piece new --main-export $CUSTOM_EXPORT \
+    --api-url="$API_URL" --identity="$IDENTITY" --space="$fresh_name" \
+    $PATTERN_SRC 2>&1); then
+    error "cf piece new into the fresh name $fresh_name should fail."
+  fi
+  if ! echo "$refused" | grep -q "No space answers to"; then
+    error "cf piece new into a fresh name should say no space answers: $refused"
+  fi
+  if ! echo "$refused" | grep -q "space create"; then
+    error "cf piece new into a fresh name should point at cf space create: $refused"
+  fi
 
   # Create a new piece using custom default export as input
   PIECE_ID=$(cf piece new --main-export $CUSTOM_EXPORT $SPACE_ARGS $PATTERN_SRC)

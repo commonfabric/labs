@@ -8,6 +8,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity/did";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import {
   type Cell,
@@ -65,7 +66,7 @@ export default pattern<Input>(({ title, boardNames }) => ({ title, boardNames })
 describe("piece-link-input-visibility", () => {
   let server: ReturnType<typeof newLoopbackServer>;
   let storage: EmulatedStorageManager;
-  let spaceName: string;
+  let spaceDid: DID;
   let runtime: Runtime;
   let pieces: PiecesController;
   let deps: PieceResolutionDeps;
@@ -73,13 +74,13 @@ describe("piece-link-input-visibility", () => {
   beforeEach(async () => {
     server = newLoopbackServer();
     storage = EmulatedStorageManager.connectTo(server, { as: signer });
-    spaceName = "issue-6965-" + crypto.randomUUID();
+    spaceDid = (await Identity.generate()).did();
     runtime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
       storageManager: storage,
     });
     pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid }),
       runtime,
     );
     await pieces.synced();
@@ -110,7 +111,7 @@ describe("piece-link-input-visibility", () => {
     });
     try {
       const readerPieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({ identity: signer, spaceDid }),
         readerRuntime,
       );
       await readerPieces.synced();
