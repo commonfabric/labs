@@ -27,10 +27,7 @@ import {
   type URI,
 } from "./sigil-types.ts";
 import { arrayEqual } from "./path-utils.ts";
-import type {
-  IMemorySpaceAddress,
-  MemoryAddressPathComponent,
-} from "./storage/interface.ts";
+import type { IMemorySpaceAddress } from "./storage/interface.ts";
 
 export { decodeJsonPointer, encodeJsonPointer };
 
