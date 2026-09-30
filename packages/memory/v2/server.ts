@@ -1216,6 +1216,13 @@ class Connection {
     return this.#pendingReceives > 0;
   }
 
+  /** Resolves once every frame handed over so far has been handled. */
+  whenReceivesSettled(): Promise<void> {
+    if (this.#pendingReceives === 0) return Promise.resolve();
+    this.#receiveIdle ??= Promise.withResolvers<void>();
+    return this.#receiveIdle.promise;
+  }
+
   async waitForReceiveQueueToDrain(deadlineMs: number): Promise<boolean> {
     while (this.#pendingReceives > 0) {
       const remainingMs = deadlineMs - Date.now();
@@ -2878,6 +2885,13 @@ export class Server {
    * does not reschedule, so a single call is sufficient.
    */
   async idle(): Promise<void> {
+    // A host hands frames over without waiting for them, so the frames in
+    // flight on every connection are handled before anything else counts.
+    await Promise.all(
+      [...this.#connections.values()].map((connection) =>
+        connection.whenReceivesSettled()
+      ),
+    );
     await this.#drainSpacePublicationLocks();
     // Dirty spaces with no timer armed are manual mode's held fan-out.
     // idle() is an explicit synchronization point exactly like
