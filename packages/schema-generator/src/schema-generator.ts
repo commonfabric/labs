@@ -1468,6 +1468,7 @@ export class SchemaGenerator {
       typeNode: _,
       hintsNode: __,
       instantiatedAs: ___,
+      carriersRead: ____,
       ...unplaced
     } = context;
     const baseContext: GenerationContext = instantiatedAs
