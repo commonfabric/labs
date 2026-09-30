@@ -484,12 +484,15 @@ Same-run resume retains naming receipts and the requirement from its recorded
 Fabric session even when connection flags are omitted; conversation history
 alone does not satisfy a new turn. A host that opens a Fabric session but grants
 a tool set without `assign_slug`, such as a lane with no authoring tools, keeps
-the run's text return contract, since it could never produce the receipt.
-Generic library runs without a configured Fabric session keep their text return
-contract; factory-only library callers can enable `requirePieceOutput`.
-Host-configured structured-result requests keep their schema-based document
-return contract, including on resume. Child return contracts are unchanged. A
-budget-finalized give-up can still report partial findings without a piece.
+the run's text return contract, since it could never produce the receipt. That
+exception covers only a run whose Fabric session could back `assign_slug`: a
+resume that cannot back it keeps the requirement its recorded session implies,
+whatever tools it was granted. Generic library runs without a configured Fabric
+session keep their text return contract; factory-only library callers can enable
+`requirePieceOutput`. Host-configured structured-result requests keep their
+schema-based document return contract, including on resume. Child return
+contracts are unchanged. A budget-finalized give-up can still report partial
+findings without a piece.
 
 When a missing input or choice blocks the goal, the parent calls `finish_task`
 with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it
