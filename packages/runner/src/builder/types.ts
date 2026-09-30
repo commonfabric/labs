@@ -337,6 +337,14 @@ export type Frame = {
    */
   eventTime?: number;
 
+  /**
+   * The event key of the event that opened this handler frame, which
+   * `eventKey()` returns. Derived once per run from the durable event id, the
+   * acting principal and the stream (see `deriveEventKey()`). Only present on
+   * handler frames.
+   */
+  eventKey?: string;
+
   unsafe_binding?: UnsafeBinding;
 
   /**

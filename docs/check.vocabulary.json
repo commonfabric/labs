@@ -30,6 +30,7 @@
     "computed",
     "currentPrincipal",
     "equals",
+    "eventKey",
     "fetchBinary",
     "fetchJson",
     "fetchJsonUnchecked",

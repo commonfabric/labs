@@ -62,6 +62,12 @@ append later would reintroduce exactly the binding the stamp already
 made. `payload` is the only client-authored content field, and
 `clientSeq` the only client-minted part of `firedAt`.
 
+A handler never reads `eventId` itself. `eventKey()` returns it a key derived
+from `eventId`, the acting user and the stream (`deriveEventKey()` in
+`event-identity.ts`), which every run of the event shares, the client's echo and
+the served run included, and which another actor sending the same `eventId`
+does not ([`features/event-key.md`](../../features/event-key.md)).
+
 The shape is settled as specced — every field above is load-bearing
 (RULED 2026-08-02); a later follow-up adds integrity provenance to
 events (e.g. attesting an authentic DOM origin).

@@ -98,11 +98,21 @@ instead of hiding it in module-scoped mutable variables.
   imperative, push complex logic into a helper and keep the bound state
   explicit.
 - Call `Date.now()` and `Math.random()` directly when a handler needs a
-  timestamp or random ID. Inside a handler these built-ins are allowed (the
+  timestamp or a random value. Inside a handler these built-ins are allowed (the
   clock is coarsened to one-second resolution); in a lift/computed or at
   pattern-body level they throw a `TimeCapabilityError`. For reactive time in a
   computed, read the interval `#now/N` wish (bare `#now` is a frozen
   first-load capture, not a clock).
+- Call `eventKey()`, not `Math.random()`, for an ID that has to name the event:
+  a key for acting on a request at most once, or the ID of a record the event
+  creates. A handler can run more than once for one event — a retry, or a
+  client's speculative run before the server's — and `Math.random()` returns
+  something different each time, while `eventKey()` returns the same key on
+  every run of the event and a different one for every other event. A stream
+  can re-admit an event id it has already handled, which gets the same key, so
+  create a record addressed by the key only if it is absent.
+  [The key of the event a handler handles](../../features/event-key.md) has the
+  details.
 - Timers are not part of the authored surface and do not compile, so drive
   timed work through the scheduler rather than reaching for `setTimeout()` or
   `setInterval()` in handler code.
