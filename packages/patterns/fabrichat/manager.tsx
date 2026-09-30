@@ -4,12 +4,10 @@
  * the user's home space, where `#chatManager` finds it, so everything it holds
  * is private to its user.
  *
- * It creates rooms in spaces of their own with `inSpace()`, which gives such a
- * space the default grants: its creator holds OWNER, and every authenticated
- * principal holds WRITE. A pattern can neither create a space open only to its
- * creator nor grant access by principal, so a room is open to any
- * authenticated principal who has a link to it, and granting each member
- * access is left for a host to do.
+ * It creates each room in a space of its own with `inSpace()`, which grants its
+ * creator OWNER and each other member named at creation WRITE, and no one
+ * else. A pattern can't change a space's grants after that, so a member added
+ * later is granted access only by a host.
  */
 import {
   type Cell,
@@ -17,6 +15,7 @@ import {
   type Default,
   equals,
   handler,
+  type InSpaceGrants,
   NAME,
   pattern,
   Stream,
@@ -205,8 +204,12 @@ const createRoom = (
   counterpart?: string,
 ): ChatIndexEntry => {
   const createdAt = epochNsecFromMsec(Date.now());
+  // The room's space grants this user OWNER and each other member WRITE.
+  const grants = Object.fromEntries(
+    members.map((member) => [member, "WRITE"]),
+  ) as InSpaceGrants;
   const room = roomLinkOf(
-    FabriChatRoom.inSpace()({
+    FabriChatRoom.inSpace(undefined, { grants })({
       about: {
         kind,
         createdAt,

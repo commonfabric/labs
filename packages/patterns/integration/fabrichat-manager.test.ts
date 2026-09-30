@@ -11,6 +11,7 @@ import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import { Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -121,7 +122,7 @@ describe("fabrichat-manager", () => {
     return { manager, send, rooms };
   };
 
-  it("creates a direct room and a group room, each in a space of its own", async () => {
+  it("creates each room in a space of its own that grants its members alone", async () => {
     const { send, rooms } = await startManager();
 
     await send("openDirect", { requestId: "d-1", counterpart: BOB });
@@ -136,5 +137,23 @@ describe("fabrichat-manager", () => {
     expect(spaces.length).toBe(2);
     expect(spaces).not.toContain(home);
     expect(spaces[0]).not.toBe(spaces[1]);
+
+    // This user holds OWNER, each other member WRITE, and no one else.
+    const aclOf = async (space: string) =>
+      (await server.readDocument(
+        space as Parameters<typeof server.readDocument>[0],
+        aclDocId(space) as Parameters<typeof server.readDocument>[1],
+      ))?.value;
+    const spaceOf = (kind: string) =>
+      rooms().find((entry) => entry.kind === kind).room
+        .getAsNormalizedFullLink().space;
+    expect(await aclOf(spaceOf("direct"))).toEqual({
+      [home]: "OWNER",
+      [BOB]: "WRITE",
+    });
+    expect(await aclOf(spaceOf("group"))).toEqual({
+      [home]: "OWNER",
+      [CAROL]: "WRITE",
+    });
   });
 });
