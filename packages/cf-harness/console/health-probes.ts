@@ -569,7 +569,13 @@ export type ConsoleVmReading =
   /** The daemon answered with something other than one JSON object. */
   | { found: "other"; answer: string }
   /** A daemon took the connection and gave no answer within the bound. */
-  | { found: "no-answer"; reason: string };
+  | { found: "no-answer"; reason: string }
+  /**
+   * The socket could not be connected to, for want of permission or for some
+   * reason other than nothing listening, so whether a daemon answers there
+   * is not known.
+   */
+  | { found: "unreadable"; reason: string };
 
 /**
  * How long a status request may go unanswered before the daemon counts as not
@@ -586,8 +592,9 @@ export const CFC_VM_STATUS_BOUND_MS = 15_000;
  * Asks the cfc-vm daemon listening at `socket` for its status, with the one
  * line `#cfcvm status`. The daemon counts the request as client activity,
  * which restarts its idle timer. A socket with nothing listening on it, or no
- * socket, is no daemon. An answer is a status where it is one JSON object,
- * and other where it is anything else but nothing; any other failure, a
+ * socket, is no daemon, and one that cannot be connected to otherwise is
+ * unreadable. An answer is a status where it is one JSON object, and other
+ * where it is anything else but nothing; once connected, any other failure, a
  * hang-up with nothing said among them, and no answer within `boundMs`, is no
  * answer.
  */
@@ -599,9 +606,10 @@ export const askCfcVmStatus = async (
   try {
     connection = await Deno.connect({ transport: "unix", path: socket });
   } catch (error) {
-    return noDaemon(error)
-      ? { found: "no-daemon" }
-      : { found: "no-answer", reason: `The connection failed: ${error}` };
+    return noDaemon(error) ? { found: "no-daemon" } : {
+      found: "unreadable",
+      reason: `The daemon socket could not be connected to: ${error}`,
+    };
   }
   // Closing the connection is what ends a read the bound cuts short, so the
   // one wait below is the whole of the request.
@@ -647,7 +655,7 @@ export const askCfcVmStatus = async (
  * sending a byte. The daemon closes such a connection and counts it as no
  * activity, so this finds out whether a daemon listens without restarting its
  * idle timer. A socket with nothing listening on it, or no socket, is no
- * daemon.
+ * daemon, and any other failure to connect is returned as it came.
  */
 export const touchCfcVmDaemon = async (
   socket: string,
@@ -690,7 +698,9 @@ const closeQuietly = (connection: Deno.Conn): void => {
  * hangs up without asking, which the daemon does not count as activity, and
  * reports the last answer as of when it was given, against the block images
  * the store holds now. So a daemon that stops, however it stops, reads idle
- * at the next read.
+ * at the next read. A socket that cannot be looked at, or connected to other
+ * than for nothing listening on it, leaves the row unknown: that says nothing
+ * of whether a daemon answers there.
  *
  * Polling the row never starts a VM, and does not on its own keep one up: a
  * VM that nothing else uses stops before the next question, which then finds
@@ -730,13 +740,16 @@ export const consoleVmHealthProbe = (
     source: "cfc-vm daemon",
     detail: socket,
   };
-  const unavailable = (checkedAt: string): ConsoleHealthRow[] => [{
+  const unknown = (checkedAt: string, reason: string): ConsoleHealthRow => ({
     ...fact,
     state: "unknown",
     checkedAt,
     value: "not verified",
-    reason: "The VM daemon could not be looked for.",
-  }];
+    reason,
+  });
+  const unavailable = (checkedAt: string): ConsoleHealthRow[] => [
+    unknown(checkedAt, "The VM daemon could not be looked for."),
+  ];
   if ("unreadable" in store) {
     return {
       id: "sandbox.vm",
@@ -744,12 +757,10 @@ export const consoleVmHealthProbe = (
       unavailable,
       read: () =>
         Promise.resolve([{
-          ...fact,
-          state: "unknown",
-          checkedAt: new Date().toISOString(),
-          value: "not verified",
-          reason:
+          ...unknown(
+            new Date().toISOString(),
             `${store.unreadable}. That file holds the VM's idle timeout, which paces this row's questions, so the row asks the daemon nothing.`,
+          ),
           remedy: `Make ${
             join(store.directory, "config.json")
           } a readable JSON object, which the daemon needs to start a VM, then restart the console, which reads it once.`,
@@ -810,13 +821,12 @@ export const consoleVmHealthProbe = (
         info = lstat(socket);
       } catch (error) {
         if (!(error instanceof Deno.errors.NotFound)) {
-          return [{
-            ...fact,
-            state: "unknown",
-            checkedAt,
-            value: "not verified",
-            reason: `The daemon socket could not be looked at: ${error}`,
-          }];
+          return [
+            unknown(
+              checkedAt,
+              `The daemon socket could not be looked at: ${error}`,
+            ),
+          ];
         }
         last = undefined;
         return [idle(checkedAt, noSocket)];
@@ -834,15 +844,19 @@ export const consoleVmHealthProbe = (
         }
         last = undefined;
         return [
-          found === "no-daemon"
-            ? idle(checkedAt, nothingListening)
-            : notAnswering(checkedAt, `The connection failed: ${found.failed}`),
+          found === "no-daemon" ? idle(checkedAt, nothingListening) : unknown(
+            checkedAt,
+            `The daemon socket could not be connected to: ${found.failed}`,
+          ),
         ];
       }
       const askedAt = now();
       const reading = await ask(socket);
       if (reading.found === "no-daemon") {
         return [idle(checkedAt, nothingListening)];
+      }
+      if (reading.found === "unreadable") {
+        return [unknown(checkedAt, reading.reason)];
       }
       if (reading.found === "no-answer") {
         return [notAnswering(checkedAt, reading.reason)];

@@ -812,6 +812,63 @@ describe("health-probes", () => {
       });
     });
 
+    it({
+      name:
+        "returns unknown, not failed, for a daemon socket whose mode forbids connecting to it",
+      ignore: searchesDespiteMode(),
+      fn: async () => {
+        // A connection refused for want of permission says nothing of whether
+        // the daemon behind the socket answers.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+          const socket = join(directory, "daemon.sock");
+          try {
+            await Deno.chmod(socket, 0o000);
+
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+            expect(row).toMatchObject({
+              state: "unknown",
+              value: "not verified",
+            });
+            expect(row.reason).toContain("Permission denied");
+            expect(daemon.lines).toEqual([]);
+          } finally {
+            await Deno.chmod(socket, 0o600);
+            await daemon.close();
+          }
+        });
+      },
+    });
+
+    it("returns unknown, not failed, where the daemon it last asked could not be connected to", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          let connectable = true;
+          const probe = consoleVmHealthProbe(store(directory), {
+            touch: (socket) =>
+              connectable
+                ? touchCfcVmDaemon(socket)
+                : Promise.resolve({ failed: "PermissionDenied: denied" }),
+          });
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          connectable = false;
+
+          const row = await readRow(probe);
+
+          expect(row).toMatchObject({
+            state: "unknown",
+            value: "not verified",
+          });
+          expect(row.reason).toContain("PermissionDenied: denied");
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
     it("returns running with the daemon's uptime, guest memory and images, and says the question is activity", async () => {
       await withStore(async (directory) => {
         const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
