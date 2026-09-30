@@ -101,8 +101,8 @@ A refusal changes no document the computation has read, and neither does a
 readmission, so on a client the call also registers the running action with the
 storage manager's access-change observer (`subscribeSpaceAccessChange()`), which
 runs it again through `Scheduler.invalidateAction()` when the verdict changes.
-Each registration lasts until the next change for that space; a run that still
-asks registers again. The runtime owns that registration
+Each registration lasts until the next change for that space, or until the
+scheduler unsubscribes the action; a run that still asks registers again. The runtime owns that registration
 (`Runtime.spaceAccessWatch`, a `SpaceAccessWatch` in
 `packages/runner/src/space-access-watch.ts`) and cancels its subscription when
 it is disposed, so a storage manager that outlives the runtime keeps no hold on

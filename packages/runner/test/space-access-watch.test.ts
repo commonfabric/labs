@@ -43,14 +43,25 @@ describe("SpaceAccessWatch", () => {
     disposables = [];
   });
 
-  /** Returns a watch over a fake storage manager, and what it invalidated. */
+  /**
+   * Returns a watch over a fake storage manager and a fake scheduler, what it
+   * invalidated, and the scheduler's unsubscribe observers.
+   */
   function watchOverFake() {
     const storage = new FakeStorage();
     const invalidated: Action[] = [];
+    const unsubscribeObservers = new Set<(action: Action) => void>();
     const watch = new SpaceAccessWatch(storage, {
       invalidateAction: (action: Action) => invalidated.push(action),
+      observeUnsubscribe: (observer) => {
+        unsubscribeObservers.add(observer);
+        return () => unsubscribeObservers.delete(observer);
+      },
     });
-    return { storage, invalidated, watch };
+    const unsubscribe = (action: Action) => {
+      for (const observer of unsubscribeObservers) observer(action);
+    };
+    return { storage, invalidated, unsubscribeObservers, unsubscribe, watch };
   }
 
   describe("instance members", () => {
@@ -77,14 +88,56 @@ describe("SpaceAccessWatch", () => {
       });
     });
 
+    describe("when the scheduler unsubscribes an action", () => {
+      it("drops every registration of the action, and never runs it again", () => {
+        const { storage, invalidated, unsubscribe, watch } = watchOverFake();
+        const gone = fakeAction();
+        const kept = fakeAction();
+        watch.rerunOnChange(spaceA, gone);
+        watch.rerunOnChange(spaceB, gone);
+        watch.rerunOnChange(spaceB, kept);
+
+        unsubscribe(gone);
+        expect([...watch.accessForTestingOnly.waiting.entries()]).toEqual([
+          [spaceB, new Set([kept])],
+        ]);
+        storage.change(spaceA);
+        storage.change(spaceB);
+        expect(invalidated).toEqual([kept]);
+      });
+
+      it("hears of it from its runtime's scheduler", () => {
+        const storageManager = EmulatedStorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        disposables.push(async () => {
+          await runtime.dispose();
+          await storageManager.close();
+        });
+        const action = fakeAction();
+        runtime.spaceAccessWatch.rerunOnChange(spaceA, action);
+        expect(runtime.spaceAccessWatch.accessForTestingOnly.waiting.size)
+          .toBe(1);
+
+        runtime.scheduler.unsubscribe(action);
+        expect(runtime.spaceAccessWatch.accessForTestingOnly.waiting.size)
+          .toBe(0);
+      });
+    });
+
     describe("dispose()", () => {
-      it("cancels the subscription, and runs nothing again afterward", () => {
-        const { storage, invalidated, watch } = watchOverFake();
+      it("cancels the subscriptions, and runs nothing again afterward", () => {
+        const { storage, invalidated, unsubscribeObservers, watch } =
+          watchOverFake();
         watch.rerunOnChange(spaceA, fakeAction());
         expect(storage.observers.size).toBe(1);
+        expect(unsubscribeObservers.size).toBe(1);
 
         watch.dispose();
         expect(storage.observers.size).toBe(0);
+        expect(unsubscribeObservers.size).toBe(0);
         watch.rerunOnChange(spaceA, fakeAction());
         expect(storage.observers.size).toBe(0);
         storage.change(spaceA);
