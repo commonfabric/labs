@@ -3,13 +3,8 @@
  * outcome recorded, and changing nothing else. With no profile, as in this
  * lane, it starts no chat at all.
  *
- * DELIBERATELY NOT COVERED HERE: creating a room. A room is created in a space
- * of its own with `inSpace()`, a cross-space commit whose closure replication
- * is unavailable in the pattern-unit lane, which fails a test file on the
- * error that logs. `../integration/fabrichat-manager.test.ts` covers
- * creating, finding, forgetting, and re-finding rooms with a runtime of its
- * own,
- * where cross-space commits work.
+ * `creation.test.tsx` covers the rooms a manager creates, with a profile of
+ * its own.
  */
 import { assert, pattern, TESTS } from "commonfabric";
 import FabriChatManager from "./manager.tsx";
