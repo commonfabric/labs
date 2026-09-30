@@ -854,12 +854,17 @@ function createForCall(
  * chain, and of a variable or a call to a plain function whose type admits
  * either one. A call the runtime provides is left out: it returns a cell
  * whatever type the value in that cell has.
+ *
+ * The type is read both inside and outside any `as`, `satisfies`, or `!`
+ * around the expression. `x satisfies T | undefined` states the nullish arm
+ * outside, and `x as unknown` erases the one inside, so either admitting one
+ * is enough, unless a `!` asserts the value is present.
  */
 function mayBeNullish(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {
-  const target = unwrapParentheses(expression);
+  const target = unwrapExpression(expression);
   if (ts.isOptionalChain(target)) {
     return true;
   }
@@ -870,16 +875,41 @@ function mayBeNullish(
     return false;
   }
 
-  const type = getTypeAtLocationWithFallback(
-    target,
-    context.checker,
-    context.state.typeRegistry,
-  );
-  if (!type) {
-    return false;
+  const typeOf = (node: ts.Expression) =>
+    getTypeAtLocationWithFallback(
+      node,
+      context.checker,
+      context.state.typeRegistry,
+    );
+  const outer = unwrapParentheses(expression);
+  return admitsNullish(typeOf(outer)) ||
+    (!assertsNonNull(outer) && admitsNullish(typeOf(target)));
+}
+
+/**
+ * Helper for `mayBeNullish()`, which reports whether the wrappers around an
+ * expression include a non-null assertion `!`.
+ */
+function assertsNonNull(expression: ts.Expression): boolean {
+  for (
+    let current = expression;
+    isTransparentWrapper(current);
+    current = current.expression
+  ) {
+    if (ts.isNonNullExpression(current)) {
+      return true;
+    }
   }
 
-  const parts = type.isUnion() ? type.types : [type];
+  return false;
+}
+
+/**
+ * Helper for `mayBeNullish()`, which reports whether `type` admits `null`,
+ * `undefined`, or `void`. A type that could not be determined admits none.
+ */
+function admitsNullish(type: ts.Type | undefined): boolean {
+  const parts = type?.isUnion() ? type.types : type ? [type] : [];
   return parts.some((part) =>
     (part.flags &
       (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
