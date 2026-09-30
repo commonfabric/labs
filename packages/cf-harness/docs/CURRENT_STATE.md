@@ -539,17 +539,20 @@ The current package provides:
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
-- parent-only `finish_task` for a question or a give-up reason, admitted through
-  ordinary policy and artifacts as the sole call in a model turn. It ends the
-  loop without another provider request, retaining the completed lifecycle and
-  reusable conversation. Reports carry the canonical task outcome; console
-  polling and SSE carry the same outcome, session identity, and current
-  continuation availability. The live pane renders the question or reason.
-  Children report blockers to the parent. Missing-input discovery distinguishes
-  released evidence, absence within an enumerated granted scope, and unknown
-  reads; it stops for input rather than repeating author delegation. Shared
-  target-selection guidance asks for an unnamed, unattached piece without a
-  registry read and preserves established conversation targets. The parent
+- parent-only `finish_task` for a completed answer, a question, or a give-up
+  reason, admitted through ordinary policy and artifacts as the sole call in a
+  model turn. A completed answer satisfies the Fabric piece contract and may
+  carry validated client actions (`open_loom`, `command`, `open_url`). It ends
+  the loop without another provider request, retaining the completed lifecycle
+  and reusable conversation. Reports carry the canonical task outcome;
+  interactive `turn_completed` events, console polling and SSE carry the same
+  outcome with its answer and actions, session identity, and current
+  continuation availability. The live pane renders the answer, question, or
+  reason. Children report blockers to the parent. Missing-input discovery
+  distinguishes released evidence, absence within an enumerated granted scope,
+  and unknown reads; it stops for input rather than repeating author delegation.
+  Shared target-selection guidance asks for an unnamed, unattached piece without
+  a registry read and preserves established conversation targets. The parent
   resolves a user-supplied slug with `resolve_piece` before author delegation,
   using the input-cell path's exact-address resolver and space restriction. Only
   an opaque handle returns; source remains child-only. An unheld slug or a

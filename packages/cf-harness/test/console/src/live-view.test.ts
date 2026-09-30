@@ -1564,6 +1564,20 @@ describe("console/src/live-view", () => {
       });
     }
 
+    it("renders a finish_task answer as a completed terminal", () => {
+      const answer = "It is 24°C and sunny in Brisbane.";
+      const disposition = { outcome: "completed" as const, answer };
+      const view = new TestConsoleLive();
+      view.entries = consoleLiveEntries(log({
+        kind: "turn_completed",
+        turnId: "turn-1",
+        ...disposition,
+        result: { ...EMPTY_RESULT, ...disposition, finalText: answer },
+      }));
+      expect(templateText(view.view())).toContain(answer);
+      expect(consoleLiveState(view.entries)).toBe("done");
+    });
+
     it("renders a turn line, prose, a subagent and the piece link it ended with", () => {
       const view = new TestConsoleLive();
       view.entries = consoleLiveEntries(log(

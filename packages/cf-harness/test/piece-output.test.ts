@@ -339,6 +339,53 @@ describe("piece-output", () => {
     });
   }
 
+  it("ends a Fabric task on a completed finish_task answer without a piece", async () => {
+    // The chat case: "weather in brisbane?" is answered in words, and the
+    // piece contract accepts that ending in one model turn.
+    const requests: HarnessModelTurnRequest[] = [];
+    const actions = [
+      { kind: "open_loom", loomId: "loom-0123456789abcdef" },
+      { kind: "command", line: "/ask what is next" },
+      { kind: "open_url", url: "https://example.com/forecast" },
+    ];
+    const loop = new CfHarnessPromptLoop({
+      sandboxRuntime: sandbox,
+      fabricSession,
+      model: "test-model",
+      allowedToolIds: ["run_pattern", "assign_slug", "finish_task"],
+      modelClient: {
+        providerId: "test-provider",
+        complete: (request) => {
+          requests.push({ ...request, transcript: [...request.transcript] });
+          return Promise.resolve({
+            assistant: toolCall("finish_task", {
+              outcome: "completed",
+              message: "It is 24°C and sunny in Brisbane.",
+              actions,
+            }, "finish"),
+          });
+        },
+      },
+    });
+    const result = await loop.runPrompt({
+      prompt: "weather in brisbane?",
+      maxModelTurns: 1,
+      promptSlotBinding: directPromptSlotBindingFor("terminal"),
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].transcript[0].content).toBe(PIECE_OUTPUT_GUIDANCE);
+    expect(result.finalAssistantText).toBe(
+      "It is 24°C and sunny in Brisbane.",
+    );
+    expect(result.taskOutcome).toEqual({
+      outcome: "completed",
+      answer: "It is 24°C and sunny in Brisbane.",
+      actions,
+    });
+    expect(result.runState.status).toBe("completed");
+    expect(result.runState.assignedPieces).toBeUndefined();
+  });
+
   for (const resumed of [false, true]) {
     it(`returns a structured document from a ${resumed ? "resumed" : "fresh"} Fabric agent request without requiring a UI piece`, async () => {
       const directory = await Deno.makeTempDir();

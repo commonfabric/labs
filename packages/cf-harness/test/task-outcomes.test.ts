@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { ConsoleServer, resolveConsoleConfig } from "../console/server.ts";
 import { readConsoleTurnResult } from "../console/turn-result.ts";
+import type { HarnessChatEventEnvelope } from "../src/contracts/interactive-chat.ts";
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import type { HarnessToolCall } from "../src/contracts/transcript.ts";
 import {
@@ -225,7 +226,7 @@ describe("task-outcomes", () => {
         expect(output).toMatchObject({
           status: "error",
           message:
-            "finish_task requires outcome question or gave-up and a nonempty message.",
+            "finish_task requires outcome completed, question, or gave-up and a nonempty message.",
         });
       }
       if (invalid === "batch") {
@@ -233,6 +234,186 @@ describe("task-outcomes", () => {
       }
     });
   }
+
+  for (
+    const [label, outcome, actions] of [
+      ["an unknown kind", "completed", [{ kind: "open_app", app: "Mail" }]],
+      ["a malformed loomId", "completed", [{
+        kind: "open_loom",
+        loomId: "loom-XYZ",
+      }]],
+      ["a command without a slash", "completed", [{
+        kind: "command",
+        line: "ask what is next",
+      }]],
+      ["an overlong command", "completed", [{
+        kind: "command",
+        line: "/" + "a".repeat(500),
+      }]],
+      ["a non-http url", "completed", [{
+        kind: "open_url",
+        url: "javascript:alert(1)",
+      }]],
+      ["an extra field", "completed", [{
+        kind: "open_url",
+        url: "https://example.com",
+        target: "_blank",
+      }]],
+      [
+        "too many actions",
+        "completed",
+        Array.from({ length: 9 }, () => ({
+          kind: "command",
+          line: "/ask",
+        })),
+      ],
+      ["actions that are not a list", "completed", {
+        kind: "command",
+        line: "/ask",
+      }],
+      ["actions with a question", "question", [{
+        kind: "command",
+        line: "/ask",
+      }]],
+      ["actions with a give-up", "gave-up", []],
+    ] as const
+  ) {
+    it(`refuses a finish_task with ${label}`, async () => {
+      const requests: HarnessModelTurnRequest[] = [];
+      const loop = new CfHarnessPromptLoop({
+        sandboxRuntime: sandbox,
+        model: "gpt-test",
+        allowedToolIds: ["finish_task"],
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push({ ...request, transcript: [...request.transcript] });
+            return Promise.resolve({
+              assistant: requests.length === 1
+                ? {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [
+                    finishCall({ outcome, message: "Done.", actions }),
+                  ],
+                }
+                : { role: "assistant", content: "Corrected ending." },
+            });
+          },
+        },
+      });
+      const result = await loop.runPrompt({
+        prompt: "Open the loom.",
+        maxModelTurns: 2,
+        promptSlotBinding: directPromptSlotBindingFor("terminal"),
+      });
+      expect(requests).toHaveLength(2);
+      expect(result.taskOutcome).toEqual({ outcome: "completed" });
+      expect(result.finalAssistantText).toBe("Corrected ending.");
+      const output = JSON.parse(
+        result.transcript.find((entry) => entry.role === "tool")!.content,
+      );
+      expect(output.status).toBe("error");
+      expect(output.message).toContain(
+        "finish_task actions are allowed only with outcome completed",
+      );
+    });
+  }
+
+  it("carries a completed answer and its actions to turn_completed and the console result", async () => {
+    const artifactRoot = await Deno.makeTempDir();
+    const answer = "Your loom is ready.";
+    const actions = [
+      { kind: "open_loom", loomId: "loom-0123456789abcdef" },
+      { kind: "command", line: "/focus loom-0123456789abcdef" },
+    ];
+    const serviceEvents: HarnessChatEventEnvelope[] = [];
+    try {
+      const config = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "unused.key",
+          "--fabric-space",
+          "empty-space",
+          "--session-db",
+          "none",
+          "--artifact-root",
+          artifactRoot,
+        ],
+        {},
+        "/console",
+      );
+      const server = new ConsoleServer(
+        config,
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            basePromptLoopOptions: { artifactRoot, sandboxRuntime: sandbox },
+            createPromptLoop: (options) =>
+              new CfHarnessPromptLoop({
+                ...options,
+                allowedToolIds: ["finish_task"],
+                modelClient: {
+                  providerId: "test-provider",
+                  complete: () =>
+                    Promise.resolve({
+                      assistant: {
+                        role: "assistant",
+                        content: "",
+                        toolCalls: [finishCall({
+                          outcome: "completed",
+                          message: answer,
+                          actions,
+                        })],
+                      },
+                    }),
+                },
+              }),
+            onEvent: (envelope) => {
+              serviceEvents.push(envelope);
+              return onEvent(envelope);
+            },
+            runIdForTurn: (_sessionId, turnId) => turnId,
+          }),
+      );
+      const started = await (await server.handle(
+        taskRequest({ text: "Make me a loom for the trip" }),
+      )).json();
+      await server.service.waitForTurn(started.sessionId, started.turnId);
+      const completed = serviceEvents.find((envelope) =>
+        envelope.event.kind === "turn_completed"
+      );
+      expect(completed?.event).toMatchObject({
+        kind: "turn_completed",
+        outcome: "completed",
+        answer,
+        actions,
+        finalText: answer,
+      });
+      const polled = await (await server.handle(
+        new Request(
+          `http://127.0.0.1:8100/api/turns/${started.turnId}/result`,
+        ),
+      )).json();
+      expect(polled).toMatchObject({
+        outcome: "completed",
+        answer,
+        actions,
+        finalText: answer,
+        sessionId: started.sessionId,
+      });
+      expect(
+        await readConsoleTurnResult({
+          artifactRoot,
+          turnId: started.turnId,
+          sessionId: started.sessionId,
+          continuable: true,
+          spaceName: "empty-space",
+        }),
+      ).toMatchObject({ outcome: "completed", answer, actions });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
 
   for (const restored of [false, true]) {
     it(`keeps SSE and polling aligned and continues a ${restored ? "restored" : "live"} session`, async () => {
@@ -424,5 +605,64 @@ describe("task-outcomes", () => {
     ) {
       expect(readHarnessTaskOutcome(value)).toBeUndefined();
     }
+  });
+
+  it("round-trips a completed answer with actions and refuses malformed ones", () => {
+    const completed = {
+      outcome: "completed",
+      answer: "It is sunny.",
+      actions: [
+        { kind: "open_loom", loomId: "loom-0123456789abcdef" },
+        { kind: "command", line: "/ask what is next" },
+        { kind: "open_url", url: "http://example.com/a?b=c" },
+      ],
+    };
+    expect(readHarnessTaskOutcome(JSON.parse(JSON.stringify(completed))))
+      .toEqual(completed);
+    expect(readHarnessTaskOutcome({ outcome: "completed", answer: "Done." }))
+      .toEqual({ outcome: "completed", answer: "Done." });
+    expect(readHarnessTaskOutcome({ outcome: "completed", actions: [] }))
+      .toEqual({ outcome: "completed" });
+    for (
+      const value of [
+        { outcome: "completed", answer: " " },
+        { outcome: "completed", answer: 42 },
+        { outcome: "completed", actions: "open" },
+        { outcome: "completed", actions: [{ kind: "open_loom" }] },
+        {
+          outcome: "completed",
+          actions: [{ kind: "open_loom", loomId: "loom-0123" }],
+        },
+        {
+          outcome: "completed",
+          actions: [{ kind: "command", line: "ask" }],
+        },
+        {
+          outcome: "completed",
+          actions: [{ kind: "open_url", url: "file:///etc/passwd" }],
+        },
+        {
+          outcome: "completed",
+          actions: [{ kind: "launch", target: "Mail" }],
+        },
+        {
+          outcome: "completed",
+          actions: Array.from({ length: 9 }, () => ({
+            kind: "command",
+            line: "/ask",
+          })),
+        },
+      ]
+    ) {
+      expect(readHarnessTaskOutcome(value)).toBeUndefined();
+    }
+    // Inherited fields are not the record's own and are ignored.
+    expect(readHarnessTaskOutcome(Object.assign(
+      Object.create({
+        answer: "Inherited.",
+        actions: [{ kind: "open_loom", loomId: "loom-0123456789abcdef" }],
+      }),
+      { outcome: "completed" },
+    ))).toEqual({ outcome: "completed" });
   });
 });
