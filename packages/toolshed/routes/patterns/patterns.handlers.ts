@@ -13,8 +13,10 @@ const patternsRoute = createPatternsRoute();
  */
 export const getPattern = (c: Context): Promise<Response> => {
   const { filename } = c.req.param();
+  const query = new URL(c.req.url).searchParams;
   return patternsRoute.serveFile(filename, {
-    identity: new URL(c.req.url).searchParams.has("identity"),
+    identity: query.has("identity"),
+    sourceRoots: query.getAll("sourceRoot"),
     ifNoneMatch: c.req.header("If-None-Match"),
   });
 };
