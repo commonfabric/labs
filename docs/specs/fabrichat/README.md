@@ -255,7 +255,8 @@ names the ones it needs, and they are gathered here:
 - **Granting access from a pattern.** A handler on a client runtime can grant
   and revoke a space's members by principal with `grantSpaceAccess()` and
   `revokeSpaceAccess()`, gated on a trusted gesture from an OWNER, and a member
-  can leave with `leaveSpace()`, gated on nothing
+  can leave with `leaveSpace()`, gated on a trusted gesture only when it makes
+  a successor OWNER
   ([changing a space's access list](../../features/space-access-changes.md)).
   A serving runtime refuses all three. Space invitations don't serve: they are
   bearer credentials, not bound to the person they are meant for (see

@@ -679,7 +679,7 @@ const leave = handler<
   { members: Writable<DID[]> }
 >(({ successors }, { members }) => {
   const me = currentPrincipal();
-  if (me !== undefined) members.remove(me);
+  if (me !== undefined) members.removeByValue(me);
   leaveSpace(members, { successors });
 });
 ```

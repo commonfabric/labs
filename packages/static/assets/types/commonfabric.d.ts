@@ -4838,8 +4838,10 @@ export interface LeaveSpaceOptions {
  * Removes the acting principal's own entry from the access list of the space
  * `target`'s value lives in, giving up the access it granted. Leaving a space
  * whose list holds no entry for the actor changes nothing, so a handler run
- * again for the same event converges. Neither does leaving when the actor's
- * entry is the list's only one: a list cannot be empty, so the entry stays.
+ * again for the same event converges, unless the list has a `"*"` entry, for
+ * which leaving is refused whether or not the actor holds an entry. Nor does
+ * leaving change anything when the actor's entry is the list's only one: a
+ * list cannot be empty, so the entry stays.
  *
  * When the actor is the space's last concrete `OWNER` and others remain, the
  * same change sets the entry of the first of `options.successors` that holds

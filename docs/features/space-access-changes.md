@@ -29,14 +29,16 @@ Each call acts for the event's actor, `Runtime.actingPrincipalFor()`, the same
 principal `currentPrincipal()` returns. Nothing in the event's payload chooses
 it, and it is not an argument.
 
-Every refusal throws, from the call or from the commit of the change. A
-refusal at the call that the handler lets escape drops the handler's whole
-transaction, and so does a refusal at a grant's or a revoke's commit, which
-comes before the handler's own. A refusal at the call is an ordinary
-exception, though, and a handler may catch it; the call throws before it
-stages anything, so a caught refusal leaves nothing staged for that call, and
-the handler's other writes commit as usual. A leave commits after the
-handler's own writes, so a refusal at its commit leaves them standing.
+A refusal at the call throws, from any of the three calls, and so does a refusal
+at a grant's or a revoke's commit, which comes before the handler's own. Either
+one, when the handler lets it escape, drops the handler's whole transaction. A
+refusal at the call is an ordinary exception, though, and a handler may catch
+it; the call throws before it stages anything, so a caught refusal leaves
+nothing staged for that call, and the handler's other writes commit as usual. A
+leave commits after the handler's own writes, so a refusal or failure at its
+commit cannot reach the handler: the handler's writes stand, and the failure is
+reported afterward through the scheduler's error handlers, as [How a leave
+commits](#how-a-leave-commits) describes.
 
 For a grant and a revoke:
 
@@ -143,9 +145,9 @@ gestures of its own. That departs from FabriChat's "leave from any client"
 for the promoting case alone.
 
 When the actor's entry is the list's only one, leaving changes nothing and
-succeeds: the list cannot be empty, so the entry stays. Nobody else can then
-read the space or be added to it, which is FabriChat's "leaving is really
-abandoning".
+succeeds: the list cannot be empty, so the entry stays. No other member can
+then read the space or be added to it, which is FabriChat's "leaving is really
+abandoning". A service DID still can, since it holds `OWNER` in every space.
 
 The memory server admits a leave from a member without `OWNER` through a rule
 of its own (INV-12 in `docs/specs/memory-v2/09-invariants.md`): an access-list
