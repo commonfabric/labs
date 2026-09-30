@@ -309,6 +309,32 @@ const EVENT_KEY_PATTERN = [
   ">(({ value, key }) => ({ value, key, bump: bump({ value, key }) }));",
 ].join("\n");
 
+/**
+ * Like `CASCADE_PATTERN`, except that the cascaded handler records what
+ * `currentPrincipal()` and `eventKey()` return to it.
+ */
+const CASCADE_IDENTITY_PATTERN = [
+  "import {",
+  "  currentPrincipal, eventKey, handler, pattern, Stream, Writable,",
+  "} from 'commonfabric';",
+  "type Seen = { principal: string; key: string };",
+  "const second = handler<unknown, { seen: Writable<Seen> }>(",
+  "  (_ev, { seen }) => {",
+  "    seen.set({ principal: currentPrincipal() ?? 'none', key: eventKey() });",
+  "  },",
+  ");",
+  "const first = handler<unknown, { next: Stream<unknown> }>(",
+  "  (_ev, { next }) => { next.send({}); },",
+  ");",
+  "export default pattern<",
+  "  { seen: Writable<Seen> },",
+  "  { seen: Seen; first: Stream<unknown>; second: Stream<unknown> }",
+  ">(({ seen }) => {",
+  "  const next = second({ seen });",
+  "  return { seen, first: first({ next }), second: next };",
+  "});",
+].join("\n");
+
 const CASCADE_PATTERN = [
   "import { handler, pattern, Stream, Writable } from 'commonfabric';",
   "const secondHandler = handler<unknown, { value: Writable<number> }>(",
@@ -3005,6 +3031,47 @@ describe("Phase 3 events-down (serving side)", () => {
       id: argument.getAsNormalizedFullLink().id,
     });
     expect((doc?.value as { value?: number })?.value).toBe(11);
+    cancelDemand();
+  });
+
+  it("returns the root event's actor from `currentPrincipal()` in a same-space cascaded handler, and binds its `eventKey()` to that actor and the cascade entry", async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(
+      clientRuntime,
+      CASCADE_IDENTITY_PATTERN,
+      { arg: "cascade-identity-arg", result: "cascade-identity-result" },
+    );
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const storedSeen = () =>
+      (Engine.read(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { seen?: { principal: string; key: string } } | undefined)
+        ?.seen;
+
+    host = newHost();
+    result.key("first").send({});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 2);
+    await awaitAdmitted(server, () => storedSeen() !== undefined);
+
+    const secondLink = resolveLink(
+      clientRuntime,
+      clientRuntime.readTx(),
+      result.key("second").getAsNormalizedFullLink(),
+    );
+    const cascadeEntry = sidecarIdsIn(engine).flatMap((id) =>
+      (Engine.read(engine, { id })?.value as StreamEventsDocValue).entries ??
+        []
+    ).find((entry) => entry.stream?.id === secondLink.id);
+    expect(cascadeEntry).toBeDefined();
+    expect(cascadeEntry!.firedAt?.user).toBe(aliceSigner.did());
+    expect(storedSeen()).toEqual({
+      principal: aliceSigner.did(),
+      key: deriveEventKey(cascadeEntry!.eventId, aliceSigner.did(), secondLink),
+    });
     cancelDemand();
   });
 
