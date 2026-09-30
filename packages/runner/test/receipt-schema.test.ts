@@ -1,5 +1,6 @@
 import { defer } from "@commonfabric/utils/defer";
 
+import { sendEvent } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { readResultSchemaMeta } from "../src/result-schema-meta.ts";
@@ -100,7 +101,7 @@ describe("receipt schema", () => {
     eventId: string,
   ): Promise<Outcome> {
     const settled = defer<Outcome>();
-    stream.send(payload, (t: IExtendedStorageTransaction) => {
+    sendEvent(stream, payload, (t: IExtendedStorageTransaction) => {
       const status = t.status();
       settled.resolve({
         status: status.status,

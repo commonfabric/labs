@@ -372,9 +372,9 @@ describe("piece-repair", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `cli-bulk-repair-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );

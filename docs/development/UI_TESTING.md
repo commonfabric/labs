@@ -66,10 +66,12 @@ composite web component; use a flattened-tree tool or the pierce fallback below.
    const shell = new ShellIntegration();
    shell.bindLifecycle(); // Sets up beforeAll/afterAll hooks
 
-   // shell.goto() handles navigation, applyConsoleFormatter, and login
+   // shell.goto() handles navigation, applyConsoleFormatter, and login.
+   // `space` is the DID `createTestSpace(identity)` returned: opening a space
+   // never creates one, so a test makes its own.
    await shell.goto({
      frontendUrl: FRONTEND_URL,
-     view: { spaceName: SPACE_NAME, pieceId },
+     view: { spaceDid: space, pieceId },
      identity,
    });
 
@@ -173,32 +175,36 @@ const path = ["x-root", "#shadow-root", "cf-input", "#shadow-root", "input"];
 ```typescript
 // Shown at module scope.
 import {
+  createTestSpace,
   env,
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   clickCfButton,
   fillCfInput,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("shadow DOM component test", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
   let identity: Identity;
+  let space: DID;
   let cc: PiecesController;
   let pieceId: string;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    // Opening a space never creates one, so the test makes its own.
+    space = await createTestSpace(identity);
     cc = await PiecesController.initialize({
-      space: SPACE_NAME,
+      space,
       apiUrl: new URL(API_URL),
       identity: identity,
     });
@@ -216,7 +222,7 @@ describe("shadow DOM component test", () => {
     // Setup: shell.goto() handles navigation, applyConsoleFormatter, and login
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid: space, pieceId },
       identity,
     });
 
@@ -367,7 +373,7 @@ file by hand, point it at the compiled binary (`deno task build-binaries`, then
 | `PIPE_CONSOLE` | Set to `true` or `1` to forward browser console output to the test runner |
 | `API_URL` | Server URL (default: `http://localhost:8000`) |
 | `FRONTEND_URL` | Frontend URL (default: `API_URL`) |
-| `SPACE_NAME` | Target a specific space (default: random UUID) |
+| `SPACE_NAME` | A legacy name of an existing space, for a test that targets one rather than creating its own (default: unset) |
 
 Example: `PIPE_CONSOLE=1 deno task integration`
 

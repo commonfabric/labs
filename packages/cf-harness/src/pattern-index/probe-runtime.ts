@@ -3,8 +3,7 @@ import type {
   CfcEnforcementMode,
   CfcReadOnExceed,
 } from "@commonfabric/runner/cfc";
-import type { Identity } from "@commonfabric/identity";
-import { createSession } from "@commonfabric/identity";
+import { createSession, type Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 
@@ -100,10 +99,7 @@ export const openProbeRuntime = async (
         : {}),
     });
     const pieces = new PiecesController(
-      await createSession({
-        identity,
-        spaceName: `render-probe-${crypto.randomUUID()}`,
-      }),
+      createSession({ identity, spaceDid: await runtime.createSpace() }),
       runtime,
     );
     await pieces.synced();

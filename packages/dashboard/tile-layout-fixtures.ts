@@ -1,6 +1,11 @@
 import type { Status, TileView } from "./types.ts";
-import { SPARKLINE_HEIGHT } from "./tile-render-values.ts";
+import { ciDurationSub, SPARKLINE_HEIGHT } from "./tile-render-values.ts";
 import { detailList } from "./detail-list.ts";
+import {
+  CI_RUNS_MAX,
+  DUR_MAX_AGE_HOURS,
+  DUR_MIN_RUNS,
+} from "./ci-run-limits.ts";
 
 export interface TileLayoutFixture {
   label: string;
@@ -109,7 +114,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     view: {
       status: "good",
       value: "17m",
-      sub: "median · 31 passing PR runs in the last 6h",
+      sub: ciDurationSub(CI_RUNS_MAX, DUR_MAX_AGE_HOURS),
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
@@ -121,7 +126,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     view: {
       status: "good",
       value: "6m",
-      sub: "median · last 20 passing PR runs",
+      sub: ciDurationSub(DUR_MIN_RUNS),
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
@@ -133,7 +138,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     view: {
       status: "good",
       value: "4m",
-      sub: "median · last 20 passing PR runs",
+      sub: ciDurationSub(DUR_MIN_RUNS),
       extra: history(),
       duration: 3 * DAY,
     },
@@ -152,7 +157,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "coverage debt",
+    label: "labs coverage debt",
     view: {
       status: "warn",
       value: "78,101 lines",

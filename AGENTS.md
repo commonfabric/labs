@@ -248,11 +248,9 @@ is missed:
    missing entry costs is a message naming the member rather than a CI timeout.
    `packages/utils/deno.jsonc` is a correct example.
 3. A checked path in `tasks/typecheck.ts`, usually a single directory entry, so
-   `deno task check` opens the package at all. Naming the package in the
-   `workspace` array is what puts it under the type check's coverage claim, so a
-   package added there and left out here fails `tasks/typecheck.test.ts` with
-   its unchecked files named — unless it earns an `UNCHECKED_TREES` entry
-   recording why it has no path.
+   `deno task check` opens the package at all. A package left out there fails
+   `tasks/typecheck.test.ts` with its unchecked files named — unless it earns an
+   `UNCHECKED_TREES` entry recording why it has no path.
 
 When the package needs a dependency, follow `docs/development/DEPENDENCIES.md`.
 
@@ -279,15 +277,16 @@ difficulties getting coverage checks to pass, consider the information in
 `tasks/typecheck.ts` (`tasks/check.sh` owns the Deno version gate and delegates
 there). The list is written by hand; its completeness is not left to hand.
 `UNCHECKED_TREES` beside it records every tree the list leaves out together with
-the reason, and `tasks/typecheck.test.ts` walks the workspace that `deno.jsonc`
-declares and fails — naming the files — on any module that is neither checked
-nor covered by one of those entries. That population is every extension the
-checker opens, JavaScript included: `deno check` type-checks a `.js` file
-carrying `// @ts-check`, so a claim stated over TypeScript alone would be
-narrower than the gate it describes. A directory left out on purpose and one
-left out by accident look identical in a list of paths, so the record is what
-separates them: a tree nobody decided about fails the test rather than passing
-in silence. Adding an exemption means adding an entry that says why.
+the reason, and `tasks/typecheck.test.ts` reads every file the repository holds
+— workspace members, and the trees no member owns, such as `.claude/scripts` —
+and fails, naming the files, on any module that is neither checked nor covered
+by one of those entries or excluded by a manifest. That population is every
+extension the checker opens, JavaScript included: `deno check` type-checks a
+`.js` file carrying `// @ts-check`, so a claim stated over TypeScript alone
+would be narrower than the gate it describes. A directory left out on purpose
+and one left out by accident look identical in a list of paths, so the record is
+what separates them: a tree nobody decided about fails the test rather than
+passing in silence. Adding an exemption means adding an entry that says why.
 
 Four trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
 and `packages/ts-transformers/test/fixtures` are fixture corpora — the inputs
@@ -307,7 +306,7 @@ sides of that line; a test cross-checks both against the collector itself. The
 other covers pattern tests, the `.test.tsx` files that `cf test` compiles
 through the runtime harness the way a running pattern is compiled. That compile
 is the behavior those tests exercise, and the harness reports a type error as a
-failed test. Every other test file in the workspace is named by a checked path,
+failed test. Every other test file in the repository is named by a checked path,
 because every `deno test` runs under `--no-check` and a checked path is then the
 only type check a test file gets. An entry claiming coverage is the one that can
 mislead most quietly, since a file it wrongly matches is one every later reader

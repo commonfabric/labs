@@ -25,6 +25,7 @@
  *                                     organization-users tile
  */
 
+import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
@@ -33,7 +34,6 @@ import {
   escapeHtml,
   friendlyError,
   githubOperationsInProgress,
-  STALE_RUNS_ERROR,
 } from "./lib.ts";
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
@@ -380,37 +380,6 @@ function snapshotCtx(
   };
 }
 
-/**
- * The run in `runs` created last, or `undefined` when none has a readable
- * creation time.
- */
-function newestRun(runs: readonly Run[] | undefined): Run | undefined {
-  let newest: Run | undefined;
-  for (const run of runs ?? []) {
-    if (createdAt(run) > createdAt(newest)) newest = run;
-  }
-  return newest;
-}
-
-/**
- * When `run` was created, or `-Infinity` for no run or an unreadable time, so
- * a snapshot without a dated run is older than any snapshot with one.
- */
-function createdAt(run: Run | undefined): number {
-  const at = run ? Date.parse(run.created_at) : NaN;
-  return Number.isFinite(at) ? at : -Infinity;
-}
-
-/**
- * Names the size of `runs` and its newest run, for the log line that says why
- * a fetch of a source was not kept.
- */
-function describeRuns(runs: readonly Run[] | undefined): string {
-  const run = newestRun(runs);
-  const count = `${runs?.length ?? 0} run${runs?.length === 1 ? "" : "s"}`;
-  return `${count}, ${run ? `newest run ${run.id} created ${run.created_at}` : "none dated"}`;
-}
-
 function sourceLabel(source: RunSource): string {
   return source.repo.split("/").at(-1) ?? source.repo;
 }
@@ -583,20 +552,6 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       }
 
       const key = runSourceKey(group.source);
-      // A source's newest run only ever moves forward. A fetch that comes back
-      // with an older newest run than the one already held read a stale view
-      // of the workflow, and publishing it would age the whole tile family
-      // backwards without saying so. Keep what is held and name the
-      // source stale; the next fetch that reaches a current view clears it.
-      const held = runSnapshots.get(key);
-      if (runs && createdAt(newestRun(runs)) < createdAt(newestRun(held))) {
-        error = STALE_RUNS_ERROR;
-        console.error(
-          `run source ${key} stale, ${error}. Fetched ${describeRuns(runs)}; ` +
-            `held ${describeRuns(held)}.`,
-        );
-        runs = undefined;
-      }
       if (runs) {
         runSnapshots.set(key, runs);
         runSourceErrors.delete(key);
@@ -698,7 +653,7 @@ const pages = livePages(routes);
 // interval elapses (and collection latency pushes that to the tick after that), so
 // the real cadence for the fastest tile is its interval plus a tick, not the bare
 // interval.
-const REFRESH_MS = Math.min(...TILES.map((t) => t.intervalMs)) + TICK_MS;
+const REFRESH_MS = minOf(TILES.map((t) => t.intervalMs)) + TICK_MS;
 
 export function page(currentViews: ReadonlyMap<string, TileView> = views): string {
   const update = dashboardUpdate(currentViews);

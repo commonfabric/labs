@@ -12,6 +12,15 @@ import { dirname, join, relative, resolve } from "@std/path";
 export type Environment = (name: string) => string | undefined;
 
 /**
+ * The entry a repository's root directory holds, which every climb here
+ * looks for. A climb reads nothing else, so a process permitted to read
+ * this one path finds its repository all the same.
+ */
+export function repositoryMarker(dir: string): string {
+  return join(dir, ".git");
+}
+
+/**
  * The repository-root-relative, forward-slashed form of a test file path —
  * the identity form for file-named tests — found by climbing from the file
  * to the enclosing .git. Outside any repository the path falls back to
@@ -22,7 +31,7 @@ export function repositoryRelativePath(filePath: string): string {
   let dir = dirname(absolute);
   for (;;) {
     try {
-      Deno.statSync(join(dir, ".git"));
+      Deno.statSync(repositoryMarker(dir));
       return absolute.slice(dir.length + 1).replaceAll("\\", "/");
     } catch {
       const parent = dirname(dir);
@@ -43,7 +52,7 @@ export function repositoryRoot(from: string = Deno.cwd()): string | undefined {
   let dir = resolve(from);
   for (;;) {
     try {
-      Deno.statSync(join(dir, ".git"));
+      Deno.statSync(repositoryMarker(dir));
       return dir;
     } catch {
       const parent = dirname(dir);

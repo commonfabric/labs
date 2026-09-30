@@ -2,13 +2,18 @@ import { assert, assertEquals } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { env, waitForCondition } from "@commonfabric/integration";
+import {
+  createLegacyTestSpace,
+  createTestSpace,
+  env,
+  waitForCondition,
+} from "@commonfabric/integration";
 import type { Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 
 import "../src/globals.ts";
 
-const { FRONTEND_URL, SPACE_NAME } = env;
+const { FRONTEND_URL } = env;
 
 /** Pierce shadow DOM to find an element by selector. */
 function pierce(page: Page, selector: string) {
@@ -42,7 +47,7 @@ describe("header menu tests", () => {
     identity = await Identity.generate({ implementation: "noble" });
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME },
+      view: { spaceDid: await createTestSpace(identity) },
       identity,
     });
   }
@@ -92,7 +97,14 @@ describe("header menu tests", () => {
 
   it("shows space name in desktop breadcrumb", async () => {
     const page = shell.page();
-    await loginAndGoto();
+    identity = await Identity.generate({ implementation: "noble" });
+    const name = `header-menu-${crypto.randomUUID()}`;
+    await createLegacyTestSpace(identity, name);
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceName: name },
+      identity,
+    });
 
     // Rendered, not merely present: `deepText` reads the text of an element
     // laid out at no size just as it reads a visible one, so without this the
@@ -103,7 +115,7 @@ describe("header menu tests", () => {
         probe.collect(".header-space").some((el) =>
           probe.isRendered(el) && probe.deepText(el).trim() === name
         ),
-      { args: [SPACE_NAME] },
+      { args: [name] },
     );
   });
 

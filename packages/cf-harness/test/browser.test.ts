@@ -326,9 +326,9 @@ describe("browser", () => {
         storageManager,
       });
       pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `browser-tool-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );

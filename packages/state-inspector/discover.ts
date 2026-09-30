@@ -8,33 +8,12 @@
 
 import * as Path from "@std/path";
 
-import { Identity } from "@commonfabric/identity";
-import { assertNotDID, isDID } from "@commonfabric/identity/did";
+import { legacySpaceDid } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 
 import { openSpace } from "./db.ts";
 import { rootCacheDir } from "./remote.ts";
-
-// A named space's DID is reproducibly derived by the runtime from its name:
-// `Identity.fromPassphrase("common user").derive(<name>)` (see
-// `packages/identity/src/session.ts` `createSession`). The shell addresses a
-// space by name (`/<space-name>/…`); we mirror that derivation so
-// `cf inspect <name>` resolves the same DB the runtime would, without anyone
-// copying a DID around.
-//
-// The derivation supports the legacy space names used during development, and
-// nothing else. It is removed once those development-only spaces have been
-// migrated; `docs/plans/random-space-identities.md` carries the migration.
-const SPACE_ROOT_PASSPHRASE = "common user";
-let spaceRoot: Promise<Identity> | undefined;
-
-/** Derive the DID of a NAMED space, the same way the runtime does. */
-export async function deriveSpaceDid(name: string): Promise<string> {
-  assertNotDID(name, "A space name");
-  spaceRoot ??= Identity.fromPassphrase(SPACE_ROOT_PASSPHRASE);
-  const space = await (await spaceRoot).derive(name);
-  return space.did();
-}
 
 export interface DiscoveredSpace {
   /** Space DID (DB file basename without `.sqlite`). */
@@ -171,8 +150,9 @@ export function resolveSpacePath(
  * Resolve a space token to a DB path, accepting a space NAME in addition to a
  * DID / DID-prefix / path. Tries the synchronous matcher first (path/DID); only
  * if that finds nothing AND the token looks like a name (not a path, not already
- * `did:`-shaped) does it derive the name's DID via {@link deriveSpaceDid} and
- * match that. Async because the derivation uses the identity keypair.
+ * `did:`-shaped) does it resolve the name as a legacy space name, the way the
+ * shell resolves a name in its URL, and match that DID. Async because the
+ * resolution derives a key pair.
  *
  * Precedence: a path / DID / DID-prefix match always WINS over name derivation,
  * so a token that is a substring of a discovered DID resolves to that DB and is
@@ -190,7 +170,7 @@ export async function resolveSpace(
     const looksLikeName = !token.includes("/") &&
       !token.endsWith(".sqlite") && !isDID(token);
     if (!looksLikeName) throw err;
-    const did = await deriveSpaceDid(token);
+    const did = await legacySpaceDid(token);
     const match = spaces.find((s) => s.did === did);
     if (match) return match.path;
     throw new Error(

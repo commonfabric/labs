@@ -295,7 +295,7 @@ by any repo test.
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
-| `FabricPrimitive` class (`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
+| `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
@@ -370,10 +370,10 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; the eight `FabricPrimitive` classes
-(`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`,
-`FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) →
-`{ type: "<Name>" }`
+and `Uint8Array` → `{ type: "object" }`; the nine `FabricPrimitive` classes
+(`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`,
+`FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`,
+`FabricUnavailable`) → `{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
@@ -787,6 +787,27 @@ Default paths of §7:
   union order. Union alias nodes resolve through non-generic alias
   declarations to recover member nodes (`getUnionTypeNode`).
   Empty unions **throw**.
+- The checker folds a member that is itself a union into the union it is a
+  member of, so one member node can stand for several members
+  (`pairUnionMemberNodes`, which `#labelsOf` in `schema-generator.ts` reads
+  members through as well):
+  - A member node that writes a union, through parentheses and aliases
+    without type parameters, pairs through the members it writes, each read
+    at its own node. `Shape | null`, with `type Shape = A | B`, stays
+    `{ anyOf: [{ type: "null" }, A, B] }`.
+  - A member node whose type is a union it does not write, such as
+    `Confidential<A | B, …>`, which the checker distributes into `A & …` and
+    `B & …`, pairs with none of them. In the general case it is read once,
+    as one alternative for all of them, where it is a CFC alias that
+    `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
+    `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
+    such nodes can stand for the same members, as two whose policies differ
+    only in a `typeof` binding do where the bindings have one type, and each
+    is an alternative of its own, in the order written. Its members are
+    otherwise read by their types: `boolean` stands for `true` and `false`,
+    `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
+    §10's.
 
 ## 9. Intersections
 
@@ -1330,11 +1351,13 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the
   node its type is written as: the declaration's own node where that denotes
-  the member alone, as an optional property's does, and otherwise the member
-  of the union the declaration writes, read through parentheses and through
-  aliases without type parameters (`readAuthoredTypeNode`). A member with no
-  such node is read by its type. A schema whose own reference
-  chain already holds every label is left as it is (`holdsIfcLabels`).
+  the member alone, as an optional property's does, and otherwise the node
+  of the union the declaration writes that it is read at (§8,
+  `pairUnionMemberNodes`). A node that stands for several members is read
+  once for all of them, and a member several such nodes stand for may be
+  under the labels of any of them. A member with no such node is read by its
+  type. A schema whose own reference chain already holds every label is left
+  as it is (`holdsIfcLabels`).
 - **`spelledBy`** is the annotation of the member a printed node holds the
   value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural

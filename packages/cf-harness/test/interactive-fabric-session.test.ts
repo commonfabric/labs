@@ -318,7 +318,7 @@ describe("interactive-fabric-session", () => {
         await expect(observeTurn(entrypoint, ["--fabric-space", "--help"], {
           CF_HARNESS_FABRIC_API_URL: "http://localhost:8123",
           CF_HARNESS_FABRIC_IDENTITY: "/tmp/synthetic-identity.pem",
-        })).rejects.toThrow("--fabric-space requires a non-empty value");
+        })).rejects.toThrow("`--fabric-space` was given no value");
       });
     });
   }

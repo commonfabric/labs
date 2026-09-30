@@ -588,7 +588,7 @@ Deno.test("diff doc: missing workspace file still highlights and structures via 
   assert(doc.definitions.has("double"), "fragment names are indexed for 't'");
   // …while semantics stays silent (no workspace to vouch for anything), and
   // the hunk label says why.
-  assertEquals(maps.rootFiles.length, 0);
+  assertEquals(maps.rootFiles.size, 0);
   const hunk = doc.flatStructure.find((n) => n.kind === "hunk")!;
   assert(hunk.label.includes("(no workspace file)"), `label: ${hunk.label}`);
 });
@@ -1170,7 +1170,7 @@ Deno.test("diff semantics: root files outside the config root are dropped", () =
     Deno.writeTextFileSync(join(elsewhere, "m.ts"), FILE_TEXT);
     const model = parseDiff(DIFF)!;
     const { maps } = buildDiffDocument(DIFF, model, stubWs(elsewhere));
-    assert(maps.rootFiles.length > 0, "the stub resolved the file");
+    assert(maps.rootFiles.size > 0, "the stub resolved the file");
     assertEquals(
       createDiffSemantics(DIFF, maps, { cwd: configRoot }),
       undefined,
@@ -1219,7 +1219,7 @@ diff --git a/n.ts b/n.ts
       "1:hunk",
       "2:variable",
     ]);
-    assertEquals(maps.rootFiles.length, 2);
+    assertEquals(maps.rootFiles.size, 2);
     const sem = createDiffSemantics(diff, maps, { cwd: root })!;
     assertEquals(sem.typeAt(diff.indexOf("v27")), "27", "second hunk maps");
     assertEquals(

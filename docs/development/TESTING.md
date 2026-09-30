@@ -682,12 +682,21 @@ while it shuts down, after `terminate()` has already returned. A process that
 exits before that write finishes loses the worker's profiles or leaves one
 truncated. A `Worker` object gives no signal when its shutdown is done, but in
 Deno a Web Lock that a web worker holds is released only when the worker's
-runtime is torn down, which comes after that write. So a test that terminates a
-web worker just before its process exits waits for it by requesting a lock the
-worker took for itself. `WebWorkerRuntimeTransport.dispose()` waits in that way
-for the runtime worker, and
+runtime is torn down, which comes after that write.
+`@commonfabric/utils/worker-lifetime` is built on that. The worker calls
+`holdWorkerLifetimeLock()` and posts the name it returns no later than the
+first reply its creator waits for, and the creator ends the worker with
+`terminateWorker()`, which settles once the worker has been torn down. Where the
+worker could take no lock, as where Web Locks are missing or refused, the name
+is `undefined` and `terminateWorker()` settles as soon as `terminate()` returns.
+A test, a test harness, or a runtime transport that starts a Deno web worker
+ends it that way. A termination needs the wait wherever it can be the last thing
+its process does, and under a shuffled order, or in a lane that runs one test
+from a file, any test's termination can be.
 `packages/runtime-client/test/client/transport-web-worker-coverage.test.ts`
-fails when that worker loses its profile.
+fails when the runtime worker loses its profile. A Node `worker_threads` worker
+cannot be waited for this way, because Deno releases its locks when it is
+terminated.
 
 ### Test Structure
 

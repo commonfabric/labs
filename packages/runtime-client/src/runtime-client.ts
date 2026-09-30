@@ -108,11 +108,10 @@ export interface RuntimeClientPageSettings {
 
 export interface RuntimeClientOptions
   extends
-    Omit<InitializationData, "apiUrl" | "identity" | "spaceIdentity">,
+    Omit<InitializationData, "apiUrl" | "identity">,
     RuntimeClientPageSettings {
   apiUrl: URL;
   identity: Identity;
-  spaceIdentity?: Identity;
 }
 
 /**
@@ -167,10 +166,10 @@ export type RuntimeClientEvents = {
  * The same posture, in the form a client that joins a runtime states it.
  *
  * Written out field by field rather than spread, because what is dropped is
- * the point: the acting principal becomes the DID it derives to, and both
- * `Identity` values -- the signer and the space identity -- are left behind.
- * A client that attaches asserts which principal the runtime acts as and
- * supplies no key, and this is where a page's signer stops.
+ * the point: the acting principal becomes the DID it derives to, and the
+ * signing `Identity` is left behind. A client that attaches asserts which
+ * principal the runtime acts as and supplies no key, and this is where a
+ * page's signer stops.
  *
  * Everything else is named, which the `satisfies` clause holds: a posture
  * field this one drops is one the client asserts nothing about, and the
@@ -849,9 +848,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       apiUrl: options.apiUrl.toString(),
       spaceHostMap: options.spaceHostMap,
       identity: options.identity.keyPair,
-      spaceIdentity: options.spaceIdentity?.keyPair,
       spaceDid: options.spaceDid,
-      spaceName: options.spaceName,
       experimental: options.experimental,
       cfcEnforcementMode: options.cfcEnforcementMode,
       cfcFlowLabels: options.cfcFlowLabels,
@@ -1045,10 +1042,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new PieceHandle<NameSchema>(this, response.piece);
   }
 
-  async resolveSpaceName(name: string): Promise<DID> {
-    const response = await this.#conn.request<RequestType.ResolveSpaceName>({
-      type: RequestType.ResolveSpaceName,
-      name,
+  /**
+   * Creates a space owned by this runtime's identity, records it in the
+   * identity's Home space list under `label`, and returns its DID once the
+   * space's genesis commit is confirmed. The space's key is generated and used
+   * inside the worker, and never crosses to this side.
+   */
+  async createSpace(label?: string): Promise<DID> {
+    const response = await this.#conn.request<RequestType.CreateSpace>({
+      type: RequestType.CreateSpace,
+      ...(label === undefined ? {} : { label }),
     });
     return response.space;
   }

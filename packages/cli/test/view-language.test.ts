@@ -1,9 +1,9 @@
 /**
  * Language selection: declarative metadata covers filenames, aliases, and
  * shebangs, with plain text when none match. Transformed compiler output selects
- * TypeScript through a separate path. `distinctLanguages` dedupes the languages
- * a diff touches, and `diffSemanticsFor` composes the diff view's semantic layer
- * from the languages present, scoped to each one's files.
+ * TypeScript through a separate path. `languageMatchingSources` falls back from
+ * filenames to content evidence, and `diffSemanticsFor` composes the diff view's
+ * semantic layer from the languages present, scoped to each one's files.
  */
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
@@ -14,13 +14,13 @@ import {
   _internal as languageInternals,
   decodeLanguageInput,
   diffSemanticsFor,
-  distinctLanguages,
   indexLanguagesByName,
   languageForFile,
   languageForName,
   languageForSource,
   languageForTransformedOutput,
   languageIds,
+  languageMatchingSources,
   type LanguageMetadata,
   languageNames,
   metadataMatchesFilename,
@@ -559,45 +559,45 @@ Deno.test("languageForSource: malformed and option-only shebangs fall back safel
   }
 });
 
-Deno.test("distinctLanguages: dedupes in first-seen order", () => {
-  const languages = distinctLanguages([
-    "a.ts",
-    "b.ts",
-    "c.md",
-    "d.json",
-    "events.jsonl",
-    "e.yaml",
-    "f.py",
-    "Package.swift",
-    "build.gradle.kts",
-    "libs.versions.toml",
-    "deploy.sh",
-    "gradle.properties",
-    "proguard-rules.pro",
-    "AndroidManifest.xml",
-    "image.png",
-    "LICENSE",
-    undefined,
-  ]);
-  expect(languages.map((l) => l.id)).toEqual(
-    [
-      "typescript",
-      "markdown",
-      "json",
-      "json-lines",
-      "yaml",
-      "python",
-      "swift",
-      "kotlin",
-      "toml",
-      "shell",
-      "properties",
-      "proguard",
-      "xml",
-      "binary",
-      "plain-text",
-    ],
-  );
+describe("languageMatchingSources()", () => {
+  it("returns a recognized filename's language without reading any source", () => {
+    const read: string[] = [];
+    const sources = function* () {
+      read.push("first");
+      yield "#!/usr/bin/env python3\n";
+    };
+
+    expect(languageMatchingSources("tool.ts", sources())).toBe(
+      typeScriptLanguage,
+    );
+    expect(read).toEqual([]);
+    expect(languageMatchingSources("tool", sources())).toBe(pythonLanguage);
+    expect(read).toEqual(["first"]);
+  });
+
+  it("returns the language of the first source that selects one, reading no further", () => {
+    const read: string[] = [];
+    const sources = function* () {
+      read.push("workspace");
+      yield "echo unrecognized\n";
+      read.push("hunk");
+      yield "\uFEFF#!/usr/bin/env python3\n";
+      read.push("unused");
+      yield "#!/usr/bin/env node\n";
+    };
+
+    expect(languageMatchingSources("tool", sources())).toBe(pythonLanguage);
+    expect(read).toEqual(["workspace", "hunk"]);
+    expect(
+      languageMatchingSources("settings.cfg", ["[defaults]\n", '{"a": 1}\n']),
+    ).toBe(jsonLanguage);
+  });
+
+  it("returns `undefined` when neither the filename nor any source selects a language", () => {
+    expect(languageMatchingSources("tool", ["echo unrecognized\n"]))
+      .toBeUndefined();
+    expect(languageMatchingSources(undefined, [])).toBeUndefined();
+  });
 });
 
 Deno.test("renderedLinesFor rejects a renderer that changes line topology", () => {
@@ -702,31 +702,34 @@ Deno.test("diffSemanticsFor: TypeScript answers over its own files in the diff",
 
     // TypeScript offers a diff semantic layer and claims m.ts, so the service
     // builds and answers a type query against the workspace.
-    const sem = diffSemanticsFor([typeScriptLanguage], DIFF, maps, {
-      cwd: root,
-    });
+    assertEquals([...maps.rootFiles.values()], [typeScriptLanguage]);
+    const sem = diffSemanticsFor(DIFF, maps, { cwd: root });
     assert(sem, "TypeScript composes a diff service");
     const answer = doc.flatStructure.find((n) => n.name === "answer")!;
     assertEquals(sem!.typeAt(answer.nameOffset!), "number");
 
     // Languages without a semantic layer contribute none, so a diff of only
     // those resolves to no service.
-    assertEquals(
-      diffSemanticsFor(
-        [
-          markdownLanguage,
-          jsonLanguage,
-          jsonLinesLanguage,
-          yamlLanguage,
-          pythonLanguage,
-          plainTextLanguage,
-        ],
-        DIFF,
-        maps,
-        { cwd: root },
-      ),
-      undefined,
-    );
+    const [path] = maps.rootFiles.keys();
+    for (
+      const language of [
+        markdownLanguage,
+        jsonLanguage,
+        jsonLinesLanguage,
+        yamlLanguage,
+        pythonLanguage,
+        plainTextLanguage,
+      ]
+    ) {
+      assertEquals(
+        diffSemanticsFor(
+          DIFF,
+          { ...maps, rootFiles: new Map([[path, language]]) },
+          { cwd: root },
+        ),
+        undefined,
+      );
+    }
   } finally {
     done();
   }
@@ -810,12 +813,12 @@ Deno.test("diffSemanticsFor: a language with no matching files is skipped", () =
   // TypeScript offers a service, but the diff's only file is Markdown, so its
   // root-file set is empty and it contributes nothing.
   const maps: DiffMaps = {
-    rootFiles: ["/workspace/README.md"],
+    rootFiles: new Map([["/workspace/README.md", markdownLanguage]]),
     toFile: () => null,
     fromFile: () => null,
   };
   assertEquals(
-    diffSemanticsFor([typeScriptLanguage], "diff", maps, { cwd: "/workspace" }),
+    diffSemanticsFor("diff", maps, { cwd: "/workspace" }),
     undefined,
   );
 });

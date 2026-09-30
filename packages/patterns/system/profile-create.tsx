@@ -120,20 +120,17 @@ export const seedProfileName = handler<
 // builder/pattern.ts `optIntoInSpaceMultiSpaceCommit` → runner
 // `enableCrossSpaceChildCommit`).
 //
-// CT-1650: the profile space is created via ANONYMOUS `inSpace()` — never
-// `inSpace(name)`. A named target derives its DID from
-// `fromPassphrase("common user").derive(name)` (createSession spaceName path),
-// i.e. the display NAME alone, so two different users picking the same profile
-// name — or one user creating two same-named profiles — collide into a single
-// shared space. That named path supports the legacy space names used during
-// development and nothing else, and is removed once those development-only
-// spaces have been migrated (docs/plans/random-space-identities.md).
-// The anonymous case instead derives the DID from this handler's
-// frame cause, which carries the creating user's per-home-space input links plus
-// the durable per-event id (runner.ts `createPatternFrame` cause): unique per
-// user AND per creation event, stable across the cross-space-commit retry. The
-// display name flows ONLY to `initialName` (editable later, independent of the
-// space identity). Existing profiles keep their already-baked concrete DID link.
+// Each profile lives in a space of its own, created by the ANONYMOUS
+// `inSpace()` call below: the calling (home) space records one allocation per
+// call, keyed by this handler's frame cause, which carries the creating user's
+// per-home-space input links plus the durable per-event id (runner.ts
+// `createPatternFrame` cause). The space is created with a random DID and owned
+// by the creating user, so a profile is unique per user AND per creation event,
+// and stable across the cross-space-commit retry. The display name flows ONLY to
+// `initialName` (editable later, independent of the space identity). Other
+// users read a profile — a lunch poll or a chat room shows its name — so the
+// space grants anyone READ. Existing profiles keep their
+// already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
@@ -169,7 +166,7 @@ export const submitProfileCreation = handler<
     const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
       []).length as number;
     profiles.push(
-      ProfileHome.inSpace()({
+      ProfileHome.inSpace(undefined, { grants: { "*": "READ" } })({
         initialName: name,
         // The freshly created profile is current-vintage by construction — it
         // carries every stream and field, so the strict producer type is the

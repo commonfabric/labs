@@ -12,7 +12,12 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, type Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  type Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -46,6 +51,8 @@ import {
 } from "@commonfabric/piece/ops";
 import {
   Cell,
+  cellRuntime,
+  cellTx,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -72,6 +79,7 @@ import {
   Runtime,
   runtimePresets,
   RuntimeProgram,
+  SpaceNotFoundError,
   UI,
   VNode,
 } from "@commonfabric/runner";
@@ -564,11 +572,12 @@ export async function withRuntimeCleanupOnFailure<T>(
 
 async function makeSession(config: SpaceConfig): Promise<Session> {
   const identity = await loadIdentity(config.identity);
-  if (isDID(config.space)) {
-    return createSession({ identity, spaceDid: config.space });
-  } else {
-    return createSession({ identity, spaceName: config.space });
-  }
+  return createSession({
+    identity,
+    spaceDid: isDID(config.space)
+      ? config.space
+      : await legacySpaceDid(config.space),
+  });
 }
 
 /**
@@ -668,7 +677,6 @@ export async function loadPieces(
           storageManager: StorageManager.open({
             as: session.as,
             memoryHost: new URL(config.apiUrl),
-            spaceIdentity: session.spaceIdentity,
           }),
           experimental,
           errorHandlers: [
@@ -729,6 +737,7 @@ export async function loadPieces(
       () =>
         new PiecesController(session, runtime, {
           deferSpaceCellSync,
+          ...(isDID(config.space) ? {} : { spaceName: config.space }),
         }),
     );
     if (deferSpaceCellSync) {
@@ -1011,10 +1020,10 @@ async function resolveRegisteredDocumentOwner(
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
 
-    current = current.runtime.getCellFromLink(
+    current = cellRuntime(current).getCellFromLink(
       { ...resultLink, path: [], schema: undefined },
       undefined,
-      current.tx,
+      cellTx(current),
       getCarriedCfcLabelView(current),
     );
   }
@@ -1804,6 +1813,13 @@ export async function newPiece(
       );
     }
   } catch (error) {
+    if (error instanceof SpaceNotFoundError) {
+      throw new Error(
+        `${error.message}. Opening a space never creates one; create one ` +
+          `with: ${cliCommand(["space", "create"])}`,
+        { cause: error },
+      );
+    }
     throw new Error(
       `Could not initialize the space's default pattern: ${
         error instanceof Error ? error.message : String(error)
@@ -2638,10 +2654,10 @@ async function isDocumentOf(
   const sameDocument = (link: NormalizedFullLink) =>
     sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
   const link = cell.getAsNormalizedFullLink();
-  const document = cell.runtime.getCellFromLink(
+  const document = cellRuntime(cell).getCellFromLink(
     { ...link, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   await document.sync();
   const backLink = getMetaLink(document, "result");
@@ -4906,7 +4922,7 @@ export function cachedResultFields(
   result: Readonly<unknown>,
 ): CachedResultField[] {
   if (!isObjectNotArray(result)) return [];
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const tx = runtime.readTx();
   const cached: CachedResultField[] = [];
   for (const name of Object.keys(result)) {
@@ -5012,7 +5028,7 @@ export async function inspectPiece(
   }));
   const resultCell = await piece.result.getCell();
   const inputCell = await piece.input.getCell();
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const sourceLink = resolveLink(
     runtime,
     runtime.readTx(),
@@ -5658,8 +5674,9 @@ export async function setCellValue(
 
 /**
  * What a {@link callPieceHandler} call supplies: the connection its
- * resolution runs over, and the three execution deps a handling can observe
- * through a call that returns nothing.
+ * resolution runs over, the three execution deps a handling can observe
+ * through a call that returns nothing, and the `sendEvent` a test stands in
+ * for the dispatch.
  *
  * Narrower than {@link PieceCallableDependencies} by the fields this path
  * cannot keep. The input readers and the help prefix have no bearing on it —
@@ -5672,7 +5689,10 @@ export async function setCellValue(
  * {@link executePieceCallable}, which returns one.
  */
 export type PieceHandlerCallDeps =
-  & Pick<CallableExecutionDeps, "invocation" | "onPhase" | "skipReadback">
+  & Pick<
+    CallableExecutionDeps,
+    "invocation" | "onPhase" | "skipReadback" | "sendEvent"
+  >
   & Pick<PieceCallableDependencies, "loadPieces" | "loadPiece">;
 
 /**
@@ -6044,6 +6064,23 @@ export async function setHomePattern(
     repository: entry.repository,
   });
   noteWroteTo(homeConfig.space);
+}
+
+/**
+ * Creates a space owned by the configured identity and returns its DID. The
+ * space gets a random DID and is born granting its creator alone; it is
+ * recorded in the identity's Home space list under `label`.
+ */
+export async function createSpace(
+  config: Omit<SpaceConfig, "space">,
+  label?: string,
+): Promise<string> {
+  const identity = await loadIdentity(config.identity);
+  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
+  const pieces = await loadPieces(homeConfig);
+  const space = await pieces.createSpace(label);
+  noteWroteTo(homeConfig.space);
+  return space;
 }
 
 /**

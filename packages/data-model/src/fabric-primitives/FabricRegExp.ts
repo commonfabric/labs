@@ -6,6 +6,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -93,7 +94,7 @@ export class FabricRegExp extends BaseFabricPrimitive
     source?: string,
     flags?: string,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricRegExp);
 
     if (regexOrFlavor instanceof RegExp) {
       rejectExtraRegExpProperties(regexOrFlavor);
@@ -163,6 +164,10 @@ export class FabricRegExp extends BaseFabricPrimitive
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class RegExpCodec

@@ -24,7 +24,7 @@
 // toolshed.
 
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
@@ -34,14 +34,14 @@ import {
   waitForSettled,
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
-import type { MemorySpace } from "@commonfabric/runner";
+import { type MemorySpace, sendEvent } from "@commonfabric/runner";
 import {
   initializePiecesController,
   type PieceController,
   type PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, SPACE_NAME } = env;
+const { API_URL } = env;
 
 // The arm this process runs in: the explicit env value, else the
 // first-party default (ON since the server-execution v2 Phase 7 flip —
@@ -112,7 +112,7 @@ describe("sx2 events (Phase 3 gates)", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: `${SPACE_NAME}-sx2-events`,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -212,15 +212,17 @@ describe("sx2 events (Phase 3 gates)", () => {
     // unscoped id is refused); the same (id, session, stream) pair
     // scopes to the same durable delivery id, which is exactly what
     // the dedupe horizon needs to see a duplicate.
-    resultCell.key("increment").send(
-      undefined as never,
+    sendEvent(
+      resultCell.key("increment"),
       undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" } as never,
+      undefined,
+      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
     );
-    resultCell.key("increment").send(
-      undefined as never,
+    sendEvent(
+      resultCell.key("increment"),
       undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" } as never,
+      undefined,
+      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
     );
     await cc.runtime.idle();
     await settleAfter(space, dupWatermark);

@@ -37,7 +37,7 @@
 
 import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
@@ -54,7 +54,7 @@ import {
   type PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, SPACE_NAME } = env;
+const { API_URL } = env;
 
 // The arm this process runs in: the explicit env value, else the
 // first-party default (ON since the server-execution v2 Phase 7 flip —
@@ -145,10 +145,10 @@ describe("sx2 scale (Phase 6 gates)", () => {
   let slowPort = 0;
   const controllers: PiecesController[] = [];
 
-  const newController = async (suffix: string): Promise<PiecesController> => {
+  const newController = async (): Promise<PiecesController> => {
     const identity = await Identity.generate({ implementation: "noble" });
     const controller = await initializePiecesController({
-      space: `${SPACE_NAME}-sx2-scale-${suffix}`,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -244,7 +244,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
   });
 
   it("a hostile effect fan-out in space A leaves space B's propagation inside budget, and A's per-space budget engages (Phase 6)", async () => {
-    const ccB = await newController("quiet");
+    const ccB = await newController();
     const counterB = await standUpCounter(ccB);
 
     // Baseline: B's settle latency on a quiet server (3 reps, take the
@@ -266,7 +266,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
     // distinct slow URL (distinct memo keys — real per-piece egress),
     // each with a live reader (the demand that makes the ON arm serve
     // its effect).
-    const ccA = await newController("flood");
+    const ccA = await newController();
     // The first create compiles (and caches) the pattern; the rest run
     // CONCURRENTLY so the fan-out's effect admissions BUNCH — a serial
     // create chain spreads them past the slow endpoint's window and >16
@@ -334,7 +334,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
 
   it("propagation latency stays flat as served spaces accumulate (the suite-context degradation gate)", async () => {
     // Baseline: the first fresh space.
-    const first = await standUpCounter(await newController("acc-first"));
+    const first = await standUpCounter(await newController());
     let baseline = 0;
     for (const value of [1, 2]) {
       baseline = Math.max(baseline, await first.settleWrite(value));
@@ -344,7 +344,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
     // Accumulate: N more served spaces, each with real work.
     for (let index = 0; index < 8; index++) {
       const accumulated = await standUpCounter(
-        await newController(`acc-${index}`),
+        await newController(),
       );
       await accumulated.settleWrite(1);
       accumulated.cancel();
@@ -352,7 +352,7 @@ describe("sx2 scale (Phase 6 gates)", () => {
 
     // The late fresh space: latency must stay in the first one's
     // ballpark (v1's suite-context degradation was 34×).
-    const late = await standUpCounter(await newController("acc-late"));
+    const late = await standUpCounter(await newController());
     let lateLatency = 0;
     for (const value of [1, 2]) {
       lateLatency = Math.max(lateLatency, await late.settleWrite(value));

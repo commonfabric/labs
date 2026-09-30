@@ -28,12 +28,12 @@ from any write whose authoring identity is not `builtin`, screening on the
 **only** when `writeIdentity.identity` is defined and uniform
 (`prepare.ts:~1372`).
 
-Untrusted pattern/handler code **does** reach `cell.tx` (the SES sandbox does not
-interpose on host `IExtendedStorageTransaction` methods —
-`ses-runtime.ts` / `query-result-proxy.ts`). So a method like
+Any code holding a transaction can call the methods on
+`IExtendedStorageTransaction`. Untrusted pattern/handler code holds none (a cell
+keeps its transaction private), but that is one layer, and a method like
 `setCfcExternalIngest` on the public interface, feeding an **unconditional**
-`ExternalIngest` push into the builtin-authored flow join, would let *any*
-handler stamp a trusted "this arrived via external source X" mark on its own
+`ExternalIngest` push into the builtin-authored flow join, would let any holder
+stamp a trusted "this arrived via external source X" mark on its own
 outputs — and because the push is builtin-authored by construction, the gate
 is a no-op for it. That is strictly worse than the existing atoms, which are
 all screened on write identity.

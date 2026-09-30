@@ -68,8 +68,9 @@ behave differently:
   present. Once the home space exposes a space list, those spaces appear too.
   Until then, `ls` at root may show only `home/`.
 
-- **`lookup /<name>`** currently succeeds for **any valid space name**. The
-  filesystem resolves it on demand through `createSession({ spaceName })`.
+- **`lookup /<name>`** succeeds for a name whose space exists. The filesystem
+  resolves the name on demand through `legacySpaceDid(name)`, and a name whose
+  space has no history reports `ENOENT` and creates nothing.
 
 - **`lookup /did:key:...`** works for direct DID access.
 
@@ -84,19 +85,15 @@ identity.
 
 ### Space Name Resolution
 
-The current implementation resolves a name through
-`createSession({ spaceName })`, which deterministically derives a DID from the
-public `"common user"` passphrase and the name. Any valid name therefore
-resolves even when it is not listed. DIDs (`did:key:...`, `did:ucan:...`) are
-used as-is without derivation.
-
-After the
-[random space identity cutover](../../plans/random-space-identities.md) a name
-still resolves through that derivation, which survives as a resolver with no
-authority: it yields a DID and never a key, and creating a space does not call
-it. What changes is that resolving a name creates nothing. A name whose space
-has no history opens nothing rather than bringing one into being, and a space is
-created by the create operation, which takes no name and yields a random DID.
+A name resolves through `legacySpaceDid(name)`, which derives a DID from the
+public `"common user"` passphrase and the name: the derivation every space
+created before space identities were random was given. It survives as a
+resolver with no authority: it yields a DID and never a key, and creating a
+space does not call it. DIDs (`did:key:...`, `did:ucan:...`) are used as-is
+without derivation. Resolving a name creates nothing. A name whose space has no
+history opens nothing rather than bringing one into being; a space is created
+by `cf space create` or the Home pattern, which take no name and yield a random
+DID.
 
 The `.spaces.json` index below lists what a mount knows about; it is not
 consulted to resolve a name, because the derivation answers without it. Under

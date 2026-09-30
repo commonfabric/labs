@@ -22,6 +22,9 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 //         │◄═════════════════════ port ═══════════════════►│
 //         │                       │                        │
 //         │◄──────ERROR───────────┤◄───────(unread)────────┤
+//         │                       │                        │
+//         │◄───PORT-REQUEST───────┤◄───────(unread)────────┤
+//         ├──────────────────PORT (transferred)───────────►│
 //
 // The host and the guest hold the two ends of a `MessagePort` and every
 // capability request, response, and event crosses on it. The outer frame
@@ -29,8 +32,18 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 //
 // The one thing it does pass along is whatever the guest posts to it, which it
 // forwards without reading. A guest has a port for everything it means to say,
-// so a message arriving by that route is a guest reporting that it could not
-// use the port -- a way to raise an alarm, not a second way to talk.
+// so a message arriving by that route is about the port itself: an alarm from
+// a guest that could not use it, a request from a guest that has none, or the
+// flush marker below. It is not a second way to talk.
+//
+// The port goes out on `LOAD`, and the guest need not have started
+// listening by the time its document has loaded: a guest can await anything
+// it likes before it connects. A guest that starts listening only after its
+// document loaded may therefore have missed the port, and posts a
+// `PORT-REQUEST` up the parent chain. A host whose guest has loaded answers
+// it as it answers a `LOAD`, with a fresh port; one still loading a document
+// ignores it, since the `LOAD` still to come brings the listening guest a
+// port.
 //
 // The relayed route and the port are separate channels, and nothing orders one
 // against the other. The `ORDERED`/`FLUSH` exchange is the rendezvous that
@@ -375,4 +388,19 @@ export function isGuestFlush(message: unknown): message is GuestFlush {
   return isObjectOrArray(message) &&
     (message as { type?: unknown }).type === "flush" &&
     typeof (message as { nonce?: unknown }).nonce === "string";
+}
+
+/**
+ * Request a guest posts up the parent chain for a port, when it starts
+ * listening for one only after its document has finished loading. The host
+ * hands a port over on the load report, which the guest may then have
+ * missed, so the host answers this with another.
+ */
+export type GuestPortRequest = { type: "port-request" };
+
+export function isGuestPortRequest(
+  message: unknown,
+): message is GuestPortRequest {
+  return isObjectOrArray(message) && "type" in message &&
+    message.type === "port-request";
 }

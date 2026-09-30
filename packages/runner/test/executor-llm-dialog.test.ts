@@ -16,6 +16,7 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
+import { sendEvent } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { waitForSettled } from "../src/executor/watermark.ts";
 import { SpaceOutbox } from "../src/executor/outbox.ts";
@@ -202,13 +203,17 @@ export default pattern<{ messages: ${messagesType} }, { dialog: any; messages: a
             (value: any) => !!value?.addMessage,
           );
           const accepted = Promise.withResolvers<void>();
-          result.key("dialog").key("addMessage").asSchema({
-            ...LLMMessageSchema,
-            asCell: ["stream"],
-          }).send({ role: "user", content: "caller message" }, (tx) => {
-            expect(tx.status().status).toBe("done");
-            accepted.resolve();
-          });
+          sendEvent(
+            result.key("dialog").key("addMessage").asSchema({
+              ...LLMMessageSchema,
+              asCell: ["stream"],
+            }),
+            { role: "user", content: "caller message" },
+            (tx) => {
+              expect(tx.status().status).toBe("done");
+              accepted.resolve();
+            },
+          );
           await accepted.promise;
           await Promise.all([...outboxes].map((outbox) => outbox.settle()));
           await Promise.all(runtimes.map((runtime) => runtime.settled()));
@@ -335,10 +340,11 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
             (value: any) => !!value?.addMessage,
           );
           const firstAck = Promise.withResolvers<void>();
-          result.key("dialog").key("addMessage").asSchema({
-            ...LLMMessageSchema,
-            asCell: ["stream"],
-          }).send(
+          sendEvent(
+            result.key("dialog").key("addMessage").asSchema({
+              ...LLMMessageSchema,
+              asCell: ["stream"],
+            }),
             { role: "user", content: "first caller" },
             () => firstAck.resolve(),
           );
@@ -370,10 +376,11 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
           await peerResult.key("dialog").pull();
           expect(peerResult.key("dialog").get()?.addMessage).toBeDefined();
           const secondAck = Promise.withResolvers<void>();
-          peerResult.key("dialog").key("addMessage").asSchema({
-            ...LLMMessageSchema,
-            asCell: ["stream"],
-          }).send(
+          sendEvent(
+            peerResult.key("dialog").key("addMessage").asSchema({
+              ...LLMMessageSchema,
+              asCell: ["stream"],
+            }),
             { role: "user", content: "second caller" },
             () => secondAck.resolve(),
           );
@@ -390,9 +397,13 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
           if (supersede) {
             const originalWork = works[0];
             const cancelAck = Promise.withResolvers<void>();
-            result.key("dialog").key("cancelGeneration").asSchema({
-              asCell: ["stream"],
-            }).send(undefined, () => cancelAck.resolve());
+            sendEvent(
+              result.key("dialog").key("cancelGeneration").asSchema({
+                asCell: ["stream"],
+              }),
+              undefined,
+              () => cancelAck.resolve(),
+            );
             await cancelAck.promise;
             await Promise.all(runtimes.map((runtime) => runtime.idle()));
             expect(signals.map((signal) => signal?.aborted)).toEqual([
@@ -400,10 +411,11 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
               false,
             ]);
             const replacementAck = Promise.withResolvers<void>();
-            result.key("dialog").key("addMessage").asSchema({
-              ...LLMMessageSchema,
-              asCell: ["stream"],
-            }).send(
+            sendEvent(
+              result.key("dialog").key("addMessage").asSchema({
+                ...LLMMessageSchema,
+                asCell: ["stream"],
+              }),
               { role: "user", content: "first replacement" },
               () => replacementAck.resolve(),
             );

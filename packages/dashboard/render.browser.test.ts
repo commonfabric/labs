@@ -219,6 +219,63 @@ function assertStandardTileLayout(
         `${label} forty-first cell must start the second row at ${width}px`,
       );
     }
+    const list = tile.querySelector<HTMLElement>(".tile-detail-list");
+    if (list) {
+      // The room the two columns share, and for each column its width, the
+      // width its widest text needs, and whether it cuts any text short.
+      const room = list.clientWidth -
+        parseFloat(getComputedStyle(list).columnGap);
+      const columns = [0, 1].map(() => ({ width: 0, need: 0, cuts: false }));
+      const cells = list.querySelectorAll<HTMLElement>(
+        ":scope > span, :scope > a > span",
+      );
+      cells.forEach((cell, index) => {
+        const text = [cell, ...cell.querySelectorAll<HTMLElement>("span")]
+          .find((element) =>
+            [...element.childNodes].some((node) =>
+              node.nodeType === Node.TEXT_NODE && node.textContent !== ""
+            )
+          );
+        assertExists(text, `${label} row cell has no text at ${width}px`);
+        const column = columns[index % 2];
+        column.width = cell.getBoundingClientRect().width;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        column.need = Math.max(
+          column.need,
+          column.width - text.clientWidth + range.getBoundingClientRect().width,
+        );
+        if (text.scrollWidth <= text.clientWidth) return;
+        column.cuts = true;
+        const style = getComputedStyle(text);
+        assert(
+          style.display === "block" && style.textOverflow === "ellipsis",
+          `${label} cuts "${cell.textContent}" without an ellipsis at ${width}px`,
+        );
+      });
+      for (const [column, other] of [columns, [...columns].reverse()]) {
+        if (!column.cuts) continue;
+        assert(
+          column.width >= room / 2 - 0.5,
+          `${label} cuts a column to ${
+            pixel(column.width)
+          }px, under half of ${pixel(room)}px, at ${width}px`,
+        );
+        assert(
+          other.cuts || other.width <= other.need + 1,
+          `${label} cuts a column while the other is ${
+            pixel(other.width)
+          }px for text needing ${pixel(other.need)}px, at ${width}px`,
+        );
+      }
+      for (const link of list.querySelectorAll<HTMLElement>(":scope > a")) {
+        assertPixelAligned(
+          link.getBoundingClientRect().width,
+          list.clientWidth,
+          `${label} linked row must span the list at ${width}px`,
+        );
+      }
+    }
     assert(
       pixel(tileRect.height) <= pixel(benchmarkRect.height),
       `${label} is ${pixel(tileRect.height)}px tall at ${width}px; benchmarks is ${
@@ -259,6 +316,12 @@ Deno.test("every standard tile shares text baselines and fits under benchmarks",
     assertStandardTileLayout(dashboard, standard);
     assertStandardTileLayout(intermediate, standard);
     assertStandardTileLayout(minimum, standard);
+    for (const sub of dashboard.querySelectorAll<HTMLElement>(".sub")) {
+      assert(
+        sub.scrollWidth <= sub.clientWidth,
+        `"${sub.textContent}" is cut short at full width: ${sub.scrollWidth}px in ${sub.clientWidth}px`,
+      );
+    }
   } finally {
     fixture.remove();
   }

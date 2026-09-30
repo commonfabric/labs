@@ -152,7 +152,7 @@ describe("home golden replay (durable home state survives an in-place roll-forwa
     // `isHomeSpace` on inside the controller (ensureDefaultPattern + the update
     // gate) so the home branch — cause "home-pattern", provenance HOME_PATTERN_PATH
     // — is exercised.
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
       spaceDid: signer.did(),
     });

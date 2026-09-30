@@ -8,6 +8,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -123,7 +124,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
     publicKey?: FabricBytes | Uint8Array,
     privateKey?: FabricBytes | Uint8Array,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricKeyPair);
 
     if (typeof pairOrAlgorithm === "string") {
       if (pairOrAlgorithm === "") {
@@ -241,6 +242,10 @@ export class FabricKeyPair extends BaseFabricPrimitive {
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class KeyPairCodec

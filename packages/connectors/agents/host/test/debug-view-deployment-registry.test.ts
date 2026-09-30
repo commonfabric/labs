@@ -3,7 +3,7 @@
 import { assertRejects } from "@std/assert";
 
 import { AgentFabricTarget } from "@commonfabric/agents-connector/fabric";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -12,9 +12,9 @@ import { deployAgentSessionsDebugView } from "../src/debug-view.ts";
 import { identity, installDefaultPattern } from "./debug_view_support.ts";
 
 Deno.test("debug deployment requires the public piece registry", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-missing-registry-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -48,9 +48,9 @@ Deno.test("debug deployment requires the public piece registry", async () => {
 });
 
 Deno.test("debug deployment reports a malformed piece registry", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registration-error-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -86,9 +86,9 @@ Deno.test("debug deployment reports a malformed piece registry", async () => {
 });
 
 Deno.test("debug deployment rejects a replaced default pattern", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-root-race-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -139,9 +139,9 @@ Deno.test("debug deployment rejects a replaced default pattern", async () => {
 });
 
 Deno.test("debug deployment rejects an in-place registry change", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registry-race-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({

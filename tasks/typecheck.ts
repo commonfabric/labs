@@ -21,6 +21,8 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 // Directory paths (no glob expansion needed).
 const DIRS = [
+  ".claude/scripts",
+  "docs",
   "packages/api",
   "packages/cf-harness",
   "packages/cli",
@@ -79,16 +81,15 @@ const DIRS = [
   "packages/ts-transformers/test/reactive",
   "packages/ui",
   "packages/utils",
+  "skills",
   "tasks",
+  "tools",
 ];
 
 // Paths reached by pattern rather than named outright.
 const GLOBS = [
+  "packages/connectors/*.ts",
   "scripts/*.ts",
-  // The top of `tools` holds a module and its test, which a workspace test
-  // task runs. The directories below it hold probes and saved evidence
-  // rather than modules the repository builds.
-  "tools/*.ts",
   "packages/static/*.ts",
   "packages/patterns/*.ts",
   "packages/patterns/*.tsx",
@@ -151,8 +152,8 @@ export interface UncheckedTree {
  * decided to leave out from one the list forgot: both are simply absent, and
  * the task reports a clean run over either. Recording the decision is what
  * tells them apart, and `typecheck.test.ts` holds the pair to being
- * exhaustive — a workspace file that is neither checked nor named by an entry
- * here fails that test, naming the file.
+ * exhaustive — a file anywhere in the repository that is neither checked nor
+ * named by an entry here fails that test, naming the file.
  */
 export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   {
@@ -205,11 +206,17 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   },
 ];
 
-/** The owning scope of a checked path: the workspace member's name. */
+/**
+ * The owning scope of a checked path: the workspace member's name, or the
+ * top-level directory of a path no member owns.
+ */
 export function scopeOfPath(checkPath: string): string {
   const parts = checkPath.split("/");
   if (parts[0] === "packages") {
-    if (parts[1] === "connectors") {
+    // A connector's members sit two levels under `packages/connectors`. A
+    // module directly under it belongs to no member, and all such modules
+    // share the `connectors` scope.
+    if (parts[1] === "connectors" && parts.length >= 4) {
       return parts.slice(1, 4).join("/");
     }
     return parts[1] ?? "repo";
@@ -226,9 +233,7 @@ export async function collectPathsByScope(
     for await (
       const entry of expandGlob(pattern, { root, includeDirs: false })
     ) {
-      const file = entry.path.startsWith(root)
-        ? entry.path.slice(root.length + 1)
-        : entry.path;
+      const file = path.relative(path.resolve(root), entry.path);
       // A file a directory entry already names is checked through it.
       if (!DIRS.some((dir) => file.startsWith(`${dir}/`))) paths.push(file);
     }

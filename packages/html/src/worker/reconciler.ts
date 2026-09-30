@@ -26,6 +26,7 @@ import {
   type Cell,
   type CellLinkInput,
   cellOfOpaqueReference,
+  cellRuntime,
   ContextualFlowControl,
   convertCellsToLinks,
   isCell,
@@ -409,38 +410,29 @@ export class WorkerReconciler {
       // renderCellChild. `renderRoot` is re-invoked with the last resolved
       // value when an ACL changes.
       let lastRootValue: unknown;
-      let rootHasRendered = false;
-      const rootWatchedDocs = new Set<string>();
+      let rootConsumed: SinkConsumedLabel | undefined;
+      const rootWatch: MembershipWatch = {
+        watched: new Set<string>(),
+        addCancel,
+        reeval: () => renderRoot(lastRootValue),
+      };
       const renderRoot = (resolvedVnode: unknown) => {
         logger.debug("root-cell-update", () => ({ resolvedVnode }));
         lastRootValue = resolvedVnode;
-        rootHasRendered = true;
-        this.#watchCellMembership(
-          vnode as Cell<unknown>,
-          rootWatchedDocs,
-          addCancel,
-          () => {
-            if (rootHasRendered) renderRoot(lastRootValue);
-          },
-        );
         // The mounted cell is an egress like any descendant cell: gate its
-        // own label against the root policy (the host ceiling when
-        // configured) before rendering its resolved content. Checked per
-        // update so label changes re-evaluate, mirroring renderCellChild.
-        const accessLost =
-          this.#cellAccessError(vnode as Cell<unknown>) !== undefined;
-        if (
-          accessLost ||
-          !this.#canRenderCellUnderPolicy(
-            vnode as Cell<unknown>,
-            this.#rootRenderPolicy,
-          )
-        ) {
-          if (!accessLost) {
-            this.#denyCellRender(
-              vnode as Cell<unknown>,
-              this.#rootRenderPolicy,
-            );
+        // read against the root policy (the host ceiling when configured)
+        // before rendering its resolved content. Checked per update so label
+        // changes re-evaluate, mirroring renderCellChild.
+        const refusal = this.#readRefusal(
+          vnode,
+          [rootConsumed],
+          this.#rootRenderPolicy,
+          rootWatch,
+        );
+        const accessLost = this.#cellAccessError(vnode) !== undefined;
+        if (accessLost || refusal !== undefined) {
+          if (!accessLost && refusal !== undefined) {
+            this.#reportRenderDenial(() => refusal, this.#rootRenderPolicy);
           }
           this.#reconcileIntoWrapper(
             ctx,
@@ -473,10 +465,10 @@ export class WorkerReconciler {
       };
 
       addCancel(
-        this.#sinkCell(
-          vnode,
-          (resolvedVnode: unknown) => renderRoot(resolvedVnode),
-        ),
+        this.#sinkCell(vnode, (resolvedVnode: unknown, read) => {
+          rootConsumed = read;
+          renderRoot(resolvedVnode);
+        }, !this.#admitsEverything(this.#rootRenderPolicy)),
       );
     } else {
       // Static VNode - render directly into container
@@ -986,13 +978,13 @@ export class WorkerReconciler {
   /**
    * Decides whether the node's render policy admits a prop or binding whose
    * value was read from `source` by `reads`, each consuming the labels it
-   * reports, and emits only what the decision changes. `shown` says whether the prop may
-   * be showing before the decision, or is undefined when nothing has been
-   * shown for it; the result says whether it may be showing after. `show`
-   * runs when the prop is admitted and either its value `changed` or it was
-   * not showing. A refused prop is removed when it may be showing, and the
-   * refusal reported once per standing block. Watches the membership the
-   * consumed labels name.
+   * reports, as {@link #readRefusal} decides, and emits only what the decision
+   * changes. `shown` says whether the prop may be showing before the decision,
+   * or is undefined when nothing has been shown for it; the result says
+   * whether it may be showing after. `show` runs when the prop is admitted and
+   * either its value `changed` or it was not showing. A refused prop is
+   * removed when it may be showing, and the refusal reported once per
+   * standing block.
    */
   #admitProp(
     state: NodeState,
@@ -1002,15 +994,40 @@ export class WorkerReconciler {
     shown: boolean | undefined,
     changed: boolean,
     show: () => void,
-    { watched, addCancel, reeval }: MembershipWatch,
+    watch: MembershipWatch,
   ): boolean {
     const policy = state.renderPolicy;
-    if (this.#admitsEverything(policy)) {
+    const refusal = this.#readRefusal(source, reads, policy, watch);
+    if (refusal === undefined) {
       if (changed || shown !== true) show();
       return true;
     }
-    // A read the sink could not label is treated as consuming the marker no
-    // policy admits.
+    if (shown !== false) {
+      this.#reportRenderDenial(() => refusal, policy);
+      if (shown) {
+        this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The label that keeps `policy` from admitting what `reads` of `cell` show,
+   * or undefined when the policy admits it. The policy has to admit both the
+   * cell's labels, as {@link #cellLabelRefusal} fits them, and the labels the
+   * reads consumed, which reach every document a read passed through,
+   * including one behind a link crossed part way along the path. A read that
+   * reports no consumed labels counts as consuming the marker no policy
+   * admits, and reads that consumed none are fitted by the cell's schema.
+   * Watches the membership all of those labels name.
+   */
+  #readRefusal(
+    cell: Cell<unknown>,
+    reads: readonly (SinkConsumedLabel | undefined)[],
+    policy: RenderPolicy,
+    { watched, addCancel, reeval }: MembershipWatch,
+  ): RenderLabelSummary | undefined {
+    if (this.#admitsEverything(policy)) return undefined;
     const confidentiality = reads.flatMap((read) =>
       read?.confidentiality ?? [CFC_LABEL_READ_FAILED_ATOM]
     );
@@ -1018,6 +1035,17 @@ export class WorkerReconciler {
     const spaces = reads.flatMap((read) =>
       [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
     );
+    const sources = this.#cellLabelSources(cell);
+    for (const source of sources ?? []) {
+      if (source.view === undefined) continue;
+      this.#watchLabelMembership(
+        this.#confidentialityLabels(source.view),
+        source.spaces,
+        watched,
+        addCancel,
+        reeval,
+      );
+    }
     this.#watchLabelMembership(
       confidentiality,
       spaces,
@@ -1025,32 +1053,19 @@ export class WorkerReconciler {
       addCancel,
       reeval,
     );
-    if (
-      confidentiality.length === 0
-        ? this.#confidentialityLabelsFromCellSchema(source).every((atom) =>
-          this.#atomRenderableUnderPolicy(atom, policy)
-        )
-        : this.#canRenderLabelUnderPolicy(
-          confidentiality,
-          integrity,
-          () => spaces,
-          policy,
-        )
-    ) {
-      if (changed || shown !== true) show();
-      return true;
-    }
-    if (shown !== false) {
-      this.#reportRenderDenial(() => ({
-        labelSource: "consumed",
+    const admitted = confidentiality.length === 0
+      ? this.#confidentialityLabelsFromCellSchema(cell).every((atom) =>
+        this.#atomRenderableUnderPolicy(atom, policy)
+      )
+      : this.#canRenderLabelUnderPolicy(
         confidentiality,
         integrity,
-      }), policy);
-      if (shown) {
-        this.#queueOps([{ op: "remove-prop", nodeId: state.nodeId, key }]);
-      }
-    }
-    return false;
+        () => spaces,
+        policy,
+      );
+    return admitted
+      ? this.#cellLabelRefusal(cell, sources, policy)
+      : { labelSource: "consumed", confidentiality, integrity };
   }
 
   /** Keep the nested pattern's whole result cell on its existing root node. */
@@ -1197,28 +1212,35 @@ export class WorkerReconciler {
   }
 
   /**
-   * A cell's CFC label view, mirroring the render gate's resolution: the cell's
-   * own view, or — when it has none — the resolved (followed) target's view,
-   * whose label may carry the `Space(...)` atoms. May throw (each caller
-   * decides its own fail-closed handling). The SINGLE source of label
-   * resolution shared by the gate (`#canRenderCellUnderPolicy`) and the
-   * Stage-2 membership watcher (`watchCellMembership`), so they can never
-   * drift out of lockstep.
+   * The CFC labels of `cell`, each with the spaces of the documents it was
+   * read from, where a module policy the label selects has its manifest (spec
+   * §4.4.1): the cell's own label, which includes a label its handle carries,
+   * and, when its path resolves through links to another place, the label
+   * there, which reflects every link the resolution followed (spec §8.2.7).
+   * The render gate ({@link #cellLabelRefusal}) fits each separately, so
+   * integrity evidence in one does not discharge a clause of the other.
+   * Undefined when the labels cannot be read, as when the resolution throws.
    */
-  #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
-    return this.#resolveCellLabelSource(cell).view;
+  #cellLabelSources(cell: Cell<unknown>): CfcLabelViewSource[] | undefined {
+    try {
+      const own = cfcLabelViewSourceForCell(cell);
+      const resolved = cell.resolveAsCell();
+      return this.#sameCellForReuse(cell, resolved)
+        ? [own]
+        : [own, cfcLabelViewSourceForCell(resolved)];
+    } catch {
+      return undefined;
+    }
   }
 
   /**
-   * {@link #resolveCellLabelView}, with the spaces of the documents the view
-   * was read from, where a module policy the label selects has its manifest
-   * (spec §4.4.1). May throw, like the view read.
+   * The cell's own CFC label view, or — when it has none — the view of the
+   * place its path resolves to, which a text-integrity denial reports. May
+   * throw.
    */
-  #resolveCellLabelSource(cell: Cell<unknown>): CfcLabelViewSource {
-    const own = cfcLabelViewSourceForCell(cell);
-    return own.view !== undefined
-      ? own
-      : cfcLabelViewSourceForCell(cell.resolveAsCell());
+  #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
+    return cfcLabelViewSourceForCell(cell).view ??
+      cfcLabelViewSourceForCell(cell.resolveAsCell()).view;
   }
 
   /**
@@ -1451,52 +1473,62 @@ export class WorkerReconciler {
       policy.declassifyConfidentiality.length === 0;
   }
 
-  /**
-   * Whether `cell` may render under `policy`: every atom of its
-   * confidentiality label (its schema's, when it carries none) sits under
-   * the ceiling or is declassified, resolved through the display-boundary
-   * exchange rules when a resolver is wired and a ceiling is in force. A
-   * label that cannot be read fails closed.
-   */
+  /** Whether `policy` admits `cell`'s labels, as {@link #cellLabelRefusal} decides. */
   #canRenderCellUnderPolicy(
     cell: Cell<unknown>,
     policy: RenderPolicy,
   ): boolean {
-    if (this.#admitsEverything(policy)) {
-      return true;
-    }
+    return this.#admitsEverything(policy) ||
+      this.#cellLabelRefusal(cell, this.#cellLabelSources(cell), policy) ===
+        undefined;
+  }
 
-    let labelView: CfcLabelView | undefined;
-    let labelSpaces: readonly string[];
-    try {
-      ({ view: labelView, spaces: labelSpaces } = this.#resolveCellLabelSource(
-        cell,
-      ));
-    } catch {
-      return false;
+  /**
+   * The label of `cell` that keeps `policy` from admitting it, or undefined
+   * when the policy admits each of `sources`, the cell's labels as
+   * {@link #cellLabelSources} reads them. Each is fitted separately, through
+   * {@link #canRenderLabelUnderPolicy}. Labels that could not be read refuse.
+   * A cell with no label is fitted by its schema's information-flow
+   * constraint, atom by atom, since that constraint is not the data label and
+   * does not carry the runtime `Space(...)` principals exchange resolution
+   * targets.
+   */
+  #cellLabelRefusal(
+    cell: Cell<unknown>,
+    sources: readonly CfcLabelViewSource[] | undefined,
+    policy: RenderPolicy,
+  ): RenderLabelSummary | undefined {
+    if (sources === undefined || sources.some((source) => source.readFailed)) {
+      return { labelSource: "unreadable", confidentiality: [], integrity: [] };
     }
-    if (labelView === undefined) {
-      // Schema IFC is a constraint, not the data label. Use it only as a
-      // conservative fallback when no stored/read label metadata is available.
-      // Exchange resolution is deliberately NOT applied here: schema IFC does
-      // not carry the runtime `Space(...)` principals resolution targets, and
-      // the per-atom exact-match fit stays fail-closed for anything it cannot
-      // admit — the resolver drives the stored-label path below.
-      const schemaLabels = this.#confidentialityLabelsFromCellSchema(cell);
-      if (schemaLabels.length === 0) {
-        return true;
+    if (sources.every((source) => source.view === undefined)) {
+      const confidentiality = this.#confidentialityLabelsFromCellSchema(cell);
+      return confidentiality.every((atom) =>
+          this.#atomRenderableUnderPolicy(atom, policy)
+        )
+        ? undefined
+        : {
+          labelSource: "schema",
+          confidentiality: confidentiality as readonly CfcConfClause[],
+          integrity: [],
+        };
+    }
+    for (const { view, spaces } of sources) {
+      if (view === undefined) continue;
+      const confidentiality = this.#confidentialityLabels(view);
+      const integrity = this.#integrityLabels(view);
+      if (
+        !this.#canRenderLabelUnderPolicy(
+          confidentiality,
+          integrity,
+          () => spaces,
+          policy,
+        )
+      ) {
+        return { labelSource: "stored", confidentiality, integrity };
       }
-      return schemaLabels.every((atom) =>
-        this.#atomRenderableUnderPolicy(atom, policy)
-      );
     }
-
-    return this.#canRenderLabelUnderPolicy(
-      this.#confidentialityLabels(labelView),
-      this.#integrityLabels(labelView),
-      () => labelSpaces,
-      policy,
-    );
+    return undefined;
   }
 
   /**
@@ -1622,10 +1654,10 @@ export class WorkerReconciler {
   }
 
   /**
-   * The label the render gate decided on, in the form an explanation reports
-   * it: the cell's own view when it has one, the schema's information-flow
-   * constraint as the same conservative fallback the gate uses, and the
-   * read-failure case named rather than left blank.
+   * The label a text-integrity denial reports, in the form an explanation
+   * reports it: the view {@link #resolveCellLabelView} reads, the schema's
+   * information-flow constraint when there is none, and the read-failure case
+   * named rather than left blank.
    */
   #renderLabelSummary(cell: Cell<unknown>): RenderLabelSummary {
     let labelView: CfcLabelView | undefined;
@@ -1661,7 +1693,12 @@ export class WorkerReconciler {
    * read-failure marker blocks with no ceiling in force at all.
    */
   #denyCellRender(cell: Cell<unknown>, policy: RenderPolicy): void {
-    this.#reportRenderDenial(() => this.#renderLabelSummary(cell), policy);
+    this.#reportRenderDenial(
+      () =>
+        this.#cellLabelRefusal(cell, this.#cellLabelSources(cell), policy) ??
+          this.#renderLabelSummary(cell),
+      policy,
+    );
   }
 
   /** {@link #denyCellRender}, for the label `summary` gives. */
@@ -1720,60 +1757,19 @@ export class WorkerReconciler {
   }
 
   /**
-   * §4.9.3 Stage 2 (spec §18.4.5): subscribe `reeval` to the ACL docs of the
-   * spaces the render resolver consults for `cell`'s label
+   * §4.9.3 Stage 2 (spec §18.4.5): subscribes `reeval` to the ACL docs of the
+   * spaces the render resolver consults for `confidentiality`
    * (`membershipSpacesInConfidentiality`, which adds module-policy subjects to
    * the spec's `Space(X)` candidates per `docs/specs/cfc-spec-changes.md`
-   * SC-44), and to the manifest document of
-   * each module policy the label selects in each space the label was read
-   * from, so a fail-closed over-block re-renders when an ACL later grants (or
-   * revokes) READ or a manifest arrives. Shared by the descendant-cell
-   * (`renderCellChild`) and root-mounted (`mount`) egress paths. A no-op
-   * without a membership provider or manifest source, or when the label
-   * carries nothing either would watch; idempotent per watched document via
-   * `watched`; cancels register through `addCancel` (the cell's cancel group).
-   * Reads the same label view the render fit consumes, so what the fit
-   * resolves and what is watched stay in lockstep. A label-read failure or a
-   * subscription that throws is swallowed (fail closed on watching — the
-   * render fit itself stays fail-closed independently).
-   */
-  #watchCellMembership(
-    cell: Cell<unknown>,
-    watched: Set<string>,
-    addCancel: (cancel: Cancel) => void,
-    reeval: () => void,
-  ): void {
-    const provider = this.#membershipProvider;
-    const manifests = this.#modulePolicySource;
-    if (provider === undefined && manifests === undefined) {
-      return;
-    }
-    // Read the label the render gate reads (`resolveCellLabelView`, including
-    // the followed-target fallback) so the watcher and the fit stay in
-    // lockstep — a followed cell whose `Space(...)` label lives on the target
-    // is watched, not silently left un-upgradable.
-    let source: CfcLabelViewSource;
-    try {
-      source = this.#resolveCellLabelSource(cell);
-    } catch {
-      return;
-    }
-    // No stored label (or a read failure) → nothing to watch. The render fit
-    // still fail-closes independently; we just set up no reactive upgrade.
-    if (source.view === undefined) return;
-    this.#watchLabelMembership(
-      this.#confidentialityLabels(source.view),
-      source.spaces,
-      watched,
-      addCancel,
-      reeval,
-    );
-  }
-
-  /**
-   * Subscribes `reeval` to the membership and module-policy manifests that
-   * `confidentiality` names, as {@link #watchCellMembership} describes, with
-   * the manifests looked up in `spaces`.
+   * SC-44), and to the manifest document of each module policy the label
+   * selects in each of `spaces`, the spaces the label was read from, so a
+   * fail-closed over-block re-renders when an ACL later grants (or revokes)
+   * READ or a manifest arrives. A no-op without a membership provider or
+   * manifest source, or when the label carries nothing either would watch;
+   * idempotent per watched document via `watched`; cancels register through
+   * `addCancel` (the cell's cancel group). A subscription that throws is
+   * swallowed (fail closed on watching — the render fit itself stays
+   * fail-closed independently).
    */
   #watchLabelMembership(
     confidentiality: readonly CfcConfClause[],
@@ -3188,7 +3184,7 @@ export class WorkerReconciler {
       ? parseLink(rawValue, base) ?? parseLink(value, base)
       : parseLink(rawValue) ?? parseLink(value);
     if (link?.id && link.space) {
-      return propsCell.runtime.getCellFromLink(link);
+      return cellRuntime(propsCell).getCellFromLink(link);
     }
     if (isCell(value)) {
       return value as Cell<unknown>;
@@ -4320,12 +4316,18 @@ export class WorkerReconciler {
       | undefined;
 
     // §4.9.3 Stage 2: on each render, watch the ACL docs of the spaces this
-    // cell is labeled with, so a fail-closed over-block upgrades to an admit
-    // when a `Space(X)` ACL syncs in (and a revoke re-blocks) — a re-evaluation
-    // with the last resolved value, forced past the value-identity dedupe.
-    const watchedDocs = new Set<string>();
+    // cell's read is labeled with, so a fail-closed over-block upgrades to an
+    // admit when a `Space(X)` ACL syncs in (and a revoke re-blocks) — a
+    // re-evaluation with the last resolved value, which emits only a change
+    // in the decision.
+    let consumed: SinkConsumedLabel | undefined;
+    const watch: MembershipWatch = {
+      watched: new Set<string>(),
+      addCancel,
+      reeval: () => renderResolved(childState.currentValue),
+    };
 
-    const renderResolved = (resolvedChild: unknown, forced = false) => {
+    const renderResolved = (resolvedChild: unknown) => {
       const isInitialRender = childState.nodeId === -1;
       const resultCell = this.#resolveCellForBinding(cell);
       const valueUnchanged = Object.is(
@@ -4333,21 +4335,13 @@ export class WorkerReconciler {
         childState.currentValue,
       );
       childState.currentValue = resolvedChild;
-      this.#watchCellMembership(
-        cell,
-        watchedDocs,
-        addCancel,
-        () => renderResolved(childState.currentValue, true),
-      );
+      const refusal = this.#readRefusal(cell, [consumed], policy, watch);
       const accessLost = this.#cellAccessError(cell) !== undefined;
-      const blockedByPolicy = accessLost ||
-        !this.#canRenderCellUnderPolicy(cell, policy);
+      const blockedByPolicy = accessLost || refusal !== undefined;
       const blockedByIntegrity = !blockedByPolicy &&
         this.#shouldBlockTextFromCell(resolvedChild, cell, policy);
 
-      if (
-        !forced && !isInitialRender && valueUnchanged
-      ) {
+      if (!isInitialRender && valueUnchanged) {
         if (blockedByPolicy && currentContentState === "policy-blocked") {
           return;
         }
@@ -4366,7 +4360,9 @@ export class WorkerReconciler {
       }
 
       if (blockedByPolicy) {
-        if (!accessLost) this.#denyCellRender(cell, policy);
+        if (!accessLost && refusal !== undefined) {
+          this.#reportRenderDenial(() => refusal, policy);
+        }
         if (!isInitialRender) {
           if (currentCancel) {
             currentCancel();
@@ -4660,7 +4656,10 @@ export class WorkerReconciler {
     };
 
     addCancel(
-      this.#sinkCell(cell, (resolvedChild) => renderResolved(resolvedChild)),
+      this.#sinkCell(cell, (resolvedChild, read) => {
+        consumed = read;
+        renderResolved(resolvedChild);
+      }, !this.#admitsEverything(policy)),
     );
 
     // When the cancel group fires (parent teardown), also cancel the current

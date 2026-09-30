@@ -35,9 +35,8 @@ same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
   Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
   general interchange (`RGI_Emoji`), with its modifiers and joiners included.
   The room refuses anything else, including text, and two emoji written as one.
-  A room has no fixed list. The four cat faces in today's `FABRICHAT_REACJI` are
-  a demo placeholder, not part of this design. Which emoji a client puts within
-  easy reach is the client's choice.
+  A room has no fixed list. Which emoji a client puts within easy reach is the
+  client's choice.
 - **`sentAt`** is the handler clock when the room recorded the reaction, at
   whatever resolution the system provides. Like every time a room records, it is
   unique in the room (see [unique times](ChatMessage.md#unique-times)). A

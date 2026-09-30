@@ -10,7 +10,7 @@ import {
   cellHasOwnerConfidentiality,
   cellHasOwnerProtection,
 } from "@commonfabric/agents-connector/fabric-graph";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -86,9 +86,9 @@ Deno.test("debug command authorization resolves local schema definitions", () =>
 });
 
 Deno.test("debug deployment requires verified command authorization", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-command-authorization-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -131,9 +131,9 @@ Deno.test("debug deployment requires verified command authorization", async () =
 });
 
 Deno.test("debug deployment protects its result before starting", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-protection-failure-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -190,9 +190,9 @@ Deno.test("debug deployment protects its result before starting", async () => {
 });
 
 Deno.test("debug deployment refuses a pre-created unprotected piece", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-piece-squatting-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -256,9 +256,9 @@ Deno.test("debug deployment refuses a pre-created unprotected piece", async () =
 });
 
 Deno.test("debug deployment refuses an unprotected registration", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registration-squatting-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -312,8 +312,8 @@ Deno.test("debug deployment refuses an unprotected registration", async () => {
 
 Deno.test("debug registration rejects writes from another owner", async () => {
   const server = newSharedServer();
-  const spaceName = `debug-registration-owner-${crypto.randomUUID()}`;
-  const readerSession = await createSession({ identity, spaceName });
+  const spaceDid = (await Identity.generate()).did();
+  const readerSession = createSession({ identity, spaceDid });
   const readerStorage = SharedServerStorageManager.connectTo(server, {
     as: readerSession.as,
   });
@@ -439,9 +439,9 @@ Deno.test("debug registration rejects writes from another owner", async () => {
 });
 
 Deno.test("debug registration rejects another owner-scoped writer", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `debug-registration-writer-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({

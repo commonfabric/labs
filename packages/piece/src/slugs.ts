@@ -1,6 +1,7 @@
 import type { CellScope, JSONSchema } from "@commonfabric/api";
 import type { Cell, IExtendedStorageTransaction } from "@commonfabric/runner";
 import {
+  cellTx,
   DEFAULT_CELL_SCOPE,
   entityIdFrom,
   isPieceDocument,
@@ -191,7 +192,7 @@ function targetKindOf(
   base: Cell<unknown>,
 ): string {
   try {
-    const target = pieces.runtime.getCellFromLink(held, undefined, base.tx)
+    const target = pieces.runtime.getCellFromLink(held, undefined, cellTx(base))
       .resolveAsCell();
     return isPieceDocument(pieces.runtime, target) ? "piece" : "not-piece";
   } catch {

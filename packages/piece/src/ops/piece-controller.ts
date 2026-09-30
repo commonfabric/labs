@@ -7,6 +7,8 @@ import {
   applyPieceSourceTransition,
   Cell,
   type CellPath,
+  cellRuntime,
+  cellTx,
   cellWithScopedLinkRequiredsRelaxed,
   ContextualFlowControl,
   deepEqual,
@@ -51,6 +53,7 @@ import {
   sanitizeSchemaForLinks,
   schemaAcceptsOpaqueCellValue,
   schemaPathSelection,
+  setCell,
   setPieceReconciliation,
 } from "@commonfabric/runner";
 import { storedArgumentRefusalDetail } from "@commonfabric/runner/shared";
@@ -125,7 +128,7 @@ async function snapshotCloneData(
   const initialManifest = cloneInternalManifest(piece);
   for (const entry of initialManifest) {
     if (entry.kind === "computed") continue;
-    const internal = piece.runtime.getCellFromLink(
+    const internal = cellRuntime(piece).getCellFromLink(
       parseLinkOrThrow(entry.link, piece),
     );
     if (!isStream(internal)) {
@@ -133,7 +136,7 @@ async function snapshotCloneData(
     }
   }
 
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -162,7 +165,7 @@ async function snapshotCloneData(
     for (const entry of manifest) {
       if (entry.kind === "computed") continue;
       const link = parseLinkOrThrow(entry.link, txPiece);
-      const internal = piece.runtime.getCellFromLink(link, undefined, tx);
+      const internal = cellRuntime(piece).getCellFromLink(link, undefined, tx);
       if (isStream(internal)) continue;
       internals.push({
         partialCause: entry.partialCause,
@@ -178,7 +181,7 @@ async function snapshotCloneData(
     }
 
     pinCloneSnapshotCells(tx, snapshotCells.values());
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
     const { error } = await tx.commit();
     if (error) throw commitFailure(error);
@@ -194,7 +197,7 @@ async function restoreCloneInternals(
   piece: Cell<unknown>,
   snapshots: readonly CloneInternalSnapshot[],
 ): Promise<void> {
-  const tx = piece.runtime.edit();
+  const tx = cellRuntime(piece).edit();
   let commitStarted = false;
   try {
     const txPiece = piece.withTx(tx);
@@ -208,9 +211,11 @@ async function restoreCloneInternals(
         throw new Error("cloned piece is missing a source data cell");
       }
       const link = parseLinkOrThrow(entry.link, txPiece);
-      piece.runtime.getCellFromLink(link, undefined, tx).set(snapshot.value);
+      cellRuntime(piece).getCellFromLink(link, undefined, tx).set(
+        snapshot.value,
+      );
     }
-    piece.runtime.prepareTxForCommit(tx);
+    cellRuntime(piece).prepareTxForCommit(tx);
     commitStarted = true;
     const { error } = await tx.commit();
     if (error) throw commitFailure(error);
@@ -218,7 +223,7 @@ async function restoreCloneInternals(
     if (!commitStarted) tx.abort(error);
     throw error;
   }
-  await piece.runtime.idle();
+  await cellRuntime(piece).idle();
 }
 
 type PiecePropIoType = "result" | "input";
@@ -1580,7 +1585,7 @@ export function durableSourceContract(
     const scopedRoot = pieces.runtime.getCellFromLink(
       { ...rawSourceLink, path: [], schema: undefined },
       undefined,
-      linkedCell.tx,
+      cellTx(linkedCell),
     );
     const hasScopedMeta = scopedRoot.getMetaRaw("schema") !== undefined ||
       scopedRoot.getMetaRaw("result") !== undefined;
@@ -1590,7 +1595,7 @@ export function durableSourceContract(
   const sourceRoot = pieces.runtime.getCellFromLink(
     { ...sourceLink, path: [], schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
 
   const resultSchema = readResultSchemaMeta(sourceRoot);
@@ -1616,7 +1621,7 @@ export function durableSourceContract(
   const ownerResult = pieces.runtime.getCellFromLink(
     { ...resultLink, schema: undefined },
     undefined,
-    linkedCell.tx,
+    cellTx(linkedCell),
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
@@ -1649,7 +1654,7 @@ export function durableSourceContract(
         validationCell: pieces.runtime.getCellFromLink(
           { ...argumentLink, schema: undefined },
           undefined,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ),
         validationPath: path,
       });
@@ -1672,7 +1677,7 @@ export function durableSourceContract(
         const internalLink = pieces.runtime.getCellFromLink(
           parsedInternalLink,
           parsedInternalLink.schema,
-          linkedCell.tx,
+          cellTx(linkedCell),
         ).getAsNormalizedFullLink();
         const path = relativePath(internalLink);
         if (path === undefined) continue;
@@ -1686,7 +1691,7 @@ export function durableSourceContract(
             validationCell: pieces.runtime.getCellFromLink(
               { ...internalLink, schema: undefined },
               undefined,
-              linkedCell.tx,
+              cellTx(linkedCell),
             ),
             validationPath: path,
           });
@@ -1719,7 +1724,7 @@ export function durableSourceContract(
           const target = pieces.runtime.getCellFromLink(
             parsed,
             parsed.schema,
-            linkedCell.tx,
+            cellTx(linkedCell),
           ).getAsNormalizedFullLink();
           // A projection is matched at the instance the link names. A result
           // alias reading a scoped input addresses the input's base slot and
@@ -2009,7 +2014,7 @@ function resolveDurableSource(
   const linkedCell = pieces.runtime.getCellFromLink(
     { ...link, schema: undefined },
     undefined,
-    linkBase.tx,
+    cellTx(linkBase),
   );
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
@@ -2047,7 +2052,7 @@ function resolveDurableSource(
       const root = pieces.runtime.getCellFromLink(
         { ...sourceLink, path: [], schema: undefined, scope },
         undefined,
-        linkedCell.tx,
+        cellTx(linkedCell),
       );
       if (
         root.getMetaRaw("result") !== undefined ||
@@ -2616,7 +2621,7 @@ export function localizeWritableDestinationContracts(
   let contracts: PathSchemaContract[] = [{ schema: root, root }];
   let approximatedCorrelatedPath = false;
   const rawRoot = rootCell.getRawUntyped({ lastNode: "top" });
-  const materializedRoot = destination.validationCell.withTx(rootCell.tx)
+  const materializedRoot = destination.validationCell.withTx(cellTx(rootCell))
     .asSchema(root).get();
   const stagedMaterializedRoot = replaceMaterializedCellValueAtPath(
     materializedRoot,
@@ -2724,7 +2729,7 @@ function rawValueAtPath(
 
 /** @internal Exported for focused projection-presence tests. */
 export function rawResolvedValueAtPath(
-  tx: NonNullable<Cell<unknown>["tx"]>,
+  tx: IExtendedStorageTransaction,
   resolved: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
 ): { present: boolean; value: unknown } {
   // Read the document envelope, not only its Cell value. A metadata-only
@@ -2808,7 +2813,7 @@ export function omitMissingProjectionAliases(
     const resolvedSchemaView = isCell(schemaView) && !isStream(schemaView)
       ? schemaView.get()
       : schemaView;
-    const tx = cell.tx;
+    const tx = cellTx(cell);
     if (tx === undefined) {
       throw new Error("projection alias reconciliation requires a transaction");
     }
@@ -3369,7 +3374,8 @@ class PiecePropIo implements PieceCellIo {
           pieces.runtime.getCellFromLink(rawTarget, undefined, tx)
             .setRawUntyped(undefined);
         } else {
-          txCell.set(
+          setCell(
+            txCell,
             nextValue,
             undefined,
             isStream(txCell) &&
@@ -5217,7 +5223,7 @@ function pieceSourceArgumentEvidence(
       const linkedCell = pieces.runtime.getCellFromLink(
         { ...link, schema: undefined },
         undefined,
-        linkBase.tx,
+        cellTx(linkBase),
       );
       const contract = durableSourceContract(linkedCell, pieces);
       return {

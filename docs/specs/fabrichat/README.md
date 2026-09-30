@@ -160,7 +160,7 @@ provide, the document says so, under the heading "Prerequisites".
    member set. A profile shown for a member is one that member contributed. The
    access list, not a list kept beside it, decides who can read and write.
 3. **History is attested.** Messages and reactions are `AuthoredByCurrentUser`
-   and `TrustedActionWrite`, as in today's FabriChat. A message's sender can
+   and `TrustedActionWrite`. A message's sender can
    edit or delete it, each change recorded as a new version, and a message can
    be obliterated, by an OWNER curating a group room or by either person in a
    direct room for their own messages, leaving only an attested tombstone. A
@@ -248,12 +248,10 @@ names the ones it needs, and they are gathered here:
 
 - **A member set for a shared space**, readable by the space's members and by
   patterns running there (see [Shared spaces](#shared-spaces)).
-- **Creating a private space from a pattern.** A host can already create a space
-  whose genesis grants only its creator (`registerSpaceIdentity` with a
-  `genesisAcl`). A pattern can't: `Factory.inSpace()` creates a space with the
-  default genesis grants (`{ [creator]: "OWNER", "*": "WRITE" }`), which open it
-  to any authenticated principal. Exposing creator-only creation to patterns is
-  the direction of [random space identities](../random-space-identities.md).
+- **Creating a private space from a pattern.** `Factory.inSpace()` creates a
+  space with a random DID whose genesis document grants only its creator
+  (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
+  as well ([random space identities](../random-space-identities.md)).
 - **Granting access from a pattern.** Only a host can change an access list
   today (`ACLManager`, the runtime client's `space:setAclEntry`). A room's
   creator needs a pattern-facing way to grant and revoke members by principal,

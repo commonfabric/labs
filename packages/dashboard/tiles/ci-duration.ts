@@ -8,6 +8,7 @@
  */
 
 import { fromFileUrl } from "@std/path";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   type Route,
   type Run,
@@ -18,7 +19,13 @@ import {
   type TileView,
 } from "../types.ts";
 import { CompletedAttempts } from "../completed-attempts.ts";
-import { escapeHtml, friendlyError, median, sparkline } from "../lib.ts";
+import {
+  ciDurationSub,
+  escapeHtml,
+  friendlyError,
+  median,
+  sparkline,
+} from "../lib.ts";
 import {
   CI_WORKFLOW,
   DUR_GOOD,
@@ -763,8 +770,7 @@ function makeCiDuration(
       // How long the sparkline spans (oldest to newest run), for the corner label.
       const times = passed.map((run) => run.createdAt);
       const spanMs = times.length >= 2
-        ? times.reduce((a, b) => Math.max(a, b)) -
-          times.reduce((a, b) => Math.min(a, b))
+        ? maxOf(times) - minOf(times)
         : 0;
       const s: Status = window.length === 0
         ? "unknown"
@@ -776,9 +782,10 @@ function makeCiDuration(
       return {
         status: s,
         value: window.length === 0 ? "—" : `${medianMins}m`,
-        sub: usingTime
-          ? `median · ${window.length} passing PR runs in the last ${DUR_MAX_AGE_HOURS}h`
-          : `median · last ${window.length} passing PR runs`,
+        sub: ciDurationSub(
+          window.length,
+          usingTime ? DUR_MAX_AGE_HOURS : undefined,
+        ),
         extra: sparkline(series, CHART_LINE, {
           count: window.length,
           color: CHART_HIGHLIGHT,

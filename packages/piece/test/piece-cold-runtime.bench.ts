@@ -1,4 +1,4 @@
-import { createSession, Identity } from "@commonfabric/identity";
+import { createSession, type DID, Identity } from "@commonfabric/identity";
 import { entityIdFrom, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { RuntimeProgram } from "../../runner/src/harness/types.ts";
@@ -43,7 +43,7 @@ const persistedPieceProgram: RuntimeProgram = {
 
 type Seed = {
   storageManager: ReturnType<typeof StorageManager.emulate>;
-  spaceName: string;
+  space: DID;
 };
 
 async function createSeed(): Promise<Seed> {
@@ -54,9 +54,9 @@ async function createSeed(): Promise<Seed> {
     apiUrl: new URL(import.meta.url),
     storageManager,
   });
-  const session = await createSession({
+  const session = createSession({
     identity: signer,
-    spaceName: `piece-cold-runtime-bench-${crypto.randomUUID()}`,
+    spaceDid: await runtime.createSpace(),
   });
   const pieces = new PiecesController(session, runtime);
   await pieces.synced();
@@ -87,7 +87,7 @@ async function createSeed(): Promise<Seed> {
   await runtime.dispose();
   return {
     storageManager,
-    spaceName: session.spaceName!,
+    space: session.space,
   };
 }
 
@@ -99,9 +99,9 @@ async function withFreshPieces<T>(
     apiUrl: new URL(import.meta.url),
     storageManager: seed.storageManager,
   });
-  const session = await createSession({
+  const session = createSession({
     identity: signer,
-    spaceName: seed.spaceName,
+    spaceDid: seed.space,
   });
   const pieces = new PiecesController(session, runtime);
   await pieces.synced();
@@ -145,9 +145,9 @@ Deno.bench({
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const seedSession = await createSession({
+    const seedSession = createSession({
       identity: signer,
-      spaceName: `piece-cold-runtime-add-${crypto.randomUUID()}`,
+      spaceDid: await seedRuntime.createSpace(),
     });
     const seedPieces = new PiecesController(seedSession, seedRuntime);
     await seedPieces.synced();
@@ -182,9 +182,9 @@ Deno.bench({
         apiUrl: new URL(import.meta.url),
         storageManager,
       });
-      const session = await createSession({
+      const session = createSession({
         identity: signer,
-        spaceName: seedSession.spaceName!,
+        spaceDid: seedSession.space,
       });
       const pieces = new PiecesController(session, runtime);
       await pieces.synced();

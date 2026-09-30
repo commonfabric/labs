@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { getLoggerFlagsBreakdown } from "@commonfabric/utils/logger";
+import { sendEvent } from "../src/cell.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import {
   createSchedulerTestRuntime,
@@ -77,12 +78,7 @@ describe("stream handler whose argument does not resolve", () => {
     runtime.telemetry.addEventListener("telemetry", onTelemetry);
 
     const callbackStatuses: string[] = [];
-    (result.key("bump") as unknown as {
-      send(
-        value: unknown,
-        onCommit: (tx: { status(): { status: string } }) => void,
-      ): void;
-    }).send({}, (commitTx) => {
+    sendEvent(result.key("bump"), {}, (commitTx) => {
       callbackStatuses.push(commitTx.status().status);
     });
     await firstPassSettled.promise;

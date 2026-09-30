@@ -457,6 +457,9 @@ export class Scheduler {
    */
   #executingAction: Action | null = null;
 
+  /** Called with each action {@link unsubscribe} is given. */
+  #unsubscribeObservers = new Set<(action: Action) => void>();
+
   #currentActionId?: string;
   #dependencyGraphState!: DependencyGraphState;
   #dependencyUpdateState!: DependencyUpdateState;
@@ -667,6 +670,15 @@ export class Scheduler {
   /** Id of the action executing right now, if one is. */
   get currentActionId(): string | undefined {
     return this.#currentActionId;
+  }
+
+  /**
+   * The action executing right now, if one is. Code running inside an action
+   * that learns of a change from somewhere the action's reads cannot see hands
+   * this to {@link invalidateAction} to run the action again.
+   */
+  get executingAction(): Action | null {
+    return this.#executingAction;
   }
 
   /**
@@ -931,6 +943,17 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    for (const observer of [...this.#unsubscribeObservers]) observer(action);
+  }
+
+  /**
+   * Calls `observer` with each action this scheduler unsubscribes, so that
+   * something holding an action for a later purpose can let it go. Returns a
+   * cancel that stops the calls.
+   */
+  observeUnsubscribe(observer: (action: Action) => void): Cancel {
+    this.#unsubscribeObservers.add(observer);
+    return () => this.#unsubscribeObservers.delete(observer);
   }
 
   async run(action: Action): Promise<any> {

@@ -1,5 +1,5 @@
 import { AgentFabricTarget } from "@commonfabric/agents-connector/fabric";
-import { createSession } from "@commonfabric/identity";
+import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -49,9 +49,9 @@ async function sendThrough(
 }
 
 Deno.test("a configured producer piece sends commands through its own protected queue", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `command-producer-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   let actingPrincipal = session.as.did();
@@ -127,9 +127,9 @@ Deno.test("a configured producer piece sends commands through its own protected 
 });
 
 Deno.test("a producer whose pattern declares no command authorization is refused", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `command-producer-unauthorized-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({
@@ -271,9 +271,9 @@ Deno.test("a producer whose pattern has no recorded identity is refused", async 
 });
 
 Deno.test("a producer cannot write through another producer's queue", async () => {
-  const session = await createSession({
+  const session = createSession({
     identity,
-    spaceName: `command-producer-isolation-${crypto.randomUUID()}`,
+    spaceDid: (await Identity.generate()).did(),
   });
   const storageManager = StorageManager.emulate({ as: session.as });
   const runtime = new Runtime({

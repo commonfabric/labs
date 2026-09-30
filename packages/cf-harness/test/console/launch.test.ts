@@ -5,6 +5,7 @@ import { join } from "@std/path";
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
 import {
+  consoleLaunchHelpText,
   type ConsoleLaunchIo,
   type ConsoleLaunchRecords,
   consoleLaunchReport,
@@ -1305,6 +1306,92 @@ describe("launch", () => {
       expect(consoleArgs).toEqual(["--host-mount", "name=c"]);
     });
 
+    it("throws naming a misspelled launcher flag and the flag it meant, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [...NAMED_ARGS, "--instance", "loom", "--no-skills-registy"],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--no-skills-registy` is not a flag of `console:launch`. Did you " +
+          "mean `--no-skills-registry`?",
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("throws naming a flag after `--` the console does not take, before reading anything", async () => {
+      let reads = 0;
+      const counted = io({
+        readTextFile: () => {
+          reads += 1;
+          return Promise.resolve(PIECES_JSON);
+        },
+        readDockerRuntimes: () => {
+          reads += 1;
+          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+        },
+      });
+
+      await expect(
+        prepareConsoleLaunch(
+          [
+            ...NAMED_ARGS,
+            "--instance",
+            "loom",
+            "--",
+            "--host-mounts",
+            "name=c",
+          ],
+          {},
+          counted,
+        ),
+      ).rejects.toThrow(
+        "`--host-mounts` is not a flag of the console. Did you mean " +
+          "`--host-mount`?",
+      );
+      expect(reads).toBe(0);
+    });
+
+    it("throws saying a console flag given to the launcher goes after `--`", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--space-db", "/x.db"], {}, io()),
+      ).rejects.toThrow(
+        "`--space-db` is a flag of the console rather than of " +
+          "`console:launch`; pass it after `--`.",
+      );
+    });
+
+    it("throws the no-value refusal, not an undeclared flag, for a value that reads as a flag", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--port", "-x"], {}, io()),
+      ).rejects.toThrow(
+        "`--port` was given no value; a value starting with `-` needs the " +
+          "`--port=<value>` spelling",
+      );
+    });
+
+    it("throws for a positional argument after `--`, which the console does not take", async () => {
+      await expect(
+        prepareConsoleLaunch([...NAMED_ARGS, "--", "hunter2"], {}, io()),
+      ).rejects.toThrow(
+        "The console takes no positional arguments, and reads no flag after " +
+          "`--`.",
+      );
+    });
+
     it("leaves the registries out when both are waived", async () => {
       const { plan } = await prepareConsoleLaunch(
         [...NAMED_ARGS, "--no-pattern-index", "--no-skills-registry"],
@@ -1533,6 +1620,99 @@ describe("launch", () => {
       }
     };
 
+    it("prints usage for `--help`, before `--` or after it, and reads and serves nothing", async () => {
+      for (const args of [["--help"], ["-h"], [...ARGS, "--", "--help"]]) {
+        let reads = 0;
+        let served = false;
+        await launchConsole(
+          args,
+          {},
+          () => {
+            served = true;
+            return Promise.resolve();
+          },
+          {
+            readTextFile: () => {
+              reads += 1;
+              return Promise.resolve(PIECES_JSON);
+            },
+            readToolshedStoreDir: () => {
+              reads += 1;
+              return Promise.resolve("file:///store/68239506e79d/memory/");
+            },
+            readDockerRuntimes: () => {
+              reads += 1;
+              return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
+            },
+          },
+        );
+
+        expect(served).toBe(false);
+        expect(reads).toBe(0);
+      }
+    });
+
+    it("refuses a dotted flag, before `--` or after it, without the value of the flag before the dot", async () => {
+      for (
+        const [args, refusal] of [
+          [
+            ["--store", "/secret/store", "--store.x", "y"],
+            "`--store.x` is not a flag of `console:launch`.",
+          ],
+          [
+            [...ARGS, "--", "--workspace", "SECRETWS", "--workspace.a", "b"],
+            "`--workspace.a` is not a flag of the console. Did you mean " +
+            "`--workspace`?",
+          ],
+        ] as const
+      ) {
+        const message = await launchConsole(
+          args,
+          {},
+          () => Promise.resolve(),
+          io,
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(message).toBe(refusal);
+      }
+    });
+
+    it("refuses a flag whose value reads as help, before `--` or after it, rather than printing usage", async () => {
+      for (
+        const [args, flag] of [
+          [["--instance", "-h"], "--instance"],
+          [["--instance", "--help"], "--instance"],
+          [[...ARGS, "--", "--port", "-h"], "--port"],
+        ] as const
+      ) {
+        let served = false;
+        await expect(
+          launchConsole(args, {}, () => {
+            served = true;
+            return Promise.resolve();
+          }, io),
+        ).rejects.toThrow(
+          `\`${flag}\` was given no value; a value starting with \`-\` ` +
+            `needs the \`${flag}=<value>\` spelling`,
+        );
+        expect(served).toBe(false);
+      }
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      let served = false;
+      await expect(
+        launchConsole(["--store", "-hidden"], {}, () => {
+          served = true;
+          return Promise.resolve();
+        }, io),
+      ).rejects.toThrow(
+        "`--store` was given no value; a value starting with `-` needs the " +
+          "`--store=<value>` spelling",
+      );
+      expect(served).toBe(false);
+    });
+
     it("serves under the environment it resolved", async () => {
       await withEnvironmentRestored(async () => {
         let served: string[] | undefined;
@@ -1626,6 +1806,24 @@ describe("launch", () => {
       expect(said).toContain("`--fabric-identity`");
       // The message is the whole of what they need; the stack is noise.
       expect(said).not.toContain("launch.ts:");
+    });
+  });
+
+  describe("consoleLaunchHelpText()", () => {
+    it("returns the launcher's usage for `--help` before `--`, and the console's after it", () => {
+      expect(consoleLaunchHelpText(["--help"])).toContain("--instance");
+      expect(consoleLaunchHelpText(["--instance", "loom", "-h"])).toContain(
+        "--instance",
+      );
+      const consoleUsage = consoleLaunchHelpText(["--", "--help"]);
+
+      expect(consoleUsage).toContain("--space-db");
+      expect(consoleUsage).not.toContain("--instance");
+    });
+
+    it("returns `undefined` for arguments that ask for no help", () => {
+      expect(consoleLaunchHelpText(["--instance", "loom", "--", "--port", "1"]))
+        .toBeUndefined();
     });
   });
 

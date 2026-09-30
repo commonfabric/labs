@@ -189,6 +189,25 @@ describe("guest", () => {
       }
     });
 
+    it("posts a port request only when constructed after its document loaded", () => {
+      const posted: unknown[] = [];
+      const originalParent = Reflect.get(globalThis, "parent");
+      const originalDocument = Reflect.get(globalThis, "document");
+      Reflect.set(globalThis, "parent", {
+        postMessage: (data: unknown) => posted.push(data),
+      });
+      try {
+        for (const readyState of ["loading", "interactive", "complete"]) {
+          Reflect.set(globalThis, "document", { readyState });
+          connectFabric().disconnect();
+        }
+        expect(posted).toEqual([{ type: "port-request" }]);
+      } finally {
+        Reflect.set(globalThis, "parent", originalParent);
+        Reflect.set(globalThis, "document", originalDocument);
+      }
+    });
+
     it("ignores a flush acknowledgement carrying another guest's nonce", async () => {
       const posted: unknown[] = [];
       const originalParent = Reflect.get(globalThis, "parent");

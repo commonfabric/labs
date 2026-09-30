@@ -1953,19 +1953,27 @@ describe("piece source reconciliation", () => {
         );
         const entered = defer<void>();
         const release = defer<void>();
-        const withTx = piece.withTx.bind(piece);
+        const storageManager = runtime.storageManager;
+        const syncCell = storageManager.syncCell;
         const compile = runtime.patternManager.compilePattern.bind(
           runtime.patternManager,
         );
         if (phase === "initial sync") {
-          const detached = piece.withTx();
-          const sync = detached.sync.bind(detached);
-          detached.sync = async () => {
-            entered.resolve();
-            await release.promise;
-            return await sync();
+          // A cell syncs through the storage manager, which holds the piece's.
+          const pieceId = piece.getAsNormalizedFullLink().id;
+          storageManager.syncCell = async function <T>(
+            cell: Cell<T>,
+            ...rest: unknown[]
+          ): Promise<Cell<T>> {
+            if (cell.getAsNormalizedFullLink().id === pieceId) {
+              entered.resolve();
+              await release.promise;
+            }
+            return await Reflect.apply(syncCell, storageManager, [
+              cell,
+              ...rest,
+            ]);
           };
-          piece.withTx = () => detached;
         } else {
           runtime.patternManager.compilePattern = async (...args) => {
             const pattern = await compile(...args);
@@ -1994,7 +2002,7 @@ describe("piece source reconciliation", () => {
         } finally {
           release.resolve();
           await opening;
-          piece.withTx = withTx;
+          storageManager.syncCell = syncCell;
           runtime.patternManager.compilePattern = compile;
         }
       });

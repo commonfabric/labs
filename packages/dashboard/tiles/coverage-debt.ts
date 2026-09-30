@@ -188,7 +188,7 @@ export function makeCoverageDebt(
   const source = options.source ?? liveCoverageDebtSource();
   let store = options.store;
   return {
-    label: "coverage debt",
+    label: "labs coverage debt",
     intervalMs: COVERAGE_REFRESH_MS,
     async collect(): Promise<TileView> {
       store ??= new CoverageDebtStore();

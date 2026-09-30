@@ -125,9 +125,9 @@ describe("agent result over Loom rows", () => {
       cfcFlowLabels: "persist",
     });
     const pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `loom-rows-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );

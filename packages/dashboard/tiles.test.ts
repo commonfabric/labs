@@ -514,7 +514,7 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
   const busy = Array.from({ length: 25 }, (_, i) => at(i));
   assertStringIncludes(
     (await collectFromWorkingRuns(labsCiDuration, ctx(busy))).sub ?? "",
-    "25 passing PR runs in the last 6h",
+    "median of 25 PR runs in 6h",
   );
   // 5 recent + 30 from two days ago -> only 5 in 6h (< 20) -> fall back to the last 20.
   const quiet = [
@@ -523,7 +523,7 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
   ];
   assertStringIncludes(
     (await collectFromWorkingRuns(labsCiDuration, ctx(quiet))).sub ?? "",
-    "last 20 passing PR runs",
+    "median of last 20 PR runs",
   );
 });
 
@@ -548,7 +548,7 @@ Deno.test("ci-duration: only runs that passed end to end count", async () => {
   // Only the 20 runs that passed on their first attempt are counted.
   assertStringIncludes(
     (await collectFromWorkingRuns(labsCiDuration, ctx(runs))).sub ?? "",
-    "20 passing PR runs in the last 6h",
+    "median of 20 PR runs in 6h",
   );
 });
 
@@ -577,13 +577,14 @@ Deno.test("ci-duration: a run without a usable landing span is dropped", async (
     ctx([usable, endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(mixed.value, "10m");
-  assertStringIncludes(mixed.sub ?? "", "last 1 passing PR runs");
+  assertStringIncludes(mixed.sub ?? "", "median of last 1 PR run");
 
   const none = await collectFromWorkingRuns(labsCiDuration, 
     ctx([endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(none.status, "unknown");
   assertEquals(none.value, "—");
+  assertEquals(none.sub, "no passing PR runs");
 });
 
 // Where page `page` of the job listing of `attempt` is requested.
@@ -632,7 +633,7 @@ Deno.test("weaver ci duration: a run that ran no job, or ran one job and skipped
   // The median of 8 and 12 minutes; the one- and two-minute runs are not
   // counted.
   assertEquals(view.value, "10m");
-  assertStringIncludes(view.sub ?? "", "last 2 passing PR runs");
+  assertStringIncludes(view.sub ?? "", "median of last 2 PR runs");
 });
 
 Deno.test("ci-duration: a job listing is read to its last page, once", async () => {

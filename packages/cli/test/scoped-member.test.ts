@@ -55,9 +55,9 @@ describe("scoped-member", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "cli-scoped-member",
+      spaceDid: (await Identity.generate()).did(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();

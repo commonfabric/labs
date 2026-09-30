@@ -1,5 +1,6 @@
 import {
   cloneIfNecessary,
+  debugStr,
   deepFreeze,
   fabricFromConvertibleJsValue,
   type FabricValue,
@@ -11,13 +12,14 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { createSession, Identity } from "@commonfabric/identity";
+import { legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
-import { sameAcl } from "@commonfabric/memory/acl";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
   type CellScope,
   commitPreconditionValueHash,
+  type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
   resetCommitPreconditionsConfig,
@@ -140,6 +142,7 @@ import {
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
 } from "./runner.ts";
+import { brandRuntime } from "./runtime-brand.ts";
 import { Action, Scheduler } from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
@@ -152,6 +155,7 @@ import {
 } from "./schema-doc-config.ts";
 import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
+import { SpaceAccessWatch } from "./space-access-watch.ts";
 import {
   normalizeSpaceHost,
   type SpaceHostRegistration,
@@ -1023,6 +1027,32 @@ const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
   additionalProperties: true,
 } as const satisfies JSONSchema;
 
+/** The allocation record a space holds for one `PatternFactory.inSpace`
+ *  name: the DID of the space the name reaches. */
+const inSpaceAllocationSchema = {
+  type: "object",
+  properties: { did: { type: "string" } },
+} as const satisfies JSONSchema;
+
+/**
+ * The key under which a space created for the `inSpace` name `name` of the
+ * space `space` is remembered: the name, together with the owner and the
+ * grants the space was created with, so that only a request for the same
+ * access-control document finds it. Grants are keyed in principal order.
+ */
+const inSpaceCreationKey = (
+  space: MemorySpace,
+  name: string,
+  owner: DID,
+  grants: ACL = {},
+): string =>
+  JSON.stringify([
+    space,
+    name,
+    owner,
+    Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+  ]);
+
 export interface SpaceCellContents {
   defaultPattern: Cell<unknown>;
 }
@@ -1297,6 +1327,9 @@ export class Runtime {
    * subscriptions). */
   #installedSpaceOpenObserver: ((space: MemorySpace) => void) | undefined;
 
+  /** The watch `spaceAccessWatch` creates on first use. */
+  #spaceAccessWatch: SpaceAccessWatch | undefined;
+
   /**
    * Whether _this_ runtime explicitly set the `serverExecution` flag at
    * construction (the only case its dispose participates in the process-global
@@ -1351,15 +1384,25 @@ export class Runtime {
     return this.#writeTeardown.signal;
   }
 
-  /** Cache of resolved PatternFactory.inSpace("name") space DIDs. */
-  readonly #spaceNameToDid = new Map<string, MemorySpace>();
-  /** The genesisAcl each name was first resolved with, so an identical
-   * re-resolution is a retry and a different one is refused. */
-  readonly #spaceNameGenesisAcls = new Map<string, ACL>();
-  /** Resolutions in flight, by name: a second caller joins the first
-   * rather than racing it to registration, so two documents for one name
-   * cannot both register before either is cached. */
-  readonly #spaceNameResolutions = new Map<string, Promise<MemorySpace>>();
+  /**
+   * The space created for each request to resolve a
+   * `PatternFactory.inSpace(name)` target no allocation record named yet,
+   * keyed by {@link inSpaceCreationKey}. Nothing removes an entry: a run
+   * suspended to resolve a name is retried on the promise that the name
+   * resolves the next time without suspending, and that promise is the
+   * retry's only bound.
+   */
+  readonly #inSpaceCreated = new Map<string, MemorySpace>();
+
+  /**
+   * Resolutions in flight, by {@link inSpaceCreationKey}: a second request
+   * for the same owner and grants joins the first rather than creating a
+   * second space. A request for other owner or grants creates its own.
+   */
+  readonly #inSpaceResolutions = new Map<string, Promise<MemorySpace>>();
+
+  /** Legacy space names this runtime has derived, and their DIDs. */
+  readonly #legacySpaceDids = new Map<string, MemorySpace>();
 
   #defaultFrame?: Frame;
   #queues = new Map<string, AsyncSemaphoreQueue>();
@@ -1696,6 +1739,8 @@ export class Runtime {
   }
 
   constructor(options: RuntimeOptions) {
+    brandRuntime(this);
+
     // Validate-then-apply: option combinations are refused BEFORE any
     // process-global write (the ambient experimental-flag propagation
     // below, the server-execution enabler), so a refused construction
@@ -2441,6 +2486,9 @@ export class Runtime {
       // released by the time it does, not whether disposal fails.
       this.scheduler.dispose();
       this.runner.dispose();
+      // The storage manager can outlive this runtime, so the subscription the
+      // watch holds on it goes now.
+      this.#spaceAccessWatch?.dispose();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -2648,8 +2696,8 @@ export class Runtime {
    * second scope instance of this one, say — still holds stays.
    *
    * Takes the runtime's write-policy authorization, like the enrollment it
-   * undoes: pattern-authored code reaches this object through a cell, and a
-   * release it made would refuse another piece's writes.
+   * undoes: a release made by any other caller would refuse another piece's
+   * writes.
    */
   releaseRuntimeOwnedStores(
     owner: NormalizedFullLink,
@@ -2715,6 +2763,17 @@ export class Runtime {
    * Undefined in the OFF arm and on serving runtimes. */
   get effectsChannel(): EffectsChannel | undefined {
     return this.#effectsChannel;
+  }
+
+  /**
+   * Runs actions again when the memory server starts or stops refusing this
+   * runtime a space, for as long as this runtime lives.
+   */
+  get spaceAccessWatch(): SpaceAccessWatch {
+    return this.#spaceAccessWatch ??= new SpaceAccessWatch(
+      this.storageManager,
+      this.scheduler,
+    );
   }
 
   /**
@@ -4147,6 +4206,28 @@ export class Runtime {
     return principal as DID | undefined;
   }
 
+  /**
+   * Returns the principal a handler run on `tx` acts for: the actor of the
+   * event it handles. On a client runtime that is the runtime's own user. On a
+   * serving runtime it is the acting user stamped on the run's wave context,
+   * which the serving loop takes from the event's server-stamped `firedAt` or
+   * from the run that emitted the event, and `undefined` for a run with no
+   * actor or no transaction. It is never the serving runtime's own identity,
+   * and nothing in the event's payload reaches it. A space a served run
+   * creates for a `PatternFactory.inSpace()` target is owned by this principal.
+   *
+   * Like `homeSpacePrincipalFor()`, except that a run on another principal's
+   * scope instance still returns the actor rather than the instance's owner,
+   * and the transaction's read scope is left as it is.
+   */
+  actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
+    if (!this.servingPosture) return this.userIdentityDID;
+    const user = tx === undefined
+      ? undefined
+      : waveRunContextOf(tx)?.acting?.user;
+    return isDID(user) ? user : undefined;
+  }
+
   getHomeSpaceCell(
     tx?: IExtendedStorageTransaction,
   ): Cell<SpaceCellContents> {
@@ -4171,176 +4252,206 @@ export class Runtime {
   }
 
   /**
-   * Returns the DID for a named `PatternFactory.inSpace("name")` target if it
-   * has already been resolved (or is itself a DID), otherwise `undefined`.
+   * Creates a space and returns its DID. The space's key is generated from
+   * random data, signs one genesis commit whose access-control document makes
+   * `owner` its only OWNER alongside `grants`, and is dropped once that commit
+   * is confirmed. The DID is returned only after that confirmation.
    *
-   * Synchronous so the pattern builder can route a child result into the target
-   * space at graph-construction time. On a miss, the caller records the name as
-   * pending and the runner resolves it via {@link resolveSpaceName} before
-   * re-running the handler/action (see RetryImmediately).
+   * `owner` defaults to the identity this runtime acts as. A serving runtime
+   * acts as a service, and a space it creates on a user's behalf must be
+   * owned by that user, so a serving runtime requires `owner`. `root`
+   * reserves the space's root pattern in the same commit; see
+   * `IStorageManager.createSpace`.
+   *
+   * @throws If the storage manager cannot create spaces, if the memory server
+   *   refuses the genesis commit, or if a serving runtime supplies no owner.
    */
-  resolveSpaceNameSync(name: string): MemorySpace | undefined {
-    if (isDID(name)) return name;
-    return this.#spaceNameToDid.get(name);
+  async createSpace(
+    options: { owner?: DID; grants?: ACL; root?: GenesisRoot } = {},
+  ): Promise<MemorySpace> {
+    if (this.servingPosture && options.owner === undefined) {
+      throw new Error(
+        "A serving runtime creates a space only on behalf of a user, and " +
+          "no owner was supplied",
+      );
+    }
+    if (this.storageManager.createSpace === undefined) {
+      throw new Error("This storage manager cannot create spaces");
+    }
+    const owner = options.owner ?? this.userIdentityDID;
+    return await this.storageManager.createSpace(
+      { ...options.grants, [owner]: "OWNER" },
+      options.root,
+    );
   }
 
   /**
-   * Resolves a named `inSpace` target to a DID, caching the result.
+   * Whether `space` is a space: whether it has an access-control document, or
+   * holds a space cell written before access-control documents existed. A DID
+   * that has neither has no history, and opening it must leave it that way.
+   * A DID the identity this runtime acts as is refused access to is a space.
    *
-   * NOTE(#1): The derivation is intentionally name-based for now — `createSession`
-   * derives the space key from the name alone (the identity is ignored on the
-   * `spaceName` path), so equal names map to the same shared space across users.
-   * This is the deliberate "shared profile space" behavior today; revisit once
-   * we can derive unique space DIDs from a string.
-   *
-   * OW31 (RULED 2026-08-18): `options.owner` names the fresh space's
-   * genesis ACL OWNER. On a SERVING runtime the caller MUST supply the
-   * run's ACTING principal (the serving-side resolvePendingSpaceNames
-   * threads it from the frame tx's wave run context) — a serving runtime
-   * with no actor REFUSES to register, mirroring getHomeSpaceCell's
-   * refusal: a served `.inSpace()` with no acting identity must never
-   * mint a service-owned space (builtins.md §5; protocol.md §2b). On a
-   * client the owner is omitted and the genesis names the manager's own
-   * signer — the active user, byte-identical to before.
-   *
-   * `options.genesisAcl` is the exact ACL document the space is born with
-   * when this resolution creates it (its first and only commit — no
-   * world-writable default is ever written), validated by the memory
-   * server's genesis admission; on a space that already exists the open
-   * proceeds only if it is owned exactly as the document says, else
-   * refuses. It is
-   * refused together with `owner` (two descriptions of one document), for
-   * a bare DID (no key to register against), and for a name already
-   * resolved — by anything, including a pattern's `inSpace(name)` — unless
-   * with the identical document; see `IStorageManager.registerSpaceIdentity`.
-   * The name is cached at resolution, before the server can refuse the
-   * document, so a refusal surfaced later (on the first sync) has no
-   * correction path through this method: register a corrected document
-   * with the storage manager directly, or use a fresh runtime. A SERVING
-   * runtime refuses it outright: served provisioning names the run's
-   * acting user OWNER through the OW31 owner path, and a document that
-   * bypassed that path could name any principal — including the service —
-   * on a space the acting user asked for. A creator that wants a sealed
-   * space mints it from its own (client) runtime.
+   * @throws If loading either document fails for any other reason, since
+   *   that load decides the answer.
    */
-  async resolveSpaceName(
+  async spaceExists(space: MemorySpace): Promise<boolean> {
+    const provider = this.storageManager.open(space);
+    const aclUri = aclDocId(space) as URI;
+    const spaceCell = this.getSpaceCell(space);
+    const loads = await Promise.all([
+      provider.sync(aclUri),
+      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+    ]);
+    const denied = this.storageManager.spaceAccessError?.(space) ??
+      this.storageManager.authorizationError?.(space);
+    if (denied !== undefined) return true;
+    for (const { error } of loads) {
+      if (error !== undefined) throw error;
+    }
+    const tx = this.edit();
+    try {
+      const acl = tx.readOrThrow({
+        space,
+        id: aclUri,
+        type: "application/json",
+        path: [],
+      });
+      return acl !== undefined || spaceCell.withTx(tx).getRaw() !== undefined;
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * Returns the DID the legacy space name `name` resolves to, once
+   * {@link resolveLegacySpaceName} has derived it in this runtime, and
+   * `undefined` before then.
+   */
+  legacySpaceDidSync(name: string): MemorySpace | undefined {
+    return this.#legacySpaceDids.get(name);
+  }
+
+  /**
+   * Returns the DID the legacy space name `name` resolves to (see
+   * `legacySpaceDid` in `@commonfabric/identity`), and remembers it for
+   * {@link legacySpaceDidSync}. Resolving a name opens and creates nothing.
+   */
+  async resolveLegacySpaceName(name: string): Promise<MemorySpace> {
+    const known = this.#legacySpaceDids.get(name);
+    if (known !== undefined) return known;
+    const did = await legacySpaceDid(name);
+    this.#legacySpaceDids.set(name, did);
+    return did;
+  }
+
+  /**
+   * Returns the space the `PatternFactory.inSpace(name)` target `name` names
+   * in `space`, reading within `tx`, or `undefined` if the name has not been
+   * resolved yet.
+   *
+   * The calling space holds one allocation record per name. When the record
+   * exists, its DID is the answer. When it does not, and an earlier
+   * {@link resolveInSpaceName} created a space for the same request, that DID
+   * is the answer and the record is written in `tx`: the record then commits
+   * in the same commit as the writes that refer to the space, or not at all.
+   * The request is `grants` and the owner {@link actingPrincipalFor} gives
+   * `tx`, so the space a run records was created with the access-control
+   * document that run asked for. `tx` reads the absent record, so a
+   * concurrent writer of the same record makes this commit conflict, and the
+   * run that follows reads the record it wrote.
+   *
+   * Synchronous so the pattern builder can route a child's result into its
+   * space while it constructs the graph. On `undefined` the caller records the
+   * name as pending, and the runner resolves it with
+   * {@link resolveInSpaceName} before running the handler or action again.
+   */
+  resolveInSpaceNameSync(
+    space: MemorySpace,
     name: string,
-    options?: { owner?: DID; genesisAcl?: ACL },
+    tx: IExtendedStorageTransaction,
+    grants?: ACL,
+  ): MemorySpace | undefined {
+    const record = this.#inSpaceAllocationCell(space, name, tx);
+    const recorded = record.get()?.did;
+    if (isDID(recorded)) return recorded;
+    const owner = this.actingPrincipalFor(tx);
+    const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
+      inSpaceCreationKey(space, name, owner, grants),
+    );
+    if (created !== undefined) record.set({ did: created });
+    return created;
+  }
+
+  /**
+   * Resolves the `PatternFactory.inSpace(name)` target `name` in `space`, so
+   * that {@link resolveInSpaceNameSync} returns its DID from then on for the
+   * same request.
+   *
+   * The calling space's allocation record decides when it exists. Otherwise
+   * this creates a space owned by `options.owner` with `options.grants`, whose
+   * DID the next run making the same request records. A record naming a DID
+   * that has no history is reported rather than replaced: the record is
+   * immutable, and replacing the space it names would move whatever the
+   * name's writers expect to find.
+   *
+   * The record is written after the space is created, and only one of the
+   * runs racing to write it commits. The space another run created is then
+   * named by nothing, and holds nothing but its access-control document,
+   * which names its owner.
+   *
+   * @throws If the record names a DID that is not a space, if loading what
+   *   decides that fails, or if creating a space fails.
+   */
+  async resolveInSpaceName(
+    space: MemorySpace,
+    name: string,
+    options: { owner?: DID; grants?: ACL } = {},
   ): Promise<MemorySpace> {
-    if (options?.owner !== undefined && options?.genesisAcl !== undefined) {
-      // Two descriptions of one document: refused before anything else,
-      // cached path included, mirroring registerSpaceIdentity.
-      throw new Error(
-        `space-name resolution for "${name}": supply either owner or ` +
-          "genesisAcl, not both — genesisAcl is the whole genesis document, " +
-          "and owner only names the OWNER of the default one",
-      );
-    }
-    if (
-      options?.genesisAcl !== undefined &&
-      this.storageManager.registerSpaceIdentity === undefined
-    ) {
-      // No seam to hand the document to; the optional call below would
-      // drop it and the space would be born with the default.
-      throw new Error(
-        `space-name resolution for "${name}" cannot register a genesisAcl: ` +
-          "this storage manager has no registerSpaceIdentity seam, so " +
-          "nothing would write the document",
-      );
-    }
-    const inFlight = this.#spaceNameResolutions.get(name);
-    if (inFlight !== undefined) {
-      // Join the resolution already under way — its rejection is this
-      // caller's too — then take the cached path: an identical document is
-      // a retry, a different one is refused.
-      await inFlight;
-      return await this.resolveSpaceName(name, options);
-    }
-    const cached = this.resolveSpaceNameSync(name);
-    if (options?.genesisAcl !== undefined) {
-      // A document the resolution cannot honor is refused, never dropped:
-      // the caller asked for a space born closed.
-      if (isDID(name)) {
-        throw new Error(
-          `space-name resolution for the DID ${name} cannot register a ` +
-            "genesisAcl: the runtime derives no space key for a bare DID, " +
-            "so nothing would write the document (register the identity " +
-            "with the storage manager directly)",
-        );
-      }
-      if (cached !== undefined) {
-        const recorded = this.#spaceNameGenesisAcls.get(name);
-        if (recorded === undefined || !sameAcl(recorded, options.genesisAcl)) {
+    const creationKey = inSpaceCreationKey(
+      space,
+      name,
+      options.owner ?? this.userIdentityDID,
+      options.grants,
+    );
+    const inFlight = this.#inSpaceResolutions.get(creationKey);
+    if (inFlight !== undefined) return await inFlight;
+    const resolution = (async (): Promise<MemorySpace> => {
+      const record = this.#inSpaceAllocationCell(space, name);
+      await record.sync();
+      const recorded = record.get()?.did;
+      if (isDID(recorded)) {
+        if (!(await this.spaceExists(recorded))) {
           throw new Error(
-            `space-name "${name}" was already resolved` +
-              (recorded === undefined
-                ? " without a genesisAcl"
-                : " with a different genesisAcl") +
-              "; the supplied document cannot be the space's genesis",
+            debugStr`The space ${space} records ${recorded} as its space ` +
+              debugStr`${name}, and no space has that DID`,
           );
         }
-        return cached;
+        return recorded;
       }
-    }
-    if (cached !== undefined) return cached;
-    if (this.servingPosture && options?.genesisAcl !== undefined) {
-      throw new Error(
-        `space-name resolution for "${name}" on a serving runtime does not ` +
-          "accept genesisAcl: served provisioning names the run's acting " +
-          "identity OWNER through the owner path (OW31, RULED 2026-08-18), " +
-          "and a caller-supplied document would bypass it",
-      );
-    }
-    if (this.servingPosture && options?.owner === undefined) {
-      throw new Error(
-        `space-name resolution for "${name}" on a serving runtime requires ` +
-          "the run's acting identity as genesis owner (OW31, RULED " +
-          "2026-08-18; builtins.md §5's per-demanding-identity resolution; " +
-          "protocol.md §2b): refusing to register a space identity whose " +
-          "genesis would name the SERVICE as owner",
-      );
-    }
-    const resolution = (async (): Promise<MemorySpace> => {
-      const session = await createSession({
-        identity: this.storageManager.as as unknown as Identity,
-        spaceName: name,
-      });
-      if (options?.genesisAcl !== undefined && !session.spaceIdentity) {
-        throw new Error(
-          `space-name resolution for "${name}" derived no space identity, ` +
-            "so the supplied genesisAcl could not be registered",
-        );
-      }
-      // Register the derived identity only as fresh-space ACL bootstrap
-      // authority. Storage continues to authenticate ordinary reads and
-      // writes as the active user (`storageManager.as`), so resolving a name
-      // does not grant an existing space's key to the caller.
-      if (session.spaceIdentity) {
-        this.storageManager.registerSpaceIdentity?.(
-          session.spaceIdentity,
-          options?.owner !== undefined || options?.genesisAcl !== undefined
-            ? {
-              ...(options.owner !== undefined ? { owner: options.owner } : {}),
-              ...(options.genesisAcl !== undefined
-                ? { genesisAcl: options.genesisAcl }
-                : {}),
-            }
-            : undefined,
-        );
-      }
-      const did = session.space as MemorySpace;
-      this.#spaceNameToDid.set(name, did);
-      if (options?.genesisAcl !== undefined) {
-        this.#spaceNameGenesisAcls.set(name, { ...options.genesisAcl });
-      }
-      return did;
+      const created = this.#inSpaceCreated.get(creationKey) ??
+        await this.createSpace(options);
+      this.#inSpaceCreated.set(creationKey, created);
+      return created;
     })();
-    this.#spaceNameResolutions.set(name, resolution);
+    this.#inSpaceResolutions.set(creationKey, resolution);
     try {
       return await resolution;
     } finally {
-      this.#spaceNameResolutions.delete(name);
+      this.#inSpaceResolutions.delete(creationKey);
     }
+  }
+
+  #inSpaceAllocationCell(
+    space: MemorySpace,
+    name: string,
+    tx?: IExtendedStorageTransaction,
+  ): Cell<{ did?: string } | undefined> {
+    return this.getCell(
+      space,
+      { inSpaceAllocation: { space, name } },
+      inSpaceAllocationSchema,
+      tx,
+    );
   }
 
   // Convenience methods that delegate to the runner

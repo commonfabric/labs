@@ -66,7 +66,7 @@
     "check-baselines-append-only": "deno run --allow-read --allow-run=git ./tasks/check-baselines-append-only.ts",
     "check-bench-workflow": "deno run --allow-read ./tasks/check-bench-workflow.ts",
     "check-test-aliases": "deno run --allow-read --allow-run=git ./tasks/check-test-aliases.ts",
-    "check-test-topology": "deno run --allow-read --allow-env --allow-net ./tasks/check-test-topology.ts",
+    "check-test-topology": "deno run --allow-read --allow-env --allow-net --allow-run=git ./tasks/check-test-topology.ts",
     "check-pattern-tiers": "deno run --allow-read ./tasks/check-pattern-tiers.ts",
     // The gate above is what CI runs, and it cannot write. Applying a marker is
     // this separate task, so the permission to rewrite a pattern comes with
@@ -80,7 +80,6 @@
     // opens spaces with, which is why this needs --allow-ffi.
     "check-completion-slots": "deno run --allow-read --allow-env --allow-sys --allow-ffi ./tasks/check-completion-slots.ts",
     "check-command-docs": "deno run --allow-read --allow-env --allow-sys --allow-ffi ./tasks/check-command-docs.ts",
-    "check-tripwires": "deno run --allow-read ./tasks/check-tripwires.ts",
     // Reports the docs/ link graph; --allow-write serves its --out flag.
     "docs-links": "deno run --allow-read --allow-write ./scripts/docs-links.ts",
     "cf": "deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts",

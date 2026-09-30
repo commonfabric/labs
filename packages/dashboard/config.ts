@@ -6,6 +6,12 @@
  */
 
 export { TRUST_RUNS_MAX } from "./ci-trust-layout.ts";
+export {
+  CI_RUNS_MAX,
+  CI_RUNS_MAX_AGE_DAYS,
+  DUR_MAX_AGE_HOURS,
+  DUR_MIN_RUNS,
+} from "./ci-run-limits.ts";
 
 export const PORT = Number(Deno.env.get("DASHBOARD_PORT") ?? "8731");
 export const REPO = Deno.env.get("DASHBOARD_REPO") ?? "commonfabric/labs";
@@ -32,11 +38,6 @@ export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
   "commonfabric/commonfabric-weaver";
 export const WEAVER_CI_WORKFLOW = "ci.yml";
 
-// Shared fetch window: the fetch stops at whichever of these two yields fewer
-// workflow runs. Every CI tile slices from it.
-export const CI_RUNS_MAX = 200; // workflow runs
-export const CI_RUNS_MAX_AGE_DAYS = 60; // ~2 months
-
 // How long a job's failure stays red on the ci tile. A job that has been
 // failing for longer than this is still failing, and still listed, but it is
 // no longer the thing that just broke, so it goes orange and leaves the red
@@ -46,9 +47,6 @@ export const CI_FAILURE_FRESH_HOURS = 48;
 // Tile display windows and status thresholds (tune here).
 export const TRUST_GOOD = 90, TRUST_WARN = 75; // first-try-green %
 export const DUR_GOOD = 12, DUR_WARN = 20; // median CI minutes
-// ci-duration median window — the larger of these two (more runs wins).
-export const DUR_MIN_RUNS = 20;
-export const DUR_MAX_AGE_HOURS = 6;
 // benchmark trend window — the same "larger of the two" idea, but in days: the
 // benchmarks.yml job runs about four-hourly, and the daily-median trend fit needs
 // several distinct days, so the recent slice is measured in days, not hours.

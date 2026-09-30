@@ -76,7 +76,7 @@ import { isTerminalRejection } from "../src/storage/rejection.ts";
 import type { PostCommitSideEffect } from "../src/cfc/types.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, cellTx, sendEvent } from "../src/cell.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const spaceSigner = await Identity.fromPassphrase("speculation overlay space");
@@ -543,16 +543,7 @@ describe("Phase 2 speculation overlay", () => {
       let refusedStatus:
         | { status: string; error?: { message?: string } }
         | undefined;
-      (result.key("bump") as unknown as {
-        send(
-          value: unknown,
-          onCommit?: (
-            tx: {
-              status(): { status: string; error?: { message?: string } };
-            },
-          ) => void,
-        ): unknown;
-      }).send({}, (ackTx) => {
+      sendEvent(result.key("bump"), {}, (ackTx) => {
         refusedStatus = ackTx.status();
         refusedAcks.record();
       });
@@ -566,9 +557,7 @@ describe("Phase 2 speculation overlay", () => {
       // ran: handler dispatch is local either way.)
       replica.enqueueEventAppend = () => new Promise(() => {});
       let heldFired = false;
-      (result.key("bump") as unknown as {
-        send(value: unknown, onCommit?: (tx: unknown) => void): unknown;
-      }).send({}, () => {
+      sendEvent(result.key("bump"), {}, () => {
         heldFired = true;
       });
       // The ack fires from the append's own commit, which the held
@@ -2451,7 +2440,7 @@ describe("Phase 2 speculation overlay", () => {
             const parentCell = args[4] as Cell<Record<string, unknown>>;
             instantiations += 1;
             readPerInstantiation.push(
-              shared.withTx(parentCell.tx).key("n").get(),
+              shared.withTx(cellTx(parentCell)).key("n").get(),
             );
             parentCell.key("witness").set(instantiations);
             return { action: () => {} };
@@ -2592,7 +2581,7 @@ describe("Phase 2 speculation overlay", () => {
             const parentCell = args[4] as Cell<Record<string, unknown>>;
             instantiations += 1;
             readPerInstantiation.push(
-              shared.withTx(parentCell.tx).key("n").get(),
+              shared.withTx(cellTx(parentCell)).key("n").get(),
             );
             parentCell.key("witness").set(instantiations);
             return { action: () => {} };
