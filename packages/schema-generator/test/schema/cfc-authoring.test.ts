@@ -1743,10 +1743,14 @@ describe("Schema: CFC authoring aliases", () => {
 
   describe("a union member that stands for several members", () => {
     /**
-     * The schema of `SchemaRoot`'s `field`, declared as `declaration`, and
-     * the diagnostics its generation reports.
+     * The schema of `SchemaRoot`'s `field`, declared as `declaration`, with
+     * its definitions and diagnostics. `additionalDeclarations` extends the
+     * program containing the field.
      */
-    const generated = async (declaration: string) => {
+    const generated = async (
+      declaration: string,
+      additionalDeclarations = "",
+    ) => {
       const { type, checker } = await getTypeFromCode(
         `
         type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -1767,6 +1771,7 @@ describe("Schema: CFC authoring aliases", () => {
         interface Host { name?: string }
         const DEFAULT_HOST: Host = {};
         type HostValue = Host | Default<typeof DEFAULT_HOST>;
+        ${additionalDeclarations}
         interface SchemaRoot { field: ${declaration} }
       `,
         "SchemaRoot",
@@ -1777,7 +1782,11 @@ describe("Schema: CFC authoring aliases", () => {
           onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
         }),
       );
-      return { field: schema.properties?.field, diagnostics };
+      return {
+        field: schema.properties?.field,
+        definitions: schema.$defs,
+        diagnostics,
+      };
     };
 
     /** The schema of `SchemaRoot`'s `field`, declared as `declaration`. */
@@ -1832,6 +1841,89 @@ describe("Schema: CFC authoring aliases", () => {
       ).toEqual({
         anyOf: [{ type: "null" }, alternative(POLICY_2), alternative(POLICY)],
       });
+    });
+
+    for (const payload of ["A", "A | B"]) {
+      for (const nullable of [false, true]) {
+        it(`keeps both policies of ${payload}${nullable ? " beside null" : " without null"}`, async () => {
+          const labeled = (binding: string) =>
+            `Confidential<${payload}, readonly [PolicyOf<typeof ${binding}>]>`;
+          const alternative = (policy: typeof POLICY) => ({
+            ...(payload === "A"
+              ? { $ref: "#/$defs/A" }
+              : { anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }] }),
+            ifc: { confidentiality: [policy] },
+          });
+          for (
+            const [first, second] of [["rules", "rules2"], ["rules2", "rules"]]
+          ) {
+            const schema = await fieldSchema(
+              `${labeled(first!)} | ${labeled(second!)}${
+                nullable ? " | null" : ""
+              }`,
+            );
+            expect(schema).toEqual({
+              anyOf: [
+                ...(nullable ? [{ type: "null" }] : []),
+                alternative(first === "rules" ? POLICY : POLICY_2),
+                alternative(second === "rules" ? POLICY : POLICY_2),
+              ],
+            });
+          }
+        });
+      }
+    }
+
+    it("preserves both policy alternatives through an alias and a recursive payload", async () => {
+      const { field, definitions, diagnostics } = await generated(
+        "Choice",
+        `
+        type Choice =
+          | Confidential<A, readonly [PolicyOf<typeof rules>]>
+          | Confidential<A, readonly [PolicyOf<typeof rules2>]>;
+        interface A { next?: Choice }
+      `,
+      );
+      const alternatives = [POLICY, POLICY_2].map((policy) => ({
+        $ref: "#/$defs/A",
+        ifc: { confidentiality: [policy] },
+      }));
+      expect(field).toEqual({ $ref: "#/$defs/Choice" });
+      expect(definitions?.Choice).toEqual({ anyOf: alternatives });
+      expect(definitions?.A).toEqual({
+        type: "object",
+        properties: {
+          a: { type: "string" },
+          next: { $ref: "#/$defs/Choice" },
+        },
+        required: ["a"],
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("keeps distinct policy alternatives inline when their payload recurs through the same union", async () => {
+      const union =
+        "Confidential<A, [PolicyOf<typeof rules>]> | Confidential<A, [PolicyOf<typeof rules2>]>";
+      const { field, definitions, diagnostics } = await generated(
+        union,
+        `interface A { next?: ${union} }`,
+      );
+      const alternatives = [POLICY, POLICY_2].map((policy) => ({
+        $ref: "#/$defs/A",
+        ifc: { confidentiality: [policy] },
+      }));
+      expect(field).toEqual({ anyOf: alternatives });
+      expect(definitions).toEqual({
+        A: {
+          type: "object",
+          properties: {
+            a: { type: "string" },
+            next: { anyOf: alternatives },
+          },
+          required: ["a"],
+        },
+      });
+      expect(diagnostics).toEqual([]);
     });
 
     it("reads each member of a union an alias writes at its own node", async () => {

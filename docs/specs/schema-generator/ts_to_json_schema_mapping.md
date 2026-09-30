@@ -754,7 +754,7 @@ defaults-no-def-mutation.test.ts).
 `UnionFormatter` (`src/formatters/union-formatter.ts`), after the
 Default paths of §7:
 
-- **Nullable special case**: exactly one non-null member + `null` →
+- **Nullable special case**: exactly one non-null alternative + `null` →
   `{ anyOf: [<member>, { type: "null" }] }` — `anyOf` over `oneOf`
   deliberately, "for better consumer compatibility" per the nullable-case
   comment in `union-formatter.ts`. Emission order is member-first; goldens
@@ -801,13 +801,27 @@ Default paths of §7:
     as one alternative for all of them, where it is a CFC alias that
     `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
     `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
-    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
+    only the node represents, as a `PolicyOf<typeof rules>` binding. Several
     such nodes can stand for the same members, as two whose policies differ
     only in a `typeof` binding do where the bindings have one type, and each
     is an alternative of its own, in the order written. Its members are
     otherwise read by their types: `boolean` stands for `true` and `false`,
     `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
     §10's.
+- The checker can also collapse several written CFC alternatives into a
+  single semantic member. Each remains an alternative of its own, including
+  `Confidential<A, [PolicyOf<typeof readers>]> |
+  Confidential<A, [PolicyOf<typeof writers>]>` when `readers` and `writers`
+  have the same declared type. This applies with or without `null`, and when
+  the payload is itself a union. Where accepted CFC nodes share a semantic
+  member, the written union is read before type-only CFC dispatch and before
+  tracking that type as a cycle (`UnionFormatter.formatCollapsedUnion`).
+  The alternatives sharing a member are themselves read inline, so an
+  anonymous recursive definition cannot identify distinct policy bindings as
+  one reading (`GenerationContext.inlineUnionMember`). Each alternative's
+  payload still follows the usual definition and cycle rules. Tested:
+  cfc-authoring.test.ts, narrowed-capture-labels.test.ts, and
+  the runner's cfc-narrowed-capture-floor.test.ts.
 
 ## 9. Intersections
 
@@ -1355,9 +1369,11 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   of the union the declaration writes that it is read at (§8,
   `pairUnionMemberNodes`). A node that stands for several members is read
   once for all of them, and a member several such nodes stand for may be
-  under the labels of any of them. A member with no such node is read by its
-  type. A schema whose own reference chain already holds every label is left
-  as it is (`holdsIfcLabels`).
+  under the labels of any of them. This also holds when the checker collapses
+  several written CFC alternatives into one member: their confidentiality
+  labels are all retained, including through optional and nullable reads.
+  A member with no such node is read by its type. A schema whose own reference
+  chain already holds every label is left as it is (`holdsIfcLabels`).
 - **`spelledBy`** is the annotation of the member a printed node holds the
   value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural
@@ -1377,9 +1393,9 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
     members are those of the union the annotation writes, read through
     parentheses and aliases without type parameters (`readUnionMemberNodes`
     in `src/typescript/type-node.ts`), so each member of the type is read at
-    the node that writes it. One node that stands for several members, as
-    `Confidential<A | B, …>` does, pairs with none of them, and they are
-    read by their types.
+    the node that writes it. CFC nodes that stand for several members, or
+    several nodes that stand for one member, follow §8's rules for retaining
+    each written alternative and its policy bindings.
   - Where the annotation spells neither, the node is read as any print is,
     by the type at hand.
 

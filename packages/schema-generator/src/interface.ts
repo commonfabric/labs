@@ -164,6 +164,14 @@ export interface GenerationContext {
   typeNode?: ts.TypeNode;
 
   /**
+   * A CFC union alternative sharing a semantic member with another written
+   * alternative. Its node is read inline, before type-based definition and
+   * cycle handling, so distinct policy bindings cannot share one definition.
+   * Consumed at that node; its payload retains ordinary cycle handling.
+   */
+  inlineUnionMember?: ts.TypeNode;
+
+  /**
    * The node whose schema hints apply at this position when it is not the node
    * read: a printed node, read by its type, keeps the hints a caller attached
    * to it.

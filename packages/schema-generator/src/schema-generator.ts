@@ -1139,13 +1139,15 @@ function mentionsBoundParameter(
 export class SchemaGenerator {
   #commonFabricFormatter = new CommonFabricFormatter(this);
 
+  #unionFormatter = new UnionFormatter(
+    this,
+    (type, node, context) => this.#readsWhole(type, node, context),
+  );
+
   #formatters: TypeFormatter[] = [
     this.#commonFabricFormatter,
     new NativeTypeFormatter(),
-    new UnionFormatter(
-      this,
-      (type, node, context) => this.#readsWhole(type, node, context),
-    ),
+    this.#unionFormatter,
     new IntersectionFormatter(this),
     // Prefer array detection before primitives to avoid Any-flag misrouting
     new ArrayFormatter(this),
@@ -1970,6 +1972,15 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
+    // Alternatives that share a type remain separate readings. Their type
+    // identity cannot name either reading or mark one as a cycle of the other.
+    if (context.typeNode && context.inlineUnionMember === context.typeNode) {
+      const { inlineUnionMember: _, ...memberContext } = context;
+      return this.#commonFabricFormatter.formatType(type, memberContext);
+    }
+    const collapsed = this.#unionFormatter.formatCollapsedUnion(type, context);
+    if (collapsed !== undefined) return collapsed;
+
     // A scope wrapper reads its payload from the reference's argument, even
     // when its declaration erases to an unbound type parameter, and a
     // `Default` over a bound one reads its value as the parameter's argument
@@ -2295,15 +2306,14 @@ export class SchemaGenerator {
   }
 
   /**
-   * Whether `node`, a union member that stands for the several members of
-   * `type`, is read whole, for all of them (`pairUnionMemberNodes()`): where
-   * it is a CFC alias the CFC formatter reads, whose labels the node alone
-   * can spell. A wrapper, such as `Default<T, V>` or a cell, is not, nor is a
-   * scope wrapper, since each has rules of its own for its place in a union:
-   * §7's for `Default`, and `scope-placement.ts`'s for a scope.
+   * Helper for {@link pairUnionMemberNodes}: whether `node` is a CFC alias
+   * read as one alternative for every semantic member of `type`, retaining
+   * the labels only its syntax represents. Wrappers with their own union
+   * rules follow those rules: §7 for `Default`, and `scope-placement.ts` for
+   * scopes.
    */
   #readsWhole(
-    type: ts.UnionType,
+    type: ts.Type,
     node: ts.TypeNode,
     context: GenerationContext,
   ): boolean {
@@ -2318,16 +2328,17 @@ export class SchemaGenerator {
 
   /**
    * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
-   * spelled by `typeNode` where given, attaches at its top in `context`. A
+   * written as `typeNode` where given, attaches at its top in `context`. A
    * value that may be missing, `T | undefined` or `T | null`, has the labels
    * of `T`, which formatting attaches to that member. A node narrowed from
    * any other union stands for any of its members, so it has the labels
    * formatting attaches to the union joined with those of its members
-   * (`joinMemberIfcLabels()`). A member is spelled by the node of the union
+   * (`joinMemberIfcLabels()`). A member is represented by the node of the union
    * `typeNode` writes, read through parentheses and aliases
    * (`readAuthoredTypeNode()`), that it is read at
-   * (`pairUnionMemberNodes()`). A member that nodes standing for several
-   * members stand for may be under the labels of any of those nodes.
+   * (`pairUnionMemberNodes()`). A member denoted by several written
+   * alternatives may be under the labels of any of them, even when the
+   * checker reduces the whole union to that member.
    */
   #labelsOf(
     type: ts.Type,
@@ -2336,9 +2347,9 @@ export class SchemaGenerator {
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
-    const paired = written && ts.isUnionTypeNode(written) && type.isUnion()
+    const paired = written && ts.isUnionTypeNode(written)
       ? pairUnionMemberNodes(
-        type.types,
+        type.isUnion() ? type.types : [type],
         written,
         checker,
         (union, node) => this.#readsWhole(union, node, context),
@@ -2351,6 +2362,15 @@ export class SchemaGenerator {
     const values = type.isUnion()
       ? type.types.filter((member) => (member.flags & nullish) === 0)
       : [type];
+    const covers = values.length === 1 && paired?.covering.get(values[0]!);
+    if (covers) {
+      return joinMemberIfcLabels(
+        {},
+        covers.map(({ type, node }) =>
+          this.#labelsOf(type, node, context) ?? {}
+        ),
+      );
+    }
     if (values.length === 1 && values[0] !== type) {
       // An optional property's declaration spells the value alone, since its
       // `?` adds the `undefined`.

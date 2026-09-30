@@ -1981,7 +1981,13 @@ adjustments:
   a label that names a binding, as a part of it does
   (`buildTypeElementsFromCaptureTree` in `ast/type-building.ts`;
   `carryNarrowing` in `transformers/type-shrinking.ts`;
-  `test/printed-type-node-schema.test.ts`)
+  `test/printed-type-node-schema.test.ts`). Distinct policy bindings on union
+  alternatives survive even when their identical declared types cause the
+  checker to collapse the alternatives into one semantic member. The schema
+  generator reads each written CFC alternative for both whole and narrowed
+  captures, with or without a nullable member (the schema-generator mapping
+  spec's §8; `test/narrowed-capture-labels.test.ts` and the runner's
+  `test/cfc-narrowed-capture-floor.test.ts`)
 - a pass that reads the structure of a node printed from a type reads the
   print's unfolding in its place: a node of the print's own kind built from the
   type it was printed from, each type node below it printed afresh from its own
