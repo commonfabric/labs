@@ -259,9 +259,12 @@ names the ones it needs, and they are gathered here:
   A serving runtime refuses both. Space invitations don't serve: they are
   bearer credentials, not bound to the person they are meant for (see
   [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
-- **Delivering a notice.** Nothing in this repository lets a pattern deliver a
-  message to a principal who shares no space with the sender (see
-  [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
+- **Delivering a notice.** A handler on a client runtime can send a member of
+  a space a notice to their DID inbox with `noticeSpaceAccess()`
+  ([telling a member of a space about it](../../features/space-access-notices.md)),
+  but nothing in this repository reads a recipient's inbox yet, so nothing
+  delivers a notice to a principal who shares no space with the sender end to
+  end (see [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
   document written by two sets of writers (see
