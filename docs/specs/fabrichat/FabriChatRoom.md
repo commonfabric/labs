@@ -8,10 +8,6 @@ Its records and surfaces are named for the contract rather than for the
 implementation, because they are part of the contract: `ChatMessage`,
 `ChatReaction`, and the surfaces the table under [writers](#writers) names.
 
-`FabriChatRoom` is `packages/patterns/fabrichat/room.tsx`. The sections through
-[prerequisites](#prerequisites) state the design; [as built](#as-built) states
-where the pattern departs from it, and why.
-
 ## State
 
 The room keeps these `PerSpace` values, shared by everyone the space admits:
@@ -243,46 +239,3 @@ the room is created from the same settings the handlers read.
 - **Admitting an access-list change atomically.** The steps above are the
   pattern-level answer to INV-12. A host facility that changes an access list
   and the room's records together would remove the gap between steps 2 and 3.
-
-## As built
-
-`packages/patterns/fabrichat/room.tsx` departs from the design above where the
-runtime lacks a prerequisite:
-
-- **Membership gestures.** `add` and `remove` are sent from controls marked
-  `ChatMembersSurface`, but no write policy requires that gesture: the
-  records `add` writes (its notice, the roster, and its activity entry) are
-  also written by acts with no gesture. `commitWindow` writes the sending
-  session's windows.
-- **Reactions are a list the message links.** Each message links a list of its
-  own reactions, a document the send creates empty and only the reaction
-  handlers write after that, until a deletion or an obliteration clears it and
-  drops the link.
-- **Keyed records.** Each message, each reaction, and each `recentActivity`
-  entry is a document of its own, addressed by a key (`elementById`), so
-  writing one never rewrites another, and a record keeps the label its own
-  writer gave it.
-- **Labels.** Messages and reactions are `AuthoredByCurrentUser`. The runtime
-  gives that label only to a record every one of whose writers names a
-  reviewed gesture, so `about`, which the creator's manager writes, and
-  `recentActivity` entries, which acts with no gesture write too, carry none. `about` is a plain argument of the
-  room, written when the room is created. Its `policy` links a document the
-  room writes when it starts.
-- **Senders are profiles.** A handler can't learn the principal that sent an
-  event, so the request memory is keyed by the sender's profile, and the
-  members who left are kept by profile. `add` therefore can't refuse a
-  principal who left. A rendered control sends no `requestId`, and the room
-  mints one for it.
-- **No access list changes.** `leave` and `add` change no access list: `leave`
-  removes the sender's roster entry and records them as having left, `add` adds
-  its notice, and each records its activity entry. `remove` is refused, since a
-  removal that changed nothing would be recorded falsely. The room knows one
-  OWNER, its creator, whose profile the manager passes when it creates the room,
-  and takes the OWNER-only rules to mean the creator. A space's own chat knows
-  no OWNER. `canSend` is whether the reader's profile resolves.
-- **Windows.** A window holds links to its messages, which stay live;
-  `hasOlder` and `hasNewer` are as of when the window was set. A handler
-  writes the windows of the session that sent the event, wherever it runs; an
-  event the server itself emitted has no session, and can't open one.
-- **Notices.** A notice's id is `[principal, requestId]` as JSON, so the client
-  that sent `add` can report it delivered without reading it back.

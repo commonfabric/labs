@@ -279,31 +279,71 @@ The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
 `manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
 in `schemas.tsx`. The home pattern holds a manager, and `#chatManager` resolves
 to it (see [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)).
-Where the runtime lacks a prerequisite, the patterns depart from this design,
-and [`FabriChatRoom`](FabriChatRoom.md#as-built) and
-[`FabriChatManager`](FabriChatManager.md#as-built) say how. In summary:
+Home's **Chats** tab renders the manager: the user's rooms, the room chosen
+among them, and the controls that start a direct or a group chat. Where the
+runtime lacks a prerequisite, the patterns depart from this design, as below.
 
-- **Rooms are open to any authenticated principal.** A room of its own is
-  created with `inSpace()`, whose space grants WRITE to `"*"`. Nothing grants,
-  revokes, or gives up access: `add` and `leave` record what a pattern can,
-  `remove` is refused, and none changes an access list. A room knows one
-  OWNER, its creator.
-- **Principals are profiles.** A pattern can't learn a principal, so the room
-  keys its request memory, and the members who left, by profile. The manager
-  takes the principals the contract names, and can't refuse a direct room with
-  the user themself.
-- **Membership and starts are not gesture-checked.** `ChatMembersSurface` and
-  `ChatStartSurface` mark their controls, but no write policy requires either
-  gesture, since the records they write are also written by acts with none.
-- **Only messages and reactions are labeled `authored-by`.** The runtime labels
-  a record with its writer only when every one of its writers names a reviewed
-  gesture, so neither `about` nor a `recentActivity` entry carries the label.
-- **Creation takes one transaction.** With no access list to change, a room is
-  created, noticed, and recorded in one commit, so no request is ever left
-  pending.
+### Access and principals
+
+- **Rooms are open to any authenticated principal.** The manager creates a room
+  of its own with `FabriChatRoom.inSpace()`, whose space grants OWNER to the
+  creator and WRITE to `"*"`, so a room is open to any authenticated principal
+  holding a link to it. Nothing grants, revokes, or gives up access: `leave`
+  removes the sender's roster entry and records them as having left, `add`
+  adds its notice, and each records its activity entry. `remove` is refused,
+  since a removal that changed nothing would be recorded falsely.
+- **One OWNER.** A room knows one OWNER, its creator, whose profile the manager
+  passes when it creates the room, and takes the OWNER-only rules to mean the
+  creator. A space's own chat knows no OWNER. `canSend` is whether the
+  reader's profile resolves.
+- **Principals are profiles.** A handler can't learn the principal that sent
+  an event, so a room keys its request memory, and the members who left, by
+  the sender's profile, and `add` can't refuse a principal who left. The
+  manager takes the principals the contract names, but can't learn its own
+  user's, so `openDirect` can't refuse the user as their own counterpart, and
+  `accept` records the `counterpart` its client checked.
+- **Creation takes one transaction.** With no grants to commit apart, creating
+  a room, its notices, and its index entry happen in one commit, and a
+  request's outcome is `done` or `refused` from the start. A request already
+  decided changes nothing when it arrives again.
 - **Placements don't know who is a member.** A placement can't read access, so
   a viewer who can't read the room sees it as `"unavailable"`, never as
   `"not-member"`. No container creates placements yet: a client does.
+
+### Writers and labels
+
+- **Membership and starts are not gesture-checked.** `add` and `remove` are
+  sent from controls marked `ChatMembersSurface`, and `openDirect` and
+  `createGroup` from controls marked `ChatStartSurface`, but no write policy
+  requires either gesture, since the records they write are also written by
+  acts with none. One handler, `commitManager`, writes the manager's records,
+  and each of its streams is a binding of it.
+- **Only messages and reactions are labeled `authored-by`.** The runtime gives
+  that label only to a record every one of whose writers names a reviewed
+  gesture, so neither `about`, which the creator's manager writes, nor a
+  `recentActivity` entry, which acts with no gesture write too, carries it.
+  `about` is a plain argument of the room, written when the room is created,
+  and its `policy` links a document the room writes when it starts.
+
+### Records
+
+- **Keyed records.** Each message, each reaction, and each `recentActivity`
+  entry is a document of its own, addressed by a key (`elementById`), so
+  writing one never rewrites another, and a record keeps the label its own
+  writer gave it.
+- **Reactions are a list the message links.** Each message links a list of its
+  own reactions, a document the send creates empty and only the reaction
+  handlers write after that, until a deletion or an obliteration clears it and
+  drops the link.
+- **Windows.** A window holds links to its messages, which stay live;
+  `hasOlder` and `hasNewer` are as of when the window was set. `commitWindow`
+  writes the windows of the session that sent the event, wherever it runs; an
+  event the server itself emitted has no session, and can't open one.
+- **Notices.** A room's notice id is `[principal, requestId]` as JSON, so the
+  client that sent `add` can report it delivered without reading it back. A
+  manager's is `[recipient, requestId]`.
+- **Request ids.** A rendered control sends no `requestId`, and the room mints
+  one for it.
 
 ## Identity and presentation
 
