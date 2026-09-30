@@ -354,6 +354,7 @@ export class UnionFormatter implements TypeFormatter {
               ? { ...context, inlineUnionMember: node }
               : context,
             node,
+            type === valued[0] ? soleInstantiated : undefined,
           );
         },
       );
