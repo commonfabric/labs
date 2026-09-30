@@ -283,13 +283,14 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
 
 ### Access and principals
 
-- **Rooms are open to any authenticated principal.** The manager creates a room
-  of its own with `FabriChatRoom.inSpace()`, whose space grants OWNER to the
-  creator and WRITE to `"*"`, so a room is open to any authenticated principal
-  holding a link to it. Nothing grants, revokes, or gives up access: `leave`
-  removes the sender's roster entry and records them as having left, `add`
-  adds its notice, and each records its activity entry. `remove` is refused,
-  since a removal that changed nothing would be recorded falsely.
+- **Access changes only at creation.** The manager creates a room of its own
+  with `FabriChatRoom.inSpace()`, naming grants, so its space grants the
+  creator OWNER and each other member WRITE, as the design says. After that,
+  nothing grants, revokes, or gives up access: `leave` removes the sender's
+  roster entry and records them as having left, and `add` adds its notice, so
+  a member added later can open the room only once a host grants them access.
+  Each records its activity entry. `remove` is refused, since a removal that
+  changed nothing would be recorded falsely.
 - **One OWNER.** A room knows one OWNER, its creator, whose profile the manager
   passes when it creates the room, and takes the OWNER-only rules to mean the
   creator. A space's own chat knows no OWNER. `canSend` is whether the
