@@ -60,9 +60,9 @@ is read as permanent — the safe default for an authorization decision.
   fundamentally-incompatible transport fails fast with the real error.
 
 The reconnect loop therefore has no unbounded retry-on-anything path: a
-permanent failure ends it (per session for an authorization denial, client-wide
-for a handshake mismatch), and only recoverable and transport-level conditions
-retry.
+permanent failure ends it (per session for a session-open denial, per key for
+a connection-authentication denial, client-wide for a handshake mismatch), and
+only recoverable and transport-level conditions retry.
 
 `SpaceSession.subscribeAccessLoss` also delivers an authoritative
 `AuthorizationError` immediately when an established session loses access. An
