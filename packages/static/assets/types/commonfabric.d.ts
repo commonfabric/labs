@@ -4823,6 +4823,48 @@ export declare function revokeSpaceAccess(
   principal: DID,
 ): void;
 
+/** The options `leaveSpace()` takes. */
+export interface LeaveSpaceOptions {
+  /**
+   * Who becomes `OWNER` when the actor is the space's last concrete `OWNER`:
+   * the first of these, in order, that holds an entry in the space's access
+   * list. Ignored when another concrete `OWNER` remains.
+   */
+  readonly successors?: readonly DID[];
+}
+
+/**
+ * Removes the acting principal's own entry from the access list of the space
+ * `target`'s value lives in, giving up the access it granted. Leaving a space
+ * whose list holds no entry for the actor changes nothing, so a handler run
+ * again for the same event converges.
+ *
+ * When the actor is the space's last concrete `OWNER`, the same change sets
+ * the entry of the first of `options.successors` that holds one to `OWNER`, so
+ * the space keeps a concrete `OWNER`. When none of them holds an entry, or
+ * none is named, leaving is refused. So is leaving a space whose list has a
+ * `"*"` entry, since the actor would keep what that entry grants, and leaving
+ * the actor's own Home space. Leaving needs no trusted gesture: it acts on the
+ * actor alone and exposes nothing.
+ *
+ * The change commits as a commit of its own, after the handler's other writes
+ * commit, since the actor can no longer write to the space once it lands. If
+ * the change then fails or is refused, the handler's writes stand and the
+ * actor keeps its entry; a failure because the list changed concurrently is
+ * repaired by leaving again.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet carry an access-list change. Every refusal
+ * throws, from the call when the runtime holds the space's list and it shows
+ * the refusal. One the handler lets escape drops its whole transaction; the
+ * call throws before staging anything, so one the handler catches leaves
+ * nothing staged for that call.
+ */
+export declare function leaveSpace(
+  target: AnyCell<unknown>,
+  options?: LeaveSpaceOptions,
+): void;
+
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a
  * cell's `entityId` — to its tagged-hash string, in whichever form the active

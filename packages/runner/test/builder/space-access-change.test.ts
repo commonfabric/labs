@@ -13,7 +13,9 @@ import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
 import {
   commitSpaceAccessChanges,
+  commitSpaceLeave,
   grantSpaceAccess,
+  leaveSpace,
   revokeSpaceAccess,
 } from "../../src/builder/space-access-change.ts";
 import type { Frame } from "../../src/builder/types.ts";
@@ -33,16 +35,19 @@ const carol = await Identity.fromPassphrase("space-access-change carol");
 
 /**
  * A pattern whose `grant` and `revoke` handlers change the access list of the
- * space `notes` lives in and then record a note there, and whose `probe` is a
- * `computed()` calling `grantSpaceAccess()`, reporting what it threw.
+ * space `notes` lives in and then record a note there, whose `leave` handler
+ * leaves that space, recording a note first unless the event says not to, and
+ * whose `probe` and `leaveProbe` are `computed()`s calling
+ * `grantSpaceAccess()` and `leaveSpace()`, reporting what each threw.
  */
 const ACCESS_PATTERN = [
   "import {",
-  "  computed, grantSpaceAccess, handler, pattern, revokeSpaceAccess,",
-  "  Stream, Writable,",
+  "  computed, grantSpaceAccess, handler, leaveSpace, pattern,",
+  "  revokeSpaceAccess, Stream, Writable,",
   "} from 'commonfabric';",
   "import type { DID, SpaceGrantLevel } from 'commonfabric';",
   "type Change = { principal: DID; level?: SpaceGrantLevel };",
+  "type Leave = { successors?: DID[]; record?: boolean };",
   "const grant = handler<Change, { notes: Writable<string[]> }>(",
   "  (event, { notes }) => {",
   "    grantSpaceAccess(notes, event.principal, event.level ?? 'WRITE');",
@@ -55,6 +60,12 @@ const ACCESS_PATTERN = [
   "    notes.push(`revoked ${event.principal}`);",
   "  },",
   ");",
+  "const leave = handler<Leave, { notes: Writable<string[]> }>(",
+  "  (event, { notes }) => {",
+  "    if (event.record !== false) notes.push('left');",
+  "    leaveSpace(notes, { successors: event.successors });",
+  "  },",
+  ");",
   "const relay = handler<Change, { grant: Stream<Change> }>(",
   "  (event, { grant }) => { grant.send(event); },",
   ");",
@@ -63,8 +74,10 @@ const ACCESS_PATTERN = [
   "  {",
   "    notes: string[];",
   "    probe: string;",
+  "    leaveProbe: string;",
   "    grant: Stream<Change>;",
   "    revoke: Stream<Change>;",
+  "    leave: Stream<Leave>;",
   "    relay: Stream<Change>;",
   "  }",
   ">(({ notes }) => {",
@@ -79,8 +92,17 @@ const ACCESS_PATTERN = [
   "      return `threw ${(error as Error).message}`;",
   "    }",
   "  }),",
+  "  leaveProbe: computed(() => {",
+  "    try {",
+  "      leaveSpace(notes);",
+  "      return 'returned';",
+  "    } catch (error) {",
+  "      return `threw ${(error as Error).message}`;",
+  "    }",
+  "  }),",
   "  grant: grantStream,",
   "  revoke: revoke({ notes }),",
+  "  leave: leave({ notes }),",
   "  relay: relay({ grant: grantStream }),",
   "  };",
   "});",
@@ -90,8 +112,10 @@ const ACCESS_PATTERN = [
 type AccessPatternResult = Cell<{
   notes: string[];
   probe: string;
+  leaveProbe: string;
   grant: unknown;
   revoke: unknown;
+  leave: unknown;
   relay: unknown;
 }>;
 
@@ -344,15 +368,18 @@ describe("space-access-change", () => {
     return result;
   }
 
-  /** Sends `event` to `result`'s stream `stream`, and waits for it to land. */
+  /**
+   * Sends `event` to `result`'s stream `stream`, and waits for it to land,
+   * with the commits that follow its handler's own, a leave's among them.
+   */
   async function send(
     runtime: Runtime,
     result: AccessPatternResult,
-    stream: "grant" | "revoke" | "relay",
+    stream: "grant" | "revoke" | "leave" | "relay",
     event: Record<string, unknown>,
   ): Promise<void> {
     result.key(stream).send(event);
-    await runtime.idle();
+    await runtime.settled();
     await runtime.storageManager.synced();
   }
 
@@ -653,6 +680,232 @@ describe("space-access-change", () => {
 
       expect(result.key("probe").get()).toContain(
         "threw `grantSpaceAccess()` is available only in a handler",
+      );
+    });
+  });
+
+  describe("leaving, in a compiled pattern", () => {
+    /**
+     * Returns a client runtime acting as `member`, running `ACCESS_PATTERN` in
+     * a space alice created with `acl`, and the space.
+     */
+    async function asMember(member: Identity, acl: ACL): Promise<{
+      runtime: Runtime;
+      factory: RecordingSessionFactory;
+      errors: string[];
+      space: MemorySpace;
+      result: AccessPatternResult;
+    }> {
+      const owner = clientRuntime(alice);
+      const space = await createSpace(owner.runtime, acl);
+      const { runtime, factory, errors } = member === alice
+        ? owner
+        : clientRuntime(member);
+      await syncAcl(runtime, space);
+      const result = await runAccessPattern(runtime, space);
+      return { runtime, factory, errors, space, result };
+    }
+
+    it("removes a `WRITE` member's own entry, which the memory server's list then lacks, and commits the handler's writes", async () => {
+      const { runtime, errors, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      await send(runtime, result, "leave", {});
+
+      expect(errors).toEqual([]);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [carol.did()]: "READ",
+      });
+      expect(result.key("notes").get()).toEqual(["left"]);
+    });
+
+    it("commits the access list after the handler's own writes, and needs no trusted gesture", async () => {
+      const { runtime, factory, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const notesId = result.key("notes").resolveAsCell()
+        .getAsNormalizedFullLink().id;
+      const before = factory.commits.length;
+
+      await send(runtime, result, "leave", {});
+
+      const sent = factory.commits.slice(before);
+      const aclAt = sent.findIndex((ids) => ids.includes(`of:${space}`));
+      const notesAt = sent.findIndex((ids) => ids.includes(notesId));
+      expect(notesAt).toBeGreaterThanOrEqual(0);
+      expect(aclAt).toBeGreaterThan(notesAt);
+      expect(sent[aclAt]).toEqual([`of:${space}`]);
+    });
+
+    it('leaves `spaceAccess()` returning `"none"` to the member who left', async () => {
+      const { runtime, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const levelOf = (): unknown => {
+        const tx = runtime.edit();
+        const frame = pushFrame({
+          runtime,
+          tx,
+          frameKind: "handler",
+          inHandler: true,
+        });
+        try {
+          return spaceAccess(runtime.getCell(space, "reached"));
+        } finally {
+          popFrame(frame);
+          tx.abort();
+        }
+      };
+      expect(levelOf()).toBe("WRITE");
+
+      await send(runtime, result, "leave", {});
+
+      expect(levelOf()).toBe("none");
+    });
+
+    it("removes the entry of an `OWNER` another concrete `OWNER` remains beside, promoting no one", async () => {
+      const { runtime, space, result } = await asMember(alice, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+        [carol.did()]: "WRITE",
+      });
+
+      await send(runtime, result, "leave", {
+        successors: [carol.did()],
+      });
+
+      expect(await storedAcl(space)).toEqual({
+        [bob.did()]: "OWNER",
+        [carol.did()]: "WRITE",
+      });
+    });
+
+    it("makes the first named successor holding an entry `OWNER` in the same commit, when the last concrete `OWNER` leaves", async () => {
+      const dave = await Identity.fromPassphrase("space-access-change dave");
+      const { runtime, factory, space, result } = await asMember(alice, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+      const before = aclCommitCount(factory, space);
+
+      await send(runtime, result, "leave", {
+        successors: [dave.did(), carol.did(), bob.did()],
+      });
+
+      expect(aclCommitCount(factory, space)).toBe(before + 1);
+      expect(await storedAcl(space)).toEqual({
+        [bob.did()]: "WRITE",
+        [carol.did()]: "OWNER",
+      });
+      expect(result.key("notes").get()).toEqual(["left"]);
+    });
+
+    for (
+      const [description, acl, successors, message] of [
+        [
+          "the last concrete `OWNER` names no successor",
+          { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+          [],
+          "no successor named holds an entry there",
+        ],
+        [
+          "the last concrete `OWNER` names successors holding no entry",
+          { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+          [carol.did()],
+          "no successor named holds an entry there",
+        ],
+        [
+          "the last member is the last concrete `OWNER`",
+          { [alice.did()]: "OWNER" },
+          [bob.did()],
+          "no successor named holds an entry there",
+        ],
+        [
+          'the list has a `"*"` entry',
+          { [alice.did()]: "OWNER", [bob.did()]: "OWNER", "*": "READ" },
+          [],
+          'has a `"*"` entry',
+        ],
+      ] as const
+    ) {
+      it(`changes neither the list nor the handler's data when ${description}`, async () => {
+        const { runtime, errors, space, result } = await asMember(alice, acl);
+
+        await send(runtime, result, "leave", { successors });
+
+        expect(errors.join("\n")).toContain(message);
+        expect(await storedAcl(space)).toEqual(acl);
+        expect(result.key("notes").get()).toEqual([]);
+      });
+    }
+
+    it("sends no leave, and keeps the entry, when the memory server refuses the handler's own writes", async () => {
+      // Alice lowers bob to `READ` before his leave's handler writes its note.
+      // The memory server would admit his leave, so only its never being sent
+      // keeps his entry.
+
+      const { runtime, factory, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      await writeAclAs(alice, space, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+      await syncAcl(runtime, space);
+      const before = aclCommitCount(factory, space);
+
+      await send(runtime, result, "leave", {});
+
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "READ",
+      });
+    });
+
+    it("reports the failure, keeping the entry and the handler's writes, when the list changes under the leave's commit, and leaving again removes it", async () => {
+      const { runtime, factory, errors, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      factory.beforeNextAclCommit = () =>
+        writeAclAs(alice, space, {
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        });
+
+      await send(runtime, result, "leave", {});
+
+      expect(errors.join("\n")).toContain(`Leaving ${space} did not commit`);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+      expect(result.key("notes").get()).toEqual(["left"]);
+
+      await send(runtime, result, "leave", { record: false });
+
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [carol.did()]: "READ",
+      });
+    });
+
+    it("throws in a `computed()`", async () => {
+      const { result } = await asMember(alice, { [alice.did()]: "OWNER" });
+
+      expect(result.key("leaveProbe").get()).toContain(
+        "threw `leaveSpace()` is available only in a handler",
       );
     });
   });
@@ -1028,6 +1281,275 @@ describe("space-access-change", () => {
         [alice.did()]: "OWNER",
         [bob.did()]: "OWNER",
       });
+    });
+  });
+
+  describe("leaveSpace()", () => {
+    /** Returns a client runtime acting as alice, and a space she owns. */
+    async function owned(acl: ACL = { [alice.did()]: "OWNER" }): Promise<{
+      runtime: Runtime;
+      space: MemorySpace;
+    }> {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, acl);
+      return { runtime, space };
+    }
+
+    it("stages a leave for an event that is not a trusted gesture", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => leaveSpace(target),
+        false,
+      );
+      expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
+        actor: alice.did(),
+        successors: [],
+      });
+    });
+
+    it("stages the successors, and a later call for the same space takes the place of an earlier one", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(runtime, runtime.edit(), () => {
+        leaveSpace(target, { successors: [carol.did()] });
+        leaveSpace(target, { successors: [bob.did()] });
+      });
+      expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
+        actor: alice.did(),
+        successors: [bob.did()],
+      });
+    });
+
+    it("stages a leave for an actor the list this runtime holds has no entry for, for the commit to decide", async () => {
+      const owner = clientRuntime(alice);
+      const space = await createSpace(owner.runtime, {
+        [alice.did()]: "OWNER",
+      });
+      const { runtime } = clientRuntime(bob);
+      await syncAcl(runtime, space);
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => leaveSpace(target),
+      );
+      expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
+        actor: bob.did(),
+        successors: [],
+      });
+    });
+
+    it("throws for a target in the actor's own Home space", async () => {
+      const { runtime } = await owned();
+      const target = runtime.getCell(alice.did() as MemorySpace, "target");
+      expect(() => inHandler(runtime, runtime.edit(), () => leaveSpace(target)))
+        .toThrow("cannot change the access list of the Home space");
+    });
+
+    it("throws for a target that is not a cell", async () => {
+      const { runtime } = await owned();
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => leaveSpace("did:key:z6Mk-not-a-cell"),
+        )
+      ).toThrow("takes a cell as its target");
+    });
+
+    for (
+      const [description, options, message] of [
+        ["options that are not an object", "carol", "takes an object"],
+        [
+          "successors that are not an array",
+          { successors: "carol" },
+          "as an array of DIDs",
+        ],
+        ["`*` as a successor", { successors: ["*"] }, "as DIDs, never `*`"],
+        [
+          "a successor that is not a DID",
+          { successors: ["carol"] },
+          "as DIDs, never `*`",
+        ],
+        [
+          "the actor as a successor",
+          { successors: [alice.did()] },
+          "as a successor",
+        ],
+      ] as const
+    ) {
+      it(`throws for ${description}`, async () => {
+        const { runtime, space } = await owned();
+        const target = runtime.getCell(space, "target");
+        expect(() =>
+          inHandler(
+            runtime,
+            runtime.edit(),
+            () => leaveSpace(target, options),
+          )
+        ).toThrow(message);
+      });
+    }
+
+    it("throws for the space's own DID as a successor", async () => {
+      const { runtime, space } = await owned();
+      const target = runtime.getCell(space, "target");
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => leaveSpace(target, { successors: [space] }),
+        )
+      ).toThrow("as a successor");
+    });
+
+    it("throws on a serving runtime", () => {
+      const runtime = servingRuntime();
+      const target = runtime.getCell(alice.did() as MemorySpace, "target");
+      expect(() => inHandler(runtime, runtime.edit(), () => leaveSpace(target)))
+        .toThrow("not available on a serving runtime");
+    });
+
+    it("throws in a `lift()` frame", async () => {
+      const { runtime, space } = await owned();
+      const target = runtime.getCell(space, "target");
+      const frame = pushFrame({
+        runtime,
+        tx: runtime.edit(),
+        frameKind: "lift",
+      });
+      try {
+        expect(() => leaveSpace(target)).toThrow("available only in a handler");
+      } finally {
+        popFrame(frame);
+      }
+    });
+
+    it("throws in a pattern body, even one built inside a handler", async () => {
+      const { runtime, space } = await owned();
+      const target = runtime.getCell(space, "target");
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      inHandler(runtime, runtime.edit(), () => {
+        expect(() =>
+          pattern(() => {
+            leaveSpace(target);
+            return {};
+          })
+        ).toThrow("available only in a handler");
+      });
+    });
+
+    it('throws for a list this runtime holds with a `"*"` entry', async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+        "*": "READ",
+      });
+      const target = runtime.getCell(space, "target");
+      expect(() => inHandler(runtime, runtime.edit(), () => leaveSpace(target)))
+        .toThrow('has a `"*"` entry');
+    });
+
+    it("throws for the last concrete `OWNER` of the list this runtime holds, with no successor holding an entry", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const target = runtime.getCell(space, "target");
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => leaveSpace(target, { successors: [carol.did()] }),
+        )
+      ).toThrow("no successor named holds an entry there");
+    });
+
+    it("stages nothing for a refusal the handler catches", async () => {
+      const { runtime, space } = await owned();
+      const target = runtime.getCell(space, "target");
+      let caught: unknown;
+      const frame = inHandler(runtime, runtime.edit(), () => {
+        try {
+          leaveSpace(target);
+        } catch (error) {
+          caught = error;
+        }
+      });
+      expect(caught).toBeInstanceOf(Error);
+      expect(frame.pendingSpaceLeaves).toBeUndefined();
+    });
+  });
+
+  describe("commitSpaceLeave()", () => {
+    it('throws, committing nothing, for a list with a `"*"` entry', async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+        "*": "READ",
+      });
+      const before = aclCommitCount(factory, space);
+
+      await expect(
+        commitSpaceLeave(runtime, space, {
+          actor: alice.did(),
+          successors: [],
+        }),
+      ).rejects.toThrow('has a `"*"` entry');
+      expect(aclCommitCount(factory, space)).toBe(before);
+    });
+
+    it("throws, committing nothing, for the last concrete `OWNER` of a list the memory server has since changed, though staging could not tell", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => leaveSpace(target),
+      );
+      await writeAclAs(alice, space, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const before = aclCommitCount(factory, space);
+
+      await expect(
+        commitSpaceLeave(runtime, space, frame.pendingSpaceLeaves!.get(space)!),
+      ).rejects.toThrow("no successor named holds an entry there");
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+    });
+
+    it("commits nothing for an actor the list holds no entry for", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const before = factory.commits.length;
+
+      await commitSpaceLeave(runtime, space, {
+        actor: bob.did(),
+        successors: [],
+      });
+
+      expect(factory.commits.length).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
     });
   });
 

@@ -299,10 +299,10 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
-  // grantSpaceAccess(target, principal, level) and revokeSpaceAccess(target,
-  // principal) stage an access-list change in the running handler and return
-  // nothing. They build no graph node, so each is a plain call inside the
-  // handler that makes it.
+  // grantSpaceAccess(target, principal, level), revokeSpaceAccess(target,
+  // principal) and leaveSpace(target, options) stage an access-list change in
+  // the running handler and return nothing. They build no graph node, so each
+  // is a plain call inside the handler that makes it.
   {
     exportName: "grantSpaceAccess",
     category: "ignored",
@@ -310,6 +310,11 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   },
   {
     exportName: "revokeSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  {
+    exportName: "leaveSpace",
     category: "ignored",
     reactiveOrigin: false,
   },
