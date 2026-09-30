@@ -8,7 +8,6 @@ import {
   action,
   type AddIntegrity,
   assert,
-  currentPrincipal,
   pattern,
   TESTS,
   Writable,
@@ -22,7 +21,6 @@ import {
   type MessagesValue,
   type ReactionList,
   type ReactionTally,
-  requestKeyOf,
   type RequestMemo,
   type RosterValue,
   type SentActivity,
@@ -91,14 +89,6 @@ export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
-  const requests = Writable.of<RequestMemo[]>([]);
-  // Forgets the request "again", as the room does once its memo expires.
-  const action_expire_again = action(() => {
-    const key = requestKeyOf(currentPrincipal() ?? "", "again");
-    const memo: Writable<RequestMemo | undefined> = requests.elementById(key);
-    requests.removeByValue(requests.elementById(key));
-    memo.set(undefined);
-  });
   // The first message's reaction list, held apart from the message, whose link
   // to it a deletion drops.
   const firstReactions = Writable.of<{ list?: Writable<ReactionList> }>({});
@@ -112,7 +102,7 @@ export default pattern(() => {
     ownSpace: false,
     messages,
     reactionLists,
-    requests,
+    requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
@@ -122,6 +112,15 @@ export default pattern(() => {
   };
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
+  );
+  // The same room with a request memory of its own, empty: it has forgotten
+  // every request, as the room does once a request's memo expires.
+  const aliceForgetful = FabriChatRoomCore(
+    {
+      myProfile: aliceProfile,
+      ...records,
+      requests: Writable.of<RequestMemo[]>([]),
+    } as RoomArg,
   );
   const rowRecords = {
     inThread: false,
@@ -232,9 +231,8 @@ export default pattern(() => {
         event: { requestId: "again", target: { value: "Again" } },
         trustedUi: sendGesture,
       },
-      { action: action_expire_again },
       {
-        action: alice.sendMessage,
+        action: aliceForgetful.sendMessage,
         event: { requestId: "again", target: { value: "Changed" } },
         trustedUi: sendGesture,
       },

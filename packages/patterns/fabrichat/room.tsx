@@ -269,8 +269,26 @@ export interface RequestMemo {
   at: FabricEpochNsec;
 }
 
+/**
+ * A remembered request, written by whichever handler acted on it. The tuple
+ * is written out here, as `WritePolicyAnyOf` requires.
+ */
+export type StoredRequestMemo = WritePolicyAnyOf<RequestMemo, [
+  WriteAuthorizedBy<unknown, typeof commitSend>,
+  WriteAuthorizedBy<unknown, typeof commitEdit>,
+  WriteAuthorizedBy<unknown, typeof commitDelete>,
+  WriteAuthorizedBy<unknown, typeof commitObliterate>,
+  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
+  WriteAuthorizedBy<unknown, typeof commitLeave>,
+  WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof commitRemove>,
+  WriteAuthorizedBy<unknown, typeof commitDelivered>,
+]>;
+
 /** The requests the room has acted on, each addressed by its key. */
-export type RequestsCell = Writable<RequestMemo[] | Default<[]>>;
+export type RequestsCell = Writable<StoredRequestMemo[] | Default<[]>>;
 
 /** A time the room has recorded something at. */
 export interface UsedTime {
@@ -278,8 +296,22 @@ export interface UsedTime {
   at: FabricEpochNsec;
 }
 
+/** A used time, written by whichever handler recorded something at it. */
+export type StoredUsedTime = WritePolicyAnyOf<UsedTime, [
+  WriteAuthorizedBy<unknown, typeof commitSend>,
+  WriteAuthorizedBy<unknown, typeof commitEdit>,
+  WriteAuthorizedBy<unknown, typeof commitDelete>,
+  WriteAuthorizedBy<unknown, typeof commitObliterate>,
+  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
+  WriteAuthorizedBy<unknown, typeof commitLeave>,
+  WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof commitRemove>,
+]>;
+
 /** The times the room has used, each addressed by its nanoseconds. */
-export type UsedTimesCell = Writable<UsedTime[] | Default<[]>>;
+export type UsedTimesCell = Writable<StoredUsedTime[] | Default<[]>>;
 
 /**
  * A stored activity entry: a document of its own, written once by the handler
@@ -297,6 +329,7 @@ export type SentActivity = WritePolicyAnyOf<ChatRoomActivity, [
   WriteAuthorizedBy<unknown, typeof commitShowProfile>,
   WriteAuthorizedBy<unknown, typeof commitLeave>,
   WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof commitRemove>,
 ]>;
 
 /** The room's recent activity, in `seq` order. */
@@ -317,9 +350,23 @@ const NO_ACTIVITY = {
   expiredThrough: 0,
 } satisfies ActivityCounters;
 
+/** The activity numbering, written by whichever handler records an entry. */
+export type StoredActivityCounters = WritePolicyAnyOf<ActivityCounters, [
+  WriteAuthorizedBy<unknown, typeof commitSend>,
+  WriteAuthorizedBy<unknown, typeof commitEdit>,
+  WriteAuthorizedBy<unknown, typeof commitDelete>,
+  WriteAuthorizedBy<unknown, typeof commitObliterate>,
+  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
+  WriteAuthorizedBy<unknown, typeof commitLeave>,
+  WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof commitRemove>,
+]>;
+
 /** The cell holding the room's activity numbering. */
 export type ActivityCountersCell = Writable<
-  ActivityCounters | Default<typeof NO_ACTIVITY>
+  StoredActivityCounters | Default<typeof NO_ACTIVITY>
 >;
 
 /**
@@ -342,10 +389,18 @@ export type RosterCell = Writable<
 >;
 
 /** The principals of members who have left. */
-export type LeftCell = Writable<string[] | Default<[]>>;
+export type LeftCell = Writable<
+  WriteAuthorizedBy<string, typeof commitLeave>[] | Default<[]>
+>;
+
+/** A notice, written by `add` and removed by `delivered`. */
+export type StoredNotice = WritePolicyAnyOf<ChatRoomNotice, [
+  WriteAuthorizedBy<unknown, typeof commitAdd>,
+  WriteAuthorizedBy<unknown, typeof commitDelivered>,
+]>;
 
 /** Notices from `add`, waiting for a client to deliver them. */
-export type NoticesCell = Writable<ChatRoomNotice[] | Default<[]>>;
+export type NoticesCell = Writable<StoredNotice[] | Default<[]>>;
 
 /** A run of consecutive messages from one view of a conversation. */
 export interface ChatMessageWindow {
@@ -370,7 +425,8 @@ export type ChatMessageWindows = Record<string, ChatMessageWindow>;
 
 /** A session's windows onto the messages. */
 export type WindowsCell = Writable<
-  ChatMessageWindows | Default<Record<PropertyKey, never>>
+  | WriteAuthorizedBy<ChatMessageWindows, typeof commitWindow>
+  | Default<Record<PropertyKey, never>>
 >;
 
 /** What a room says about itself, as its creator wrote it. */
@@ -402,7 +458,7 @@ const entityKeyOf = (cell: unknown): string | undefined => {
 const clockNsec = (): bigint => nsecOf(epochNsecFromMsec(Date.now()));
 
 /** A request's key: its sender's principal, and its id. */
-export const requestKeyOf = (sender: string, requestId: string): string =>
+const requestKeyOf = (sender: string, requestId: string): string =>
   JSON.stringify([sender, requestId]);
 
 /** Whether the room has acted on the request `key` and still remembers it. */
@@ -1149,6 +1205,18 @@ export const commitDelivered = handler<RoomStreamEvent, RoomActState>(
   (event, state) => performMembershipAct("delivered", event, state),
 );
 
+/** What `commitWindow` is bound to. */
+export interface WindowActState {
+  /** Whether the binding opens (or moves) a window, or closes one. */
+  op: "open" | "close";
+
+  /** The room's messages. */
+  messages: MessagesCell;
+
+  /** The session's windows. */
+  windows: WindowsCell;
+}
+
 /** A window request, whose thread root is one of the room's messages. */
 export interface RoomWindowEvent extends Omit<WindowEvent, "root"> {
   /** The root of the thread to show; absent for the main conversation. */
@@ -1160,59 +1228,54 @@ export interface RoomWindowEvent extends Omit<WindowEvent, "root"> {
  * messages. It changes nothing but that session's windows, so it keeps no
  * request memory: repeating a request sets or removes the same window again.
  */
-export const commitWindow = handler<
-  RoomWindowEvent,
-  {
-    op: "open" | "close";
-    messages: MessagesCell;
-    windows: WindowsCell;
-  }
->((event, { op, messages, windows }) => {
-  const windowId = event?.windowId;
-  if (typeof windowId !== "string" || windowId === "") return;
-  const current = (windows.get() ?? {}) as ChatMessageWindows;
-  if (op === "close") {
-    if (!(windowId in current)) return;
-    windows.set(
-      Object.fromEntries(
-        Object.entries(current).filter(([id]) => id !== windowId),
-      ),
+export const commitWindow = handler<RoomWindowEvent, WindowActState>(
+  (event, { op, messages, windows }) => {
+    const windowId = event?.windowId;
+    if (typeof windowId !== "string" || windowId === "") return;
+    const current = (windows.get() ?? {}) as ChatMessageWindows;
+    if (op === "close") {
+      if (!(windowId in current)) return;
+      windows.set(
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => id !== windowId),
+        ),
+      );
+      return;
+    }
+    const request = event;
+    if (
+      !(windowId in current) &&
+      Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
+    ) {
+      return;
+    }
+    const entries = messageEntries(messages);
+    const root = request.root?.resolveAsCell();
+    const rootEntry = root === undefined ? undefined : entryFor(entries, root);
+    if (root !== undefined && rootEntry === undefined) return;
+    const view = rootEntry === undefined
+      ? entries.filter(isInMain).sort(compareEntries)
+      : threadView(entries, rootEntry.key);
+    if (view === undefined) return;
+    const anchor = anchorOf(request.from);
+    if (anchor === undefined) return;
+    const count = Math.min(
+      Math.max(0, Math.floor(request.count ?? 0)),
+      FABRICHAT_POLICY.maxWindowCount,
     );
-    return;
-  }
-  const request = event;
-  if (
-    !(windowId in current) &&
-    Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
-  ) {
-    return;
-  }
-  const entries = messageEntries(messages);
-  const root = request.root?.resolveAsCell();
-  const rootEntry = root === undefined ? undefined : entryFor(entries, root);
-  if (root !== undefined && rootEntry === undefined) return;
-  const view = rootEntry === undefined
-    ? entries.filter(isInMain).sort(compareEntries)
-    : threadView(entries, rootEntry.key);
-  if (view === undefined) return;
-  const anchor = anchorOf(request.from);
-  if (anchor === undefined) return;
-  const count = Math.min(
-    Math.max(0, Math.floor(request.count ?? 0)),
-    FABRICHAT_POLICY.maxWindowCount,
-  );
-  const slice = windowSlice(view, anchor, count);
-  if (slice === undefined) return;
-  windows.key(windowId).set({
-    requestId: request.requestId,
-    ...(root === undefined ? {} : { root }),
-    messages: view.slice(slice.start, slice.end).map((entry) =>
-      entry.cell.resolveAsCell()
-    ),
-    hasOlder: slice.hasOlder,
-    hasNewer: slice.hasNewer,
-  });
-});
+    const slice = windowSlice(view, anchor, count);
+    if (slice === undefined) return;
+    windows.key(windowId).set({
+      requestId: request.requestId,
+      ...(root === undefined ? {} : { root }),
+      messages: view.slice(slice.start, slice.end).map((entry) =>
+        entry.cell.resolveAsCell()
+      ),
+      hasOlder: slice.hasOlder,
+      hasNewer: slice.hasNewer,
+    });
+  },
+);
 
 //
 // Derived facts
