@@ -739,6 +739,61 @@ describe("spaceAccess()", () => {
         });
       });
 
+      it("loads again what the refusal kept from a computation that reads the space without calling it", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const target = runtime.getCell<unknown>(space, "space-access target");
+        const write = await writerFor();
+        await write(target.getAsNormalizedFullLink().id, { note: "granted" });
+        const noteSchema = {
+          type: "object",
+          properties: {
+            target: {
+              type: "object",
+              properties: { note: { type: "string" } },
+            },
+          },
+        } as const satisfies JSONSchema;
+        const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+        const noteOf = lift(
+          (input: { target?: { note?: string } }) =>
+            input.target?.note ?? "unread",
+          noteSchema,
+          { type: "string" },
+        );
+        const notePattern = pattern(
+          ({ target }) => ({ note: noteOf({ target }) }),
+          noteSchema,
+          { type: "object", properties: { note: { type: "string" } } },
+        );
+        const home = dave.did() as MemorySpace;
+        await (await aclWriter(dave))({ [home]: "OWNER" });
+        const tx = runtime.edit();
+        const resultCell = runtime.getCell(
+          home,
+          "space-access note",
+          undefined,
+          tx,
+        );
+        const note =
+          (runtime.run(tx, notePattern, { target }, resultCell) as Cell<
+            { note?: string }
+          >).key("note");
+        await tx.commit();
+        await waitForCellValue(runtime, note, (v) => v === "unread", {
+          stuckLabel: "dave's note to arrive as `unread`",
+        });
+        await runtime.idle();
+        await runtime.storageManager.synced();
+
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        await runtime.retrySpaceAccess(space);
+        await waitForCellValue(runtime, note, (v) => v === "granted", {
+          stuckLabel: "dave's note to follow the retry to `granted`",
+        });
+      });
+
       it("stays `none`, without throwing, when the memory server refuses the space again", async () => {
         const setAcl = await aclWriter();
         await setAcl({ [alice.did()]: "OWNER" });

@@ -3388,7 +3388,9 @@ class Provider
     } catch {
       // The session's own failure path records a refusal, and anything else
       // leaves the space as refused as it was.
+      return;
     }
+    await this.#followReplacement((replica) => replica.repullRefused());
   }
 
   listEntityIds(): Promise<string[] | undefined> {
@@ -3632,6 +3634,17 @@ export class SpaceReplica
    *  during reconnect, which closes its watch view without a fresh watch result
    *  to record. */
   #sessionSession?: MemoryV2Client.SpaceSession;
+
+  /**
+   * The loads the memory server refused this replica for want of access, by
+   * watch id, which `repullRefused()` makes again once a retry is admitted.
+   * Nothing else re-asks for them: a refused load leaves no selector behind
+   * to cover it, and its readers see no change to run again on.
+   */
+  readonly #refusedPulls = new Map<
+    string,
+    [WatchAddress, SchemaPathSelector]
+  >();
 
   /** THE SESSION REMOUNT's latch (see `noteAclChanged` /
    *  `#consumeOwedSessionRemount`): an admitted commit touched this space's
@@ -4345,10 +4358,7 @@ export class SpaceReplica
    */
   #noteAuthorizationStatus(result: Result<Unit, PullError>): void {
     if (result.error) {
-      if (
-        result.error.name === "AuthorizationError" &&
-        (result.error as { retriable?: unknown }).retriable !== true
-      ) {
+      if (isPermanentAuthorizationFailure(result.error)) {
         this.#lastAuthorizationError = result.error as IAuthorizationError;
         this.#onAccessChange?.(
           authorizationErrorToThrow(this.#lastAuthorizationError),
@@ -4369,6 +4379,18 @@ export class SpaceReplica
    */
   async sessionSettled(): Promise<void> {
     await this.#sessionHandle?.then(() => {}, () => {});
+  }
+
+  /**
+   * Makes again every load the memory server refused this replica for want
+   * of access, and resolves once they have been admitted or refused. A load
+   * refused again is kept for the next retry.
+   */
+  async repullRefused(): Promise<void> {
+    if (this.#refusedPulls.size === 0) return;
+    const entries = [...this.#refusedPulls.values()];
+    this.#refusedPulls.clear();
+    await this.pull(entries);
   }
 
   /**
@@ -5549,6 +5571,11 @@ export class SpaceReplica
       // and must not invalidate selectors whose fetch succeeded here.
       const result = await fetchPromise;
       if (result.error) {
+        if (isPermanentAuthorizationFailure(result.error)) {
+          for (const entry of newEntries) {
+            this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
+          }
+        }
         for (const [address, selector] of newEntries) {
           const baseAddress = {
             id: address.id,
@@ -9215,8 +9242,7 @@ export class SpaceReplica
           this.#sessionHandle = undefined;
           if (
             !this.#closed && error instanceof Error &&
-            error.name === "AuthorizationError" &&
-            (error as { retriable?: unknown }).retriable !== true
+            isPermanentAuthorizationFailure(error)
           ) this.#onAccessChange?.(error);
         }
         throw error;
@@ -9259,6 +9285,15 @@ const toConnectionError = (error: unknown): IConnectionError =>
       code: 500,
     },
   }) as IConnectionError;
+
+/**
+ * Returns whether `error` is an `AuthorizationError` the memory server did not
+ * mark retriable, which is the denial a retry cannot heal until the access
+ * list changes.
+ */
+const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
+  error.name === "AuthorizationError" &&
+  (error as { retriable?: unknown }).retriable !== true;
 
 // Preserve a real AuthorizationError (name, message, and the server's retriable
 // marker) instead of flattening it to a generic ConnectionError, so a caller can
