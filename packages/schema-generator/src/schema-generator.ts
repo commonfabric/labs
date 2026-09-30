@@ -312,6 +312,29 @@ function unionArms(
 }
 
 /**
+ * The labels of the value `schema` denotes, which may be any arm of it
+ * (`unionArms()`): those declared along each reference chain on the way to an
+ * arm (`declaredIfcLabels()`), a union's joined with those of its arms
+ * (`joinMemberIfcLabels()`).
+ */
+function armLabels(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): Record<string, unknown> | undefined {
+  const labels = declaredIfcLabels(schema, context.definitions);
+  const resolved = resolveLocalRef(schema, context);
+  if (!isObjectOrArray(resolved) || !Array.isArray(resolved.anyOf)) {
+    return labels;
+  }
+  return joinMemberIfcLabels(
+    labels ?? {},
+    (resolved.anyOf as MutableJSONSchema[]).map((arm) =>
+      armLabels(arm, context) ?? {}
+    ),
+  );
+}
+
+/**
  * `Pick`/`Omit` applied to `schema`: the object it denotes with only the
  * selected properties. These aliases map over `keyof T`, and the keys of a
  * union are the keys every arm has, so a union does not distribute the way
@@ -3597,8 +3620,10 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second);
         if (keys === undefined) return undefined;
-        // The picked members are the labelled value's, so its label stays.
+        // The picked members are those of whichever arm the labeled value
+        // is, so it keeps the labels of every arm, joined.
         const operand = analyze(first, instantiatedAs);
+        const labels = armLabels(operand, context);
         const { ifc, ...payload } = isObjectOrArray(operand) &&
             !Array.isArray(operand)
           ? operand as Record<string, unknown>
@@ -3608,9 +3633,7 @@ export class SchemaGenerator {
           context,
           name === "Pick" ? { pick: keys } : { omit: keys },
         );
-        return picked && isObjectOrArray(ifc) && !Array.isArray(ifc)
-          ? withIfcLabels(picked, ifc as Record<string, unknown>)
-          : picked;
+        return picked && labels ? withIfcLabels(picked, labels) : picked;
       }
       case "Record": {
         if (second === undefined) return undefined;

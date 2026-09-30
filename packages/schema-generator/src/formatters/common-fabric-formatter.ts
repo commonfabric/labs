@@ -64,7 +64,11 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
-import { withIfcLabels } from "../ifc-labels.ts";
+import {
+  combineIfcLabels,
+  joinMemberIfcLabels,
+  withIfcLabels,
+} from "../ifc-labels.ts";
 import {
   holdsUnreadLabel,
   holdsUnreadMetadataLabel,
@@ -509,17 +513,14 @@ const boundArgumentOfType = (
 };
 
 /**
- * Whether `type`, the payload of an intersection of CFC metadata carriers,
- * leaves the intersection no carrier: `never`, and `null` and `undefined`,
- * alone or in a union of them, make it `never`, and `any` makes it `any`.
- * Every other payload keeps the carriers, `void` and `unknown` among them.
+ * Whether `type`, intersected with a CFC metadata carrier, leaves the
+ * intersection nothing: `never`, `null` and `undefined` make it `never`.
+ * Every other type keeps the carrier, `void` and `unknown` among them, except
+ * `any`, which makes it `any`.
  */
-const leavesNoCarrier = (type: ts.Type): boolean =>
-  (type.isUnion() ? type.types : [type]).every((member) =>
-    (member.flags &
-      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined |
-        ts.TypeFlags.Any)) !== 0
-  );
+const vanishesUnderCarrier = (type: ts.Type): boolean =>
+  (type.flags &
+    (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
 
 /**
  * The metadata type a CFC carrier holds, with the bindings it is read under,
@@ -531,22 +532,55 @@ type CarriedMetadata = {
 };
 
 /**
- * A default-library alias mapping a labeled type's members, read for the
- * value it holds and the labels it keeps (`CommonFabricFormatter`'s
- * `#libraryView()`).
+ * One member a labeled operand may be: its payload, and the metadata of each
+ * carrier the member holds.
  */
-type LibraryView = {
-  /** The payload of the alias's labeled operand. */
+type LabeledMember = {
+  /** The type the member intersects its carriers with. */
   readonly payload: ts.Type;
 
-  /** The metadata of each carrier the operand holds. */
+  /** The metadata of each carrier the member holds, none where unlabeled. */
   readonly metadata: readonly CarriedMetadata[];
+};
+
+/**
+ * A default-library alias mapping a labeled type's members, read for the
+ * value it holds and the labels it keeps (`CommonFabricFormatter`'s
+ * `#libraryView()`), or the operand of one.
+ */
+type LibraryView = {
+  /**
+   * Each member the operand may be: one, or several for a union, or none
+   * where it is `never`.
+   */
+  readonly members: readonly LabeledMember[];
 
   /**
-   * Whether the value is the payload: a primitive, which `Readonly`,
-   * `Partial` and `Required` leave as it is.
+   * The payload the value is, where the operand is one member whose payload
+   * is a primitive, which `Readonly`, `Partial` and `Required` leave as it
+   * is.
    */
-  readonly primitive: boolean;
+  readonly primitive: ts.Type | undefined;
+};
+
+/** The view of `type` as one member of an operand, unlabeled. */
+const unlabeledView = (type: ts.Type): LibraryView => ({
+  members: [{ payload: type, metadata: [] }],
+  primitive: undefined,
+});
+
+/**
+ * The payload of the one member in `members`, where there is one and its
+ * payload is a primitive.
+ */
+const primitivePayloadOf = (
+  members: readonly LabeledMember[],
+): ts.Type | undefined => {
+  const [only, ...others] = members;
+  return only && others.length === 0 &&
+      (only.payload.flags & ts.TypeFlags.Object) === 0
+    ? only.payload
+    : undefined;
 };
 
 /**
@@ -940,21 +974,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     // an object of the primitive's methods. So the value is that type as the
     // formatters after this one read it, or, where `Readonly`, `Partial` and
     // `Required` leave a primitive as it is, the primitive; and its labels
-    // are the operand's, read from its carriers in full or not at all.
+    // are those of the members the operand may be, joined.
     const view = this.#libraryView(type, context);
     if (view) {
       const shape = view.primitive
         ? this.#schemaGenerator.formatChildType(
-          view.payload,
+          view.primitive,
           context,
           undefined,
         )
         : this.#schemaGenerator.formatStructure(type, context);
       // The structure may carry the same labels, from the carrier folded into
       // it; labelling it again with them changes nothing.
-      return (this.#labelsOf(view.metadata, context) ?? []).reduce<
-        MutableJSONSchema
-      >((labelled, label) => withIfcLabels(labelled, label), shape);
+      const labels = this.#memberLabelsOf(view.members, context);
+      return labels ? withIfcLabels(shape, labels) : shape;
     }
 
     // With no alias name left to follow, and no reference naming the policy,
@@ -1919,25 +1952,64 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
+   * The labels of a value that may be any one of `members`, the members a
+   * labeled operand may be: one member's carriers combined, as one value's
+   * labels are, and several members' labels joined
+   * (`joinMemberIfcLabels()`), or `undefined` where that keeps none. Each
+   * member's carriers are read in full (`#labelsOf()`), or the value is
+   * unlabeled: a member read in part could claim what its author never
+   * wrote together, and a member not read could hold a confidentiality
+   * label the join would leave out.
+   */
+  #memberLabelsOf(
+    members: readonly LabeledMember[],
+    context: GenerationContext,
+  ): Record<string, unknown> | undefined {
+    const labels: Record<string, unknown>[] = [];
+    for (const { metadata } of members) {
+      const read = this.#labelsOf(metadata, context);
+      if (!read) return undefined;
+      labels.push(
+        read.reduce<Record<string, unknown>>(
+          (combined, label) => combineIfcLabels(combined, label),
+          {},
+        ),
+      );
+    }
+    const [only, ...others] = labels;
+    return others.length === 0 ? only : joinMemberIfcLabels({}, labels);
+  }
+
+  /**
    * Where `type` is a default-library alias mapping a labeled type's members
    * (`Readonly<Sec<X>>`), directly or down a chain of aliases
-   * (`#followToLibraryAlias()`), its labeled operand (`#operandView()`), and
-   * whether the value is the operand's payload: a primitive, which
-   * `Readonly`, `Partial` and `Required` leave as it is; `undefined` for any
-   * other type. `bound` binds the type parameters `type` may hold.
+   * (`#followToLibraryAlias()`), the members of its operand
+   * (`#operandView()`), one of them labeled at least, and the primitive the
+   * value is, where the operand is one member whose payload is a primitive
+   * and the alias leaves it as it is, as `Readonly`, `Partial` and `Required`
+   * do; `undefined` for any other type, a union among them: the checker
+   * distributes such an alias over a union operand where it maps the
+   * operand's own members, as `Readonly` does, and builds a union whose every
+   * member is read on its own. `bound` binds the type parameters `type` may
+   * hold.
    */
   #libraryView(
     type: ts.Type,
     context: GenerationContext,
     bound = context.boundTypeParameters,
   ): LibraryView | undefined {
+    if (type.isUnion()) return undefined;
     const followed = this.#followToLibraryAlias(type, bound, context);
     if (!followed) return undefined;
     const inner = this.#operandView(followed.operand, followed.bound, context);
-    return inner && {
-      ...inner,
-      primitive: inner.primitive &&
-        PRIMITIVE_KEEPING_LIBRARY_ALIASES.has(followed.name),
+    if (!inner?.members.some(({ metadata }) => metadata.length > 0)) {
+      return undefined;
+    }
+    return {
+      members: inner.members,
+      primitive: PRIMITIVE_KEEPING_LIBRARY_ALIASES.has(followed.name)
+        ? inner.primitive
+        : undefined,
     };
   }
 
@@ -2074,13 +2146,17 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * Helper for {@link #libraryView}, which returns the labeled parts of
-   * `operand`, the type a default-library alias mapping an object's members
-   * is given, read under `bound`: for a type parameter `bound` binds, its
-   * argument's; for an intersection of CFC metadata carriers and one other
-   * member, that member as its payload is read (`#payloadParts()`), with the
-   * carriers' metadata and any its payload adds; for such an alias in turn,
-   * its operand's; and `undefined` for any other type.
+   * Helper for {@link #libraryView}, which returns the members `operand`, the
+   * type a default-library alias mapping an object's members is given, may
+   * be under `bound`, and the payload the value is where the operand is one
+   * member whose payload is a primitive; `undefined` where `operand` is
+   * `any`, which holds no labels. A type parameter `bound` binds is its
+   * argument. A union has the members each of its own has, and is no
+   * primitive, since the checker distributes an alias that leaves one as it
+   * is over a union; `never` has none. An intersection of CFC metadata
+   * carriers and one other member has the members its carriers label
+   * (`#carriedMembers()`), such an alias in turn its operand's, and any other
+   * type is one unlabeled member.
    */
   #operandView(
     operand: ts.Type,
@@ -2091,52 +2167,88 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (argument) {
       return this.#operandView(argument.type, argument.bound, context);
     }
+    if ((operand.flags & ts.TypeFlags.Any) !== 0) return undefined;
+    if ((operand.flags & ts.TypeFlags.Never) !== 0) {
+      return { members: [], primitive: undefined };
+    }
+    if (operand.isUnion()) {
+      const members: LabeledMember[] = [];
+      for (const member of operand.types) {
+        const view = this.#operandView(member, bound, context);
+        if (!view) return undefined;
+        for (const read of view.members) members.push(read);
+      }
+      return { members, primitive: undefined };
+    }
     const carried = cfcCarriedParts(operand, context.typeChecker);
-    if (!carried) return this.#libraryView(operand, context, bound);
-    const payload = this.#payloadParts(carried.payload, bound, context);
-    return payload && {
-      payload: payload.payload,
-      metadata: [
-        ...payload.metadata,
-        ...carried.metadata.map((type) => ({ type, bound })),
-      ],
-      primitive: (payload.payload.flags & ts.TypeFlags.Object) === 0,
-    };
+    if (!carried) {
+      return this.#libraryView(operand, context, bound) ??
+        unlabeledView(operand);
+    }
+    const members = this.#carriedMembers(carried, bound, context);
+    return members && { members, primitive: primitivePayloadOf(members) };
   }
 
   /**
-   * Helper for {@link #operandView}, which returns what `payload`, the member
-   * a labeled operand intersects its carriers with, is under `bound`, and the
-   * metadata of the carriers it adds to the operand's. A type parameter
-   * `bound` binds is its argument. The checker folds an argument that is
-   * itself labeled into the operand's intersection, as it folds any
-   * intersection into another, so the argument's payload is the operand's
-   * and its carriers add their metadata. An argument that leaves the
-   * intersection no carrier (`leavesNoCarrier()`) leaves the operand
-   * unlabeled, and so returns `undefined`. Any other payload adds no carrier.
+   * Helper for {@link #operandView} and {@link #payloadParts}, which returns
+   * the members `carried`, an intersection of CFC metadata carriers and one
+   * other member, may be under `bound`: those that member, its payload, may
+   * be (`#payloadParts()`), each with the carriers' metadata added;
+   * `undefined` where the payload is `any`.
+   */
+  #carriedMembers(
+    carried: {
+      readonly payload: ts.Type;
+      readonly metadata: readonly ts.Type[];
+    },
+    bound: BoundTypeParameters | undefined,
+    context: GenerationContext,
+  ): LabeledMember[] | undefined {
+    const members = this.#payloadParts(carried.payload, bound, context);
+    const metadata = carried.metadata.map((type) => ({ type, bound }));
+    return members?.map(({ payload, metadata: payloadMetadata }) => ({
+      payload,
+      metadata: [...payloadMetadata, ...metadata],
+    }));
+  }
+
+  /**
+   * Helper for {@link #carriedMembers}, which returns the members `payload`,
+   * a type a labeled operand intersects its carriers with, may be under
+   * `bound`, each with the metadata of the carriers it adds to the operand's;
+   * `undefined` where it is `any`, which makes the operand `any`. A type
+   * parameter `bound` binds is its argument, which the checker folds into the
+   * operand's intersection, as it folds any type in. So the intersection
+   * distributes over a union, each member of which is read on its own; it is
+   * `never` for a type that leaves it nothing (`vanishesUnderCarrier()`),
+   * which has no members; and a type that is itself labeled folds its
+   * carriers in (`#carriedMembers()`). Any other type is one member adding no
+   * carrier.
    */
   #payloadParts(
     payload: ts.Type,
     bound: BoundTypeParameters | undefined,
     context: GenerationContext,
-  ):
-    | { readonly payload: ts.Type; readonly metadata: CarriedMetadata[] }
-    | undefined {
+  ): LabeledMember[] | undefined {
     const argument = boundArgumentOfType(payload, bound);
-    if (!argument) return { payload, metadata: [] };
-    if (leavesNoCarrier(argument.type)) return undefined;
-    const carried = cfcCarriedParts(argument.type, context.typeChecker);
-    if (!carried) {
+    if (argument) {
       return this.#payloadParts(argument.type, argument.bound, context);
     }
-    const inner = this.#payloadParts(carried.payload, argument.bound, context);
-    return inner && {
-      payload: inner.payload,
-      metadata: [
-        ...inner.metadata,
-        ...carried.metadata.map((type) => ({ type, bound: argument.bound })),
-      ],
-    };
+    if ((payload.flags & ts.TypeFlags.Any) !== 0) return undefined;
+    if (vanishesUnderCarrier(payload)) return [];
+    if (payload.isUnion()) {
+      const members: LabeledMember[] = [];
+      for (const member of payload.types) {
+        const read = this.#payloadParts(member, bound, context);
+        if (!read) return undefined;
+        for (const part of read) members.push(part);
+      }
+      return members;
+    }
+    const carried = cfcCarriedParts(payload, context.typeChecker);
+    return carried
+      ? this.#carriedMembers(carried, bound, context)
+      : [{ payload, metadata: [] }];
   }
 
   /**

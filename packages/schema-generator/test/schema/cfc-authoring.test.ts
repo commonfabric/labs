@@ -2691,6 +2691,54 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [alias, argument, ifc] of [
+        [
+          'Pick<Sec<T>, "x">',
+          'Confidential<{ x: string }, readonly ["c"]> | { x: string; z: 1 }',
+          { confidentiality: ["a", "c"] },
+        ],
+        [
+          'Omit<Sec<T>, "z">',
+          'Confidential<{ x: string }, readonly ["c"]> | { x: string; z: 1 }',
+          { confidentiality: ["a", "c"] },
+        ],
+        [
+          'Pick<T | Sec<{ x: string; z: 1 }>, "x">',
+          'Confidential<{ x: string }, readonly ["c"]>',
+          { confidentiality: ["c", "a"] },
+        ],
+        [
+          'Pick<T | Integrity<{ x: string; z: 1 }, readonly ["j"]>, "x">',
+          'Integrity<{ x: string }, readonly ["i"]>',
+          undefined,
+        ],
+        [
+          'Pick<Sec<T>, "x">',
+          "Labeled | { x: string; z: 1 }",
+          { confidentiality: ["a", "c"] },
+        ],
+        ['Pick<T, "x">', "Labeled", { confidentiality: ["c"] }],
+      ] as const
+    ) {
+      it(`joins the labels of the members \`${alias}\` may be read from under bindings, \`T\` bound to \`${argument}\``, async () => {
+        // The picked members are those of whichever member the value is.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Labeled = Confidential<{ x: string }, readonly ["c"]>;
+          type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          ...(ifc ? { ifc } : {}),
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
     it("reads a nesting of an alias in its own argument as written", async () => {
       const { value, diagnostics } = await generate(`
         type Wrap<B> = Confidential<{ w: B }, readonly ["w"]>;
@@ -2783,8 +2831,11 @@ describe("Schema: CFC authoring aliases", () => {
     const ALIASES = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type Sec<T> = Confidential<T, readonly ["a"]>;
       type Pair = { x?: string; y: number };
+      type One = { x: string };
+      type Two = { x: string; z: 1 };
     `;
 
     const generate = async (value: string, declarations = "") => {
@@ -2866,6 +2917,10 @@ describe("Schema: CFC authoring aliases", () => {
         [
           "Partial<Readonly<Sec<Pair>>>",
           { type: "object", properties: { x, y }, ifc: secret },
+        ],
+        [
+          'Pick<Confidential<Pair, readonly []>, "x">',
+          { type: "object", properties: { x }, ifc: { confidentiality: [] } },
         ],
         [
           '{ readonly [K in keyof Confidential<Sec<{ y: number }>, readonly ["b"]>]: Confidential<Sec<{ y: number }>, readonly ["b"]>[K] }',
@@ -3017,6 +3072,86 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
 
+    describe("a union operand", () => {
+      // `Pick` and `Omit` build one object from a union operand, whichever
+      // member the value is, so it has the labels of every member joined:
+      // each confidentiality label any member carries, and each other label
+      // every member carries alike. Each member's carriers are read in full,
+      // or the object is unlabeled.
+
+      const picked = (ifc?: Record<string, unknown>) => ({
+        type: "object",
+        properties: { x },
+        required: ["x"],
+        ...(ifc ? { ifc } : {}),
+      });
+
+      for (
+        const [value, ifc] of [
+          ['Pick<Sec<One | Two>, "x">', secret],
+          ['Pick<Sec<One> | Sec<Two>, "x">', secret],
+          [
+            'Pick<Sec<Confidential<One, readonly ["b"]> | Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            'Pick<Sec<One> | Confidential<Two, readonly ["b"]>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          ['Pick<Sec<One> | Two, "x">', secret],
+          [
+            'Pick<Readonly<Sec<One> | Confidential<Two, readonly ["b"]>>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          [
+            'Omit<Sec<One> | Confidential<Two, readonly ["b"]>, "z">',
+            { confidentiality: ["a", "b"] },
+          ],
+          [
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<Two, readonly ["i"]>, "x">',
+            { integrity: ["i"] },
+          ],
+          [
+            'Pick<Integrity<Sec<One>, readonly ["i"]> | Integrity<Sec<Two>, readonly ["j"]>, "x">',
+            secret,
+          ],
+          [
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<Two, readonly ["j"]>, "x">',
+            undefined,
+          ],
+          [
+            'Pick<Sec<One> | Confidential<Two, readonly [string]>, "x">',
+            undefined,
+          ],
+          ['Pick<One | Two, "x">', undefined],
+        ] as const
+      ) {
+        it(`reads \`${value}\` ${ifc ? "with its members' labels joined" : "unlabeled"}`, async () => {
+          const { schema, diagnostics } = await generate(value);
+          expect(schema).toEqual(picked(ifc));
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      it("reads an alias the checker distributes over a union operand as a union of its members, each with its own labels", async () => {
+        const { schema, diagnostics } = await generate(
+          'Readonly<Sec<One> | Confidential<Two, readonly ["b"]>>',
+        );
+        expect(schema).toEqual({
+          anyOf: [
+            picked(secret),
+            {
+              type: "object",
+              properties: { x, z: { type: "number", enum: [1] } },
+              required: ["x", "z"],
+              ifc: { confidentiality: ["b"] },
+            },
+          ],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    });
+
     describe("a user's generic alias of one", () => {
       // The checker names a `Pick` or an `Omit` over literal keys by a user's
       // alias of it, and holds that alias's arguments. The alias is followed,
@@ -3047,6 +3182,15 @@ describe("Schema: CFC authoring aliases", () => {
           SelectSec<Confidential<T, readonly ["c"]>>;
         type Id<X> = X;
         type ForwardThroughId<T extends { x?: string }> = SelectSec<Id<T>>;
+        type SelectUnion<T extends { x?: string }, U extends { x?: string }> =
+          Pick<Sec<T> | Sec<U>, "x">;
+        type SelectIntegrity<T extends { x?: string }, U extends { x?: string } | null> =
+          Pick<Integrity<T, readonly ["i"]> | Integrity<U, readonly ["j"]>, "x">;
+        type SelectOr<T extends { x?: string }> = Pick<T | Sec<Two>, "x">;
+        type SelectOrIntegrity<T extends { x?: string }> =
+          Pick<T | Integrity<Two, readonly ["i"]>, "x">;
+        type SelectSecOr<T extends { x?: string }> = SelectSec<T | Two>;
+        type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
       `;
 
       for (
@@ -3121,6 +3265,49 @@ describe("Schema: CFC authoring aliases", () => {
             'Pick<Confidential<Pair, readonly [...string[], "b"]>, "x">',
             undefined,
           ],
+          [
+            "Select<Sec<One> | Sec<Two>>",
+            'Pick<Sec<One> | Sec<Two>, "x">',
+            secret,
+          ],
+          ["SelectSec<One | Two>", 'Pick<Sec<One | Two>, "x">', secret],
+          [
+            'SelectSec<Confidential<One, readonly ["b"]> | Two>',
+            'Pick<Sec<Confidential<One, readonly ["b"]> | Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          [
+            'SelectUnion<One, Confidential<Two, readonly ["b"]>>',
+            'Pick<Sec<One> | Sec<Confidential<Two, readonly ["b"]>>, "x">',
+            { confidentiality: ["a", "b"] },
+          ],
+          [
+            "SelectIntegrity<One, null>",
+            'Pick<Integrity<One, readonly ["i"]> | Integrity<null, readonly ["j"]>, "x">',
+            { integrity: ["i"] },
+          ],
+          [
+            "SelectUnion<One, any>",
+            'Pick<Sec<One> | Sec<any>, "x">',
+            undefined,
+          ],
+          [
+            'SelectOr<Confidential<One, readonly ["b"]>>',
+            'Pick<Confidential<One, readonly ["b"]> | Sec<Two>, "x">',
+            { confidentiality: ["b", "a"] },
+          ],
+          ["SelectOr<any>", 'Pick<any | Sec<Two>, "x">', undefined],
+          [
+            "SelectOrIntegrity<never>",
+            'Pick<Integrity<Two, readonly ["i"]>, "x">',
+            { integrity: ["i"] },
+          ],
+          ["SelectSecOr<any>", 'Pick<Sec<any | Two>, "x">', undefined],
+          [
+            "ReadonlyUnion<string, null>",
+            "Readonly<Sec<string> | Sec<null>>",
+            secret,
+          ],
         ] as const
       ) {
         it(`reads \`${alias}\` as \`${written}\`, ${ifc ? "labeled" : "unlabeled"}`, async () => {
@@ -3131,24 +3318,6 @@ describe("Schema: CFC authoring aliases", () => {
           expect(read.diagnostics).toEqual([]);
         });
       }
-
-      it("keeps the operand's own label for a union argument, which the alias written out distributes over", async () => {
-        // Every member of the union carries the operand's carrier. Written
-        // out, the intersection distributes over the union and is read as
-        // no one labeled operand.
-        const read = await generate(
-          "SelectSec<{ x: string } | { x: string; z: 1 }>",
-          DECLARATIONS,
-        );
-        const direct = await generate(
-          'Pick<Sec<{ x: string } | { x: string; z: 1 }>, "x">',
-          DECLARATIONS,
-        );
-        expect((read.schema as Record<string, unknown>).ifc).toEqual(secret);
-        expect((direct.schema as Record<string, unknown>).ifc)
-          .toBeUndefined();
-        expect(read.diagnostics).toEqual([]);
-      });
     });
   });
 });
