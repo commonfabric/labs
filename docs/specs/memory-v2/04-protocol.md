@@ -60,7 +60,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
-    "presenceV1": true
+    "presenceV1": true,
+    "sessionClose": true
   }
 }
 ```
@@ -82,7 +83,8 @@ If the server accepts the protocol, it returns:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
-    "presenceV1": true
+    "presenceV1": true,
+    "sessionClose": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -274,6 +276,12 @@ commands and the `presence/upsert` and `presence/remove` pushes of section
 connected to an older server does not send a presence message, and reports
 presence as unavailable to whatever asked for it.
 
+`sessionClose` advertises that the server ends one session on a
+`session.close` request (section 4.3.7) and leaves the connection and its other
+sessions open. It is build-inherent and defaults to `false` when absent: a
+client connected to an older server closes a session locally, and the server
+keeps the session attached until the connection closes.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -454,6 +462,8 @@ interface HelloMessage {
     entityIdLookup?: boolean;
     sessionHoldings?: boolean;
     sessionReadCeiling?: boolean;
+    presenceV1?: boolean;
+    sessionClose?: boolean;
   };
 }
 
@@ -467,6 +477,7 @@ interface RequestMessage {
     | "session.watch.set"
     | "session.watch.add"
     | "session.ack"
+    | "session.close"
     | "event.attention.resolve"
     | "presence.join"
     | "presence.publish"
@@ -976,7 +987,42 @@ Semantics:
 - watch mutations are applied in order per session; clients must serialize
   `session.watch.set` and `session.watch.add`
 
-### 4.3.7 Branch Lifecycle Commands
+### 4.3.7 `session.close` — End One Session
+
+`session.close` ends a session and leaves the connection open. A client that
+holds sessions for several spaces on one connection uses it to release one of
+them.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SessionCloseRequest {
+  type: "session.close";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+}
+
+/** `ok` of the response. */
+type SessionCloseResult = Record<string, never>;
+```
+
+Semantics:
+
+- the session leaves the connection: a later request naming it gets a
+  `SessionError`, and the server sends it no further `session/effect`
+- the session's presence memberships end, and the rooms' other members are
+  told (section 4.13.1)
+- the session stays resumable for the detach grace a session keeps after its
+  connection closes, so a client that opens it again soon after, presenting
+  its latest `sessionToken`, resumes it
+- the connection's other sessions are unaffected
+- a `session.close` naming a session the connection does not hold gets a
+  `SessionError`
+
+### 4.3.8 Branch Lifecycle Commands
 
 Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
@@ -1293,6 +1339,15 @@ Clients MUST:
 The server processes writes serially within a branch, or with equivalent
 serializable isolation.
 
+A connection handles the frames it is handed in turns, and a turn is per space.
+A frame naming a space is handled after the frames handed over before it for
+that space, and after every frame naming no space that was handed over before
+it. A frame naming no space — `hello`, or a message the server cannot read — is
+handled after every frame handed over before it. Frames for different spaces on
+one connection do not wait for each other, so a `transact` waiting for its
+space's publication lock delays nothing addressed to another space. Presence
+messages stay outside these turns (section 4.13.4).
+
 For live sync, transact verdicts return INLINE before the independently batched
 fan-out: N commits can apply against one watch-union recompute, which is where
 the subscription pipeline's throughput comes from. A per-space publication lock
@@ -1389,18 +1444,18 @@ advertises the capability as `presenceV1` (section 4.1.1).
 A room is addressed by an opaque identifier under a space. Joining requires an
 open session for that space on the same connection: space access, decided by
 the memory ACL, is what admits a participant, and there is no separate
-presence authentication. A connection is in a room at most once, keyed by the
-connection itself, and the membership belongs to the session that joined: a
-join, publish, or leave of that room through another session on the same
-connection is refused with a `PresenceError`. Several observers of one room on
-a client share the one membership their session holds.
+presence authentication. A membership belongs to one session on one
+connection, and a session is in a room at most once. Two sessions on the same
+connection each hold a membership of their own, with a participant id of its
+own, and neither can publish under or end the other's. Several observers of
+one room on a client share the one membership their session holds.
 
 The server assigns the participant id at join and identifies every later
 publication by the membership it arrives on, never by a claimed id. A
 membership ends, and the room's other members are told, on an explicit
-`presence.leave`, on the connection closing, and on the joining session being
-revoked or detached — a takeover by another connection resuming the same
-session included.
+`presence.leave`, on the connection closing, on a `session.close` of the
+joining session, and on the joining session being revoked or detached — a
+takeover by another connection resuming the same session included.
 
 ### 4.13.2 Record
 
@@ -1501,12 +1556,12 @@ interface PresenceRecord {
 }
 ```
 
-A join on a membership that already exists, through the session that holds
-it, returns the same participant id and a current snapshot. A publish before
-a join, a publish whose `revision` does not exceed the membership's last
-accepted one, and a join, publish, or leave through another session on the
-connection are refused with a `PresenceError`. A member that has never
-published is in no snapshot and announced to nobody.
+A join on a membership that already exists returns the same participant id
+and a current snapshot. A publish before a join, and a publish whose
+`revision` does not exceed the membership's last accepted one, are refused
+with a `PresenceError`. A leave by a session that is not a member does
+nothing. A member that has never published is in no snapshot and announced to
+nobody.
 
 Server to client, pushes with no request id, addressed to the session the
 receiving membership joined through:
@@ -1546,9 +1601,9 @@ interface PresenceRecord {
 ### 4.13.4 Ordering
 
 The connection parses each frame as it is handed to it. A `presence.*`
-message is handled at that point; every other message enters the connection's
-ordered queue (section 4.11.2), so a presence message never waits for the
-commands already queued there. What that buys depends on how frames reach the
+message is handled at that point; every other message waits for its turn
+(section 4.11.2), so a presence message never waits for the commands already
+waiting there. What that buys depends on how frames reach the
 connection, and on the WebSocket hosts today it is bounded: both hand frames
 to the connection one at a time, each after the one before it has been
 handled, so a presence frame behind a large `transact` on the same socket

@@ -2627,7 +2627,7 @@ export class Server {
     this.#presence.leaveSession(space, sessionId, connectionId);
   }
 
-  /** How many connections are in a presence room; `0` when nobody is. */
+  /** How many memberships a presence room holds; `0` when nobody is in it. */
   presenceMemberCount(space: string, room: string): number {
     return this.#presence.memberCount(space, room);
   }

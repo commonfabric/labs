@@ -401,8 +401,8 @@ describe("v2-presence-server", () => {
   });
 
   describe("another session on the same connection", () => {
-    // One connection may hold two sessions on a space; a membership belongs
-    // to the session that joined, and the other cannot touch it.
+    // One connection may hold two sessions on a space. Each holds a
+    // membership of its own, and neither can touch the other's.
 
     const openSecondSession = async (peer: Peer): Promise<string> => {
       await peer.connection.receive(encodeMemoryBoundary({
@@ -419,7 +419,7 @@ describe("v2-presence-server", () => {
       return opened.ok!.sessionId;
     };
 
-    const asSession = async (
+    const asSession = async <Result = Record<PropertyKey, never>>(
       peer: Peer,
       sessionId: string,
       message: Record<string, unknown>,
@@ -430,12 +430,68 @@ describe("v2-presence-server", () => {
         sessionId,
         room: ROOM,
       }));
-      return shiftResponse(peer.messages);
+      return shiftResponse<Result>(peer.messages);
     };
 
-    it("refuses to join, publish to, or leave a room another session joined", async () => {
-      const server = createServer("cross-session");
-      const space = "did:key:z6Mk-presence-cross-session";
+    it("joins the room as a participant of its own", async () => {
+      const server = createServer("second-session-join");
+      const space = "did:key:z6Mk-presence-second-session-join";
+      try {
+        const a = await openPeer(server, space, "a");
+        const first = await join(a);
+        await publish(a, 1, "Ada");
+        const other = await openSecondSession(a);
+        const second = await asSession<PresenceJoinResult>(a, other, {
+          type: "presence.join",
+          requestId: "other-join",
+        });
+        expect(second.ok!.participantId).not.toBe(first.ok!.participantId);
+        expect(second.ok!.participants.map((record) => record.participantId))
+          .toEqual([first.ok!.participantId]);
+        expect(server.presenceMemberCount(space, ROOM)).toBe(2);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("receives the first session's publication, addressed to itself", async () => {
+      const server = createServer("second-session-push");
+      const space = "did:key:z6Mk-presence-second-session-push";
+      try {
+        const a = await openPeer(server, space, "a");
+        await join(a);
+        const other = await openSecondSession(a);
+        await asSession(a, other, {
+          type: "presence.join",
+          requestId: "other-join",
+        });
+        // Both sessions are on one connection, so the push to the second
+        // and the response to the first arrive in the same list.
+        await a.connection.receive(encodeMemoryBoundary({
+          type: "presence.publish",
+          requestId: "first-publish",
+          space,
+          sessionId: a.sessionId,
+          room: ROOM,
+          revision: 1,
+          name: "Ada",
+          facets: {},
+        }));
+        expect(
+          a.messages.map((message) =>
+            message.type === "presence/upsert"
+              ? [message.type, message.sessionId]
+              : [message.type]
+          ),
+        ).toEqual([["presence/upsert", other], ["response"]]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("gets a `PresenceError` publishing to a room only the first session joined", async () => {
+      const server = createServer("second-session-publish");
+      const space = "did:key:z6Mk-presence-second-session-publish";
       try {
         const a = await openPeer(server, space, "a");
         const b = await openPeer(server, space, "b");
@@ -446,12 +502,6 @@ describe("v2-presence-server", () => {
         const other = await openSecondSession(a);
         expect(
           (await asSession(a, other, {
-            type: "presence.join",
-            requestId: "other-join",
-          })).error?.name,
-        ).toBe("PresenceError");
-        expect(
-          (await asSession(a, other, {
             type: "presence.publish",
             requestId: "other-publish",
             revision: 2,
@@ -459,16 +509,35 @@ describe("v2-presence-server", () => {
             facets: {},
           })).error?.name,
         ).toBe("PresenceError");
+        expect(b.messages).toEqual([]);
+        // The first session's revision is where it was: its next
+        // publication is accepted at the revision the refused one named.
+        expect((await publish(a, 2, "Ada, still")).ok).toEqual({});
+        expect(b.messages).toHaveLength(1);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("leaves the first session's membership in place when it leaves the room", async () => {
+      const server = createServer("second-session-leave");
+      const space = "did:key:z6Mk-presence-second-session-leave";
+      try {
+        const a = await openPeer(server, space, "a");
+        const b = await openPeer(server, space, "b");
+        await join(a);
+        await join(b);
+        await publish(a, 1, "Ada");
+        b.messages.length = 0;
+        const other = await openSecondSession(a);
         expect(
           (await asSession(a, other, {
             type: "presence.leave",
             requestId: "other-leave",
-          })).error?.name,
-        ).toBe("PresenceError");
+          })).ok,
+        ).toEqual({});
         expect(b.messages).toEqual([]);
         expect(server.presenceMemberCount(space, ROOM)).toBe(2);
-        expect((await publish(a, 2, "Ada, still")).ok).toEqual({});
-        expect(b.messages).toHaveLength(1);
       } finally {
         await server.close();
       }
