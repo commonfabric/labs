@@ -1292,14 +1292,15 @@ export const consoleVmHealthProbes = (
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
  * its turns resolve from the options each is built with. On macOS it also
- * asks the VM that driver runs in, from the store `env` names.
+ * asks the VM that driver runs in, from the store `env` names. `env` is the
+ * process's environment unless given, since that is the one runsc runs with.
  * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
   modelOptions?: CreateHarnessPromptLoopOptions,
-  env?: Record<string, string | undefined>,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
 ): ConsoleHealth =>
@@ -1310,7 +1311,7 @@ export const createConsoleHealth = (
         consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
-    ...consoleVmHealthProbes(config, env ?? {}),
+    ...consoleVmHealthProbes(config, env),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,

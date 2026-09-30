@@ -983,6 +983,61 @@ describe("console/server", () => {
       }
     });
 
+    /**
+     * Runs `body` with the process's `CFC_VM_HOME` naming `store`, which is
+     * where a console built without an environment finds its VM, and restores
+     * the variable after.
+     */
+    const withProcessVmHome = async <T>(
+      store: string,
+      body: () => Promise<T>,
+    ): Promise<T> => {
+      const previous = Deno.env.get("CFC_VM_HOME");
+      Deno.env.set("CFC_VM_HOME", store);
+      try {
+        return await body();
+      } finally {
+        if (previous === undefined) Deno.env.delete("CFC_VM_HOME");
+        else Deno.env.set("CFC_VM_HOME", previous);
+      }
+    };
+
+    it("adds the VM row from the process's environment for a console built without one", async () => {
+      // runsc runs with the console process's environment, so that is where
+      // a console handed no environment looks for the store runsc uses.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const configured = await resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+
+        const vm = await withProcessVmHome(store, async () => {
+          const response = await new ConsoleServer(
+            configured,
+            () => server.service,
+          ).handle(getRequest("/api/health/detail"));
+          const { rows } = await response.json() as {
+            rows: readonly ConsoleHealthRow[];
+          };
+          return rows.find((row) => row.id === "sandbox.vm");
+        });
+
+        if (Deno.build.os === "darwin") {
+          expect(vm).toMatchObject({
+            label: "Sandbox VM",
+            value: "not checked",
+            detail: join(store, "daemon.sock"),
+          });
+        } else {
+          expect(vm).toBeUndefined();
+        }
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
     describe("consoleVmHealthProbes()", () => {
       /** A macOS store holding `config.json`, removed after `body`. */
       const withStore = async (body: (store: string) => Promise<void>) => {
@@ -1248,17 +1303,22 @@ describe("console/server", () => {
     });
 
     it("reports the runsc runtime's rows, and no Docker row, for a console on the runsc runtime", async () => {
-      const runscServer = new ConsoleServer(
-        await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
-        () => server.service,
-      );
+      // The process's environment names a store without a `config.json`, so
+      // that this host's own VM adds no row.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      const rows = await withProcessVmHome(store, async () => {
+        const runscServer = new ConsoleServer(
+          await resolveConsoleConfig(ARGS, RUNSC_ENV, "/console"),
+          () => server.service,
+        );
 
-      const response = await runscServer.handle(
-        getRequest("/api/health/detail"),
-      );
-      const { rows } = await response.json() as {
-        rows: readonly ConsoleHealthRow[];
-      };
+        const response = await runscServer.handle(
+          getRequest("/api/health/detail"),
+        );
+        return (await response.json() as {
+          rows: readonly ConsoleHealthRow[];
+        }).rows;
+      }).finally(() => Deno.remove(store, { recursive: true }));
 
       expect(
         rows.filter((row) => row.group === "sandbox").map((
