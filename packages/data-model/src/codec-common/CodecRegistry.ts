@@ -354,6 +354,11 @@ export class CodecRegistry<Encoded> {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Guards against registering a codec under a tag that is not one. A decoder
    * refuses a tag that is not syntactically a tag, per Section 9 of the formal

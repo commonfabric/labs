@@ -27,4 +27,9 @@ export abstract class BaseFabricSpecialObject {
       ? toCompactDebugString(this)
       : `[${this.constructor.name}]`;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

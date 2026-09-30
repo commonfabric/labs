@@ -43,4 +43,9 @@ export class SlotLimitError extends ProblematicStateError {
   rootScalar(name: string): RootScalar | undefined {
     return rootScalarOf(this.#jsonText, name);
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

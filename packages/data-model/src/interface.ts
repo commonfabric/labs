@@ -172,6 +172,11 @@ export abstract class FabricInstance extends BaseFabricSpecialObject {
    * that callers can invoke it through a `FabricInstance` reference.
    */
   abstract shallowClone(frozen: boolean): FabricInstance;
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }
 
 /**
@@ -215,6 +220,11 @@ export abstract class FabricPrimitive extends BaseFabricSpecialObject {
    * so that it returns the same name when read off the class's `prototype`.
    */
   abstract get schemaType(): FabricPrimitiveSchemaType;
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }
 
 //

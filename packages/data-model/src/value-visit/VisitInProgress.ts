@@ -1039,4 +1039,9 @@ export class VisitInProgress<
     throw new Error(`Shouldn't happen: Got result type \`${type}\`.`);
   }
   // deno-coverage-ignore-stop
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }
