@@ -1782,24 +1782,42 @@ export class PatternManager {
    * `#patternFromEvaluation` load path does. Reach for the bare
    * `Engine.compileAndEvaluateModules` only to inspect serialized/verified output
    * *without running* (engine unit tests), where stamping entry refs is unwanted.
+   *
+   * With `persistence`, the program's module closure is also written into
+   * `persistence.space`, as an ordinary compile into that space writes it,
+   * whenever CFC is enforcing. A pattern the program instantiates in a space
+   * of its own, with `inSpace()`, is replicated there from that closure, so a
+   * caller that runs the program in `persistence.space` passes it. A failed
+   * write fails the call.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
     options?: TypeScriptHarnessProcessOptions,
+    persistence?: { space: MemorySpace },
   ): Promise<EvaluateResult> {
     const patternCoverage = this.#patternCoverageFor(options);
     const effectiveOptions: TypeScriptHarnessProcessOptions = {
       ...options,
       patternCoverage,
     };
-    const byteCache = this.#runtime.moduleByteCache;
-    const runtimeVersion = byteCache === undefined
+    // The same condition `compileOrGetPattern()` persists under: the
+    // compiled-set integrity label is only written, and only trusted on read,
+    // under an enforcing mode.
+    const persistenceSpace = this.#runtime.cfcEnforcementMode === "disabled"
       ? undefined
-      : moduleByteCacheRuntimeVersion(
-        await getCompileCacheRuntimeVersion(),
-        { patternCoverage: patternCoverage !== undefined },
-      );
-    if (byteCache === undefined || runtimeVersion === undefined) {
+      : persistence?.space;
+    const byteCache = this.#runtime.moduleByteCache;
+    const runtimeVersion =
+      byteCache === undefined && persistenceSpace === undefined
+        ? undefined
+        : moduleByteCacheRuntimeVersion(
+          await getCompileCacheRuntimeVersion(),
+          { patternCoverage: patternCoverage !== undefined },
+        );
+    if (
+      persistenceSpace === undefined &&
+      (byteCache === undefined || runtimeVersion === undefined)
+    ) {
       const result = await this.#runtime.harness.compileAndEvaluateModules(
         program,
         effectiveOptions,
@@ -1808,13 +1826,35 @@ export class PatternManager {
       return result;
     }
 
-    const { id, graph, mainSpecifier, modules } = await this.#runtime.harness
-      .compileToRecordGraph(program, {
+    const { id, graph, mainSpecifier, entryIdentity, modules } = await this
+      .#runtime.harness.compileToRecordGraph(program, {
         ...effectiveOptions,
-        precompiledModulesFor: ({ identities }) =>
-          Promise.resolve(byteCache.getCompleteSet(runtimeVersion, identities)),
+        ...(byteCache === undefined || runtimeVersion === undefined ? {} : {
+          precompiledModulesFor: ({ identities }) =>
+            Promise.resolve(
+              byteCache.getCompleteSet(runtimeVersion, identities),
+            ),
+        }),
       });
-    byteCache.putAll(runtimeVersion, modules);
+    if (byteCache !== undefined && runtimeVersion !== undefined) {
+      byteCache.putAll(runtimeVersion, modules);
+    }
+    if (persistenceSpace !== undefined) {
+      if (runtimeVersion === undefined) {
+        await this.#persistSourceCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+        );
+      } else {
+        await this.#persistCompileCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+          { runtimeVersion },
+        );
+      }
+    }
     // Yield ahead of the synchronous SES evaluation (see compilePattern).
     await interleaveCompileYield();
     const result = this.#runtime.harness.evaluateRecordGraph(

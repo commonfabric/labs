@@ -108,6 +108,38 @@ describe("PatternManager.compileAndRegisterModules", () => {
     expect(runtime.patternManager.getArtifactEntryRef(entry)).toBeDefined();
   });
 
+  describe("given a persistence space", () => {
+    it("writes the program's source closure into that space", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored?.files.map((file) => file.name)).toEqual(["/main.tsx"]);
+      // The read above leaves a sync in flight, which teardown would cut off.
+      await runtime.storageManager.synced();
+    });
+
+    it("writes nothing into a space when none is given", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+  });
+
   it("reuses an injected module byte cache across runtimes and still registers", async () => {
     // The cf-test harness injects a process-wide module byte cache
     // (`RuntimeOptions.moduleByteCache`) so repeated pattern compiles across

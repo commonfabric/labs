@@ -1351,10 +1351,16 @@ export async function runTestPattern(
       // path does (`patternFromEvaluation`). Without registration, anonymous
       // map/filter/flatMap ops fall back to a defer-corrupted embedded graph and a
       // grandchild derived-internal output throws at bind time (CT-1811).
+      // The closure is written into the test's space, as deploying the test
+      // would write it, so that a pattern the test instantiates with
+      // `inSpace()` can be replicated from it into its own space. A
+      // compile-only run instantiates nothing.
       () =>
-        runtime.patternManager.compileAndRegisterModules(program, {
-          patternCoverage,
-        }),
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          { patternCoverage },
+          options.compileOnly ? undefined : { space },
+        ),
     );
     const { main } = evalResult;
 
