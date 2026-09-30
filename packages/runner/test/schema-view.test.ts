@@ -475,8 +475,7 @@ describe("schema-view", () => {
 
   describe("a `FabricInstance`", () => {
     // A lazy view hands one back as itself, as a schemaless read does: no view
-    // can stand in for an instance. An eager read of an instance at a typed
-    // position refuses it (`schema traversal`), so these read lazily only.
+    // can stand in for an instance. An eager read agrees.
 
     it("returns a stored `FabricError` at an object-typed position as itself", async () => {
       const read = await seeded(
@@ -489,12 +488,75 @@ describe("schema-view", () => {
       );
 
       const lazy = read(true);
+      const eager = read(false);
       try {
-        const err = (lazy.get() as { err: unknown }).err;
-        expect(err).toBeInstanceOf(FabricError);
-        expect((err as FabricError).message).toBe("boom");
+        for (const reader of [lazy, eager]) {
+          const err = (reader.get() as { err: unknown }).err;
+          expect(err).toBeInstanceOf(FabricError);
+          expect((err as FabricError).message).toBe("boom");
+        }
       } finally {
         await lazy.tx.commit();
+        await eager.tx.commit();
+      }
+    });
+
+    it("reads a stored `FabricError` at a position typed as a string as undefined", async () => {
+      // An instance answers to "object" alone, so a position typed as
+      // another kind mismatches, and an optional one reads as absent.
+      const read = await seeded(
+        "instance-wrong-type",
+        { err: new Error("boom") },
+        {
+          type: "object",
+          properties: { err: { type: "string" } },
+        } as const,
+      );
+
+      const lazy = read(true);
+      const eager = read(false);
+      try {
+        for (const reader of [lazy, eager]) {
+          expect((reader.get() as { err?: unknown }).err).toBeUndefined();
+        }
+      } finally {
+        await lazy.tx.commit();
+        await eager.tx.commit();
+      }
+    });
+
+    it("returns stored `FabricError`s in an array of structurally typed elements as themselves", async () => {
+      // An element typed `{ type: "object", properties: ... }` is read through
+      // the eager read's plain-schema plan, which hands one back as itself as
+      // the other arms do.
+      const read = await seeded(
+        "instance-elements",
+        { errs: [new Error("first"), new Error("second")] },
+        {
+          type: "object",
+          properties: {
+            errs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { message: { type: "string" } },
+              },
+            },
+          },
+        } as const,
+      );
+
+      const lazy = read(true);
+      const eager = read(false);
+      try {
+        for (const reader of [lazy, eager]) {
+          const errs = (reader.get() as { errs: unknown[] }).errs;
+          expect(errs[1]).toBeInstanceOf(FabricError);
+          expect((errs[1] as FabricError).message).toBe("second");
+        }
+      } finally {
+        await lazy.tx.commit();
+        await eager.tx.commit();
       }
     });
 
@@ -510,18 +572,29 @@ describe("schema-view", () => {
           } as const,
         );
 
-      const present = (await readWith(["message"]))(true);
-      const absent = (await readWith(["x"]))(true);
+      const present = await readWith(["message"]);
+      const absent = await readWith(["x"]);
+      const readers = [
+        present(true),
+        present(false),
+        absent(true),
+        absent(false),
+      ];
+      const [lazyPresent, eagerPresent, lazyAbsent, eagerAbsent] = readers;
       try {
-        expect((present.get() as { err: FabricError }).err.message).toBe(
-          "boom",
-        );
-        expect(() => (absent.get() as { err: unknown }).err).toThrow(
+        for (const reader of [lazyPresent, eagerPresent]) {
+          expect((reader.get() as { err: FabricError }).err.message).toBe(
+            "boom",
+          );
+        }
+        expect(() => (lazyAbsent.get() as { err: unknown }).err).toThrow(
           "opaque leaf is missing a required property",
         );
+        // An eager read refuses the whole value, as it does for any required
+        // property that fails.
+        expect(eagerAbsent.get()).toBeUndefined();
       } finally {
-        await present.tx.commit();
-        await absent.tx.commit();
+        for (const reader of readers) await reader.tx.commit();
       }
     });
   });

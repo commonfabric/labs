@@ -74,16 +74,21 @@ describe("fabric-instance-pattern-binding", () => {
     expect(message).toBe("boom");
   });
 
-  it("sets up a handler whose typed state holds a deep-frozen `FabricError`", async () => {
+  it("sets up and runs a handler whose typed state holds a deep-frozen `FabricError`", async () => {
     // The argument walks that collect a handler's writable and scheduler-read
     // links reach the instance at its typed position, and cannot descend it;
-    // one holding nothing but fabric data holds no link to collect.
+    // one holding nothing but fabric data holds no link to collect. When the
+    // handler runs, its typed state is read eagerly, and the read hands the
+    // instance back as itself.
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const seen: unknown[] = [];
     const root = pattern(() => ({
       note: handler(
         { type: "object", properties: {} },
         { type: "object", properties: { err: { type: "object" } } },
-        () => {},
+        (_event: unknown, state: { err: unknown }) => {
+          seen.push(state.err);
+        },
       )({
         // An object-typed slot is typed as a record, which an instance is
         // not, statically; at run time the slot admits one.
@@ -100,11 +105,16 @@ describe("fabric-instance-pattern-binding", () => {
       undefined,
       tx,
     );
-    runtime.run(tx, root, {}, rootCell);
+    const result = runtime.run(tx, root, {}, rootCell);
     expect((await tx.commit()).error).toBeUndefined();
+    await runtime.idle();
+    result.key("note").send({});
     await runtime.idle();
 
     expect(errors.map((error) => error.message)).toEqual([]);
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toBeInstanceOf(FabricError);
+    expect((seen[0] as FabricError).message).toBe("boom");
   });
 
   it("hands a `FabricError` a computation reads from a cell to a pattern it calls, as an instance", async () => {
