@@ -127,9 +127,7 @@ export async function runLoomPairingLogin(
   }
 
   await keyStore.set(ROOT_KEY, identity);
-  // A key-file credential is what quick unlock reads the KeyStore for, which
-  // is where this key now lives.
-  save(createKeyFileCredential(identity.did()));
+  rememberKeyFileCredential(identity, save);
   return "accepted";
 }
 
@@ -181,6 +179,26 @@ export async function handleLoomPairingLink(
     } catch {
       // The reporter itself failed; continue booting rather than hanging.
     }
+  }
+}
+
+/**
+ * Record a paired key as a key-file credential, which is what quick unlock
+ * reads the KeyStore for, and where the key now lives.
+ *
+ * Best-effort: the key is already stored, and it is what signs the person in.
+ * A browser that refuses the write (storage full, or blocked) costs only the
+ * quick-unlock button, where a thrown error would report a pairing that
+ * succeeded as a failure.
+ */
+export function rememberKeyFileCredential(
+  identity: Identity,
+  save: (credential: StoredCredential) => void = saveCredential,
+): void {
+  try {
+    save(createKeyFileCredential(identity.did()));
+  } catch (error) {
+    console.warn("[loom-pairing] could not record the credential", error);
   }
 }
 

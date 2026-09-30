@@ -15,6 +15,7 @@
  * once, and the Loom voids it after five wrong tries.
  */
 
+import { urlToAppView } from "@commonfabric/navigation";
 import { isLoopbackHostname } from "@commonfabric/utils/loopback";
 
 /** The Loom a code is redeemed against when the link or the form names none. */
@@ -41,6 +42,9 @@ const REDEEM_PATH = "/identity-pairing/redeem";
  * the outstanding offer and voids it after five.
  */
 export function normalizePairingCode(text: string): string | null {
+  // ASCII only, before any case folding: `toUpperCase()` maps some other
+  // letters onto the alphabet, `ſ` to `S` and `ı` to `I`.
+  if (!/^[0-9A-Za-z\s\-_.]*$/.test(text)) return null;
   const folded = text.replace(/[\s\-_.]+/g, "").toUpperCase()
     .replaceAll("O", "0").replaceAll("I", "1").replaceAll("L", "1");
   if (folded.length !== CODE_LENGTH) return null;
@@ -134,11 +138,19 @@ export function consumeLoomPairingFragment(): LoomPairingFragment {
   const parsed = parseLoomPairingFragment(location.hash);
 
   // An absolute URL, for the reason `consumeDeviceLinkFragment()` gives: a
-  // path beginning `//` would otherwise resolve as protocol-relative.
+  // path beginning `//` would otherwise resolve as protocol-relative. A link
+  // opened on a loaded page is a fragment navigation, whose new entry holds no
+  // state, and `Navigation` ignores an entry without one when Back or Forward
+  // returns to it. So the scrubbed entry is given the view its address names,
+  // as `Navigation` does for the entry it starts on.
   try {
     const scrubbed = new URL(location.href);
     scrubbed.hash = "";
-    globalThis.history?.replaceState(null, "", scrubbed.href);
+    globalThis.history?.replaceState(
+      globalThis.history.state ?? urlToAppView(scrubbed),
+      "",
+      scrubbed.href,
+    );
   } catch {
     // An unsupported history leaves the code in the address bar, which is no
     // reason to abandon the pairing.
@@ -154,8 +166,9 @@ export type LoomPairingFailure =
   /** The Loom refused the code: wrong, expired, spent, or voided. */
   | "refused"
   /**
-   * No answer the page could read. The Loom is not running at that URL, or it
-   * is a Loom that does not admit a redeem from a page on another origin.
+   * No Loom that can pair this page at that URL: nothing answers there, or a
+   * Loom too old to pair a browser does, one without the redeem route or
+   * without admitting a page on another origin to it.
    */
   | "unreachable"
   /** The Loom answered, but not with a key this shell can use. */
@@ -228,6 +241,13 @@ export async function redeemPairingCode(
     );
   }
 
+  if (response.status === 404) {
+    throw new LoomPairingError(
+      "unreachable",
+      `Loom at ${request.loomUrl} does not offer pairing. Update Loom and ` +
+        "try again.",
+    );
+  }
   const body = await readJson(response);
   if (response.status === 403) {
     const hint = typeof body?.hint === "string" ? body.hint : null;

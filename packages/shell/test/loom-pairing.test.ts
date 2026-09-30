@@ -2,12 +2,17 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { urlToAppView } from "@commonfabric/navigation";
 
 import type { StoredCredential } from "../src/lib/credentials.ts";
 import {
+  confirmWithUser,
+  describeThisDevice,
   handleLoomPairingLink,
   type LoomPairingQuestion,
   pairWithLoom,
+  rememberKeyFileCredential,
+  reportLoomPairingFailure,
   runLoomPairingLogin,
 } from "../src/lib/loom-pairing-login.ts";
 import {
@@ -76,6 +81,14 @@ function templateText(value: unknown): string {
     .map(templateText).join("");
 }
 
+/** The functions a Lit template holds, its event handlers, in order. */
+function functionsOf(value: unknown): Array<() => void> {
+  if (typeof value === "function") return [value as () => void];
+  if (value == null || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap(functionsOf);
+  return ((value as { values?: unknown[] }).values ?? []).flatMap(functionsOf);
+}
+
 /** In-memory stand-in for the IndexedDB-backed KeyStore. */
 function fakeKeyStore(initial?: Identity) {
   const entries = new Map<string, Identity>();
@@ -91,6 +104,75 @@ function fakeKeyStore(initial?: Identity) {
         },
         // deno-lint-ignore no-explicit-any
       } as any),
+  };
+}
+
+/**
+ * Replaces `globalThis` properties for the length of `body`, restoring each
+ * afterwards.
+ */
+function withGlobals<T>(values: Record<string, unknown>, body: () => T): T {
+  const saved = Object.keys(values).map((name) =>
+    [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+  );
+  for (const [name, value] of Object.entries(values)) {
+    Object.defineProperty(globalThis, name, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  }
+  const restore = () => {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  };
+  try {
+    const result = body();
+    if (result instanceof Promise) {
+      return result.finally(restore) as T;
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
+/** A stand-in for the pairing view, which the dialog functions drive. */
+class FakePairingView extends EventTarget {
+  question: LoomPairingQuestion | null = null;
+  failure: string | null = null;
+  removed = false;
+
+  remove() {
+    this.removed = true;
+  }
+
+  answer(accepted: boolean) {
+    this.dispatchEvent(
+      new CustomEvent("loom-pairing-result", { detail: { accepted } }),
+    );
+  }
+}
+
+/** A `document` whose views are `FakePairingView`s, and the views it made. */
+function fakeDocument() {
+  const views: FakePairingView[] = [];
+  const inserted: FakePairingView[] = [];
+  return {
+    views,
+    inserted,
+    document: {
+      createElement: () => {
+        const view = new FakePairingView();
+        views.push(view);
+        return view;
+      },
+      body: { appendChild: (view: FakePairingView) => inserted.push(view) },
+    },
   };
 }
 
@@ -114,6 +196,11 @@ describe("loom-pairing", () => {
     it("returns `null` for a character outside the alphabet", () => {
       expect(normalizePairingCode("7KQ2M-XH4RU")).toBeNull();
       expect(normalizePairingCode("7KQ2M-XH4R!")).toBeNull();
+    });
+
+    it("returns `null` for a letter that only uppercases into the alphabet", () => {
+      expect(normalizePairingCode("7KQ2M-XH4Rſ")).toBeNull();
+      expect(normalizePairingCode("7KQ2M-XH4Rı")).toBeNull();
     });
   });
 
@@ -198,9 +285,14 @@ describe("loom-pairing", () => {
   });
 
   describe("consumeLoomPairingFragment()", () => {
-    function withLocation(hash: string, framed = false) {
+    function withLocation(
+      hash: string,
+      framed = false,
+      history: { state?: unknown; throws?: boolean } = {},
+    ) {
       const href = "http://localhost:8000/home/piece" + hash;
       const replaced: string[] = [];
+      const states: unknown[] = [];
       const saved = ["location", "history", "top", "self"].map((
         name,
       ) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
@@ -212,8 +304,12 @@ describe("loom-pairing", () => {
         });
       set("location", { hash, href });
       set("history", {
-        replaceState: (_state: unknown, _title: string, url: string) =>
-          replaced.push(url),
+        state: history.state ?? null,
+        replaceState: (state: unknown, _title: string, url: string) => {
+          if (history.throws) throw new DOMException("refused");
+          states.push(state);
+          replaced.push(url);
+        },
       });
       set("self", globalThis);
       set("top", framed ? {} : globalThis);
@@ -223,8 +319,43 @@ describe("loom-pairing", () => {
           else Reflect.deleteProperty(globalThis, name);
         }
       };
-      return { replaced, restore };
+      return { replaced, states, restore };
     }
+
+    it("gives a scrubbed entry without state the view its address names", () => {
+      const ctx = withLocation("#pair=7KQ2M-XH4RD");
+      try {
+        consumeLoomPairingFragment();
+        expect(ctx.states).toEqual([
+          urlToAppView(new URL("http://localhost:8000/home/piece")),
+        ]);
+      } finally {
+        ctx.restore();
+      }
+    });
+
+    it("keeps the state of a scrubbed entry that has one", () => {
+      const state = { spaceName: "home" };
+      const ctx = withLocation("#pair=7KQ2M-XH4RD", false, { state });
+      try {
+        consumeLoomPairingFragment();
+        expect(ctx.states).toEqual([state]);
+      } finally {
+        ctx.restore();
+      }
+    });
+
+    it("returns the request when the history refuses the scrub", () => {
+      const ctx = withLocation("#pair=7KQ2M-XH4RD", false, { throws: true });
+      try {
+        expect(consumeLoomPairingFragment()).toEqual({
+          kind: "request",
+          request: { code: "7KQ2MXH4RD", loomUrl: DEFAULT_LOOM_URL },
+        });
+      } finally {
+        ctx.restore();
+      }
+    });
 
     it("returns the request and scrubs the fragment, keeping the path", () => {
       const ctx = withLocation("#pair=7KQ2M-XH4RD");
@@ -345,6 +476,16 @@ describe("loom-pairing", () => {
       expect(error.message).toContain("http://localhost:9900");
     });
 
+    it("throws `unreachable` for a Loom without the redeem route", async () => {
+      const { fetchImpl } = fakeFetch(() => new Response("", { status: 404 }));
+      const error = await redeemPairingCode(REQUEST, DEVICE, fetchImpl).then(
+        () => null,
+        (e) => e,
+      );
+      expect(error.reason).toBe("unreachable");
+      expect(error.message).toContain("does not offer pairing");
+    });
+
     it("throws `invalid-response` on another error status", async () => {
       const { fetchImpl } = fakeFetch(() => json(500, { error: "boom" }));
       const error = await redeemPairingCode(REQUEST, DEVICE, fetchImpl).then(
@@ -444,6 +585,23 @@ describe("loom-pairing", () => {
         expect(ctx.saved).toEqual([{ id: incoming.did(), method: "keyfile" }]);
       });
 
+      it("returns `accepted` when the credential cannot be saved", async () => {
+        const incoming = await makeIdentity(1);
+        const keyStore = fakeKeyStore();
+        const outcome = await withGlobals({
+          console: { ...console, warn: () => {} },
+        }, () =>
+          runLoomPairingLogin(REQUEST, {
+            openKeyStore: keyStore.open,
+            pair: () => Promise.resolve(incoming),
+            saveCredential: () => {
+              throw new DOMException("quota", "QuotaExceededError");
+            },
+          }));
+        expect(outcome).toBe("accepted");
+        expect(keyStore.entries.get("$ROOT_KEY")).toBe(incoming);
+      });
+
       it("asks before redeeming, and redeems nothing on cancel", async () => {
         const existing = await makeIdentity(2);
         const ctx = run({ existing, incoming: await makeIdentity(1) });
@@ -526,6 +684,84 @@ describe("loom-pairing", () => {
       });
     });
   });
+  describe("rememberKeyFileCredential()", () => {
+    it("saves a key-file credential for the identity", async () => {
+      const identity = await makeIdentity(1);
+      const saved: StoredCredential[] = [];
+      rememberKeyFileCredential(identity, (c) => saved.push(c));
+      expect(saved).toEqual([{ id: identity.did(), method: "keyfile" }]);
+    });
+
+    it("returns normally when the browser refuses the write", async () => {
+      const identity = await makeIdentity(1);
+      const warnings: unknown[] = [];
+      withGlobals({
+        console: {
+          ...console,
+          warn: (...args: unknown[]) => warnings.push(args),
+        },
+      }, () =>
+        rememberKeyFileCredential(identity, () => {
+          throw new DOMException("quota", "QuotaExceededError");
+        }));
+      expect(warnings.length).toBe(1);
+    });
+  });
+
+  describe("describeThisDevice()", () => {
+    it("names the shell's host", () => {
+      expect(
+        withGlobals(
+          { location: { host: "localhost:8000" } },
+          describeThisDevice,
+        ),
+      ).toEqual({
+        name: "Common Fabric shell at localhost:8000",
+        platform: "web",
+      });
+    });
+
+    it("returns a generic name without a location", () => {
+      expect(withGlobals({ location: undefined }, describeThisDevice))
+        .toEqual({ name: "Common Fabric shell", platform: "web" });
+    });
+  });
+
+  describe("confirmWithUser()", () => {
+    it("shows the question and returns the person's answer", async () => {
+      const question = {
+        loomUrl: REQUEST.loomUrl,
+        currentDid: "did:key:z6Mkcurrent",
+        incomingDid: null,
+      };
+      for (const accepted of [true, false]) {
+        const fake = fakeDocument();
+        const answer = await withGlobals({ document: fake.document }, () => {
+          const pending = confirmWithUser(question);
+          expect(fake.inserted).toEqual(fake.views);
+          expect(fake.views[0].question).toBe(question);
+          fake.views[0].answer(accepted);
+          return pending;
+        });
+        expect(answer).toBe(accepted);
+        expect(fake.views[0].removed).toBe(true);
+      }
+    });
+  });
+
+  describe("reportLoomPairingFailure()", () => {
+    it("shows the message until it is dismissed, then removes the view", async () => {
+      const fake = fakeDocument();
+      await withGlobals({ document: fake.document }, () => {
+        const pending = reportLoomPairingFailure("Make a new code.");
+        expect(fake.views[0].failure).toBe("Make a new code.");
+        fake.views[0].answer(false);
+        return pending;
+      });
+      expect(fake.views[0].removed).toBe(true);
+    });
+  });
+
   describe("handleLoomPairingLink()", () => {
     const LINK = { kind: "request", request: REQUEST } as const;
 
@@ -651,6 +887,65 @@ describe("loom-pairing", () => {
       expect(text).toContain(REQUEST.loomUrl);
       expect(text).not.toContain("not on this computer");
       expect(text).not.toContain("Would become");
+    });
+
+    it("renders a failure with only a dismiss button, which answers no", () => {
+      const { view, answers } = makeView({ failure: "Make a new code." });
+      const rendered = view.render();
+      expect(templateText(rendered)).toContain("Make a new code.");
+      const handlers = functionsOf(rendered);
+      expect(handlers.length).toBe(1);
+      handlers[0]();
+      expect(answers).toEqual([false]);
+    });
+
+    it("renders nothing without a question or a failure", () => {
+      expect(templateText(makeView({}).view.render())).toBe("");
+    });
+
+    it("wires the dialog's cancel to no, and clears its guard timer on disconnect", () => {
+      const { view, answers } = makeView({
+        question: {
+          loomUrl: REQUEST.loomUrl,
+          currentDid: null,
+          incomingDid: "did:key:z6Mkincoming",
+        },
+      });
+      let cancel: ((event: Event) => void) | undefined;
+      let focused = false;
+      const dialog = {
+        showModal: () => {},
+        setAttribute: () => {},
+        addEventListener: (type: string, listener: (e: Event) => void) => {
+          if (type === "cancel") cancel = listener;
+        },
+      };
+      Object.defineProperty(view, "renderRoot", {
+        value: {
+          querySelector: (selector: string) =>
+            selector === "dialog" ? dialog : {
+              focus: () => (focused = true),
+            },
+        },
+        configurable: true,
+      });
+      const cleared: unknown[] = [];
+      let release: (() => void) | undefined;
+      withGlobals({
+        setTimeout: (callback: () => void) => {
+          release = callback;
+          return 7;
+        },
+        clearTimeout: (id: unknown) => cleared.push(id),
+      }, () => {
+        view.firstUpdated();
+        release?.();
+        cancel?.(new Event("cancel"));
+        view.disconnectedCallback();
+      });
+      expect(answers).toEqual([false]);
+      expect(focused).toBe(true);
+      expect(cleared).toEqual([7]);
     });
 
     it("accepts once the guard has released", () => {

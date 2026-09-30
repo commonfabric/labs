@@ -18,7 +18,10 @@ import {
   saveCredential,
   type StoredCredential,
 } from "../lib/credentials.ts";
-import { pairWithLoom } from "../lib/loom-pairing-login.ts";
+import {
+  pairWithLoom,
+  rememberKeyFileCredential,
+} from "../lib/loom-pairing-login.ts";
 import {
   DEFAULT_LOOM_URL,
   normalizeLoomUrl,
@@ -486,11 +489,8 @@ export class XLoginView extends BaseView {
         await keyStore.set(ROOT_KEY, identity);
       }
 
-      // Quick unlock reads a key-file credential's key from the KeyStore,
-      // which is where the paired key now lives.
-      const credential = createKeyFileCredential(identity.did());
-      saveCredential(credential);
-      this.storedCredential = credential;
+      rememberKeyFileCredential(identity);
+      this.storedCredential = getStoredCredential();
 
       this.command({ type: "set-identity", identity });
     } catch (e) {
@@ -848,13 +848,13 @@ export class XLoginView extends BaseView {
     `;
   }
 
-  #handleLoomPairingSubmit = (e: Event) => {
+  #handleLoomPairingSubmit = async (e: Event) => {
     e.preventDefault();
-    const formData = new FormData(e.target as HTMLFormElement);
-    const code = normalizePairingCode(
-      String(formData.get("pairing-code") ?? ""),
-    );
-    const loomUrl = normalizeLoomUrl(String(formData.get("loom-url") ?? ""));
+    const fields = (e.target as HTMLFormElement).elements;
+    const field = (name: string) =>
+      (fields.namedItem(name) as HTMLInputElement | null)?.value ?? "";
+    const code = normalizePairingCode(field("pairing-code"));
+    const loomUrl = normalizeLoomUrl(field("loom-url"));
     if (!code) {
       this.pairingError =
         "A pairing code is ten letters and digits, like 7KQ2M-XH4RD.";
@@ -864,7 +864,7 @@ export class XLoginView extends BaseView {
       this.pairingError = `Enter Loom's address, like ${DEFAULT_LOOM_URL}.`;
       return;
     }
-    void this.#handleLoomPairing(code, loomUrl);
+    await this.#handleLoomPairing(code, loomUrl);
   };
 
   #renderMnemonicDisplay() {

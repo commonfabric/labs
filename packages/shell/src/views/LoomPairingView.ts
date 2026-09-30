@@ -6,7 +6,7 @@ import {
   activateModalDialog,
   pairingDialogStyles,
   TAP_THROUGH_GUARD_MS,
-} from "./DeviceLinkView.ts";
+} from "./pairing-dialog.ts";
 
 /**
  * The dialog a `#pair=` link raises: whether to sign in as the identity a Loom
