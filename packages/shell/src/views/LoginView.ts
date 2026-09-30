@@ -18,10 +18,27 @@ import {
   saveCredential,
   type StoredCredential,
 } from "../lib/credentials.ts";
+import {
+  pairWithLoom,
+  rememberKeyFileCredential,
+} from "../lib/loom-pairing-login.ts";
+import {
+  DEFAULT_LOOM_URL,
+  normalizeLoomUrl,
+  normalizePairingCode,
+} from "../lib/loom-pairing.ts";
 import { ROOT_KEY } from "../lib/root-key.ts";
 import "../components/VBox.ts";
 
 type AuthFlow = "register" | "login";
+
+/**
+ * Signing in with a code from a Loom. A login method, but not a stored
+ * credential: the key it brings is stored as a key-file credential.
+ */
+const LOOM_PAIRING = "loom-pairing" as const;
+
+type LoginMethod = AuthMethod | typeof LOOM_PAIRING;
 
 // Internal auth events for LoginView
 type AuthEventType =
@@ -200,7 +217,7 @@ export class XLoginView extends BaseView {
   @state()
   private accessor flow: AuthFlow | null = null;
   @state()
-  private accessor method: AuthMethod | null = null;
+  private accessor method: LoginMethod | null = null;
   @state()
   private accessor error: string | null = null;
   @state()
@@ -214,6 +231,9 @@ export class XLoginView extends BaseView {
     getStoredCredential();
   @state()
   private accessor copied = false;
+  /** Why the last pairing attempt failed, shown beside the pairing form. */
+  @state()
+  private accessor pairingError: string | null = null;
   @property({ attribute: false })
   private accessor keyStore: KeyStore | undefined = undefined;
 
@@ -457,6 +477,32 @@ export class XLoginView extends BaseView {
     }
   }
 
+  async #handleLoomPairing(code: string, loomUrl: string) {
+    this.isProcessing = true;
+    this.pairingError = null;
+
+    try {
+      const identity = await pairWithLoom({ code, loomUrl });
+
+      const keyStore = this.#getKeyStore();
+      if (keyStore) {
+        await keyStore.set(ROOT_KEY, identity);
+      }
+
+      rememberKeyFileCredential(identity);
+      this.storedCredential = getStoredCredential();
+
+      this.command({ type: "set-identity", identity });
+    } catch (e) {
+      console.error("[LoginView] Loom pairing error:", e);
+      this.pairingError = e instanceof Error
+        ? e.message
+        : "Could not pair with Loom";
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
   #handleClearStoredCredential() {
     clearStoredCredential();
     this.storedCredential = null;
@@ -560,6 +606,13 @@ export class XLoginView extends BaseView {
           `
           : null}
 
+        <x-button test-id="pair-with-loom" @click="${() => {
+          this.flow = "login";
+          this.method = LOOM_PAIRING;
+        }}">
+          🔗 Pair with Loom
+        </x-button>
+
         <x-button test-id="register-new-key" @click="${() =>
           this.flow = "register"}">
           ➕ Register New Key
@@ -614,16 +667,23 @@ export class XLoginView extends BaseView {
   }
 
   #renderMethodSelection() {
+    // Pairing signs in as an identity that already exists, so it is offered
+    // for login and not for registration.
+    const methods: LoginMethod[] = this.flow === "login"
+      ? [...this.#availableMethods, LOOM_PAIRING]
+      : this.#availableMethods;
     return html`
       <h2>${this.flow === "login" ? "Login with" : "Register with"}</h2>
       <div class="method-list">
-        ${this.#availableMethods.map((method) =>
+        ${methods.map((method) =>
           html`
             <x-button
               test-id="${method === AUTH_METHOD_PASSKEY
                 ? "use-passkey"
                 : method === AUTH_METHOD_PASSPHRASE
                 ? "use-passphrase"
+                : method === LOOM_PAIRING
+                ? "pair-with-loom"
                 : "import-cli-key"}"
               @click="${() => this.#handleMethodSelect(method)}"
             >
@@ -631,6 +691,8 @@ export class XLoginView extends BaseView {
                 ? "🔑 Use Passkey"
                 : method === AUTH_METHOD_PASSPHRASE
                 ? "📝 Use Passphrase"
+                : method === LOOM_PAIRING
+                ? "🔗 Pair with Loom"
                 : "📁 Import CLI Key"}
             </x-button>
           `
@@ -645,9 +707,9 @@ export class XLoginView extends BaseView {
     `;
   }
 
-  #handleMethodSelect(method: AuthMethod) {
+  #handleMethodSelect(method: LoginMethod) {
     this.method = method;
-    if (method === AUTH_METHOD_KEYFILE) {
+    if (method === AUTH_METHOD_KEYFILE || method === LOOM_PAIRING) {
       return;
     }
     if (this.flow === "register" && method === AUTH_METHOD_PASSKEY) {
@@ -743,6 +805,68 @@ export class XLoginView extends BaseView {
     void this.#handleKeyFileImport(file);
   };
 
+  #renderLoomPairing() {
+    return html`
+      <form @submit="${this.#handleLoomPairingSubmit}">
+        ${this.pairingError
+          ? html`
+            <div class="error">${this.pairingError}</div>
+          `
+          : null}
+        <input
+          type="text"
+          name="pairing-code"
+          placeholder="XXXXX-XXXXX"
+          autocomplete="one-time-code"
+          autocapitalize="characters"
+          spellcheck="false"
+          required
+        />
+        <input
+          type="url"
+          name="loom-url"
+          value="${DEFAULT_LOOM_URL}"
+          placeholder="${DEFAULT_LOOM_URL}"
+          required
+        />
+        <p class="info-text">
+          On the Mac that runs Loom, open Weaver Settings &gt; Pair a device (or
+          run <code>loom identity pair</code>) and enter the code within ten
+          minutes. This browser then holds your Loom identity in its IndexedDB.
+        </p>
+        <x-button type="submit" variant="primary">
+          🔗 Pair
+        </x-button>
+      </form>
+      <x-button @click="${() => {
+        this.flow = null;
+        this.method = null;
+        this.pairingError = null;
+      }}">
+        ← Back
+      </x-button>
+    `;
+  }
+
+  #handleLoomPairingSubmit = async (e: Event) => {
+    e.preventDefault();
+    const fields = (e.target as HTMLFormElement).elements;
+    const field = (name: string) =>
+      (fields.namedItem(name) as HTMLInputElement | null)?.value ?? "";
+    const code = normalizePairingCode(field("pairing-code"));
+    const loomUrl = normalizeLoomUrl(field("loom-url"));
+    if (!code) {
+      this.pairingError =
+        "A pairing code is ten letters and digits, like 7KQ2M-XH4RD.";
+      return;
+    }
+    if (!loomUrl) {
+      this.pairingError = `Enter Loom's address, like ${DEFAULT_LOOM_URL}.`;
+      return;
+    }
+    await this.#handleLoomPairing(code, loomUrl);
+  };
+
   #renderMnemonicDisplay() {
     return html`
       <div class="message success">
@@ -816,7 +940,9 @@ export class XLoginView extends BaseView {
       : this.isProcessing
       ? html`
         <div class="loading">
-          <p>Please follow the browser's prompts to continue...</p>
+          <p>${this.method === LOOM_PAIRING
+            ? "Pairing with Loom..."
+            : "Please follow the browser's prompts to continue..."}</p>
         </div>
       `
       : this.mnemonic
@@ -831,6 +957,8 @@ export class XLoginView extends BaseView {
       ? this.#renderPassphraseAuth()
       : this.method === AUTH_METHOD_KEYFILE
       ? this.#renderKeyFileImport()
+      : this.method === LOOM_PAIRING
+      ? this.#renderLoomPairing()
       : this.method === AUTH_METHOD_PASSKEY
       ? html`
         <div class="loading">

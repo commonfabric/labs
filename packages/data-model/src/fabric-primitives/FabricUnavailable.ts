@@ -19,6 +19,7 @@ import type { MustBeTrue, Same } from "@commonfabric/utils/types";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -140,7 +141,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
     errorKind: UnavailableErrorKind | null = null,
     errorMessage: string | null = null,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricUnavailable);
 
     if (
       (typeof reason !== "string") ||
@@ -279,6 +280,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   /**
    * The message `errorMessage` returns for each kind when none was stored.

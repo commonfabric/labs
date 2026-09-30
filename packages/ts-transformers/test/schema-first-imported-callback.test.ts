@@ -1,9 +1,12 @@
-import { describe, it } from "@std/testing/bdd";
+import { assert } from "@std/assert";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
-import { transformFiles } from "./utils.ts";
+import ts from "typescript";
+
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
-import { callsNamed, parseModule } from "./transformed-ast.ts";
+import { callsNamed, literalToValue, parseModule } from "./transformed-ast.ts";
+import { transformFiles } from "./utils.ts";
 
 const HELPERS = `export interface Ping {
   word: string;
@@ -75,6 +78,44 @@ describe("schema-first-imported-callback", () => {
     expect(call.arguments.length).toBe(4);
     expect(call.arguments[2].getText(module)).toBe("echoImported");
     expect(call.arguments[3].getText(module)).toContain("resultSchema");
+  });
+
+  it("merges a declared result into an existing runtime options slot", async () => {
+    // The lowered runtime form can already carry options, although the public
+    // handler overloads expose the result through type arguments alone.
+    const main = MAIN.replace(
+      "  echoImported,\n);",
+      '  echoImported,\n  { resultSchema: { type: "number" } },\n);',
+    );
+    const output = await transformFiles({
+      "/main.tsx": main,
+      "/helpers.ts": HELPERS,
+    }, { types: COMMONFABRIC_TYPES });
+    const module = parseModule(output["/main.tsx"]);
+    const calls = callsNamed(module, "handler");
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call.arguments).toHaveLength(4);
+    const callback = call.arguments[2];
+    assert(ts.isIdentifier(callback));
+    expect(callback.text).toBe("echoImported");
+
+    const options = call.arguments[3];
+    assert(ts.isObjectLiteralExpression(options));
+    expect(options.properties).toHaveLength(2);
+    const [preserved, result] = options.properties;
+    assert(ts.isSpreadAssignment(preserved));
+    expect(literalToValue(preserved.expression)).toEqual({
+      resultSchema: { type: "number" },
+    });
+    assert(ts.isPropertyAssignment(result));
+    assert(ts.isIdentifier(result.name));
+    expect(result.name.text).toBe("resultSchema");
+    expect(literalToValue(result.initializer)).toEqual({
+      type: "object",
+      properties: { echoed: { type: "string" } },
+      required: ["echoed"],
+    });
   });
 
   it("recognizes an imported callback whose type degraded to `any`", async () => {

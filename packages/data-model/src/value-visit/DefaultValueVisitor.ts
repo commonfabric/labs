@@ -2,6 +2,7 @@ import { type Primitive } from "@commonfabric/utils/types";
 
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -98,6 +99,19 @@ export abstract class DefaultValueVisitor<
     value: FabricBytes,
   ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricBytes);
+  }
+
+  /**
+   * Visits a value of type `FabricDurationDay`. If not overridden, this calls
+   * `visitFabricPrimitiveValue()`.
+   */
+  visitFabricDurationDay(
+    value: FabricDurationDay,
+  ): VisitResult<PlusType, ResultType> {
+    return this.visitFabricPrimitiveValue(
+      value,
+      VALUE_TAGS.FabricDurationDay,
+    );
   }
 
   /**
@@ -434,6 +448,10 @@ export abstract class DefaultValueVisitor<
         return this.visitFabricBytes(value as FabricBytes);
       }
 
+      case VALUE_TAGS.FabricDurationDay: {
+        return this.visitFabricDurationDay(value as FabricDurationDay);
+      }
+
       case VALUE_TAGS.FabricDurationNsec: {
         return this.visitFabricDurationNsec(value as FabricDurationNsec);
       }
@@ -544,5 +562,10 @@ export abstract class DefaultValueVisitor<
     _value: FabricValuePlus<PlusType>,
   ): VisitingEntryResult<PlusType, ResultType> {
     return undefined;
+  }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
   }
 }

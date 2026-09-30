@@ -4,8 +4,17 @@ import {
   entityRefToString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
-import { homeSchema } from "@commonfabric/home-schemas";
-import { createSession, Identity, type Session } from "@commonfabric/identity";
+import {
+  homeSchema,
+  siteTableCause,
+  siteTableSchema,
+} from "@commonfabric/home-schemas";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+  type Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
@@ -56,6 +65,7 @@ import {
   setPatternRepository,
   setPatternSource,
   type SpaceCellContents,
+  SpaceNotFoundError,
 } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -177,6 +187,9 @@ const readEnv: EnvReader = (key) =>
 
 export interface PiecesControllerOptions {
   deferSpaceCellSync?: boolean;
+
+  /** The legacy space name the space was opened by, if it was. */
+  spaceName?: string;
 }
 
 export interface CreatePieceOptions {
@@ -195,6 +208,8 @@ export class PiecesController<T = unknown> {
 
   #space: MemorySpace;
 
+  #spaceName: string | undefined;
+
   #spaceCell: Cell<SpaceCellContents>;
 
   #diagnosticConsole: RuntimeConsole;
@@ -212,9 +227,12 @@ export class PiecesController<T = unknown> {
     this.#session = session;
     this.#diagnosticConsole = new RuntimeConsole(runtime.harness);
     this.#space = this.#session.space;
+    this.#spaceName = options.spaceName;
 
-    // Use the space DID as the cause - it's derived from the space name
-    // and consistently available everywhere
+    // A Home space's cell is the runtime's Home space cell. Any other space's
+    // cell is keyed by the space's DID, which every client of the space
+    // holds: the random key's DID for a space made by `createSpace`, or the
+    // DID a legacy space's name derives.
     const isHomeSpace = this.#space === this.runtime.userIdentityDID;
     this.#spaceCell = isHomeSpace
       ? this.runtime.getHomeSpaceCell()
@@ -262,7 +280,10 @@ export class PiecesController<T = unknown> {
       apiUrl: URL | string;
       identity: Identity;
 
-      /** The space to open, as a `did:key:` DID or as a space name. */
+      /**
+       * The space to open, as a `did:key:` DID or as a legacy space name,
+       * which resolves to a DID without creating anything.
+       */
       space: string;
 
       /**
@@ -334,15 +355,13 @@ export class PiecesController<T = unknown> {
   ): Promise<PiecesController> {
     const api = new URL(apiUrl);
     setLLMUrl(api.toString());
-    const session = await createSession(
-      isDID(space)
-        ? { identity, spaceDid: space }
-        : { identity, spaceName: space },
-    );
+    const session = createSession({
+      identity,
+      spaceDid: isDID(space) ? space : await legacySpaceDid(space),
+    });
     const storageManager = StorageManager.open({
       as: session.as,
       memoryHost: api,
-      spaceIdentity: session.spaceIdentity,
     });
     // Shared first-party posture for client runtimes against a deployed API
     // (CT-1814); the CFC pin this site previously restated lives in the
@@ -390,6 +409,7 @@ export class PiecesController<T = unknown> {
       }
       const pieces = new PiecesController(session, runtime, {
         deferSpaceCellSync,
+        ...(isDID(space) ? {} : { spaceName: space }),
       });
       // Opening the space's session is what turns a permanent denial into an
       // error: the per-space status below is written while the session opens,
@@ -416,7 +436,7 @@ export class PiecesController<T = unknown> {
   }
 
   getSpaceName(): string | undefined {
-    return this.#session.spaceName;
+    return this.#spaceName;
   }
 
   async synced(): Promise<void> {
@@ -2030,6 +2050,16 @@ export class PiecesController<T = unknown> {
       );
     }
 
+    // Determine which pattern to use based on space type
+    const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
+
+    // A Home space comes into being on its user's first open. Any other space
+    // is created on purpose, and one that was not is not conjured by opening,
+    // so this is settled before anything touches the space.
+    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+      throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
+    }
+
     // Stop and unlink the existing default pattern first (before any operations that might fail)
     // We need to stop it to prevent resource leaks or duplicate behavior from the old pattern
     // Access the space cell directly to get the pattern reference without running it
@@ -2041,9 +2071,6 @@ export class PiecesController<T = unknown> {
       this.runtime.runner.stop(defaultPatternRef);
     }
     await this.unlinkDefaultPattern();
-
-    // Determine which pattern to use based on space type
-    const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
 
     let patternConfig: { name: string; source: string; cause: string };
     let pattern;
@@ -2148,6 +2175,98 @@ export class PiecesController<T = unknown> {
   }
 
   /**
+   * Creates a space owned by this controller's identity, records it in the
+   * identity's Home space list under `label` and in its site table as served by
+   * this runtime's host, and returns its DID. This controller must be over the
+   * identity's Home space, where both records live.
+   *
+   * @throws If this controller is over any other space, or if the memory
+   *   server refuses the new space's genesis commit.
+   */
+  async createSpace(label?: string): Promise<MemorySpace> {
+    this.#assertHomeSpace("create a space");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    if (home.key("addSpace").getRaw() === undefined) {
+      throw new Error(
+        "This Home pattern has no space list to record a space in",
+      );
+    }
+    const space = await this.runtime.createSpace();
+    await home.key("addSpace").send({ did: space, name: label ?? "" });
+    await this.#recordServingHosts([space], "created");
+    return space;
+  }
+
+  /**
+   * Replaces each entry of the Home space list that names a space rather than
+   * identifying it with an entry keyed by the space's DID and called by the
+   * same name, and records each such space in the site table as served by this
+   * runtime's host. The DID is the one the name has always resolved to, so
+   * the entry opens the space it always opened. This controller must be over
+   * the identity's Home space.
+   */
+  async adoptLegacySpaces(): Promise<void> {
+    this.#assertHomeSpace("adopt legacy spaces");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    // A Home pattern that cannot adopt an entry keeps its legacy entries,
+    // which still open by name.
+    if (home.key("adoptSpace").getRaw() === undefined) return;
+    const rows = home.key("spaces").get();
+    const adopted: MemorySpace[] = [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!isObjectOrArray(row) || isDID(row.did)) continue;
+      const name = row.name;
+      if (typeof name !== "string" || name.length === 0) continue;
+      const did = isDID(name) ? name : await legacySpaceDid(name);
+      await home.key("adoptSpace").send({ name, did });
+      adopted.push(did);
+    }
+    await this.#recordServingHosts(adopted, "adopted");
+  }
+
+  #assertHomeSpace(operation: string): void {
+    if (this.#space !== this.runtime.userIdentityDID) {
+      throw new Error(
+        `Only a controller over the identity's Home space can ${operation}`,
+      );
+    }
+  }
+
+  /**
+   * Appends a row to the Home site table for each of `spaces` the table does
+   * not already record as served by this runtime's host.
+   */
+  async #recordServingHosts(
+    spaces: readonly MemorySpace[],
+    source: string,
+  ): Promise<void> {
+    if (spaces.length === 0) return;
+    const host = new URL(this.runtime.apiUrl).origin;
+    const updatedAt = new Date().toISOString();
+    const result = await this.runtime.editWithRetry((tx) => {
+      const table = this.runtime.getCell(
+        this.#space,
+        siteTableCause(this.#space),
+        siteTableSchema,
+        tx,
+      );
+      const rows = table.get() ?? [];
+      const known = new Set(
+        rows.filter((row) => row.host === host).map((row) => row.did),
+      );
+      const added = spaces.filter((did) => !known.has(did));
+      if (added.length === 0) return;
+      table.set([
+        ...rows,
+        ...added.map((did) => ({ did, host, updatedAt, source })),
+      ]);
+    });
+    if (result.error) throw new Error(result.error.message);
+    await this.runtime.idle();
+    await this.synced();
+  }
+
+  /**
    * Ensures a default pattern exists for this space, creating it if necessary.
    * For home spaces, uses home.tsx; for other spaces, uses default-app.tsx.
    * This makes CLI-created spaces work the same as Shell-created spaces.
@@ -2170,6 +2289,12 @@ export class PiecesController<T = unknown> {
 
     // Determine which pattern to use based on space type
     const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
+
+    // A Home space comes into being on its user's first open. Any other space
+    // is created on purpose, and one that was not is not conjured by opening.
+    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+      throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
+    }
 
     let patternConfig: { name: string; source: string; cause: string };
 

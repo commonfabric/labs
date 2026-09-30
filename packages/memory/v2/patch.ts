@@ -337,7 +337,7 @@ const appendAtPath = (
       `append target is not an array at ${encodePointer(path)}`,
     );
   }
-  container.push(...values.map((value) => cloneValue(value)));
+  for (const value of values) container.push(cloneValue(value));
   return newRoot;
 };
 

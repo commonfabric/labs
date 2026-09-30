@@ -28,7 +28,6 @@ describe("topic board seed", () => {
       };
       const fixture = await seedTopicBoardOutOfProcess({
         apiUrl: new URL(env.API_URL),
-        spaceName: `${env.SPACE_NAME}-${demand}`,
         passphrase,
         demand,
         ...shape,
@@ -45,7 +44,7 @@ describe("topic board seed", () => {
 
       const reader = await initializePiecesController({
         apiUrl: new URL(env.API_URL),
-        space: fixture.spaceName,
+        space: fixture.spaceDid,
         identity: await seedIdentity(passphrase),
       });
       try {

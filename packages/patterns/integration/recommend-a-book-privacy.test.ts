@@ -15,11 +15,7 @@ describe("recommend-a-book privacy", () => {
         Identity.fromPassphrase(`book unbounded submission ${name}`)
       ),
     );
-    const invitation = await Identity.fromPassphrase(
-      "book unbounded submission invitation",
-    );
     const harness = await MultiRuntimeHarness.create({
-      spaceName: invitation.did(),
       programPath: `${rootPath}integration/fixtures/recommend-a-book/main.tsx`,
       rootPath,
       watchPaths: [["$UI"]],
@@ -69,9 +65,7 @@ describe("recommend-a-book privacy", () => {
         Identity.fromPassphrase(`book privacy ${name}`)
       ),
     );
-    const invitation = await Identity.fromPassphrase("book privacy invitation");
     const harness = await MultiRuntimeHarness.create({
-      spaceName: invitation.did(),
       programPath: `${rootPath}integration/fixtures/recommend-a-book/main.tsx`,
       rootPath,
       watchPaths: [["$UI"]],
@@ -81,12 +75,12 @@ describe("recommend-a-book privacy", () => {
         cfc: {
           cfcEnforcementMode: "enforce-strict",
           cfcFlowLabels: "persist",
-          cfcReadMaxConfidentiality: [
-            cfcAtom.user(identity.did()),
-            cfcAtom.space(invitation.did()),
-          ],
           experimental: { agentBuiltin: true, serverExecution: false },
         },
+        readCeiling: (spaceDid) => [
+          cfcAtom.user(identity.did()),
+          cfcAtom.space(spaceDid),
+        ],
       })),
     });
     try {
@@ -182,7 +176,7 @@ describe("recommend-a-book privacy", () => {
         },
       });
       expect(publication).toMatchObject({
-        audience: cfcAtom.space(invitation.did()),
+        audience: cfcAtom.space(harness.spaceDid),
       });
       await harness.settle();
       const publishedView = await visitor.client().call("viewText");

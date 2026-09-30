@@ -2105,6 +2105,8 @@ class VerifierMetadataResolver {
   #views = new WeakMap<CfcMetadata, Map<string, LinkSourceProjection>>();
   #labelIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
   #labels = new WeakMap<CfcMetadata, Map<string, IFCLabel | undefined>>();
+  #linkSources = new WeakMap<CfcMetadata, Map<string, CfcMetadata>>();
+  #prepared = new Set<string>();
   #coverIndexes = new WeakMap<CfcLabelView, ConsumedLabelIndex>();
   #covers = new WeakMap<
     CfcLabelView,
@@ -2142,6 +2144,42 @@ class VerifierMetadataResolver {
       types.set(type, storedMetadataFor(this.#tx, space, id, scope, type));
     }
     return types.get(type);
+  }
+
+  /** Projects stored link labels through the source's final payload writes. */
+  linkSource(
+    metadata: CfcMetadata,
+    key: string,
+    target: ValueWriteTarget | undefined,
+    inputs: readonly LinkWritePolicyInput[],
+  ): CfcMetadata {
+    if (
+      this.#prepared.has(key) || (target === undefined && inputs.length === 0)
+    ) {
+      return metadata;
+    }
+    let sources = this.#linkSources.get(metadata);
+    if (sources === undefined) {
+      sources = new Map();
+      this.#linkSources.set(metadata, sources);
+    }
+    let current = sources.get(key);
+    if (current === undefined) {
+      const entries = metadata.labelMap.entries.filter((entry) =>
+        entry.origin !== "link" ||
+        !linkEntrySuperseded(this.#tx, target, entry.path, inputs)
+      );
+      current = entries.length === metadata.labelMap.entries.length
+        ? metadata
+        : { ...metadata, labelMap: { ...metadata.labelMap, entries } };
+      sources.set(key, current);
+    }
+    return current;
+  }
+
+  /** Marks an envelope whose persisted entries already describe final writes. */
+  didPrepare(key: string): void {
+    this.#prepared.add(key);
   }
 
   /** Resolves a source label using the validated envelope's path index. */
@@ -2281,6 +2319,7 @@ class VerifierMetadataResolver {
       this.#views = new WeakMap();
       this.#labelIndexes = new WeakMap();
       this.#labels = new WeakMap();
+      this.#linkSources = new WeakMap();
       this.#coverIndexes = new WeakMap();
       this.#covers = new WeakMap();
       this.#seenWrites = 0;
@@ -2303,6 +2342,7 @@ class VerifierMetadataResolver {
         this.#viewIndexes.delete(metadata);
         this.#labelIndexes.delete(metadata);
         this.#labels.delete(metadata);
+        this.#linkSources.delete(metadata);
       }
       documents?.delete(write.id);
     }
@@ -2588,6 +2628,45 @@ const linkWritesByTarget = (
     const entries = result.get(key) ?? [];
     entries.push(input);
     result.set(key, entries);
+  }
+  return result;
+};
+
+/** Selects each slot's last recorded link matching the source it still holds. */
+const currentLinkWritesByTarget = function* (
+  tx: IExtendedStorageTransaction,
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
+): Generator<void, Map<string, LinkWritePolicyInput[]>> {
+  const result = new Map<string, LinkWritePolicyInput[]>();
+  for (const [key, inputs] of linkWrites) {
+    const slots = new Map<string, LinkWritePolicyInput[]>();
+    for (const input of inputs) {
+      const path = pathKey(input.target.path);
+      const slot = slots.get(path);
+      if (slot === undefined) slots.set(path, [input]);
+      else slot.push(input);
+    }
+    const current: LinkWritePolicyInput[] = [];
+    for (const slot of slots.values()) {
+      yield;
+      const first = slot[0];
+      const target = {
+        ...first.target,
+        id: first.target.id as URI,
+        path: [...first.target.path],
+      };
+      const final = parseLink(
+        tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META }),
+        target,
+      );
+      if (final === undefined) continue;
+      const input = slot.findLast((input) =>
+        targetKey(final) === targetKey(input.source) &&
+        arraysEqual(final.path, input.source.path)
+      );
+      if (input !== undefined) current.push(input);
+    }
+    result.set(key, current);
   }
   return result;
 };
@@ -3310,6 +3389,17 @@ const linkEntryPointerReplaced = (
     return "link" in before || "link" in after ||
       !deepEqual(before.value, after.value);
   });
+
+/** Returns whether final writes replace or rederive a stored link entry. */
+const linkEntrySuperseded = (
+  tx: IExtendedStorageTransaction,
+  target: ValueWriteTarget | undefined,
+  path: readonly string[],
+  inputs: readonly LinkWritePolicyInput[],
+): boolean =>
+  inputs.some((input) =>
+    concretePathHasPrefix(path, canonicalizeLogicalPath(input.target.path))
+  ) || (target !== undefined && linkEntryPointerReplaced(tx, target, path));
 
 /**
  * Whether `id` names a document of one of the two id classes no schema can
@@ -7584,10 +7674,12 @@ const derivePersistedLinkLabel = (
   candidateSchemas: ReadonlyMap<string, JSONSchema>,
   authoringIdentity: ImplementationIdentity | undefined,
   metadataResolver: VerifierMetadataResolver,
+  valueTargets: ReadonlyMap<string, ValueWriteTarget>,
+  linkWrites: ReadonlyMap<string, readonly LinkWritePolicyInput[]>,
   pendingSourceView?: CfcLabelView,
 ): { label?: IFCLabel; reason?: string; sourceView?: CfcLabelView } => {
   metadataResolver.refresh();
-  const sourceMetadata = metadataResolver.read(
+  let sourceMetadata = metadataResolver.read(
     input.source.space,
     input.source.id as URI,
     input.source.scope,
@@ -7604,6 +7696,12 @@ const derivePersistedLinkLabel = (
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+    sourceMetadata = metadataResolver.linkSource(
+      sourceMetadata,
+      targetKey(input.source),
+      valueTargets.get(targetKey(input.source)),
+      linkWrites.get(targetKey(input.source)) ?? [],
+    );
   }
   let pendingSourceSchema = candidateSchemas.get(targetKey(input.source)) ??
     setupResultSchemaFor(tx, input.source);
@@ -7728,8 +7826,32 @@ const derivePersistedLinkLabel = (
   ) {
     return {};
   }
+  // A pending reference covering this source supplies its author. A stored
+  // container's claim cannot become the reference's claim when an obsolete
+  // child entry is removed from the source view.
+  const sourcePath = canonicalizeLogicalPath(input.source.path);
+  const pendingCover =
+    pendingSourceView?.entries.some((entry) => entry.path.length === 0) ??
+      false;
+  let projectionMetadata = sourceMetadata;
+  if (sourceMetadata !== undefined && pendingCover) {
+    let changed = false;
+    const entries = sourceMetadata.labelMap.entries.map((entry) => {
+      if (!isPrefix(entry.path, sourcePath)) return entry;
+      const label = withoutPrincipalClaims(entry.label);
+      if (label === entry.label) return entry;
+      changed = true;
+      return { ...entry, label };
+    });
+    if (changed) {
+      projectionMetadata = {
+        ...sourceMetadata,
+        labelMap: { ...sourceMetadata.labelMap, entries },
+      };
+    }
+  }
   const storedSource = metadataResolver.projection(
-    sourceMetadata,
+    projectionMetadata,
     input.source.path,
   );
   const storedSourceView = storedSource?.view;
@@ -7957,6 +8079,7 @@ const createLinkLabelDeriver = (
     input: WritePolicyInput,
   ) => ImplementationIdentity | undefined,
   metadataResolver: VerifierMetadataResolver,
+  valueTargets: ReadonlyMap<string, ValueWriteTarget>,
 ): LinkLabelDeriver => {
   /** A finite projection and the source values waiting for it to resolve. */
   type RequestedPath = {
@@ -8012,25 +8135,7 @@ const createLinkLabelDeriver = (
       const upstreamPath = canonicalizeLogicalPath(upstream.target.path);
       const covers = concretePathHasPrefix(sourcePath, upstreamPath);
       if (
-        (!covers && !concretePathHasPrefix(upstreamPath, sourcePath)) ||
-        !pathHoldsStagedReference(tx, upstream.target, upstreamPath)
-      ) continue;
-      const final = parseLink(
-        tx.readValueOrThrow({
-          ...upstream.target,
-          id: upstream.target.id as URI,
-          path: [...upstreamPath],
-        }, { meta: INTERNAL_VERIFIER_META }),
-        {
-          ...upstream.target,
-          id: upstream.target.id as URI,
-          path: [...upstreamPath],
-        },
-      );
-      if (
-        final === undefined ||
-        targetKey(final) !== targetKey(upstream.source) ||
-        !arraysEqual(final.path, upstream.source.path)
+        !covers && !concretePathHasPrefix(upstreamPath, sourcePath)
       ) continue;
       const relative = sourcePath.slice(upstreamPath.length);
       const prefix = upstreamPath.slice(sourcePath.length);
@@ -8161,6 +8266,8 @@ const createLinkLabelDeriver = (
       candidates,
       identity,
       metadataResolver,
+      valueTargets,
+      linkWrites,
       pending.view,
     );
     if (result.reason !== undefined) {
@@ -8236,6 +8343,8 @@ const createLinkLabelDeriver = (
       candidates,
       identityForInput(input),
       metadataResolver,
+      valueTargets,
+      linkWrites,
       pending.view,
     ).label;
   };
@@ -9782,6 +9891,7 @@ export function* prepareBoundaryCommitSteps(
     identityForInput,
   );
   const linkWrites = linkWritesByTarget(state.writePolicyInputs);
+  const currentLinkWrites = yield* currentLinkWritesByTarget(tx, linkWrites);
   // S16 flow labels: the per-tx conservative join. In `persist` mode every
   // value write target gets a `derived` component carrying it; in `observe`
   // mode it only feeds diagnostics. Derivation never rejects.
@@ -10012,9 +10122,10 @@ export function* prepareBoundaryCommitSteps(
   const linkLabels = createLinkLabelDeriver(
     tx,
     candidates,
-    linkWrites,
+    currentLinkWrites,
     identityForInput,
     metadataResolver,
+    valueTargets,
   );
   for (const key of targetKeys) {
     yield;
@@ -10299,7 +10410,7 @@ export function* prepareBoundaryCommitSteps(
         const failures = yield* verifyWriteFloor(tx, schema, target, {
           identityForPath: (path) =>
             identityForSchemaPath(writeAuthorIdentities.get(key), path),
-          linkWriteInputs,
+          linkWriteInputs: currentLinkWrites.get(key) ?? [],
           linkLabels,
           // Only PERSISTED flow integrity may credit the floor: `observe` mode
           // computes the join for diagnostics but stores nothing on the value,
@@ -10532,8 +10643,10 @@ export function* prepareBoundaryCommitSteps(
     const persistedLabelEntryKeys = new Set(
       persistedLabelEntries.map((entry) => pathKey(entry.path)),
     );
+    const currentLinkInputs = currentLinkWrites.get(key) ?? [];
+    const currentLinkWriteInputs = new Set(currentLinkInputs);
     const currentLinkWritePaths = new Set(
-      linkWriteInputs.map((input) => pathKey(input.target.path)),
+      [...currentLinkWriteInputs].map((input) => pathKey(input.target.path)),
     );
     // Whole-value write destinations stamped as written
     // (`assertedValueRootPaths`). They join the written prefixes here, so the
@@ -10824,8 +10937,13 @@ export function* prepareBoundaryCommitSteps(
       // element's own entries below, so an element keeps its labels at every
       // position it moves to.
       if (
-        entry.origin === "link" && valueTarget !== undefined &&
-        linkEntryPointerReplaced(tx, valueTarget, entryPath)
+        entry.origin === "link" &&
+        linkEntrySuperseded(
+          tx,
+          valueTarget,
+          entryPath,
+          currentLinkInputs,
+        )
       ) {
         linkCleared = true;
         continue;
@@ -10888,6 +11006,9 @@ export function* prepareBoundaryCommitSteps(
     for (const input of linkWriteInputs) {
       const result = yield* linkLabels.persisted(input);
       reasons.push(...result.reasons);
+      // Every attempted link is checked; only the final reference contributes
+      // labels to the value this transaction stores at the slot.
+      if (!currentLinkWriteInputs.has(input)) continue;
       for (const entry of result.entries) {
         const persisted: LabelMapEntry = {
           path: [...canonicalizeLogicalPath(input.target.path), ...entry.path],
@@ -11811,6 +11932,7 @@ export function* prepareBoundaryCommitSteps(
         canonicalizeCfcMetadata(metadata),
       )
     ) {
+      metadataResolver.didPrepare(key);
       continue;
     }
 
@@ -11873,7 +11995,10 @@ export function* prepareBoundaryCommitSteps(
             canonicalizeCfcMetadata(existing),
             canonicalizeCfcMetadata(metadata),
           )
-        ) continue;
+        ) {
+          metadataResolver.didPrepare(key);
+          continue;
+        }
       }
     }
 
@@ -11935,6 +12060,7 @@ export function* prepareBoundaryCommitSteps(
       // user-surface reads/writes plus explicit policy inputs, not by recursive
       // attempted-target tracking of this internal metadata update.
     }, storedEnvelope);
+    metadataResolver.didPrepare(key);
   }
   reasons.push(...verifySinkRequestCeilings(tx));
   // Single-use grant consumption (design §2.2): stage every claim the

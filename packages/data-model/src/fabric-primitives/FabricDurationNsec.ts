@@ -9,6 +9,7 @@ import {
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import type { RealmCodecValue } from "@/codec-realm";
@@ -37,7 +38,7 @@ export class FabricDurationNsec extends BaseFabricPrimitive
 
   /** Constructs an instance representing a span of `value` nanoseconds. */
   constructor(value: bigint) {
-    super();
+    super(BLESSING_TOKEN, FabricDurationNsec);
     this.#value = value;
   }
 
@@ -63,6 +64,11 @@ export class FabricDurationNsec extends BaseFabricPrimitive
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class DurationNsecCodec

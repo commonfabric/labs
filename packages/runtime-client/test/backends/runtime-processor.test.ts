@@ -21,7 +21,7 @@ import {
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 import { getLogger } from "@commonfabric/utils/logger";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -181,21 +181,21 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("resolves the acting user's own space against a ceiling", async () => {
+    it("resolves the session's own Home space against a ceiling", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
         const resolver = renderConfidentialityResolverFor(
           runtime,
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
-          undefined,
+          cfcSigner.did(),
           undefined,
           undefined,
         );
         expect(resolver).toBeDefined();
         const ceiling = [cfcAtom.user(cfcSigner.did())];
-        // The acting user's own space (space DID == principal DID) is a verified
-        // member, so a Space label naming it resolves to User(actingUser).
+        // The session's space is a verified member for the key holder, so a
+        // Space label naming it resolves to User(actingUser).
         expect(
           atomsOutsideCeiling(
             resolver!({ confidentiality: [cfcAtom.space(cfcSigner.did())] }),
@@ -216,9 +216,11 @@ describe("runtime-processor", () => {
     });
 
     it("resolves the session workspace when it differs from the principal DID", async () => {
-      // createSession({ spaceName }) derives a home-space DID distinct from the
-      // acting principal; the session-authorized workspace is a verified member,
-      // so its own Space(...) label resolves rather than over-blocking.
+      // A session opened on a space other than the user's Home space: the
+      // session-authorized workspace is a verified member, so its own
+      // Space(...) label resolves rather than over-blocking. The principal's
+      // DID is a member only where an ACL says so, and no provider is given
+      // here to read one.
 
       const { runtime, storageManager } = createRuntime();
       const sessionSpace = "did:key:z6MkSessionWorkspaceDistinct";
@@ -239,13 +241,13 @@ describe("runtime-processor", () => {
             ceiling,
           ),
         ).toEqual([]);
-        // ...and the acting user's own identity space still resolves too.
+        // ...and the space named by the acting user's own DID does not.
         expect(
           atomsOutsideCeiling(
             resolver!({ confidentiality: [cfcAtom.space(cfcSigner.did())] }),
             ceiling,
           ),
-        ).toEqual([]);
+        ).toEqual([cfcAtom.space(cfcSigner.did())]);
         // A third, unrelated space stays blocked.
         expect(
           atomsOutsideCeiling(
@@ -255,6 +257,33 @@ describe("runtime-processor", () => {
             ceiling,
           ),
         ).toEqual([cfcAtom.space("did:key:z6MkThird")]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("resolves no space by the acting user's DID alone", async () => {
+      // Being a space's DID is not evidence of reading it: a Home space's user
+      // reads it because its ACL says so. With no session workspace and no
+      // membership provider there is nothing to consult.
+
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const resolver = renderConfidentialityResolverFor(
+          runtime,
+          cfcSigner,
+          { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(
+          atomsOutsideCeiling(
+            resolver!({ confidentiality: [cfcAtom.space(cfcSigner.did())] }),
+            [cfcAtom.user(cfcSigner.did())],
+          ),
+        ).toEqual([cfcAtom.space(cfcSigner.did())]);
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -294,13 +323,13 @@ describe("runtime-processor", () => {
             ceiling,
           ),
         ).toEqual([cfcAtom.space(cfcSigner.did())]);
-        // The delegate's own space still resolves.
+        // And so does the space named by the delegate's own DID.
         expect(
           atomsOutsideCeiling(
             resolver!({ confidentiality: [cfcAtom.space(delegate)] }),
             ceiling,
           ),
-        ).toEqual([]);
+        ).toEqual([cfcAtom.space(delegate)]);
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -426,7 +455,7 @@ describe("runtime-processor", () => {
           runtime,
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
-          undefined,
+          space,
           undefined,
           createRuntimeCfcModulePolicySource(runtime),
         );
@@ -567,7 +596,7 @@ describe("runtime-processor", () => {
           runtime,
           cfcSigner,
           { atoms: [cfcAtom.user(own)] },
-          undefined,
+          own,
           undefined,
           createRuntimeCfcModulePolicySource(runtime),
         );
@@ -581,7 +610,8 @@ describe("runtime-processor", () => {
             }),
             [cfcAtom.user(own)],
           );
-        // The owner, and a reader the shared space's ACL grants.
+        // The session's own workspace, and a reader the shared space's ACL
+        // grants.
         expect(outside(own)).toEqual([]);
         expect(outside(shared)).toEqual([]);
         // A space whose ACL names somebody else.
@@ -639,8 +669,9 @@ describe("runtime-processor", () => {
           atoms: [cfcAtom.user(cfcSigner.did())],
         });
         expect(provider).toBeDefined();
-        // The acting user's own space is an implicit OWNER (no ACL read).
-        expect(provider!.readerRole(cfcSigner.did())).toBe("owner");
+        // The space named by the acting user's own DID has no ACL doc here,
+        // and being its DID grants nothing by itself.
+        expect(provider!.readerRole(cfcSigner.did())).toBeNull();
         // A space whose ACL grants READ resolves to a reader role.
         expect(provider!.readerRole(grantedSpace)).toBe("reader");
         // A space with no ACL doc fails closed.
@@ -1078,6 +1109,31 @@ describe("runtime-processor", () => {
       });
 
       expect(response.access.canEdit).toBe(false);
+    });
+
+    it("gives the principal whose DID is the space only what the ACL grants it", async () => {
+      const space = "did:key:z6Mk-runtime-processor-acl-self" as const;
+      const owner = "did:key:z6Mk-runtime-processor-owner" as const;
+      const aclSaying = (acl: Record<string, string>) =>
+        buildProcessor({
+          cc: { getSpace: () => space },
+          space,
+          runtime: {
+            userIdentityDID: space,
+            storageManager: { synced: () => Promise.resolve() },
+            getCellFromLink: () => ({
+              sync: () => Promise.resolve(),
+              get: () => acl,
+            }),
+          },
+        }).handleSpaceGetAcl({ type: RequestType.SpaceGetAcl, space });
+
+      expect((await aclSaying({ [owner]: "OWNER" })).access.canEdit)
+        .toBe(false);
+      expect(
+        (await aclSaying({ [owner]: "OWNER", [space]: "OWNER" })).access
+          .canEdit,
+      ).toBe(true);
     });
 
     it("routes valid ACL mutations and returns each committed ACL", async () => {
@@ -2198,16 +2254,19 @@ describe("runtime-processor", () => {
       });
 
       it("leaves a forged `FabricPrimitive` for the encode to refuse", () => {
-        // An object on a `FabricPrimitive`'s prototype passes every membership
-        // check and has no encoding: `isValidFabricValue()` says true and the
-        // encode refuses. Producing one takes deliberate effort, so it is not
-        // worth a second walk of every console argument to find early; it is
-        // left to fail where the encoding is actually done.
+        // An object on a `FabricPrimitive`'s prototype has no encoding, and the
+        // membership check refuses it by throwing rather than by answering
+        // `false`. The conversion runs no such check: producing one takes
+        // deliberate effort, so it is not worth a second walk of every console
+        // argument to find early. It is carried as it is, and left to fail
+        // where the encoding is actually done.
 
         const forged = Object.create(FabricBytes.prototype);
-        expect(isValidFabricValue(toConsoleDebugValue(forged))).toBe(true);
-        expect(() => realmFromFabricValue(toConsoleDebugValue(forged)))
-          .toThrow();
+        const converted = toConsoleDebugValue(forged);
+        expect(converted).toBe(forged);
+        expect(() => isValidFabricValue(converted))
+          .toThrow("counterfeit `FabricPrimitive`");
+        expect(() => realmFromFabricValue(converted)).toThrow();
       });
 
       it("returns a unique symbol as its marker", () => {
@@ -2671,6 +2730,9 @@ describe("runtime-processor", () => {
         getAsNormalizedFullLink: () => defaultPatternRef,
         getMetaRaw: (metaField: string) =>
           metaField === "pattern" ? cellRefToSigilLink(patternRef) : undefined,
+        // An empty space list, so the adoption the handler runs has nothing
+        // to adopt.
+        key: () => ({ get: () => [] }),
         sync: () => Promise.resolve(),
       };
       let startedDirectly = false;
@@ -2714,6 +2776,184 @@ describe("runtime-processor", () => {
 
       expect(ensured).toBe(true);
       expect(startedDirectly).toBe(false);
+    });
+
+    /**
+     * A processor over a real runtime on emulated storage, whose Home pattern
+     * is a stand-in holding `rows` as its space list and recording what is
+     * sent to its streams. The space creation, the site table, and the
+     * adoption run for real.
+     */
+    async function homeWorker(rows: readonly unknown[] | (() => unknown)) {
+      const signer = await Identity.generate({ implementation: "noble" });
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://home-worker.test/"),
+        storageManager,
+      });
+      const homeRef: CellRef = {
+        id: "of:home-worker-home" as CellRef["id"],
+        space: signer.did(),
+        scope: "space",
+        path: [],
+      };
+      const sent: { stream: string; event: unknown }[] = [];
+      const home = {
+        getAsLink: () => cellRefToSigilLink(homeRef),
+        key: (name: string) =>
+          name === "spaces"
+            ? { get: typeof rows === "function" ? rows : () => rows }
+            : {
+              getRaw: () => ({ $stream: true }),
+              send: (event: unknown) => {
+                sent.push({ stream: name, event });
+                return Promise.resolve();
+              },
+            },
+      };
+      const ensure = stub(
+        PiecesController.prototype,
+        "ensureDefaultPattern",
+        () => Promise.resolve({ getCell: () => home } as never),
+      );
+      const processor = buildProcessor({
+        identity: signer,
+        runtime,
+        space: signer.did(),
+      });
+      /** The rows of the Home site table, as committed. */
+      const siteTable = async () => {
+        const table = runtime.getCell(
+          signer.did(),
+          siteTableCause(signer.did()),
+          siteTableSchema,
+        );
+        await table.sync();
+        return (table.get() ?? []).map(({ did, host, source }) => ({
+          did,
+          host,
+          source,
+        }));
+      };
+      return {
+        runtime,
+        processor,
+        sent,
+        siteTable,
+        async [Symbol.asyncDispose]() {
+          ensure.restore();
+          await runtime.dispose();
+          await storageManager.close();
+        },
+      };
+    }
+
+    it("creates a space, records it in Home under its label, and appends a site-table row", async () => {
+      await using worker = await homeWorker([]);
+
+      const { space } = await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+        label: "Notebook",
+      });
+
+      expect(await worker.runtime.spaceExists(space)).toBe(true);
+      expect(worker.sent).toEqual([
+        { stream: "addSpace", event: { did: space, name: "Notebook" } },
+      ]);
+      expect(await worker.siteTable()).toEqual([
+        { did: space, host: "http://home-worker.test", source: "created" },
+      ]);
+    });
+
+    it("records an entry with an empty name when the request carries no label", async () => {
+      await using worker = await homeWorker([]);
+
+      const { space } = await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+      });
+
+      expect(worker.sent).toEqual([
+        { stream: "addSpace", event: { did: space, name: "" } },
+      ]);
+    });
+
+    it("creates a separate space for each request, even under one label", async () => {
+      await using worker = await homeWorker([]);
+
+      const first = await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+        label: "Notebook",
+      });
+      const second = await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+        label: "Notebook",
+      });
+
+      expect(second.space).not.toBe(first.space);
+      expect(first.space).not.toBe(await legacySpaceDid("Notebook"));
+      expect(worker.sent.map(({ event }) => event)).toEqual([
+        { did: first.space, name: "Notebook" },
+        { did: second.space, name: "Notebook" },
+      ]);
+    });
+
+    it("opens Home when adopting its legacy rows fails, and adopts on the next ensure", async () => {
+      let reads = 0;
+      await using worker = await homeWorker(() => {
+        if (reads++ === 0) throw new Error("transient read failure");
+        return [{ name: "team-lunch" }];
+      });
+      const warn = stub(console, "warn", () => {});
+      try {
+        const first = await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        expect(first.cell).toBeDefined();
+        expect(worker.sent).toEqual([]);
+
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        expect(worker.sent).toEqual([{
+          stream: "adoptSpace",
+          event: {
+            name: "team-lunch",
+            did: await legacySpaceDid("team-lunch"),
+          },
+        }]);
+        expect(warn.calls.length).toBe(1);
+      } finally {
+        warn.restore();
+      }
+    });
+
+    it("adopts the Home space list's legacy rows once per worker", async () => {
+      await using worker = await homeWorker([
+        { name: "team-lunch" },
+        { name: "Keyed", did: "did:key:z6Mk-home-worker-keyed" },
+      ]);
+      const legacy = await legacySpaceDid("team-lunch");
+
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      await worker.processor.handleEnsureHomePatternRunning({
+        type: RequestType.EnsureHomePatternRunning,
+      });
+      const { space } = await worker.processor.handleCreateSpace({
+        type: RequestType.CreateSpace,
+        label: "Fresh",
+      });
+
+      // One adoption of the name-only row, and none of the keyed one.
+      expect(worker.sent).toEqual([
+        { stream: "adoptSpace", event: { name: "team-lunch", did: legacy } },
+        { stream: "addSpace", event: { did: space, name: "Fresh" } },
+      ]);
+      expect(await worker.siteTable()).toEqual([
+        { did: legacy, host: "http://home-worker.test", source: "adopted" },
+        { did: space, host: "http://home-worker.test", source: "created" },
+      ]);
     });
   });
 
@@ -3878,7 +4118,7 @@ describe("runtime-processor", () => {
         },
       };
       const cellWithTx = {
-        push: (...values: unknown[]) => {
+        pushAll: (values: readonly unknown[]) => {
           expect(values).toEqual(["new value"]);
         },
         send: (value: unknown) => {

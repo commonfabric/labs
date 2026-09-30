@@ -10,6 +10,7 @@ import "core-js/proposals/async-explicit-resource-management";
 
 import { getLogger } from "@commonfabric/utils/logger";
 import { unrefTimer } from "@commonfabric/utils/sleep";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 
 import {
   TransportNotificationType,
@@ -18,7 +19,6 @@ import {
 } from "@/protocol/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { postToClient } from "@/backends/post-to-client.ts";
-import { holdLifetimeLock } from "@/backends/web-worker/lifetime-lock.ts";
 
 // Worker event-loop lag probe (`runner.loop/workerLag`): each tick records how
 // far past schedule the timer fired — long synchronous stretches (compile,
@@ -127,7 +127,7 @@ self.addEventListener("message", (event: MessageEvent) => {
 if (
   (typeof self !== "undefined") && (typeof self.postMessage === "function")
 ) {
-  const lifetimeLock = await holdLifetimeLock();
+  const lifetimeLock = await holdWorkerLifetimeLock();
 
   // The transport's own traffic, not the runtime's: it tells the client this
   // entry has run and the listener above is installed.

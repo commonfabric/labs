@@ -151,7 +151,7 @@ The toolshed-embedded memory service has two modes:
 | `MEMORY_DIR` | `./cache/memory/` (as a `file://` URL) | **Directory mode** — one SQLite file per space. Default; backwards-compatible. |
 | `DB_PATH` | _(unset)_ | **Single-file mode** — absolute path to one SQLite database holding every space, instead of a file per space. Takes precedence over `MEMORY_DIR`. Validated as an absolute path. |
 | `MEMORY_URL` | `http://localhost:8000` | Where other components reach the memory service. |
-| `MEMORY_ACL_MODE` | `enforce` | Space ACL policy: `off`, `observe`, or `enforce`. `observe` logs ordinary access shortfalls, while malformed ACLs and fresh-space genesis violations still fail closed. |
+| `MEMORY_ACL_MODE` | `enforce` | Space ACL policy: `off`, `observe`, or `enforce`. `observe` logs ordinary access shortfalls, while malformed ACLs, fresh-space genesis violations, and any shortfall of OWNER (an ACL write, a disk-source registration) still fail closed. |
 | `MEMORY_DOCUMENT_CACHE_BUDGET_BYTES` | _(engine default, 128 MiB)_ | Byte budget of each space's decoded-document cache on the memory server, in encoded UTF-8 bytes of the documents as stored (expect a few times that in heap per active space; a Topics-board page load retains ~18 MB across ~13,300 documents). Least-recently-read eviction under a budget smaller than a corpus's working set serves nothing, so lower it only with `/api/health/stats` → `documentCaches` in view: `evictions` climbing for a space being read repeatedly means it no longer fits, and `patchReplays` far above `misses` means a document under a run of patch commits is being lost between the commits that write it, each one rebuilding it from its base or snapshot rather than from the revision before it. A resident document still costs one row per commit, so the ratio is the signal rather than the count. |
 | `MEMORY_DOCUMENT_CACHE_MAX_ENTRIES` | _(engine default, 65536)_ | Entry cap of the same cache — the cardinality backstop beside the byte budget, kept well above any real working set (a Topics-board page load is ~13,300 documents). |
 | `MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES` | _(server default, 256 MiB)_ | Bound across every space's document cache on the memory server this process hosts, held as documents are cached, least-recently-used space first. The per-space budget decides what one corpus may keep; this decides what the server keeps in total (one memory server per toolshed process, so in deployment: the process). `documentCaches.totalBudgetEvictions` on `/api/health/stats` counts what holding it has cost. |
@@ -165,13 +165,14 @@ configured service DID writes a valid ACL with a concrete OWNER. A populated
 space that has never had an ACL remains authenticated-public READ/WRITE as a
 temporary pre-launch compatibility rule; public access never includes OWNER.
 Retracted, malformed, and ownerless ACLs fail closed.
-Normal fresh named-space bootstrap writes the genesis document the caller
-registered beside the space key (`registerSpaceIdentity(identity,
-{ genesisAcl })`), else the fallback `{ [activeUser]: "OWNER", "*": "WRITE" }`,
-so new non-home spaces that asked for nothing are public read/write until ACL
-management has a UI. Home bootstrap remains owner-only. The wildcard is a
-default, not a fixture: a caller can supply its own document at genesis, and
-the space's owner can narrow it afterwards with `cf acl remove ANYONE` (see
+Creating a space writes its genesis document in a session authenticated as a
+key generated for that one commit: `{ [creator]: "OWNER" }` together with any
+grants the creator chose, so a new space is private to its creator unless it
+asked otherwise. After genesis the space's own DID holds only what that document
+grants it. A Home space's first open writes `{ [user]: "OWNER" }`. The space's owner shares it afterwards with `cf acl set`, and
+`cf acl set ANYONE WRITE` opens it to every authenticated principal. Legacy
+named spaces carry `"*": "WRITE"` in their genesis document, and
+`cf acl remove ANYONE` closes one (see
 [tutorial chapter 10](../tutorial/10-identity-and-security.md#reading-and-changing-a-spaces-acl)).
 Whatever writes the ACL must send it as a single whole-document replacement —
 the server's admission rules for ACL commits are INV-12 and INV-13 in
@@ -408,7 +409,11 @@ when you run `deno task integration`:
 | `FRONTEND_URL` | `API_URL` | Override when testing the shell dev server directly (`http://localhost:5173`). |
 | `HEADLESS` | `false` | Browser tests headless when `true`. |
 | `PIPE_CONSOLE` | `false` | Pipe browser console output into the test runner. |
-| `SPACE_NAME` | random UUID | Stable name for cross-run debugging. |
+| `SPACE_NAME` | unset | A legacy space name, for a test that targets an existing space rather than creating one. Opening a name creates nothing, so the space must already exist. |
+
+A test that needs a space of its own creates one with `createTestSpace` (or
+`createLegacyTestSpace`, for a test of a legacy space name) from
+`@commonfabric/integration`, and addresses it by the DID that returns.
 
 Additionally, [`tasks/integration.ts`](../../tasks/integration.ts) sets
 `INTEGRATION_TEST_FLAGS` (default: unset; populated with `--junit-path=…` when

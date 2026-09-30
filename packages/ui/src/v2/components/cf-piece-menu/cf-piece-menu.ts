@@ -3,7 +3,7 @@ import {
   subscribePieceBoundary,
 } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity";
-import { assertNotDID, isDID } from "@commonfabric/identity/did";
+import { isDID } from "@commonfabric/identity/did";
 import {
   appViewToUrlPath,
   navigate,
@@ -12,7 +12,7 @@ import {
   preserveAppViewMode,
   urlToAppView,
 } from "@commonfabric/navigation";
-import { parseFabricRef } from "@commonfabric/runner/shared";
+import { type JSONSchema, parseFabricRef } from "@commonfabric/runner/shared";
 import {
   $conn,
   CellHandle,
@@ -239,6 +239,12 @@ export function payloadHint(action: PieceAction): string | undefined {
   return names.length > 0 ? `{ ${names.join(", ")} }` : undefined;
 }
 
+/** The Home pattern's stream that takes a space out of the user's list. */
+const HOME_REMOVE_SPACE = {
+  type: "object",
+  properties: { removeSpace: { asCell: ["stream"] } },
+} as const satisfies JSONSchema;
+
 /**
  * CFPieceMenu — the menu a right-click opens on a space, and usually on a
  * piece in it. Its piece entries hold the panels for what it can show and do
@@ -262,6 +268,7 @@ export function payloadHint(action: PieceAction): string | undefined {
  * `cf-piece-context-menu` announcement and shows its own; see
  * `docs/features/host-embedding.md`.
  */
+
 export class CFPieceMenu extends BaseElement {
   static override styles = css`
     :host {
@@ -2040,33 +2047,50 @@ export class CFPieceMenu extends BaseElement {
     await this.cloneIntoNewSpace({ copyData: mode === "copy-data" });
   }
 
-  /** Clone the selected piece into a unique named space and open the copy. */
+  /**
+   * Clone the selected piece into a new space and open the copy. The space is
+   * created for the copy, and is listed in the user's Home space list under
+   * `label`. A clone that fails takes the space back out of that list: the
+   * space cannot be deleted, and a list holding one empty space per failed
+   * attempt would be the failure's only visible result.
+   */
   async cloneIntoNewSpace(
     {
       copyData = false,
-      spaceName = `piece-copy-${crypto.randomUUID()}`,
-    }: { copyData?: boolean; spaceName?: string } = {},
+      label = "Piece copy",
+    }: { copyData?: boolean; label?: string } = {},
   ): Promise<void> {
     const cell = this.cell;
     if (!cell || this.clonePending) return;
-    // The name is derived into a space key AND put in the URL as a name; a DID
-    // would mean two different spaces on those two routes.
-    assertNotDID(spaceName, "A space name");
     this.cloneMode = copyData ? "copy-data" : "fresh";
     this.clonePending = true;
     this.cloneError = undefined;
     try {
       const runtime = cell.runtime();
-      const destinationSpace = await runtime.resolveSpaceName(spaceName);
+      const destinationSpace = await runtime.createSpace(label);
       const clone = await runtime.clonePiece(
         cell.id(),
         cell.space(),
         destinationSpace,
         { copyData, scope: cell.ref().scope },
-      );
+      ).catch(async (error: unknown) => {
+        // The clone's failure is what the dialog reports; failing to unlist
+        // the space as well is reported beside it rather than in its place.
+        try {
+          const home = (await runtime.ensureHomePatternRunning())
+            .asSchema<{ removeSpace: { did: string } }>(HOME_REMOVE_SPACE);
+          await home.key("removeSpace").sendStrict({ did: destinationSpace });
+        } catch (unlistError) {
+          console.error(
+            "[cf-piece-menu] The failed clone's space stays in Home:",
+            unlistError,
+          );
+        }
+        throw error;
+      });
       this.clonePending = false;
       this.close();
-      navigate({ spaceName, pieceId: clone.id() });
+      navigate({ spaceDid: destinationSpace, pieceId: clone.id() });
     } catch (error) {
       this.cloneError = cell.runtime().signal.aborted
         ? "The clone was canceled because the runtime stopped."

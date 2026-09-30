@@ -16,6 +16,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -148,6 +149,14 @@ const primitiveCases = [
     second: new FabricDurationNsec(-5n),
     firstSeen: "9007199254740993",
     secondSeen: "-5",
+  },
+  {
+    name: "FabricDurationDay",
+    read: "String(args.v?.value ?? -1n)",
+    first: new FabricDurationDay(9_007_199_254_740_993n),
+    second: new FabricDurationDay(-7n),
+    firstSeen: "9007199254740993",
+    secondSeen: "-7",
   },
   {
     name: "FabricHash",

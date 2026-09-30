@@ -10,11 +10,10 @@
 
 import * as path from "@std/path";
 import {
-  preloadArgument,
+  recordingArguments,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
   type SkipList,
-  spoolWriteArgument,
   type TestIdentity,
 } from "@commonfabric/test-support/records";
 import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
@@ -490,19 +489,31 @@ export function unavailableFrom(
   return { excluded, unavailable };
 }
 
+/** A batch's skip list, as the invocation running the batch takes it. */
+export interface BatchSkipList {
+  /** The file holding the list, where the batch skips anything. */
+  path?: string;
+
+  /** The variable naming that file, where there is one. */
+  env: Record<string, string>;
+}
+
 /**
- * What an invocation takes to record: the preload, and the write
- * permission it needs to leave its name map in the batch's spool. The
- * permission is left out where the flags already grant one, since
- * appending a path list to a blanket grant either ends the run or cuts
- * the grant down to that list; `spoolWriteArgument` says which.
+ * Writes a batch's skip list into the batch's own directory as
+ * `<slug>.skip.json`, where it names anything. One naming nothing is not
+ * written, since the absence of the file is what tells the invocation to
+ * run everything.
  */
-export function recordingArguments(
-  flags: readonly string[],
+export async function writeBatchSkipList(
   context: CommandContext,
-): string[] {
-  const write = spoolWriteArgument(flags, context.spoolDir);
-  return write === undefined ? [preloadArgument()] : [preloadArgument(), write];
+  slug: string,
+  skips: SkipList,
+): Promise<BatchSkipList> {
+  if (Object.keys(skips).length === 0) return { env: {} };
+  const skipList = path.join(context.outputDir, `${slug}.skip.json`);
+  await Deno.mkdir(context.outputDir, { recursive: true });
+  await Deno.writeTextFile(skipList, serializeSkipList(skips));
+  return { path: skipList, env: { [SKIP_LIST_VARIABLE]: skipList } };
 }
 
 /**
@@ -518,7 +529,8 @@ export function shuffleArguments(): string[] {
 /**
  * The command that runs `deno test` over `files` under `flags`, recording
  * and shuffling as every suite's `deno test` does, and writing its report to
- * `junitPath`.
+ * `junitPath`. The preload is permitted to read `skipList`, where the
+ * batch has one.
  *
  * It never type-checks. The `typecheck` suite checks every file a test
  * loads, so a test process checking its module graph again repeats that
@@ -530,6 +542,7 @@ export function denoTestCommand(
   context: CommandContext,
   junitPath: string,
   files: readonly string[],
+  skipList?: string,
 ): string[] {
   const unchecked = [
     "--no-check",
@@ -540,20 +553,14 @@ export function denoTestCommand(
     "test",
     ...unchecked,
     ...shuffleArguments(),
-    ...recordingArguments(unchecked, context),
+    ...recordingArguments(unchecked, {
+      spool: context.spoolDir,
+      root: context.root,
+      skipList,
+    }),
     `--junit-path=${junitPath}`,
     ...files,
   ];
-}
-
-/** Writes a batch's skip list where its invocations will read it. */
-export async function writeSkipList(
-  skipListPath: string,
-  skips: SkipList,
-): Promise<void> {
-  if (Object.keys(skips).length === 0) return;
-  await Deno.mkdir(path.dirname(skipListPath), { recursive: true });
-  await Deno.writeTextFile(skipListPath, serializeSkipList(skips));
 }
 
 /** The skip list a set of unit requests comes to. */
@@ -634,7 +641,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
       units.push(file);
       partOf.set(file, part);
     }
-    unavailable.push(...part.unavailable ?? []);
+    for (const entry of part.unavailable ?? []) unavailable.push(entry);
   }
   const surfaces = {
     recordSurfaces,
@@ -693,15 +700,8 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           if (!group.some((request) => request.unit === unit)) continue;
           skips[unit] = [...new Set([...skips[unit] ?? [], ...leaves])];
         }
-        const env: Record<string, string> = { ...part.env };
-        if (Object.keys(skips).length > 0) {
-          const skipListPath = path.join(
-            context.outputDir,
-            `${slug}.skip.json`,
-          );
-          await writeSkipList(skipListPath, skips);
-          env[SKIP_LIST_VARIABLE] = skipListPath;
-        }
+        const skipList = await writeBatchSkipList(context, slug, skips);
+        const env: Record<string, string> = { ...part.env, ...skipList.env };
         const measuring = measuringInto(context, part.packageDir);
         if (measuring !== undefined) env.DENO_COVERAGE_DIR = measuring;
         if (
@@ -718,6 +718,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
             group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
+            skipList.path,
           ),
           cwd,
           env,

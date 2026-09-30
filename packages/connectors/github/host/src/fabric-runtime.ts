@@ -1,5 +1,10 @@
 import { GithubFabricTarget } from "@commonfabric/github-connector/fabric";
-import { createSession, Identity, isDID } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  isDID,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import {
   experimentalOptionsForDeployedClient,
   type MemorySpace,
@@ -31,10 +36,12 @@ export async function openGithubFabricRuntime(options: {
   const identity = await Identity.fromPkcs8(
     await Deno.readFile(options.identityPath),
   );
-  const session =
-    await (isDID(options.space)
-      ? createSession({ identity, spaceDid: options.space })
-      : createSession({ identity, spaceName: options.space }));
+  const session = createSession({
+    identity,
+    spaceDid: isDID(options.space)
+      ? options.space
+      : await legacySpaceDid(options.space),
+  });
   // The deployment's posture, with this host's explicit EXPERIMENTAL_* still
   // winning per flag: the GitHub host is installed separately from the
   // toolshed it talks to (docs/development/EXPERIMENTAL_OPTIONS.md), so an
@@ -49,7 +56,6 @@ export async function openGithubFabricRuntime(options: {
   const storageManager = StorageManager.open({
     as: session.as,
     memoryHost: apiUrl,
-    spaceIdentity: session.spaceIdentity,
   });
   const runtime = new Runtime(runtimePresets.remoteClient({
     apiUrl,

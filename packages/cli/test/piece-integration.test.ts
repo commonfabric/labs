@@ -18,6 +18,7 @@ import {
   type TempIdentity,
   writeTempIdentity,
 } from "@commonfabric/integration/temp-identity";
+import { createTestSpace } from "@commonfabric/integration/test-space";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   callPieceHandler,
@@ -72,14 +73,14 @@ let serverExecutionOn = false;
 // server.
 async function waitForContent(
   identity: Identity,
-  spaceName: string,
+  space: string,
   piece: string,
   expected: string,
 ): Promise<void> {
   const pieces = await PiecesController.initialize({
     apiUrl: new URL(API_URL!),
     identity,
-    space: spaceName,
+    space,
   });
   try {
     const controller = await pieces.get(piece);
@@ -105,13 +106,13 @@ async function waitForContent(
  */
 async function waitForServedValue(
   identity: Identity,
-  spaceName: string,
+  space: string,
   piece: string,
 ): Promise<void> {
   const pieces = await PiecesController.initialize({
     apiUrl: new URL(API_URL!),
     identity,
-    space: spaceName,
+    space,
   });
   try {
     const controller = await pieces.get(piece);
@@ -138,10 +139,10 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
     tempIdentity = await writeTempIdentity();
     const { identity, path } = tempIdentity;
     identityPath = path;
-    const spaceName = `cf-piece-get-test-${Date.now()}`;
+    const space = await createTestSpace(identity, { apiUrl: API_URL! });
     spaceConfig = {
       apiUrl: API_URL!,
-      space: spaceName,
+      space,
       identity: identityPath,
     };
     pieceId = await newPiece(spaceConfig, noteEntry);
@@ -180,7 +181,7 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
           coldSelectionResultPieceId,
         ]
       ) {
-        await waitForServedValue(identity, spaceName, cold);
+        await waitForServedValue(identity, space, cold);
       }
     }
     sessionScopedPieceId = await newPiece(spaceConfig, {
@@ -198,8 +199,8 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
       { detail: { value: NOTE_CONTENT } },
     );
     flags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceName} --piece ${pieceId}`;
-    await waitForContent(identity, spaceName, pieceId, NOTE_CONTENT);
+      `--api-url ${API_URL} --identity ${identityPath} --space ${space} --piece ${pieceId}`;
+    await waitForContent(identity, space, pieceId, NOTE_CONTENT);
   });
 
   afterAll(async () => {

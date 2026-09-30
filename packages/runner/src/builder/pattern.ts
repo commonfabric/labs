@@ -1,4 +1,8 @@
-import type { JSONSchemaObj } from "@commonfabric/api";
+import type {
+  InSpaceGrants,
+  InSpaceOptions,
+  JSONSchemaObj,
+} from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
@@ -641,6 +645,7 @@ function factoryFromPattern<T, R>(
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
+    spaceGrants?: InSpaceGrants,
   ): PatternFactory<T, R> => {
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
@@ -657,7 +662,11 @@ function factoryFromPattern<T, R>(
         const outputs = reactive<R>();
         const frame = getTopFrame();
         if (defaultSpace !== undefined) {
-          const targetSpace = resolveInSpaceTargetSpace(defaultSpace, frame);
+          const targetSpace = resolveInSpaceTargetSpace(
+            defaultSpace,
+            spaceGrants,
+            frame,
+          );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
@@ -694,12 +703,29 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace);
+      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
       noteDerivedCopy(derived, factory);
       return derived;
     };
-    factory.inSpace = (space?: string | unknown) => {
-      const derived = makePatternFactory(defaultScope, space ?? "");
+    factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
+      // Pattern code is not trusted to keep to the type: a created space's
+      // only owner is the identity the run acts for.
+      for (
+        const [principal, capability] of Object.entries(options?.grants ?? {})
+      ) {
+        if (capability !== "READ" && capability !== "WRITE") {
+          throw new Error(
+            `inSpace() grants READ or WRITE only, not ${
+              JSON.stringify(capability)
+            } to ${JSON.stringify(principal)}`,
+          );
+        }
+      }
+      const derived = makePatternFactory(
+        defaultScope,
+        space ?? "",
+        options?.grants,
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -1095,18 +1121,23 @@ function assignComputedCellKinds(
  * graph-construction time.
  *
  * - A DID string or a cell resolves synchronously.
- * - A named string (or the anonymous case below) is resolved from the runtime's
- *   space-name cache. On a cache miss the name is recorded on the frame as
- *   pending and `undefined` is returned; the runner resolves pending names after
- *   the run and re-runs the handler/action (RetryImmediately), at which point
- *   the cache hits and the target resolves synchronously.
+ * - A named string (or the anonymous case below) names a space as the frame's
+ *   space calls it, and resolves through that space's allocation record (see
+ *   `Runtime.resolveInSpaceNameSync`). When the name has not been resolved,
+ *   it is recorded on the frame as pending, with `grants`, and `undefined` is
+ *   returned; the runner resolves pending names after the run and re-runs the
+ *   handler or action (RetryImmediately), at which point the target resolves
+ *   synchronously. The first call to name a space in a run is the one whose
+ *   grants create it: a later call naming it reads the record that call
+ *   writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
- *   call site gets its own deterministic space that survives re-runs — mirroring
- *   how cell ids are derived from causes.
+ *   call site gets its own space that survives re-runs — mirroring how cell ids
+ *   are derived from causes.
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
+  grants: InSpaceGrants | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1119,15 +1150,23 @@ function resolveInSpaceTargetSpace(
     );
   }
   const runtime = frame?.runtime;
-  if (!runtime) return undefined;
+  const callingSpace = frame?.space;
+  const tx = frame?.tx;
+  if (!runtime || !callingSpace || !tx) return undefined;
   const name = typeof space === "string" && space.length > 0
     ? space
     : anonymousSpaceName(frame!);
-  const resolved = runtime.resolveSpaceNameSync(name);
+  const resolved = runtime.resolveInSpaceNameSync(
+    callingSpace,
+    name,
+    tx,
+    grants,
+  );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
-  (frame!.pendingSpaceNames ??= new Set<string>()).add(name);
+  const pending = frame!.pendingSpaceNames ??= new Map();
+  if (!pending.has(name)) pending.set(name, grants);
   return undefined;
 }
 
@@ -1233,6 +1272,7 @@ export function pushFrameFromCause(
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
     eventTime?: number;
+    eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
     runtime?: Runtime;
     tx?: IExtendedStorageTransaction;
@@ -1245,6 +1285,7 @@ export function pushFrameFromCause(
     inHandler,
     frameKind,
     eventTime,
+    eventKey,
     runtime,
     tx,
     space,
@@ -1273,6 +1314,7 @@ export function pushFrameFromCause(
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
     ...(eventTime !== undefined && { eventTime }),
+    ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
   pushOntoFrameStack(frame);

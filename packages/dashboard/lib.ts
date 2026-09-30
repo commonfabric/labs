@@ -7,6 +7,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
@@ -525,7 +526,7 @@ export async function runArtifactId(options: {
   const ids = (listed.artifacts ?? [])
     .filter((artifact) => artifact.name === name && !artifact.expired)
     .map((artifact) => artifact.id);
-  return ids.length === 0 ? undefined : Math.max(...ids);
+  return ids.length === 0 ? undefined : maxOf(ids);
 }
 
 // Cache an async result for ttlMs; a rejection is not cached (so it retries).
@@ -560,10 +561,11 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
 }
 
 /**
- * The error a run list is refused with when its newest run is older than the
- * newest run already collected from the same workflow.
+ * The error a run list is refused with when it is behind the workflow's newest
+ * runs: its newest run is older than one already collected, or a search does
+ * not reach the runs on the workflow's newest page.
  */
-export const STALE_RUNS_ERROR = "newest run older than the one already collected";
+export const STALE_RUNS_ERROR = "run list behind the workflow's newest runs";
 
 /** A workflow run as far as telling which of two runs was created last. */
 export interface DatedRun {
@@ -731,7 +733,7 @@ export function sparkline(
   // window can sit far from the historical range, e.g. a near-zero error rate).
   const recent = highlight && !highlight.scaleAll ? vals.slice(-highlight.count) : vals;
   const scaled = scaleValues(recent, scale);
-  const lo = Math.min(...scaled), hi = Math.max(...scaled);
+  const lo = minOf(scaled), hi = maxOf(scaled);
   const pad = (hi - lo) * 0.125 || 0.5; // 12.5% each side ≈ +25% range; a floor for a flat series
   const min = lo - pad, rng = (hi + pad) - min;
   // Place each point at its `xs` fraction of the width (shared axis), else evenly.
@@ -824,7 +826,7 @@ export function multiSparkline(
   const all = drawable.flatMap((line) => line.vals);
   if (!all.length) return "";
   const scaled = scaleValues(all, opts.scale);
-  const lo = Math.min(...scaled), hi = Math.max(...scaled);
+  const lo = minOf(scaled), hi = maxOf(scaled);
   // Match sparkline's centered flat range when trimming leaves two equal values.
   const pad = scaled === all || lo !== hi ? 0 : 0.5;
   const w = 220, h = 34, min = lo - pad, max = hi + pad, rng = (max - min) || 1;

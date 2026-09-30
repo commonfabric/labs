@@ -12,6 +12,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { defer } from "@commonfabric/utils/defer";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 
 import type { FabricValue } from "@";
 import {
@@ -39,6 +40,7 @@ import {
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -86,7 +88,7 @@ function stateOf(encoded: RealmEncodedValue): RealmCodecValue {
 /**
  * Encodes `value`, sends it to a real `Worker`, and returns what that worker
  * made of it. Waits on the worker's own message rather than polling, and
- * terminates it however the wait ends.
+ * terminates it however the wait ends, settling once it has been torn down.
  */
 async function crossRealm(value: FabricValue): Promise<EchoReport> {
   const worker = new Worker(
@@ -98,11 +100,14 @@ async function crossRealm(value: FabricValue): Promise<EchoReport> {
   worker.onmessage = (ev) => report.resolve(ev.data as EchoReport);
   worker.onerror = (ev) => report.reject(new Error(ev.message));
 
+  let lifetimeLock: string | undefined;
   try {
     worker.postMessage(realmFromFabricValue(value));
-    return await report.promise;
+    const echoed = await report.promise;
+    lifetimeLock = echoed.lifetimeLock;
+    return echoed;
   } finally {
-    worker.terminate();
+    await terminateWorker(worker, lifetimeLock);
   }
 }
 
@@ -1180,6 +1185,7 @@ describe("RealmCodecEngine", () => {
         nsec: new FabricEpochNsec(1234567890123456789n),
         days: new FabricEpochDay(20_000n),
         span: new FabricDurationNsec(-31_556_952_000_000_000_001n),
+        daySpan: new FabricDurationDay(-9_007_199_254_740_993n),
         hash: new FabricHash(new Uint8Array([9, 8, 7]), "fid1"),
         regexp: new FabricRegExp(/ab+c/gi),
         unavailable: new FabricUnavailable("error", "general", "boom"),
@@ -1194,6 +1200,7 @@ describe("RealmCodecEngine", () => {
         nsec: "FabricEpochNsec",
         days: "FabricEpochDay",
         span: "FabricDurationNsec",
+        daySpan: "FabricDurationDay",
         hash: "FabricHash",
         regexp: "FabricRegExp",
         unavailable: "FabricUnavailable",
@@ -1206,6 +1213,7 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.nsec).toBe(1234567890123456789n);
       expect(report.facts?.days).toBe(20_000n);
       expect(report.facts?.span).toBe(-31_556_952_000_000_000_001n);
+      expect(report.facts?.daySpan).toBe(-9_007_199_254_740_993n);
       expect(report.facts?.hashTag).toBe("fid1");
       expect(report.facts?.hashBytes).toEqual([9, 8, 7]);
       expect(report.facts?.regexpParts).toEqual(["es2025", "ab+c", "gi"]);
@@ -1369,6 +1377,7 @@ describe("RealmCodecEngine", () => {
         ["FabricEpochNsec", FabricEpochNsec],
         ["FabricEpochDay", FabricEpochDay],
         ["FabricDurationNsec", FabricDurationNsec],
+        ["FabricDurationDay", FabricDurationDay],
         ["FabricHash", FabricHash],
         ["FabricRegExp", FabricRegExp],
         ["FabricUnavailable", FabricUnavailable],

@@ -112,6 +112,7 @@
  */
 
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Calibration, SuiteFit } from "./manifest.ts";
 import {
@@ -531,7 +532,7 @@ function span(
   of: (observation: BatchObservation) => number,
 ): number {
   const read = observations.map(of);
-  return Math.max(...read) - Math.min(...read);
+  return maxOf(read) - minOf(read);
 }
 
 /**

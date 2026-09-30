@@ -67,9 +67,7 @@ interface Outcome {
 // Instantiate the pattern under the gate, materialize lifts, then fire every
 // top-level result stream to exercise handler-context clock reads too.
 async function checkPattern(rel: string): Promise<Outcome> {
-  const cc = await initializeCapabilityGateController(
-    `${rel}-${crypto.randomUUID()}`,
-  );
+  const cc = await initializeCapabilityGateController();
   const errors: string[] = [];
   cc.runtime.scheduler.onError((err) => {
     if (err?.name === "TimeCapabilityError") errors.push(err.message);

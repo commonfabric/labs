@@ -385,6 +385,28 @@ describe("Schema: CFC authoring aliases", () => {
     expect(diagnostics[0]!.message).toContain("`WriteAuthorizedBy`");
   });
 
+  it("does not treat a type-only argument as an authored indirect writer binding", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Protected<T, Binding> = Cfc<
+        WriteAuthorizedBy<T, Binding>,
+        { confidentiality: readonly ["private"] }
+      >;
+      function save() {}
+      type SchemaRoot = Protected<string, typeof save>;
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    new SchemaGenerator().generateSchema(type, checker, undefined, {
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   it("reports nothing for a policy read from a type alone, which has no reference to spell a binding in", async () => {
     const { type, checker } = await getTypeFromCode(
       `
@@ -1741,6 +1763,150 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  describe("a union member that stands for several members", () => {
+    /**
+     * The schema of `SchemaRoot`'s `field`, declared as `declaration`, and
+     * the diagnostics its generation reports.
+     */
+    const generated = async (declaration: string) => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type Confidential<T, X extends readonly unknown[]> =
+          Cfc<T, { confidentiality: X }>;
+        type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+        declare const rules: unknown;
+        declare const rules2: unknown;
+        interface A { a: string }
+        interface B { b: number }
+        type Both =
+          | Confidential<A, readonly [PolicyOf<typeof rules>]>
+          | Confidential<B, readonly [PolicyOf<typeof rules>]>;
+        type Shape = A | B;
+        declare const DEFAULT_MARKER: unique symbol;
+        type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+        type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+        interface Host { name?: string }
+        const DEFAULT_HOST: Host = {};
+        type HostValue = Host | Default<typeof DEFAULT_HOST>;
+        interface SchemaRoot { field: ${declaration} }
+      `,
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker, undefined, {
+          onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+        }),
+      );
+      return { field: schema.properties?.field, diagnostics };
+    };
+
+    /** The schema of `SchemaRoot`'s `field`, declared as `declaration`. */
+    const fieldSchema = async (declaration: string) =>
+      (await generated(declaration)).field;
+
+    const POLICY = {
+      type: "https://commonfabric.org/cfc/atom/Policy",
+      policyRefKind: "module",
+      __ctPolicyIdentityOf: { file: "test.ts", path: ["rules"] },
+      subject: { __ctOwningSpace: true },
+    };
+    const POLICY_2 = {
+      ...POLICY,
+      __ctPolicyIdentityOf: { file: "test.ts", path: ["rules2"] },
+    };
+
+    it("keeps a CFC alias's labels on the members of a union it distributes into", async () => {
+      expect(
+        await fieldSchema(
+          "Confidential<A | B, readonly [PolicyOf<typeof rules>]> | null",
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "null" },
+          {
+            anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }],
+            ifc: { confidentiality: [POLICY] },
+          },
+        ],
+      });
+    });
+
+    it("reads each of two nodes that stand for the same members as an alternative of its own", async () => {
+      // `rules` and `rules2` have one type, so the checker folds both labeled
+      // unions into the same members, and only their nodes tell the policies
+      // apart.
+      const labeled = (binding: string) =>
+        `Confidential<A | B, readonly [PolicyOf<typeof ${binding}>]>`;
+      const alternative = (policy: typeof POLICY) => ({
+        anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }],
+        ifc: { confidentiality: [policy] },
+      });
+
+      expect(
+        await fieldSchema(`${labeled("rules")} | ${labeled("rules2")} | null`),
+      ).toEqual({
+        anyOf: [{ type: "null" }, alternative(POLICY), alternative(POLICY_2)],
+      });
+      expect(
+        await fieldSchema(`${labeled("rules2")} | ${labeled("rules")} | null`),
+      ).toEqual({
+        anyOf: [{ type: "null" }, alternative(POLICY_2), alternative(POLICY)],
+      });
+    });
+
+    it("reads each member of a union an alias writes at its own node", async () => {
+      expect(await fieldSchema("Both | null")).toEqual({
+        anyOf: [
+          { type: "null" },
+          { $ref: "#/$defs/A", ifc: { confidentiality: [POLICY] } },
+          { $ref: "#/$defs/B", ifc: { confidentiality: [POLICY] } },
+        ],
+      });
+    });
+
+    it("reports a label it cannot read once for a member node that stands for several members", async () => {
+      const { diagnostics } = await generated(
+        'Confidential<A | B, readonly ["a" | "b"]> | null',
+      );
+
+      expect(
+        diagnostics.filter((diagnostic) =>
+          diagnostic.type === "cfc-label:unread"
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("leaves a scope wrapper that stands for several members to the rules for a scope wrapper in a union", async () => {
+      // `PerUser<boolean>` distributes over `true` and `false`. Where a scope
+      // lands in a union is `scope-placement.ts`'s to decide, so the wrapper
+      // is not read whole as one alternative, which would put its scope
+      // inside an `anyOf` branch.
+      await expect(fieldSchema("PerUser<boolean> | null")).resolves.toEqual({
+        anyOf: [{ type: "null" }, { type: "boolean" }],
+      });
+    });
+
+    it("leaves a `Default` that stands for several members to the rules for `Default` in a union", async () => {
+      // `Default<T, V>` is `(T & DefaultMarker<V>) | T`, which the checker
+      // folds into the union beside `null`.
+      expect(await fieldSchema("HostValue | null")).toEqual({
+        anyOf: [{ type: "null" }, { $ref: "#/$defs/Host" }],
+      });
+    });
+
+    it("keeps the members of a union an alias writes as alternatives of its own", async () => {
+      expect(await fieldSchema("Shape | null")).toEqual({
+        anyOf: [
+          { type: "null" },
+          { $ref: "#/$defs/A" },
+          { $ref: "#/$defs/B" },
+        ],
+      });
+    });
+  });
+
   describe("an alias chain entered with its arguments as written", () => {
     // A field's annotation reaches the lowering with the reference's argument
     // nodes. The payload is read from the declaration of the last alias along
@@ -2318,7 +2484,7 @@ describe("Schema: CFC authoring aliases", () => {
           interface Holder { value: Nest<string> }
         `);
         expect(diagnostics.map((diagnostic) => diagnostic.type)).toContain(
-          "schema-type:unread",
+          "cfc-schema:recursion-limit",
         );
       });
     }
@@ -2554,7 +2720,7 @@ describe("Schema: CFC authoring aliases", () => {
         interface Holder { value: Nest<string> }
       `);
       expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
-        "schema-type:unread",
+        "cfc-schema:recursion-limit",
       ]);
     });
 

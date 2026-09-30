@@ -9,11 +9,16 @@ import {
   cfcEnforcementStrictness,
   RUNTIME_CFC_DIAL_DEFAULTS,
 } from "@commonfabric/runner/cfc";
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity";
 import {
   createRuntimeClientOptions,
   defaultRenderConfidentialityCeiling,
+  resolveSpaceDid,
   RuntimeInternals,
   type RuntimeTrustSnapshot,
 } from "@commonfabric/lib-shell";
@@ -82,11 +87,13 @@ class MockRuntimeClient {
     return Promise.resolve();
   }
 
-  resolvedSpaceNames: string[] = [];
+  createdSpaceLabels: Array<string | undefined> = [];
 
-  resolveSpaceName(name: string): Promise<DID> {
-    this.resolvedSpaceNames.push(name);
-    return Promise.resolve(`did:key:z6Mk-${name}` as DID);
+  createSpace(label?: string): Promise<DID> {
+    this.createdSpaceLabels.push(label);
+    return Promise.resolve(
+      `did:key:z6Mk-created-${this.createdSpaceLabels.length}` as DID,
+    );
   }
 
   registeredSpaceHosts: Array<{ space: DID; host: string }> = [];
@@ -446,14 +453,17 @@ describe("RuntimeInternals", () => {
     }
   });
 
-  it("resolves named spaces through the worker client", async () => {
+  it("creates spaces through the worker client and returns each DID", async () => {
     const client = new MockRuntimeClient();
     const runtime = new RuntimeInternals(client as any);
     try {
-      await expect(runtime.resolveSpaceName("notebook")).resolves.toBe(
-        "did:key:z6Mk-notebook",
+      await expect(runtime.createSpace("notebook")).resolves.toBe(
+        "did:key:z6Mk-created-1",
       );
-      expect(client.resolvedSpaceNames).toEqual(["notebook"]);
+      await expect(runtime.createSpace()).resolves.toBe(
+        "did:key:z6Mk-created-2",
+      );
+      expect(client.createdSpaceLabels).toEqual(["notebook", undefined]);
     } finally {
       await runtime.dispose();
     }
@@ -848,9 +858,9 @@ describe("RuntimeInternals", () => {
 
   it("defaults worker runtime options to shell-compatible CFC policy and principal trust", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-runtime-options",
+      spaceDid: identity.did(),
     });
 
     const experimental = {
@@ -877,7 +887,6 @@ describe("RuntimeInternals", () => {
       actingPrincipal: session.as.did(),
     });
     expect(options.spaceDid).toBe(session.space);
-    expect(options.spaceName).toBe(session.spaceName);
     expect(options.experimental).toBe(experimental);
     // A page that names no outer frame has none, and one that names one has
     // that one.
@@ -901,9 +910,9 @@ describe("RuntimeInternals", () => {
     // below the rung a Runtime resolves for a construction naming none would
     // hand that embedder less enforcement through the shell than without it.
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-enforcement-floor",
+      spaceDid: identity.did(),
     });
 
     const options = createRuntimeClientOptions({
@@ -921,9 +930,9 @@ describe("RuntimeInternals", () => {
 
   it("populates the §8.10.6 render ceiling when cfcRenderCeiling is on", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling",
+      spaceDid: identity.did(),
     });
 
     const options = createRuntimeClientOptions({
@@ -975,9 +984,9 @@ describe("RuntimeInternals", () => {
 
   it("builds the render ceiling for a host-supplied acting principal", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling-delegated",
+      spaceDid: identity.did(),
     });
     const delegate = "did:key:z6MkDelegatedHost";
 
@@ -1004,9 +1013,9 @@ describe("RuntimeInternals", () => {
 
   it("falls back to the session identity when nobody is named", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-render-ceiling-fallback",
+      spaceDid: identity.did(),
     });
     const sessionCeiling = defaultRenderConfidentialityCeiling(
       session.as.did(),
@@ -1039,9 +1048,9 @@ describe("RuntimeInternals", () => {
 
   it("allows hosts to override CFC policy and trust snapshot", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-cfc-runtime-options",
+      spaceDid: identity.did(),
     });
     const trustSnapshot: RuntimeTrustSnapshot = {
       id: "principal:loom-host",
@@ -1073,9 +1082,9 @@ describe("RuntimeInternals", () => {
 
   it("carries the worker-console flag onto the client options", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: "lib-shell-forward-worker-console",
+      spaceDid: identity.did(),
     });
 
     expect(
@@ -1627,6 +1636,27 @@ describe("RuntimeInternals", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+  });
+
+  describe("resolveSpaceDid()", () => {
+    it("returns the DID the legacy name resolves to, whoever asks", async () => {
+      const [alice, bob] = await Promise.all([
+        Identity.generate({ implementation: "noble" }),
+        Identity.generate({ implementation: "noble" }),
+      ]);
+      const legacy = await legacySpaceDid("team-lunch");
+
+      expect(await resolveSpaceDid(alice, "team-lunch")).toBe(legacy);
+      expect(await resolveSpaceDid(bob, "team-lunch")).toBe(legacy);
+    });
+
+    it("returns different DIDs for different names", async () => {
+      const identity = await Identity.generate({ implementation: "noble" });
+
+      expect(await resolveSpaceDid(identity, "team-lunch")).not.toBe(
+        await resolveSpaceDid(identity, "team-dinner"),
+      );
     });
   });
 });

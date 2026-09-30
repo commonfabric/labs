@@ -65,6 +65,7 @@
  * tile's collection keeps their history warm.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -407,10 +408,12 @@ async function fetchZip(
 
 // The benchmarks.yml runs on main, newest first, paging back until past the
 // window (or the 12-page ceiling). The workflow runs to a four-hourly schedule
-// and on manual dispatch. Both kinds of run land on main, and the list is
-// filtered by branch alone, so it holds either.
+// and on manual dispatch. Both kinds of run land on main, so the list is read
+// unfiltered and narrowed to main here: GitHub answers a list filtered by
+// branch from an index that is often days behind, and an unfiltered one
+// current.
 //
-// GitHub sometimes answers with a list that ends days back. A list whose
+// A list can still come back ending days back. A list whose
 // newest run is older than the newest run already collected is refused with
 // `STALE_RUNS_ERROR`, and any other list is kept in `latestBenchmarkRuns`.
 // What was collected is the last list kept, or, before one has been kept since
@@ -422,13 +425,15 @@ async function pageBenchmarkRuns(
 ): Promise<Run[]> {
   const runs: Run[] = [];
   for (let page = 1; page <= 12; page++) {
-    const response = await github.json<{ workflow_runs?: Run[] }>(
-      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&per_page=100&page=${page}`,
+    const response = await github.json<
+      { workflow_runs?: (Run & { head_branch: string | null })[] }
+    >(
+      `repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100&page=${page}`,
       token,
     );
     const batch = response.workflow_runs ?? [];
     if (!batch.length) break;
-    runs.push(...batch);
+    for (const run of batch) if (run.head_branch === "main") runs.push(run);
     if (
       batch.length < 100 ||
       Date.parse(batch[batch.length - 1].created_at) < cutoff
@@ -1120,8 +1125,8 @@ function benchmarkIndexView(
       count === 1 ? "" : "s"
     }${windowLabel}</div>`;
   const allPoints = indices.flatMap((series) => series.points);
-  const chartStart = Math.min(...allPoints.map((point) => point.at));
-  const chartEnd = Math.max(...allPoints.map((point) => point.at));
+  const chartStart = minOf(allPoints.map((point) => point.at));
+  const chartEnd = maxOf(allPoints.map((point) => point.at));
   const chartSpan = chartEnd - chartStart;
   const chartAxis = chartSpan || 1;
   const chart = multiSparkline(
@@ -1870,8 +1875,8 @@ export function benchPage(
       const status = representative.status;
       const pct = representative.pct;
       const allPoints = cpus.flatMap((series) => series.points);
-      const firstAt = Math.min(...allPoints.map((point) => point.at));
-      const lastAt = Math.max(...allPoints.map((point) => point.at));
+      const firstAt = minOf(allPoints.map((point) => point.at));
+      const lastAt = maxOf(allPoints.map((point) => point.at));
       const spark = multiSparkline(
         cpus.map((series) => ({
           vals: series.values,

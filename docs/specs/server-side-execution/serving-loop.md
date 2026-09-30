@@ -1389,23 +1389,22 @@ ADMITS a foreign-space write at ACCUMULATION iff BOTH hold —
   (`foreignWriteAuthorityFor`; the wave REFUSES the accept posture
   at construction without an authority probe, so the gate cannot be
   configured vacuous — carriage alone is minted for every acting
-  run and authorizes nothing). The structural grants:
-  **owner-by-identity** (the target space IS the actor's own DID —
-  their home space, the wish bootstrap's target),
-  **fresh-store creation** (the target store does not exist — §2b's
-  sanctioned provisioning, where the creating commit makes the
-  space the actor's; the probe checks the space NAME is a
+  run and authorizes nothing). The one structural grant is the
+  target's own ACL document granting the actor WRITE — checked
+  mode-independently: this is the serving plane's normative
+  fail-closed interim, not the client ACL rollout, so neither the
+  service-DID blanket nor the missing-ACL-populated-legacy compat
+  arm applies. The actor's home space (the wish bootstrap's target)
+  is granted by the OWNER entry its genesis ACL names; the space DID
+  equaling the actor's grants nothing by itself. A space no store
+  holds grants nothing either: a space exists once its genesis ACL
+  commit lands, and a served `.inSpace()` creates its target before
+  the handler re-runs, so a write aimed at a DID with no store names a
+  space nobody created. The probe checks the space NAME is a
   well-formed DID and never materializes a store itself, so a
-  carriage-bearing write to a garbage space string cannot silently
-  provision one — the recorded residual is that a well-formed FRESH
-  DID still provisions at commit, §2b's sanctioned minting with
-  quota attribution the standing residual, README §3.8), or an
-  **explicit ACL grant** (the target's own ACL document grants the
-  actor WRITE — checked mode-independently: this is the serving
-  plane's normative fail-closed interim, not the client ACL
-  rollout, so neither the service-DID blanket nor the
-  missing-ACL-populated-legacy compat arm applies). Per-DOC grant
-  RESOLUTION stays the OW13 owed hardening.
+  carriage-bearing write to a garbage or uncreated space refuses here
+  rather than provisioning one. Per-DOC grant RESOLUTION stays the
+  OW13 owed hardening.
 
 A carriage-less foreign write — the lunch-wall class: a run resolving
 against the SERVICE identity's ambient state — and an UNGRANTED one —

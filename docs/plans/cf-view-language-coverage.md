@@ -33,7 +33,11 @@ diffs and standard Git commit output. Source evidence otherwise settles only an
 extension that several syntaxes share. Each of those extensions is paired in
 metadata with the evidence one language claims it on, and a view with no source
 text leaves such a name unclaimed. Recognized shebangs and transformed compiler
-headers remain explicit source selectors. Binary is a supported, read-only
+headers remain explicit source selectors. A diff selects the language of each
+side of each file once, and every view of that side uses it. A path no language
+claims defers to that side's content: a hunk that begins at its first line,
+and then its complete file in the workspace or in Git. A side with no such
+evidence takes the other side's language. Binary is a supported, read-only
 language with raw-byte decoding and a hex-dump rendered view. Known binary
 filenames, NUL-containing input, and invalid UTF-8 select it before text
 decoding. Interactive binary views use a bounded preview, while redirected
@@ -490,7 +494,7 @@ leads on files and activity; shell leads on repositories.
 - [x] Highlight heredocs without guessing an embedded language unless the
   delimiter names it reliably.
 - [x] Add Infra and Loom fixtures that exercise operational scripts.
-- [ ] Select an extensionless file's language from its shebang in a diff.
+- [x] Select an extensionless file's language from its shebang in a diff.
 
 Shell runs on the Tree-sitter adapter with the official
 [`tree-sitter/tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash)
@@ -511,13 +515,14 @@ expansion's removal pattern, as in `${h%]}`, derails it; coloring continues
 inside those regions, and the structure tree loses 12 of one file's 161
 functions and 4 of the other's 44.
 
-A diff selects each file's language from its path, so an extensionless script
-in a diff is plain text. The fixtures' survey paths name `.sh` files for that
-reason.
+A diff reads an extensionless script's shebang from a hunk that starts at its
+first line, from the workspace file, or from the old Git blob. The shared
+fixture contract checks every recorded filename and shebang of a language in a
+diff as well as directly, which covers Git hooks and other extensionless
+programs.
 
 Completion gate: every surveyed shell selection form works in direct files,
-diffs, and incomplete edits. It does not pass yet: extensionless scripts in
-diffs are plain text.
+diffs, and incomplete edits. The gate passes.
 
 ## Stage 5: web markup, styling, and XML
 

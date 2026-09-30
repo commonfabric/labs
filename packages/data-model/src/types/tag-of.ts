@@ -20,10 +20,7 @@ import {
   type FabricValueLayer,
   type FabricValuePlusLayer,
 } from "@/interface.ts";
-import {
-  FABRIC_PRIMITIVE_VALUE_TAGS,
-  type FabricPrimitiveValueTag,
-} from "@/fabric-primitives/interface.ts";
+import type { FabricPrimitiveValueTag } from "@/fabric-primitives/interface.ts";
 import { debugStr } from "@/value-debug";
 
 import { type PlusTypePredicate } from "./interface.ts";
@@ -35,50 +32,30 @@ import {
 } from "./tags.ts";
 
 /**
- * Maps a `FabricPrimitive` to its tag. This `throw`s if it determines that the
- * given value is not valid: a type lie, an instance of no primitive class, or
- * one reporting a tag that is not a primitive tag.
+ * Maps a `FabricPrimitive` to its tag. A genuine instance always has one, since
+ * only the `data-model`'s own classes can produce one.
+ *
+ * @throws If `value` is not a `FabricPrimitive` at all (a type lie), or is a
+ *   counterfeit one, per `BaseFabricPrimitive.isInstance()`.
  */
 export function tagOfFabricPrimitive(
   value: FabricPrimitive,
 ): FabricPrimitiveValueTag {
-  const result = tagOfFabricPrimitiveElseNull(value);
-
-  if (result !== null) {
-    return result;
+  if (BaseFabricPrimitive.isInstance(value)) {
+    return value[VALUE_TAG];
   }
 
   throw new Error(debugStr`Not a valid \`FabricPrimitive\`: $quote${value}`);
 }
 
 /**
- * Maps a `FabricPrimitive` to its tag. This returns `null` if the given value
- * turns out not to be valid: a type lie, an instance of no primitive class, or
- * one reporting a tag that is not a primitive tag.
- */
-export function tagOfFabricPrimitiveElseNull(
-  value: FabricPrimitive,
-): FabricPrimitiveValueTag | null {
-  if (!(value instanceof BaseFabricPrimitive)) {
-    return null;
-  }
-
-  const tag = value[VALUE_TAG];
-
-  return ((typeof tag === "string") &&
-      Object.hasOwn(FABRIC_PRIMITIVE_VALUE_TAGS, tag))
-    ? tag
-    : null;
-}
-
-/**
  * Maps an arbitrary value to a `FabricValueTag`, based on a shallow evaluation
  * of its type as a possibly-valid `FabricValue`, `FabricValueLayer`, or `*Plus`
  * version of same. This returns `null` if it determines that the given value
- * cannot possibly be valid. To get a `PlusType` return value, a corresponding
- * type predicate must be passed as the second argument, and that function is
- * used to make a determination if the value would otherwise be considered
- * invalid.
+ * cannot possibly be valid, except for a counterfeit `FabricPrimitive`, for
+ * which it `throw`s. To get a `PlusType` return value, a corresponding type
+ * predicate must be passed as the second argument, and that function is used
+ * to make a determination if the value would otherwise be considered invalid.
  *
  * This function is intentionally not `export`ed, as the two cases it covers are
  * better handled by the `export`ed ones. The point of this function is to help
@@ -137,15 +114,14 @@ function tagOfUnknownElseNull<PlusType = never>(
     // possibly be one, so it falls through to the `isPlusType()` question.
     return VALUE_TAGS.Object;
   } else if (value instanceof FabricPrimitive) {
-    // Note: If `value` turns out to be an invalid `FabricPrimitive`, this will
-    // return `null` instead of falling through to an `isPlusType()` check. The
+    // Note: If `value` turns out to be a counterfeit `FabricPrimitive`, this
+    // `throw`s instead of falling through to an `isPlusType()` check. The
     // reasoning here is that the full class hierarchy under `FabricPrimitive`
-    // is meant to be controlled by the `data-model`, and so any invalid
-    // `FabricPrimitive` is de facto a bug in the `data-model`, and that makes
-    // it _more correct_ to return `null` here compared to blithely calling
-    // through to an `isPlusType()` predicate which should never have been
-    // called with such a value.
-    return tagOfFabricPrimitiveElseNull(value);
+    // is controlled by the `data-model`, so an invalid `FabricPrimitive` is a
+    // forgery, and that makes it _more correct_ to refuse it here compared to
+    // blithely calling through to an `isPlusType()` predicate which should
+    // never have been called with such a value.
+    return tagOfFabricPrimitive(value);
   } else if (value instanceof FabricInstance) {
     return VALUE_TAGS.FabricInstance;
   } else if (isPlusType?.(value)) {
@@ -189,9 +165,13 @@ export function tagOfFabricValue<PlusType = never>(
  * Maps a presumed valid `FabricValue`, `FabricValueLayer`, or corresponding
  * `*Plus` value to its tag, based on a shallow evaluation of its type. This
  * returns `null` if it determines that the given value cannot possibly be
- * valid. For `*Plus` values, a corresponding type predicate must be passed as
- * the second argument, and that function is used to make a determination if the
- * value would otherwise be considered invalid.
+ * valid, except for a counterfeit `FabricPrimitive`, for which it `throw`s. For
+ * `*Plus` values, a corresponding type predicate must be passed as the second
+ * argument, and that function is used to make a determination if the value
+ * would otherwise be considered invalid.
+ *
+ * @throws If `value` is a counterfeit `FabricPrimitive`, per
+ *   `BaseFabricPrimitive.isInstance()`.
  */
 export function tagOfFabricValueElseNull(
   value: FabricValueLayer,
@@ -214,7 +194,8 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * Maps a possible `FabricConvertibleJsValue` to its tag, based on a shallow
  * evaluation of its type. This returns `null` if it determines that the given
  * value isn't possibly either a valid `FabricValue` or an instance of one of
- * the members of `FabricConvertibleJsObject`.
+ * the members of `FabricConvertibleJsObject`, except for a counterfeit
+ * `FabricPrimitive`, for which it `throw`s.
  *
  * Note: Instances of `Error` are _only_ detected in this function using
  * `Error.isError()` and _not_ by looking at the prototype chain.
@@ -226,6 +207,9 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * not enter into it: SES lockdown replaces the global `Date` and `RegExp` with
  * constructors of its own that keep the original prototypes, so an instance
  * made before lockdown, after it, or inside a compartment is recognized alike.
+ *
+ * @throws If `value` is a counterfeit `FabricPrimitive`, per
+ *   `BaseFabricPrimitive.isInstance()`.
  */
 export function tagOfConvertibleJsValueElseNull(
   value: unknown,

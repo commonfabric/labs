@@ -57,6 +57,22 @@ describe("the tree half of the drift guard", () => {
     expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
   });
 
+  it("reads no unit of a suite that maps changes itself as a directory", () => {
+    // A type-check scope named after the top-level directory it checks
+    // runs none of the tests in that directory.
+    const suites = [
+      suite({
+        id: "typecheck",
+        units: ["tasks"],
+        unitsForChange: () => ["tasks"],
+      }),
+    ];
+    const findings = checkTree(suites, ["tasks/glaze.test.ts"]);
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "tasks/glaze.test.ts is claimed by no suite",
+    ]);
+  });
+
   it("lets a default suite and a variant suite claim one file", () => {
     const suites = [
       suite({ id: "package-integration", units: ["packages/oven/a.test.ts"] }),
@@ -341,7 +357,7 @@ describe("the store half of the drift guard", () => {
 });
 
 describe("what the tree half looks at", () => {
-  /** A tree holding the files a case names. */
+  /** A repository holding the files a case names. */
   async function tree(files: readonly string[]): Promise<string> {
     const root = await Deno.makeTempDir({ prefix: "surfaces-" });
     for (const file of files) {
@@ -349,6 +365,10 @@ describe("what the tree half looks at", () => {
       await Deno.mkdir(at.slice(0, at.lastIndexOf("/")), { recursive: true });
       await Deno.writeTextFile(at, "");
     }
+    const init = await new Deno.Command("git", {
+      args: ["-C", root, "init", "--quiet"],
+    }).output();
+    expect(init.code).toBe(0);
     return root;
   }
 
@@ -386,15 +406,20 @@ describe("what the tree half looks at", () => {
     }
   });
 
-  it("never descends into the directories the walk is told to skip", async () => {
-    // These hold test files; what keeps them out is their names.
+  it("finds a test anywhere in the repository and nowhere it ignores", async () => {
     const root = await tree([
+      ".claude/scripts/hook.test.ts",
+      ".claude/worktrees/copy/packages/oven/test/c.test.ts",
       "packages/oven/node_modules/dep/a.test.ts",
-      "packages/oven/dist/b.test.ts",
       "packages/oven/test/c.test.ts",
     ]);
     try {
+      await Deno.writeTextFile(
+        `${root}/.gitignore`,
+        ".claude/worktrees/\nnode_modules/\n",
+      );
       expect(await candidateSurfaces(root)).toEqual([
+        ".claude/scripts/hook.test.ts",
         "packages/oven/test/c.test.ts",
       ]);
     } finally {
@@ -1339,23 +1364,5 @@ describe("running the check and saying what it found", () => {
     const { findings, suites } = await check({ root });
     expect(findings.filter((finding) => finding.fails)).toEqual([]);
     expect(suites).toBeGreaterThan(0);
-  });
-});
-
-describe("walking a tree that cannot be read", () => {
-  it("raises rather than checking against a shorter list", async () => {
-    // A directory that cannot be read is not a directory that holds
-    // nothing. Treating the two alike would let the guard report success
-    // over whatever it managed to reach.
-    const root = await Deno.makeTempDir({ prefix: "obstructed-" });
-    await Deno.writeTextFile(`${root}/packages`, "not a directory");
-    await expect(candidateSurfaces(root)).rejects.toThrow();
-    await Deno.remove(root, { recursive: true });
-  });
-
-  it("finds nothing in a tree that holds none of its roots", async () => {
-    const root = await Deno.makeTempDir({ prefix: "bare-" });
-    expect(await candidateSurfaces(root)).toEqual([]);
-    await Deno.remove(root, { recursive: true });
   });
 });

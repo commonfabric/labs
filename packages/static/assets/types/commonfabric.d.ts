@@ -382,6 +382,24 @@ export interface FabricBytesConstructor {
 export declare const FabricBytes: FabricBytesConstructor;
 
 /**
+ * Temporal type representing a span of time, as a count of days. Wraps a
+ * `bigint` value.
+ */
+export interface FabricDurationDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationDay";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationDayConstructor {
+  new (value: bigint): FabricDurationDay;
+  prototype: FabricDurationDay;
+}
+
+export declare const FabricDurationDay: FabricDurationDayConstructor;
+
+/**
  * Temporal type representing a span of time, as a count of nanoseconds. Wraps
  * a `bigint` value.
  */
@@ -634,6 +652,7 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  */
 export type ConcreteFabricPrimitive =
   | FabricBytes
+  | FabricDurationDay
   | FabricDurationNsec
   | FabricEpochDay
   | FabricEpochNsec
@@ -1153,11 +1172,11 @@ export interface IReadable<T> {
 /**
  * Writable cells can update their value.
  *
- * **Frozenness contract:** Values passed into `set()`, `update()`, and `push()`
- * flow through a write-boundary normalization step that shallowly freezes any
- * plain unfrozen Object/Array levels it visits. Inputs that are already
- * deep-frozen valid `FabricValue` trees are accepted identity-preservingly with
- * no further cloning.
+ * **Frozenness contract:** Values passed into `set()`, `update()`, `push()`,
+ * and `pushAll()` flow through a write-boundary normalization step that
+ * shallowly freezes any plain unfrozen Object/Array levels it visits. Inputs
+ * that are already deep-frozen valid `FabricValue` trees are accepted
+ * identity-preservingly with no further cloning.
  */
 export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
@@ -1179,11 +1198,26 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Append one or more values to an array cell. See the
    * {@link IWritable} interface docs for the frozenness contract on the
-   * inputs.
+   * inputs. To append a list, pass it to {@link IWritable.pushAll} rather
+   * than spreading it here: every spread element is a separate argument, and a
+   * long enough list overflows the stack.
    */
   push(
     this: IsThisArray,
-    ...value: T extends (infer U)[] ? (U | AnyCellWrapping<U>)[] : never
+    ...value: T extends readonly (infer U)[] ? (U | AnyCellWrapping<U>)[]
+      : never
+  ): void;
+
+  /**
+   * Append every value in `values` to an array cell, in order, as one
+   * mergeable append, exactly as `push(...values)` would, but for a list of
+   * any length. See the {@link IWritable} interface docs for the frozenness
+   * contract on the inputs.
+   */
+  pushAll(
+    this: IsThisArray,
+    values: T extends readonly (infer U)[] ? readonly (U | AnyCellWrapping<U>)[]
+      : never,
   ): void;
 
   /**
@@ -1227,9 +1261,9 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
 
 /**
  * How the pattern transformer classifies a mergeable write: an
- * `array-identity-writer` takes element arguments whose identity is tracked
- * (`push` / `addUnique` / `removeByValue`); a `scalar-writer` does not
- * (`increment`).
+ * `array-identity-writer` takes elements whose identity is tracked, as
+ * arguments (`push` / `addUnique` / `removeByValue`) or as one list argument
+ * (`pushAll`); a `scalar-writer` does not (`increment`).
  */
 export type MergeableOpMethodKind = "scalar-writer" | "array-identity-writer";
 
@@ -1254,9 +1288,12 @@ export interface MergeableOpMethod {
  * transformer's method classification both derive from it, so adding a mergeable
  * op is one entry here plus its behavior descriptor — the transformer picks up
  * the new method with no edit, and a consistency test cross-checks the wire tags.
+ * Two methods may record the same wire op, as `push` and `pushAll` both record
+ * `append`.
  */
 export const MERGEABLE_OP_METHODS: readonly MergeableOpMethod[] = [
   { method: "push", wireOp: "append", kind: "array-identity-writer" },
+  { method: "pushAll", wireOp: "append", kind: "array-identity-writer" },
   { method: "addUnique", wireOp: "add-unique", kind: "array-identity-writer" },
   {
     method: "removeByValue",
@@ -2531,6 +2568,23 @@ export type NodeFactory<T, R> =
     asScope(scope: CellScope): NodeFactory<T, R>;
   };
 
+/**
+ * Access a space created by `PatternFactory.inSpace()` grants beyond its
+ * owner, by principal DID, or `"*"` for anyone. The grants
+ * apply when the space is created, and the first call to name a space in a
+ * run is the one that creates it; a space that already exists keeps its own
+ * access-control document.
+ */
+export type InSpaceGrants = Readonly<
+  { [principal in DID | "*"]?: "READ" | "WRITE" }
+>;
+
+/** Options for `PatternFactory.inSpace()`. */
+export interface InSpaceOptions {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+}
+
 export type PatternFactory<T, R> =
   & ((inputs: FactoryInput<T>) => Reactive<R>)
   & Pattern
@@ -2538,7 +2592,10 @@ export type PatternFactory<T, R> =
   & toEncodableForm
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
-    inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
+    inSpace(
+      space?: string | AnyCell<unknown>,
+      options?: InSpaceOptions,
+    ): PatternFactory<T, R>;
   };
 
 export type ModuleFactory<T, R> =
@@ -4120,6 +4177,61 @@ export type WishTag = `/${string}` | `#${string}`;
  */
 export type DID = `did:${string}`;
 
+/**
+ * Returns whether `value` is a DID in the syntax of the W3C DID Core
+ * specification, at most 256 characters long: `did:`, a lowercase method name,
+ * a colon, and a method-specific identifier of letters, digits, `.`, `-`, `_`,
+ * percent-escapes and inner `:` separators. Whitespace, other punctuation, a
+ * capitalized prefix and a trailing `:` all fail it.
+ *
+ * Ask it of a DID read from data before showing that DID to a person or
+ * treating it as the principal a record names, so that no other spelling of
+ * a DID passes for it. It checks syntax alone: a DID that passes names no one
+ * in particular, and says nothing about who wrote it.
+ *
+ * The runtime decides DID syntax with this same predicate. It reads nothing but
+ * its argument, so it can be called anywhere: in a handler, a `computed()` or a
+ * `lift()`, and in a pattern body, where a call on a reactive value is lifted
+ * like a call to any other function.
+ */
+export declare function isWellFormedDID(value: unknown): value is DID;
+
+/**
+ * Returns the principal the running handler acts for: the authenticated actor
+ * of the event it handles, or `undefined` for an event no principal sent.
+ * Nothing in the event's payload can choose the value.
+ *
+ * The value is _authority_, not _intent_: a handler that another pattern
+ * invokes sees the user that pattern runs as, so it does not show that the
+ * person asked for the action. A trusted gesture, or a value labeled
+ * `AuthoredByCurrentUser`, is what shows that.
+ *
+ * Available only in a handler for now, and throws anywhere else. A pattern body
+ * builds one graph for every viewer, and reading the viewer in a `computed()`
+ * or a `lift()` needs every runtime to scope the value to that user, and a
+ * label saying who may see the viewer's DID.
+ */
+export declare function currentPrincipal(): DID | undefined;
+
+/**
+ * Returns the event key of the event the running handler handles: a string
+ * naming that one event, as its actor sent it to its stream. Every run of the
+ * same event returns the same key, including a retry and the serving runtime's
+ * run of a client's event, so a handler can use it as an idempotence key or as
+ * the id of what the event creates. A new gesture, a new stream or another
+ * actor gets a new key, and nothing in the event's payload can choose it.
+ *
+ * The key is distinct per durable event id, actor and stream. A stream that
+ * has handled an event can admit the same id again, which gets the same key
+ * from the same actor, so a record addressed by the key may already exist.
+ *
+ * The key is unlabeled and carries no trust: it says that one event is one
+ * event, not who sent it or that a person asked for it.
+ *
+ * Available only in a handler, and throws anywhere else.
+ */
+export declare function eventKey(): string;
+
 export type WishParams = {
   query: WishTag | string;
   path?: string[];
@@ -4511,13 +4623,28 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
+ *
+ * The shared space is born with an access list. The first participant's user
+ * is its OWNER, and every other user holds the level its participants declare
+ * with `{ pattern, access }`, or `"WRITE"` when none declares one; `"none"`
+ * leaves the user out of the list. It is what `spaceAccess()` reads. The
+ * storage server does not enforce it: a participant reads and writes the space
+ * whatever its level.
+ *
+ * The run fails before any participant starts when a participant of the first
+ * participant's user declares a level other than `"OWNER"`, or when two
+ * participants of one user declare different levels.
  */
 export interface MultiUserTestDescriptor {
   setup?: (...args: never[]) => unknown;
   participants: Record<
     string,
     | ((...args: never[]) => unknown)
-    | { pattern: (...args: never[]) => unknown; user?: string }
+    | {
+      pattern: (...args: never[]) => unknown;
+      user?: string;
+      access?: SpaceAccessLevel;
+    }
   >;
 }
 
@@ -4620,6 +4747,99 @@ export type GetEntityIdFunction = (
 ) => { "/": string } | FabricHash | undefined;
 
 export declare const getEntityId: GetEntityIdFunction;
+
+/**
+ * A principal's access to a space: one of the capabilities a space's access
+ * list grants, or `"none"` when it grants that principal nothing.
+ */
+export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
+
+/**
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, as the space's access list states it: the principal's entry in
+ * the list, else the list's `"*"` entry. `target` is required, so a call about
+ * the pattern's own space passes a cell that lives there.
+ *
+ * `"none"` means the principal holds nothing there. `undefined` means the
+ * answer is not known yet: the access list has not arrived, the space has no
+ * access list, there is no principal, or `target` is `undefined`, which is what
+ * a value that cannot be read yet reads as. It is never a guess.
+ *
+ * In a reactive computation (`computed()`, `lift()`) the principal is whoever
+ * is viewing, and the result is theirs alone, so two users never see each
+ * other's answer; it updates when the access list changes. In a handler it is
+ * the event's actor. Calling it in a pattern body throws, since a pattern
+ * body builds one graph for every viewer: wrap it in `computed()` instead.
+ *
+ * It names no principal, and tells a member only what a member can already
+ * read, since any member can read the whole access list.
+ */
+export type SpaceAccessFunction = (
+  target: AnyCell<unknown> | undefined,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccess: SpaceAccessFunction;
+
+/** The level `grantSpaceAccess()` sets an access-list entry to. */
+export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
+
+/**
+ * Sets `principal`'s entry in the access list of the space `target`'s value
+ * lives in to exactly `level`, raising or lowering it. Granting a level the
+ * principal already holds changes nothing, so a handler run again for the same
+ * event converges.
+ *
+ * A grant exposes to `principal` everything the space already holds, not only
+ * what is written after it, since adding a member changes no value's label.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture: a person's action on a rendered UI.
+ * `principal` must be a DID other than the actor's own, the space's own, and
+ * `"*"`. The space may not be the actor's own Home space. Lowering the space's
+ * last concrete `OWNER` is refused. A runtime
+ * cannot know the deployment's service DIDs, or the identities its serving
+ * runtimes act through, so it does not refuse one of those as `principal`.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function grantSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+  level: SpaceGrantLevel,
+): void;
+
+/**
+ * Removes `principal`'s entry from the access list of the space `target`'s
+ * value lives in. Revoking an entry that is not there changes nothing, so a
+ * handler run again for the same event converges. A principal the list's
+ * `"*"` entry covers keeps what that entry grants.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Revoking the space's last concrete `OWNER` is
+ * refused.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function revokeSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+): void;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

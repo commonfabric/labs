@@ -72,9 +72,9 @@ describe("setsrc over an unloadable current pattern", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `setsrc-unloadable-pattern-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );

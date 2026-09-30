@@ -6,9 +6,10 @@
  */
 
 import { debugStr } from "@commonfabric/data-model";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   Browser,
+  createTestSpace,
   env,
   type Page,
   waitForCondition,
@@ -114,10 +115,10 @@ async function verifyPosture(): Promise<void> {
 const fixtures = new Map<
   number,
   Promise<{
-    spaceName: string;
+    spaceDid: DID;
     pieceId: string;
     profileLocation: string;
-    profileSpace: string;
+    profileSpace: DID;
   }>
 >();
 /** Seeds one dedicated space per size and releases the seeding runtime. */
@@ -126,45 +127,35 @@ function fixture(voteCount: number) {
   if (!created) {
     created = (async () => {
       await verifyPosture();
-      const spaceName =
-        `${env.SPACE_NAME}-${profileLocation}-read-${voteCount}`;
+      const spaceDid = await createTestSpace(identity);
       const cc = await initializePiecesController({
-        space: spaceName,
+        space: spaceDid,
         apiUrl: new URL(env.API_URL),
         identity,
       });
       try {
         await cc.ensureDefaultPattern();
         const voterCount = Math.ceil(voteCount / OPTIONS) + 2;
-        let profileSpace = cc.getSpace();
+        let profileSpace = spaceDid;
         let input: { profiles: Cell<{ name: string }[]> } | undefined;
         if (profileLocation === "cross-space") {
-          const profileController = await initializePiecesController({
-            space: `${spaceName}-profiles`,
-            apiUrl: new URL(env.API_URL),
-            identity,
+          profileSpace = await createTestSpace(identity);
+          const profiles = cc.runtime.getCell<{ name: string }[]>(
+            profileSpace,
+            "benchmark-voter-profiles",
+          );
+          const initialized = await cc.runtime.editWithRetry((tx) => {
+            const writable = profiles.withTx(tx);
+            writable.set([]);
+            for (let index = 0; index < voterCount; index++) {
+              const profile = writable.elementById(String(index));
+              profile.set({ name: `Voter ${index}` });
+              writable.addUnique(profile);
+            }
           });
-          try {
-            profileSpace = profileController.getSpace();
-            const profiles = cc.runtime.getCell<{ name: string }[]>(
-              profileSpace,
-              "benchmark-voter-profiles",
-            );
-            const initialized = await cc.runtime.editWithRetry((tx) => {
-              const writable = profiles.withTx(tx);
-              writable.set([]);
-              for (let index = 0; index < voterCount; index++) {
-                const profile = writable.elementById(String(index));
-                profile.set({ name: `Voter ${index}` });
-                writable.addUnique(profile);
-              }
-            });
-            if (initialized.error) throw new Error(initialized.error.message);
-            await cc.synced();
-            input = { profiles };
-          } finally {
-            await profileController.dispose();
-          }
+          if (initialized.error) throw new Error(initialized.error.message);
+          await cc.synced();
+          input = { profiles };
         }
         const root = join(import.meta.dirname!, "..");
         const program = await resolveLocalProgram(
@@ -232,7 +223,7 @@ function fixture(voteCount: number) {
         } finally {
           stop();
         }
-        return { spaceName, pieceId: piece.id, profileLocation, profileSpace };
+        return { spaceDid, pieceId: piece.id, profileLocation, profileSpace };
       } finally {
         await cc.dispose();
       }
@@ -288,9 +279,9 @@ for (const voteCount of SIZES) {
         pageErrors.push(event.detail.message);
       });
       await page.goto(
-        `${env.FRONTEND_URL}${target.spaceName}/${target.pieceId}`,
+        `${env.FRONTEND_URL}${target.spaceDid}/${target.pieceId}`,
       );
-      await waitForPieceView(page, target.spaceName, target.pieceId);
+      await waitForPieceView(page, target.spaceDid, target.pieceId);
       await login(page, identity);
       await waitForSettledText(page, "body", "Lunch 13");
       await clickCfButton(page, "[data-benchmark-claim]");

@@ -1706,6 +1706,37 @@ describe("cell-handle", () => {
       expect(cell.get()).toEqual([1, 2, 3]);
     });
 
+    it("sends a list given to pushAll as one CellPush of every member", () => {
+      const members = Array.from({ length: 200_000 }, (_, index) => index);
+      const requests: unknown[] = [];
+      const cell = new CellHandle<number[]>(runtimeCapturing(requests), ref);
+      cell[$onCellUpdate]([-1]);
+
+      cell.pushAll(members);
+
+      expect(requests.length).toBe(1);
+      const request = requests[0] as { type: unknown; values: unknown };
+      expect(request.type).toBe(RequestType.CellPush);
+      expect(request.values).toEqual(members);
+      expect(cell.get()).toEqual([-1, ...members]);
+    });
+
+    it("reports a refused strict pushAll to capability callers", async () => {
+      const refused = new Error("push refused");
+      const runtime = {
+        [$conn]: () => ({
+          request: () => Promise.reject(refused),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<number[]>(runtime, ref, [1]);
+
+      await expect(cell.pushAllStrict([2, 3])).rejects.toBe(refused);
+      expect(cell.get()).toEqual([1]);
+    });
+
     it("reports a refused strict push to capability callers", async () => {
       const refused = new Error("push refused");
       const runtime = {
@@ -2544,11 +2575,11 @@ describe("cell-handle", () => {
       }) as unknown as RuntimeClient;
 
     it("surfaces the failure to the caller rather than swallowing it", async () => {
-      // An object forged onto a `FabricPrimitive`'s prototype is a
-      // `FabricValue` by every check and still has no encoding, so it is what
-      // can fail a send, since the domain's real members all cross. The
-      // caller has to learn that their write never happened; the alternative
-      // is a `set()` that resolves over a value the runtime never saw.
+      // An object forged onto a `FabricPrimitive`'s prototype has no encoding,
+      // so it is what can fail a send, since the domain's real members all
+      // cross. The caller has to learn that their write never happened; the
+      // alternative is a `set()` that resolves over a value the runtime never
+      // saw.
       //
       // `set()` alone covers the hazard. Every write path attaches a
       // `.catch()` that turns a rejected send into a resolved promise --

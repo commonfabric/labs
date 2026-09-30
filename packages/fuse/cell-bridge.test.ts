@@ -6,12 +6,18 @@
  * too. Nothing here mounts a filesystem.
  */
 
+import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { defer } from "@commonfabric/utils/defer";
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -19,7 +25,15 @@ import {
   type PieceController,
   PiecesController,
 } from "@commonfabric/piece/ops";
-import { decomposeSchema, Runtime } from "@commonfabric/runner";
+import {
+  decomposeSchema,
+  Runtime,
+  SpaceNotFoundError,
+} from "@commonfabric/runner";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "@commonfabric/runner/storage/cache.deno";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { registerSchemaDocument } from "../runner/src/schema-registry.ts";
@@ -275,6 +289,20 @@ function readStatusFile(tree: FsTree): string {
 }
 
 /**
+ * `fake` as the `PiecesController` of a space that exists, which is the only
+ * kind `connectSpace()` opens. It keeps the fake's identity and any `runtime`
+ * members the fake supplies.
+ */
+function existingSpacePieces(
+  fake: { runtime?: object; [member: string]: unknown },
+): SpaceState["pieces"] {
+  fake.runtime = Object.assign(fake.runtime ?? {}, {
+    spaceExists: () => Promise.resolve(true),
+  });
+  return fake as unknown as SpaceState["pieces"];
+}
+
+/**
  * Build a minimal SpaceState backed by a fake PiecesController.
  * Registers the state in bridge.spaces and bridge.knownSpaces.
  */
@@ -393,6 +421,118 @@ describe("cell-bridge", () => {
 
     describe("instance members", () => {
       describe("connectSpace()", () => {
+        describe("over a shared store", () => {
+          // Every connection is a client of one in-process memory server, so
+          // what one writes another reads, and `checker` looks at the store
+          // from outside the bridge.
+
+          let server: ReturnType<typeof newLoopbackServer>;
+          let signer: Identity;
+          let storages: EmulatedStorageManager[];
+          let runtimes: Runtime[];
+          let checker: Runtime;
+          let tree: FsTree;
+          let bridge: CellBridge;
+
+          /** A runtime on its own connection to the shared store. */
+          const openRuntime = () => {
+            const storageManager = EmulatedStorageManager.connectTo(server, {
+              as: signer,
+            });
+            storages.push(storageManager);
+            const runtime = new Runtime({
+              apiUrl: new URL("https://example.invalid"),
+              storageManager,
+            });
+            runtimes.push(runtime);
+            return runtime;
+          };
+
+          beforeEach(async () => {
+            server = newLoopbackServer();
+            signer = await Identity.generate();
+            storages = [];
+            runtimes = [];
+            checker = openRuntime();
+            tree = new FsTree();
+            // Opens a space the way `PiecesController.initialize()` does: a
+            // name resolves to its legacy DID, and opening creates nothing.
+            bridge = new CellBridge(tree, "/tmp/cf-exec", {
+              loadPieces: async ({ space }) =>
+                new PiecesController(
+                  createSession({
+                    identity: signer,
+                    spaceDid: isDID(space)
+                      ? space
+                      : await legacySpaceDid(space),
+                  }),
+                  openRuntime(),
+                  {
+                    deferSpaceCellSync: true,
+                    ...(isDID(space) ? {} : { spaceName: space }),
+                  },
+                ),
+            });
+            bridge.init({
+              apiUrl: "https://example.invalid",
+              identity: "test",
+            });
+          });
+
+          afterEach(async () => {
+            for (const runtime of runtimes) await runtime.dispose();
+            for (const storage of storages) await storage.close();
+            await server.close();
+          });
+
+          it("rejects a name that reaches no space, leaves nothing to look up, and creates nothing", async () => {
+            // The root lookup callback replies `ENOENT` when `connectSpace()`
+            // rejects, and when the tree then holds no entry for the name.
+
+            const name = "fuse-unused-space-name";
+            const error = await bridge.connectSpace(name).then(
+              () => undefined,
+              (thrown: unknown) => thrown,
+            );
+
+            assert(error instanceof SpaceNotFoundError);
+            expect(error.space).toBe(await legacySpaceDid(name));
+            expect(
+              new FuseOperationState(tree, bridge).lookup(
+                tree.rootIno,
+                encodeFuseComponent(name),
+              ),
+            ).toBeUndefined();
+            expect(bridge.spaces.has(name)).toBe(false);
+            expect(await checker.spaceExists(await legacySpaceDid(name)))
+              .toBe(false);
+          });
+
+          it("connects a space that was created before it was opened", async () => {
+            const space = await checker.createSpace();
+
+            const state = await bridge.connectSpace(space);
+
+            expect(state.did).toBe(space);
+            expect(
+              new FuseOperationState(tree, bridge).lookup(
+                tree.rootIno,
+                encodeFuseComponent(space),
+              ),
+            ).toBe(state.spaceIno);
+            expect(bridge.spaces.get(space)).toBe(state);
+          });
+
+          it("connects the identity's Home space before its first open", async () => {
+            const home = signer.did();
+
+            const state = await bridge.connectSpace(home);
+
+            expect(state.did).toBe(home);
+            expect(bridge.spaces.get(home)).toBe(state);
+          });
+        });
+
         it("removes the space's partial state after a late connection failure", async () => {
           // The failure lands at the connect's index write, after the space's
           // tree and state exist: the tree refuses `.index.json`. The space's
@@ -403,7 +543,7 @@ describe("cell-bridge", () => {
           const connectionFailure = new Error("manifest generation failed");
           const tree = new RefusingTree(".index.json", connectionFailure);
           let disposeCalls = 0;
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zFailedSpace",
             runtime: {
               dispose: () => {
@@ -411,7 +551,7 @@ describe("cell-bridge", () => {
                 return Promise.reject(new Error("dispose failed"));
               },
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
           });
@@ -455,7 +595,7 @@ describe("cell-bridge", () => {
             loadPieces: () => {
               managerLoads++;
               return Promise.resolve(
-                {
+                existingSpacePieces({
                   getSpace: () => "did:key:zRetrySpace",
                   listEntityIdPage: () => {
                     listRequests++;
@@ -463,7 +603,7 @@ describe("cell-bridge", () => {
                       ? Promise.reject(new Error("identifier list unavailable"))
                       : Promise.resolve({ serverSeq: 1, ids: [entityId] });
                   },
-                } as unknown as SpaceState["pieces"],
+                }),
               );
             },
           });
@@ -490,13 +630,13 @@ describe("cell-bridge", () => {
           const identifiers = defer<{ serverSeq: number; ids: string[] }>();
           const entityId = "of:fid1:delayed-entity";
           let managerLoads = 0;
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zDelayedSpace",
             listEntityIdPage: () => {
               discoveryStarted.resolve();
               return identifiers.promise;
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => {
               managerLoads++;
@@ -529,7 +669,7 @@ describe("cell-bridge", () => {
             { name: "AuthorizationError" },
           );
           let disposedManagers = 0;
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             ensureSpaceSession: () => Promise.resolve(),
             synced: () => Promise.resolve(),
             getSpace: () => "did:key:zDeniedInitialSpace",
@@ -542,7 +682,7 @@ describe("cell-bridge", () => {
                 return Promise.resolve();
               },
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
           });
@@ -781,7 +921,7 @@ describe("cell-bridge", () => {
           ];
           let listRequests = 0;
           const existenceRequests: string[] = [];
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zTargetedEntitySpace",
             listEntityIdPage: () => {
               listRequests++;
@@ -791,7 +931,7 @@ describe("cell-bridge", () => {
               existenceRequests.push(id);
               return Promise.resolve(ids.includes(id));
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
@@ -834,11 +974,11 @@ describe("cell-bridge", () => {
               get: () => Promise.resolve({}),
             },
           });
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zPendingEntitySpace",
             entityIdExists: (id: string) =>
               Promise.resolve(id === firstId || id === secondId),
-          } as unknown as SpaceState["pieces"];
+          });
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
@@ -1154,7 +1294,7 @@ describe("cell-bridge", () => {
             sync: rejectEntityValueRequest,
           };
           const piecesCell = { sink: () => () => {} };
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zEntityListSpace",
             getPieceRegistry: () => {
               pieceListRequests++;
@@ -1173,7 +1313,7 @@ describe("cell-bridge", () => {
               return Promise.resolve(entityIds.includes(id));
             },
             get: rejectEntityValueRequest,
-          } as unknown as SpaceState["pieces"];
+          });
           let deferredSpaceCellSync = false;
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: (config) => {
@@ -1228,7 +1368,7 @@ describe("cell-bridge", () => {
             (_, index) => `of:fid1:entity-${index.toString().padStart(4, "0")}`,
           );
           const requests: Array<Record<string, unknown>> = [];
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zPaginatedEntitySpace",
             listEntityIdPage: (options: {
               after?: string;
@@ -1247,7 +1387,7 @@ describe("cell-bridge", () => {
                 ...(hasMore ? { nextAfter: pageIds.at(-1)! } : {}),
               });
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
@@ -1352,13 +1492,13 @@ describe("cell-bridge", () => {
           const ids = ["of:fid1:first", "of:fid1:second"];
           const page = defer<{ serverSeq: number; ids: string[] }>();
           let requests = 0;
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zCoalescedEntitySpace",
             listEntityIdPage: () => {
               requests++;
               return page.promise;
             },
-          } as unknown as SpaceState["pieces"];
+          });
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
@@ -1442,7 +1582,7 @@ describe("cell-bridge", () => {
           const tree = new FsTree();
           let entityIds = ["of:fid1:original"];
           const piecesCell = { sink: () => () => {} };
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zEntityRefreshSpace",
             getPieceRegistry: () => Promise.resolve(piecesCell),
             syncPieces: () => Promise.resolve([]),
@@ -1450,7 +1590,7 @@ describe("cell-bridge", () => {
               Promise.resolve({ serverSeq: 1, ids: [...entityIds] }),
             entityIdExists: (id: string) =>
               Promise.resolve(entityIds.includes(id)),
-          } as unknown as SpaceState["pieces"];
+          });
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
           });
@@ -1554,7 +1694,7 @@ describe("cell-bridge", () => {
             sync: rejectEntityValueRequest,
           };
           let pieceListRequests = 0;
-          const spacePieces = {
+          const spacePieces = existingSpacePieces({
             getSpace: () => "did:key:zLegacyEntityListSpace",
             getPieceRegistry: () => {
               pieceListRequests++;
@@ -1566,7 +1706,7 @@ describe("cell-bridge", () => {
             },
             listEntityIds: () => Promise.resolve(undefined),
             get: rejectEntityValueRequest,
-          } as unknown as SpaceState["pieces"];
+          });
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () => Promise.resolve(spacePieces),
           });
@@ -1601,11 +1741,11 @@ describe("cell-bridge", () => {
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () =>
               Promise.resolve(
-                {
+                existingSpacePieces({
                   getSpace: () => "did:key:zRetainedEntitySpace",
                   entityIdExists: (id: string) =>
                     Promise.resolve(liveIds.has(id)),
-                } as unknown as SpaceState["pieces"],
+                }),
               ),
             maxEntityProjections: 1,
           });
@@ -1660,11 +1800,11 @@ describe("cell-bridge", () => {
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () =>
               Promise.resolve(
-                {
+                existingSpacePieces({
                   getSpace: () => "did:key:zReferencedEntitySpace",
                   entityIdExists: (id: string) =>
                     Promise.resolve(ids.includes(id)),
-                } as unknown as SpaceState["pieces"],
+                }),
               ),
             maxEntityProjections: 1,
           });
@@ -1713,11 +1853,11 @@ describe("cell-bridge", () => {
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () =>
               Promise.resolve(
-                {
+                existingSpacePieces({
                   getSpace: () => "did:key:zRepeatedReferencesSpace",
                   entityIdExists: (id: string) =>
                     Promise.resolve(exists && id === entityId),
-                } as unknown as SpaceState["pieces"],
+                }),
               ),
           });
           bridge.init({ apiUrl: "https://example.invalid", identity: "test" });
@@ -1769,11 +1909,11 @@ describe("cell-bridge", () => {
           const bridge = new CellBridge(tree, "/tmp/cf-exec", {
             loadPieces: () =>
               Promise.resolve(
-                {
+                existingSpacePieces({
                   getSpace: () => "did:key:zRemovedChildSpace",
                   entityIdExists: (id: string) =>
                     Promise.resolve(ids.includes(id)),
-                } as unknown as SpaceState["pieces"],
+                }),
               ),
             maxEntityProjections: 1,
           });
@@ -5614,11 +5754,11 @@ describe("cell-bridge", () => {
         const bridge = new CellBridge(tree, "/tmp/cf-exec", {
           loadPieces: () =>
             Promise.resolve(
-              {
+              existingSpacePieces({
                 getSpace: () => "did:key:zConcurrentEntitySpace",
                 entityIdExists: (id: string) =>
                   Promise.resolve(ids.includes(id)),
-              } as unknown as SpaceState["pieces"],
+              }),
             ),
           maxEntityProjections: 1,
         });
@@ -5767,6 +5907,9 @@ describe("cell-bridge", () => {
           bridge.init({ apiUrl: "https://example.invalid", identity: "test" });
 
           const state = await bridge.connectSpace("home");
+          // Connecting reads the space cell, which is the root entity, to
+          // confirm the space exists. What is measured is the traversal.
+          serverPayloads.length = 0;
           const fuseOperations = new FuseOperationState(tree, bridge);
           const entitiesFh = fuseOperations.openDirectory(state.entitiesIno);
           expect(entitiesFh).toBeDefined();

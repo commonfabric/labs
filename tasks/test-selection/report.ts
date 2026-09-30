@@ -34,6 +34,7 @@ import {
   testIdentityOfKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { maxOf } from "@commonfabric/utils/math";
 import { excusedMeasurement, isLaneMeasurement } from "../lane-measurement.ts";
 import type { WithheldReason } from "./manifest.ts";
 import {
@@ -834,7 +835,7 @@ export function shownIdentity(test: TestIdentity): string {
   );
   const longest = Math.max(
     0,
-    ...[...text.matchAll(/`+/g)].map((run) => run[0].length),
+    maxOf([...text.matchAll(/`+/g)].map((run) => run[0].length)),
   );
   const fence = "`".repeat(longest + 1);
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";

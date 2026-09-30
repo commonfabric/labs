@@ -212,13 +212,31 @@ describe("staged-reference-authorship", () => {
     });
 
     for (const confidentialSlot of [false, true]) {
-      for (const order of ["bottom-up", "top-down", "stored"] as const) {
+      for (
+        const order of [
+          "bottom-up",
+          "top-down",
+          "stored",
+          "replaced-bottom-up",
+          "replaced-top-down",
+        ] as const
+      ) {
         it(`keeps ${kind} on the referenced value with ${confidentialSlot ? "a confidential" : "an undeclared"} slot in ${order} order`, async () => {
           const seed = runtime.edit();
           actAs(seed, bob.did());
           const leaf = runtime.getCell(space, "leaf", claimSchema(kind), seed);
           leaf.set({ content: text });
           recordTrustedWrite(seed, leaf.getAsNormalizedFullLink());
+          const oldLeaf = runtime.getCell(
+            space,
+            "old-leaf",
+            claimSchema(kind),
+            seed,
+          );
+          if (order.startsWith("replaced-")) {
+            oldLeaf.set({ content: "Bob's previous content" });
+            recordTrustedWrite(seed, oldLeaf.getAsNormalizedFullLink());
+          }
           expect((await seed.commit()).error).toBeUndefined();
 
           const tx = runtime.edit();
@@ -237,11 +255,14 @@ describe("staged-reference-authorship", () => {
               : {}),
           } as const satisfies JSONSchema;
           const wrapper = runtime.getCell(space, "wrapper", wrapperSchema, tx);
-          const stageWrapper = (transaction: IExtendedStorageTransaction) => {
+          const stageWrapper = (
+            transaction: IExtendedStorageTransaction,
+            source = leaf,
+          ) => {
             actAs(transaction, alice.did());
             const target = wrapper.withTx(transaction);
             target.set({
-              next: leaf.withTx(transaction),
+              next: source.withTx(transaction),
               own: "Alice's value",
             });
             recordReferencedArgumentFields(
@@ -251,9 +272,9 @@ describe("staged-reference-authorship", () => {
             );
             recordTrustedWrite(transaction, target.getAsNormalizedFullLink());
           };
-          if (order === "stored") {
+          if (order === "stored" || order.startsWith("replaced-")) {
             const stored = runtime.edit();
-            stageWrapper(stored);
+            stageWrapper(stored, order === "stored" ? leaf : oldLeaf);
             expect((await stored.commit()).error).toBeUndefined();
           }
           const node = runtime.getCell(space, "node", {
@@ -300,7 +321,9 @@ describe("staged-reference-authorship", () => {
             },
           ];
           for (
-            const stage of order === "top-down" ? stages.toReversed() : stages
+            const stage of order.endsWith("top-down")
+              ? stages.toReversed()
+              : stages
           ) {
             stage();
           }

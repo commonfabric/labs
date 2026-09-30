@@ -982,6 +982,28 @@ export const set = (cache: Cache, key: string, value: string) =>
   cache.set(key, value);
 ```
 
+### Spreading a collection into a call
+
+A spread in a call's arguments, as in `records.push(...more)` or
+`Math.max(...times)`, passes each element of the collection as a separate
+argument. V8 limits how many arguments one call can take, and past roughly a
+hundred thousand the call throws `RangeError: Maximum call stack size
+exceeded`. A collection whose size the code does not fix can reach that. Append
+it in a loop, `for (const record of more) records.push(record);`, and take its
+largest or smallest value with `maxOf` or `minOf` from
+`@commonfabric/utils/math`, which walk the collection and otherwise return what
+`Math.max` and `Math.min` would. An array cell is the exception to the loop:
+each `push()` on a cell rebuilds the cell's local copy of the array and records
+an append of its own, so pass the list to `pushAll()` instead, which does that
+once for the whole list.
+
+The scripts under `tasks/` read collections that grow with the number of tests
+a run has, so there the `cf-tasks/no-spread-arguments` lint rule
+(`tasks/lint-spread-arguments.ts`, registered in the root `deno.jsonc`) reports
+every spread into `push`, `unshift`, `splice`, `Math.max`, `Math.min`,
+`String.fromCharCode`, and `String.fromCodePoint`, whatever the collection's
+size.
+
 ## Build & Test
 
 ### Running Tests

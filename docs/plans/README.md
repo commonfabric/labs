@@ -175,6 +175,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   it. It implements the
   [random space identity specification](../specs/random-space-identities.md),
   uses existing DID routes, and is complete without a public name registry.
+  The code is implemented; its deployment sequence, a specification change and
+  an infrastructure change in other repositories, and the tripwire's deletion
+  remain.
 - [CFC runner implementation](runner_cfc_implementation.md) defines the
   commit-boundary enforcement workstreams and rollout.
 - [Finishing the piece source lifecycle](piece-source-lifecycle-completion.md)

@@ -251,10 +251,13 @@ What works today:
 
 The sandbox `bash` tool has a provisional direct-`curl` guard while sandbox
 networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
-hosts such as `localhost`, `127.0.0.1`, and Docker Desktop's
+hosts such as `localhost`, `127.0.0.1`, `[::1]`, and Docker Desktop's
 `host.docker.internal` host alias, but obvious external `curl` targets are
-denied before sandbox execution. This is an integration unblock, not a complete
-network confinement model.
+denied before sandbox execution. The refusal states that rule and names no host
+to try instead, since what answers on those names is the driver's: under Docker
+`host.docker.internal` reaches any port of the host, and under the direct driver
+on macOS only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -417,6 +420,32 @@ section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
 
+A flag the CLI does not declare is refused, never ignored, because an ignored
+restriction is a run without it: `--allowed-tools read_file` stops before any
+model call with
+`` `--allowed-tools` is not a flag of the batch CLI. Did you mean
+`--allow-tool`? ``
+rather than running with every tool. The refusal names the flag and, where one
+is close, the declared flag it most likely meant, and never the value typed with
+it, nor a word that could not be a flag's name. The control commands (`config`,
+`auth`, `models`, `whoami`), the interactive stdio entrypoint, the local Loom
+host's `batch` and `interactive` modes over those two, the console,
+`console:launch` and the measurement scripts refuse the same way. Through the
+local Loom host a `batch` refusal is an `invalid-request` host failure carrying
+that message; an `interactive` one stays on the chat protocol, as the error the
+host returns, with that message, for each request it is sent. `--help` or `-h`,
+written as a word of its own, answers whatever else is on the line, and text
+after `--` is prompt text, flags included.
+
+The batch CLI, the interactive stdio entrypoint, the console and
+`console:launch` also refuse a flag that takes a value when nothing follows it
+or the word after it starts with `-`, since the word after it would otherwise be
+taken apart as flags or taken as the value of the wrong flag: the batch CLI
+would read `--prompt "- buy milk"` as an empty prompt followed by a run of
+flags. Such a value is written as one shell word, `--prompt='- buy milk'`. That
+refusal comes before help, so `--prompt -h` is a prompt given no value rather
+than a question.
+
 Standard bearer-auth mode:
 
 ```bash
@@ -484,14 +513,20 @@ gets a host correction within the existing model-turn bound. Exhausting a strict
 turn budget still records `max_model_turns`; with `finalizeOnTurnLimit`, the
 last turn instead records the existing budget-finalized give-up without a
 correction. The host does not create a replacement piece on the model's behalf.
-Same-run resume retains naming receipts and the requirement from its recorded
-Fabric session even when connection flags are omitted; conversation history
-alone does not satisfy a new turn. Generic library runs without a configured
-Fabric session keep their text return contract; factory-only library callers can
-enable `requirePieceOutput`. Host-configured structured-result requests keep
-their schema-based document return contract, including on resume. Child return
-contracts are unchanged. A budget-finalized give-up can still report partial
-findings without a piece.
+Same-run resume retains naming receipts even when connection flags are omitted;
+conversation history alone does not satisfy a new turn. A host that opens a
+Fabric session but grants a tool set without `assign_slug`, such as a lane with
+no piece-naming tool, keeps the run's text return contract, since it could never
+produce the receipt. The run records that decision as `pieceOutputRequired`. A
+resume that cannot back `assign_slug` (no connection flags) has no tool list to
+decide from, so it keeps the recorded decision, whatever tools it was granted. A
+record from a harness that did not keep the decision falls back to requiring a
+piece whenever the run had a Fabric session. Generic library runs without a
+configured Fabric session keep their text return contract; factory-only library
+callers can enable `requirePieceOutput`. Host-configured structured-result
+requests keep their schema-based document return contract, including on resume.
+Child return contracts are unchanged. A budget-finalized give-up can still
+report partial findings without a piece.
 
 The parent ends a task in words with `finish_task`. When the task is done, it
 calls `{ "outcome": "completed", "message": "…" }` with the answer the person
@@ -1865,12 +1900,17 @@ full model-context CFC record atomically with resumable history. A later root
 task retains that goal alongside its current request and inherits those findings
 as historical context, including after SQLite restart. It receives current
 grants independently; earlier bindings are not automatically transferred to a
-child. By default, failed and canceled turns retain the previous checkpoint. The
-Loom interactive host opts into `finalizeOnTurnLimit`: a failed provider call
-can retain the last resumable checkpoint: a validated complete tool batch or
+child. By default, a failed turn retains the previous checkpoint. The Loom
+interactive host opts into `finalizeOnTurnLimit`: a failed provider call can
+retain the last resumable checkpoint: a validated complete tool batch or
 opening-research handoff with matching research, CFC state, and omission
-provenance. Unpaired work, canceled turns, and process interruptions do not
-advance that checkpoint; their evidence remains in the audit trail.
+provenance. A turn the person cancels always advances the checkpoint to its own
+request plus that last complete batch, followed by a host notice that the turn
+was stopped before it finished, so a following turn reads the request as
+interrupted rather than answered. A session closed mid-turn saves nothing.
+Unpaired work, including a tool call still running when the cancel lands, and
+process interruptions do not advance the checkpoint; their evidence remains in
+the audit trail.
 
 `finalizeOnTurnLimit` reserves the last root model turn for a partial answer
 with harness and native tools disabled. It warns two turns beforehand and

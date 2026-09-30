@@ -166,4 +166,9 @@ export abstract class BaseValueVisitor<
       debugStr`Shouldn't happen: \`${methodName}()\` called on $quote${this}`,
     );
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

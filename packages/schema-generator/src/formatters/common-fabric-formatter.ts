@@ -843,6 +843,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         type,
         context,
         resolvedScopeAlias,
+        "scope",
         () =>
           this.#applyScopeWrapperSemantics(
             this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
@@ -861,6 +862,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         type,
         context,
         resolvedCfcAlias,
+        "cfc",
         () => this.#formatResolvedCfcAlias(resolvedCfcAlias, context),
       );
     }
@@ -1911,6 +1913,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     type: ts.Type,
     context: GenerationContext,
     resolved: ResolvedAliasChain,
+    kind: "cfc" | "scope",
     read: () => MutableJSONSchema,
   ): MutableJSONSchema {
     const checker = context.typeChecker;
@@ -1924,6 +1927,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           alias,
           undefined,
+          kind,
           read,
         )
         : read();
@@ -1937,6 +1941,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
       reference,
       instantiated,
+      kind,
       read,
     );
   }
@@ -2779,11 +2784,11 @@ export class CommonFabricFormatter implements TypeFormatter {
   /**
    * The write claim of `aliasName`, a policy whose second argument is its
    * writer binding. The binding must be a direct `typeof`
-   * (cfc_authoring_contract.md), read from its node;
-   * `WriteAuthorizedByValidationTransformer` reports any other spelling. A
+   * (cfc_authoring_contract.md), read from its node. An indirect binding is
+   * an error here as well as in `WriteAuthorizedByValidationTransformer`,
+   * which cannot see bindings passed through another alias's parameters. A
    * policy written through another alias whose binding has no node to read
-   * would leave that reference's schema with no write restriction, which
-   * nothing else would report, so that is an error here.
+   * is also an error: its schema would carry no write restriction.
    */
   #buildWriteAuthorizedByMetadataForArg(
     context: GenerationContext,
@@ -2800,6 +2805,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (
       !ts.isTypeQueryNode(bindingNode) || !ts.isIdentifier(bindingNode.exprName)
     ) {
+      // A declaration read from an instantiated type can name a parameter
+      // whose argument has no syntax. It is a type-only read, not an authored
+      // indirect binding for this check to reject.
+      const bound = this.#boundArgumentAt(bindingNode, context);
+      if (bound && !bound.argument.node) return undefined;
+      reportUnreadWriterBinding(context, aliasName);
       return undefined;
     }
 

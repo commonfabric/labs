@@ -14,10 +14,8 @@ import {
   reportDeviceLinkFailure,
   runDeviceLinkLogin,
 } from "../src/lib/device-link-login.ts";
-import {
-  activateModalDialog,
-  XDeviceLinkView,
-} from "../src/views/DeviceLinkView.ts";
+import { XDeviceLinkView } from "../src/views/DeviceLinkView.ts";
+import { activateModalDialog } from "../src/views/pairing-dialog.ts";
 
 // NOTE: this file lives in test/ deliberately. The shell's test task globs
 // `test/*.test.ts` ONLY — a co-located src/lib/*.test.ts is silently never run,

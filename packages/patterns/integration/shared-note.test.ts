@@ -2,8 +2,9 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
+  createTestSpace,
   env,
   type Page,
   type ProbeApi,
@@ -11,7 +12,6 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { ACLManager } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 
 import {
@@ -26,7 +26,7 @@ import {
   type PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const IMPORTED_FILE =
   "---\r\ncategory: team\r\n---\r\n\r\n# Shared plan\r\n\r\n- [ ] Café lunch 🥗\r\n\r\n";
 const MARKDOWN = IMPORTED_FILE.replace(/\r\n?/g, "\n");
@@ -162,6 +162,7 @@ describe("shared-note", () => {
 
   let ada: Identity;
   let grace: Identity;
+  let spaceDid: DID;
   let controller: PiecesController;
   let piece: PieceController;
   let cancel: (() => void) | undefined;
@@ -171,16 +172,15 @@ describe("shared-note", () => {
       Identity.generate({ implementation: "noble" }),
       Identity.generate({ implementation: "noble" }),
     ]);
+    spaceDid = await createTestSpace(ada, {
+      grants: { [grace.did()]: "OWNER" },
+    });
     controller = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: ada,
     });
     await controller.ensureDefaultPattern();
-    await new ACLManager(controller.runtime, controller.getSpace()).set(
-      grace.did(),
-      "OWNER",
-    );
     const program = await resolveLocalProgram(
       (resolver) => controller.runtime.harness.resolve(resolver),
       {
@@ -204,13 +204,13 @@ describe("shared-note", () => {
     const adaPage = adaShell.page();
     const gracePage = graceShell.page();
     const pages = [adaPage, gracePage];
-    const view = { spaceName: SPACE_NAME, pieceId: piece.id };
+    const view = { spaceDid, pieceId: piece.id };
     await Promise.all([
       adaShell.goto({ frontendUrl: FRONTEND_URL, view, identity: ada }),
       graceShell.goto({ frontendUrl: FRONTEND_URL, view, identity: grace }),
     ]);
     await Promise.all(pages.map(async (page) => {
-      await waitForActiveSpaceRoot(page, controller.getSpace());
+      await waitForActiveSpaceRoot(page, spaceDid);
       await waitForRuntimeIdle(page);
       await waitForCondition(page, editorReady);
       expect(await editorState(page)).toBe(MARKDOWN);

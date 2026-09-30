@@ -6,13 +6,9 @@ Status: proposed design (see [`README.md`](README.md)).
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
 
-`FabriChatRoom` is the successor to the room in today's
-`packages/patterns/fabrichat/chat.tsx`, and keeps that room's record, writers,
-and reviewed surfaces. What changes is where it lives, what decides its
-membership, and the names of its records and surfaces, which are now neutral
-with respect to the implementation because they are part of the contract (for
-example, today's `FabriChatMessage` and `FabriChatSendSurface` become
-`ChatMessage` and `ChatSendSurface`).
+Its records and surfaces are named for the contract rather than for the
+implementation, because they are part of the contract: `ChatMessage`,
+`ChatReaction`, and the surfaces the table under [writers](#writers) names.
 
 ## State
 
@@ -70,12 +66,11 @@ Every write goes through one handler per stream:
 | `commitRemove` | `remove` | `ChatMembersSurface` |
 | `commitDelivered` | `delivered` | none |
 
-`commitSend` and `commitSendReaction` keep the types of today's `commitSend` and
-`commitReact`: the stored value is
+`commitSend` and `commitSendReaction` store a value typed
 `AuthoredByCurrentUser<TrustedActionWrite<…>>`, so the runtime labels it with
 its writer and refuses it without a trusted gesture from the named surface. The
 room's own composer builds a send's `{ version: { body, sentAt }, replyTo? }`
-from the text the person submitted, which today's room reads as `target.value`,
+from the text the person submitted, which its handler reads as `target.value`,
 and the composer event's time as the proposed `sentAt`.
 
 Every handler first checks its event's sender and `requestId` against a keyed
@@ -110,15 +105,14 @@ times](ChatMessage.md#unique-times)). A room keeps the times it has used in a
 keyed collection, so the check doesn't scan every message, and two records made
 at once conflict and retry rather than share a time.
 
-Today's `commitReact` toggles a reaction, which a repeated or delayed event can
-turn into the opposite of what the person meant. It splits into
-`commitSendReaction` and `commitDeleteReaction`, each of which changes nothing
-when the reaction is already as asked.
+A reaction is never toggled, since a repeated or delayed toggle can turn into
+the opposite of what the person meant. `commitSendReaction` and
+`commitDeleteReaction` each change nothing when the reaction is already as
+asked.
 
 `commitSendReaction` keeps each reaction at an address within its message
-derived from its reactor's profile and its emoji (`reactionKeyFor`, which today
-also takes the message). One person's one reaction to one message has a single
-address in every session, which is how the room meets
+derived from its reactor's profile and its emoji. One person's one reaction to
+one message has a single address in every session, which is how the room meets
 [`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
 the list. The reactions are a separately authorized part of the message:
 `commitSend` and `commitEdit` can't write them, and the reaction handlers can
@@ -164,8 +158,7 @@ removes one.
 
 `about` is stored as `AuthoredByCurrentUser<ChatRoomAbout>`, written once by the
 handler that creates the room, so it is labeled with its creator. `canSend` is
-computed for each viewer from their access and whether their profile resolves,
-as today's room computes `cannotSend`.
+computed for each viewer from their access and whether their profile resolves.
 
 Every handler that changes the room's own record, except `commitDelivered`,
 appends its `recentActivity` entry in the same transaction as the change, so the
@@ -205,17 +198,17 @@ the room is created from the same settings the handlers read.
 
 ## Prerequisites
 
-- **A private space, created from a pattern.** A host can already create a space
-  whose genesis grants only its creator (`registerSpaceIdentity` with a
-  `genesisAcl`). A pattern can't: `FabriChatRoom.inSpace()` works today, but the
-  space it creates takes the default grants, including `"*": "WRITE"`. Exposing
-  creator-only creation to patterns is the direction of [random space
-  identities](../random-space-identities.md). Until then, a prototype MAY use
-  `inSpace()`, and MUST say that the room is open to any authenticated
-  principal.
-- **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
-  for a pattern to ask its host to change an access list. Today only hosts can
-  do that (`ACLManager`, the runtime client's `space:setAclEntry`).
+- **A private space, created from a pattern.** `FabriChatRoom.inSpace()`
+  creates a space with a random DID whose genesis document names its creator as
+  the only OWNER and grants nobody else anything
+  ([random space identities](../random-space-identities.md)). A name given to
+  `inSpace(name)` names the room as the calling space calls it; two calling
+  spaces using one name get two rooms, and nobody can recompute a room's key.
+- **Pattern-facing access control.** `commitAdd` and `commitRemove` can change
+  the room's access list with `grantSpaceAccess()` and `revokeSpaceAccess()`
+  on a client runtime
+  ([changing a space's access list](../../features/space-access-changes.md));
+  a serving runtime refuses both.
 - **Leaving without OWNER.** `commitLeave` removes the sender's own access list
   entry even when the sender is only a WRITE member. Whether the memory layer
   lets a non-OWNER remove their own entry, or the host has to do it on their

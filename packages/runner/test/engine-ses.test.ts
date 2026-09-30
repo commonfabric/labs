@@ -1,3 +1,4 @@
+import { FabricDurationNsec } from "@commonfabric/data-model/fabric-primitives";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -320,6 +321,36 @@ describe("Engine in SES mode", () => {
     );
     expect(main?.default).toBeInstanceOf(RegExp);
     expect(main?.default?.test("hello")).toBe(true);
+  });
+
+  it("keeps a fabric primitive in a top-level snapshot as it is", async () => {
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { FabricDurationNsec } from "commonfabric";',
+            "const settings = { window: new FabricDurationNsec(600n) };",
+            "export default settings;",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    expect(joinedBodies(graph)).toContain("__cf_data({");
+
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(main?.default?.window).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.default?.window?.value).toBe(600n);
   });
 
   it("allows top-level template literal snapshots", async () => {

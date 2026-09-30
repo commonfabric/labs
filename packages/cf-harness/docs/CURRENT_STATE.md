@@ -375,9 +375,14 @@ The current package provides:
 
 - a console operator snapshot at `GET /api/health/detail`, retaining launch
   decisions for all connector grants and refusals alongside independently cached
-  observations of the selected sandbox driver and the index, with deciding
-  records, timestamps, causes, and remedies; unknown observations remain
-  distinct from failures, and reading the route never waits for a live probe;
+  observations of the selected sandbox driver — on macOS, of the direct driver's
+  VM too, holding any answer its daemon gave for the idle timeout and 30 s so
+  that watching the row does not on its own keep the VM up, and asking sooner
+  only where it holds none because the last question went unanswered, the
+  daemon's socket has changed, or a connection between questions failed — and
+  the index, with deciding records, timestamps, causes, and remedies; unknown
+  observations remain distinct from failures, and reading the route never waits
+  for a live probe;
 - owner retraction through console `POST /api/index/retract`, signed by the
   configured identity and requiring an active same-owner direct successor; the
   generic index proxy stays read-only and standalone deletion is unsupported;
@@ -394,6 +399,13 @@ The current package provides:
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
+- refusal of any flag an entrypoint does not declare — the batch CLI and its
+  control commands, the interactive stdio entrypoint, the local Loom host's
+  modes over them, the console and `console:launch` — naming the flag and the
+  nearest declared one, so a misspelled restriction stops a run rather than
+  going unapplied; and, on the batch CLI, the interactive stdio entrypoint, the
+  console and `console:launch`, of a flag given no value, which is what the
+  parser leaves of a value starting with `-` written as a separate word;
 - persistent provider configuration and structured config/auth control, with
   durable bounded Codex refresh health;
 - workspace, Fabric, and explicit host mounts with path containment;
@@ -525,17 +537,19 @@ The current package provides:
   replay, cancellation, and restore state; a session's durable transcript
   normally advances at a completed turn. On failure, the Loom host can retain
   the last resumable checkpoint (a validated complete batch or opening handoff),
-  atomically with its matching research/CFC state and omission provenance.
-  Unpaired work, cancellation, and interrupted activity stay on the audit trail;
-  turn-local budget notices stay in audit artifacts and are excluded from
-  resumable history; a completed turn's history is checked before it is
-  promoted, and promotion commits with the completion or not at all; and a
-  restored session whose recorded history does not pair its tool calls with tool
-  results preserves that history and adds explicit unknown-outcome results for
-  missing results, while orphan results and duplicate call IDs refuse the
-  session locally rather than sending malformed history to a provider; and a
-  listener that cannot take an event is reported to the host as a delivery
-  failure and does not change the outcome of the turn that produced it;
+  atomically with its matching research/CFC state and omission provenance. A
+  canceled turn advances it to the turn's request and last complete batch,
+  followed by a host notice that the person stopped the turn. Unpaired work and
+  interrupted activity stay on the audit trail; turn-local budget notices stay
+  in audit artifacts and are excluded from resumable history; a completed turn's
+  history is checked before it is promoted, and promotion commits with the
+  completion or not at all; and a restored session whose recorded history does
+  not pair its tool calls with tool results preserves that history and adds
+  explicit unknown-outcome results for missing results, while orphan results and
+  duplicate call IDs refuse the session locally rather than sending malformed
+  history to a provider; and a listener that cannot take an event is reported to
+  the host as a delivery failure and does not change the outcome of the turn
+  that produced it;
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;

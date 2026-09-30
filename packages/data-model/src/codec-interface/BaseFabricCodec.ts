@@ -100,4 +100,9 @@ export abstract class BaseFabricCodec<
     }
     return this.#recognizedTypeTag;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net
+#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=git
 
 /**
  * Whether the topology still accounts for everything.
@@ -8,11 +8,12 @@
  * failure than the workflow edit it replaced. A surface goes missing in
  * three ways, and a check answers each.
  *
- * The tree half needs no store and runs on every pull request. It walks
- * the tree for things that look like tests and fails on any that no
- * suite accounts for, or that two suites claim under the same record
- * surface and variant. This is what catches a pull request adding a test
- * surface nobody registered, at the moment it is added.
+ * The tree half needs no store and runs on every pull request. It reads
+ * every file the repository holds for things that look like tests, and
+ * fails on any that no suite accounts for, or that two suites claim under
+ * the same record surface and variant. This is what catches a pull
+ * request adding a test surface nobody registered, at the moment it is
+ * added.
  *
  * The workflow half runs beside it, over the step definitions under
  * `.github`. A step can wrap a command in `run-recorded`. The three
@@ -65,6 +66,7 @@ import {
   withoutContinuations,
 } from "./ci-workflow.ts";
 import { isLaneMeasurement } from "./lane-measurement.ts";
+import { repositoryFiles } from "./repository-files.ts";
 import { dayOf } from "./test-selection/build.ts";
 import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
 import { claimsFor, loadTopology } from "./test-topology.ts";
@@ -85,60 +87,23 @@ gathered among them`;
  */
 const TEST_FILE = DENO_TEST_FILE;
 
-/** Directories that hold no test surface of their own. */
-const SKIPPED = new Set([
-  ".git",
-  "node_modules",
-  "vendor",
-  "coverage",
-  "dist",
-  "target",
-]);
-
-/** Roots the walk starts from. Everything else holds no tests. */
-const ROOTS = ["packages", "tasks", "scripts", "tools"];
-
-/** Every path in the tree that looks like a test surface. */
+/**
+ * Every file in the repository that looks like a test surface. A test beside
+ * a module no workspace member owns, such as a hook script under `.claude/`,
+ * counts as much as one inside a package.
+ */
 export async function candidateSurfaces(root: string): Promise<string[]> {
-  const found: string[] = [];
-  const walk = async (relative: string): Promise<void> => {
-    // The entries are read before any of them is followed, and only that
-    // read is allowed to answer "no such directory". A catch around the
-    // recursion as well would let one directory that vanished mid-walk —
-    // a temporary one a running test made and removed — end the walk at
-    // every level above it, silently shortening the list the guard
-    // checks against. That is the guard failing while reporting success.
-    let entries: Deno.DirEntry[];
-    try {
-      entries = await Array.fromAsync(Deno.readDir(path.join(root, relative)));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      const at = `${relative}/${entry.name}`;
-      if (entry.isDirectory) {
-        if (!SKIPPED.has(entry.name)) await walk(at);
-        continue;
-      }
-      if (!entry.isFile) continue;
-      if (TEST_FILE.test(entry.name)) found.push(at);
-      else if (
-        entry.name.endsWith(".sh") && relative.endsWith("/integration")
-      ) {
-        found.push(at);
-      }
-    }
-  };
-  for (const start of ROOTS) await walk(start);
-  return found.sort();
+  return (await repositoryFiles(root)).filter((file) =>
+    TEST_FILE.test(file) ||
+    (file.endsWith(".sh") && path.dirname(file).endsWith("/integration"))
+  );
 }
 
 /**
- * Paths that look like tests and are not: fixtures a test drives rather
- * than tests of their own. An entry ending in `/` is a directory, and
- * covers everything under it. Each says why, and an entry that stops
- * applying fails, so the list cannot go stale unnoticed.
+ * Paths that look like tests and are not: fixtures a test drives, and
+ * programs that only share a test's name. An entry ending in `/` is a
+ * directory, and covers everything under it. Each says why, and an entry
+ * that stops applying fails, so the list cannot go stale unnoticed.
  */
 const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
@@ -160,6 +125,10 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "packages/deno-web-test/test/timeout-project/hang.test.ts",
     reason: "a project the harness runs to prove it reports a wedged test",
+  },
+  {
+    path: "tasks/test.ts",
+    reason: "the root `deno task test` runner, named like a test module",
   },
   {
     path: "packages/cli/test/fixtures/",
@@ -243,7 +212,7 @@ export async function workflowRecords(
       }
       if (!entry.isFile || !/\.ya?ml$/.test(entry.name)) continue;
       const text = await Deno.readTextFile(path.join(root, at));
-      found.push(...recordedIdentities(text, at));
+      for (const identity of recordedIdentities(text, at)) found.push(identity);
     }
   };
   await walk(CI_DEFINITIONS);
@@ -263,9 +232,13 @@ function claimsOf(
 ): { exact: Set<string>; containers: string[] } {
   const exact = new Set<string>(suite.sources ?? []);
   const containers: string[] = [];
+  // A suite answering `unitsForChange()` names units that are not paths —
+  // a type-check scope, a gate — so none of them contains anything, even
+  // where a name such as `tasks` is spelled like a directory.
+  const paths = suite.unitsForChange === undefined;
   for (const unit of suite.units) {
     if (TEST_FILE.test(unit)) exact.add(unit);
-    else containers.push(unit);
+    else if (paths) containers.push(unit);
   }
   for (const entry of suite.unavailable) exact.add(entry.unit);
   return { exact, containers };
@@ -338,9 +311,8 @@ export function checkTree(
       claim.containers.some((unit) => candidate.startsWith(`${unit}/`))
     );
     // Containment is coarse and legitimately overlapping: a workspace
-    // member that runs whole contains a directory another suite owns,
-    // and a type-check group's unit is a scope name that reads as a
-    // directory prefix. Only an exact claim is exclusive.
+    // member that runs whole contains a directory another suite owns.
+    // Only an exact claim is exclusive.
     if (containing.length > 0) continue;
     findings.push({
       fails: true,
@@ -577,8 +549,9 @@ async function recordFiles(at: string): Promise<RecordFile[]> {
   const from = path.basename(at);
   for await (const entry of Deno.readDir(at)) {
     const child = path.join(at, entry.name);
-    if (entry.isDirectory) found.push(...await recordFiles(child));
-    else if (entry.isFile && entry.name.endsWith(".ndjson")) {
+    if (entry.isDirectory) {
+      for (const file of await recordFiles(child)) found.push(file);
+    } else if (entry.isFile && entry.name.endsWith(".ndjson")) {
       found.push({
         path: child,
         from,
@@ -617,7 +590,9 @@ export async function readRecords(
   const resolver = aliases ?? await loadAliasResolver();
   const records: StoredIdentity[] = [];
   const files: RecordFile[] = [];
-  for (const at of paths) files.push(...await recordFiles(at));
+  for (const at of paths) {
+    for (const file of await recordFiles(at)) files.push(file);
+  }
   for (const file of files) {
     const text = await Deno.readTextFile(file.path);
     for (const group of parseReportGroups(text)) {
@@ -734,9 +709,10 @@ export async function check(
     await candidateSurfaces(options.root),
     { fixtures: NOT_A_TEST_SURFACE },
   );
-  findings.push(
-    ...checkWorkflows(suites, await workflowRecords(options.root)),
-  );
+  const workflows = await workflowRecords(options.root);
+  for (const finding of checkWorkflows(suites, workflows)) {
+    findings.push(finding);
+  }
   if (options.store !== undefined) {
     // Each named path is read on its own, because a path holding nothing
     // is a part of the run the store half did not see, and summing them

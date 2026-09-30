@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { defer } from "@commonfabric/utils/defer";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   type Cell,
@@ -27,6 +28,30 @@ import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 
 const signer = await Identity.fromPassphrase("piece source lifecycle");
+
+/**
+ * Runs the fixture module `fixture` in a worker of its own, and returns the
+ * outcome it posts once that worker has been torn down.
+ */
+async function fixtureOutcome<T>(fixture: string): Promise<T> {
+  const worker = new Worker(
+    new URL(`./fixtures/${fixture}`, import.meta.url).href,
+    { type: "module" },
+  );
+  const posted = defer<T & { lifetimeLock: string | undefined }>();
+  worker.onmessage = (event) => posted.resolve(event.data);
+  worker.onerror = (event) =>
+    posted.reject(event.error ?? new Error(event.message));
+
+  let lifetimeLock: string | undefined;
+  try {
+    const outcome = await posted.promise;
+    lifetimeLock = outcome.lifetimeLock;
+    return outcome;
+  } finally {
+    await terminateWorker(worker, lifetimeLock);
+  }
+}
 
 function versionProgram(version: string): RuntimeProgram {
   return {
@@ -200,9 +225,9 @@ describe("piece source lifecycle", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `piece-source-lifecycle-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -226,43 +251,21 @@ describe("piece source lifecycle", () => {
   }
 
   it("preloads source verification before creating a piece", async () => {
-    const worker = new Worker(
-      new URL(
-        "./fixtures/piece-source-compiler-preload.ts",
-        import.meta.url,
-      ).href,
-      { type: "module" },
-    );
-    const result = await new Promise<{
+    const result = await fixtureOutcome<{
       history?: string[];
       error?: string;
-    }>((resolve, reject) => {
-      worker.onmessage = (event) => resolve(event.data);
-      worker.onerror = (event) =>
-        reject(event.error ?? new Error(event.message));
-    }).finally(() => worker.terminate());
+    }>("piece-source-compiler-preload.ts");
 
     expect(result.error).toBeUndefined();
     expect(result.history).toEqual(["create"]);
   });
 
   it("preloads source verification before an unavailable-baseline transition", async () => {
-    const worker = new Worker(
-      new URL(
-        "./fixtures/piece-source-transition-compiler-preload.ts",
-        import.meta.url,
-      ).href,
-      { type: "module" },
-    );
-    const result = await new Promise<{
+    const result = await fixtureOutcome<{
       baseline?: string;
       history?: string[];
       error?: string;
-    }>((resolve, reject) => {
-      worker.onmessage = (event) => resolve(event.data);
-      worker.onerror = (event) =>
-        reject(event.error ?? new Error(event.message));
-    }).finally(() => worker.terminate());
+    }>("piece-source-transition-compiler-preload.ts");
 
     expect(result.error).toBeUndefined();
     expect(result.baseline).toBe("unavailable");

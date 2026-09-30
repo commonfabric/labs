@@ -25,6 +25,7 @@
  *                                     organization-users tile
  */
 
+import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
@@ -33,8 +34,6 @@ import {
   escapeHtml,
   friendlyError,
   githubOperationsInProgress,
-  isStaleRunList,
-  STALE_RUNS_ERROR,
 } from "./lib.ts";
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
@@ -553,15 +552,6 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       }
 
       const key = runSourceKey(group.source);
-      // A source's newest run only ever moves forward. A fetch that comes back
-      // with an older newest run than the one already held read a stale view
-      // of the workflow, and publishing it would age the whole tile family
-      // backwards without saying so. Keep what is held and name the
-      // source stale; the next fetch that reaches a current view clears it.
-      if (runs && isStaleRunList(key, runs, runSnapshots.get(key))) {
-        error = STALE_RUNS_ERROR;
-        runs = undefined;
-      }
       if (runs) {
         runSnapshots.set(key, runs);
         runSourceErrors.delete(key);
@@ -663,7 +653,7 @@ const pages = livePages(routes);
 // interval elapses (and collection latency pushes that to the tick after that), so
 // the real cadence for the fastest tile is its interval plus a tick, not the bare
 // interval.
-const REFRESH_MS = Math.min(...TILES.map((t) => t.intervalMs)) + TICK_MS;
+const REFRESH_MS = minOf(TILES.map((t) => t.intervalMs)) + TICK_MS;
 
 export function page(currentViews: ReadonlyMap<string, TileView> = views): string {
   const update = dashboardUpdate(currentViews);

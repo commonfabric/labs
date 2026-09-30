@@ -121,9 +121,9 @@ async function createStrictFabric() {
     cfcFlowLabels: "persist",
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: signer,
-      spaceName: `release-decisions-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     runtime,
   );

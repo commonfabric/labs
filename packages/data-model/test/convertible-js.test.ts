@@ -68,6 +68,7 @@ import {
 } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -571,6 +572,11 @@ describe("convertible-js", () => {
       {
         name: "`FabricBytes` JSON",
         codec: FabricBytes[JSON_CODEC],
+        state: "!",
+      },
+      {
+        name: "`FabricDurationDay` JSON",
+        codec: FabricDurationDay[JSON_CODEC],
         state: "!",
       },
       {

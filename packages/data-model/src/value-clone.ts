@@ -249,6 +249,7 @@ export function cloneHelper(
     case VALUE_TAGS.FabricEpochNsec:
     case VALUE_TAGS.FabricEpochDay:
     case VALUE_TAGS.FabricDurationNsec:
+    case VALUE_TAGS.FabricDurationDay:
     case VALUE_TAGS.FabricBytes:
     case VALUE_TAGS.FabricKeyPair:
     case VALUE_TAGS.FabricRegExp:
@@ -396,6 +397,11 @@ export class CloneForMutationError extends Error {
    */
   get valueKind(): string {
     return this.#valueKind;
+  }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
   }
 }
 

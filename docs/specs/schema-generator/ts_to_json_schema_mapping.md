@@ -152,7 +152,9 @@ reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
 one per schema, naming each unread type once. An authored `any`, or a name
 declared as `any`, is a reading, not a guess, and is not reported; nor is a
 guess inside an intersection that accepts nothing, which leaves nothing of it in
-the schema.
+the schema. Reaching the nesting limit of a CFC alias chain instead reports
+`cfc-schema:recursion-limit` as an error: the unread remainder could discard
+policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
@@ -295,7 +297,7 @@ by any repo test.
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
-| `FabricPrimitive` class (`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
+| `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
@@ -370,10 +372,10 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; the eight `FabricPrimitive` classes
-(`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`,
-`FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) →
-`{ type: "<Name>" }`
+and `Uint8Array` → `{ type: "object" }`; the nine `FabricPrimitive` classes
+(`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`,
+`FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`,
+`FabricUnavailable`) → `{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
@@ -787,6 +789,27 @@ Default paths of §7:
   union order. Union alias nodes resolve through non-generic alias
   declarations to recover member nodes (`getUnionTypeNode`).
   Empty unions **throw**.
+- The checker folds a member that is itself a union into the union it is a
+  member of, so one member node can stand for several members
+  (`pairUnionMemberNodes`, which `#labelsOf` in `schema-generator.ts` reads
+  members through as well):
+  - A member node that writes a union, through parentheses and aliases
+    without type parameters, pairs through the members it writes, each read
+    at its own node. `Shape | null`, with `type Shape = A | B`, stays
+    `{ anyOf: [{ type: "null" }, A, B] }`.
+  - A member node whose type is a union it does not write, such as
+    `Confidential<A | B, …>`, which the checker distributes into `A & …` and
+    `B & …`, pairs with none of them. In the general case it is read once,
+    as one alternative for all of them, where it is a CFC alias that
+    `CommonFabricFormatter` reads: `Confidential<A | B, […]> | null` emits
+    `{ anyOf: [{ type: "null" }, { anyOf: [A, B], ifc: … }] }`, with labels
+    only the node can spell, as a `PolicyOf<typeof rules>` binding. Several
+    such nodes can stand for the same members, as two whose policies differ
+    only in a `typeof` binding do where the bindings have one type, and each
+    is an alternative of its own, in the order written. Its members are
+    otherwise read by their types: `boolean` stands for `true` and `false`,
+    `Default<T, V>`'s place in a union is §7's, and a scope wrapper's is
+    §10's.
 
 ## 9. Intersections
 
@@ -951,7 +974,12 @@ Mechanics:
   alias is read from its type alone. A `WriteAuthorizedBy` written through
   another alias, whose binding neither way reads, is the
   `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
-  since its schema would carry no write restriction. A payload that is itself a
+  since its schema would carry no write restriction. A binding node that is
+  not a direct `typeof` of an identifier reports the same error, including an
+  alias for `typeof writer` passed through another alias's parameter: its type
+  does not stand in for the written binding. A parameter bound only to a type,
+  with no argument node, remains a type-only read rather than an authored
+  indirect binding and is not reported by this check. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
@@ -1081,10 +1109,22 @@ Mechanics:
   instantiation. A type read under bindings is
   identified, as a recursive definition's name and in cycle detection, by its
   type together with that instantiation and the arguments as written, or with
-  its bindings where no instantiation is carried, so two instantiations of one
-  declaration keep apart, and a recursion whose instantiation the checker
-  settles to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to
-  its definition although the written arguments nest without end.
+  its bindings where no instantiation is carried. Each argument also retains
+  the ordered `typeof` bindings reached through its outer bindings and
+  alias bodies, identified by the writer declaration they resolve to (or by
+  the query node where no writer resolves): two writers with the same function
+  type still name distinct write policies in recursive definitions. Repeated
+  union and intersection members contribute their query origins once, so adding
+  the same policy again does not change the recursion key. An alias's arguments,
+  including defaults read under earlier arguments, contribute at their uses in
+  its body, under that position's union or intersection operator. Two
+  instantiations of one declaration keep apart. A recursion whose instantiation
+  the checker settles to the same type (`Sec<T | undefined>` inside `Sec<T>`)
+  refers to its definition when its query origins also settle. Conditional and
+  indexed aliases can retain query syntax the checker drops, or repeat a
+  parameter under an operator other than union or intersection, so their keys
+  may keep growing even when their types settle. Such chains reach the nesting
+  limit and report an error.
 - A chain is also tracked from the written reference it is entered from
   (`SchemaGenerator.readAliasChain`), so a chain entered again from that
   reference inside itself is found as a recursion through it. One whose
@@ -1131,8 +1171,13 @@ Mechanics:
   same type read inside itself with the same arguments written for it, each
   under deeper bindings, is taken for a recursion that instantiates the chain
   without end (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author
-  wrote out (`Pair<Pair<string>>`); the innermost accepts any value and is
-  reported, a chain reached by its alias as the checker prints its type.
+  wrote out (`Pair<Pair<string>>`). The bound is three nested readings. A CFC
+  alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
+  one whose writer-query key cannot settle. Its unread remainder would discard
+  confidentiality or write policies, so the schema must not be used. A chain
+  reached by its alias is located at its type node where available. The separate
+  bound on a type read under bindings and a scope-wrapper chain reaching its
+  nesting bound continue to report an unread-type warning.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
@@ -1330,11 +1375,13 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
   union's labels, every member's confidentiality, and each other label every
   member declares alike (`joinMemberIfcLabels`). A member is spelled by the
   node its type is written as: the declaration's own node where that denotes
-  the member alone, as an optional property's does, and otherwise the member
-  of the union the declaration writes, read through parentheses and through
-  aliases without type parameters (`readAuthoredTypeNode`). A member with no
-  such node is read by its type. A schema whose own reference
-  chain already holds every label is left as it is (`holdsIfcLabels`).
+  the member alone, as an optional property's does, and otherwise the node
+  of the union the declaration writes that it is read at (§8,
+  `pairUnionMemberNodes`). A node that stands for several members is read
+  once for all of them, and a member several such nodes stand for may be
+  under the labels of any of them. A member with no such node is read by its
+  type. A schema whose own reference chain already holds every label is left
+  as it is (`holdsIfcLabels`).
 - **`spelledBy`** is the annotation of the member a printed node holds the
   value of, where that annotation names a value binding, as
   `PolicyOf<typeof rules>` does. A print spells the binding as the structural

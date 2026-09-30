@@ -38,9 +38,9 @@ describe("PiecesController runtime diagnostics", () => {
         };
       },
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: `pieces-console-${crypto.randomUUID()}`,
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.ready;

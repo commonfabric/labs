@@ -1430,9 +1430,10 @@ describe("late space host hints", () => {
   });
 
   it("cancels an in-progress provisional ACL query before replay", async () => {
+    // A Home space (its DID is the signer's own) is the one space a first
+    // mount writes an ACL for.
     const signer = await Identity.fromPassphrase("late-hint-acl-user");
-    const spaceIdentity = await Identity.fromPassphrase("late-hint-acl-space");
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const targetId = "of:late-hint-acl-target" as URI;
     const defaultServer = makeServer("late-hint-acl-default");
     const hintedServer = makeServer("late-hint-acl-hinted");
@@ -1463,7 +1464,7 @@ describe("late space host hints", () => {
         if (
           gateDefaultBootstrap &&
           server === defaultServer &&
-          sessionSigner?.did() === spaceIdentity.did()
+          mountOptions.sessionId !== manager.scopeKeyIdentity().sessionId
         ) {
           gateDefaultBootstrap = false;
           const queryGraph = connection.session.queryGraph.bind(
@@ -1489,8 +1490,6 @@ describe("late space host hints", () => {
         return connection;
       },
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const provider = manager.open(targetSpace);
       const firstRead = provider.sync(targetId, {
@@ -1517,10 +1516,7 @@ describe("late space host hints", () => {
       expect(
         await hintedServer.readDocument(targetSpace, `of:${targetSpace}`),
       ).toEqual({
-        value: {
-          [signer.did()]: "OWNER",
-          "*": "WRITE",
-        },
+        value: { [signer.did()]: "OWNER" },
       });
     } finally {
       bootstrapQueryCancelled.reject(
@@ -1534,8 +1530,7 @@ describe("late space host hints", () => {
 
   it("does not issue ACL setup after immediate manager disposal", async () => {
     const signer = await Identity.fromPassphrase("disposed-acl-user");
-    const spaceIdentity = await Identity.fromPassphrase("disposed-acl-space");
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const defaultServer = makeServer("disposed-acl-default");
     const bootstrapQueryStarted = Promise.withResolvers<void>();
     const bootstrapQueryCancelled = Promise.withResolvers<void>();
@@ -1550,7 +1545,7 @@ describe("late space host hints", () => {
           sessionSigner,
           mountOptions,
         );
-        if (sessionSigner?.did() === spaceIdentity.did()) {
+        if (mountOptions.sessionId !== manager.scopeKeyIdentity().sessionId) {
           const queryGraph = connection.session.queryGraph.bind(
             connection.session,
           );
@@ -1582,8 +1577,6 @@ describe("late space host hints", () => {
         return connection;
       },
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const firstRead = manager.open(targetSpace).sync(
         "of:disposed-acl-target" as URI,
@@ -1612,10 +1605,7 @@ describe("late space host hints", () => {
     const signer = await Identity.fromPassphrase(
       "issued-acl-provisional-user",
     );
-    const spaceIdentity = await Identity.fromPassphrase(
-      "issued-acl-provisional-space",
-    );
-    const targetSpace = spaceIdentity.did();
+    const targetSpace = signer.did();
     const defaultServer = makeServer("issued-acl-provisional-default");
     const factory = new LoopbackSessionFactory(() => defaultServer);
     const manager = TestStorageManager.create(signer, {
@@ -1623,8 +1613,6 @@ describe("late space host hints", () => {
       create: (space, sessionSigner, mountOptions) =>
         factory.create(space, sessionSigner, mountOptions),
     });
-    manager.registerSpaceIdentity(spaceIdentity);
-
     try {
       const read = await manager.open(targetSpace).sync(
         "of:issued-acl-provisional-target" as URI,
@@ -1633,10 +1621,7 @@ describe("late space host hints", () => {
       expect(
         await defaultServer.readDocument(targetSpace, `of:${targetSpace}`),
       ).toEqual({
-        value: {
-          [signer.did()]: "OWNER",
-          "*": "WRITE",
-        },
+        value: { [signer.did()]: "OWNER" },
       });
 
       expect(

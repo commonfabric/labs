@@ -390,9 +390,8 @@ export function readReport(
     // not scored, and not discarded either: it is what the packer's
     // charges for both are fitted from. One group is one lane's
     // artifact, so a batch's two halves are here together.
-    lanes.push(
-      ...laneObservationsOf(report.objectName, group.records, day),
-    );
+    const observed = laneObservationsOf(report.objectName, group.records, day);
+    for (const lane of observed) lanes.push(lane);
     for (const record of group.records) {
       // A lane measuring its own setup or one of its batches is not a
       // test, so nothing here scores it: a catch, a flake observation and

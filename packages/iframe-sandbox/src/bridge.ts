@@ -40,7 +40,7 @@ export type BridgeCell = {
   pull(): FabricValue | undefined | Promise<FabricValue | undefined>;
   initialize?(value: FabricValue): FabricValue | Promise<FabricValue>;
   set?(value: FabricValue): void | Promise<void>;
-  push?(...values: FabricValue[]): void | Promise<void>;
+  push?(values: readonly FabricValue[]): void | Promise<void>;
   sink?(
     listener: (value: FabricValue | undefined) => void,
   ): BridgeCancel;
@@ -520,7 +520,7 @@ export class FabricBridgeHost {
             name,
           );
         }
-        await push.call(cell, ...(request.values ?? []));
+        await push.call(cell, request.values ?? []);
         return undefined;
       }
       case "resolve": {

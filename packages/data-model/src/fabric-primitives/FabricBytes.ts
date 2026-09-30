@@ -11,6 +11,7 @@ import type {
 import type { FabricValue } from "@/interface.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import type { RealmCodecValue } from "@/codec-realm";
@@ -56,7 +57,7 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
    *   permission does and does not guarantee.
    */
   constructor(bytes: Uint8Array | ArrayBufferLike, transfer: boolean = false) {
-    super();
+    super(BLESSING_TOKEN, FabricBytes);
     this.#bytes = toOwnedUint8Array(bytes, transfer);
   }
 
@@ -138,6 +139,11 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class BytesCodec extends BaseTerminalCodec<JsonCodecValue, string> {

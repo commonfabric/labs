@@ -20,9 +20,9 @@ describe("cell-flip shaping (plan B)", () => {
 
   beforeEach(async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: `shape-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate({ implementation: "noble" })).did(),
     });
     const runtime = new Runtime({
       apiUrl: new URL("http://localhost:8000/"),

@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { Identity } from "@commonfabric/identity";
+import type { DID, Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
 
@@ -62,7 +62,6 @@ describe("topics-browser-measurement", () => {
     );
     fixture = await seedTopicBoard({
       apiUrl: new URL(env.API_URL),
-      spaceName: env.SPACE_NAME,
       identity,
       topicCount: 2,
       crossrefsPerTopic: 1,
@@ -185,12 +184,12 @@ describe("topics-browser-measurement", () => {
    */
   async function returnToBoard(on: BoardSession = session): Promise<void> {
     await on.page.evaluate(
-      async (spaceName: string, pieceId: string) => {
-        await globalThis.app.setView({ spaceName, pieceId });
+      async (spaceDid: DID, pieceId: string) => {
+        await globalThis.app.setView({ spaceDid, pieceId });
       },
-      { args: [fixture.spaceName, fixture.boardId] },
+      { args: [fixture.spaceDid, fixture.boardId] },
     );
-    await waitForPieceView(on.page, fixture.spaceName, fixture.boardId);
+    await waitForPieceView(on.page, fixture.spaceDid, fixture.boardId);
     await on.showBoard();
   }
 

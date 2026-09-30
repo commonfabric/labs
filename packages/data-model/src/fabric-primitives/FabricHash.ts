@@ -11,6 +11,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
@@ -79,7 +80,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
     tag: string,
     transfer: boolean = false,
   ) {
-    super();
+    super(BLESSING_TOKEN, FabricHash);
     this.#hash = toOwnedUint8Array(hash, transfer);
     this.#tag = tag;
     this.#justHashString = toUnpaddedBase64url(this.#hash);
@@ -149,6 +150,11 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class HashCodec extends BaseNonterminalCodec<never, FabricHashState> {

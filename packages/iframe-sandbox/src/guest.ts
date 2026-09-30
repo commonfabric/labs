@@ -225,6 +225,19 @@ export class RemoteCell<T = FabricValue> {
 
   /** Appends members with the runtime's mergeable array operation. */
   push<U>(this: RemoteCell<U[]>, ...values: U[]): Promise<void> {
+    return this.pushAll(values);
+  }
+
+  /**
+   * Like `push()`, except that it takes the members to append as one list, so
+   * the list can be of any length.
+   */
+  pushAll<U>(this: RemoteCell<U[]>, values: readonly U[]): Promise<void> {
+    if (!Array.isArray(values)) {
+      return Promise.reject(
+        new TypeError("`pushAll()` requires an array of members."),
+      );
+    }
     let snapshots: U[];
     try {
       snapshots = cloneIfNecessary(values as FabricValue, {

@@ -111,6 +111,7 @@ const benchZip = (json: string) => artifactZip("results.json", json);
 
 interface GhRun {
   id: number;
+  head_branch: string | null;
   run_attempt: number;
   status: string;
   created_at: string;
@@ -132,6 +133,7 @@ const ghRun = (
   durationMs = RUN_MS,
 ): GhRun => ({
   id,
+  head_branch: "main",
   run_attempt: runAttempt,
   status: "completed",
   created_at: new Date(at).toISOString(),
@@ -3509,6 +3511,7 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
   const runId = 80_001;
   const run = {
     id: runId,
+    head_branch: "main",
     created_at: new Date(BASE).toISOString(),
     conclusion: "success",
   } as GhRun;
@@ -3520,6 +3523,24 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
     const store = new BenchmarkHistoryStore();
     await store.load();
     assertEquals(store.get(runId, 1)?.runAttempt, 1);
+  });
+});
+
+Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", async () => {
+  const main = ghRun(80_011, BASE);
+  const branch = { ...ghRun(80_012, BASE + HOUR), head_branch: "feature" };
+  await withApi({
+    pages: { 1: [branch, main] },
+    artifacts: { [main.id]: [], [branch.id]: [] },
+  }, async (calls) => {
+    await benchmark.collect(ctx({ GH_TOKEN: "token" }));
+    const store = new BenchmarkHistoryStore();
+    await store.load();
+    assert(store.get(main.id, 1) !== undefined);
+    assertEquals(store.get(branch.id, 1), undefined);
+    const listed = runListCalls(calls);
+    assert(listed.length > 0);
+    assert(listed.every((call) => !call.includes("branch=")), listed.join(" "));
   });
 });
 

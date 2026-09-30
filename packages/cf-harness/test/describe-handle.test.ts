@@ -866,18 +866,18 @@ describe("describe_handle", () => {
         storageManager,
       });
       const pieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `describe-handle-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );
       await pieces.synced();
       session = { pieces };
       neighbour = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `describe-handle-neighbour-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         runtime,
       );

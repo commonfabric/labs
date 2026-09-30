@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import {
   type ConfirmedRead,
@@ -280,6 +280,160 @@ describe("engine-conflicts", () => {
     expect(scans.calls).toHaveLength(1);
     expect(patches.calls).toHaveLength(1);
   });
+
+  for (const kind of ["confirmed", "pending"] as const) {
+    for (const malformed of [false, true]) {
+      const failure = malformed
+        ? "failing to decode patches for a"
+        : "rejecting a stale";
+      it(`accepts a commit after ${failure} ${kind} read and another connection writes`, async () => {
+        // The newest row decides the read. Releasing its cursor must not
+        // fetch the older row or retain a snapshot across the rollback.
+
+        const other = await open({ url: toFileUrl(path) });
+        try {
+          for (const localSeq of [1, 2]) {
+            applyCommit(engine, {
+              sessionId: "session:updates",
+              commit: {
+                localSeq,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "patch",
+                  id: ids[0],
+                  patches: [{
+                    op: "replace",
+                    path: "/value/a",
+                    value: localSeq + 10,
+                  }],
+                }],
+              },
+            });
+          }
+          if (malformed) {
+            engine.database.exec(
+              "UPDATE revision SET data = NULL WHERE id = ? AND op = 'patch'",
+              ids[0],
+            );
+          }
+          const statement = kind === "confirmed"
+            ? engine.statements.selectPatchConflicts
+            : engine.statements.selectPatchConflictsExcludingSession;
+          const iterate = statement.iter.bind(statement);
+          let rowsRead = 0;
+          using scans = stub(statement, "iter", function* (...params) {
+            for (const row of iterate(...params)) {
+              rowsRead++;
+              yield row;
+            }
+          });
+          const stale = { id: ids[0], path: toDocumentPath(["value", "a"]) };
+          expect(() =>
+            applyCommit(engine, {
+              sessionId,
+              commit: {
+                localSeq: 2,
+                reads: {
+                  confirmed: kind === "confirmed" ? [{ ...stale, seq: 1 }] : [],
+                  pending: kind === "pending"
+                    ? [{ ...stale, basisSeq: 1, localSeq: [1] }]
+                    : [],
+                },
+                operations: [{
+                  op: "set",
+                  id: "of:output",
+                  value: { value: "rejected" },
+                }],
+              },
+            })
+          ).toThrow(
+            malformed
+              ? "memory v2 stored patches must carry a payload"
+              : ConflictError,
+          );
+          expect(scans.calls).toHaveLength(1);
+          expect(rowsRead).toBe(1);
+          expect(engine.database.inTransaction).toBe(false);
+
+          // Advancing the WAL from another connection makes any read snapshot
+          // retained by the rejected commit too old to upgrade to a writer.
+          const intervening = applyCommit(other, {
+            sessionId: "session:other-connection",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:other-output",
+                value: { value: "intervening" },
+              }],
+            },
+          });
+          expect(commitReads([]).seq).toBe(intervening.seq + 1);
+          expect(read(other, { id: "of:output" })).toEqual({
+            value: "updated",
+          });
+        } finally {
+          close(other);
+        }
+      });
+    }
+  }
+
+  for (const malformed of [false, true]) {
+    const behavior = malformed
+      ? "reports both a patch decoding error and a cursor cleanup error"
+      : "propagates a cursor cleanup error after finding a conflict";
+    it(behavior, () => {
+      applyCommit(engine, {
+        sessionId: "session:updates",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: ids[0],
+            patches: [{ op: "replace", path: "/value/a", value: 10 }],
+          }],
+        },
+      });
+      if (malformed) {
+        engine.database.exec(
+          "UPDATE revision SET data = NULL WHERE id = ? AND op = 'patch'",
+          ids[0],
+        );
+      }
+      const statement = engine.statements.selectPatchConflicts;
+      const get = statement.get.bind(statement);
+      const cleanupError = new Error("cursor cleanup failed");
+      using cleanup = stub(statement, "get", (...params) => {
+        get(...params);
+        throw cleanupError;
+      });
+      let caught: unknown;
+      try {
+        commitReads([{
+          id: ids[0],
+          path: toDocumentPath(["value", "a"]),
+          seq: 1,
+        }]);
+      } catch (error) {
+        caught = error;
+      }
+      if (malformed) {
+        expect(caught).toBeInstanceOf(SuppressedError);
+        const suppressed = caught as SuppressedError;
+        expect(suppressed.suppressed).toHaveProperty(
+          "message",
+          "memory v2 stored patches must carry a payload",
+        );
+        expect(suppressed.error).toBe(cleanupError);
+      } else {
+        expect(caught).toBe(cleanupError);
+      }
+      expect(cleanup.calls).toHaveLength(1);
+    });
+  }
 
   for (const invalidFirst of [false, true]) {
     it(`rejects an unknown branch ${invalidFirst ? "before" : "after"} a stale read without reporting a retryable conflict`, () => {

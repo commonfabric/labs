@@ -11,11 +11,12 @@ import { decode, encode } from "@commonfabric/utils/encoding";
 import {
   FragmentWriter,
   ingestJUnit,
-  preloadArgument,
+  readEnv,
   readNameMaps,
+  recordingArguments,
   RECORDS_DIR_VARIABLE,
   recordsDir,
-  spoolWriteArgument,
+  SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
 
@@ -76,7 +77,8 @@ export async function testPackage(
     // other.
     const args = ["task", "test"];
     if (junitPath !== undefined) {
-      args.push(`--junit-path=${junitPath}`, ...recording);
+      args.push(`--junit-path=${junitPath}`);
+      for (const argument of recording) args.push(argument);
     }
     result = await new Deno.Command(Deno.execPath(), {
       args,
@@ -421,26 +423,30 @@ export function leafFlags(task: string): string[] {
 
 /**
  * What each member's leaf takes to record, beyond the JUnit path: the
- * preload, and the write permission it needs to leave its name map in
- * the spool. A member whose task cannot take the preload takes neither,
- * and appears with no arguments at all.
+ * preload, and the permissions it needs to find the repository, read the
+ * skip list where there is one, and leave its name map in the spool. A
+ * member whose task cannot take the preload takes neither, and appears
+ * with no arguments at all.
  */
 export async function memberRecordingArguments(
   members: readonly string[],
   spool: string,
   root: string | URL = Deno.cwd(),
+  skipList?: string,
 ): Promise<Map<string, string[]>> {
+  const rootPath = path.fromFileUrl(directoryUrl(root));
   const recording = new Map<string, string[]>();
   for (const member of members) {
     const task = await leafTask(member, root);
-    if (!acceptsPreload(task)) {
-      recording.set(member, []);
-      continue;
-    }
-    const write = spoolWriteArgument(leafFlags(task ?? ""), spool);
     recording.set(
       member,
-      write === undefined ? [preloadArgument()] : [preloadArgument(), write],
+      acceptsPreload(task)
+        ? recordingArguments(leafFlags(task ?? ""), {
+          spool,
+          root: rootPath,
+          skipList,
+        })
+        : [],
     );
   }
   return recording;
@@ -538,8 +544,19 @@ export async function runTests(
   const capable = junitRoot !== undefined
     ? await junitCapableMembers(members, workspaceUrl)
     : new Set<string>();
+  // A skip list the run inherits reaches every member, each in a directory
+  // of its own, so it is named to them by its absolute path.
+  const inheritedSkipList = readEnv(SKIP_LIST_VARIABLE);
+  const skipList = inheritedSkipList
+    ? path.resolve(workspaceCwd, inheritedSkipList)
+    : undefined;
   const recording = junitRoot !== undefined && spoolDir !== undefined
-    ? await memberRecordingArguments(members, spoolDir, workspaceUrl)
+    ? await memberRecordingArguments(
+      members,
+      spoolDir,
+      workspaceUrl,
+      skipList,
+    )
     : new Map<string, string[]>();
 
   const results: PackageResult[] = [];
@@ -560,9 +577,12 @@ export async function runTests(
         packageName,
         packagePath,
         coverageRoot,
-        spoolDir === undefined
-          ? undefined
-          : { [RECORDS_DIR_VARIABLE]: spoolDir },
+        {
+          ...(spoolDir === undefined
+            ? {}
+            : { [RECORDS_DIR_VARIABLE]: spoolDir }),
+          ...(skipList === undefined ? {} : { [SKIP_LIST_VARIABLE]: skipList }),
+        },
         junitPath,
         recording.get(memberPath),
       );

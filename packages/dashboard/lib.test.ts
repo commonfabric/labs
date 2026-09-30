@@ -3,6 +3,7 @@
  */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, readBudget, sparkline, STALE_RUNS_ERROR, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
 
@@ -155,7 +156,7 @@ Deno.test("sparkline: scale normalizes to the recent runs, clipping old spikes",
   const spiky = ysOf(sparkline([100, 10, 11, 12, 13], "#111", { count: 4, color: "#eee" }));
   assert(spiky[0] < 0, `old spike should clip above the viewport, got y=${spiky[0]}`);
   const recent = spiky.slice(1);
-  assert(Math.max(...recent) - Math.min(...recent) > 12, "recent runs should span most of the height");
+  assert(maxOf(recent) - minOf(recent) > 12, "recent runs should span most of the height");
   // Without the spike, the same recent runs land on the same scale (spike-independent).
   const clean = ysOf(sparkline([12, 10, 11, 12, 13], "#111", { count: 4, color: "#eee" }));
   assertEquals(clean.slice(1), recent);
@@ -189,7 +190,7 @@ Deno.test("sparkline: highlight scaleAll keeps the whole series in view, still d
   const [base, tail] = lines;
   // The spike is now the series max, so it stays in view (not clipped past the top).
   assert(base[0] >= 0, `spike should stay in view with scaleAll, got y=${base[0]}`);
-  assertEquals(base[0], Math.min(...base), "the spike is the highest point (smallest y)");
+  assertEquals(base[0], minOf(base), "the spike is the highest point (smallest y)");
   assertEquals(tail.length, 4); // the tail still covers the trailing 4 points
 });
 

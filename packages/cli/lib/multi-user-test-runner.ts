@@ -31,6 +31,13 @@
  * worker runs that same instance locally (like every browser tab does), so
  * per-user scoped state behaves like production.
  *
+ * The shared space is created with an access list, which
+ * {@link participantAccess} composes: the first participant's user is its
+ * OWNER, and `{ pattern, access: "READ" }` declares another user's level. The
+ * storage server runs with access control off, so the list is what
+ * `spaceAccess()` reads and nothing more: a participant at `READ`, or left
+ * out at `"none"`, still reads and writes the space.
+ *
  * Coordination: a participant's steps run in order until an
  * `{ await: marker }` for a marker no other participant has announced via
  * `{ label: marker }` yet; the orchestrator then switches to the next
@@ -46,10 +53,15 @@
  * after a marker is therefore read once, and a false value is a failure.
  */
 
-import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import type { SpaceAccessLevel } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
+import { type ACL, isCapability } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import type {
   TestResult,
   TestRunnerOptions,
@@ -58,6 +70,7 @@ import type {
 import type {
   ParticipantInitResult,
   StepMeta,
+  WorkerLifetimeNotice,
   WorkerRequest,
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
@@ -67,6 +80,9 @@ export interface MultiUserParticipantSpec {
 
   /** Identity seed; participants with the same `user` share an identity. */
   user: string;
+
+  /** Level the participant declares for its user, if it declares one. */
+  access?: SpaceAccessLevel;
 }
 
 export interface MultiUserDescriptorMeta {
@@ -75,8 +91,12 @@ export interface MultiUserDescriptorMeta {
 
 /**
  * Recognize a multi-user descriptor (default export with a `participants`
- * record of pattern factories or `{ pattern, user? }` entries). Returns the
- * orchestration metadata, or undefined for ordinary single-runtime tests.
+ * record of pattern factories or `{ pattern, user?, access? }` entries).
+ * Returns the orchestration metadata, or undefined for ordinary
+ * single-runtime tests.
+ *
+ * @throws If a participant declares an `access` that is not a
+ *   `SpaceAccessLevel`.
  */
 export function multiUserDescriptorMeta(
   defaultExport: unknown,
@@ -98,10 +118,17 @@ export function multiUserDescriptorMeta(
       isObjectOrArray(entry) &&
       typeof (entry as { pattern?: unknown }).pattern === "function"
     ) {
-      const user = (entry as { user?: unknown }).user;
+      const { user, access } = entry as { user?: unknown; access?: unknown };
+      if (access !== undefined && !isSpaceAccessLevel(access)) {
+        throw new Error(
+          debugStr`Participant \`${name}\` declares access $quote${access}, ` +
+            "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
+        );
+      }
       participants.push({
         name,
         user: typeof user === "string" ? user : name,
+        ...(access === undefined ? {} : { access }),
       });
     } else {
       return undefined;
@@ -110,9 +137,56 @@ export function multiUserDescriptorMeta(
   return participants.length > 0 ? { participants } : undefined;
 }
 
+/** Whether `value` is a level a participant may declare. */
+function isSpaceAccessLevel(value: unknown): value is SpaceAccessLevel {
+  return value === "none" || isCapability(value);
+}
+
+/**
+ * Composes the level each user holds in the shared space's access list, keyed
+ * by user. The first participant's user is the space's OWNER. Every other user
+ * holds the level its participants declare, or `WRITE` when none of them
+ * declares one. A user at `"none"` is one the list leaves out.
+ *
+ * @throws If the first participant's user declares a level other than
+ *   `OWNER`, or if two participants of one user declare different levels.
+ */
+export function participantAccess(
+  participants: readonly MultiUserParticipantSpec[],
+): Map<string, SpaceAccessLevel> {
+  const declared = new Map<string, SpaceAccessLevel>();
+  for (const { name, user, access } of participants) {
+    if (access === undefined) continue;
+    const other = declared.get(user);
+    if (other !== undefined && other !== access) {
+      throw new Error(
+        `Participants of user \`${user}\` declare access both \`${other}\` ` +
+          `and \`${access}\` (the second in \`${name}\`), but a user holds ` +
+          "one level",
+      );
+    }
+    declared.set(user, access);
+  }
+  const owner = participants[0].user;
+  const ownerAccess = declared.get(owner);
+  if (ownerAccess !== undefined && ownerAccess !== "OWNER") {
+    throw new Error(
+      `User \`${owner}\` of the first participant creates the shared ` +
+        `space and is its OWNER, so it cannot declare access ` +
+        `\`${ownerAccess}\``,
+    );
+  }
+  const levels = new Map<string, SpaceAccessLevel>([[owner, "OWNER"]]);
+  for (const { user } of participants) {
+    if (!levels.has(user)) levels.set(user, declared.get(user) ?? "WRITE");
+  }
+  return levels;
+}
+
 class ParticipantWorker {
   readonly name: string;
   #worker: Worker;
+  #lifetimeLock?: string;
   #nextId = 1;
   #failure?: Error;
   #pending = new Map<
@@ -126,7 +200,13 @@ class ParticipantWorker {
       new URL("./multi-user-test-worker.ts", import.meta.url),
       { type: "module", name: `cf-test:${name}` },
     );
-    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    this.#worker.onmessage = (
+      event: MessageEvent<WorkerResponse | WorkerLifetimeNotice>,
+    ) => {
+      if ("lifetimeLock" in event.data) {
+        this.#lifetimeLock = event.data.lifetimeLock;
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -155,9 +235,15 @@ class ParticipantWorker {
     });
   }
 
-  terminate(error = new Error(`[${this.name}] worker terminated`)): void {
-    this.#worker.terminate();
+  /**
+   * Rejects pending and future calls with `error`, and terminates the worker,
+   * settling once it has been torn down.
+   */
+  async terminate(
+    error = new Error(`[${this.name}] worker terminated`),
+  ): Promise<void> {
     this.#fail(error);
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 
   /** Reject pending and future calls once the worker cannot answer them. */
@@ -228,7 +314,6 @@ export async function runMultiUserTestPattern(
   let runResult: TestRunResult | undefined;
 
   const server = StandaloneMemoryServer.start();
-  const spaceName = crypto.randomUUID();
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
@@ -245,6 +330,21 @@ export async function runMultiUserTestPattern(
       }
     }
 
+    // The first participant creates the shared space, with each user at the
+    // level `participantAccess()` gives it.
+    const acl: ACL = {};
+    for (const [user, level] of participantAccess(meta.participants)) {
+      if (level !== "none") acl[identities.get(user)!.did()] = level;
+    }
+    const owner = identities.get(meta.participants[0].user)!;
+    const creator = StorageManager.open({ as: owner, memoryHost: server.url });
+    let spaceDid: string;
+    try {
+      spaceDid = await creator.createSpace(acl);
+    } finally {
+      await creator.close();
+    }
+
     // Sequential init: the first worker materializes the shared setup
     // instance (and the wish("#default") seed); the rest resume it.
     for (const [index, spec] of meta.participants.entries()) {
@@ -252,7 +352,8 @@ export async function runMultiUserTestPattern(
         // The failed worker may be idle while another participant is waiting.
         // Reject every worker's requests so that failure reaches the active
         // await, including during initialization, and cleanup can proceed.
-        for (const worker of workers) worker.terminate(error);
+        // Every worker is terminated again, and waited for, on the way out.
+        for (const worker of workers) void worker.terminate(error);
       });
       workers.push(worker);
       try {
@@ -260,7 +361,7 @@ export async function runMultiUserTestPattern(
           identity: realmValueFromKeyPair(
             identities.get(spec.user)!.keyPair,
           ),
-          spaceName,
+          spaceDid,
           apiUrl: server.url.href,
           testPath,
           root: options.root,
@@ -316,7 +417,7 @@ export async function runMultiUserTestPattern(
         }
       } catch (error) {
         await worker.call("dispose").catch(() => {});
-        worker.terminate();
+        await worker.terminate();
         throw error;
       }
     }
@@ -557,7 +658,7 @@ export async function runMultiUserTestPattern(
         );
         teardownError ??= error;
       });
-      participant.worker.terminate();
+      await participant.worker.terminate();
     }
     await server.close().catch(() => {});
     if (teardownError) {

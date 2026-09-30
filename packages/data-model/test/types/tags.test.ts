@@ -57,17 +57,17 @@ import {
   type PrimitiveValueTag,
   tagOfConvertibleJsValueElseNull,
   tagOfFabricPrimitive,
-  tagOfFabricPrimitiveElseNull,
   tagOfFabricValue,
   tagOfFabricValueElseNull,
   VALUE_TAGS,
   type ValueTag,
 } from "@";
-import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { VALUE_TAG } from "@/fabric-bases";
 import { FabricError, FabricMap } from "@/fabric-instances";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   FabricBytes,
+  FabricDurationDay,
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
@@ -79,75 +79,6 @@ import {
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
-
-/**
- * A `BaseFabricPrimitive` subclass whose reported tag is one the vocabulary
- * holds, though it is not the class the tag names: the dispatch reads the tag
- * and does not check it against the class.
- */
-class TaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return FABRIC_PRIMITIVE_VALUE_TAGS.FabricHash;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A `BaseFabricPrimitive` subclass reporting a tag the vocabulary lacks. */
-class MistaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return "Bogus" as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/**
- * A `BaseFabricPrimitive` subclass reporting a tag the vocabulary holds but
- * no primitive may report, which the getter's type refuses and a cast lets
- * through.
- */
-class NonPrimitiveTagProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return VALUE_TAGS.JsError as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A subclass of a production primitive that supplies no tag of its own. */
-class SubBytes extends FabricBytes {}
-
-/**
- * A `BaseFabricPrimitive` subclass reporting a name the vocabulary inherits
- * rather than declares, which a `tag in VALUE_TAGS` test would accept.
- */
-class InheritedNameProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return "toString" as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
-
-/** A `BaseFabricPrimitive` subclass reporting something that is no string. */
-class UntaggedProbe extends BaseFabricPrimitive {
-  get [VALUE_TAG](): FabricPrimitiveValueTag {
-    return undefined as unknown as FabricPrimitiveValueTag;
-  }
-
-  get schemaType(): never {
-    throw new Error("Unimplemented.");
-  }
-}
 
 /**
  * A direct `FabricPrimitive` subclass, bypassing `BaseFabricPrimitive`, which
@@ -435,36 +366,22 @@ describe("tags", () => {
       );
     });
 
-    it("returns the parent's tag for a subclass that supplies none", () => {
-      // The getter is inherited like any other member. Whether that is what
-      // such a subclass means is the subclass's concern; the dispatch reads
-      // what it reports.
-
-      expect(tagOfFabricPrimitive(new SubBytes(new Uint8Array([1]))))
-        .toBe(FABRIC_PRIMITIVE_VALUE_TAGS.FabricBytes);
-    });
-
-    it("returns the tag a subclass reports, whatever its class", () => {
-      expect(tagOfFabricPrimitive(new TaggedProbe())).toBe(
-        VALUE_TAGS.FabricHash,
-      );
-    });
-
     it("throws for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
       expect(() => tagOfFabricPrimitive(new RoguePrimitive())).toThrow(
-        "Not a valid `FabricPrimitive`",
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
-    it("throws for a reported tag the vocabulary lacks", () => {
-      expect(() => tagOfFabricPrimitive(new MistaggedProbe())).toThrow(
-        "Not a valid `FabricPrimitive`",
-      );
-    });
+    it("throws for a proxy over a genuine primitive, whatever tag it reports", () => {
+      // A proxy passes `instanceof` and can report any tag at all, which is
+      // why a tag is read only from a value the type guard accepts.
 
-    it("throws for a reported tag outside the primitive subset", () => {
-      expect(() => tagOfFabricPrimitive(new NonPrimitiveTagProbe())).toThrow(
-        "Not a valid `FabricPrimitive`",
+      const lying = new Proxy(new FabricBytes(new Uint8Array([1])), {
+        get: (target, key) =>
+          (key === VALUE_TAG) ? "Bogus" : Reflect.get(target, key),
+      });
+      expect(() => tagOfFabricPrimitive(lying)).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
@@ -472,46 +389,8 @@ describe("tags", () => {
       expect(() => tagOfFabricPrimitive({} as FabricPrimitive)).toThrow(
         "Not a valid `FabricPrimitive`",
       );
-    });
-  });
-
-  describe("tagOfFabricPrimitiveElseNull()", () => {
-    for (const [value, tag] of FABRIC_PRIMITIVE_TAGS) {
-      it(`returns \`${tag}\` for a \`${value.constructor.name}\``, () => {
-        expect(tagOfFabricPrimitiveElseNull(value)).toBe(tag);
-      });
-    }
-
-    it("returns `null` for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
-      expect(tagOfFabricPrimitiveElseNull(new RoguePrimitive())).toBe(null);
-    });
-
-    it("returns `null` for a reported tag the vocabulary lacks", () => {
-      expect(tagOfFabricPrimitiveElseNull(new MistaggedProbe())).toBe(null);
-    });
-
-    it("returns `null` for a reported tag outside the primitive subset", () => {
-      // `JsError` is a tag, but not one a primitive may report; a primitive
-      // reporting it would otherwise be rebuilt as an error by conversion.
-
-      expect(tagOfFabricPrimitiveElseNull(new NonPrimitiveTagProbe()))
-        .toBe(null);
-    });
-
-    it("returns `null` for a reported tag that is only an inherited name", () => {
-      expect(tagOfFabricPrimitiveElseNull(new InheritedNameProbe())).toBe(
-        null,
-      );
-    });
-
-    it("returns `null` for a reported tag that is no string", () => {
-      expect(tagOfFabricPrimitiveElseNull(new UntaggedProbe())).toBe(null);
-    });
-
-    it("returns `null` for a type lie", () => {
-      expect(tagOfFabricPrimitiveElseNull({} as FabricPrimitive)).toBe(null);
-      expect(tagOfFabricPrimitiveElseNull(null as unknown as FabricPrimitive))
-        .toBe(null);
+      expect(() => tagOfFabricPrimitive(null as unknown as FabricPrimitive))
+        .toThrow("Not a valid `FabricPrimitive`");
     });
   });
 
@@ -571,9 +450,9 @@ describe("tags", () => {
         .toThrow("Not possibly a valid `FabricValue`");
     });
 
-    it("throws for a primitive whose reported tag the vocabulary lacks", () => {
-      expect(() => tagOfFabricValue(new MistaggedProbe())).toThrow(
-        "Not possibly a valid `FabricValue`",
+    it("throws for a counterfeit `FabricPrimitive`", () => {
+      expect(() => tagOfFabricValue(new RoguePrimitive())).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
       );
     });
 
@@ -738,10 +617,10 @@ describe("tags", () => {
         .toBe(null);
     });
 
-    it("returns `null` for a primitive whose reported tag the vocabulary lacks", () => {
-      expect(tagOfFabricValueElseNull(new MistaggedProbe())).toBe(null);
-      expect(tagOfFabricValueElseNull(new NonPrimitiveTagProbe())).toBe(null);
-      expect(tagOfFabricValueElseNull(new RoguePrimitive())).toBe(null);
+    it("throws for a counterfeit `FabricPrimitive`", () => {
+      expect(() => tagOfFabricValueElseNull(new RoguePrimitive())).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
+      );
     });
 
     describe("given an `isPlusType` predicate", () => {
@@ -1265,6 +1144,7 @@ describe("tags", () => {
 
     const fabricClasses = [
       FabricBytes,
+      FabricDurationDay,
       FabricDurationNsec,
       FabricEpochDay,
       FabricEpochNsec,
