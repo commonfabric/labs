@@ -353,6 +353,42 @@ describe("Engine in SES mode", () => {
     expect(main?.default?.window?.value).toBe(600n);
   });
 
+  it("keeps a fabric primitive constructed at top level as it is", async () => {
+    // A construction at top level, as a `const` and as the default export,
+    // reaches the freezer only through the transformer's `__cf_data()` wrap;
+    // the previous test holds one inside an object literal, which the wrap of
+    // the literal carries.
+    const program: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { FabricDurationNsec } from "commonfabric";',
+            "export const window = new FabricDurationNsec(600n);",
+            "export default new FabricDurationNsec(1n);",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
+      program,
+    );
+    expect(joinedBodies(graph)).toContain("__cf_data(new");
+
+    const { main } = engine.evaluateRecordGraph(
+      id,
+      graph,
+      mainSpecifier,
+      program,
+    );
+    expect(main?.window).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.window?.value).toBe(600n);
+    expect(main?.default).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.default?.value).toBe(1n);
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",

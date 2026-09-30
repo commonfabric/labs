@@ -807,6 +807,52 @@ export { model, lookup, days, matcher, scopes, years, tags, proxied, passthrough
     );
   });
 
+  it("wraps a top-level fabric primitive construction with __cfHelpers.__cf_data", async () => {
+    const source = `
+import { FabricDurationNsec, FabricEpochNsec as Epoch } from "commonfabric";
+
+class FabricHash {
+  constructor(readonly value: string) {}
+}
+
+const span = new FabricDurationNsec(600n);
+const renamed = new Epoch(1n);
+const lookalike = new FabricHash("not the data model's");
+
+export { span, renamed, lookalike };
+export default new FabricDurationNsec(1n);
+`;
+
+    const output = await transformFiles(
+      { "/main.ts": source },
+      { types: COMMONFABRIC_TYPES },
+    );
+    const main = output["/main.ts"]!;
+
+    const root = parseModule(main);
+    const wrapped = new Set(
+      collect(root, ts.isVariableDeclaration).filter((d) =>
+        d.initializer && ts.isCallExpression(d.initializer) &&
+        ts.isPropertyAccessExpression(d.initializer.expression) &&
+        d.initializer.expression.name.text === "__cf_data"
+      ).map((d) => ts.isIdentifier(d.name) ? d.name.text : undefined),
+    );
+    // A construction of a `FabricPrimitive` is data the runtime freezer keeps
+    // as it is, so it is wrapped, under a renamed import too. The class is
+    // recognized by the brand its type carries, so a user class sharing a
+    // name is not.
+    assert(wrapped.has("span"), "expected span to be __cf_data-wrapped");
+    assert(wrapped.has("renamed"), "expected renamed to be __cf_data-wrapped");
+    assert(!wrapped.has("lookalike"), "expected lookalike to stay unwrapped");
+    const defaultExport = collect(root, ts.isExportAssignment)[0];
+    assert(defaultExport && ts.isCallExpression(defaultExport.expression));
+    assert(
+      ts.isPropertyAccessExpression(defaultExport.expression.expression) &&
+        defaultExport.expression.expression.name.text === "__cf_data",
+      "expected the default export to be __cf_data-wrapped",
+    );
+  });
+
   it("hardens direct top-level functions with a canonical helper", async () => {
     const source = `
 const step = (value: number) => value + 1;

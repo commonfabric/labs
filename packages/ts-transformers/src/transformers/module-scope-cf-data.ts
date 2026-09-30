@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { declaresFabricPrimitiveBrand } from "@commonfabric/schema-generator/fabric-primitive-brand";
 import {
   isTrustedBuilder,
   isTrustedDataHelper,
@@ -163,7 +164,8 @@ function shouldWrapTopLevelExpression(
   }
 
   if (ts.isNewExpression(expr)) {
-    return hasNamedTarget(expr.expression, CF_DATA_CONSTRUCTOR_NAMES);
+    return hasNamedTarget(expr.expression, CF_DATA_CONSTRUCTOR_NAMES) ||
+      constructsFabricPrimitive(expr, context);
   }
 
   if (
@@ -175,6 +177,22 @@ function shouldWrapTopLevelExpression(
   }
 
   return false;
+}
+
+/**
+ * Whether `expression` constructs a `FabricPrimitive`, such as
+ * `new FabricDurationNsec(600n)`. The runtime freezer keeps one as it is
+ * (`SES_SANDBOXING_SPEC.md` §4.2.3), so the construction is data to wrap. The
+ * class is recognized by the brand its instance type carries, not by name, so
+ * a user class that shares a name is not wrapped and a renamed import is.
+ */
+function constructsFabricPrimitive(
+  expression: ts.NewExpression,
+  context: TransformationContext,
+): boolean {
+  return declaresFabricPrimitiveBrand(
+    context.checker.getTypeAtLocation(expression),
+  );
 }
 
 function isTrustedBuilderCall(expression: ts.CallExpression): boolean {

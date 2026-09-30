@@ -3057,11 +3057,19 @@ encloses the original expression, wrappers included:
     `void`, and unions/intersections thereof (`isPrimitiveSnapshotCall`,
     `isPrimitiveLikeType`);
   - any call whose callee is a property access (`receiver.method(...)`).
-- **`new` expressions.** Only `new Map(...)` and `new Set(...)`
-  (`CF_DATA_CONSTRUCTOR_NAMES`). Notably `new Proxy(...)` is left unwrapped —
-  "Proxy snapshots stay unsupported until Proxy is re-enabled in SES
-  compartments" (`test/transform.test.ts`, "wraps top-level data candidates
-  with __cfHelpers.__cf_data").
+- **`new` expressions.** `new Map(...)` and `new Set(...)`
+  (`CF_DATA_CONSTRUCTOR_NAMES`, by name), and a construction of a
+  `FabricPrimitive` such as `new FabricDurationNsec(600n)`, recognized by the
+  brand its instance type carries (`constructsFabricPrimitive`,
+  `declaresFabricPrimitiveBrand` from
+  `@commonfabric/schema-generator/fabric-primitive-brand`), which the runtime
+  freezer keeps as it is (`SES_SANDBOXING_SPEC.md` §4.2.3; test: "wraps a
+  top-level fabric primitive construction with __cfHelpers.__cf_data";
+  `packages/runner/test/engine-ses.test.ts`, "keeps a fabric primitive
+  constructed at top level as it is"). Notably `new Proxy(...)` is left
+  unwrapped — "Proxy snapshots stay unsupported until Proxy is re-enabled in
+  SES compartments" (`test/transform.test.ts`, "wraps top-level data
+  candidates with __cfHelpers.__cf_data").
 - **Literals.** Regular-expression literals, object literals, and array
   literals are always wrapped.
 - Everything else — identifier references, primitive literals, template

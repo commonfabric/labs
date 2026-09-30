@@ -3,6 +3,7 @@ import ts from "typescript";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
+import { declaresFabricPrimitiveBrand } from "./typescript/fabric-primitive-brand.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
 import { isCommonFabricSymbol } from "./typescript/common-fabric-symbols.ts";
@@ -592,7 +593,7 @@ export function getNamedTypeKey(
   if (NativeTypeFormatter.isNativeType(name)) {
     if (
       !NativeTypeFormatter.isFabricPrimitiveTypeName(name) ||
-      NativeTypeFormatter.declaresFabricPrimitiveBrand(type)
+      declaresFabricPrimitiveBrand(type)
     ) {
       return undefined;
     }
