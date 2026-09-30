@@ -326,6 +326,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * hosts: over one connection per host that they share, authenticated once
    * per key, or over one connection per space. A manager without the method
    * has no connections to share.
+   *
+   * @throws If a session is already open and the choice would change: the
+   * sessions would then be split across the two.
    */
   setSharedMemoryConnection?(enabled: boolean): void;
 

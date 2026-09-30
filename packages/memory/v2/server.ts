@@ -947,8 +947,11 @@ class Connection {
     space: string,
     sessionId: string,
   ): boolean {
-    return this.#server.isAclActive() &&
-      (!this.hasSession(space, sessionId) ||
+    // A session this connection no longer holds — closed, or revoked — is
+    // sent nothing, whatever the ACL mode; under an active ACL, neither is
+    // one another connection has taken over.
+    return !this.hasSession(space, sessionId) ||
+      (this.#server.isAclActive() &&
         !this.#server.isSessionAttached(space, sessionId, this.id));
   }
 

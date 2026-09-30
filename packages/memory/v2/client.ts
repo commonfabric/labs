@@ -827,6 +827,7 @@ export class Client {
   async #authenticate(
     principal: SessionPrincipal,
     whileConnected: boolean,
+    freshChallenge = false,
   ): Promise<string | typeof STALE> {
     const existing = this.#authenticated.get(principal.did);
     if (existing !== undefined) {
@@ -840,8 +841,12 @@ export class Client {
     const epoch = this.#connectionEpoch;
     const held = this.sessionOpenAuthContext();
     // The server refuses a challenge that has expired, and one this key has
-    // already signed, so either case takes a challenge of its own.
-    const needsChallenge = this.#challengeSigners.has(principal.did) ||
+    // already signed, so either case takes a challenge of its own. The
+    // expiry is read by this clock, which may lag the server's: a refusal
+    // the server marks retriable is answered once with a challenge asked
+    // for outright.
+    const needsChallenge = freshChallenge ||
+      this.#challengeSigners.has(principal.did) ||
       held.challenge.expiresAt <= Math.floor(Date.now() / 1000);
     if (!needsChallenge) {
       this.#challengeSigners.add(principal.did);
@@ -879,6 +884,12 @@ export class Client {
         this.#authenticated.delete(principal.did);
       }
       if (error === STALE_AUTHENTICATION) return STALE;
+      if (
+        !needsChallenge && isRetriableAuthorizationError(error) &&
+        !this.#staleSince(epoch)
+      ) {
+        return await this.#authenticate(principal, whileConnected, true);
+      }
       throw error;
     }
   }
@@ -3244,6 +3255,10 @@ const permanentProtocolError = (message: string): Error =>
 // anti-replay race the server marked `retriable` (an expired/used/mismatched
 // challenge, a stale signed `exp`) — is excluded, so the client keeps reopening
 // through a token-refresh window or a challenge race a fresh handshake heals.
+const isRetriableAuthorizationError = (error: unknown): boolean =>
+  error instanceof Error && error.name === "AuthorizationError" &&
+  (error as { retriable?: unknown }).retriable === true;
+
 const isPermanentAuthorizationError = (error: unknown): boolean =>
   error instanceof Error && error.name === "AuthorizationError" &&
   (error as { retriable?: unknown }).retriable !== true;

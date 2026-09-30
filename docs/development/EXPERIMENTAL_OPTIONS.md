@@ -1229,8 +1229,9 @@ the per-epic implementation notes).
 - **End state and removal:** retain the negotiation while deployments may
   contain clients that sign each `session.open`. Remove the capability as
   part of a protocol version that requires connection authentication.
-- **Status (2026-09-29):** optional; off wherever `sharedMemoryConnection` is
-  off.
+- **Status (2026-09-29):** optional. Toolshed advertises it exactly when
+  `sharedMemoryConnection` is on; the standalone server advertises it when
+  started with `connectionAuth: true`, whatever the flag says.
 
 ### `conflictAdmissionMode`
 

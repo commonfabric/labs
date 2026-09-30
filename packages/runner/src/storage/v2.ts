@@ -1225,6 +1225,9 @@ export class StorageManager implements IStorageManager {
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
+
+  /** What `setSharedMemoryConnection()` last declared. */
+  #sharedMemoryConnection = false;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
 
@@ -1695,6 +1698,13 @@ export class StorageManager implements IStorageManager {
 
   /** See `IStorageManager.setSharedMemoryConnection`. */
   setSharedMemoryConnection(enabled: boolean): void {
+    if (enabled !== this.#sharedMemoryConnection && this.#providers.size > 0) {
+      throw new Error(
+        "setSharedMemoryConnection: a session is already open; changing " +
+          "the choice now would leave the sessions on two topologies",
+      );
+    }
+    this.#sharedMemoryConnection = enabled;
     this.#sessionFactory.setSharedConnections?.(enabled);
   }
 

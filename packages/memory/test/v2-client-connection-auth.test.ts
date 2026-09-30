@@ -30,8 +30,14 @@ type Options = {
   /** Principals whose `connection.auth` the host refuses, permanently. */
   refused?: Set<string>;
 
-  /** The server's clock, in unix seconds; the real one when left out. */
-  now?: number;
+  /**
+   * The server's clock, in unix seconds, which a test moves; the real one
+   * when left out.
+   */
+  clock?: { now: number };
+
+  /** How long a challenge the server issues lives, in seconds. */
+  challengeTtlSeconds?: number;
 };
 
 const createServer = (name: string, options: Options = {}): Server =>
@@ -43,7 +49,9 @@ const createServer = (name: string, options: Options = {}): Server =>
       authorizeConnection: async (message, context) => {
         const principal = await verifyConnectionAuthorization(message, {
           ...context,
-          ...(options.now === undefined ? {} : { nowSeconds: options.now }),
+          ...(options.clock === undefined
+            ? {}
+            : { nowSeconds: options.clock.now }),
         });
         if (options.refused?.has(principal)) {
           throw Object.assign(new Error(`${principal} is refused`), {
@@ -55,7 +63,12 @@ const createServer = (name: string, options: Options = {}): Server =>
     }),
     sessionOpenAuth: {
       audience: AUDIENCE,
-      ...(options.now === undefined ? {} : { nowSeconds: () => options.now! }),
+      ...(options.clock === undefined
+        ? {}
+        : { nowSeconds: () => options.clock!.now }),
+      ...(options.challengeTtlSeconds === undefined
+        ? {}
+        : { challengeTtlSeconds: options.challengeTtlSeconds }),
     },
   });
 
@@ -163,13 +176,41 @@ describe("Client connection authentication", () => {
     it("asks for a challenge when the one it holds has expired", async () => {
       // The server's clock is decades behind the client's, so every
       // challenge it issues has expired by the client's clock.
-      const server = createServer("expired", { now: 1_000_000 });
+      const server = createServer("expired", { clock: { now: 1_000_000 } });
       const transport = new ServerTransport(server);
       const client = await connect({ transport });
       try {
         await client.mount(SPACES[0], {}, principalOf(alice));
         expect(transport.sentTypes).toEqual([
           "hello",
+          "connection.challenge",
+          "connection.auth",
+          "session.open",
+        ]);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+  });
+
+  describe("mount() against a server whose clock runs ahead", () => {
+    it("asks for a challenge when the server refuses the one it holds as expired", async () => {
+      // By this clock the challenge is live; by the server's, moved on
+      // after issuing it, it has expired, and the refusal says so.
+      const clock = { now: Math.floor(Date.now() / 1000) };
+      const server = createServer("server-clock-ahead", {
+        clock,
+        challengeTtlSeconds: 30,
+      });
+      const transport = new ServerTransport(server);
+      const client = await connect({ transport });
+      try {
+        clock.now += 60;
+        await client.mount(SPACES[0], {}, principalOf(alice));
+        expect(transport.sentTypes).toEqual([
+          "hello",
+          "connection.auth",
           "connection.challenge",
           "connection.auth",
           "session.open",
