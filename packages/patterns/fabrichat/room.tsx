@@ -30,10 +30,14 @@ import {
   eventKey,
   type FabricEpochNsec,
   getEntityId,
+  grantSpaceAccess,
   handler,
+  isWellFormedDID,
   NAME,
   pattern,
   type PerSession,
+  revokeSpaceAccess,
+  spaceAccess,
   Stream,
   type TrustedActionWrite,
   UI,
@@ -47,7 +51,6 @@ import {
 import {
   chooseRecordedTime,
   isInMain,
-  isPrincipal,
   isSingleEmoji,
   type ShownIn,
   threadReplyCounts,
@@ -642,15 +645,12 @@ const isValidBody = (text: unknown): text is string =>
 const SHOWN_IN: readonly ShownIn[] = ["main", "thread", "both"];
 
 /**
- * Whether `sender` is an OWNER as far as the room can tell. The room can't
- * read its space's access list, so it knows only its creator, who holds OWNER.
+ * Whether the principal this code runs for holds OWNER in the room's space,
+ * which `cell` lives in: the event's actor in a handler, the viewer in a
+ * computation (see `spaceAccess()`).
  */
-const isKnownOwner = (
-  creatorProfile: ProfileCell | undefined,
-  sender: ProfileCell,
-): boolean =>
-  creatorProfile?.get() !== undefined &&
-  equals(creatorProfile.resolveAsCell(), sender);
+const isOwnerOf = (cell: Cell<unknown>): boolean =>
+  spaceAccess(cell) === "OWNER";
 
 /** A `ChatWindowAnchor` as `windowSlice()` takes it, if it is well formed. */
 const anchorOf = (
@@ -745,9 +745,6 @@ export interface RoomActState {
   /** Whether the room lives in a space of its own. */
   ownSpace: boolean;
 
-  /** The room's creator, the one OWNER the room knows. */
-  creatorProfile?: ProfileCell;
-
   /** The room's messages. */
   messages: MessagesCell;
 
@@ -820,7 +817,6 @@ const performMessageAct = (
   const {
     myProfile,
     kind,
-    creatorProfile,
     messages,
     reactionLists,
     requests,
@@ -917,8 +913,7 @@ const performMessageAct = (
     if (current.authorProfile === undefined) return;
     const allowed = op === "delete" || kind === "direct"
       ? isAuthor
-      : FABRICHAT_POLICY.ownersMayObliterate &&
-        isKnownOwner(creatorProfile, profile);
+      : FABRICHAT_POLICY.ownersMayObliterate && isOwnerOf(messages);
     if (!allowed) return;
     if (op === "delete" && isDeleted(current)) return;
     const editedAt = claimTime(usedTimes, clock);
@@ -1065,7 +1060,7 @@ const performMembershipAct = (
     myProfile,
     kind,
     ownSpace,
-    creatorProfile,
+    messages,
     roster,
     left,
     notices,
@@ -1121,7 +1116,7 @@ const performMembershipAct = (
     return;
   }
 
-  if (!isKnownOwner(creatorProfile, profile)) return;
+  if (!isOwnerOf(messages)) return;
 
   if (op === "delivered") {
     const id = event?.id ?? state.id;
@@ -1135,21 +1130,34 @@ const performMembershipAct = (
     return;
   }
 
-  // A pattern can't revoke access, and a removal that changed nothing would
-  // be recorded falsely, so `remove` is refused until a host can apply it.
-  if (op === "remove") return;
   const principal = event?.principal ?? event?.target?.value?.trim();
-  if (!isPrincipal(principal)) return;
-  // Someone who left isn't added back without their own say.
-  if ((left.get() ?? []).includes(principal)) return;
-  const access = event?.access ?? "WRITE";
-  if (access !== "WRITE" && access !== "OWNER") return;
-  // The adding client knows the id without reading it back: the person
-  // added, and its own request.
-  const id = JSON.stringify([principal, requestId]);
-  const notice = notices.elementById(id);
-  notice.set({ id, recipient: principal });
-  notices.addUnique(notice);
+  if (!isWellFormedDID(principal)) return;
+
+  if (op === "remove") {
+    // The runtime refuses what the design refuses too (the room's last OWNER,
+    // the sender themself), before staging anything.
+    try {
+      revokeSpaceAccess(messages, principal);
+    } catch {
+      return;
+    }
+  } else {
+    // Someone who left isn't added back without their own say.
+    if ((left.get() ?? []).includes(principal)) return;
+    const access = event?.access ?? "WRITE";
+    if (access !== "WRITE" && access !== "OWNER") return;
+    try {
+      grantSpaceAccess(messages, principal, access);
+    } catch {
+      return;
+    }
+    // The adding client knows the id without reading it back: the person
+    // added, and its own request.
+    const id = JSON.stringify([principal, requestId]);
+    const notice = notices.elementById(id);
+    notice.set({ id, recipient: principal });
+    notices.addUnique(notice);
+  }
   // The entry links the roster's list, which may not exist yet.
   if ((roster.get() as RosterValue | undefined)?.items === undefined) {
     roster.key("items").set([]);
@@ -1410,9 +1418,6 @@ export interface FabriChatMessageRowInput {
   /** Whether the room lives in a space of its own. */
   ownSpace: boolean;
 
-  /** The room's creator, the one OWNER the room knows. */
-  creatorProfile?: ProfileCell;
-
   /** The session's composer state. */
   composer: PerSession<ComposerCell>;
 
@@ -1491,7 +1496,6 @@ export const FabriChatMessageRow = pattern<
     inThread,
     kind,
     ownSpace,
-    creatorProfile,
     composer,
     messages,
     reactionLists,
@@ -1506,7 +1510,6 @@ export const FabriChatMessageRow = pattern<
   const records = {
     kind,
     ownSpace,
-    creatorProfile,
     composer,
     messages,
     reactionLists,
@@ -1545,8 +1548,7 @@ export const FabriChatMessageRow = pattern<
     const viewer = myProfile.resolveAsCell();
     return kind === "direct"
       ? equals(record.authorProfile, viewer)
-      : FABRICHAT_POLICY.ownersMayObliterate &&
-        isKnownOwner(creatorProfile, viewer);
+      : FABRICHAT_POLICY.ownersMayObliterate && isOwnerOf(messages);
   });
   const isEditing = computed(() => {
     const editing = composer.get()?.editing;
@@ -1745,7 +1747,6 @@ export const FabriChatMessageRow = pattern<
                         myProfile,
                         kind,
                         ownSpace,
-                        creatorProfile,
                         composer,
                         messages,
                         reactionLists,
@@ -1777,7 +1778,6 @@ export const FabriChatMessageRow = pattern<
                         myProfile,
                         kind,
                         ownSpace,
-                        creatorProfile,
                         composer,
                         messages,
                         reactionLists,
@@ -1836,7 +1836,6 @@ export const FabriChatMessageRow = pattern<
                     myProfile,
                     kind,
                     ownSpace,
-                    creatorProfile,
                     composer,
                     messages,
                     reactionLists,
@@ -2071,9 +2070,6 @@ export interface FabriChatRoomCoreInput {
   /** Whether the room lives in a space of its own. */
   ownSpace: boolean;
 
-  /** The room's creator, whom the room knows as its OWNER. */
-  creatorProfile?: ProfileCell;
-
   /** The room's messages. */
   messages: MessagesCell;
 
@@ -2127,7 +2123,6 @@ export const FabriChatRoomCore = pattern<
     myProfile,
     about,
     ownSpace,
-    creatorProfile,
     messages,
     reactionLists,
     requests,
@@ -2143,7 +2138,6 @@ export const FabriChatRoomCore = pattern<
   const records = {
     kind,
     ownSpace,
-    creatorProfile,
     composer,
     messages,
     reactionLists,
@@ -2178,8 +2172,14 @@ export const FabriChatRoomCore = pattern<
     () => [...((roster.get() as RosterValue | undefined)?.items ?? [])],
   );
   const participants = computed(() => participantsOf(rosterItems, entries));
-  const canSend = computed(() => myProfile?.get() !== undefined);
-  const cannotSend = computed(() => myProfile?.get() === undefined);
+  // A reader sends once their profile resolves and the room's space grants
+  // them WRITE or OWNER; `undefined` (not known yet) is not a grant.
+  const canSend = computed(() => {
+    const level = spaceAccess(messages);
+    return myProfile?.get() !== undefined &&
+      (level === "WRITE" || level === "OWNER");
+  });
+  const cannotSend = computed(() => !canSend);
   // The policy is a document of its own, which `about` links.
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
   const aboutView = {
@@ -2193,8 +2193,7 @@ export const FabriChatRoomCore = pattern<
   );
   const groupOfItsOwn = computed(() => ownSpace === true && kind === "group");
   const viewerIsOwner = computed(() =>
-    myProfile?.get() !== undefined &&
-    isKnownOwner(creatorProfile, myProfile.resolveAsCell())
+    myProfile?.get() !== undefined && isOwnerOf(messages)
   );
   const title = computed(() =>
     about?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
@@ -2341,7 +2340,6 @@ export const FabriChatRoomCore = pattern<
               myProfile={myProfile}
               kind={kind}
               ownSpace={ownSpace}
-              creatorProfile={creatorProfile}
               composer={composer}
               messages={messages}
               reactionLists={reactionLists}
@@ -2401,7 +2399,6 @@ export const FabriChatRoomCore = pattern<
               myProfile={myProfile}
               kind={kind}
               ownSpace={ownSpace}
-              creatorProfile={creatorProfile}
               composer={composer}
               messages={messages}
               reactionLists={reactionLists}
@@ -2475,7 +2472,6 @@ export const FabriChatRoomCore = pattern<
                       myProfile,
                       kind,
                       ownSpace,
-                      creatorProfile,
                       composer,
                       messages,
                       reactionLists,
@@ -2513,10 +2509,7 @@ export const FabriChatRoomCore = pattern<
   };
 });
 
-/**
- * What a room stores. A space's own chat starts with none of these: each has a
- * default except `creatorProfile`, which such a chat does without.
- */
+/** What a room stores. Each has a default, so a space's own chat starts with none. */
 export interface FabriChatRoomInput {
   /**
    * What the room says about itself, written once by whoever creates it. A
@@ -2526,9 +2519,6 @@ export interface FabriChatRoomInput {
 
   /** Whether the room lives in a space of its own. */
   ownSpace?: boolean | Default<false>;
-
-  /** The room's creator, whom the room knows as its OWNER. */
-  creatorProfile?: ProfileCell;
 
   /** The room's messages. */
   messages?: MessagesCell;
@@ -2575,7 +2565,6 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         myProfile: profileWish.result,
         about: input.about,
         ownSpace: input.ownSpace,
-        creatorProfile: input.creatorProfile,
         messages: input.messages,
         reactionLists: input.reactionLists,
         requests: input.requests,

@@ -13,6 +13,7 @@ import {
   equals,
   NAME,
   pattern,
+  spaceAccess,
   VIEWS,
   wish,
 } from "commonfabric";
@@ -181,11 +182,17 @@ const FabriChatPlacement = pattern<
   const profileWish = wish<ProfileCell>({ query: "#profile" });
   const viewer = profileWish.result;
   const about = computed(() => room.get()?.about);
-  // A pattern can't read its viewer's access, so a room it can't read is
-  // unavailable to it, whether or not the viewer is a member.
-  const state = computed((): PlacementState =>
-    about?.kind === undefined ? "unavailable" : "member"
-  );
+  // The viewer's access to the room's space decides: `"none"` is not a
+  // member, and `undefined`, not known yet, is unavailable, as is a room a
+  // member can't read yet.
+  const state = computed((): PlacementState => {
+    const level = spaceAccess(room);
+    return level === "none"
+      ? "not-member"
+      : level === undefined || about?.kind === undefined
+      ? "unavailable"
+      : "member";
+  });
   const isMember = computed(() => state === "member");
   const messages = computed(() => isMember ? room.get()?.messages : undefined);
   const reactionTallies = computed((): PlacedTallies[] => {

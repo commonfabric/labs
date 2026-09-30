@@ -91,18 +91,6 @@ export const isSingleEmoji = (text: unknown): text is string =>
   // at, though every runtime that runs them has it.
   new RegExp("^\\p{RGI_Emoji}$", "v").test(text);
 
-/**
- * DID Core syntax, as `isWellFormedDID()` in `packages/identity/src/did.ts`
- * states it. That guard is out of a pattern's reach, so it is restated here.
- */
-const WELL_FORMED_DID =
-  /^did:[a-z0-9]+:(?:[A-Za-z0-9._:-]|%[0-9A-Fa-f]{2})*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})$/;
-
-/** Whether `text` is a principal: a DID in DID Core syntax, 256 at most. */
-export const isPrincipal = (text: unknown): text is string =>
-  typeof text === "string" && text.length <= 256 &&
-  WELL_FORMED_DID.test(text);
-
 /** Where a reply is shown. */
 export type ShownIn = "main" | "thread" | "both";
 

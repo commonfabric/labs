@@ -72,7 +72,6 @@ export default pattern(() => {
   const records = {
     about: { kind: "group" as const, title: "Team" },
     ownSpace: true,
-    creatorProfile: aliceProfile,
     messages,
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
     requests: Writable.of<RequestMemo[]>([]),

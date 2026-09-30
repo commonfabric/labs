@@ -126,7 +126,6 @@ export default pattern(() => {
     left: Writable.of<string[]>([]),
     notices: Writable.of<ChatRoomNotice[]>([]),
     ownSpace: true,
-    creatorProfile: aliceProfile,
     messages,
     reactionLists,
     requests,
@@ -319,17 +318,8 @@ export default pattern(() => {
         assertion: assert(() => typeof stored(messages)[1]?.body === "object"),
       },
 
-      // Obliteration in a group room: the OWNER may, anyone else may not.
-      {
-        action: bobOnFirst.obliterateMessage,
-        event: {},
-        trustedUi: obliterateGesture,
-      },
-      {
-        assertion: assert(() =>
-          stored(messages)[0]?.body === "Hello, everyone"
-        ),
-      },
+      // Obliteration in a group room by its OWNER, which this lane's user is;
+      // `members.test.tsx` covers a member who isn't.
       {
         action: aliceOnThird.obliterateMessage,
         event: {},

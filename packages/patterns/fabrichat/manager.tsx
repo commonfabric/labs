@@ -18,6 +18,7 @@ import {
   eventKey,
   handler,
   type InSpaceGrants,
+  isWellFormedDID,
   NAME,
   pattern,
   spaceAccess,
@@ -28,7 +29,6 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { isPrincipal } from "./logic.ts";
 import FabriChatRoom from "./room.tsx";
 import {
   CHAT_START_SURFACE,
@@ -154,7 +154,7 @@ const otherMembers = (
 ): string[] =>
   members.reduce<string[]>(
     (found, member) =>
-      isPrincipal(member) && member !== self && !found.includes(member)
+      isWellFormedDID(member) && member !== self && !found.includes(member)
         ? [...found, member]
         : found,
     [],
@@ -213,9 +213,6 @@ const createRoom = (
         ...(title === undefined ? {} : { title }),
       },
       ownSpace: true,
-      // The profile itself, not the link through this user's home space that
-      // reached it, which other members can't follow.
-      creatorProfile: state.myProfile?.resolveAsCell(),
     }),
   );
   members.forEach((recipient) => {
@@ -249,8 +246,8 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
     if (earlier !== undefined && earlier.status !== "pending") return;
     const typed = event?.target?.value?.trim();
 
-    // A room remembers its creator by profile, so it can't be started
-    // without one.
+    // A chat is started by someone who can take part in it, and taking part
+    // needs a profile.
     if (
       (act === "openDirect" || act === "createGroup") &&
       state.myProfile?.get() === undefined
@@ -286,7 +283,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
     if (act === "openDirect") {
       const counterpart = event?.counterpart ?? typed;
-      if (!isPrincipal(counterpart)) {
+      if (!isWellFormedDID(counterpart)) {
         recordOutcome(requests, requestId, {
           status: "refused",
           reason: "The counterpart is not a principal.",
@@ -367,7 +364,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       return;
     }
     const counterpart = event?.counterpart;
-    if (kind === "direct" && !isPrincipal(counterpart)) {
+    if (kind === "direct" && !isWellFormedDID(counterpart)) {
       recordOutcome(requests, requestId, {
         status: "refused",
         reason: "A direct room needs its counterpart.",

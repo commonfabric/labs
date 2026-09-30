@@ -5,10 +5,8 @@
  * room's record.
  */
 import {
-  action,
   type AddIntegrity,
   assert,
-  currentPrincipal,
   equals,
   pattern,
   TESTS,
@@ -27,12 +25,9 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MEMBERS_ACTION,
-  CHAT_MEMBERS_SURFACE,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   type ChatProfile,
-  type ChatRoomActivity,
   type ChatRoomNotice,
 } from "./schemas.tsx";
 
@@ -48,11 +43,6 @@ const sendGesture = {
   surface: CHAT_SEND_SURFACE,
   action: CHAT_SEND_ACTION,
 };
-const membersGesture = {
-  surface: CHAT_MEMBERS_SURFACE,
-  action: CHAT_MEMBERS_ACTION,
-};
-
 // Enough windows, with the one already open, to pass the room's limit by one.
 const MORE_WINDOWS = Array.from({ length: 50 }, (_, index) => ({
   requestId: `many-${index}`,
@@ -78,13 +68,6 @@ const windowText = (window: ChatMessageWindow | undefined): string =>
     window.hasNewer ? ">" : "",
   ].filter((part) => part !== "").join(" ");
 
-// Whether the newest activity entry's `what` reads as a list.
-const newestLinksList = (activity: Writable<SentActivity[]>): boolean => {
-  const entries = (activity.get() ?? []) as ChatRoomActivity[];
-  const newest = entries[entries.length - 1];
-  return Array.isArray(newest?.what?.get());
-};
-
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
@@ -96,7 +79,6 @@ export default pattern(() => {
   const records = {
     about: { kind: "group" as const },
     ownSpace: true,
-    creatorProfile: aliceProfile,
     messages,
     reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
     requests: Writable.of<RequestMemo[]>([]),
@@ -116,12 +98,6 @@ export default pattern(() => {
   // The same room as a space's own chat, which nobody leaves.
   const bobInSpaceChat = FabriChatRoomCore(
     { myProfile: bobProfile, ...records, ownSpace: false } as RoomArg,
-  );
-
-  // Adds the principal who left: the one this test runs as, whom `leave`
-  // records whichever profile it was sent under.
-  const action_add_who_left = action(() =>
-    alice.add.send({ requestId: "add-left", principal: currentPrincipal() })
   );
 
   return {
@@ -204,32 +180,6 @@ export default pattern(() => {
         ),
       },
 
-      // Adding comes first, before anyone has shown a profile. Only an OWNER
-      // adds a member, and adding one leaves a notice for a
-      // client to deliver.
-      {
-        action: bob.add,
-        event: { requestId: "add-b", principal: "did:key:z6MkBob" },
-        trustedUi: membersGesture,
-      },
-      {
-        action: alice.add,
-        event: { requestId: "add-a", principal: "not a did" },
-        trustedUi: membersGesture,
-      },
-      {
-        action: alice.add,
-        event: { requestId: "add-a2", principal: "did:key:z6MkCarol" },
-        trustedUi: membersGesture,
-      },
-      {
-        assertion: assert(() =>
-          alice.outgoingNotices.length === 1 &&
-          alice.outgoingNotices[0].recipient === "did:key:z6MkCarol"
-        ),
-      },
-      // The add's activity entry links the roster's list, which it creates.
-      { assertion: assert(() => newestLinksList(activity)) },
       // Showing a profile lists it once, however often it is shown.
       { action: alice.showProfile, event: { requestId: "show-a" } },
       { action: bob.showProfile, event: { requestId: "show-b" } },
@@ -239,29 +189,6 @@ export default pattern(() => {
           alice.roster.length === 2 && equals(alice.roster[1], bobProfile)
         ),
       },
-
-      // Removing is refused, since nothing could revoke the access, and the
-      // room records nothing for it: its activity is still the three sends,
-      // the two profiles shown, and the one person added.
-      {
-        action: alice.remove,
-        event: { requestId: "remove-a", principal: "did:key:z6MkCarol" },
-        trustedUi: membersGesture,
-      },
-      {
-        assertion: assert(() => alice.recentActivity.length === 6),
-      },
-      // Only the OWNER reports the notice delivered.
-      {
-        action: bob.delivered,
-        event: { requestId: "d-b", id: '["did:key:z6MkCarol","add-a2"]' },
-      },
-      { assertion: assert(() => alice.outgoingNotices.length === 1) },
-      {
-        action: alice.delivered,
-        event: { requestId: "d-a", id: '["did:key:z6MkCarol","add-a2"]' },
-      },
-      { assertion: assert(() => alice.outgoingNotices.length === 0) },
 
       // Leaving takes the member's roster entry with it, from a room of its
       // own; a space's own chat is left by leaving the space.
@@ -273,14 +200,6 @@ export default pattern(() => {
           alice.roster.length === 1 && equals(alice.roster[0], aliceProfile) &&
           (left.get() ?? []).length === 1 &&
           (left.get() ?? [])[0].startsWith("did:")
-        ),
-      },
-      // Someone who left isn't added back without their own say.
-      { action: action_add_who_left },
-      {
-        assertion: assert(() =>
-          alice.outgoingNotices.length === 0 &&
-          alice.recentActivity.length === 7
         ),
       },
     ],
