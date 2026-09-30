@@ -20,6 +20,15 @@ describe(
         expect(failed).toBe(0);
         expect(passed).toBe(2);
       });
+
+      it("runs from a multi-user participant's handler without a replication error", async () => {
+        const { passed, failed } = await runTests(
+          resolve(FIXTURES, "create-in-participant-handler.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(0);
+        expect(passed).toBe(1);
+      });
     });
   },
 );
