@@ -20,6 +20,7 @@ import {
   fabricPrimitiveClassesByName,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   all as rowLabelAll,
   any as rowLabelAny,
@@ -273,6 +274,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     inspectConfLabel,
     currentPrincipal,
     eventKey,
+    // The one DID Core syntax guard, shared with the runtime rather than
+    // restated for patterns.
+    isWellFormedDID,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):

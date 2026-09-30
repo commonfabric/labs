@@ -4140,6 +4140,25 @@ export type WishTag = `/${string}` | `#${string}`;
 export type DID = `did:${string}`;
 
 /**
+ * Returns whether `value` is a DID in the syntax of the W3C DID Core
+ * specification, at most 256 characters long: `did:`, a lowercase method name,
+ * a colon, and a method-specific identifier of letters, digits, `.`, `-`, `_`,
+ * percent-escapes and inner `:` separators. Whitespace, other punctuation, a
+ * capitalized prefix and a trailing `:` all fail it.
+ *
+ * Ask it of a DID read from data before showing that DID to a person or
+ * treating it as the principal a record names, so that no other spelling of
+ * a DID passes for it. It checks syntax alone: a DID that passes names no one
+ * in particular, and says nothing about who wrote it.
+ *
+ * The runtime decides DID syntax with this same predicate. It reads nothing but
+ * its argument, so it can be called anywhere: in a handler, a `computed()` or a
+ * `lift()`, and in a pattern body, where a call on a reactive value is lifted
+ * like a call to any other function.
+ */
+export declare function isWellFormedDID(value: unknown): value is DID;
+
+/**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
  * Nothing in the event's payload can choose the value.
