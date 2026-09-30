@@ -4697,6 +4697,38 @@ export type GetEntityIdFunction = (
 export declare const getEntityId: GetEntityIdFunction;
 
 /**
+ * A principal's access to a space: one of the capabilities a space's access
+ * list grants, or `"none"` when it grants that principal nothing.
+ */
+export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
+
+/**
+ * Returns the current principal's own access to the space `target`'s value
+ * lives in, as the space's access list states it: the principal's entry in
+ * the list, else the list's `"*"` entry. `target` is required, so a call about
+ * the pattern's own space passes a cell that lives there.
+ *
+ * `"none"` means the principal holds nothing there. `undefined` means the
+ * answer is not known yet: the access list has not arrived, the space has no
+ * access list, there is no principal, or `target` is `undefined`, which is what
+ * a value that cannot be read yet reads as. It is never a guess.
+ *
+ * In a reactive computation (`computed()`, `lift()`) the principal is whoever
+ * is viewing, and the result is theirs alone, so two users never see each
+ * other's answer; it updates when the access list changes. In a handler it is
+ * the event's actor. Calling it in a pattern body throws, since a pattern
+ * body builds one graph for every viewer: wrap it in `computed()` instead.
+ *
+ * It names no principal, and tells a member only what a member can already
+ * read, since any member can read the whole access list.
+ */
+export type SpaceAccessFunction = (
+  target: AnyCell<unknown> | undefined,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccess: SpaceAccessFunction;
+
+/**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a
  * cell's `entityId` — to its tagged-hash string, in whichever form the active
  * cell representation uses (a `{ "/": "id-string" }` object or a `FabricHash`).

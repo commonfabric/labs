@@ -84,6 +84,10 @@ a line for each new document to the index below.
   for: where `currentPrincipal()` gets it on a client and on a serving runtime,
   what cannot steer it, why it is authority rather than intent, and why it is
   available only in a handler
+- [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
+  about the access its principal holds in a space: where the level comes from,
+  who the principal is, when the answer is `"none"` and when it is not known,
+  and how it stays current
 
 ## Talking to the outside world
 
