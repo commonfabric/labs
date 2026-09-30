@@ -99,11 +99,11 @@ class FakeInbox {
     return this.#store.list(recipient.did()).messages;
   }
 
-  /** Answers one request, as the runtime's `fetch`. */
-  readonly fetch = async (
+  /** Answers one request, as a runtime's `fetch`. */
+  async fetch(
     input: RequestInfo | URL,
     init?: RequestInit,
-  ): Promise<Response> => {
+  ): Promise<Response> {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== API_URL || url.pathname !== "/api/inbox/send") {
@@ -119,7 +119,7 @@ class FakeInbox {
       if (!(error instanceof InboxError)) throw error;
       return Response.json({ code: error.code }, { status: 409 });
     }
-  };
+  }
 
   /** Closes the store. */
   close(): void {
@@ -145,7 +145,7 @@ function gesture(payload: Record<string, unknown>): Record<string, unknown> {
   return event;
 }
 
-describe("noticeSpaceAccess()", () => {
+describe("space-access-notice", () => {
   let server: Server;
   let inbox: FakeInbox;
   let cleanups: (() => Promise<void>)[];
@@ -189,7 +189,7 @@ describe("noticeSpaceAccess()", () => {
     const runtime = new Runtime({
       apiUrl: new URL(API_URL),
       storageManager,
-      fetch: inbox.fetch,
+      fetch: (input, init) => inbox.fetch(input, init),
     });
     const errors: string[] = [];
     runtime.scheduler.onError((error: Error) => {
@@ -216,7 +216,7 @@ describe("noticeSpaceAccess()", () => {
       apiUrl: new URL(API_URL),
       storageManager,
       servingPosture: true,
-      fetch: inbox.fetch,
+      fetch: (input, init) => inbox.fetch(input, init),
     });
     cleanups.push(async () => {
       await runtime.dispose();
@@ -410,7 +410,7 @@ describe("noticeSpaceAccess()", () => {
     it("sends one message for two deliveries of the same event", async () => {
       // The second delivery's commit is refused, since the event's receipt
       // exists, and a refused commit sends nothing. Two runs of one event that
-      // both commit are the case below, under "called in a handler frame".
+      // both commit are the case below, under `noticeSpaceAccess()`.
 
       const { runtime } = clientRuntime(alice);
       const space = await createSpace(runtime, {
@@ -539,7 +539,7 @@ describe("noticeSpaceAccess()", () => {
     });
   });
 
-  describe("called in a handler frame", () => {
+  describe("noticeSpaceAccess()", () => {
     /**
      * Returns a client runtime acting as alice, a space she owns in which bob
      * has `WRITE`, and a room document there.
