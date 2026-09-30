@@ -141,8 +141,9 @@ export const FABRICHAT_QUICK_REACTIONS = [
 //
 
 /**
- * A stored reaction: written only by the reaction handlers, each from the
- * reviewed reaction surface with its own action, and labeled with its reactor.
+ * A stored reaction: written by the reaction handlers, each from the reviewed
+ * reaction surface with its own action, and labeled with its reactor; and
+ * cleared by a deletion or an obliteration, from that act's own surface.
  */
 export type SentReaction = AuthoredByCurrentUser<
   WritePolicyAnyOf<ChatReaction, [
@@ -157,6 +158,18 @@ export type SentReaction = AuthoredByCurrentUser<
       typeof commitDeleteReaction,
       typeof CHAT_UNREACT_ACTION,
       typeof CHAT_REACT_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitDelete,
+      typeof CHAT_DELETE_ACTION,
+      typeof CHAT_DELETE_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitObliterate,
+      typeof CHAT_OBLITERATE_ACTION,
+      typeof CHAT_OBLITERATE_SURFACE
     >,
   ]>
 >;
@@ -848,6 +861,7 @@ const performMessageAct = (
     if (op === "delete" && isDeleted(current)) return;
     const editedAt = claimTime(usedTimes, clock);
     if (editedAt === undefined) return;
+    current.reactions?.set([]);
     target.set({
       body: { deleted: true },
       sentAt: current.sentAt,
@@ -879,6 +893,7 @@ const performMessageAct = (
   if (op === "delete") {
     const editedAt = claimTime(usedTimes, clock);
     if (editedAt === undefined) return;
+    current.reactions?.set([]);
     target.set({
       authorProfile: current.authorProfile,
       body: { deleted: true },

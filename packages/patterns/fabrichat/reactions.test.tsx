@@ -83,11 +83,12 @@ export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
   const records = {
     about: { kind: "group" as const },
     ownSpace: false,
     messages,
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
+    reactionLists,
     requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
     activity: Writable.of<SentActivity[]>([]),
@@ -202,8 +203,8 @@ export default pattern(() => {
           reactionsOn(messages, 0).length === 2
         ),
       },
-      // Deleting a message takes its reactions out of the room's record, and
-      // the deleted message takes no new ones.
+      // Deleting a message clears its reactions and takes them out of the
+      // room's record, and the deleted message takes no new ones.
       {
         action: aliceOnFirst.deleteMessage,
         event: {},
@@ -217,6 +218,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           reactionsOn(messages, 0).length === 0 &&
+          ((reactionLists.get()[0] ?? []) as unknown[]).length === 0 &&
           aliceOnFirst.tallies.length === 0
         ),
       },
