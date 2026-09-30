@@ -193,15 +193,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -227,6 +227,7 @@
           "cell"
         ],
         "default": {},
+        "description": "The direct room shared with each counterpart.",
         "properties": {},
         "type": "object"
       },
@@ -235,6 +236,7 @@
           "cell"
         ],
         "default": [],
+        "description": "Notices waiting for a client to deliver them.",
         "items": {
           "$ref": "#/$defs/ChatManagerNotice"
         },
@@ -248,6 +250,7 @@
           "cell"
         ],
         "default": {},
+        "description": "Each request's outcome.",
         "properties": {},
         "type": "object"
       },
@@ -256,6 +259,7 @@
           "cell"
         ],
         "default": [],
+        "description": "The rooms this user belongs to.",
         "items": {
           "$ref": "#/$defs/ChatIndexEntry"
         },
@@ -450,15 +454,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -599,10 +603,12 @@
     "description": "What a manager offers: `ChatManagerOutput`.",
     "properties": {
       "$NAME": {
+        "description": "The manager's name, for lists of pieces.",
         "type": "string"
       },
       "$UI": {
-        "$ref": "https://commonfabric.org/schemas/vnode.json"
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "The manager's rendering."
       },
       "$VIEWS": {
         "description": "The manager's data face, as one group.",

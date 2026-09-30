@@ -73,6 +73,7 @@ import {
   type ChatRoomNotice,
   type ChatRoomPolicy,
   CLOCK_TICK_NSEC,
+  durationNsec,
   epochNsec,
   epochNsecFromMsec,
   nsecOf,
@@ -88,10 +89,11 @@ import {
 const NSEC_PER_SEC = 1_000_000_000n;
 
 /**
- * Every room's policy. Each setting is read by the handlers it governs, and
- * `about.policy` states it, so the two cannot disagree.
+ * Every room's settings. Each is read by the handlers it governs, and
+ * `about.policy` states them (see `statedPolicy()`), so the two cannot
+ * disagree.
  */
-export const FABRICHAT_POLICY: ChatRoomPolicy = {
+export const FABRICHAT_SETTINGS = {
   ownersMayObliterate: true,
   keepsHistory: true,
   deletionIsObliteration: false,
@@ -103,19 +105,37 @@ export const FABRICHAT_POLICY: ChatRoomPolicy = {
 };
 
 /**
+ * Every room's policy: its settings as `about.policy` states them. A module's
+ * own values are plain data, which a `FabricDurationNsec` is not, so the
+ * durations are wrapped here, when a room is created.
+ */
+const statedPolicy = (): ChatRoomPolicy => ({
+  ...FABRICHAT_SETTINGS,
+  proposedTimeMaxAgeNsec: durationNsec(
+    FABRICHAT_SETTINGS.proposedTimeMaxAgeNsec,
+  ),
+  proposedTimeMaxLeadNsec: durationNsec(
+    FABRICHAT_SETTINGS.proposedTimeMaxLeadNsec,
+  ),
+  recentActivityWindowNsec: durationNsec(
+    FABRICHAT_SETTINGS.recentActivityWindowNsec,
+  ),
+});
+
+/**
  * How long the room remembers a request it acted on: the greater of the
  * proposed-time window's total width and the activity window.
  */
 const REQUEST_MEMORY_NSEC = [
-  FABRICHAT_POLICY.proposedTimeMaxAgeNsec +
-  FABRICHAT_POLICY.proposedTimeMaxLeadNsec,
-  FABRICHAT_POLICY.recentActivityWindowNsec,
+  FABRICHAT_SETTINGS.proposedTimeMaxAgeNsec +
+  FABRICHAT_SETTINGS.proposedTimeMaxLeadNsec,
+  FABRICHAT_SETTINGS.recentActivityWindowNsec,
 ].reduce((a, b) => (a > b ? a : b));
 
 /** The time bounds `chooseRecordedTime()` holds a proposal to. */
 const TIME_BOUNDS = {
-  maxAgeNsec: FABRICHAT_POLICY.proposedTimeMaxAgeNsec,
-  maxLeadNsec: FABRICHAT_POLICY.proposedTimeMaxLeadNsec,
+  maxAgeNsec: FABRICHAT_SETTINGS.proposedTimeMaxAgeNsec,
+  maxLeadNsec: FABRICHAT_SETTINGS.proposedTimeMaxLeadNsec,
   tickNsec: CLOCK_TICK_NSEC,
 };
 
@@ -429,7 +449,7 @@ const appendActivity = (
 ): void => {
   const at = claimTime(usedTimes, clock);
   const numbering = counters.get() ?? NO_ACTIVITY;
-  const horizon = clock - FABRICHAT_POLICY.recentActivityWindowNsec;
+  const horizon = clock - FABRICHAT_SETTINGS.recentActivityWindowNsec;
   const current = (activity.get() ?? []) as ChatRoomActivity[];
   const expired = current.filter((entry) => nsecOf(entry.at) < horizon);
   const expiredThrough = expired.reduce(
@@ -800,13 +820,13 @@ const performMessageAct = (
   const isAuthor = current.authorProfile !== undefined &&
     equals(current.authorProfile, profile);
   const deletionObliterates = op === "delete" &&
-    FABRICHAT_POLICY.deletionIsObliteration;
+    FABRICHAT_SETTINGS.deletionIsObliteration;
 
   if (op === "obliterate" || deletionObliterates) {
     if (current.authorProfile === undefined) return;
     const allowed = op === "delete" || kind === "direct"
       ? isAuthor
-      : FABRICHAT_POLICY.ownersMayObliterate &&
+      : FABRICHAT_SETTINGS.ownersMayObliterate &&
         isKnownOwner(creatorProfile, profile);
     if (!allowed) return;
     if (op === "delete" && isDeleted(current)) return;
@@ -833,7 +853,7 @@ const performMessageAct = (
   }
 
   if (!isAuthor || isDeleted(current)) return;
-  const kept: ChatMessageVersion[] = FABRICHAT_POLICY.keepsHistory
+  const kept: ChatMessageVersion[] = FABRICHAT_SETTINGS.keepsHistory
     ? [...(current.earlierVersions ?? []), {
       body: current.body as string,
       sentAt: current.editedAt ?? current.sentAt,
@@ -1103,7 +1123,7 @@ export const commitWindow = handler<
   const request = event;
   if (
     !(windowId in current) &&
-    Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
+    Object.keys(current).length >= FABRICHAT_SETTINGS.maxOpenWindows
   ) {
     return;
   }
@@ -1119,7 +1139,7 @@ export const commitWindow = handler<
   if (anchor === undefined) return;
   const count = Math.min(
     Math.max(0, Math.floor(request.count ?? 0)),
-    FABRICHAT_POLICY.maxWindowCount,
+    FABRICHAT_SETTINGS.maxWindowCount,
   );
   const slice = windowSlice(view, anchor, count);
   if (slice === undefined) return;
@@ -1387,7 +1407,7 @@ export const FabriChatMessageRow = pattern<
     const viewer = myProfile.resolveAsCell();
     return kind === "direct"
       ? equals(record.authorProfile, viewer)
-      : FABRICHAT_POLICY.ownersMayObliterate &&
+      : FABRICHAT_SETTINGS.ownersMayObliterate &&
         isKnownOwner(creatorProfile, viewer);
   });
   const isEditing = computed(() => {
@@ -2010,10 +2030,10 @@ export const FabriChatRoomCore = pattern<
     entries.filter(isInMain).sort(compareEntries)
   );
   const latest = computed(() => ({
-    messages: mainEntries.slice(-FABRICHAT_POLICY.maxWindowCount).map((
+    messages: mainEntries.slice(-FABRICHAT_SETTINGS.maxWindowCount).map((
       entry,
     ) => entry.cell),
-    hasOlder: mainEntries.length > FABRICHAT_POLICY.maxWindowCount,
+    hasOlder: mainEntries.length > FABRICHAT_SETTINGS.maxWindowCount,
   }));
   const count = computed(() => entries.length);
   const sortedEntries = computed(() => [...entries].sort(compareEntries));
@@ -2028,7 +2048,7 @@ export const FabriChatRoomCore = pattern<
   const canSend = computed(() => myProfile?.get() !== undefined);
   const cannotSend = computed(() => myProfile?.get() === undefined);
   // The policy is a document of its own, which `about` links.
-  const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);
+  const policy = new Writable.perSpace<ChatRoomPolicy>(statedPolicy());
   const aboutView = {
     kind,
     title: computed(() => about?.title),

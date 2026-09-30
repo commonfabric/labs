@@ -8,7 +8,12 @@
  * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
  * compared through `nsecOf()`.
  */
-import { type Cell, FabricEpochNsec, VIEWS } from "commonfabric";
+import {
+  type Cell,
+  FabricDurationNsec,
+  FabricEpochNsec,
+  VIEWS,
+} from "commonfabric";
 
 //
 // Reviewed surfaces
@@ -59,6 +64,10 @@ export const nsecOf = (time: FabricEpochNsec): bigint => time.value;
 /** A recorded time holding `nsec`. */
 export const epochNsec = (nsec: bigint): FabricEpochNsec =>
   new FabricEpochNsec(nsec);
+
+/** A span of `nsec` nanoseconds. */
+export const durationNsec = (nsec: bigint): FabricDurationNsec =>
+  new FabricDurationNsec(nsec);
 
 /** A handler clock reading, in milliseconds, as a recorded time. */
 export const epochNsecFromMsec = (msec: number): FabricEpochNsec =>
@@ -168,13 +177,13 @@ export interface ChatRoomPolicy {
   deletionIsObliteration: boolean;
 
   /** How far before the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxAgeNsec: bigint;
+  proposedTimeMaxAgeNsec: FabricDurationNsec;
 
   /** How far after the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxLeadNsec: bigint;
+  proposedTimeMaxLeadNsec: FabricDurationNsec;
 
   /** How long an entry stays in `recentActivity`, in ns. */
-  recentActivityWindowNsec: bigint;
+  recentActivityWindowNsec: FabricDurationNsec;
 
   /** The most messages a message window holds. */
   maxWindowCount: number;

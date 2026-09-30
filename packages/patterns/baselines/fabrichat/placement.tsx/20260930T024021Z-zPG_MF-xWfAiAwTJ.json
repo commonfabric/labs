@@ -1,34 +1,6 @@
 {
   "argumentSchema": {
     "$defs": {
-      "AdaptedPlacement": {
-        "properties": {
-          "$VIEWS": {
-            "description": "The placement's data face.",
-            "properties": {
-              "chat": {
-                "$ref": "#/$defs/FabriChatPlacementView"
-              }
-            },
-            "required": [
-              "chat"
-            ],
-            "type": "object"
-          },
-          "room": {
-            "$ref": "#/$defs/PlacedRoom",
-            "asCell": [
-              "cell"
-            ],
-            "description": "The placed room."
-          }
-        },
-        "required": [
-          "room",
-          "$VIEWS"
-        ],
-        "type": "object"
-      },
       "ChatDeletedBody": {
         "properties": {
           "deleted": {
@@ -285,15 +257,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -305,58 +277,6 @@
           "recentActivityWindowNsec",
           "maxWindowCount",
           "maxOpenWindows"
-        ],
-        "type": "object"
-      },
-      "FabriChatPlacementView": {
-        "properties": {
-          "about": {
-            "$ref": "#/$defs/ChatRoomAbout",
-            "description": "What the room says about itself; absent unless `state` is `\"member\"`."
-          },
-          "canSend": {
-            "description": "Whether the viewer can send.",
-            "type": "boolean"
-          },
-          "messages": {
-            "$ref": "#/$defs/PlacedMessageList",
-            "description": "The room's messages; absent unless `state` is `\"member\"`."
-          },
-          "participants": {
-            "description": "The room's participants.",
-            "items": {
-              "$ref": "#/$defs/ChatProfile",
-              "asCell": [
-                "cell"
-              ]
-            },
-            "type": "array"
-          },
-          "reactionTallies": {
-            "description": "Reactions on the newest messages and on the session's windows.",
-            "items": {
-              "$ref": "#/$defs/PlacedTallies"
-            },
-            "type": "array"
-          },
-          "recentActivity": {
-            "description": "What the room recorded recently.",
-            "items": {
-              "$ref": "#/$defs/ChatRoomActivity"
-            },
-            "type": "array"
-          },
-          "state": {
-            "$ref": "#/$defs/PlacementState",
-            "description": "Whether the viewer can read the room."
-          }
-        },
-        "required": [
-          "state",
-          "canSend",
-          "recentActivity",
-          "participants",
-          "reactionTallies"
         ],
         "type": "object"
       },
@@ -451,111 +371,26 @@
           }
         },
         "type": "object"
-      },
-      "PlacedTallies": {
-        "properties": {
-          "message": {
-            "asCell": [
-              "cell"
-            ],
-            "description": "The message.",
-            "type": "unknown"
-          },
-          "tallies": {
-            "description": "Its reactions, by emoji, in the order each was first used.",
-            "items": {
-              "$ref": "#/$defs/PlacedTally"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "message",
-          "tallies"
-        ],
-        "type": "object"
-      },
-      "PlacedTally": {
-        "properties": {
-          "count": {
-            "description": "How many people reacted with it.",
-            "type": "number"
-          },
-          "emoji": {
-            "description": "The emoji.",
-            "type": "string"
-          },
-          "mine": {
-            "description": "Whether the viewer is one of them.",
-            "type": "boolean"
-          },
-          "reactors": {
-            "description": "Their profiles.",
-            "items": {
-              "$ref": "#/$defs/ChatProfile",
-              "asCell": [
-                "cell"
-              ]
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "emoji",
-          "count",
-          "mine",
-          "reactors"
-        ],
-        "type": "object"
-      },
-      "PlacementState": {
-        "enum": [
-          "member",
-          "not-member",
-          "unavailable"
-        ]
       }
     },
-    "description": "What an adapter holds.",
+    "description": "What a placement holds.",
     "properties": {
-      "placement": {
-        "$ref": "#/$defs/AdaptedPlacement",
-        "description": "The placement, set when the adapter is created."
+      "room": {
+        "$ref": "#/$defs/PlacedRoom",
+        "asCell": [
+          "cell"
+        ],
+        "description": "The room, set when the placement is created."
       }
     },
     "required": [
-      "placement"
+      "room"
     ],
     "type": "object"
   },
-  "pattern": "fabrichat/adapter.tsx",
+  "pattern": "fabrichat/placement.tsx",
   "resultSchema": {
     "$defs": {
-      "AdaptedPlacement": {
-        "properties": {
-          "$VIEWS": {
-            "description": "The placement's data face.",
-            "properties": {
-              "chat": {
-                "$ref": "#/$defs/FabriChatPlacementView"
-              }
-            },
-            "required": [
-              "chat"
-            ],
-            "type": "object"
-          },
-          "room": {
-            "$ref": "#/$defs/PlacedRoom",
-            "description": "The placed room."
-          }
-        },
-        "required": [
-          "room",
-          "$VIEWS"
-        ],
-        "type": "object"
-      },
       "ChatDeletedBody": {
         "properties": {
           "deleted": {
@@ -791,15 +626,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -1004,18 +839,14 @@
         ]
       }
     },
-    "description": "What an adapter offers.",
+    "description": "What a placement offers.",
     "properties": {
       "$NAME": {
         "description": "The placed room's title, for lists of pieces: `\"Chat\"` for a room with no\ntitle, and `\"Chat (unavailable)\"` for a room the viewer can't read.",
         "type": "string"
       },
-      "$UI": {
-        "$ref": "https://commonfabric.org/schemas/vnode.json",
-        "description": "The room's own rendering, or why there is none."
-      },
       "$VIEWS": {
-        "description": "The placement's data face, re-exported by link.",
+        "description": "The placement's data face.",
         "properties": {
           "chat": {
             "$ref": "#/$defs/FabriChatPlacementView"
@@ -1026,15 +857,14 @@
         ],
         "type": "object"
       },
-      "placement": {
-        "$ref": "#/$defs/AdaptedPlacement",
-        "description": "The placement."
+      "room": {
+        "$ref": "#/$defs/PlacedRoom",
+        "description": "The room, so a client can reach its own streams."
       }
     },
     "required": [
-      "placement",
+      "room",
       "$NAME",
-      "$UI",
       "$VIEWS"
     ],
     "type": "object"

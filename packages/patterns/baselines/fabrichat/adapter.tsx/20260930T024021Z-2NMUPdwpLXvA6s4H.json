@@ -285,15 +285,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -791,15 +791,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -1007,7 +1007,7 @@
     "description": "What an adapter offers.",
     "properties": {
       "$NAME": {
-        "description": "The placed room's title, for lists of pieces.",
+        "description": "The placed room's title, for lists of pieces: `\"Chat\"` for a room with no\ntitle, and `\"Chat (unavailable)\"` for a room the viewer can't read.",
         "type": "string"
       },
       "$UI": {

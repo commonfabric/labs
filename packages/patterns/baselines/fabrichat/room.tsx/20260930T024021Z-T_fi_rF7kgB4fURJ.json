@@ -352,7 +352,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "JFIuLpYsj9jU3KP5Gh2fmtQUGhNpwTW38BgoaIUlbb4",
+                  "moduleIdentity": "A9Yg756UIcOAxUcd2u3Byt-7o3f8gPYnRUSxpVqt598",
                   "path": [
                     "commitRoom"
                   ]
@@ -376,7 +376,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "JFIuLpYsj9jU3KP5Gh2fmtQUGhNpwTW38BgoaIUlbb4",
+              "moduleIdentity": "A9Yg756UIcOAxUcd2u3Byt-7o3f8gPYnRUSxpVqt598",
               "path": [
                 "commitRoom"
               ]
@@ -406,7 +406,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "JFIuLpYsj9jU3KP5Gh2fmtQUGhNpwTW38BgoaIUlbb4",
+              "moduleIdentity": "A9Yg756UIcOAxUcd2u3Byt-7o3f8gPYnRUSxpVqt598",
               "path": [
                 "commitRoom"
               ]
@@ -436,7 +436,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "JFIuLpYsj9jU3KP5Gh2fmtQUGhNpwTW38BgoaIUlbb4",
+              "moduleIdentity": "A9Yg756UIcOAxUcd2u3Byt-7o3f8gPYnRUSxpVqt598",
               "path": [
                 "commitRoom"
               ]
@@ -963,15 +963,15 @@
           },
           "proposedTimeMaxAgeNsec": {
             "description": "How far before the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
             "description": "How far after the room's clock a proposed time is accepted, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
             "description": "How long an entry stays in `recentActivity`, in ns.",
-            "type": "integer"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -1345,7 +1345,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "JFIuLpYsj9jU3KP5Gh2fmtQUGhNpwTW38BgoaIUlbb4",
+              "moduleIdentity": "A9Yg756UIcOAxUcd2u3Byt-7o3f8gPYnRUSxpVqt598",
               "path": [
                 "commitRoom"
               ]
