@@ -1789,7 +1789,8 @@ export class PatternManager {
    * in a space of its own, with `inSpace()`, is replicated there from that
    * closure, so a caller that runs the program in `persistence.space` passes
    * it. The write comes after evaluation, and `persistence.when`, given the
-   * evaluated result, can decline it. A failed write fails the call.
+   * evaluated result, can decline it. A failed write fails the call, and
+   * leaves the program's modules unregistered.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
@@ -1849,7 +1850,9 @@ export class PatternManager {
       mainSpecifier,
       program,
     );
-    this.registerEvaluatedModules(result);
+    // Registered only once any write has succeeded: a registered module is
+    // served by identity without reading the space, which would hide a
+    // closure that never landed there.
     if (
       persistenceSpace !== undefined && persistence?.when?.(result) !== false
     ) {
@@ -1868,6 +1871,7 @@ export class PatternManager {
         );
       }
     }
+    this.registerEvaluatedModules(result);
     return result;
   }
 

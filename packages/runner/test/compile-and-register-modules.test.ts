@@ -149,6 +149,53 @@ describe("PatternManager.compileAndRegisterModules", () => {
       expect(stored).toBeUndefined();
     });
 
+    it("registers the modules when `when` declines the write", async () => {
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space: signer.did(), when: () => false },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeDefined();
+    });
+
+    it("leaves the modules unregistered when the write fails", async () => {
+      // The entry's identity is a content hash, so a compile in a second
+      // runtime names the same one.
+      const probeStorage = StorageManager.emulate({ as: signer });
+      const probe = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: probeStorage,
+      });
+      let identity: string;
+      try {
+        const probed = await probe.patternManager.compileAndRegisterModules(
+          program,
+        );
+        identity = probe.patternManager.getArtifactEntryRef(
+          probed.main!["default"] as object,
+        )!.identity;
+      } finally {
+        await probe.dispose();
+        await probeStorage.close();
+      }
+
+      runtime.patternManager.accessForTestingOnly.compileCacheWriter = () =>
+        Promise.reject(new Error("write refused"));
+      await expect(
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          undefined,
+          { space: signer.did() },
+        ),
+      ).rejects.toThrow("write refused");
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeUndefined();
+    });
+
     it("writes nothing into a space when none is given", async () => {
       const space = signer.did();
       const result = await runtime.patternManager.compileAndRegisterModules(
