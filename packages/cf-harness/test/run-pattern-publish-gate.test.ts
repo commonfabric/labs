@@ -249,9 +249,9 @@ describe("run_pattern publish render gate", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `publish-gate-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -686,9 +686,9 @@ describe("run_pattern publish render gate", () => {
     // disposal closes the manager it owns.
     extraRuntimes.push(boundedRuntime);
     const boundedPieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `publish-gate-bounded-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       boundedRuntime,
     );

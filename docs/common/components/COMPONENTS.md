@@ -187,7 +187,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
 | `cf-slider` | Range input slider | |
-| `cf-space-link` | Renders a space as a clickable navigation pill | |
+| `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
+| `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
 | `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
@@ -547,21 +548,23 @@ other host, because a reader receives only what its own demand declares.
 Right-clicking a rendered piece opens `cf-piece-menu` for it. **View source**
 shows the piece's retained authored files. **Origin and history** shows its
 active origin and recorded source revisions. **Clone fresh piece into new
-space** creates a copy with default input data in a unique named space and opens
-it. **Clone piece and copy data into new space** instead seeds the copy with
-detached snapshots of the selected piece's current input and stateful internal
-data. Computed values are recomputed in the new space. Data linked from another
-space is rejected because it cannot be captured atomically. Both actions show
-their progress and any failure in a dialog. A detached piece becomes the copy's
-origin. A piece that already follows an origin passes that origin to the copy.
-A followed piece also has **Stop following source**, which keeps the exact
-current source and clears the origin. Historical entries can restore
-their retained source version or resume following their earlier origin. Each
-entry links to its exact retained source. A mutable Fabric piece origin links
-to that piece in its own space, and the space fact links to the space's default
-piece. The menu warns before applying a structurally incompatible historical
-source. Its confirmation remains bound to the exact candidate that produced
-the warning.
+space** creates a space with a random DID, lists it in the user's Home space
+list under the label `Piece copy`, copies the piece into it with default input
+data, and opens the copy by the space's DID. A clone that fails takes the space
+back out of the Home space list. **Clone piece and copy data into new space**
+instead seeds the copy with detached snapshots of the selected piece's current
+input and stateful internal data. Computed values are recomputed in the new
+space. Data linked from another space is rejected because it cannot be captured
+atomically. Both actions show their progress and any failure in a dialog. A
+detached piece becomes the copy's origin. A piece that already follows an origin
+passes that origin to the copy. A followed piece also has **Stop following
+source**, which keeps the exact current source and clears the origin. Historical
+entries can restore their retained source version or resume following their
+earlier origin. Each entry links to its exact retained source. A mutable Fabric
+piece origin links to that piece in its own space, and the space fact links to
+the space's default piece. The menu warns before applying a structurally
+incompatible historical source. Its confirmation remains bound to the exact
+candidate that produced the warning.
 
 **Data** shows the piece's argument and result values (both stay live while
 the menu is open; linked cells appear as `{"@cell": …}` stubs), and

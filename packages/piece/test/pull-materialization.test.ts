@@ -928,9 +928,9 @@ describe("piece pull materialization", () => {
       storageManager,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "pull-materialization-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -6070,9 +6070,9 @@ describe("piece pull materialization", () => {
       output: 50,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const freshRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
@@ -7492,9 +7492,9 @@ describe("piece pull materialization", () => {
       { start: false },
     );
     const id = entityRefToString(piece.entityId);
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const remoteRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
@@ -7692,8 +7692,6 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
   let writerStorage: EmulatedStorageManager;
   let writerRuntime: Runtime;
   let writerPieces: PiecesController;
-  let spaceName: string;
-
   beforeEach(async () => {
     server = newSharedServer();
     writerStorage = EmulatedStorageManager.connectTo(server, {
@@ -7703,8 +7701,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: writerStorage,
     });
-    spaceName = "cold-slot-" + crypto.randomUUID();
-    const session = await createSession({ identity: signer, spaceName });
+    const session = createSession({
+      identity: signer,
+      spaceDid: await writerRuntime.createSpace(),
+    });
     writerPieces = new PiecesController(session, writerRuntime);
     await writerPieces.synced();
   });
@@ -7746,7 +7746,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -7806,7 +7809,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -7893,7 +7899,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();
@@ -8032,7 +8041,10 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: readerStorage,
     });
-    const readerSession = await createSession({ identity: signer, spaceName });
+    const readerSession = createSession({
+      identity: signer,
+      spaceDid: writerPieces.getSpace(),
+    });
     const readerPieces = new PiecesController(readerSession, readerRuntime);
     try {
       await readerPieces.synced();

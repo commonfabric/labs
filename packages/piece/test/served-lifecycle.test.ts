@@ -141,7 +141,7 @@ describe("served lifecycle verbs", () => {
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
     });
     ({ server, host } = serving);
-    session = await createSession({
+    session = createSession({
       identity: serviceSigner,
       spaceDid: space as DID,
     });

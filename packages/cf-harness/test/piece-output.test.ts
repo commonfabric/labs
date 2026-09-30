@@ -2,8 +2,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { createSession, Identity } from "@commonfabric/identity";
-import { PiecesController } from "@commonfabric/piece/ops";
+import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -22,6 +21,7 @@ import { PIECE_OUTPUT_GUIDANCE } from "../src/piece-output.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 
 const sandbox: SandboxRuntime = {
@@ -79,10 +79,7 @@ describe("piece-output", () => {
       apiUrl: new URL(fabricSession.apiUrl),
       storageManager,
     });
-    const pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: fabricSession.space }),
-      runtime,
-    );
+    const pieces = await openLegacySpace(signer, runtime, fabricSession.space);
     const requests: HarnessModelTurnRequest[] = [];
     try {
       await pieces.synced();

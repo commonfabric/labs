@@ -26,9 +26,9 @@ describe("piece address forms", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "piece-address-forms-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -78,9 +78,9 @@ describe("piece address forms", () => {
       experimental: { serverExecution: true, viewScopedReplication: true },
     });
     try {
-      const session = await createSession({
+      const session = createSession({
         identity: signer,
-        spaceName: "view-addressed-controller",
+        spaceDid: await runtime.createSpace(),
       });
       const controller = new PiecesController(session, viewer);
       const remote = viewer.getCell(
@@ -123,9 +123,9 @@ describe("piece address forms", () => {
       experimental: { serverExecution: true, viewScopedReplication: true },
     });
     try {
-      const session = await createSession({
+      const session = createSession({
         identity: signer,
-        spaceName: "view-start-controller",
+        spaceDid: await runtime.createSpace(),
       });
       const controller = new PiecesController(session, viewer);
       const remote = patchableCell(viewer.getCell(

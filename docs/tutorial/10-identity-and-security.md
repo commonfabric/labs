@@ -15,27 +15,31 @@ keypair, named by its public key as a DID:
 `did:key:z6Mk...` (`packages/identity/src/identity.ts`). Everything that
 acts or is acted upon — users, services, spaces — is a DID.
 
-Two derivation tricks give the system its shape:
+Two derivation tricks recur:
 
 - **Passphrase derivation.** `Identity.fromPassphrase(s)` hashes a string
   into a keypair deterministically.
 - **Hierarchical derivation.** `identity.derive(name)` deterministically
   derives a child keypair from a parent and a label.
 
-A **space DID** is just `someIdentity.derive(spaceName).did()`. No
-registration step, no central registry: knowing the derivation inputs *is*
-knowing the space. Dev environments lean on this hard: named dev spaces
-derive from a well-known passphrase, which is why two local setups agree on
-what `did:key:...` a space name means. The same trick defines the **shared
-dev identity** `cf id derive "implicit trust"` — the DID the local toolshed
-itself runs as in dev mode. Because it comes from a public string, *everyone*
-who derives it gets the identical keypair. That is a convenience on your own
-localhost (CLI, browser, and server can all act as one admin identity) and a
-footgun anywhere shared: derive or browser-import it against a server other
-people use and you all become the *same* principal — seeing and overwriting
-each other's `PerUser` data. Use a unique `id new` key for your own identity;
-reserve `implicit trust` for deliberately acting as a local dev server's
-operator. See `docs/features/shared-identity.md`.
+A user's **Home space** has the user's own DID. Every other space gets its
+DID from a fresh random key when it is created (see the ACL section below), so
+no string recomputes it, and it is reached by its DID. A **legacy** space, one
+created under the earlier naming scheme, has the DID that hierarchical
+derivation gives its name under a well-known passphrase. `legacySpaceDid(name)`
+(`packages/identity/src/legacy-space.ts`) resolves such a name to that DID,
+offline and with no registry, which is why two setups agree on what
+`did:key:...` a legacy space name means. It returns the DID and never the key,
+and the DID names a space only if one was created there. Passphrase derivation
+also defines the **shared dev identity** `cf id derive "implicit trust"` — the
+DID the local toolshed itself runs as in dev mode. Because it comes from a
+public string, *everyone* who derives it gets the identical keypair. That is a
+convenience on your own localhost (CLI, browser, and server can all act as one
+admin identity) and a footgun anywhere shared: derive or browser-import it
+against a server other people use and you all become the *same* principal —
+seeing and overwriting each other's `PerUser` data. Use a unique `id new` key
+for your own identity; reserve `implicit trust` for deliberately acting as a
+local dev server's operator. See `docs/features/shared-identity.md`.
 
 ## Passkeys: the browser login
 
@@ -49,7 +53,7 @@ server. Login (`packages/identity/src/pass-key.ts`):
    function; its 32-byte output becomes the seed for the user's root
    Ed25519 key (`Identity.fromRaw(seed)`).
 3. The root identity is cached in IndexedDB (`common-key-store`) for the
-   session; user spaces are `derive()`d from it.
+   session; its DID is also the DID of the user's Home space.
 
 So the user's "account" is reconstructible from their passkey alone, on any
 device, with the actual signing key never leaving the authenticator's
@@ -93,15 +97,14 @@ A space can carry an ACL document (addressed by the wire entity id
 The server evaluates them per message — session-open, queries, and watches need
 READ; `transact` needs WRITE; writing the ACL itself needs OWNER. A fresh space
 is read-only until its space identity (or a configured service DID) writes a
-valid ACL with at least one concrete OWNER. Named-space bootstrap uses a
-temporary space-identity session to write the genesis ACL, then remounts as
-that user: the document a caller registered beside the space key
-(`registerSpaceIdentity(identity, { genesisAcl })`, so a space can be born
-with exactly that ACL), else the rollout default of the active user as OWNER
-plus `"*"`
-WRITE. Home spaces use the
-same identity for both roles and remain private by claiming
-`{ [space]: "OWNER" }`, including an ACL-less legacy home.
+valid ACL with at least one concrete OWNER, and that genesis is the only thing
+the space identity may do as the space. Creating a space (`cf space create`,
+the Home pattern's Spaces tab, or `Runtime.createSpace()`) generates a random
+key, uses it once to write the genesis ACL — the creator as the only OWNER,
+plus any grants the creator chose — and drops it. Opening a space never
+creates one, except a user's Home space: it uses the user's own identity for
+both roles and is born private on its first open by claiming
+`{ [space]: "OWNER" }`.
 
 As a temporary pre-launch compatibility rule, a populated space that has never
 had an ACL is authenticated-public READ/WRITE but never OWNER. A malformed,
@@ -114,37 +117,40 @@ ACL validity and fresh-space genesis remain hard invariants in `observe` mode.
 
 ## Reading and changing a space's ACL
 
-That bootstrap default has a consequence worth stating plainly: **a newly
-created named space is world-writable, not private.** The `"*": "WRITE"` grant
-is a literal entry in its ACL document, and `cf acl ls` shows it:
+That genesis makes **a newly created space private to its creator.**
+`cf space create` prints the new space's DID, which the commands below keep in
+a shell variable; `cf acl ls` shows the space's ACL document:
 
 ```bash
-cf acl ls --identity ./my.key --api-url https://api.example.com --space my-space
+SPACE=$(cf space create --identity ./my.key --api-url https://api.example.com)
+cf acl ls --identity ./my.key --api-url https://api.example.com --space "$SPACE"
 ```
 
 That prints a bordered `DID` / `CAPABILITY` table (or `No ACL entries found.`
-if the space has no ACL yet). For a space you just created it is two rows: your
-own DID with `OWNER`, and `*` with `WRITE`. Grant and revoke are the other two
-subcommands (`packages/cli/commands/acl.ts`):
+if the space has no ACL yet). For the space you just created it is one row:
+your own DID with `OWNER`. Grant and revoke are the other two subcommands
+(`packages/cli/commands/acl.ts`):
 
 ```bash
 # Grant, or change an existing grant. Capability is READ, WRITE, or OWNER.
-cf acl set did:key:z6Mkk... WRITE --space my-space
+cf acl set did:key:z6Mkk... WRITE --space "$SPACE"
 
-# Revoke one identity — but while `*` is still present this revokes nothing;
+# Revoke one identity — but while `*` is present this revokes nothing;
 # see the caveat below.
-cf acl remove did:key:z6Mkk... --space my-space
+cf acl remove did:key:z6Mkk... --space "$SPACE"
 
-# Drop the bootstrap wildcard — this is what makes the space private.
-cf acl remove ANYONE --space my-space
+# Open the space to every authenticated identity.
+cf acl set ANYONE WRITE --space "$SPACE"
+
+# Drop the wildcard — this is what makes an open space private again.
+cf acl remove ANYONE --space "$SPACE"
 ```
 
-**Drop the wildcard first, or the per-identity commands do not mean what they
-look like.** The server resolves a principal's capability as *its own entry if
-it has one, otherwise the wildcard's* (`#resolveCapability` in
-`packages/memory/v2/server.ts`: `acl[principal] ?? acl["*"]`). While
-`"*": "WRITE"` is in the ACL, that fallback is WRITE, and it produces two
-counter-intuitive results:
+**A wildcard entry changes what the per-identity commands mean.** The server
+resolves a principal's capability as *its own entry if it has one, otherwise
+the wildcard's* (`#resolveCapability` in `packages/memory/v2/server.ts`:
+`acl[principal] ?? acl["*"]`). While `"*": "WRITE"` is in the ACL, that
+fallback is WRITE, and it produces two counter-intuitive results:
 
 - `cf acl remove <did>` **revokes nothing.** It deletes that identity's
   explicit entry, which drops them onto the wildcard's WRITE. `cf acl ls` will
@@ -154,12 +160,15 @@ counter-intuitive results:
   READ. (`cf acl set <did> WRITE` changes nothing today, but is a durable grant
   that survives removing the wildcard.)
 
-So the order that works is `cf acl remove ANYONE` first, then grant each
-identity what it should have. Until the wildcard is gone, treat the space as
-world-writable regardless of what the per-identity rows say.
+A legacy named space carries `"*": "WRITE"` in its genesis document, so `cf acl
+ls --space my-space` on one prints two rows: its owner with `OWNER`, and `*`
+with `WRITE`. To make one private, run `cf acl remove ANYONE` first, then grant
+each identity what it should have. Until the wildcard is gone, treat the space
+as world-writable regardless of what the per-identity rows say.
 
-`--identity` and `--api-url` fall back to `CF_IDENTITY` and `CF_API_URL`;
-`--space` takes a space name or a DID and has no environment fallback. `ANYONE`
+`--identity`, `--api-url` and `--space` fall back to `CF_IDENTITY`,
+`CF_API_URL` and `CF_SPACE`. `--space` takes a DID, or a legacy space name that
+resolves to one. `ANYONE`
 is the CLI spelling of the `"*"` wildcard, so the shell does not glob-expand it
 before the CLI sees it — `cf acl ls` still prints the raw `*`.
 

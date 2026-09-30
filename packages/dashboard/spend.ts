@@ -14,6 +14,7 @@
  * dry further back than its lag allows.
  */
 
+import { maxOf } from "@commonfabric/utils/math";
 import { multiSparkline } from "./lib.ts";
 import { themedChartSeries } from "./theme.ts";
 
@@ -262,7 +263,7 @@ export function spendChart(
     }
     knownThrough.set(source, known);
   }
-  const end = Math.max(...knownThrough.values());
+  const end = maxOf(knownThrough.values());
   const start = Math.max(
     earliest,
     end - (SPEND_HISTORY_DAYS - 1) * DAY_MS,

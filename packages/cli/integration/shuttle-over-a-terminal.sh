@@ -98,10 +98,18 @@ lacks() {
   esac
 }
 
-SPACE="${SPACE:-$(mktemp -u shuttleXXXXXXXX)}"
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY=$(mktemp)
   $CF id new >"$CF_IDENTITY" 2>/dev/null
+fi
+if [ -z "${SPACE:-}" ]; then
+  # Opening a space never creates it, so the run makes its own; `cf space
+  # create` prints the new space's DID.
+  SPACE=$($CF space create --quiet --api-url="$API_URL" --identity="$CF_IDENTITY")
+  case "$SPACE" in
+    did:key:*) ;;
+    *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
+  esac
 fi
 ARGS="--api-url=$API_URL --identity=$CF_IDENTITY --space=$SPACE"
 

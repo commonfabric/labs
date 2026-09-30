@@ -12,7 +12,7 @@ import {
   IdentityCreateConfig,
   Session,
 } from "@commonfabric/identity";
-import { env, waitFor } from "@commonfabric/integration";
+import { createTestSpace, env, waitFor } from "@commonfabric/integration";
 import { Program } from "@commonfabric/js-compiler";
 import {
   experimentalOptionsFromEnv,
@@ -136,6 +136,23 @@ interface PatternState {
 export default pattern<PatternState>(() => ({ version: "candidate" }));
 `;
 
+/** The part of the Home pattern's result that lists the user's spaces. */
+const HOME_SPACES_SCHEMA = {
+  type: "object",
+  properties: {
+    spaces: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          did: { type: "string" },
+        },
+      },
+    },
+  },
+} as const satisfies JSONSchema;
+
 describe("RuntimeClient", () => {
   describe("lifecycle", () => {
     it("initializes and reaches ready state", async () => {
@@ -145,21 +162,45 @@ describe("RuntimeClient", () => {
     });
   });
 
-  describe("named spaces", () => {
-    it("resolves and opens a runtime-derived named space", async () => {
+  describe("created spaces", () => {
+    it("creates a distinct space its creator alone owns, recorded in Home", async () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
-      const name = `runtime-client-named-${crypto.randomUUID()}`;
-      const expected = await createSession({
-        identity: session.as,
-        spaceName: name,
-      });
+      const label = `runtime-client-created-${crypto.randomUUID()}`;
 
-      const space = await rt.resolveSpaceName(name);
-      assertEquals(space, expected.space);
-      const root = await rt.getSpaceRootPattern(space);
-      assertExists(root);
-      await rt.synced(space);
+      const labeled = await rt.createSpace(label);
+      const unlabeled = await rt.createSpace();
+      assert(labeled !== unlabeled, "each call creates another space");
+      for (const space of [labeled, unlabeled]) {
+        assert(space !== session.space && space !== identity.did());
+        const access = await rt.getSpaceAcl(space);
+        assertEquals(access.acl, { [identity.did()]: "OWNER" });
+        assertEquals(access.canEdit, true);
+        assertExists(await rt.getSpaceRootPattern(space));
+        await rt.synced(space);
+      }
+
+      // The worker sends each space to Home's `addSpace` stream; idle() is
+      // the barrier after which that handler's commit has landed.
+      await rt.idle();
+      const spaces = await (await rt.ensureHomePatternRunning())
+        .asSchema<{ spaces: { name?: string; did?: string }[] }>(
+          HOME_SPACES_SCHEMA,
+        )
+        .key("spaces")
+        .pull();
+      const entries = (spaces ?? []).filter((entry) =>
+        entry.did === labeled || entry.did === unlabeled
+      );
+      assertEquals(entries.length, 2);
+      assertEquals(entries.find((entry) => entry.did === labeled), {
+        name: label,
+        did: labeled,
+      });
+      assertEquals(entries.find((entry) => entry.did === unlabeled), {
+        name: "",
+        did: unlabeled,
+      });
     });
   });
 
@@ -597,14 +638,13 @@ describe("RuntimeClient", () => {
       assertEquals(revisionSource.files, source.files);
     });
 
-    it("clones a piece into another named space and follows it", async () => {
+    it("clones a piece into another space and follows it", async () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
       const sourcePiece = await rt.createPiece(TEST_PROGRAM, session.space, {
         run: true,
       });
-      const destinationName = `piece-clone-${crypto.randomUUID()}`;
-      const destinationSpace = await rt.resolveSpaceName(destinationName);
+      const destinationSpace = await createTestSpace(identity);
 
       const clone = await rt.clonePiece(
         sourcePiece.id(),
@@ -633,8 +673,7 @@ describe("RuntimeClient", () => {
         argument: { count: 7, label: "copied label" },
         run: true,
       });
-      const destinationName = `piece-clone-data-${crypto.randomUUID()}`;
-      const destinationSpace = await rt.resolveSpaceName(destinationName);
+      const destinationSpace = await createTestSpace(identity);
 
       const clone = await rt.clonePiece(
         sourcePiece.id(),
@@ -1811,7 +1850,7 @@ export default pattern<Record<string, never>>(() => {
      */
     async function owningClient(session: Session) {
       const transport = await WebWorkerRuntimeTransport.connect();
-      const options = await clientOptionsFor(session);
+      const options = clientOptionsFor(session);
       const client = await RuntimeClient.initialize(transport, options);
       await client.synced(session.space);
       return { client, transport, options };
@@ -1976,9 +2015,9 @@ export default pattern<Record<string, never>>(() => {
 });
 
 async function createTestSession(): Promise<Session> {
-  return await createSession({
+  return createSession({
     identity,
-    spaceName: globalThis.crypto.randomUUID(),
+    spaceDid: await createTestSpace(identity),
   });
 }
 
@@ -1987,27 +2026,14 @@ async function createTestSession(): Promise<Session> {
  * by asserting the security half of these, so the two callers build them from
  * one place rather than each stating a posture of its own.
  */
-async function clientOptionsFor(
+function clientOptionsFor(
   session: Session,
   extraOptions: Partial<RuntimeClientOptions> = {},
-): Promise<RuntimeClientOptions> {
-  // If a space identity was created, replace it with a transferrable
-  // key in Deno using the same derivation as Session. That derivation supports
-  // the legacy space names used during development and nothing else, and is
-  // removed once those development-only spaces have been migrated
-  // (docs/plans/random-space-identities.md).
-  if (session.spaceIdentity && session.spaceName) {
-    session.spaceIdentity = await (
-      await Identity.fromPassphrase("common user", keyConfig)
-    ).derive(session.spaceName, keyConfig);
-  }
-
+): RuntimeClientOptions {
   return {
     apiUrl: new URL(API_URL),
     identity: session.as,
-    spaceIdentity: session.spaceIdentity,
     spaceDid: session.space,
-    spaceName: session.spaceName,
     // Workers receive the same environment-selected flags as their host,
     // including explicit false overrides of a client-class default.
     experimental: EXPERIMENTAL,
@@ -2022,7 +2048,7 @@ async function createRuntimeClient(
   const transport = await WebWorkerRuntimeTransport.connect();
   const worker = await RuntimeClient.initialize(
     transport,
-    await clientOptionsFor(session, extraOptions),
+    clientOptionsFor(session, extraOptions),
   );
 
   await worker.synced(session.space);

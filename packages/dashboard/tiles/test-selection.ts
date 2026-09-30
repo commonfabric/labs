@@ -24,6 +24,7 @@
 
 import type { Manifest } from "@commonfabric/test-support/records";
 
+import { maxOf } from "@commonfabric/utils/math";
 import { compactSpan, groupDigits } from "../lib.ts";
 import {
   collectSelectionTile,
@@ -91,7 +92,7 @@ function selectionView(
   const budget = laneBudgetOf(manifest.dials);
   const fullest = manifest.lanes.length === 0
     ? 0
-    : Math.max(...manifest.lanes.map((lane) => lane.projectedSeconds));
+    : maxOf(manifest.lanes.map((lane) => lane.projectedSeconds));
   const over = fullest > budget;
   const unplaceable = manifest.unschedulable.length;
   const broken = manifest.health?.alarms.length ?? 0;

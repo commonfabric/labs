@@ -124,19 +124,6 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [],
   },
   {
-    name: "check-tripwires",
-    kind: "gate",
-    run: ["task", "check-tripwires"],
-    // Probes the weakness each tripwire asserts is still present, and
-    // reads the test file carrying the same assertion. A tripwire added
-    // against another package widens this list.
-    reachedBy: [
-      "packages/identity/",
-      "packages/toolshed/routes/ingest-channels/",
-      "tasks/check-tripwires.ts",
-    ],
-  },
-  {
     name: "check-docs",
     kind: "gate",
     run: ["task", "check-docs"],

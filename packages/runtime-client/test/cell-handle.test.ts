@@ -2544,11 +2544,11 @@ describe("cell-handle", () => {
       }) as unknown as RuntimeClient;
 
     it("surfaces the failure to the caller rather than swallowing it", async () => {
-      // An object forged onto a `FabricPrimitive`'s prototype is a
-      // `FabricValue` by every check and still has no encoding, so it is what
-      // can fail a send, since the domain's real members all cross. The
-      // caller has to learn that their write never happened; the alternative
-      // is a `set()` that resolves over a value the runtime never saw.
+      // An object forged onto a `FabricPrimitive`'s prototype has no encoding,
+      // so it is what can fail a send, since the domain's real members all
+      // cross. The caller has to learn that their write never happened; the
+      // alternative is a `set()` that resolves over a value the runtime never
+      // saw.
       //
       // `set()` alone covers the hazard. Every write path attaches a
       // `.catch()` that turns a rejected send into a resolved promise --

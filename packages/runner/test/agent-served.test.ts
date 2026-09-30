@@ -91,6 +91,11 @@ describe("agent-served", () => {
    */
   const request = async (space: MemorySpace) => {
     const home = alice.did() as MemorySpace;
+    // A Home space is born with `{ [user]: "OWNER" }` on its user's first
+    // open, and a served run writes into it on its user's behalf through that
+    // entry. The emulated session factory writes no genesis, so the test
+    // writes it.
+    await server.writeDocument(home, `of:${home}`, { [home]: "OWNER" });
     const seed = client.edit();
     seedHomeAgentQueue(client, home, seed);
     expect((await seed.commit()).error).toBeUndefined();

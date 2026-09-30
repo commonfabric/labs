@@ -7,6 +7,7 @@ import {
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
@@ -246,9 +247,9 @@ async function createFabric(
     cfcFlowLabels: "persist",
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: signer,
-      spaceName: `run-pattern-${cfcEnforcementMode}-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     runtime,
   );
@@ -706,9 +707,9 @@ describe("run-pattern", () => {
       onPatternInstantiated: recorder.observe,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -1389,9 +1390,9 @@ describe("run-pattern", () => {
         cfcFlowLabels: "persist",
       });
       const strictPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
-          spaceName: `run-pattern-strict-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         }),
         strictRuntime,
       );
@@ -2402,9 +2403,9 @@ describe("run-pattern", () => {
     it("runs over an admitted foreign input while retaining its CFC labels", async () => {
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
-        const foreign = (await createSession({
+        const foreign = (createSession({
           identity: signer,
-          spaceName: `foreign-input-${crypto.randomUUID()}`,
+          spaceDid: (await Identity.generate()).did(),
         })).space;
         const tx = runtime.edit();
         const source = runtime.getCell(
@@ -3066,7 +3067,7 @@ describe("run-pattern", () => {
     // resolves through a link, so a schema-less validation read in a fresh
     // session measures `undefined` where the value is.
     let server: ReturnType<typeof newLoopbackServer>;
-    let spaceName: string;
+    let spaceDid: DID;
     let writerStorage: EmulatedStorageManager;
     let writerRuntime: Runtime;
     let writerPieces: PiecesController;
@@ -3075,14 +3076,14 @@ describe("run-pattern", () => {
 
     beforeEach(async () => {
       server = newLoopbackServer();
-      spaceName = `run-pattern-cold-${crypto.randomUUID()}`;
+      spaceDid = (await Identity.generate()).did();
       writerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
       writerRuntime = new Runtime({
         apiUrl: new URL("http://toolshed.test"),
         storageManager: writerStorage,
       });
       writerPieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({ identity: signer, spaceDid }),
         writerRuntime,
       );
       await writerPieces.synced();
@@ -3099,7 +3100,7 @@ describe("run-pattern", () => {
         storageManager: readerStorage,
       });
       const readerPieces = new PiecesController(
-        await createSession({ identity: signer, spaceName }),
+        createSession({ identity: signer, spaceDid }),
         readerRuntime,
       );
       await readerPieces.synced();

@@ -49,14 +49,9 @@ Server issues a nonce + cell cause; caller writes it into that cell in the
 target space; server reads it back.
 
 **It proves the wrong predicate.** The round-trip demonstrates *write*
-capability. Non-home spaces genesis as the document the caller registered
-beside the space key, else the fallback
-`{ [activeUser]: "OWNER", "*": "WRITE" }` (`packages/runner/src/storage/v2.ts`, the
-`bootstrapAcl` selection in `#createInitializedSession`; the fallback shape is
-`defaultGenesisAcl` over `DEFAULT_GENESIS_GRANTS`)
-— and the ingest path registers none, so it gets the fallback — described
-upstream as "the rollout default until ACL management has a UI"
-(`docs/specs/memory-v2/04-protocol.md:742-748`). So on a genesis'd data space,
+capability, and write is not ownership. A space's owner can grant WRITE to
+another identity, or to `"*"`, at any time. Every legacy named space carries
+`"*": "WRITE"` in its genesis document. On a space with that wildcard,
 *every* authenticated principal — anyone who can generate a keypair — already
 holds WRITE and passes the nonce challenge. The ceremony authorizes precisely
 the party it exists to exclude.
@@ -75,7 +70,7 @@ and fails **on the write**.
 
 The registration carries `secretHash`, the target `space`, and `causePrefix`.
 Option B stores it at an address whose integrity is exactly the write-ACL of the
-space it sits in. On a genesis'd data space with `"*": "WRITE"`, an attacker
+space it sits in. On a data space with `"*": "WRITE"`, an attacker
 writes their *own* registration with their *own* `secretHash` into the victim's
 space, then POSTs with the token they chose. The server verifies a hash the
 attacker authored and durably appends marked records. Confused deputy, restored
@@ -88,14 +83,17 @@ future work on its own track." The server cannot ask "was this written by the
 space's owner?"
 
 *Correction worth recording:* a user's **home/identity** space genesises as
-`{ [signer]: "OWNER" }` with **no wildcard** (the home arm of that same
-`bootstrapAcl` selection), so Option B is
-sound *for home spaces specifically*. It is unsound for the named data spaces
-the location beacon actually targets. Option B becomes generally sound exactly
-when the wildcard goes away — but a create primitive whose safety depends on a
-documented-temporary rollout crutch being removed later is backwards. The
-security property should get stronger as the platform tightens, never start
-invalid.
+`{ [signer]: "OWNER" }` on its first open (`#createInitializedSession` in
+`packages/runner/src/storage/v2.ts`), and every other new space is born through
+`StorageManager.createSpace(acl, root?)` with the genesis document its creator
+passes, which `Runtime.createSpace()` writes as `{ [creator]: "OWNER" }` plus
+any grants the creator chose. Opening a space that was never created writes
+nothing. Option B is sound for such a space as long as nobody but its owners
+holds WRITE. It is unsound for every space where someone
+else does: a legacy named space carrying the wildcard, and any space whose owner
+granted WRITE to another identity or to `"*"`. A create primitive whose safety
+depends on the owner never sharing write access is backwards. The security
+property should hold however the owner shares the space.
 
 Lesser objections: it changes the ingest wire (the POST must carry the space),
 breaking the shipped client contract and the derived-id property, and
@@ -118,8 +116,8 @@ if (acl?.[callerDid] !== "OWNER") return forbidden();
 **A narrow, explicit grant — deliberately not `spaceReaderRole`.**
 `packages/runner/src/cfc/space-membership.ts:55` is the canonical membership
 oracle, and it is the right shape, but it is scoped to the §4.9.3 *render* fit
-and folds in three implicit-owner branches that are correct there and wrong
-here: `principal === space`, `serviceDids.includes(principal)`, and a wildcard
+and folds in two implicit-owner branches that are correct there and wrong
+here: `serviceDids.includes(principal)`, and a wildcard
 fallback (`acl[principal] ?? acl["*"]`, `:66`). That last one matters: on an ACL
 of `{alice:"OWNER", "*":"OWNER"}` — reachable via `cf acl set ANYONE OWNER` —
 `spaceReaderRole` returns `"owner"` for *everyone*. Over-admitting is tolerable
@@ -137,14 +135,15 @@ authority. So: a narrow predicate, in a toolshed seam, with its own tests.
 - **Security tightens with the ACL; LIVENESS does not — state both.** The
   entitlement check gets stronger as grants narrow, with no code change. The
   operator's ability to *deliver* moves the other way: with
-  `MEMORY_SERVICE_DIDS` unset, the operator can write a named space only via
-  the temporary genesis wildcard `"*": "WRITE"`. When ACL management gets a UI
-  and users narrow their grants, new mints will 409 and — worse — channels
-  minted earlier will return 200 while committing nothing, which is exactly the
-  "born dead, looks healthy" failure this change exists to remove. Putting the
-  operator DID in `MEMORY_SERVICE_DIDS` is therefore not optional hardening; it
-  is the precondition for this feature to keep working. Home spaces already
-  require it today (they genesis with no wildcard).
+  `MEMORY_SERVICE_DIDS` unset, the operator can write a named space only
+  through a grant that covers it, such as the `"*": "WRITE"` a legacy named
+  space carries. A fresh named space grants the operator nothing, so a mint
+  against it answers 409. When an owner removes the wildcard from a legacy
+  space, channels minted against it return 200 while committing nothing,
+  which is exactly the "born dead, looks healthy" failure this change exists to
+  remove. Putting the operator DID in `MEMORY_SERVICE_DIDS` is therefore not
+  optional hardening; it is the precondition for this feature to work on home
+  spaces and fresh named spaces, neither of which carries the wildcard.
 - **The resource is the space, not the minting key.** Rotate/revoke/list
   authorize against the registration's **stored** space, never a caller-supplied
   one and never against `createdBy`. Control follows the space through key
@@ -181,33 +180,35 @@ Four forks were resolved explicitly rather than by default:
 
 **Self-serve mint is exactly as strong as space-key custody, and no stronger.**
 
-The memory server grants implicit `OWNER` when `principal === space`, before
-reading the ACL at all (`packages/memory/v2/server.ts:1044-1049`). ACL mutation
-requires OWNER (`:2061-2065`), and on an already-valid ACL the only constraints
-are shape plus "at least one concrete OWNER survives" (`:1184-1213`,
-`packages/memory/acl.ts:28-32`). So anyone who can sign **as a space DID** can
-write `{ attacker: "OWNER" }` into that space — and may drop the real owner in
-the same commit — after which they pass the narrow predicate as a legitimate,
-explicit owner.
+The memory server grants a principal signing **as a space DID** implicit
+`OWNER` while that space has no ACL document and no history — that is what its
+genesis commit needs — and grants it only what the ACL says after that
+(`#resolveCapability` in `packages/memory/v2/server.ts`). ACL mutation requires
+OWNER, and on an already-valid ACL the only constraints are shape plus "at least
+one concrete OWNER survives" (`packages/memory/acl.ts`). New spaces are created
+with a random key that signs genesis and is then dropped
+([random space identities](../specs/random-space-identities.md)). A space
+created before that, however, was given a key derived from a public passphrase
+and its name, and while the server still treated the space DID as a permanent
+owner, anyone could sign as such a space and write `{ attacker: "OWNER" }` into
+it — and drop the real owner in the same commit — after which they pass the
+narrow predicate as a legitimate, explicit owner. Such a grant outlives the
+narrowing that stopped new ones.
 
-On a deployment where space DIDs derive from a public passphrase, that is
-everyone. This is a known, intentional, temporary platform property, not a
-regression introduced here — but minting creates a **durable capability that
-outlives the ACL state that authorized it**, so it deserves a stated
-precondition rather than a testing footnote:
+Minting creates a **durable capability that outlives the ACL state that
+authorized it**, so this deserves a stated precondition rather than a testing
+footnote:
 
 > Self-serve minting is safe only on deployments where space keys are not
 > derivable from public inputs. Where they are, the mint endpoint inherits a
 > space-takeover primitive.
 
 This is **enforced, not just documented**: the control plane is mounted only
-when `INGEST_SELF_SERVE_ENABLED` is set, and the default is off. A tripwire
-proving the weakness still exists is not a substitute for the gate — the
-tripwire tells you when the repair lands, while the gate is what stops durable
-credentials being issued before it. Credentials issued under the old trust
-condition are not retracted by the repair, so the order is: repair custody,
-sweep ACLs, retire existing channels (`deno task retire-ingest-channels`), then
-enable.
+when `INGEST_SELF_SERVE_ENABLED` is set, and the default is off. Credentials
+issued under the old trust condition are not retracted by making space keys
+random, so a deployment that anyone outside its operators could reach while
+keys were derivable reviews its space ACLs and retires existing channels
+(`deno task retire-ingest-channels`) before enabling.
 
 Consequently the acceptance criterion "refused when naming a space you don't
 control" must be tested against a space with a **concrete, non-derived** owner,
@@ -522,35 +523,8 @@ not atomic. A channel minted between the run and the cutover is missed. The
 script is idempotent, so re-run it — or take the control plane down for the
 migration — and confirm with `deno task audit-ingest-channels`.
 
-**How anyone remembers to do this.** A procedure in a document is not a
-mechanism. The trigger is a tripwire test —
-`packages/toolshed/routes/ingest-channels/space-key-derivation-tripwire.test.ts`
-— which asserts that the weakness is **still present**: that two different
-users derive the same key for one space name, and that the space key is
-reconstructible from repo constants alone. Fixing the derivation therefore
-*breaks the build*, and the failure message is the procedure below.
-
-The reminder is deliberately hard to silence, because the realistic threat is
-not malice but a mechanical fix — an agent (or a hurrying human) repairing a
-red assertion without reading why it is red:
-
-- **There is no expectation to edit.** The test does not compare an expected
-  value; it throws explicitly when the weakness is gone, so there is nothing to
-  "update" and no comparison to invert.
-- **The file leads with a STOP block** addressed to whoever just saw it fail,
-  stating that making it pass is the one wrong move.
-- **`deno task check-tripwires` re-derives the same condition independently**,
-  in a different task family, wired into CI next to `check-skill-facts`. It
-  also fails if the test file is deleted, has lost its sentinel (gutted), or
-  has been `.ignore`d. Silencing the obligation therefore means neutering two
-  things in two places in one diff a reviewer can see.
-- **`tasks/check-tripwires.test.ts`** guards the guard: a typo'd manifest path
-  would otherwise let the check report "intact" vacuously.
-
-All five paths were verified by deliberately breaking each one: weakness fixed,
-file deleted, sentinel removed, test skipped, and the healthy case.
-
-**Procedure when space keys are fixed:**
+**Procedure for a deployment that anyone outside its operators could reach
+while space keys were derivable:**
 0. `deno task audit-ingest-channels --repair-indexes --recover <record>` —
    only needed on a deployment that provisioned channels *before* this change,
    and only once. See "Recovering a channel the index never learned about"
@@ -558,10 +532,11 @@ file deleted, sentinel removed, test skipped, and the healthy case.
 1. `deno task audit-ingest-channels` — record the current population.
 2. `deno task retire-ingest-channels --reason space-key-derivation-fix`
    (dry run), then again with `--confirm`.
-3. Sweep the space ACLs for concrete `OWNER` grants nobody can account for.
-   **Revocation retires tokens; it does not remove a self-granted ACL entry**,
-   and that entry is what would let an attacker simply mint again the next day.
-   This step is not optional.
+3. Review every legacy space's ACL for concrete `OWNER` grants nobody can
+   account for, and remove them with `cf acl remove`, along with the wildcard
+   grant and any entry for the space's own DID. **Revocation retires tokens; it
+   does not remove a self-granted ACL entry**, and that entry is what would let
+   an attacker simply mint again the next day. This step is not optional.
 4. `deno task audit-ingest-channels` — confirm nothing is left active.
 
 ### Recovering a channel the index never learned about

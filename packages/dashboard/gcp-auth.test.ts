@@ -5,6 +5,7 @@
  */
 
 import { assertEquals, assertRejects } from "@std/assert";
+import { encodeBase64 } from "@std/encoding/base64";
 import { bigQuery, METADATA_TOKEN_URL } from "./gcp.ts";
 
 // One request as the code issued it, normalized through Request so headers and
@@ -59,7 +60,7 @@ async function saKeyJson(): Promise<string> {
     ["sign", "verify"],
   );
   const der = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
-  const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...new Uint8Array(der)))}\n-----END PRIVATE KEY-----`;
+  const pem = `-----BEGIN PRIVATE KEY-----\n${encodeBase64(der)}\n-----END PRIVATE KEY-----`;
   return JSON.stringify({ client_email: "svc@proj.iam.gserviceaccount.com", private_key: pem, token_uri: TOKEN_URI });
 }
 

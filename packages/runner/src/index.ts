@@ -196,6 +196,7 @@ export {
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
   resolveSpaceRootPattern,
+  SpaceNotFoundError,
   type SpaceRootCreationHooks,
   spaceRootPatternConfig,
 } from "./ensure-space-root.ts";

@@ -156,9 +156,9 @@ const withFabric = async (
     storageManager,
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity,
-      spaceName: `acquire-skill-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     runtime,
   );

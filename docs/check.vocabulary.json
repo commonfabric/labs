@@ -263,7 +263,6 @@
     "Runner",
     "Runtime",
     "SESRuntime",
-    "SPACE_NAME",
     "SandboxConfig",
     "SchedulerAddress",
     "SchedulerNode",

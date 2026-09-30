@@ -58,9 +58,9 @@ describe("setsrc schema metadata", () => {
       storageManager: storage,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `setsrc-schema-metadata-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );

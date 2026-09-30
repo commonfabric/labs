@@ -49,8 +49,9 @@ Use a simple, repeatable shell flow and keep it fixed across runs:
    starting view, and confirm the result persisted.
 3. Repeat the same interaction several times in the **same space** — for
    scaling questions, fan-out grows with existing content, so a fresh space
-   per run hides the problem. In the integration harness, prefer
-   `SPACE_NAME=...` over a random space.
+   per run hides the problem. In the integration harness, set `SPACE_NAME` to
+   the legacy name of an existing space rather than letting the test create
+   one.
 
 For integration-test FAILURES, start with the self-diagnosing failure
 output (fill phase ledger, pending-IPC table, worker request ledger) before

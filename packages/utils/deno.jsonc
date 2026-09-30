@@ -34,6 +34,7 @@
     "./loopback": "./src/loopback.ts",
     "./logger": "./src/logger.ts",
     "./markdown": "./src/markdown.ts",
+    "./math": "./src/math.ts",
     "./objects": "./src/objects.ts",
     "./path-key-map": "./src/path-key-map.ts",
     "./remove-directory": "./src/remove-directory.ts",
