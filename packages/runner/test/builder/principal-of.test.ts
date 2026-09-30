@@ -193,6 +193,24 @@ describe("principalOf()", () => {
   };
 
   /**
+   * Replaces the label map of the document `cause` names with one of
+   * `entries`, leaving its value as it is.
+   */
+  const relabel = async (cause: string, entries: SeedEntry[]) => {
+    const tx = runtime.edit();
+    seedStoredEnvelope(
+      tx,
+      { space, scope: "space", id: idOf(cause), path: ["cfc"] },
+      {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries },
+      } as never,
+    );
+    expect((await tx.commit()).error).toBeUndefined();
+  };
+
+  /**
    * Writes a document at `cause` under `claimedSchema(kind, subject)` from a
    * handler, and returns the document's cell, the principal that handler's
    * `currentPrincipal()` returned, and the commit's error, if any.
@@ -502,7 +520,7 @@ describe("principalOf()", () => {
           { stuckLabel: "the computed to return bob's DID" },
         );
 
-        await seed("profile", [
+        await relabel("profile", [
           claimsAt([], claim("represents-principal", alice.did())),
         ]);
         await waitForCellValue(
