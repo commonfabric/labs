@@ -333,18 +333,48 @@ want of permission or malformed is failed: runsc cannot use it, and every
 command's output then arrives without a CFC result and is denied to the model.
 The console takes no enforcement mode, so its turns run at `enforce-strict`, and
 with no policy the runtime row is failed because the engine refuses every turn
-before any tool runs. Each probe caches independently for 30 seconds. Reading
-the route returns the current snapshot immediately and schedules stale checks in
-the background, sharing any in-flight check. No probe is awaited by the route.
-The timestamp remains visible while an observation is being refreshed. Model
-rows describe the startup provider and credential source without exposing
-credentials or making a model request; a configured API key does not prove
-provider acceptance. Neither a Docker registration nor an executable `runsc`
-proves a sandbox can execute a task, nor does a rootfs directory or a policy
-that parses: on macOS the rootfs is a marker the darwin `runsc` maps to a block
-image the probe does not look at, and only `runsc` knows a policy's schema.
-Fabric-session liveness remains unverified, and Loom, toolshed, and application
-pin status belong to the application that observes them directly.
+before any tool runs.
+
+On macOS the direct driver runs every sandbox in one VM, which `runsc` starts on
+a command's first use and which stops itself once it has gone its idle timeout
+without a client: `idleTimeoutSec` in the store's `config.json`, 600 seconds
+unless set. The rootfs there is only a marker directory, empty by design, so the
+rows above can all read ok while that VM is dead. The **Sandbox VM** row,
+`sandbox.vm`, reads the VM itself. It looks in the store `runsc` uses —
+`CFC_VM_HOME`, or else `~/Library/Application Support/cfc-vm` — and is there
+only on macOS and only where that store holds a `config.json`:
+
+| What it finds                                                                      | State and value                         |
+| ---------------------------------------------------------------------------------- | --------------------------------------- |
+| no `daemon.sock`, or one nothing listens on                                        | ok, `idle; starts on first use`         |
+| a status with the guest's figures                                                  | ok, `running`                           |
+| a status without the image the rootfs names, and no `ext4/<key>.ext4` to attach it | failed, `the VM has no <key> image`     |
+| a status without the guest's figures                                               | failed, `the VM guest does not answer`  |
+| no answer within two seconds, or an answer that is not a status                    | failed, `the VM daemon does not answer` |
+
+The question is the one line `#cfcvm status` on the daemon's socket, and the
+running row's `detail` carries the answer's uptime, the guest's memory and the
+images the VM attached. The daemon counts that question as client activity,
+which restarts its idle timer, so the row asks nothing where there is no socket,
+asks a running daemon at most once per idle timeout and 30 seconds, and shows
+the last answer, with its time, in between; a socket that has gone reads idle at
+once. Watching the row therefore never starts a VM, and does not on its own keep
+one up: a VM nothing else uses stops before the next question, which finds no
+socket. The most it does is keep a VM up for one idle timeout after its last
+use. Another client asking in between, a second console's row among them, counts
+as use.
+
+Each probe caches independently for 30 seconds. Reading the route returns the
+current snapshot immediately and schedules stale checks in the background,
+sharing any in-flight check. No probe is awaited by the route. The timestamp
+remains visible while an observation is being refreshed. Model rows describe the
+startup provider and credential source without exposing credentials or making a
+model request; a configured API key does not prove provider acceptance. Neither
+a Docker registration nor an executable `runsc` proves a sandbox can execute a
+task, nor does a rootfs directory, a running VM holding its image, or a policy
+that parses: nothing here starts a sandbox, and only `runsc` knows a policy's
+schema. Fabric-session liveness remains unverified, and Loom, toolshed, and
+application pin status belong to the application that observes them directly.
 
 A task body carries the text, optionally the session to continue, and optionally
 the cells the task is to be computed over, published patterns, and the

@@ -375,9 +375,11 @@ The current package provides:
 
 - a console operator snapshot at `GET /api/health/detail`, retaining launch
   decisions for all connector grants and refusals alongside independently cached
-  observations of the selected sandbox driver and the index, with deciding
-  records, timestamps, causes, and remedies; unknown observations remain
-  distinct from failures, and reading the route never waits for a live probe;
+  observations of the selected sandbox driver — on macOS, of the direct driver's
+  VM too, asked no more often than its idle timeout so that watching the row
+  does not on its own keep the VM up — and the index, with deciding records,
+  timestamps, causes, and remedies; unknown observations remain distinct from
+  failures, and reading the route never waits for a live probe;
 - owner retraction through console `POST /api/index/retract`, signed by the
   configured identity and requiring an active same-owner direct successor; the
   generic index proxy stays read-only and standalone deletion is unsupported;

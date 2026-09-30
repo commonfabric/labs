@@ -918,6 +918,70 @@ describe("console/server", () => {
       ]);
     });
 
+    it("adds the VM row for a console on the runsc runtime exactly where the store is a macOS one", async () => {
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const health = createConsoleHealth(
+          await resolveConsoleConfig(ARGS, {
+            ...RUNSC_ENV,
+            CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+          }, "/console"),
+          undefined,
+          undefined,
+          { CFC_VM_HOME: store },
+          undefined,
+          () => Promise.reject(new Error("Docker is not asked")),
+        );
+
+        await health.refresh();
+
+        const vm = health.snapshot().rows.find((row) =>
+          row.id === "sandbox.vm"
+        );
+        if (Deno.build.os === "darwin") {
+          expect(vm).toMatchObject({
+            group: "sandbox",
+            state: "ok",
+            value: "idle; starts on first use",
+          });
+        } else {
+          expect(vm).toBeUndefined();
+        }
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
+    it("adds no VM row for a console on Docker, whatever store the environment names", async () => {
+      // Settings a runsc console would resolve, so that only the runtime kind
+      // stands between this console and a VM row.
+      const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await Deno.writeTextFile(join(store, "config.json"), "{}");
+        const runsc = await resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+        const health = createConsoleHealth(
+          { ...runsc, sandboxRuntimeKind: "docker" },
+          undefined,
+          undefined,
+          { CFC_VM_HOME: store },
+          undefined,
+          () => Promise.resolve({ runtimes: { "runsc-cfc": {} } }),
+        );
+
+        await health.refresh();
+
+        expect(health.snapshot().rows.map((row) => row.id)).not.toContain(
+          "sandbox.vm",
+        );
+      } finally {
+        await Deno.remove(store, { recursive: true });
+      }
+    });
+
     /** The runsc selection with no CFC policy named, and none under `HOME`. */
     const RUNSC_NO_POLICY_ENV = {
       CF_HARNESS_SANDBOX_RUNTIME: "runsc",

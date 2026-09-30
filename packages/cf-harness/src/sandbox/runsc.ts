@@ -108,19 +108,18 @@ export const RUNSC_ROOTFS_ENV = "CF_HARNESS_SANDBOX_ROOTFS";
 export const RUNSC_CFC_POLICY_ENV = "CF_HARNESS_RUNSC_CFC_POLICY";
 export const RUNSC_BINARY_ENV = "CF_HARNESS_RUNSC_BINARY";
 
+/**
+ * The store the macOS runsc keeps its VM, images and daemon in when
+ * `CFC_VM_HOME` does not name another.
+ */
+export const defaultDarwinCfcVmStore = (home: string): string =>
+  joinHostPath(home, "Library", "Application Support", "cfc-vm");
+
 /** Where the macOS runsc keeps the block image a bundle can name as rootfs. */
 export const defaultDarwinRootfs = (
   home: string,
   imageKey = "kitchensink",
-): string =>
-  joinHostPath(
-    home,
-    "Library",
-    "Application Support",
-    "cfc-vm",
-    "images",
-    imageKey,
-  );
+): string => joinHostPath(defaultDarwinCfcVmStore(home), "images", imageKey);
 
 export type RunscNetworkMode = "none" | "sandbox" | "host";
 

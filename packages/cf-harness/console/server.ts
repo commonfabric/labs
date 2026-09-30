@@ -152,6 +152,7 @@ import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
+  type ConsoleHealthProbe,
   type ConsoleHealthRow,
   consoleHealthUrl,
   type ConsoleObservedLaunchHealth,
@@ -161,6 +162,8 @@ import {
   consolePatternIndexHealthProbes,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  consoleVmStore,
 } from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
@@ -1263,11 +1266,33 @@ export const runscWithoutPolicyRefusesTurns = (
 };
 
 /**
+ * Helper for `createConsoleHealth()`, which returns the VM row's probe for a
+ * console on the direct runsc driver whose runsc keeps a macOS cfc-vm store,
+ * named by `env` as runsc names it. None where the runsc configuration does
+ * not resolve, which the runsc probe reports.
+ */
+const consoleVmHealthProbes = (
+  config: ConsoleConfig,
+  env: Record<string, string | undefined>,
+): ConsoleHealthProbe[] => {
+  if (config.sandboxRuntimeKind !== "runsc") return [];
+  let rootfs: string;
+  try {
+    rootfs = resolveConsoleRunscConfig(config).rootfs;
+  } catch {
+    return [];
+  }
+  const store = consoleVmStore(rootfs, env);
+  return store === undefined ? [] : [consoleVmHealthProbe(store)];
+};
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. `readDockerRuntimes`
- * replaces the Docker driver's `docker info` reading.
+ * its turns resolve from the options each is built with. On macOS it also
+ * asks the VM that driver runs in, from the store `env` names.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
@@ -1284,6 +1309,7 @@ export const createConsoleHealth = (
         consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
+    ...consoleVmHealthProbes(config, env ?? {}),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,

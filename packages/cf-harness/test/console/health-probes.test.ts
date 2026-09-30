@@ -2,11 +2,14 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
+  askCfcVmStatus,
   type ConsolePathReading,
   consolePatternIndexHealthProbes,
   type ConsolePolicyReading,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  consoleVmStore,
   readConsolePath,
   readConsolePolicy,
 } from "../../console/health-probes.ts";
@@ -38,6 +41,58 @@ const searchesDespiteMode = (): boolean => {
     Deno.chmodSync(dir, 0o700);
     Deno.removeSync(dir, { recursive: true });
   }
+};
+
+/**
+ * A fake cfc-vm daemon at `<directory>/daemon.sock`. It reads one line from
+ * each connection and records it without its newline, then writes back what
+ * `answer` returns and hangs up, or, where that is `undefined`, holds the
+ * connection open without answering until it is closed.
+ */
+const fakeVmDaemon = (
+  directory: string,
+  answer: (line: string) => string | undefined,
+) => {
+  const listener = Deno.listen({
+    transport: "unix",
+    path: join(directory, "daemon.sock"),
+  });
+  const lines: string[] = [];
+  const held: Deno.Conn[] = [];
+  const serving = (async () => {
+    for await (const connection of listener) {
+      const line = await readLine(connection);
+      lines.push(line);
+      const reply = answer(line);
+      if (reply === undefined) {
+        held.push(connection);
+        continue;
+      }
+      await connection.write(new TextEncoder().encode(`${reply}\n`));
+      connection.close();
+    }
+  })().catch(() => {});
+  return {
+    lines,
+    close: async () => {
+      for (const connection of held) connection.close();
+      listener.close();
+      await serving;
+    },
+  };
+};
+
+/** Reads from `connection` up to its first newline, or to its end. */
+const readLine = async (connection: Deno.Conn): Promise<string> => {
+  const decoder = new TextDecoder();
+  const buffer = new Uint8Array(256);
+  let text = "";
+  while (!text.includes("\n")) {
+    const read = await connection.read(buffer);
+    if (read === null) break;
+    text += decoder.decode(buffer.subarray(0, read), { stream: true });
+  }
+  return text.split("\n")[0];
 };
 
 describe("health-probes", () => {
@@ -479,6 +534,390 @@ describe("health-probes", () => {
           { id: "sandbox.rootfs", state: "unknown", value: "not verified" },
         ]);
       expect(rows[1].reason).toBe("runsc sandbox needs a rootfs");
+    });
+  });
+
+  describe("consoleVmStore()", () => {
+    /** A store directory holding `config.json` with `config`, or none. */
+    const withStore = async (
+      config: Record<string, unknown> | undefined,
+      body: (directory: string) => Promise<void> | void,
+    ) => {
+      const directory = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        if (config !== undefined) {
+          await Deno.writeTextFile(
+            join(directory, "config.json"),
+            JSON.stringify(config),
+          );
+        }
+        await body(directory);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    };
+
+    it("returns the store `CFC_VM_HOME` names, the image the rootfs names in it, and its idle timeout", async () => {
+      await withStore({ idleTimeoutSec: 300 }, (directory) => {
+        const rootfs = join(
+          Deno.realPathSync(directory),
+          "images",
+          "kitchensink",
+        );
+
+        expect(
+          consoleVmStore(rootfs, { CFC_VM_HOME: directory }, {
+            platform: "darwin",
+          }),
+        ).toEqual({ directory, imageKey: "kitchensink", idleTimeoutSec: 300 });
+      });
+    });
+
+    it("returns the store under `HOME` when `CFC_VM_HOME` is unset", async () => {
+      await withStore(undefined, async (home) => {
+        const directory = join(
+          home,
+          "Library",
+          "Application Support",
+          "cfc-vm",
+        );
+        await Deno.mkdir(directory, { recursive: true });
+        await Deno.writeTextFile(join(directory, "config.json"), "{}");
+
+        for (const env of [{ HOME: home }, { CFC_VM_HOME: "", HOME: home }]) {
+          expect(
+            consoleVmStore("/elsewhere/rootfs", env, { platform: "darwin" }),
+          ).toEqual({ directory, idleTimeoutSec: 600 });
+        }
+      });
+    });
+
+    it("returns the daemon's own idle timeout where `config.json` names none it can use", async () => {
+      for (
+        const config of [{}, { idleTimeoutSec: 0 }, { idleTimeoutSec: "5" }]
+      ) {
+        await withStore(config, (directory) => {
+          expect(
+            consoleVmStore("/r", { CFC_VM_HOME: directory }, {
+              platform: "darwin",
+            })?.idleTimeoutSec,
+          ).toBe(600);
+        });
+      }
+    });
+
+    it("returns no image for a rootfs outside the store's `images`", async () => {
+      await withStore({}, (directory) => {
+        const store = consoleVmStore(
+          join(Deno.realPathSync(directory), "rootfs", "kitchensink"),
+          { CFC_VM_HOME: directory },
+          { platform: "darwin" },
+        );
+
+        expect(store?.imageKey).toBeUndefined();
+      });
+    });
+
+    it("returns `undefined` off macOS", async () => {
+      await withStore({}, (directory) => {
+        expect(
+          consoleVmStore(join(directory, "images", "kitchensink"), {
+            CFC_VM_HOME: directory,
+          }, { platform: "linux" }),
+        ).toBeUndefined();
+      });
+    });
+
+    it("returns `undefined` for a directory with no `config.json`", async () => {
+      await withStore(undefined, (directory) => {
+        expect(
+          consoleVmStore(join(directory, "images", "kitchensink"), {
+            CFC_VM_HOME: directory,
+          }, { platform: "darwin" }),
+        ).toBeUndefined();
+      });
+    });
+
+    it("returns `undefined` when neither `CFC_VM_HOME` nor `HOME` is set", () => {
+      expect(consoleVmStore("/r", {}, { platform: "darwin" })).toBeUndefined();
+    });
+  });
+
+  describe("consoleVmHealthProbe()", () => {
+    /** What a running daemon answers, as the real one does. */
+    const STATUS = {
+      activeClients: 0,
+      forwardPorts: [],
+      guest: {
+        memAvailableKiB: 1_883_096,
+        memTotalKiB: 2_040_268,
+        rootfs: 0,
+        runsc: 0,
+      },
+      idleSec: 29,
+      images: ["kitchensink"],
+      pid: 21275,
+      shares: {},
+      uptimeSec: 1592,
+    };
+
+    /** Runs `body` over an empty temporary store directory. */
+    const withStore = async (body: (directory: string) => Promise<void>) => {
+      const directory = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+      try {
+        await body(directory);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    };
+
+    const store = (directory: string, imageKey = "kitchensink") => ({
+      directory,
+      imageKey,
+      idleTimeoutSec: 600,
+    });
+
+    /** The row the probe returns, alone. */
+    const readRow = async (probe: ReturnType<typeof consoleVmHealthProbe>) => {
+      const rows = await probe.read();
+      expect(rows.map((row) => row.id)).toEqual(["sandbox.vm"]);
+      return rows[0];
+    };
+
+    it("returns idle without connecting when the store has no daemon socket", async () => {
+      await withStore(async (directory) => {
+        let asked = 0;
+        const row = await readRow(
+          consoleVmHealthProbe(store(directory), {
+            ask: () => {
+              asked += 1;
+              return Promise.resolve({ found: "no-daemon" });
+            },
+          }),
+        );
+
+        expect(asked).toBe(0);
+        expect(row).toMatchObject({
+          label: "Sandbox VM",
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+      });
+    });
+
+    it("returns idle when nothing listens on the socket the store holds", async () => {
+      await withStore(async (directory) => {
+        // What a daemon that stopped without removing its socket leaves.
+        const listener = Deno.listen({
+          transport: "unix",
+          path: join(directory, "live.sock"),
+        });
+        await Deno.rename(
+          join(directory, "live.sock"),
+          join(directory, "daemon.sock"),
+        );
+        listener.close();
+
+        const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+        expect(row).toMatchObject({
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+      });
+    });
+
+    it("returns running with the daemon's uptime, guest memory and images, and says the question is activity", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+          expect(row.detail).toContain("up 26m 32s");
+          expect(row.detail).toContain(
+            "guest memory 1839 MiB available of 1992 MiB",
+          );
+          expect(row.detail).toContain("images kitchensink");
+          expect(row.reason).toContain("counts as activity");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed naming the image the VM has not attached and the store holds no block image for", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: ["other"] }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM has no kitchensink image",
+          });
+          expect(row.remedy).toContain("ext4/kitchensink.ext4");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns running when the store holds the block image the VM has not attached", async () => {
+      await withStore(async (directory) => {
+        await Deno.mkdir(join(directory, "ext4"));
+        await Deno.writeTextFile(
+          join(directory, "ext4", "kitchensink.ext4"),
+          "",
+        );
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, images: [] }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon does not answer within the bound", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => undefined);
+        try {
+          const row = await readRow(
+            consoleVmHealthProbe(store(directory), {
+              ask: (socket) => askCfcVmStatus(socket, 50),
+            }),
+          );
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+          expect(row.remedy).toContain("daemon.log");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon answers with something other than its status", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => "error: busy");
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon answers with a JSON object that is not a status", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ error: "busy", guest: STATUS.guest }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns failed when the daemon answers without the guest's own figures", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(
+          directory,
+          () => JSON.stringify({ ...STATUS, guest: {} }),
+        );
+        try {
+          const row = await readRow(consoleVmHealthProbe(store(directory)));
+
+          expect(row).toMatchObject({
+            state: "failed",
+            value: "the VM guest does not answer",
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("asks a running daemon no more often than its idle timeout and two of its idle checks", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          let now = 1_000_000;
+          const probe = consoleVmHealthProbe(store(directory), {
+            now: () => now,
+          });
+
+          const first = await readRow(probe);
+          now += 629_999;
+          const cached = await readRow(probe);
+          expect(daemon.lines.length).toBe(1);
+          expect(cached).toEqual(first);
+
+          now += 1;
+          await readRow(probe);
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns idle, and asks again, once the socket has gone and come back", async () => {
+      await withStore(async (directory) => {
+        const probe = consoleVmHealthProbe(store(directory));
+        const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        await readRow(probe);
+        await first.close();
+
+        expect(await readRow(probe)).toMatchObject({
+          value: "idle; starts on first use",
+        });
+
+        const second = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(second.lines).toEqual(["#cfcvm status"]);
+        } finally {
+          await second.close();
+        }
+      });
+    });
+
+    it("returns unknown when the socket could not be looked at", async () => {
+      const row = await readRow(
+        consoleVmHealthProbe(store("/store"), {
+          lstat: () => {
+            throw new Deno.errors.PermissionDenied("denied");
+          },
+        }),
+      );
+
+      expect(row).toMatchObject({ state: "unknown", value: "not verified" });
     });
   });
 
