@@ -26,7 +26,9 @@ export const VALUE_TAG: unique symbol = Symbol("data-model.valueTag");
  * _not_ `export`ed from this file, so that only `blessFabricPrimitiveClass()`
  * can succeed in performing a blessing.
  */
-const BLESSING_KEY: unique symbol = Symbol("data-model.FabricPrimitiveBlessing");
+const BLESSING_KEY: unique symbol = Symbol(
+  "data-model.FabricPrimitiveBlessing",
+);
 
 /**
  * Symbol bound on the `BaseFabricPrimitive` constructor (class object) and
@@ -54,7 +56,9 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
   /** Constructs an instance. */
   constructor() {
     if (!BaseFabricPrimitive.#blessedClasses.has(new.target)) {
-      throw new Error("Invalid attempt to construct an instance of an unblessed `FabricPrimitive` class.");
+      throw new Error(
+        "Invalid attempt to construct an instance of an unblessed `FabricPrimitive` class.",
+      );
     }
 
     super();
@@ -95,7 +99,10 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
    * `blessingKey`. This also freezes its prototype, to more fully guarantee
    * inertness.
    */
-  protected static [BLESS](ctor: Constructor<BaseFabricPrimitive>, blessingKey: typeof BLESSING_KEY) {
+  protected static [BLESS](
+    ctor: Constructor<BaseFabricPrimitive>,
+    blessingKey: typeof BLESSING_KEY,
+  ) {
     if (blessingKey === BLESSING_KEY) {
       this.#blessedClasses.add(ctor);
       Object.freeze(ctor.prototype);
