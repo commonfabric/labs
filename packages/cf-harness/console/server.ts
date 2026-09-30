@@ -99,6 +99,16 @@ import {
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
+  argvHolds,
+  flagUsageLines,
+  HELP_SPELLINGS,
+  isNameable,
+  recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
+  refuseUndeclaredFlags,
+} from "../src/cli-flags.ts";
+import { HarnessControlError } from "../src/control-errors.ts";
+import {
   checkInputCellSpec,
   parseInputCellArgument,
 } from "../src/input-cells.ts";
@@ -152,6 +162,7 @@ import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
+  type ConsoleHealthProbe,
   type ConsoleHealthRow,
   consoleHealthUrl,
   type ConsoleObservedLaunchHealth,
@@ -161,6 +172,8 @@ import {
   consolePatternIndexHealthProbes,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  consoleVmStore,
 } from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
@@ -600,6 +613,103 @@ export const refuseBatchSandboxFlags = (
   }
 };
 
+/** The flags the console takes that carry a value. */
+export const CONSOLE_STRING_FLAGS = [
+  "port",
+  "workspace",
+  "artifact-root",
+  "model",
+  "reasoning-effort",
+  "research-reasoning-effort",
+  "loom-authoring-config",
+  "fabric-api-url",
+  "fabric-identity",
+  "fabric-space",
+  "fabric-foreign-spaces",
+  "pattern-index-url",
+  "skills-registry-url",
+  "skills-root",
+  "host-mount",
+  "session-db",
+  "space-db",
+  "max-model-turns",
+  "fabric-cfc-enforcement-mode",
+  "fabric-cfc-flow-labels",
+  "fabric-cfc-posture",
+  "system-prompt-file",
+] as const;
+
+/** The console's switches. */
+const CONSOLE_BOOLEAN_FLAGS = [
+  "help",
+  "no-child-composition-guidance",
+  "no-pattern-index-publish",
+  "pattern-index-publish-discoverable",
+  "allow-skill-scripts",
+] as const;
+
+/** Every flag the console takes, without its dashes. */
+export const CONSOLE_FLAGS: readonly string[] = [
+  ...CONSOLE_STRING_FLAGS,
+  ...CONSOLE_BOOLEAN_FLAGS,
+];
+
+/** What `--help` prints. */
+const CONSOLE_USAGE = [
+  "Usage: deno task --cwd packages/cf-harness console [flags]",
+  "",
+  "Serves the cf-harness console. Most flags have an environment variable",
+  "that sets the same thing, and packages/cf-harness/console/README.md",
+  "describes both.",
+  "",
+  ...flagUsageLines(CONSOLE_STRING_FLAGS, CONSOLE_BOOLEAN_FLAGS),
+].join("\n");
+
+/**
+ * The console's usage where `args` ask for it with `--help` or `-h`, whatever
+ * else they hold, and otherwise `undefined`.
+ */
+export const consoleHelpText = (args: readonly string[]): string | undefined =>
+  argvHolds(args, HELP_SPELLINGS) ? CONSOLE_USAGE : undefined;
+
+/**
+ * Parses the console's arguments. The batch CLI's sandbox selection flags are
+ * refused first, each naming the variable to set instead, then a flag given
+ * no value, then any other flag the console does not take, and then any
+ * positional argument, since it takes none; what follows `--` is one.
+ * `console:launch` checks the arguments it passes through with this before it
+ * reads anything.
+ *
+ * @throws Error naming the first flag refused.
+ */
+export const parseConsoleArgs = (args: readonly string[]) => {
+  const undeclared: string[] = [];
+  const parsed = parseArgs([...args], {
+    string: [...CONSOLE_STRING_FLAGS],
+    boolean: [...CONSOLE_BOOLEAN_FLAGS],
+    collect: ["host-mount"],
+    alias: { h: "help" },
+    unknown: recordUndeclaredFlags(undeclared),
+  });
+  refuseBatchSandboxFlags(parsed);
+  refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
+  refuseUndeclaredFlags(undeclared, CONSOLE_FLAGS, "the console");
+  const [positional] = parsed._;
+  if (positional !== undefined) {
+    // Only a word shaped like a flag is named, never a value.
+    const flag = String(positional).split("=")[0];
+    throw new HarnessControlError(
+      "invalid-request",
+      flag.startsWith("-") && isNameable(flag.replace(/^-+/, ""))
+        ? `\`${flag}\` follows \`--\`, after which the console reads no ` +
+          "flag; it takes no positional arguments."
+        : "The console takes no positional arguments, and reads no flag " +
+          "after `--`.",
+    );
+  }
+  return parsed;
+};
+
 /**
  * Resolves configuration from flags over environment over defaults. The space
  * is rejected when it is a `did:key`: a run in such a space can build a piece
@@ -611,43 +721,19 @@ export const resolveConsoleConfig = async (
   env: Record<string, string | undefined>,
   cwd: string,
 ): Promise<ConsoleConfig> => {
-  const parsed = parseArgs(args, {
-    string: [
-      "port",
-      "workspace",
-      "artifact-root",
-      "model",
-      "reasoning-effort",
-      "research-reasoning-effort",
-      "loom-authoring-config",
-      "fabric-api-url",
-      "fabric-identity",
-      "fabric-space",
-      "fabric-foreign-spaces",
-      "pattern-index-url",
-      "skills-registry-url",
-      "skills-root",
-      "host-mount",
-      "session-db",
-      "space-db",
-      "max-model-turns",
-      "fabric-cfc-enforcement-mode",
-      "fabric-cfc-flow-labels",
-      "fabric-cfc-posture",
-      "system-prompt-file",
-    ],
-    boolean: [
-      "no-child-composition-guidance",
-      "no-pattern-index-publish",
-      "pattern-index-publish-discoverable",
-      "allow-skill-scripts",
-    ],
-    collect: ["host-mount"],
-  });
-  const flag = (name: string): string | undefined =>
-    typeof parsed[name] === "string" ? nonEmpty(parsed[name]) : undefined;
+  const parsed = parseConsoleArgs(args);
+  // A flag written with an empty value is refused rather than read as unset,
+  // which would put the default in place of what was typed.
+  const flag = (name: string): string | undefined => {
+    const value = parsed[name];
+    if (typeof value !== "string") return undefined;
+    const given = nonEmpty(value);
+    if (given === undefined) {
+      throw new Error(`\`--${name}\` was given no value`);
+    }
+    return given;
+  };
 
-  refuseBatchSandboxFlags(parsed);
   // The one derivation every entrypoint shares, over this server's own
   // environment. Nothing beyond the runtime kind is returned unless the
   // runtime is runsc, so a console that names no runtime hands the engine no
@@ -1263,17 +1349,41 @@ export const runscWithoutPolicyRefusesTurns = (
 };
 
 /**
+ * The VM row's probe for a console on the direct runsc driver whose runsc
+ * keeps a macOS cfc-vm store, named by `env` as runsc names it, and otherwise
+ * none. None too where the runsc configuration does not resolve, which the
+ * runsc probe reports. `platform` replaces `Deno.build.os`.
+ */
+export const consoleVmHealthProbes = (
+  config: ConsoleConfig,
+  env: Record<string, string | undefined>,
+  options: { platform?: string } = {},
+): ConsoleHealthProbe[] => {
+  if (config.sandboxRuntimeKind !== "runsc") return [];
+  let rootfs: string;
+  try {
+    rootfs = resolveConsoleRunscConfig(config).rootfs;
+  } catch {
+    return [];
+  }
+  const store = consoleVmStore(rootfs, env, options);
+  return store === undefined ? [] : [consoleVmHealthProbe(store)];
+};
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. `readDockerRuntimes`
- * replaces the Docker driver's `docker info` reading.
+ * its turns resolve from the options each is built with. On macOS it also
+ * asks the VM that driver runs in, from the store `env` names. `env` is the
+ * process's environment unless given, since that is the one runsc runs with.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
   modelOptions?: CreateHarnessPromptLoopOptions,
-  env?: Record<string, string | undefined>,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
 ): ConsoleHealth =>
@@ -1284,6 +1394,7 @@ export const createConsoleHealth = (
         consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
+    ...consoleVmHealthProbes(config, env),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,
@@ -2330,7 +2441,10 @@ export const consoleStartupBanner = (
  * options: `CreateHarnessPromptLoopOptions` extends the engine's options,
  * which extend the config resolver's, and the interactive service spreads this
  * object into every turn — so what is set here holds for the whole session,
- * and the engine builds both lazily-cached client factories from it.
+ * and the engine builds both lazily-cached client factories from it. A flag
+ * that takes a value but was given none is refused first, so `--port --help`
+ * throws; only then, where `args` ask for help, it prints the usage instead
+ * and serves nothing.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
@@ -2338,6 +2452,13 @@ export const startConsoleServer = async (
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
 ): Promise<void> => {
+  // A flag with no value first: the `-h` it leaves behind is not a question.
+  refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
+  const help = consoleHelpText(args);
+  if (help !== undefined) {
+    console.log(help);
+    return;
+  }
   const config = await resolveConsoleConfig(args, env, cwd);
   for (const directory of consoleDataDirectories(config)) {
     await Deno.mkdir(directory, { recursive: true });

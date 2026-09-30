@@ -11,17 +11,20 @@ const FACTORY_URL = new URL(
 );
 
 /**
- * The builder modules whose exports `factory.ts` injects as callables, each of
- * which needs a registry entry. The guard sees only exports imported from these,
- * so a module that a new callable is imported from has to be added here.
+ * The modules whose exports `factory.ts` injects as callables, each of which
+ * needs a registry entry: the builder modules, and `@commonfabric/identity/did`.
+ * The guard sees only exports imported from these, so a module that a new
+ * callable is imported from has to be added here.
  */
 const TRACKED_IMPORT_SOURCES = new Set([
+  "@commonfabric/identity/did",
   "./built-in.ts",
   "./current-principal.ts",
   "./event-key.ts",
   "./module.ts",
   "./pattern.ts",
   "./space-access.ts",
+  "./space-access-change.ts",
 ]);
 
 function getPropertyNameText(name: ts.PropertyName): string | undefined {

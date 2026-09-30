@@ -70,4 +70,9 @@ export class RealmCodecEngine extends BaseCodecEngine<
   ): RealmDecodeAct {
     return new RealmDecodeAct(this, env);
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

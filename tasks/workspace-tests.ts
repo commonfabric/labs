@@ -77,7 +77,8 @@ export async function testPackage(
     // other.
     const args = ["task", "test"];
     if (junitPath !== undefined) {
-      args.push(`--junit-path=${junitPath}`, ...recording);
+      args.push(`--junit-path=${junitPath}`);
+      for (const argument of recording) args.push(argument);
     }
     result = await new Deno.Command(Deno.execPath(), {
       args,

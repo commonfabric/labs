@@ -108,6 +108,42 @@ root fails naming the import and the importing file. CI's `pattern-unit` suite
 packages/patterns` explicitly, so a bare local run resolves imports the same way
 CI does.
 
+### The test's space and its access list
+
+A single-user test runs in its identity's home space, on an in-process store.
+Before the test pattern runs, `cf test` gives that space the access list a home
+space is born with, naming the test's identity as its only OWNER. So
+`spaceAccess()`, asked about any cell in the test's space, returns `"OWNER"`,
+in a handler and in a computed alike.
+
+A multi-user test's participants share one space, which is created with an
+access list. The first participant's user is its OWNER. Every other user holds
+the level one of its participants declares with `access`, or `"WRITE"` when
+none of them declares one; `"none"` leaves the user out of the list, and
+`spaceAccess()` then returns `"none"` for it. Participants that share a `user`
+share its level, so they cannot declare two different ones, and the first
+participant's user cannot declare anything but `"OWNER"`.
+
+```tsx
+// Shown for illustration only.
+export default multiUserTest({
+  setup,
+  participants: {
+    host, // OWNER, as the first participant
+    guest, // WRITE, since it declares no level
+    viewer: { pattern: viewer, access: "READ" },
+    stranger: { pattern: stranger, access: "none" }, // not in the list
+  },
+});
+```
+
+Neither space's storage enforces the list. A participant at `"READ"`, or left
+out at `"none"`, still reads and writes the shared space like any other, so the
+list is what `spaceAccess()` reports and nothing more. A pattern test can check
+what a pattern decides from the level it is given, such as a control only an
+OWNER is offered. What the memory server refuses a principal is a question for
+a test against a server that enforces access lists.
+
 ## Test Step Format
 
 Tests use a **discriminated union** format:

@@ -113,8 +113,20 @@ naming them. The pattern index and skills registry are this deployment's
 constants rather than any fabric's. It prints every value with the record that
 decided it, and serves on the port Weaver pairs with. Arguments after `--` reach
 this server untouched, so every flag in the tables below is reachable through
-it. [`../docs/WEAVER.md`](../docs/WEAVER.md) is the operator procedure it
-belongs to, including the tailnet topology and the pre-demo preflight.
+it. Each of the two refuses a flag it does not take, naming it and, where one is
+close, the flag it most likely meant, and `console:launch` holds the arguments
+after `--` to the server's flags before it reads anything, so a misspelled
+switch stops the launch rather than going unapplied. A console flag given to the
+launcher is refused with a pointer to `--`. A flag given no value is refused
+too, whether nothing follows it, the word after it starts with `-`, or its value
+is empty, rather than falling back to the default: a value starting with `-`
+needs the `--name=<value>` spelling. The server takes no positional argument,
+and so nothing after a `--` of its own. `--help` or `-h`, as a word of its own,
+prints the flags each takes, the launcher's before `--` and the server's after
+it, and serves nothing, unless it is the word after a flag that takes a value,
+which is that flag given no value. [`../docs/WEAVER.md`](../docs/WEAVER.md) is
+the operator procedure it belongs to, including the tailnet topology and the
+pre-demo preflight.
 
 Against a toolshed of your own, the environment below is what `console:launch`
 would otherwise have resolved:
@@ -333,18 +345,65 @@ want of permission or malformed is failed: runsc cannot use it, and every
 command's output then arrives without a CFC result and is denied to the model.
 The console takes no enforcement mode, so its turns run at `enforce-strict`, and
 with no policy the runtime row is failed because the engine refuses every turn
-before any tool runs. Each probe caches independently for 30 seconds. Reading
-the route returns the current snapshot immediately and schedules stale checks in
-the background, sharing any in-flight check. No probe is awaited by the route.
-The timestamp remains visible while an observation is being refreshed. Model
-rows describe the startup provider and credential source without exposing
-credentials or making a model request; a configured API key does not prove
-provider acceptance. Neither a Docker registration nor an executable `runsc`
-proves a sandbox can execute a task, nor does a rootfs directory or a policy
-that parses: on macOS the rootfs is a marker the darwin `runsc` maps to a block
-image the probe does not look at, and only `runsc` knows a policy's schema.
-Fabric-session liveness remains unverified, and Loom, toolshed, and application
-pin status belong to the application that observes them directly.
+before any tool runs.
+
+On macOS the direct driver runs every sandbox in one VM, which `runsc` starts on
+a command's first use and which stops itself once it has gone its idle timeout
+without a client: `idleTimeoutSec` in the store's `config.json`, 600 seconds
+unless set. The rootfs there is only a marker directory, empty by design, so the
+rows above can all read ok while that VM is dead. The **Sandbox VM** row,
+`sandbox.vm`, reads the VM itself. It looks in the store `runsc` uses —
+`CFC_VM_HOME`, or else `~/Library/Application Support/cfc-vm` — and is there
+only on macOS and only where that store holds a `config.json`. Each line of the
+table applies where no line above it does:
+
+| What it finds                                                                                                                       | State and value                         |
+| ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| a `config.json` that cannot be read as a JSON object, in which case the daemon is not looked for                                    | unknown, `not verified`                 |
+| no `daemon.sock`, or one nothing listens on                                                                                         | ok, `idle; starts on first use`         |
+| a `daemon.sock` that cannot be looked at, or that cannot be connected to for any reason but nothing listening on it                 | unknown, `not verified`                 |
+| no answer within fifteen seconds, a hang-up with nothing said, or an answer that is not a status                                    | failed, `the VM daemon does not answer` |
+| a status without the guest's figures                                                                                                | failed, `the VM guest does not answer`  |
+| a status, where the store's path cannot be resolved to tell which of its images the rootfs names                                    | unknown, `not verified`                 |
+| a status, where the rootfs names no image of the store, or one the VM attached, or one whose `ext4/<key>.ext4` file the store holds | ok, `running`                           |
+| a status without the image the rootfs names, and an `ext4/<key>.ext4` that cannot be looked at                                      | unknown, `not verified`                 |
+| a status without the image the rootfs names, and no `ext4/<key>.ext4` file                                                          | failed, `the VM has no <key> image`     |
+
+The question is the one line `#cfcvm status` on the daemon's socket, and the
+running row's `detail` carries the answer's uptime, the guest's memory and the
+images the VM attached. The daemon answers it after asking its guest, which it
+gives up on after ten seconds, so the row waits fifteen for the answer. The
+daemon counts the question as client activity, which restarts its idle timer,
+and it takes the idle timeout from the same `config.json`. So the row asks
+nothing where there is no socket or that file cannot be read, and holds any
+answer a daemon gave, a status or anything else, for its idle timeout and 30
+seconds before asking that daemon again. It asks at once where it holds no
+answer: where the socket is not the one the last answer came on, or where the
+last question got none, whether none came within the bound, the exchange failed,
+the daemon hung up with nothing said, or the socket could not be connected to.
+While it holds an answer, it connects and hangs up without a word, which the
+daemon closes without counting as activity, and reports that answer, with the
+time it was given, against the store as it is: installing a missing image's
+block file clears that row at the next refresh without a question. A connection
+that finds nothing listening reads idle, and one that fails otherwise reads
+unknown; either drops the answer held. A daemon that has stopped, whether it
+removed its socket or not, therefore reads idle at the next refresh. Watching
+the row never starts a VM, and does not on its own keep one up: a VM nothing
+else uses stops before the next question, which finds no daemon. The most it
+does is keep a VM up for one idle timeout after its last use. Another client
+asking in between, a second console's row among them, counts as use.
+
+Each probe caches independently for 30 seconds. Reading the route returns the
+current snapshot immediately and schedules stale checks in the background,
+sharing any in-flight check. No probe is awaited by the route. The timestamp
+remains visible while an observation is being refreshed. Model rows describe the
+startup provider and credential source without exposing credentials or making a
+model request; a configured API key does not prove provider acceptance. Neither
+a Docker registration nor an executable `runsc` proves a sandbox can execute a
+task, nor does a rootfs directory, a running VM holding its image, or a policy
+that parses: nothing here starts a sandbox, and only `runsc` knows a policy's
+schema. Fabric-session liveness remains unverified, and Loom, toolshed, and
+application pin status belong to the application that observes them directly.
 
 A task body carries the text, optionally the session to continue, and optionally
 the cells the task is to be computed over, published patterns, and the

@@ -88,26 +88,27 @@ export function spaceAccess(
   return accessLevel(
     runtime,
     tx,
-    spaceOfTarget(target),
+    spaceOfTarget(target, "spaceAccess(target)"),
     principal,
     kind === "lift",
   );
 }
 
 /**
- * Helper for {@link spaceAccess}, which returns the space `target` lives in,
- * after following any links it holds.
+ * Returns the space the value of the cell `target` lives in, after following
+ * any links it holds. `call` names the call `target` was passed to, for the
+ * error.
+ *
+ * @throws Error when `target` is not a cell.
  */
-function spaceOfTarget(target: unknown): MemorySpace {
+export function spaceOfTarget(target: unknown, call: string): MemorySpace {
   let cell: Cell<unknown>;
   if (isCell(target)) {
     cell = target;
   } else if (isCellResult(target)) {
     cell = getCellOrThrow(target);
   } else {
-    throw new Error(
-      "`spaceAccess(target)` takes a cell, or `undefined`, as its target.",
-    );
+    throw new Error(`\`${call}\` takes a cell as its target.`);
   }
   return cell.resolveAsCell().getAsNormalizedFullLink().space;
 }

@@ -252,12 +252,13 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Granting access from a pattern.** Only a host can change an access list
-  today (`ACLManager`, the runtime client's `space:setAclEntry`). A room's
-  creator needs a pattern-facing way to grant and revoke members by principal,
-  gated as an outward act and implemented by the host. Space invitations don't
-  serve: they are bearer credentials, not bound to the person they are meant for
-  (see [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
+- **Granting access from a pattern.** A handler on a client runtime can grant
+  and revoke a space's members by principal with `grantSpaceAccess()` and
+  `revokeSpaceAccess()`, gated on a trusted gesture from an OWNER
+  ([changing a space's access list](../../features/space-access-changes.md)).
+  A serving runtime refuses both. Space invitations don't serve: they are
+  bearer credentials, not bound to the person they are meant for (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
 - **Delivering a notice.** Nothing in this repository lets a pattern deliver a
   message to a principal who shares no space with the sender (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).

@@ -114,8 +114,26 @@ its own. The session opens again when something reads a document of that space
 that the replica has not asked for, and a refused principal who has since been
 granted access sees a level only from then on.
 
+## Changing the level
+
+`spaceAccess(target)` only reads. A handler changes a principal's entry with
+`grantSpaceAccess()` and `revokeSpaceAccess()`, which
+[`space-access-changes.md`](space-access-changes.md) describes.
+
 ## What it discloses
 
 The answer names no principal. It tells a member only what a member can
 already read, since the memory server serves the whole access list to anyone
 holding `READ`, and it tells a non-member only that they are one.
+
+## In a pattern test
+
+`cf test` gives the test's space an access list, so `spaceAccess(target)`
+returns a level there rather than `undefined`. A multi-user test's list holds a
+level per user. A single-user test's space holds no list on the store `cf test`
+creates, and gets one naming the test's identity as its only OWNER; a store a
+caller supplies to the runner (`TestRunnerOptions.storageHost`) keeps any list
+it already holds, and that list decides the level. The test lane's storage does
+not enforce the list.
+[The test's space and its access list](../common/workflows/pattern-testing.md#the-tests-space-and-its-access-list)
+says how a participant declares its level.

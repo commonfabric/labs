@@ -20,6 +20,7 @@ import {
   fabricPrimitiveClassesByName,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
+import { isWellFormedDID } from "@commonfabric/identity/did";
 import {
   all as rowLabelAll,
   any as rowLabelAny,
@@ -87,6 +88,7 @@ import {
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import { spaceAccess } from "./space-access.ts";
+import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
   BuilderFunctionsAndConstants,
   ToSchemaFunction,
@@ -274,6 +276,8 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     inspectConfLabel,
     currentPrincipal,
     eventKey,
+    // The DID Core syntax guard the runtime itself decides by.
+    isWellFormedDID,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):
@@ -302,6 +306,8 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
 
     // Access
     spaceAccess,
+    grantSpaceAccess,
+    revokeSpaceAccess,
 
     // Entity utilities
     getEntityId,

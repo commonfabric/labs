@@ -1,3 +1,4 @@
+import { encodeBase64 } from "@std/encoding/base64";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -37,7 +38,7 @@ async function signingKey(): Promise<string> {
   const pkcs8 = new Uint8Array(
     await crypto.subtle.exportKey("pkcs8", pair.privateKey),
   );
-  const base64 = btoa(String.fromCharCode(...pkcs8)).replace(
+  const base64 = encodeBase64(pkcs8).replace(
     /(.{64})/g,
     "$1\n",
   );

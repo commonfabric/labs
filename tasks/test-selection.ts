@@ -32,6 +32,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   DIALS,
   dialValue,
@@ -141,7 +142,7 @@ function pad(text: string, width: number): string {
 /** Every dial, as the lines `dials` prints. */
 export function dialLines(): string[] {
   const lines: string[] = [];
-  const width = Math.max(...DIALS.map((dial) => dial.name.length));
+  const width = maxOf(DIALS.map((dial) => dial.name.length));
   for (const dial of DIALS) {
     lines.push(
       `${pad(dial.name, width)}  ${dialValue(dial)} ${dial.unit} ` +
@@ -175,8 +176,7 @@ export function coverageLines(
   );
   const width = Math.max(
     1,
-    ...names.map((name) => name.length),
-    ...ungated.map((member) => member.length),
+    maxOf([...names, ...ungated].map((name) => name.length)),
   );
   const baselines = new Map(
     (manifest?.coverageBaselines ?? []).map((

@@ -250,10 +250,13 @@ What works today:
 
 The sandbox `bash` tool has a provisional direct-`curl` guard while sandbox
 networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
-hosts such as `localhost`, `127.0.0.1`, and Docker Desktop's
+hosts such as `localhost`, `127.0.0.1`, `[::1]`, and Docker Desktop's
 `host.docker.internal` host alias, but obvious external `curl` targets are
-denied before sandbox execution. This is an integration unblock, not a complete
-network confinement model.
+denied before sandbox execution. The refusal states that rule and names no host
+to try instead, since what answers on those names is the driver's: under Docker
+`host.docker.internal` reaches any port of the host, and under the direct driver
+on macOS only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -415,6 +418,32 @@ Every run selects a provider, and there is no default. The examples in this
 section pass `--model-provider` for one run; `CF_HARNESS_MODEL_PROVIDER` selects
 one for a shell and `config set` selects one for a machine, and the later
 examples in this document assume a provider selected one of those two ways.
+
+A flag the CLI does not declare is refused, never ignored, because an ignored
+restriction is a run without it: `--allowed-tools read_file` stops before any
+model call with
+`` `--allowed-tools` is not a flag of the batch CLI. Did you mean
+`--allow-tool`? ``
+rather than running with every tool. The refusal names the flag and, where one
+is close, the declared flag it most likely meant, and never the value typed with
+it, nor a word that could not be a flag's name. The control commands (`config`,
+`auth`, `models`, `whoami`), the interactive stdio entrypoint, the local Loom
+host's `batch` and `interactive` modes over those two, the console,
+`console:launch` and the measurement scripts refuse the same way. Through the
+local Loom host a `batch` refusal is an `invalid-request` host failure carrying
+that message; an `interactive` one stays on the chat protocol, as the error the
+host returns, with that message, for each request it is sent. `--help` or `-h`,
+written as a word of its own, answers whatever else is on the line, and text
+after `--` is prompt text, flags included.
+
+The batch CLI, the interactive stdio entrypoint, the console and
+`console:launch` also refuse a flag that takes a value when nothing follows it
+or the word after it starts with `-`, since the word after it would otherwise be
+taken apart as flags or taken as the value of the wrong flag: the batch CLI
+would read `--prompt "- buy milk"` as an empty prompt followed by a run of
+flags. Such a value is written as one shell word, `--prompt='- buy milk'`. That
+refusal comes before help, so `--prompt -h` is a prompt given no value rather
+than a question.
 
 Standard bearer-auth mode:
 

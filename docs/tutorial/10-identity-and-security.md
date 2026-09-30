@@ -94,6 +94,8 @@ Beyond authentication, per-space **ACLs** are wired into the v2 server itself.
 A space can carry an ACL document (addressed by the wire entity id
 `of:<space DID>`; types in `packages/memory/acl.ts`, managed by the runner's
 `ACLManager` and surfaced as `cf acl`) granting READ/WRITE/OWNER capabilities.
+A pattern's handler changes it with `grantSpaceAccess()` and
+`revokeSpaceAccess()`.
 The server evaluates them per message — session-open, queries, and watches need
 READ; `transact` needs WRITE; writing the ACL itself needs OWNER. A fresh space
 is read-only until its space identity (or a configured service DID) writes a

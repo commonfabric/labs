@@ -356,7 +356,9 @@ function taskCommands(
   const follow = (command: string) => {
     const named = /^deno task (?:-q |--quiet )?([\w:.-]+)/.exec(command);
     if (named !== null && named[1]! in tasks) {
-      commands.push(...taskCommands(tasks, named[1]!, seen));
+      for (const found of taskCommands(tasks, named[1]!, seen)) {
+        commands.push(found);
+      }
       return;
     }
     // A member's `test` task hands its task names to the script that runs
@@ -366,7 +368,10 @@ function taskCommands(
     if (script !== -1) {
       const { tasks: names } = readInvocation(words.slice(script + 1));
       for (const next of names) {
-        if (next in tasks) commands.push(...taskCommands(tasks, next, seen));
+        if (!(next in tasks)) continue;
+        for (const found of taskCommands(tasks, next, seen)) {
+          commands.push(found);
+        }
       }
       return;
     }
@@ -377,7 +382,9 @@ function taskCommands(
   } else if (task !== null && typeof task === "object") {
     const shape = task as { command?: string; dependencies?: string[] };
     for (const dependency of shape.dependencies ?? []) {
-      commands.push(...taskCommands(tasks, dependency, seen));
+      for (const command of taskCommands(tasks, dependency, seen)) {
+        commands.push(command);
+      }
     }
     if (typeof shape.command === "string") {
       for (const command of commandsOf(shape.command)) follow(command);

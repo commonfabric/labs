@@ -398,6 +398,11 @@ export class CloneForMutationError extends Error {
   get valueKind(): string {
     return this.#valueKind;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }
 
 /** Options for `cloneForMutation()`. */

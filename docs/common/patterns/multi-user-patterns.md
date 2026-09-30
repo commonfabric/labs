@@ -329,6 +329,33 @@ use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
 
+### Checking a DID read from data
+
+A DID a pattern reads from its data — a member list, a message's author, an
+invitation — is only a string, and anything can be written there. Before showing
+one to a person or treating it as the principal a record names, ask
+`isWellFormedDID()`, exported from `commonfabric`. It returns whether the value is
+a DID in DID Core syntax and at most 256 characters long, and narrows it to `DID`
+when it is. A longer DID fails it even when its syntax is valid:
+
+```tsx
+// Shown inside a pattern body.
+const donutFans = new Writable<string[]>([]);
+
+const addFan = action(({ fan }: { fan: unknown }) => {
+  if (!isWellFormedDID(fan)) return;
+  donutFans.push(fan);
+});
+```
+
+- It is the same predicate the runtime decides DID syntax with, so do not
+  restate the syntax in a pattern.
+- It checks syntax alone. A value that passes names no one in particular and says
+  nothing about who wrote it; `currentPrincipal()` is what names the acting user.
+- It reads nothing but its argument, so it works anywhere: in an action or
+  handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
+  call on a reactive value is lifted like a call to any other function.
+
 ### Anti-patterns (do not ship these)
 
 - A "your name" text field used as the current user's identity → resolve `#profile`.
@@ -593,6 +620,50 @@ regardless, and a rule a pattern enforces only by consulting
 `spaceAccess(target)` holds among honest runtimes and nowhere else. For a write
 that must be refused, use a write policy as described above.
 [`space-access.md`](../../features/space-access.md) has the details.
+
+### Granting and revoking access to a space
+
+`grantSpaceAccess(target, principal, level)` sets `principal`'s entry in the
+access list of the space `target`'s value lives in to exactly `level`:
+`"READ"`, `"WRITE"`, or `"OWNER"`, raising or lowering it.
+`revokeSpaceAccess(target, principal)` removes the entry. `target` is a cell in
+the space, as for `spaceAccess(target)`.
+
+**A grant exposes everything already in the space.** Adding a member changes
+no value's label, so the new member can read what was written before they
+were added, not only what comes after. Put data a new member must not see in
+another space before granting.
+
+```tsx
+// Shown at module scope.
+const addMember = handler<
+  { member: DID },
+  { members: Writable<DID[]> }
+>(({ member }, { members }) => {
+  grantSpaceAccess(members, member, "WRITE");
+  members.addUnique(member);
+});
+```
+
+Both calls work only in a handler whose event is a trusted gesture, a person's
+action on a rendered surface; anywhere else, or for an event without one, they
+throw. The person who sent the event must hold `OWNER` in the space, which
+may not be their own Home space, and `principal` must be a DID other than
+theirs, the space's own, and `"*"`. A change that would leave the space with
+no concrete `OWNER` is refused. Every refusal throws. A throw the handler lets
+escape drops its whole transaction, so its other writes are dropped too; the
+call throws before staging anything, so a handler that catches the throw has
+changed nothing for that call.
+
+Granting a level someone already holds, or revoking an entry that is not
+there, does nothing, so a handler that runs again for the same event is safe.
+The change to the access list commits on its own, just before the handler's
+other writes, so if those fail the change still stands; the handler running
+again for the same event repairs that.
+
+Both calls throw on a serving runtime for now.
+[`space-access-changes.md`](../../features/space-access-changes.md) has the
+details.
 
 ## Mapping Shared Lists
 

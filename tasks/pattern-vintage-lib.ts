@@ -99,7 +99,7 @@ export function autoGenerationsToPrune(
     const ordered = [...group].sort((left, right) =>
       right.stamp.localeCompare(left.stamp)
     );
-    doomed.push(...ordered.slice(Math.max(keep, 0)).map((v) => v.path));
+    for (const v of ordered.slice(Math.max(keep, 0))) doomed.push(v.path);
   }
   return doomed.sort();
 }

@@ -92,6 +92,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // A predicate over its argument alone, returning a plain boolean rather than
+  // a reactive value.
+  {
+    exportName: "isWellFormedDID",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // `assertCapture` records one operand of an `assert` body and returns it
   // unchanged. AssertDiagnosticsTransformer emits the calls; authored code
   // does not call it. It takes a resolved value and hands the same value back,
@@ -289,6 +296,20 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // so it is a plain call inside the computation or handler that makes it.
   {
     exportName: "spaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // grantSpaceAccess(target, principal, level) and revokeSpaceAccess(target,
+  // principal) stage an access-list change in the running handler and return
+  // nothing. They build no graph node, so each is a plain call inside the
+  // handler that makes it.
+  {
+    exportName: "grantSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  {
+    exportName: "revokeSpaceAccess",
     category: "ignored",
     reactiveOrigin: false,
   },

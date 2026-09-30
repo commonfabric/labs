@@ -202,9 +202,11 @@ the room is created from the same settings the handlers read.
   ([random space identities](../random-space-identities.md)). A name given to
   `inSpace(name)` names the room as the calling space calls it; two calling
   spaces using one name get two rooms, and nobody can recompute a room's key.
-- **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
-  for a pattern to ask its host to change an access list. Today only hosts can
-  do that (`ACLManager`, the runtime client's `space:setAclEntry`).
+- **Pattern-facing access control.** `commitAdd` and `commitRemove` can change
+  the room's access list with `grantSpaceAccess()` and `revokeSpaceAccess()`
+  on a client runtime
+  ([changing a space's access list](../../features/space-access-changes.md));
+  a serving runtime refuses both.
 - **Leaving without OWNER.** `commitLeave` removes the sender's own access list
   entry even when the sender is only a WRITE member. Whether the memory layer
   lets a non-OWNER remove their own entry, or the host has to do it on their
