@@ -5,10 +5,9 @@
  * A manager piece in the harness's space creates each room in a new space,
  * which only the room's creator may reach. The guest session is granted the
  * harness's space and nothing else, so reading a room is a read of a space it
- * was never granted until the room's owner grants it. Both runs of this file,
- * one per server-execution posture, host the storage server in `enforce`
- * mode; with the harness's default of `off`, the guest would read every room
- * from the start.
+ * was never granted until the room's owner grants it. Under either
+ * server-execution posture the storage server runs in `enforce` mode; with the
+ * harness's default of `off`, the guest would read every room from the start.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -20,6 +19,7 @@ import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
   type PieceAddress,
+  resolveServerExecution,
 } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(
@@ -32,6 +32,9 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 
 /** The gesture a room's `grant` stream requires, as a members surface gives. */
 const CHANGE_ACCESS = { surface: "MembersSurface", action: "ChangeAccess" };
+
+/** Whether this run's harness serves handlers from a serving loop. */
+const SERVER_EXECUTION = resolveServerExecution();
 
 describe("space access across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -66,7 +69,24 @@ describe("space access across runtimes", () => {
     return await owner.link(["rooms", index]);
   }
 
-  it("refuses a non-member's read of a room in its own space", async () => {
+  /**
+   * Has the owner grant the guest access to `room`, after checking that the
+   * guest is refused before the grant.
+   */
+  async function grantGuest(room: PieceAddress): Promise<void> {
+    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
+      `lacks READ on space ${room.space}`,
+    );
+    await owner.send(
+      "grant",
+      { principal: guest.identity.did() },
+      CHANGE_ACCESS,
+      { piece: room },
+    );
+    await harness.settle();
+  }
+
+  it("throws on a non-member's read of a room in its own space", async () => {
     const room = await createRoom("Refused");
 
     expect(room.space).not.toBe(harness.spaceDid);
@@ -76,29 +96,12 @@ describe("space access across runtimes", () => {
     );
   });
 
-  it("reads a room for a member its owner granted", async () => {
+  it("returns a room to a member its owner granted", {
+    ignore: SERVER_EXECUTION,
+  }, async () => {
     const room = await createRoom("Granted");
-    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
-      `lacks READ on space ${room.space}`,
-    );
+    await grantGuest(room);
 
-    await owner.send(
-      "grant",
-      { principal: guest.identity.did() },
-      CHANGE_ACCESS,
-      { piece: room },
-    );
-    await harness.settle();
-
-    if (harness.serverExecution) {
-      // A served handler cannot change an access list: `grantSpaceAccess()`
-      // throws on a serving runtime, and the throw drops the handler's own
-      // write along with it.
-      // TODO(danfuzz): Hold this posture to the other one's outcome once a
-      // served handler can change an access list.
-      expect(await owner.read(["members"], { piece: room })).toEqual([]);
-      return;
-    }
     expect(await owner.read(["members"], { piece: room })).toEqual([
       guest.identity.did(),
     ]);
@@ -106,5 +109,19 @@ describe("space access across runtimes", () => {
     expect(await guest.read(["members"], { piece: room })).toEqual([
       guest.identity.did(),
     ]);
+  });
+
+  it("drops a served grant's handler writes", {
+    ignore: !SERVER_EXECUTION,
+  }, async () => {
+    // `grantSpaceAccess()` throws on a serving runtime, and the throw drops
+    // the rest of the handler's run.
+    // TODO(danfuzz): Remove this case, and the other posture's `ignore`, once
+    // a served handler can change an access list.
+
+    const room = await createRoom("Served");
+    await grantGuest(room);
+
+    expect(await owner.read(["members"], { piece: room })).toEqual([]);
   });
 });

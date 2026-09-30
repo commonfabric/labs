@@ -609,7 +609,9 @@ one, resolves it as a deployed entry point does — the explicit
 `EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
 starts a serving server for ON and a plain one for OFF. The pattern
 `MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
-do this, so each runs on whichever arm the CI role selects.
+do this, so each runs on whichever arm the CI role selects. A test over the
+harness whose expectations differ by arm asks `resolveServerExecution()`,
+beside the harness, which arm that is.
 
 ### Tests that start Deno
 

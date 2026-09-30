@@ -235,6 +235,19 @@ function systemPatternsRoute(): PatternsRoute {
   );
 }
 
+/**
+ * Whether a harness runs the server-execution ON posture, given what its first
+ * session's `cfc.experimental.serverExecution` asks for: that, else the
+ * canonical environment mapping, else the first-party default, as the
+ * header's POSTURE block describes. A test whose expectations differ by
+ * posture resolves it here, with the same `explicit` its harness is given.
+ */
+export function resolveServerExecution(explicit?: boolean): boolean {
+  return explicit ??
+    experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
+    SERVER_EXECUTION_DEFAULT_ENABLED;
+}
+
 const coverageFile =
   `multi-runtime-${Deno.pid}-${crypto.randomUUID()}.pattern-coverage.lcov`;
 
@@ -675,7 +688,6 @@ export class MultiRuntimeHarness {
   readonly spaceDid: DID;
   readonly pieceId: string;
   #server?: HostedServer;
-  #serverExecution: boolean;
   #awaitsServedConsequences: boolean;
 
   private constructor(
@@ -683,24 +695,13 @@ export class MultiRuntimeHarness {
     spaceDid: DID,
     pieceId: string,
     server: HostedServer | undefined,
-    serverExecution: boolean,
     awaitsServedConsequences: boolean,
   ) {
     this.sessions = sessions;
     this.spaceDid = spaceDid;
     this.pieceId = pieceId;
     this.#server = server;
-    this.#serverExecution = serverExecution;
     this.#awaitsServedConsequences = awaitsServedConsequences;
-  }
-
-  /**
-   * Whether this harness runs the server-execution ON posture, resolved as
-   * the header's POSTURE block describes. A test whose expectations differ by
-   * posture reads it here rather than resolving the posture again.
-   */
-  get serverExecution(): boolean {
-    return this.#serverExecution;
   }
 
   static async create(
@@ -722,9 +723,7 @@ export class MultiRuntimeHarness {
     const explicitServerExecution = typeof firstSession === "string"
       ? undefined
       : firstSession.cfc?.experimental?.serverExecution;
-    const serverExecutionOn = explicitServerExecution ??
-      experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
-      SERVER_EXECUTION_DEFAULT_ENABLED;
+    const serverExecutionOn = resolveServerExecution(explicitServerExecution);
     const serve = (request: Request) => systemPatternsRoute().serve(request);
     const { aclMode } = options;
     const server = options.apiUrl !== undefined
@@ -829,7 +828,6 @@ export class MultiRuntimeHarness {
         spaceDid,
         pieceId,
         server,
-        serverExecutionOn,
         server === undefined || serverExecutionOn,
       );
     } catch (error) {

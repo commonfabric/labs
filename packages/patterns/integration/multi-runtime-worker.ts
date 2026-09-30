@@ -568,8 +568,8 @@ const handlers: Record<
   // (own-write-race repro).
   async set({ path, value, idle: doIdle, piece }) {
     const runtime = controller().runtime;
-    const tx = runtime.edit();
     let cell = await resultAt(piece);
+    const tx = runtime.edit();
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never) as Cell<any>;
     }
