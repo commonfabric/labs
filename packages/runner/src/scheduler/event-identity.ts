@@ -1,3 +1,4 @@
+import type { DID } from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -7,13 +8,13 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 // only as long as the transaction object; retries of the sending handler
 // run in a NEW transaction and therefore mint fresh ids (spec §7.6: each
 // attempt's launches are tied to that attempt).
-const txEventKeys = new WeakMap<object, { key: string; counter: number }>();
+const txOriginStates = new WeakMap<object, { key: string; counter: number }>();
 
 function originStateFor(tx: object): { key: string; counter: number } {
-  let state = txEventKeys.get(tx);
+  let state = txOriginStates.get(tx);
   if (!state) {
     state = { key: crypto.randomUUID(), counter: 0 };
-    txEventKeys.set(tx, state);
+    txOriginStates.set(tx, state);
   }
   return state;
 }
@@ -98,6 +99,43 @@ export function scopeCallerEventId(
       scope: eventLink.scope,
       session,
       space: eventLink.space,
+    })
+  }`;
+}
+
+/**
+ * Derives the event key a handler reads through `eventKey()`: a stable name
+ * for one event as one actor sent it to one stream. Every run of the same event
+ * derives the same key, in any process, so a handler can use it as an
+ * idempotence key or as the address of what the event creates.
+ *
+ * The durable event id alone is not enough. It is visible to anyone who can
+ * read the stream, and after the stream's watermark passes it, the same raw id
+ * is admitted again as a new event. Binding the actor in means a principal who
+ * replays another's id gets a key of their own, never the victim's. Binding the
+ * stream in keeps two handlers that receive one id apart, as it does for
+ * `scopeCallerEventId()`.
+ *
+ * An `actor` of `undefined`, a served run no principal sent, binds to `null`.
+ * The hash is type-tagged, so `null` equals no DID, and in particular not the
+ * serving runtime's own. The key carries no trust: it is runtime output, and
+ * what it identifies is only that one event is one event.
+ */
+export function deriveEventKey(
+  eventId: string,
+  actor: DID | undefined,
+  eventLink: NormalizedFullLink,
+): string {
+  return `evk:${
+    hashStringOf({
+      actor: actor ?? null,
+      event: eventId,
+      stream: {
+        id: eventLink.id,
+        path: [...eventLink.path],
+        scope: eventLink.scope,
+        space: eventLink.space,
+      },
     })
   }`;
 }

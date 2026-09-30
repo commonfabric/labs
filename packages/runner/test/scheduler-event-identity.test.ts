@@ -4,6 +4,7 @@ import type { EnsurePieceVerdict } from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import type { Runtime } from "../src/runtime.ts";
 import {
+  deriveEventKey,
   mintEventId,
   scopeCallerEventId,
 } from "../src/scheduler/event-identity.ts";
@@ -150,6 +151,52 @@ describe("scheduler event identity", () => {
     expect(scopeCallerEventId("inv", "1:ses", eventLink)).not.toBe(
       scopeCallerEventId("inv:1", "ses", eventLink),
     );
+  });
+
+  describe("deriveEventKey()", () => {
+    const alice = "did:key:z6MkEventKeyAlice" as const;
+    const bob = "did:key:z6MkEventKeyBob" as const;
+    const service = "did:key:z6MkEventKeyService" as const;
+
+    it("returns the same `evk:` key for the same event, actor and stream", () => {
+      const key = deriveEventKey("evt:one", alice, eventLink);
+      expect(key).toMatch(/^evk:./);
+      expect(deriveEventKey("evt:one", alice, { ...eventLink })).toBe(key);
+    });
+
+    it("returns different keys for different event ids", () => {
+      expect(deriveEventKey("evt:one", alice, eventLink)).not.toBe(
+        deriveEventKey("evt:two", alice, eventLink),
+      );
+    });
+
+    it("returns different keys for one event id under two actors", () => {
+      expect(deriveEventKey("evt:one", alice, eventLink)).not.toBe(
+        deriveEventKey("evt:one", bob, eventLink),
+      );
+    });
+
+    it("returns a key for no actor that no DID shares, the service's included", () => {
+      const none = deriveEventKey("evt:one", undefined, eventLink);
+      expect(none).not.toBe(deriveEventKey("evt:one", service, eventLink));
+      expect(none).not.toBe(deriveEventKey("evt:one", alice, eventLink));
+    });
+
+    it("returns different keys for one event id on streams differing by id, path, scope or space", () => {
+      const key = deriveEventKey("evt:one", alice, eventLink);
+      const others: NormalizedFullLink[] = [
+        { ...eventLink, id: "of:other-stream" },
+        { ...eventLink, path: ["a"] },
+        { ...eventLink, scope: "user" },
+        {
+          ...eventLink,
+          space: "did:key:z6MkOtherEventIdentity" as MemorySpace,
+        },
+      ];
+      for (const other of others) {
+        expect(deriveEventKey("evt:one", alice, other)).not.toBe(key);
+      }
+    });
   });
 
   it("threads explicit event ids into queued events", () => {
