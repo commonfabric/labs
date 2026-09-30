@@ -153,29 +153,32 @@ function addressKey(address: PieceAddress): string {
  * Opening a piece other than the attached one starts it in this runtime, as
  * the attached piece was started, and syncs it from the space it lives in.
  * Throws the server's refusal when this runtime's identity may not read that
- * space.
+ * space, on the first command to address the piece and on every later one.
  */
 async function resultAt(address: unknown): Promise<Cell<any>> {
   if (address === undefined) return result();
   const { id, space } = address as PieceAddress;
   const key = addressKey({ id, space });
-  const known = addressedResults.get(key);
-  if (known) return known;
-  const pieces = controller();
-  const { runtime } = pieces;
-  let opened: Cell<any>;
-  try {
-    opened = await pieces.getPieceCell(
-      runtime.getCellFromEntityId(space as MemorySpace, id),
-      true,
-    );
-  } catch (error) {
-    // A space that refuses this session syncs as one holding no data, and
-    // the refusal is what says why.
-    throw runtime.storageManager.authorizationError?.(space as MemorySpace) ??
-      error;
+  const { runtime } = controller();
+  // A denied space reads as one holding no data, or as whatever this runtime
+  // held of it before the denial, so the refusal is asked for rather than
+  // waited on.
+  const refusal = () =>
+    runtime.storageManager.authorizationError?.(space as MemorySpace);
+  let opened = addressedResults.get(key);
+  if (!opened) {
+    try {
+      opened = await controller().getPieceCell(
+        runtime.getCellFromEntityId(space as MemorySpace, id),
+        true,
+      );
+    } catch (error) {
+      throw refusal() ?? error;
+    }
+    addressedResults.set(key, opened);
   }
-  addressedResults.set(key, opened);
+  const refused = refusal();
+  if (refused) throw refused;
   return opened;
 }
 

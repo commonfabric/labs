@@ -10,20 +10,28 @@ import {
   handler,
   NAME,
   pattern,
+  revokeSpaceAccess,
   type Stream,
   UI,
   type VNode,
   Writable,
 } from "commonfabric";
 
-export interface GrantEvent {
+export interface MemberEvent {
   principal: DID;
 }
 
-const grant = handler<GrantEvent, { members: Writable<DID[]> }>(
+const grant = handler<MemberEvent, { members: Writable<DID[]> }>(
   (event, { members }) => {
     grantSpaceAccess(members, event.principal, "READ");
-    members.push(event.principal);
+    members.addUnique(event.principal);
+  },
+);
+
+const revoke = handler<MemberEvent, { members: Writable<DID[]> }>(
+  (event, { members }) => {
+    revokeSpaceAccess(members, event.principal);
+    members.removeByValue(event.principal);
   },
 );
 
@@ -39,7 +47,10 @@ export interface RoomOutput {
   members: DID[];
 
   /** Grants `principal` READ in this piece's space, as a trusted gesture. */
-  grant: Stream<GrantEvent>;
+  grant: Stream<MemberEvent>;
+
+  /** Revokes `principal`'s access to this piece's space, as a trusted gesture. */
+  revoke: Stream<MemberEvent>;
 }
 
 export default pattern<RoomInput, RoomOutput>(({ title, members }) => ({
@@ -52,4 +63,5 @@ export default pattern<RoomInput, RoomOutput>(({ title, members }) => ({
   title,
   members,
   grant: grant({ members }),
+  revoke: revoke({ members }),
 }));

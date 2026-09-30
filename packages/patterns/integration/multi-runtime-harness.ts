@@ -473,8 +473,9 @@ export class MultiRuntimeSession {
    * Pass `piece` to read from another piece's result instead: one living in a
    * space of its own, say, which the harness's piece holds a link to. Its
    * address is what {@link link} returns for that link. The first command in
-   * this session to address a piece starts it here and syncs it, and throws
-   * when this session's identity may not read the space it lives in.
+   * this session to address a piece starts it here and syncs it. Each one
+   * throws the server's refusal once this session's identity may not read the
+   * space the piece lives in, whether it never could or has been revoked.
    */
   async read(
     path: (string | number)[] = [],

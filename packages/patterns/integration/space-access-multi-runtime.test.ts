@@ -111,6 +111,31 @@ describe("space access across runtimes", () => {
     ]);
   });
 
+  it("throws on a read of a room after its owner revokes the reader", {
+    ignore: SERVER_EXECUTION,
+  }, async () => {
+    // The guest's runtime already holds the room when the revoke lands, so
+    // the read that follows has data to return and nothing of its own that
+    // fails.
+
+    const room = await createRoom("Revoked");
+    await grantGuest(room);
+    expect(await guest.read(["title"], { piece: room })).toBe("Revoked");
+
+    await owner.send(
+      "revoke",
+      { principal: guest.identity.did() },
+      CHANGE_ACCESS,
+      { piece: room },
+    );
+    await harness.settle();
+
+    expect(await owner.read(["members"], { piece: room })).toEqual([]);
+    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
+      "memory session revoked: unauthorized",
+    );
+  });
+
   it("drops a served grant's handler writes", {
     ignore: !SERVER_EXECUTION,
   }, async () => {
