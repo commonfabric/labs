@@ -357,6 +357,12 @@ export class Client {
   #authenticated = new Map<string, Promise<string>>();
 
   /**
+   * Per authenticated key, the timer that renews its authentication before
+   * the lease the server granted runs out.
+   */
+  #renewals = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
    * The keys that have signed the challenge `#sessionOpenAuthContext` holds.
    * A challenge accepts each key once, so a key in here authenticates over a
    * challenge it asks for.
@@ -456,6 +462,7 @@ export class Client {
     this.#connected = false;
     this.#noteStateChange();
     this.#cancelReconnectDelay?.();
+    this.#cancelRenewals();
     this.#rejectPending(new Error("memory client closed"));
     await Promise.all([...this.#spaces].map((space) => space.close()));
     this.#spaces.clear();
@@ -598,6 +605,7 @@ export class Client {
    * again. Sends nothing for a key this connection has not authenticated.
    */
   async release(did: string): Promise<void> {
+    this.#cancelRenewal(did);
     if (!this.#authenticated.delete(did)) return;
     await this.request({
       type: "connection.release",
@@ -874,6 +882,7 @@ export class Client {
         requestId: this.#nextRequestId(),
         ...signed,
       }, { whileConnected });
+      this.#scheduleRenewal(principal, epoch, result.expiresAt);
       return result.principal;
     })();
     this.#authenticated.set(principal.did, authenticated);
@@ -894,6 +903,53 @@ export class Client {
     }
   }
 
+  /**
+   * Helper for `#authenticate()`, which arms the renewal of `principal`'s
+   * authentication ahead of `expiresAt`, the unix second its lease runs out
+   * at: two minutes ahead, or halfway through a lease shorter than four. A
+   * renewal signs a challenge asked for outright, since the one held may be
+   * one the key has signed. A renewal the server refuses for good ends the
+   * sessions mounted as the key, as a refused reopen ends a session.
+   */
+  #scheduleRenewal(
+    principal: SessionPrincipal,
+    epoch: number,
+    expiresAt: number,
+  ): void {
+    this.#cancelRenewal(principal.did);
+    const leaseMs = expiresAt * 1000 - Date.now();
+    const delay = Math.max(0, leaseMs - Math.min(120_000, leaseMs / 2));
+    const timer = setTimeout(() => {
+      this.#renewals.delete(principal.did);
+      if (this.#closed || !this.#connected || epoch !== this.#connectionEpoch) {
+        return;
+      }
+      this.#authenticated.delete(principal.did);
+      void this.#authenticate(principal, false, true).catch((error) => {
+        if (!isPermanentAuthorizationError(error)) return;
+        for (const session of [...this.#spaces]) {
+          if (session.principal === principal.did) {
+            session.handleConnectionFailure(error);
+          }
+        }
+      });
+    }, delay);
+    this.#renewals.set(principal.did, timer);
+  }
+
+  #cancelRenewal(did: string): void {
+    const timer = this.#renewals.get(did);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.#renewals.delete(did);
+    }
+  }
+
+  #cancelRenewals(): void {
+    for (const timer of this.#renewals.values()) clearTimeout(timer);
+    this.#renewals.clear();
+  }
+
   /** Waits for the transport handshake and restoration of existing sessions. */
   async restoreConnection(): Promise<void> {
     await this.#ensureConnected();
@@ -904,6 +960,7 @@ export class Client {
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
+    this.#cancelRenewals();
     this.#challengeSigners.clear();
     // Signed opens waiting on the old connection's chain settle on their
     // own, as stale, and the restores that follow this handshake must not
@@ -1346,6 +1403,11 @@ export class SpaceSession {
 
   get sessionToken(): string | undefined {
     return this.#sessionToken;
+  }
+
+  /** DID of the key this session acts as, when it was mounted with one. */
+  get principal(): string | undefined {
+    return typeof this.#auth === "object" ? this.#auth.did : undefined;
   }
 
   get serverSeq(): number {

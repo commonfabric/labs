@@ -1903,6 +1903,14 @@ export type ConnectionAuthRequest = {
 export type ConnectionAuthResult = {
   /** The DID the connection may now name in its requests. */
   principal: string;
+
+  /**
+   * The unix second the authentication runs out at: the statement's `exp`,
+   * capped by the server. Requests naming the principal are refused from
+   * then on, and sessions opened as it are sent nothing more, until a new
+   * `connection.auth` renews it.
+   */
+  expiresAt: number;
 };
 
 /** Asks for a challenge a later `connection.auth` on this connection signs. */

@@ -310,6 +310,12 @@ const DEFAULT_SESSION_OPEN_CHALLENGE_TTL_SECONDS = 300;
 export const MAX_CONNECTION_PRINCIPALS = 64;
 
 /**
+ * The longest a `connection.auth` authenticates its key for, in seconds. A
+ * statement asking for more is admitted for this long.
+ */
+export const MAX_CONNECTION_AUTH_LEASE_SECONDS = 3600;
+
+/**
  * Unexpired challenges one connection holds. Issuing one past it retires the
  * oldest.
  */
@@ -702,6 +708,16 @@ type SessionOpenChallengeState = SessionOpenChallenge & {
 type SessionHandle = {
   space: string;
   sessionId: string;
+
+  /**
+   * The authenticated principal the session was opened as by name, and the
+   * unix second the lease it lives under runs out at; both absent for a
+   * session a signed open opened. The lease is the principal's as it stood
+   * when the session opened or the principal last renewed, and a release of
+   * the principal leaves it standing.
+   */
+  principal?: string;
+  leaseEnd?: number;
 };
 
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
@@ -893,8 +909,11 @@ class Connection {
   /** Every unexpired challenge issued on this connection, oldest first. */
   #challenges = new Map<string, ConnectionChallengeState>();
 
-  /** The principals `connection.auth` has authenticated and nothing released. */
-  #principals = new Set<string>();
+  /**
+   * The principals `connection.auth` has authenticated and nothing released,
+   * each with the unix second its lease runs out at.
+   */
+  #principals = new Map<string, { leaseEnd: number }>();
 
   /**
    * Settles once every frame that names no space, and every frame handed
@@ -978,12 +997,21 @@ class Connection {
     this.#send(response);
   }
 
-  addSession(space: string, sessionId: string): void {
+  addSession(space: string, sessionId: string, principal?: string): void {
     const key = sessionKey(space, sessionId);
     if (this.#sessions.has(key)) {
       return;
     }
-    this.#sessions.set(key, { space, sessionId });
+    const lease = principal === undefined
+      ? undefined
+      : this.#principals.get(principal);
+    this.#sessions.set(key, {
+      space,
+      sessionId,
+      ...(principal === undefined || lease === undefined
+        ? {}
+        : { principal, leaseEnd: lease.leaseEnd }),
+    });
   }
 
   revokeSession(
@@ -1023,9 +1051,17 @@ class Connection {
     return challenge;
   }
 
-  /** Whether `connection.auth` has authenticated `principal` here. */
+  /** Whether `connection.auth` has authenticated `principal` here, and its
+   *  lease has not run out. */
   hasPrincipal(principal: string): boolean {
-    return this.#principals.has(principal);
+    const held = this.#principals.get(principal);
+    return held !== undefined && held.leaseEnd > this.#server.nowSeconds();
+  }
+
+  /** Whether the session lives under a lease that has run out. */
+  #leaseExpired(handle: SessionHandle): boolean {
+    return handle.leaseEnd !== undefined &&
+      handle.leaseEnd <= this.#server.nowSeconds();
   }
 
   /** Ends the authentication of `principal`, if it has one. */
@@ -1088,7 +1124,8 @@ class Connection {
 
   /**
    * Records that `issuer`'s `connection.auth` over `challenge` verified as
-   * `principal`, which the connection's later requests may name. Throws an
+   * `principal`, which the connection's later requests may name until
+   * `leaseEnd`; a principal already held has its lease replaced. Throws an
    * `AuthorizationError` when the connection already holds its limit of
    * principals and `principal` is not among them.
    */
@@ -1096,6 +1133,7 @@ class Connection {
     principal: string,
     issuer: string,
     challenge: SessionOpenChallenge,
+    leaseEnd: number,
   ): void {
     if (
       !this.#principals.has(principal) &&
@@ -1107,7 +1145,17 @@ class Connection {
       );
     }
     this.#challenges.get(challenge.value)?.acceptedFor.add(issuer);
-    this.#principals.add(principal);
+    this.#principals.set(principal, { leaseEnd });
+    // The sessions opened as the principal take the renewed lease, and one
+    // whose lease had run out is evaluated again for whatever it missed.
+    for (const handle of this.#sessions.values()) {
+      if (handle.principal !== principal) continue;
+      if (this.#leaseExpired(handle)) {
+        this.#server.markSessionForFullResync(handle.space, handle.sessionId);
+        this.#server.markSpaceDirty(handle.space);
+      }
+      handle.leaseEnd = leaseEnd;
+    }
   }
 
   sessionOpenAuthContext(message: SessionOpenRequest): SessionOpenAuthContext {
@@ -1288,18 +1336,31 @@ class Connection {
     space: string,
     sessionId: string,
   ): boolean {
-    if (this.hasSession(space, sessionId)) {
-      return true;
+    const handle = this.#sessions.get(sessionKey(space, sessionId));
+    if (handle === undefined) {
+      this.#send({
+        type: "response",
+        requestId,
+        error: toError(
+          "SessionError",
+          "Session is not open on this connection",
+        ),
+      });
+      return false;
     }
-    this.#send({
-      type: "response",
-      requestId,
-      error: toError(
-        "SessionError",
-        "Session is not open on this connection",
-      ),
-    });
-    return false;
+    if (this.#leaseExpired(handle)) {
+      // Renewable: a `connection.auth` for the principal restores the
+      // session, so the refusal is marked as one a retry heals.
+      const error = toError(
+        "AuthorizationError",
+        `memory authentication lease of ${handle.principal} has run out; ` +
+          "renew it with `connection.auth`",
+      );
+      error.retriable = true;
+      this.#send({ type: "response", requestId, error });
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1444,7 +1505,11 @@ class Connection {
       case "session.open": {
         const response = await this.#server.openSession(parsed, this);
         if (response.ok?.sessionId) {
-          this.addSession(parsed.space, response.ok.sessionId);
+          this.addSession(
+            parsed.space,
+            response.ok.sessionId,
+            parsed.principal,
+          );
         }
         this.#send(response);
         return;
@@ -1712,9 +1777,15 @@ class Connection {
     }
 
     let processed = 0;
-    for (const { space: sessionSpace, sessionId } of this.#sessions.values()) {
+    for (const handle of this.#sessions.values()) {
+      const { space: sessionSpace, sessionId } = handle;
       if (this.#closed) {
         return processed;
+      }
+      // A session under a lease that has run out is sent nothing until the
+      // lease is renewed, which evaluates it again in full.
+      if (this.#leaseExpired(handle)) {
+        continue;
       }
       // A construction intentionally reuses one authenticated session id in
       // every space. Dirty refresh is still space-specific: syncing that id
@@ -3818,11 +3889,21 @@ export class Server {
           "memory connection.auth names no principal",
         );
       }
-      connection.admitPrincipal(principal, issuer, context.challenge);
+      // The lease is what the statement asks for, capped. Its `exp` was
+      // verified to be a number by the authorizer; anything else takes the
+      // cap.
+      const asked = message.invocation?.exp;
+      const leaseEnd = Math.min(
+        typeof asked === "number" && Number.isFinite(asked)
+          ? asked
+          : Number.POSITIVE_INFINITY,
+        this.nowSeconds() + MAX_CONNECTION_AUTH_LEASE_SECONDS,
+      );
+      connection.admitPrincipal(principal, issuer, context.challenge, leaseEnd);
       return {
         type: "response",
         requestId: message.requestId,
-        ok: { principal },
+        ok: { principal, expiresAt: leaseEnd },
       };
     } catch (error) {
       const wireError = toError(

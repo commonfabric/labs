@@ -1112,6 +1112,8 @@ interface ConnectionAuthRequest {
 /** `ok` of the response. */
 interface ConnectionAuthResult {
   principal: DID;
+  /** Unix second the authentication runs out at. */
+  expiresAt: number;
 }
 
 interface ConnectionChallengeRequest {
@@ -1148,10 +1150,18 @@ refusal is permanent. One challenge accepts several keys, once each, so
 authenticating two keys needs no ordering between them. A client holding no
 usable challenge asks for one with `connection.challenge`.
 
-An authenticated principal stays authenticated until the connection closes
-or a `connection.release` names it. A connection holds at most 64, and a
-`connection.auth` past that is refused, permanently, until one is released.
-Sessions a principal opened stay open after its release.
+An authentication is a lease. It runs out at the invocation's `exp`, or an
+hour after it was accepted, whichever is sooner, and the response says
+which. From then on a `session.open` naming the principal is refused, a
+request on a session opened as it is refused with a `retriable`
+`AuthorizationError`, and such a session is sent no `session/effect`. A new
+`connection.auth` for the same key, over a challenge of its own, renews the
+lease: the sessions are served again, each evaluated in full so nothing it
+missed is lost. A client renews ahead of the end. A `connection.release`
+ends the authentication early and leaves the sessions the principal opened
+under the lease they had. A connection holds at most 64 principals, and a
+`connection.auth` for a new one past that is refused, permanently, until one
+is released.
 
 A `session.open` naming a principal the connection has not authenticated is
 refused with a permanent `AuthorizationError`. One naming an authenticated

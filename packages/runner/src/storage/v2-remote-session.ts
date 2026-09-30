@@ -132,6 +132,12 @@ const storageAddressForMemoryHost = (host: URL): URL => {
 export const SESSION_OPEN_TTL_SECONDS = 300;
 
 /**
+ * Lease a signed `connection.auth` asks for, in seconds: the server caps it
+ * at its own limit, and the client renews ahead of whatever it granted.
+ */
+export const CONNECTION_AUTH_LEASE_SECONDS = 3600;
+
+/**
  * Builds the per-space storage-endpoint resolver: a space present in
  * `spaceHostMap` resolves against that host's origin, everything else
  * against `defaultHost`. Host selection lives here, next to the
@@ -523,7 +529,7 @@ export async function createSignedConnectionAuth(
     args: { protocol: MEMORY_PROTOCOL },
     challenge: context.challenge.value,
     iat,
-    exp: iat + SESSION_OPEN_TTL_SECONDS,
+    exp: iat + CONNECTION_AUTH_LEASE_SECONDS,
   };
   const signature = await signer.sign(hashOf(invocation).bytes);
   if (signature.error) {

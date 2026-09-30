@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 
 import { defer } from "@commonfabric/utils/defer";
 
@@ -218,6 +219,58 @@ describe("Client connection authentication", () => {
       } finally {
         await client.close();
         await server.close();
+      }
+    });
+  });
+
+  describe("the authentication lease", () => {
+    it("renews a key's authentication ahead of the lease running out", async () => {
+      // The key's statements ask for 300 seconds; the renewal is due two
+      // minutes ahead of each lease's end, and the sessions keep working
+      // past the end of the first. Signing takes a turn of its own, so
+      // each renewal is waited for by the `connection.auth` it sends.
+      const time = new FakeTime();
+      const server = createServer("renewal");
+      const inner = new ServerTransport(server);
+      let renewed = defer<void>();
+      const transport: Transport = {
+        async send(payload) {
+          await inner.send(payload);
+          if (payload.includes('"connection.auth"')) renewed.resolve();
+        },
+        close: () => inner.close(),
+        setReceiver: (receiver) => inner.setReceiver(receiver),
+        setCloseReceiver: (receiver) => inner.setCloseReceiver(receiver),
+      };
+      try {
+        const client = await connect({ transport });
+        try {
+          const session = await client.mount(SPACES[0], {}, principalOf(alice));
+          inner.clearSent();
+          renewed = defer<void>();
+          await time.tickAsync(179_000);
+          expect(inner.sentTypes).toEqual([]);
+          await time.tickAsync(2_000);
+          await renewed.promise;
+          expect(inner.sentTypes).toEqual([
+            "connection.challenge",
+            "connection.auth",
+          ]);
+          // Past the first lease's end, the session is still served, and
+          // the next renewal has been sent.
+          renewed = defer<void>();
+          await time.tickAsync(200_000);
+          await renewed.promise;
+          expect((await session.queryGraph({ roots: [] })).serverSeq).toBe(0);
+          expect(
+            inner.sentTypes.filter((type) => type === "connection.auth"),
+          ).toHaveLength(2);
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await server.close();
+        time.restore();
       }
     });
   });

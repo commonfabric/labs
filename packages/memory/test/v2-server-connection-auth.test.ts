@@ -8,9 +8,14 @@ import type {
   ConnectionChallengeResult,
   ResponseMessage,
   SessionOpenResult,
+  WatchSetResult,
 } from "../v2.ts";
 import { verifyConnectionAuthorization } from "../v2/connection-auth.ts";
-import { MAX_CONNECTION_PRINCIPALS, Server } from "../v2/server.ts";
+import {
+  MAX_CONNECTION_AUTH_LEASE_SECONDS,
+  MAX_CONNECTION_PRINCIPALS,
+  Server,
+} from "../v2/server.ts";
 import { verifySessionOpenAuthorization } from "../v2/session-open-auth.ts";
 import { alice, bob, mallory, space } from "./principal.ts";
 import {
@@ -132,9 +137,9 @@ describe("connection authentication", () => {
       const server = createServer("accepts");
       try {
         const peer = await connectPeer(server);
-        expect((await authenticate(peer, alice)).ok).toEqual({
-          principal: alice.did(),
-        });
+        expect((await authenticate(peer, alice)).ok?.principal).toBe(
+          alice.did(),
+        );
       } finally {
         await server.close();
       }
@@ -211,12 +216,12 @@ describe("connection authentication", () => {
       const server = createServer("two-keys");
       try {
         const peer = await connectPeer(server);
-        expect((await authenticate(peer, alice)).ok).toEqual({
-          principal: alice.did(),
-        });
-        expect((await authenticate(peer, space)).ok).toEqual({
-          principal: space.did(),
-        });
+        expect((await authenticate(peer, alice)).ok?.principal).toBe(
+          alice.did(),
+        );
+        expect((await authenticate(peer, space)).ok?.principal).toBe(
+          space.did(),
+        );
       } finally {
         await server.close();
       }
@@ -275,6 +280,111 @@ describe("connection authentication", () => {
     });
   });
 
+  describe("the authentication lease", () => {
+    // The clock is the server's; the lease is read against it.
+
+    const watchDoc = (peer: WirePeer, space: string, sessionId: string) =>
+      request<WatchSetResult>(peer, {
+        type: "session.watch.set",
+        space,
+        sessionId,
+        watches: [{
+          id: "watch",
+          kind: "graph",
+          query: {
+            roots: [{
+              id: "of:lease-doc",
+              selector: { path: [], schema: false },
+            }],
+          },
+        }],
+      });
+
+    it("runs out at the statement's `exp`, capped at an hour", async () => {
+      const clock = { now: 1_000_000 };
+      const server = createServer("lease-cap", { clock });
+      try {
+        const peer = await connectPeer(server);
+        const asked = await authenticate(peer, alice, {
+          exp: clock.now + 7200,
+        }, clock);
+        expect(asked.ok?.expiresAt).toBe(
+          clock.now + MAX_CONNECTION_AUTH_LEASE_SECONDS,
+        );
+        const other = await connectPeer(server);
+        const shorter = await authenticate(other, alice, {
+          exp: clock.now + 60,
+        }, clock);
+        expect(shorter.ok?.expiresAt).toBe(clock.now + 60);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses, as retriable, a `session.open` and the requests of open sessions once it has run out, and sends those sessions nothing", async () => {
+      const clock = { now: 1_000_000 };
+      const server = createServer("lease-out", { clock });
+      try {
+        const watcher = await connectPeer(server);
+        const writer = await connectPeer(server);
+        await authenticate(watcher, alice, { exp: clock.now + 60 }, clock);
+        await authenticate(writer, space, {}, clock);
+        const watching = await open(watcher, SPACE, alice.did());
+        const writing = await open(writer, SPACE, space.did());
+        await watchDoc(watcher, SPACE, watching.ok!.sessionId);
+
+        clock.now += 61;
+        const refusedOpen = await open(watcher, OTHER_SPACE, alice.did());
+        expect(refusedOpen.error?.name).toBe("AuthorizationError");
+        const refusedQuery = await query(
+          watcher,
+          SPACE,
+          watching.ok!.sessionId,
+        );
+        expect(refusedQuery.error).toEqual({
+          name: "AuthorizationError",
+          message: `memory authentication lease of ${alice.did()} has run ` +
+            "out; renew it with `connection.auth`",
+          retriable: true,
+        });
+        await request(writer, {
+          type: "transact",
+          space: SPACE,
+          sessionId: writing.ok!.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:lease-doc",
+              value: { value: { n: 1 } },
+            }],
+          },
+        });
+        await server.accessForTestingOnly.flushScheduledSessions();
+        expect(watcher.messages).toEqual([]);
+
+        // Renewed, the session is served again, and what it missed
+        // reaches it.
+        const renewed = await authenticate(watcher, alice, {
+          challenge: (await request<ConnectionChallengeResult>(watcher, {
+            type: "connection.challenge",
+          })).ok!.challenge.value,
+          exp: clock.now + 60,
+        }, clock);
+        expect(renewed.ok?.expiresAt).toBe(clock.now + 60);
+        expect((await query(watcher, SPACE, watching.ok!.sessionId)).ok)
+          .toBeDefined();
+        await server.accessForTestingOnly.flushScheduledSessions();
+        expect(watcher.messages.map((message) => message.type)).toEqual([
+          "session/effect",
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
   describe("connection.challenge", () => {
     it("responds with a challenge the connection's next `connection.auth` may sign", async () => {
       const clock = { now: 1_000_000 };
@@ -290,7 +400,7 @@ describe("connection authentication", () => {
         const accepted = await authenticate(peer, alice, {
           challenge: fresh.ok!.challenge.value,
         }, clock);
-        expect(accepted.ok).toEqual({ principal: alice.did() });
+        expect(accepted.ok?.principal).toBe(alice.did());
       } finally {
         await server.close();
       }
