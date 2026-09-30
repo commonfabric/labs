@@ -175,7 +175,12 @@ space DID to its
 [`space` query parameter](../../packages/runner/src/storage/v2-remote-session.ts)
 and Toolshed server runtimes connect through
 [`MEMORY_URL`](../../packages/toolshed/runtime-options.ts). Both current and
-future deployment routers must preserve that contract.
+future deployment routers must preserve that contract. Under the
+[`sharedMemoryConnection`](../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)
+experimental flag a session's connection carries several spaces and names
+none in its address, which this routing cannot serve; the flag stays off in
+these deployments until a router terminates client connections
+([memory-v2/connection-multiplexing.md](./memory-v2/connection-multiplexing.md)).
 
 ## Existing spaces
 
