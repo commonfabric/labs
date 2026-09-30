@@ -736,10 +736,10 @@ Three escalating options:
    pattern whose identity is a profile cell can be driven without a test seam
    standing in for one. Its storage server checks no access list unless given
    `aclMode`; `enforce`, the mode a deployed toolshed runs, is what a test of
-   who may read which space needs. A session's `read()`, `send()` and the
-   other calls taking a path address the piece the harness opened, or, given
-   `piece`, another piece, such as one living in a space of its own, at the
-   address `link()` returns for a link to it. See
+   who may read which space needs. A session's `read()`, `readRaw()`,
+   `link()`, `send()`, `set()` and `push()` address the piece the harness
+   opened, or, given `piece`, another piece, such as one living in a space of
+   its own, at the address `link()` returns for a link to it. See
    `cfc-group-chat-demo-multi-runtime.test.ts`,
    `profile-create-surface-multi-runtime.test.ts`, and
    `space-access-multi-runtime.test.ts`.
