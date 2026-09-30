@@ -1335,6 +1335,13 @@ export class Runtime {
 
   readonly userIdentityDID: DID;
 
+  /** The creator-only spaces created and not yet recorded, by request key. */
+  get accessForTestingOnly(): {
+    readonly preparedCreatorSpaces: ReadonlyMap<string, MemorySpace>;
+  } {
+    return { preparedCreatorSpaces: this.#preparedCreatorSpaces };
+  }
+
   /**
    * The identity this runtime's in-memory instance keys resolve scoped
    * addresses against (key-vocabulary.md §2): its own authenticated
@@ -4391,9 +4398,14 @@ export class Runtime {
     return this.#preparedCreatorSpaces.get(key);
   }
 
-  /** Forgets the creator-only space {@link createCreatorSpace} made for `key`. */
-  releasePreparedCreatorSpace(key: string): void {
-    this.#preparedCreatorSpaces.delete(key);
+  /**
+   * Forgets the creator-only space {@link createCreatorSpace} made for `key`,
+   * or, when `space` is given, only if that is the space it made.
+   */
+  releasePreparedCreatorSpace(key: string, space?: MemorySpace): void {
+    if (space === undefined || this.#preparedCreatorSpaces.get(key) === space) {
+      this.#preparedCreatorSpaces.delete(key);
+    }
   }
 
   /**

@@ -464,6 +464,16 @@ describe("creator-only-space", () => {
       expect(result.key("rooms").get()).toEqual([]);
     });
 
+    it("keeps no created space in the runtime once its record commits", async () => {
+      const { runtime, registered } = newRuntime(alice);
+      const result = await standUp(runtime, alice, "prepared-released");
+      await result.key("create").send({ name: "room" });
+      await settle(runtime);
+
+      expect(registered).toEqual([roomSpace(result, 0)]);
+      expect(runtime.accessForTestingOnly.preparedCreatorSpaces.size).toBe(0);
+    });
+
     it("reaches the recorded space again on a later run, creating no second one", async () => {
       const { runtime, registered } = newRuntime(alice);
       const result = await standUp(runtime, alice, "rerun");
@@ -545,6 +555,10 @@ describe("creator-only-space", () => {
       const recorded = roomSpace(firstResult, 0);
       expect(roomSpace(firstResult, 1)).toBe(recorded);
       expect([first.registered[0], second.registered[0]]).toContain(recorded);
+      expect(first.runtime.accessForTestingOnly.preparedCreatorSpaces.size)
+        .toBe(0);
+      expect(second.runtime.accessForTestingOnly.preparedCreatorSpaces.size)
+        .toBe(0);
     });
   });
 

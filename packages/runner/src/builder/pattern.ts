@@ -1274,6 +1274,13 @@ function resolveCreatorSpaceTarget(
   const prepared = runtime.preparedCreatorSpace(key);
   if (prepared !== undefined) {
     allocation.set(prepared);
+    // Once the record commits, it is what later runs read, so the runtime's
+    // copy is released. A commit that fails leaves it for the retry.
+    tx.addCommitCallback((_tx, result) => {
+      if (result.error === undefined) {
+        runtime.releasePreparedCreatorSpace(key, prepared);
+      }
+    });
     return optIntoInSpaceMultiSpaceCommit(frame, prepared);
   }
   (frame.pendingCreatorSpaces ??= new Map()).set(key, {
