@@ -364,10 +364,17 @@ export type StoredActivityCounters = WritePolicyAnyOf<ActivityCounters, [
   WriteAuthorizedBy<unknown, typeof commitRemove>,
 ]>;
 
-/** The cell holding the room's activity numbering. */
+/**
+ * The room's activity numbering, kept as one keyed record, `NUMBERING_KEY`,
+ * absent until the first entry. The list around it defaults to empty, so
+ * nothing but the handlers its policy lists ever writes the record.
+ */
 export type ActivityCountersCell = Writable<
-  StoredActivityCounters | Default<typeof NO_ACTIVITY>
+  StoredActivityCounters[] | Default<[]>
 >;
+
+/** The key of the activity numbering's one record. */
+const NUMBERING_KEY = "numbering";
 
 /**
  * The room's roster: members' profiles, as claims. It changes only through
@@ -423,11 +430,17 @@ export interface ChatMessageWindow {
 /** A session's open windows, by the `windowId` its client chose. */
 export type ChatMessageWindows = Record<string, ChatMessageWindow>;
 
-/** A session's windows onto the messages. */
-export type WindowsCell = Writable<
-  | WriteAuthorizedBy<ChatMessageWindows, typeof commitWindow>
-  | Default<Record<PropertyKey, never>>
+/** A session's windows onto the messages, written only by `commitWindow`. */
+export type WindowsValue = WriteAuthorizedBy<
+  ChatMessageWindows,
+  typeof commitWindow
 >;
+
+/**
+ * The cell holding a session's windows, absent until the first opens: only
+ * `commitWindow` writes it, so it has no default for anything else to write.
+ */
+export type WindowsCell = Writable<WindowsValue>;
 
 /** What a room says about itself, as its creator wrote it. */
 export interface AboutRecord {
@@ -530,7 +543,8 @@ const appendActivity = (
   dropFor?: MessageCell,
 ): void => {
   const at = claimTime(usedTimes, clock);
-  const numbering = counters.get() ?? NO_ACTIVITY;
+  const record = counters.elementById(NUMBERING_KEY);
+  const numbering = (record.get() ?? NO_ACTIVITY) as ActivityCounters;
   const horizon = clock - FABRICHAT_POLICY.recentActivityWindowNsec.value;
   const current = (activity.get() ?? []) as ChatRoomActivity[];
   const expired = current.filter((entry) => nsecOf(entry.at) < horizon);
@@ -555,10 +569,11 @@ const appendActivity = (
     entry.set({ seq: numbering.nextSeq, at, requestId, what } as SentActivity);
     activity.addUnique(entry);
   }
-  counters.set({
+  record.set({
     nextSeq: numbering.nextSeq + (at === undefined ? 0 : 1),
     expiredThrough,
-  });
+  } as StoredActivityCounters);
+  counters.addUnique(record);
 };
 
 /** A stored message as the views see it, keyed by its `sentAt`. */
@@ -2141,7 +2156,7 @@ export const FabriChatRoomCore = pattern<
     notices,
   };
   const alsoToMain = new Writable.perSession(false);
-  const windows = new Writable.perSession<ChatMessageWindows>({});
+  const windows = new Writable.perSession<WindowsValue>();
 
   const entries = computed(() => messageEntries(messages));
   const mainEntries = computed(() =>
@@ -2174,7 +2189,7 @@ export const FabriChatRoomCore = pattern<
     policy,
   };
   const expiredThrough = computed(() =>
-    (counters.get() ?? NO_ACTIVITY).expiredThrough
+    ((counters.get() ?? [])[0] ?? NO_ACTIVITY).expiredThrough
   );
   const groupOfItsOwn = computed(() => ownSpace === true && kind === "group");
   const viewerIsOwner = computed(() =>

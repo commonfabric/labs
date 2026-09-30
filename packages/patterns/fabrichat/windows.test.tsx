@@ -102,7 +102,7 @@ export default pattern(() => {
     requests: Writable.of<RequestMemo[]>([]),
     usedTimes: Writable.of<UsedTime[]>([]),
     activity,
-    counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
+    counters: Writable.of<ActivityCounters[]>([]),
     roster,
     left,
     notices,

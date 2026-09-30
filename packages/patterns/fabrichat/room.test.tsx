@@ -116,10 +116,7 @@ export default pattern(() => {
   const requests = Writable.of<RequestMemo[]>([]);
   const usedTimes = Writable.of<UsedTime[]>([]);
   const activity = Writable.of<SentActivity[]>([]);
-  const counters = Writable.of<ActivityCounters>({
-    nextSeq: 1,
-    expiredThrough: 0,
-  });
+  const counters = Writable.of<ActivityCounters[]>([]);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const pendingProfile = Writable.of<TestProfile | undefined>(undefined);
