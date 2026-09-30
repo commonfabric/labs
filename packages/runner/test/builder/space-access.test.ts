@@ -6,7 +6,9 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
@@ -14,10 +16,13 @@ import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { ExecutorHost } from "../../src/executor/host.ts";
 import { stampWaveRunContext } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { ArrivalLog, awaitAdmitted } from "../support/serving-waits.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
 const AUDIENCE = "did:key:z6Mk-runner-space-access-audience";
@@ -59,13 +64,15 @@ describe("spaceAccess()", () => {
 
   /**
    * Returns a function writing a document in the space `owner` is the
-   * identity of, `space` unless given, as that identity.
+   * identity of, `space` unless given, as that identity, on the memory server
+   * `on`, the test's own unless given.
    */
   async function writerFor(
     owner: Identity = spaceSigner,
+    on: Server = server,
   ): Promise<(id: string, value: FabricValue) => Promise<void>> {
     const target = owner.did() as MemorySpace;
-    const client = await connect({ transport: loopback(server) });
+    const client = await connect({ transport: loopback(on) });
     cleanups.push(() => client.close());
     const session = await client.mount(
       target,
@@ -459,20 +466,21 @@ describe("spaceAccess()", () => {
   describe("in a dependent computation", () => {
     const resultSchema = {
       type: "object",
-      properties: { level: { type: "string" } },
+      properties: { level: { type: "string" }, derived: { type: "string" } },
     } as const satisfies JSONSchema;
 
     /**
-     * Runs, in `user`'s home space, a pattern whose one computation returns
-     * `user`'s level in the space of a cell in `space`, and returns the cell
-     * holding that level; `unknown` stands in for `undefined`. The computation
-     * takes the cell as a cell, or with `byValue` as the value it holds.
+     * Runs, in `user`'s home space, a pattern whose computation `level`
+     * returns `user`'s level in the space of a cell in `space`, and returns
+     * the result cell; `unknown` stands in for `undefined`. The computation
+     * takes the cell as a cell, or with `byValue` as the value it holds. A
+     * second computation, `derived`, reads `level`'s value and nothing else.
      */
     async function levelCell(
       runtime: Runtime,
       user: Identity,
       options: { byValue?: boolean } = {},
-    ): Promise<Cell<string>> {
+    ): Promise<Cell<{ level?: string; derived?: string }>> {
       const argumentSchema = {
         type: "object",
         properties: {
@@ -488,8 +496,16 @@ describe("spaceAccess()", () => {
         argumentSchema,
         { type: "string" },
       );
+      const derive = lift(
+        (input: { level?: string }) => `derived:${input.level}`,
+        { type: "object", properties: { level: { type: "string" } } },
+        { type: "string" },
+      );
       const levelPattern = pattern(
-        ({ target }) => ({ level: level({ target }) }),
+        ({ target }) => {
+          const levelOf = level({ target });
+          return { level: levelOf, derived: derive({ level: levelOf }) };
+        },
         argumentSchema,
         resultSchema,
       );
@@ -506,7 +522,7 @@ describe("spaceAccess()", () => {
       const target = runtime.getCell<unknown>(space, "space-access target");
       const result = runtime.run(tx, levelPattern, { target }, resultCell);
       await tx.commit();
-      return result.key("level") as Cell<string>;
+      return result as Cell<{ level?: string; derived?: string }>;
     }
 
     it("writes its value where only its own user reads it", async () => {
@@ -514,11 +530,25 @@ describe("spaceAccess()", () => {
       await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
 
       const runtime = clientRuntime(bob);
-      const level = await levelCell(runtime, bob);
+      const level = (await levelCell(runtime, bob)).key("level");
       await waitForCellValue(runtime, level, (v) => v === "WRITE", {
         stuckLabel: "bob's level to arrive as `WRITE`",
       });
       expect(level.resolveAsCell().getAsNormalizedFullLink().scope).toBe(
+        "user",
+      );
+    });
+
+    it("writes a computation that reads only its value where only its own user reads it", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      const derived = (await levelCell(runtime, bob)).key("derived");
+      await waitForCellValue(runtime, derived, (v) => v === "derived:WRITE", {
+        stuckLabel: "bob's derived value to arrive as `derived:WRITE`",
+      });
+      expect(derived.resolveAsCell().getAsNormalizedFullLink().scope).toBe(
         "user",
       );
     });
@@ -531,13 +561,15 @@ describe("spaceAccess()", () => {
         .getAsNormalizedFullLink().id;
       await (await writerFor())(targetId, { note: "in the space" });
 
-      const bobLevel = await levelCell(bobRuntime, bob, { byValue: true });
+      const bobLevel = (await levelCell(bobRuntime, bob, { byValue: true }))
+        .key("level");
       await waitForCellValue(bobRuntime, bobLevel, (v) => v === "WRITE", {
         stuckLabel: "bob's level to arrive as `WRITE`",
       });
 
       const daveRuntime = clientRuntime(dave);
-      const daveLevel = await levelCell(daveRuntime, dave, { byValue: true });
+      const daveLevel = (await levelCell(daveRuntime, dave, { byValue: true }))
+        .key("level");
       await waitForCellValue(daveRuntime, daveLevel, (v) => v !== undefined, {
         stuckLabel: "dave's level to arrive",
       });
@@ -549,7 +581,7 @@ describe("spaceAccess()", () => {
       await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
 
       const runtime = clientRuntime(bob);
-      const level = await levelCell(runtime, bob);
+      const level = (await levelCell(runtime, bob)).key("level");
       await waitForCellValue(runtime, level, (v) => v === "WRITE", {
         stuckLabel: "bob's level to arrive as `WRITE`",
       });
@@ -570,7 +602,7 @@ describe("spaceAccess()", () => {
       await setAcl({ [alice.did()]: "OWNER" });
 
       const runtime = clientRuntime(dave);
-      const level = await levelCell(runtime, dave);
+      const level = (await levelCell(runtime, dave)).key("level");
       await waitForCellValue(runtime, level, (v) => v === "none", {
         stuckLabel: "dave's level to arrive as `none`",
       });
@@ -585,6 +617,160 @@ describe("spaceAccess()", () => {
       await waitForCellValue(runtime, level, (v) => v === "READ", {
         stuckLabel: "dave's level to follow the grant to `READ`",
       });
+    });
+  });
+
+  describe("downstream of a computation calling it, on a serving loop", () => {
+    // Two principals with different levels demand the same piece, which runs
+    // on the serving loop. `derived` reads `level` and never calls
+    // `spaceAccess()` itself.
+
+    const LEVEL_PATTERN = [
+      "import { computed, pattern, spaceAccess, Writable } from 'commonfabric';",
+      "export default pattern<",
+      "  { anchor: Writable<string> },",
+      "  { level: string; derived: string }",
+      ">(({ anchor }) => {",
+      "  const level = computed(() => spaceAccess(anchor) ?? 'unknown');",
+      "  const derived = computed(() => 'derived:' + level);",
+      "  return { level, derived };",
+      "});",
+    ].join("\n");
+
+    /** Whether any document of the scope instance `scopeKey` holds `needle`. */
+    const instanceHolds = (
+      engine: Engine.Engine,
+      scopeKey: string,
+      needle: string,
+    ): boolean =>
+      (engine.database.prepare(
+        `SELECT id FROM head WHERE scope_key = :scope_key AND op != 'delete'`,
+      ).all({ scope_key: scopeKey }) as { id: string }[]).some(({ id }) =>
+        JSON.stringify(
+          Engine.read(engine, { id, scopeKey } as never)?.value ?? null,
+        ).includes(needle)
+      );
+
+    it("gives each demanding principal their own value of a computation that reads only its value", async () => {
+      const shared = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+      cleanups.push(() => shared.close());
+      const activations = new ArrivalLog<string>();
+      const host = new ExecutorHost({
+        server: shared,
+        serviceIdentity: service.did(),
+        // deno-lint-ignore require-await
+        createRuntime: async () => {
+          const manager = EmulatedStorageManager.connectTo(shared, {
+            as: service,
+          });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: manager,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          return {
+            runtime,
+            dispose: async () => {
+              await runtime.dispose();
+              await manager.close();
+            },
+          };
+        },
+        policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+        ensureSpaceRoots: false,
+        onActivationSettled: (activated, outcome) => {
+          if (outcome === "active") activations.record(activated);
+        },
+      });
+      cleanups.push(() => host.close());
+      const openClient = (user: Identity): Runtime => {
+        const manager = EmulatedStorageManager.connectTo(shared, { as: user });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { serverExecution: true },
+        });
+        cleanups.push(async () => {
+          await runtime.dispose();
+          await manager.close();
+        });
+        return runtime;
+      };
+
+      const writeAsSpace = await writerFor(spaceSigner, shared);
+      await writeAsSpace(`of:${space}`, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      const aliceRuntime = openClient(alice);
+      const engine = await shared.engineForSpace(space);
+      const compiled = await aliceRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: LEVEL_PATTERN }],
+      }, { space });
+      const argument = aliceRuntime.getCell<Record<string, unknown>>(
+        space,
+        "space-access served argument",
+        undefined,
+      );
+      const result = aliceRuntime.getCell<Record<string, unknown>>(
+        space,
+        "space-access served result",
+        compiled.resultSchema,
+      );
+      await argument.sync();
+      await result.sync();
+      {
+        const tx = aliceRuntime.edit();
+        argument.withTx(tx).set({ anchor: "here" });
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      {
+        const tx = aliceRuntime.edit();
+        aliceRuntime.run(tx, compiled, argument, result);
+        expect((await tx.commit()).error).toBeUndefined();
+      }
+      await aliceRuntime.idle();
+      await aliceRuntime.storageManager.synced();
+      const resultId = result.getAsNormalizedFullLink().id;
+
+      for (const user of [bob, carol]) {
+        const runtime = openClient(user);
+        const root = runtime.getCell<Record<string, unknown>>(
+          space,
+          "space-access served result",
+          undefined,
+        );
+        await root.sync();
+        const cancel = root.sink(() => {});
+        cleanups.push(() => Promise.resolve(cancel()));
+      }
+      await activations.matching((activated) => activated === space);
+      await awaitAdmitted(shared, () => {
+        const demanded = host.spaceServer(space)?.demandedIdentitiesOf(
+          resultId,
+        ) ?? [];
+        return [bob, carol].every((user) =>
+          demanded.some((identity) => identity.principal === user.did())
+        );
+      });
+
+      const bobKey = resolveScopeKey("user", { principal: bob.did() });
+      const carolKey = resolveScopeKey("user", { principal: carol.did() });
+      await awaitAdmitted(
+        shared,
+        () =>
+          instanceHolds(engine, bobKey, '"derived:WRITE"') &&
+          instanceHolds(engine, carolKey, '"derived:READ"'),
+      );
+      expect(instanceHolds(engine, bobKey, '"derived:READ"')).toBe(false);
+      expect(instanceHolds(engine, carolKey, '"derived:WRITE"')).toBe(false);
+      // The space instance holds the argument, so the scan reaches it.
+      expect(instanceHolds(engine, "space", '"here"')).toBe(true);
+      expect(instanceHolds(engine, "space", '"derived:')).toBe(false);
     });
   });
 

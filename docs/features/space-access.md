@@ -47,6 +47,12 @@ answer differs by who asks, so its value has to live in a per-user instance; at
 into one shared slot. `spaceAccess()` narrows the scope itself rather than
 leaving it to how the principal was found.
 
+The narrowing carries downstream. A computation that reads only the value of
+one calling `spaceAccess()`, and never calls it itself, reads a per-user
+document, so its own read scope is `user` as well and its value lands in a
+per-user instance too. That holds on a client, and on a serving runtime, where
+two principals demanding the same derived value each get their own.
+
 ## `"none"` and `undefined`
 
 | Answer | When |
