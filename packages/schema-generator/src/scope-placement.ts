@@ -82,6 +82,21 @@ export const scopeInsideUnionError = (scope: string): Error =>
       `a wrapper scopes the whole slot.`,
   );
 
+/**
+ * The error raised when a scope wrapper holds a cell beside another
+ * alternative. The cell's `asCell` entry is then in an `anyOf` branch, where
+ * the scope can scope the slot but not cap the handle, so a read through the
+ * handle could reach a narrower scope's value.
+ */
+export const scopeAroundCellUnionError = (scope: string): Error =>
+  new Error(
+    `A scope wrapper around a cell cannot hold another alternative beside ` +
+      `the cell. \`PerUser<Cell<T>> | null\` would give the slot ` +
+      `\`scope: "${scope}"\` but leave the cell's handle uncapped. Put the ` +
+      `alternative inside the cell (\`PerUser<Cell<T | null>>\`), or make ` +
+      `the property optional (\`prop?: PerUser<Cell<T>>\`).`,
+  );
+
 const walkSlot = (schema: MutableJSONSchema): void => {
   if (!isObjectOrArray(schema)) return;
 

@@ -216,38 +216,88 @@ export default make<Secret>();`,
       });
     });
 
-    for (const nullish of ["null", "undefined"]) {
-      it(`keeps the scope and \`${nullish}\` of a nullable scoped cell's capture`, async () => {
-        const module = await transformed(
-          `import { computed, pattern, UI, Writable, type PerSession } from "commonfabric";
-export default pattern<{ enabled: boolean }>(({ enabled }) => {
-  const confirming: PerSession<Writable<boolean>> | ${nullish} = enabled
-    ? Writable.perSession.of<boolean>(false)
-    : ${nullish};
-  const isConfirming = computed(() => confirming?.get());
-  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
+    it("reads a wrapper around a labeled intersection with its labels in its scope", async () => {
+      // Neither `A & B` nor the labels on it can be told apart from the brand
+      // as one member, so the structure and the labels are read separately.
+      const { output } = patternSchemas(
+        await transformed(
+          `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+export default pattern(() => {
+  const result = computed(
+    (): PerUser<Confidential<A & B, readonly ["owner"]>> => ({ a: "x", b: 1 }),
+  );
+  return { result };
 });`,
-        );
-        const capture = callsNamed(module, "lift")
-          .flatMap((lift) =>
-            (lift.typeArguments![0]! as ts.TypeLiteralNode).members
-          )
-          .find((member) =>
-            member.name?.getText(module) === "confirming"
-          ) as ts.PropertySignature;
-        const [input] = callSchemas(module, "lift");
+        ),
+      );
 
-        expect(capture.type!.getText(module)).toBe(
-          `__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean> | ${nullish}>`,
+      expect((output.properties as Record<string, unknown>).result).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        ifc: { confidentiality: ["owner"] },
+        scope: "user",
+      });
+    });
+
+    it("reads a nullable wrapper around an intersection alike through an alias and written out", async () => {
+      const schemaOf = async (declarations: string, argument: string) =>
+        emittedSchemas(
+          await transformed(
+            `import { toSchema, type PerUser } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+${declarations}
+export const schema = toSchema<${argument}>();`,
+          ),
+        )[0];
+
+      const written = await schemaOf("", "PerUser<A & B> | undefined");
+
+      expect(
+        await schemaOf("type Maybe = PerUser<A & B> | undefined;", "Maybe"),
+      )
+        .toEqual(written);
+      expect(written).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          {
+            type: "object",
+            properties: { a: { type: "string" }, b: { type: "number" } },
+            required: ["a", "b"],
+          },
+        ],
+        scope: "user",
+      });
+    });
+
+    it("refuses a wrapper nested in another of a different scope in an inferred result", async () => {
+      // The checker keeps both scopes' brands on the one value, which no node
+      // names as two wrappers.
+      await expect(transformed(
+        `import { computed, pattern, type PerSession, type PerUser } from "commonfabric";
+interface A { a: string }
+export default pattern(() => {
+  const result = computed((): PerUser<PerSession<A>> => ({ a: "x" }));
+  return { result };
+});`,
+      )).rejects.toThrow(
+        "Nested scope wrappers require a cell boundary between scopes.",
+      );
+    });
+
+    for (const nullish of ["null", "undefined"]) {
+      it(`refuses a scoped cell beside \`${nullish}\`, whose scope would not cap its handle`, async () => {
+        await expect(transformed(
+          `import { toSchema, type Cell, type PerSpace } from "commonfabric";
+export const schema = toSchema<{
+  handle: PerSpace<Cell<{ field: string }>> | ${nullish};
+}>();`,
+        )).rejects.toThrow(
+          "A scope wrapper around a cell cannot hold another alternative",
         );
-        expect((input!.properties as Record<string, unknown>).confirming)
-          .toEqual({
-            anyOf: [
-              { type: "boolean", asCell: ["readonly"] },
-              { type: nullish },
-            ],
-            scope: "session",
-          });
       });
     }
   });

@@ -879,7 +879,8 @@ as a type met again inside itself: by `CommonFabricFormatter` where it claims
 the type for more than the brand, as for the labels of
 `PerUser<Confidential<T, […]>>`, whose CFC parts pass over the brand
 (`cfcCarriedParts`), and otherwise by the formatters after it
-(`formatStructure`). The payload of a wrapper found by name is
+(`formatStructure`), with the labels of any CFC metadata carrier it holds, as
+`Confidential<A & B, […]>` does. The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
@@ -898,13 +899,19 @@ non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
-`{ type: "string", scope: "user" }`. A wrapper around a cell beside `null` or
-`undefined` is one around the cell and those alternatives, and scopes the whole
-slot as any wrapper beside them does: `PerSession<Writable<boolean>> | null` →
-`{ anyOf: [{ type: "null" }, { type: "boolean", asCell: ["cell"] }], scope:
-"session" }`. A nested scope **without an intervening
+`{ type: "string", scope: "user" }`. A wrapper around a cell **beside another
+alternative throws** (`A scope wrapper around a cell cannot hold another
+alternative beside the cell.`), `null` and `undefined` included, as in
+`PerSpace<Cell<T>> | null` or `PerSpace<Cell<T> | null>`: the cell's `asCell`
+entry would sit in an `anyOf` branch, where the scope could scope the slot but
+not cap the handle. An optional property keeps the cell alone
+(`handle?: PerSpace<Cell<T>>` → `{ …, asCell: [{ kind: "cell", scope: "space"
+}] }`). A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
-scopes.`; tested, scope-wrappers.test.ts). With a cell boundary
+scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
+scopes' brands on one value, as an inferred `PerUser<PerSession<T>>` resolves
+to. Two brands of one scope fold into one, so a wrapper nested in one of its
+own scope is that wrapper alone. With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
@@ -1538,6 +1545,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| Scope wrapper around a cell beside another alternative | `A scope wrapper around a cell cannot hold another alternative beside the cell.` | `common-fabric-formatter.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

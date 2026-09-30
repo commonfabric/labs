@@ -72,6 +72,44 @@ interface SchemaRoot {
       .toThrow("A scope wrapper cannot be a member of a union.");
   });
 
+  it("throws for a scope wrapper around a cell beside another alternative", async () => {
+    // The cell's `asCell` entry would sit in an `anyOf` branch, where the
+    // scope could scope the slot but not cap the handle.
+    for (
+      const declaration of [
+        "PerSpace<Cell<string>> | null",
+        "PerSpace<Cell<string>> | undefined",
+        "PerSpace<Cell<string> | null>",
+      ]
+    ) {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface SchemaRoot { handle: ${declaration}; }`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow(
+        "A scope wrapper around a cell cannot hold another alternative",
+      );
+    }
+  });
+
+  it("caps the handle of an optional property's scoped cell", async () => {
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "interface SchemaRoot { handle?: PerSpace<Cell<string>>; }",
+      "SchemaRoot",
+    );
+
+    expect(
+      (new SchemaGenerator().generateSchema(type, checker, typeNode) as {
+        properties: unknown;
+      }).properties,
+    ).toEqual({
+      handle: { type: "string", asCell: [{ kind: "cell", scope: "space" }] },
+    });
+  });
+
   it("throws for a scope wrapper unioned with a value type", async () => {
     const { type, checker, typeNode } = await getTypeFromCode(
       `
@@ -94,8 +132,7 @@ interface SchemaRoot {
     /** The schema of `SchemaRoot`'s `draft`, declared as `declaration`. */
     const draftSchema = async (declaration: string) => {
       const { type, checker, typeNode } = await getTypeFromCode(
-        `type Draft = PerUser<Cell<string>>;
-interface SchemaRoot { draft: ${declaration}; }`,
+        `interface SchemaRoot { draft: ${declaration}; }`,
         "SchemaRoot",
       );
       return (new SchemaGenerator().generateSchema(
@@ -119,20 +156,11 @@ interface SchemaRoot { draft: ${declaration}; }`,
       });
     });
 
-    for (
-      const [spelled, inside] of [
-        ["PerUser<boolean> | null", "PerUser<boolean | null>"],
-        [
-          "PerUser<Cell<string>> | undefined",
-          "PerUser<Cell<string> | undefined>",
-        ],
-        ["Draft | undefined", "PerUser<Cell<string> | undefined>"],
-      ] as const
-    ) {
-      it(`reads \`${spelled}\` as \`${inside}\``, async () => {
-        expect(await draftSchema(spelled)).toEqual(await draftSchema(inside));
-      });
-    }
+    it("reads `PerUser<boolean> | null` as `PerUser<boolean | null>`", async () => {
+      expect(await draftSchema("PerUser<boolean> | null")).toEqual(
+        await draftSchema("PerUser<boolean | null>"),
+      );
+    });
   });
 
   it("throws for a scope inside a cell that is a union member", async () => {

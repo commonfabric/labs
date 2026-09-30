@@ -111,6 +111,27 @@ export function scopePayloadType(
 }
 
 /**
+ * Whether `type` carries the brands of two different scopes on one value, as
+ * the checker resolves `PerUser<PerSession<T>>` to: a scope wrapper nested in
+ * another with no cell between them, which `getScopeBrand()` reads as no
+ * wrapper at all. The checker folds two brands of one scope into one, so a
+ * wrapper nested in one of its own scope is the wrapper alone.
+ */
+export function hasNestedScopeBrands(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return (type.isUnion() ? type.types : [type]).some((member) =>
+    member.isIntersection() &&
+    new Set(
+        member.types.map((part) => scopeOfBrandMember(part, checker)).filter(
+          (scope) => scope !== undefined,
+        ),
+      ).size > 1
+  );
+}
+
+/**
  * Whether `member`, a member of an intersection, is a scope wrapper's brand
  * `{ readonly [SCOPE_BRAND]?: S }`, which holds no part of the value.
  */

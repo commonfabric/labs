@@ -2033,10 +2033,7 @@ adjustments:
   its brand, is rebuilt when the narrowing of cells reaches its scope wrapper
   directly: its cell, printed afresh, is narrowed inside a rebuilt scope wrapper
   registered with the scoped cell's type, through which node-driven shrinking
-  and identity-only paths then reach the cell. A scoped cell beside `null` or
-  `undefined` is rebuilt with them inside the wrapper,
-  `PerSession<ReadonlyCell<boolean> | null>`
-  (`test/scope-wrapper-alias-schema.test.ts`). Schema generation reads the scope from the wrapper's name and
+  and identity-only paths then reach the cell. Schema generation reads the scope from the wrapper's name and
   the cell from the node inside it. Capability narrowing does not reach a scoped
   cell through the printed union of an optional member, so that cell keeps its
   authored capability and value shape. Node-driven shrinking keeps the print of
