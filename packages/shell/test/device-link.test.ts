@@ -14,10 +14,8 @@ import {
   reportDeviceLinkFailure,
   runDeviceLinkLogin,
 } from "../src/lib/device-link-login.ts";
-import {
-  activateModalDialog,
-  XDeviceLinkView,
-} from "../src/views/DeviceLinkView.ts";
+import { XDeviceLinkView } from "../src/views/DeviceLinkView.ts";
+import { activateModalDialog } from "../src/views/pairing-dialog.ts";
 
 // NOTE: this file lives in test/ deliberately. The shell's test task globs
 // `test/*.test.ts` ONLY — a co-located src/lib/*.test.ts is silently never run,
@@ -535,8 +533,11 @@ function handlersOf(value: any): Array<() => void> {
   if (Array.isArray(value)) return value.flatMap(handlersOf);
   const out: Array<() => void> = [];
   for (const v of value.values ?? []) {
-    if (typeof v === "function") out.push(v as () => void);
-    else out.push(...handlersOf(v));
+    if (typeof v === "function") {
+      out.push(v as () => void);
+    } else {
+      for (const handler of handlersOf(v)) out.push(handler);
+    }
   }
   return out;
 }

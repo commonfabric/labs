@@ -468,9 +468,10 @@ const establishContextMessages = async (
       options.onGrantsUnavailable?.(error);
     }
   }
-  messages.push(
-    ...pieceTargetingContextMessages(await engine.establishInputCells()),
-  );
+  const inputCells = await engine.establishInputCells();
+  for (const message of pieceTargetingContextMessages(inputCells)) {
+    messages.push(message);
+  }
   const patternRefsMessage = patternRefsContextMessage(
     await engine.establishPatternRefs(),
   );

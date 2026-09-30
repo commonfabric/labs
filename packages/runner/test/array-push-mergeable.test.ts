@@ -180,6 +180,55 @@ describe("mergeable array appends", () => {
     }
   });
 
+  it("two concurrent pushAll appends to the same list both survive in order", async () => {
+    const rt1 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage1,
+    });
+    const rt2 = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage2,
+    });
+    try {
+      const tx0 = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
+      await tx0.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      const cell2 = rt2.getCell<string[]>(space, CAUSE, stringListSchema);
+      await cell2.sync();
+      await cell2.pull();
+
+      const txA = rt1.edit();
+      rt1.getCell<string[]>(space, CAUSE, stringListSchema, txA).pushAll([
+        "A1",
+        "A2",
+      ]);
+      await txA.commit({ resolveAt: "verdict" });
+      await rt1.storageManager.synced();
+
+      // Session 2 has not observed session 1's append.
+      const txB = rt2.edit();
+      rt2.getCell<string[]>(space, CAUSE, stringListSchema, txB).pushAll([
+        "B1",
+        "B2",
+      ]);
+      await txB.commit({ resolveAt: "verdict" });
+      await rt2.storageManager.synced();
+
+      expect(await readDurable(server)).toEqual([
+        "seed",
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+      ]);
+    } finally {
+      await rt2.dispose();
+      await rt1.dispose();
+    }
+  });
+
   it("a conditional push (explicit read before push) conflicts with a concurrent append", async () => {
     // A CONDITIONAL push — the handler reads the list explicitly before pushing
     // (the dedup-then-push shape) — must keep its read in the conflict set, so
@@ -2251,6 +2300,72 @@ describe("mergeable op guards and single-session branches", () => {
   it("addUnique without a transaction throws", () => {
     const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema);
     expect(() => cell.addUnique("x")).toThrow();
+  });
+
+  it("pushAll without a transaction throws", () => {
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema);
+    expect(() => cell.pushAll(["x"])).toThrow();
+  });
+
+  it("pushAll given something other than an array throws", () => {
+    const tx = rt.edit();
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+    expect(() => cell.pushAll("abc" as unknown as string[])).toThrow(
+      /requires an array of values/,
+    );
+    expect(() => cell.pushAll(["abc"])).not.toThrow();
+  });
+
+  it("push and pushAll append to a cell typed as a readonly array", () => {
+    const tx = rt.edit();
+    const cell = rt.getCell<readonly string[]>(
+      space,
+      "readonly-list",
+      stringListSchema,
+      tx,
+    );
+    cell.push("a");
+    cell.pushAll(["b", "c"]);
+    expect(cell.get()).toEqual(["a", "b", "c"]);
+  });
+
+  it("pushAll commits its list as one append of every member", async () => {
+    const tx0 = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["a"]);
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    const cell = rt.getCell<string[]>(space, CAUSE, stringListSchema, tx);
+    cell.pushAll(["b", "c", "d"]);
+    expect(cell.get()).toEqual(["a", "b", "c", "d"]);
+
+    const native = getDirectTransactionNativeCommit(tx, space);
+    expect(native?.operations).toEqual([
+      expect.objectContaining({
+        op: "patch",
+        patches: [{ op: "append", path: "/value", values: ["b", "c", "d"] }],
+      }),
+    ]);
+  });
+
+  it("pushAll commits a list too long to spread into push's arguments", async () => {
+    const members = Array.from({ length: 150_000 }, (_, index) => `${index}`);
+    const tx0 = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx0).set(["seed"]);
+    await tx0.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    const tx = rt.edit();
+    rt.getCell<string[]>(space, CAUSE, stringListSchema, tx).pushAll(members);
+    const result = await tx.commit({ resolveAt: "verdict" });
+    await rt.storageManager.synced();
+
+    expect(result.error).toBeUndefined();
+    const durable = await readDurable(server);
+    expect(durable.length).toBe(150_001);
+    expect(durable[0]).toBe("seed");
+    expect(durable[150_000]).toBe("149999");
   });
 
   it("increment without a transaction throws", () => {

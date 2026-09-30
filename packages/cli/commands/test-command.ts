@@ -145,7 +145,7 @@ export function createTestCommand(
           if (stat.isDirectory) {
             // Discover test files in directory
             const discovered = await discoverTestFiles(fullPath);
-            testFiles.push(...discovered);
+            for (const file of discovered) testFiles.push(file);
           } else if (stat.isFile) {
             // Single file - warn but allow non-.test.tsx for flexibility
             if (!path.endsWith(".test.tsx")) {

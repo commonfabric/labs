@@ -2743,7 +2743,9 @@ export class WaveAccumulator
       ) {
         consequenceOf.push(context.eventId);
       }
-      outboxAppends.push(...contribution.outboundAppends);
+      for (const append of contribution.outboundAppends) {
+        outboxAppends.push(append);
+      }
       const home = this.#homeSealed(contribution);
       if (home === undefined) continue;
       for (const operation of home.sealed.commit.operations) {
@@ -3103,7 +3105,9 @@ export class WaveAccumulator
         for (const operation of sealed.sealed.commit.operations) {
           batch.operations.push(operation);
         }
-        batch.preconditions.push(...sealed.sealed.commit.preconditions ?? []);
+        for (const precondition of sealed.sealed.commit.preconditions ?? []) {
+          batch.preconditions.push(precondition);
+        }
       }
     }
     return [...batches.entries()].map(([key, batch]) => ({ key, batch }));

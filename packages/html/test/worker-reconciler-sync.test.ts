@@ -53,7 +53,7 @@ async function renderAndCollect(
   const updateOps: VDomOp[] = [];
   const reconciler = new WorkerReconciler({
     onOps: (ops) => {
-      updateOps.push(...ops);
+      for (const op of ops) updateOps.push(op);
     },
   });
   const cancel = reconciler.mount(

@@ -51,6 +51,7 @@ value.set(next)          // replace (last-write-wins)
 value.update({ k: v })   // shallow merge into an object
 value.increment(1)       // add to a number — mergeable: concurrent increments sum
 items.push(item)         // append — mergeable: disjoint appends merge
+items.pushAll(list)      // append every element of a list — mergeable
 items.addUnique(item)    // append if not already present — mergeable
 items.remove(item)       // remove the first matching element
 items.removeByValue(item) // remove elements equal to a value — mergeable
@@ -206,8 +207,8 @@ mechanisms in Chapters 8 and 9:
   cross-space atomicity.)
 - **Updates are optimistic and converge — by one of three routes.** Your
   own writes always apply locally and instantly. What happens when two
-  users race depends on the kind of write: *mergeable* operations
-  (`push`, `addUnique`, `increment`, `removeByValue`) are merged by the
+  users race depends on the kind of write: *mergeable* operations (`push`,
+  `pushAll`, `addUnique`, `increment`, `removeByValue`) are merged by the
   server, so concurrent writers all land; plain scalar `set`s — including
   the writes two-way UI bindings make — are last-write-wins, the later
   write simply sticks; and read-modify-write commits carry their read set,

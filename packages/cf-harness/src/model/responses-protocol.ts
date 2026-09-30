@@ -315,17 +315,17 @@ export const toResponsesInput = async (
         );
         const searchOutput = unchangedSearchOutput(message, model, providerId);
         if (searchOutput !== undefined) {
-          input.push(
-            ...searchOutput.filter((item) =>
+          for (const item of searchOutput) {
+            if (
               !(index === boundary && carried.length > 0 &&
                 isCompactionItem(item))
-            ),
-          );
+            ) {
+              input.push(item);
+            }
+          }
           break;
         }
-        input.push(
-          ...carriedOutput,
-        );
+        for (const item of carriedOutput) input.push(item);
         if (message.content.length > 0) {
           input.push({
             type: "message",

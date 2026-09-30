@@ -1726,15 +1726,15 @@ const renderSupersededVisibility = (
     lines.push(
       "",
       "**Still findable when the batch started**, so a session could have composed a version the committed source cannot rebuild:",
-      ...findable.map(([id]) => `- \`${id}\``),
     );
+    for (const [id] of findable) lines.push(`- \`${id}\``);
   }
   if (unread.length > 0) {
     lines.push(
       "",
       "NOT READ, so nothing here says whether these were findable:",
-      ...unread.map(([id]) => `- \`${id}\``),
     );
+    for (const [id] of unread) lines.push(`- \`${id}\``);
   }
   return `${lines.join("\n")}\n`;
 };
@@ -1784,12 +1784,12 @@ const renderCellSpec = (preflight: CellSpecPreflight): string => {
     `**The console was not the cell this batch was told to measure, so no task ran.** ${preflight.reason}`,
   ];
   if (preflight.mismatches !== undefined) {
-    lines.push(
-      "",
-      ...preflight.mismatches.map((mismatch) =>
-        `- \`${mismatch.field}\`: expected ${mismatch.expected}, and this console reports ${mismatch.actual}`
-      ),
-    );
+    lines.push("");
+    for (const mismatch of preflight.mismatches) {
+      lines.push(
+        `- \`${mismatch.field}\`: expected ${mismatch.expected}, and this console reports ${mismatch.actual}`,
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 };
@@ -1934,30 +1934,32 @@ export const renderBatchReport = (batch: BatchResult): string => {
     renderPreflight(batch.preflight),
     REPORT_SCOPE,
     "",
-    ...renderConfiguration(batch.results),
-    "## Batch totals",
-    "",
-    "```text",
-    ...renderTotalsLines(
-      foldTotals(
-        batch.results.map((result) => result.measurement?.totals).filter((
-          totals,
-        ): totals is NonNullable<typeof totals> => totals !== undefined),
-      ),
-    ),
+  );
+  for (const line of renderConfiguration(batch.results)) lines.push(line);
+  lines.push("## Batch totals", "", "```text");
+  const batchTotals = foldTotals(
+    batch.results.map((result) => result.measurement?.totals).filter((
+      totals,
+    ): totals is NonNullable<typeof totals> => totals !== undefined),
+  );
+  for (const line of renderTotalsLines(batchTotals)) lines.push(line);
+  lines.push(
     "```",
     "",
     `Tasks: ${batch.results.length}, of which ${
       batch.results.filter((result) => result.measurement === undefined).length
     } were not measured.`,
     "",
-    ...renderComposition(
-      batch.results,
-      batch.suite.seededPatternIds,
-      batch.importedPatternOrigins,
-      batch.suite.supersededPatternIds,
-      batch.suite.supersededReasons,
-    ),
+  );
+  const composition = renderComposition(
+    batch.results,
+    batch.suite.seededPatternIds,
+    batch.importedPatternOrigins,
+    batch.suite.supersededPatternIds,
+    batch.suite.supersededReasons,
+  );
+  for (const line of composition) lines.push(line);
+  lines.push(
     "## The index, before and after",
     "",
     "How much of it a run could find, going in:",
@@ -2000,9 +2002,11 @@ export const renderBatchReport = (batch: BatchResult): string => {
     }
     lines.push("```text");
     for (const run of result.measurement.runs) {
-      lines.push(...renderRunLines(run));
+      for (const line of renderRunLines(run)) lines.push(line);
     }
-    lines.push(...renderTotalsLines(result.measurement.totals));
+    for (const line of renderTotalsLines(result.measurement.totals)) {
+      lines.push(line);
+    }
     lines.push("```", "");
   }
   return lines.join("\n");

@@ -8,6 +8,8 @@
  * unstarted piece, never its full result; the names are cached until the
  * space changes; and a load the header abandons (switcher closed, space
  * switched, header removed) leaves nothing behind for the next open to show.
+ * The desktop switcher stays in the breadcrumb while the piece has no name to
+ * show, and Escape closes it unless another component already handled the key.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -254,6 +256,54 @@ describe("HeaderView piece list", () => {
       expect(loadingLists(markup)).toBe(0);
       expect(markup).toContain("did:key:first title");
       expect(markup).toContain("Piece #untitl");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the switcher in the breadcrumb while the piece has no name to show", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const view = await mountHeader(makeRuntime());
+      view.headerPieceDropdownOpen = true;
+      for (const pieceTitle of [undefined, ""]) {
+        view.pieceTitle = pieceTitle;
+        const markup = templateMarkup(view.render());
+        const trigger = markup.indexOf('class="header-piece-trigger"');
+        expect(trigger).toBeGreaterThan(-1);
+        expect(markup.slice(trigger, markup.indexOf("</button>", trigger)))
+          .toContain("Untitled");
+        expect(markup).toContain('class="header-piece-dropdown"');
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes the switcher on Escape, unless the key was already handled or ends a composition", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const view = await mountHeader(makeRuntime());
+      const { handleKeyDown } = view.accessForTestingOnly;
+      const escape = (init: { handled?: boolean; isComposing?: boolean }) => {
+        const event = Object.assign(
+          new Event("keydown", { cancelable: true }),
+          { key: "Escape", isComposing: init.isComposing ?? false },
+        );
+        if (init.handled) event.preventDefault();
+        return event as unknown as KeyboardEvent;
+      };
+
+      view.headerPieceDropdownOpen = true;
+      handleKeyDown(escape({ handled: true }));
+      expect(view.headerPieceDropdownOpen).toBe(true);
+      handleKeyDown(escape({ isComposing: true }));
+      expect(view.headerPieceDropdownOpen).toBe(true);
+
+      const unhandled = escape({});
+      handleKeyDown(unhandled);
+      expect(view.headerPieceDropdownOpen).toBe(false);
+      expect(unhandled.defaultPrevented).toBe(true);
     } finally {
       restore();
     }

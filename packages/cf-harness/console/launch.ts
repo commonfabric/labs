@@ -456,7 +456,7 @@ export const resolveConsoleLaunchPlan = (
       piecesJson: instance.piecesJson,
       piecesJsonPath: instance.piecesJsonPath,
     });
-    connectorGrants.push(...resolvedConnectors.grants);
+    for (const grant of resolvedConnectors.grants) connectorGrants.push(grant);
     const source = "loom connector receipt + pieces.json";
     const detail = `${instance.handlesJsonPath}; ${instance.piecesJsonPath}`;
     connectorHealth.push({

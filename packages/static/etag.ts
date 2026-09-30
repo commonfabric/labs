@@ -3,16 +3,15 @@
  * Uses SHA-256 content hashing for strong ETags.
  */
 
+import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+
 /**
  * Generate a strong ETag from content using SHA-256 hash.
  * Returns a base64-encoded hash in quotes.
  */
 export async function generateETag(content: Uint8Array): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", content as BufferSource);
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(hash)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+  const base64 = toUnpaddedBase64url(new Uint8Array(hash));
 
   return `"${base64}"`;
 }

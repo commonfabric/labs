@@ -383,9 +383,13 @@ export const syncTransactions: AppRouteHandler<SyncTransactionsRoute> = async (
           } = syncResponse.data;
 
           // Collect the actual transaction data
-          allAddedTransactions.push(...added);
-          allModifiedTransactions.push(...modified);
-          allRemovedIds.push(...removed.map((r) => r.transaction_id));
+          for (const transaction of added) {
+            allAddedTransactions.push(transaction);
+          }
+          for (const transaction of modified) {
+            allModifiedTransactions.push(transaction);
+          }
+          for (const r of removed) allRemovedIds.push(r.transaction_id);
 
           cursor = next_cursor;
           hasMore = has_more;

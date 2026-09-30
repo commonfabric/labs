@@ -311,7 +311,9 @@ function staticConfidentialityOf(
   for (const p of Object.values(props)) {
     const conf = (p as { ifc?: { confidentiality?: CfcConfClause[] } })?.ifc
       ?.confidentiality;
-    if (Array.isArray(conf)) out.push(...conf);
+    if (Array.isArray(conf)) {
+      for (const clause of conf) out.push(clause);
+    }
   }
   return out;
 }
@@ -334,7 +336,8 @@ function declaredSlotConfidentiality(
       entry.path.length === resultPath.length + 1 &&
       resultPath.every((segment, i) => segment === entry.path[i])
     ) {
-      out.push(...(entry.label.confidentiality ?? []) as CfcConfClause[]);
+      const clauses = (entry.label.confidentiality ?? []) as CfcConfClause[];
+      for (const clause of clauses) out.push(clause);
     }
   }
   return out;

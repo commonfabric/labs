@@ -224,7 +224,7 @@ async function collectBrowserLoadMetrics(page: Page): Promise<{
       if (!supported.includes(type)) return [] as PerformanceEntry[];
       const entries: PerformanceEntry[] = [];
       const observer = new PerformanceObserver((list) => {
-        entries.push(...list.getEntries());
+        for (const entry of list.getEntries()) entries.push(entry);
       });
       observer.observe({ type, buffered: true });
       await new Promise((resolve) => requestAnimationFrame(resolve));

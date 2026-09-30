@@ -255,12 +255,14 @@ function subschemaChildren(
   }
   for (const key of SUBSCHEMA_LIST_KEYS) {
     const nested = record[key];
-    if (!skip?.has(key) && Array.isArray(nested)) children.push(...nested);
+    if (!skip?.has(key) && Array.isArray(nested)) {
+      for (const child of nested) children.push(child);
+    }
   }
   for (const key of SUBSCHEMA_MAP_KEYS) {
     const nested = record[key];
     if (!skip?.has(key) && isKeyableObjectOrArray(nested)) {
-      children.push(...Object.values(nested));
+      for (const child of Object.values(nested)) children.push(child);
     }
   }
   return children;

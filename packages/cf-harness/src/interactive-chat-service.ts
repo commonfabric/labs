@@ -5,6 +5,8 @@ import {
 import { selectResearchContext } from "./research/context.ts";
 import { loomAuthoringForTurn } from "./loom-authoring.ts";
 import { ensureSESLockdown, type Runtime } from "@commonfabric/runner";
+import { spliceAll } from "@commonfabric/utils/arrays";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -861,15 +863,16 @@ export class HarnessInteractiveChatService {
         ),
       });
     }
-    this.#events.splice(
+    spliceAll(
+      this.#events,
       0,
       this.#events.length,
-      ...await this.#sessionStore.listEvents(),
+      await this.#sessionStore.listEvents(),
     );
     this.#pruneInMemoryEvents();
     this.#sequence = Math.max(
       await this.#sessionStore.latestSequence(),
-      ...this.#events.map((event) => event.sequence),
+      maxOf(this.#events.map((event) => event.sequence)),
     );
     await this.#terminalizeInterruptedTurnsFromStore();
   }

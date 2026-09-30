@@ -346,9 +346,9 @@ export function fanOutUnionLog(state: FanOutNodeState): ReactivityLog {
   const writes: IMemorySpaceAddress[] = [];
   for (const record of state.instances.values()) {
     if (record.log === undefined) continue;
-    reads.push(...record.log.reads);
-    shallowReads.push(...record.log.shallowReads);
-    writes.push(...record.log.writes);
+    for (const read of record.log.reads) reads.push(read);
+    for (const read of record.log.shallowReads) shallowReads.push(read);
+    for (const write of record.log.writes) writes.push(write);
   }
   return { reads, shallowReads, writes };
 }

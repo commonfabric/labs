@@ -227,7 +227,7 @@ export const groupedQueries = (
       });
       continue;
     }
-    existing.roots.push(...watch.query.roots);
+    for (const root of watch.query.roots) existing.roots.push(root);
   }
   return grouped;
 };
@@ -340,8 +340,8 @@ export const buildDiffSync = (
     .map((entry) => toWireRemove(entry, keyed))
     .sort(compareSyncAddress);
   if (delivered !== undefined) {
-    delivered.upserts.push(...upserts);
-    delivered.removes.push(...removedEntries);
+    for (const upsert of upserts) delivered.upserts.push(upsert);
+    for (const entry of removedEntries) delivered.removes.push(entry);
   }
   return {
     type: "sync",
