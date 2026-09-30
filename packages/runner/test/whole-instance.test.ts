@@ -74,6 +74,16 @@ describe("whole-instance", () => {
     expect(canCarryFabricInstanceWhole(frozenError(link))).toBe(false);
   });
 
+  it("returns `false` for an instance holding a value the walk also maps", () => {
+    // A record the caller's walk would convert, found at any depth.
+    const isMarked = (value: unknown) =>
+      typeof value === "object" && value !== null && "marked" in value;
+    const error = frozenError(undefined, { deep: [{ marked: true }] });
+
+    expect(canCarryFabricInstanceWhole(error)).toBe(true);
+    expect(canCarryFabricInstanceWhole(error, isMarked)).toBe(false);
+  });
+
   it("returns `false` for an instance holding something that is not fabric data", () => {
     // A `Date` is a class instance with no `FabricValue` form of its own, and
     // a frozen one passes the deep-frozen test vacuously.

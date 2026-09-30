@@ -73,4 +73,37 @@ describe("fabric-instance-pattern-binding", () => {
 
     expect(message).toBe("boom");
   });
+
+  it("sets up a handler whose typed state holds a deep-frozen `FabricError`", async () => {
+    // The argument walks that collect a handler's writable and scheduler-read
+    // links reach the instance at its typed position, and cannot descend it;
+    // one holding nothing but fabric data holds no link to collect.
+    const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const root = pattern(() => ({
+      note: handler(
+        { type: "object", properties: {} },
+        { type: "object", properties: { err: { type: "object" } } },
+        () => {},
+      )({
+        // An object-typed slot is typed as a record, which an instance is
+        // not, statically; at run time the slot admits one.
+        err: deepFreeze(
+          FabricError.fromNativeError(new Error("boom")),
+        ) as never,
+      }),
+    }));
+
+    const tx = runtime.edit();
+    const rootCell = runtime.getCell<{ note: unknown }>(
+      space,
+      "instance handler root",
+      undefined,
+      tx,
+    );
+    runtime.run(tx, root, {}, rootCell);
+    expect((await tx.commit()).error).toBeUndefined();
+    await runtime.idle();
+
+    expect(errors.map((error) => error.message)).toEqual([]);
+  });
 });

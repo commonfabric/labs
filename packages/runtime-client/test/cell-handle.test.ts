@@ -2550,6 +2550,29 @@ describe("cell-handle", () => {
       );
     });
 
+    it("refuses to send a `FabricInstance` holding a `CellRef`", () => {
+      // The worker's inbound walk would map the `CellRef` record, and cannot
+      // reach it inside an instance; refused here, before this handle caches
+      // a value the worker would refuse.
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: {
+            id: "of:fid1:referenced",
+            space: "did:key:z6Mkreferenced",
+            scope: "space",
+            path: [],
+          },
+        }),
+      );
+
+      expect(() => CellHandle.serialize(error)).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`)",
+      );
+    });
+
     it("refuses a `FabricInstance` in either direction", () => {
       // A primitive is a leaf, so a walk that stops at it has lost nothing.
       // An instance is a container reached by its codec contents rather than

@@ -9537,19 +9537,17 @@ export class Runner {
       // it: zero enumerable own properties, every keyed read yields
       // `undefined`, and a leaf holds no link to collect anyway.
       //
-      // A `FabricInstance` is refused. A write-redirect link nested in its
-      // codec contents is unreachable by property name, so passing one through
-      // _misses_ that link -- and over-collection is this walker's safe
-      // direction, which makes a miss the unsafe one.
-      //
-      // Nothing reaches this in production today, de facto rather than by
-      // construction: a `FabricError` is ungated and exposed to pattern
-      // authors, so what keeps this safe is that no action argument yet
-      // carries one.
+      // A `FabricInstance` holding a link is refused. A write-redirect link
+      // nested in its codec contents is unreachable by property name, so
+      // passing one through _misses_ that link -- and over-collection is this
+      // walker's safe direction, which makes a miss the unsafe one. One holding
+      // nothing but fabric data holds no link, so there is nothing in it to
+      // collect, and nothing further to visit.
       //
       // TODO(danfuzz): descend by codec-mediated traversal into instance
       // state, at which point this becomes a walk rather than a refusal.
       if (currentValue instanceof FabricInstance) {
+        if (canCarryFabricInstanceWhole(currentValue)) return;
         refuseFabricInstance(
           currentValue,
           "when collecting writable cell links from an argument",
@@ -9687,17 +9685,16 @@ export class Runner {
       // Indexed, not rebuilt. Right for a `FabricPrimitive`: zero enumerable
       // own properties, and a leaf holds no link to collect.
       //
-      // A `FabricInstance` is refused, for the same reason as the sibling walk
-      // in `collectWritableCellArgumentLinks()`: a link in its codec contents
-      // is unreachable by property name, so passing one through misses it, and
-      // a miss is the unsafe direction here.
-      //
-      // Nothing reaches this in production today, de facto rather than by
-      // construction.
+      // A `FabricInstance` holding a link is refused, and one holding nothing
+      // but fabric data is passed over, for the same reasons as in the sibling
+      // walk in `collectWritableCellArgumentLinks()`: a link in its codec
+      // contents is unreachable by property name, so passing one through
+      // misses it, and a miss is the unsafe direction here.
       //
       // TODO(danfuzz): descend by codec-mediated traversal into instance
       // state, at which point this becomes a walk rather than a refusal.
       if (currentValue instanceof FabricInstance) {
+        if (canCarryFabricInstanceWhole(currentValue)) return;
         refuseFabricInstance(
           currentValue,
           "when collecting scheduler read links from an argument",

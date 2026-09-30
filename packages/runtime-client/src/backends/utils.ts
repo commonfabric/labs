@@ -43,8 +43,9 @@ import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
  * closes. A subtree reachable from two positions is shared rather than
  * cyclic, and is walked at each.
  *
- * A `FabricInstance` is carried whole when nothing inside it needs mapping
- * (`canCarryFabricInstanceWhole()`), and refused otherwise.
+ * A `FabricInstance` is carried whole when nothing inside it needs mapping --
+ * no link, and no `CellRef` (`canCarryFabricInstanceWhole()`) -- and refused
+ * otherwise.
  *
  * @throws If the value contains a cycle, or a `FabricInstance` that holds
  *   something this walk would map.
@@ -94,8 +95,9 @@ function mapOne(
     // A container reached by its codec contents rather than by property name,
     // which this walk cannot descend: the record branch below would rebuild
     // one from enumerable own properties it does not have, yielding `{}`. It
-    // crosses whole when it holds nothing this walk would map, and is refused
-    // otherwise, since a link inside it would cross unmapped.
+    // crosses whole when it holds nothing this walk would map -- no link, and
+    // no `CellRef` record -- and is refused otherwise, since either would
+    // cross unmapped.
     //
     // The same rule holds at each end of the crossing -- `CellHandle`'s
     // `serialize()`, `deserialize()` and `applyValue()` in `../cell-handle.ts`,
@@ -104,7 +106,7 @@ function mapOne(
     //
     // TODO(danfuzz): descend by codec-mediated traversal into instance state,
     // at which point a link inside one is mapped rather than refused.
-    if (canCarryFabricInstanceWhole(value)) return value;
+    if (canCarryFabricInstanceWhole(value, isCellRef)) return value;
     refuseFabricInstance(value, "when mapping cell refs to sigil links");
   } else if (typeof value === "object" && value) {
     // A container. It goes onto `ancestors` for as long as the walk is inside

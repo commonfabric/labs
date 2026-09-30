@@ -21,7 +21,11 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
  * the walk would have mapped, so carrying it loses nothing.
  *
  * A link in either representation counts, a `FabricLink` whatever the active
- * regime, and `instance` itself being one returns `false`. Deep-frozen is what
+ * regime, and `instance` itself being one returns `false`. A walk that maps
+ * more than links passes what else it maps as `alsoMapped`, which is asked of
+ * every value the contents hold: a walk converting a `CellRef` record passes
+ * a test for one, and an instance holding such a record returns `false` too.
+ * Deep-frozen is what
  * rules out a query-result view inside: a view over a record has the shape of
  * a plain object, and is never frozen. The contents are read by encoding each
  * instance the walk reaches, which is the snapshot its codec gives, so the
@@ -33,6 +37,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
  */
 export function canCarryFabricInstanceWhole(
   instance: FabricInstance,
+  alsoMapped?: (value: unknown) => boolean,
 ): boolean {
   if (!isDeepFrozen(instance)) return false;
 
@@ -43,6 +48,7 @@ export function canCarryFabricInstanceWhole(
     if (!isObjectOrArray(value)) return isValidFabricValue(value);
     if (value instanceof FabricPrimitive) return true;
     if (value instanceof FabricLink || isLinkRef(value)) return false;
+    if (alsoMapped?.(value)) return false;
     if (visited.has(value)) return true;
     visited.add(value);
 

@@ -4950,6 +4950,29 @@ describe("runtime-processor", () => {
       );
     });
 
+    it("refuses a `FabricInstance` holding a `CellRef`", () => {
+      // This walk maps a `CellRef` record as well as a link, so an instance
+      // holding one has something inside it this walk would have converted.
+      const error = deepFreeze(
+        new FabricError({
+          type: "Error",
+          message: "boom",
+          stack: undefined,
+          cause: {
+            id: "of:fid1:referenced",
+            space: "did:key:z6Mkreferenced",
+            scope: "space",
+            path: [],
+          },
+        }),
+      );
+
+      expect(() => mapCellRefsToSigilLinks({ e: error })).toThrow(
+        "Cannot yet handle `FabricError` (a `FabricInstance`) when mapping " +
+          "cell refs to sigil links.",
+      );
+    });
+
     it("refuses a `FabricInstance`, naming the class and the situation", () => {
       // A tripwire, not a limitation to route around: an instance's codec
       // contents can hold a link that this walk cannot reach, and one that is

@@ -35,6 +35,7 @@ import { InitializedRuntimeConnection } from "./client/connection.ts";
 import {
   type CellRef,
   type CfcLabelView,
+  isCellRef,
   JSONValue,
   RequestType,
   type SqliteParams,
@@ -1021,14 +1022,15 @@ export class CellHandle<T = unknown> {
     // An instance is a container whose contents this walk cannot reach, so a
     // `CellHandle` inside one would cross unconverted -- as a handle, which
     // the wire has no representation for. One holding nothing but fabric data
-    // crosses whole. Anything else is refused here rather than downstream: the
-    // worker's `mapCellRefsToSigilLinks()` refuses one as well, and a refusal
-    // there arrives as an error reply, after this handle has already cached
-    // the value and told its subscribers. Refused through the shared helper,
-    // as `deserialize()` above already does, so the two walks say the same
-    // thing about the same value.
+    // crosses whole, as long as none of it is a `CellRef` record, which the
+    // worker's `mapCellRefsToSigilLinks()` would map and cannot reach inside
+    // an instance. Anything else is refused here rather than downstream: that
+    // walk refuses one as well, and a refusal there arrives as an error reply,
+    // after this handle has already cached the value and told its
+    // subscribers. Refused through the shared helper, as `deserialize()` above
+    // already does, so the two walks say the same thing about the same value.
     if (value instanceof FabricInstance) {
-      if (canCarryFabricInstanceWhole(value)) return value;
+      if (canCarryFabricInstanceWhole(value, isCellRef)) return value;
       refuseFabricInstance(value, "when sending a value over this connection");
     }
 
