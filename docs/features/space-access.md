@@ -55,10 +55,18 @@ leaving it to how the principal was found.
 
 `undefined` is never a guess. A space with no access list is one the memory
 server opens to any authenticated principal for compatibility, but that grant
-is not membership, and `spaceReaderRole()` does not treat it as any. A `target`
-passed as `undefined` is what a computation's input reads as while the value it
-names cannot be read, which is exactly the case where the calling code's own
-space would be the wrong answer.
+is not membership: `spaceReaderRole()` returns no role for it, and neither does
+the render membership lookup, so `spaceAccess()` agrees with both and returns
+`undefined`.
+
+`spaceAccess()` and `spaceAccess(undefined)` are different calls. The first
+asks about the space the calling code runs in; the second asks about a target
+that is not there, and returns `undefined`. A computation that takes its target
+by value, rather than as a cell, reads `undefined` for it while the value it
+names cannot be read, which is exactly when the target's space is one the
+principal may not belong to. Taking that `undefined` as "no target" would
+report the calling code's own space instead, typically the principal's own
+space, where they hold `OWNER`.
 
 The refusal counts only on a client, where the session the memory server
 refused is the principal's own. A serving runtime reads every space as that

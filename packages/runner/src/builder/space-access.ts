@@ -31,8 +31,12 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  * space outright. `undefined` means the answer is not known yet, which is
  * what an access list that has not arrived, a space that has no access list,
  * a run with no principal, and a `target` passed as `undefined` all return.
- * The last is what a computation's input reads as while the value it names
- * cannot be read, so it is not taken to mean the calling code's own space.
+ *
+ * So `spaceAccess()` and `spaceAccess(undefined)` differ: the first asks about
+ * the calling code's own space, and the second returns `undefined`. A
+ * computation's by-value input reads `undefined` while the value it names
+ * cannot be read, which is when the principal may not belong to its space, and
+ * reporting the calling code's own space there would be wrong.
  *
  * Who the principal is depends on where the call runs. In a reactive
  * computation it is the principal demanding the value, and the call makes the

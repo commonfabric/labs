@@ -4636,8 +4636,10 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
  *
  * `"none"` means the principal holds nothing there. `undefined` means the
  * answer is not known yet: the access list has not arrived, the space has no
- * access list, there is no principal, or `target` was passed as `undefined`,
- * which is what a value that cannot be read yet reads as. It is never a guess.
+ * access list, there is no principal, or `target` was passed as `undefined`.
+ * It is never a guess. So `spaceAccess()` and `spaceAccess(undefined)` differ:
+ * a value that cannot be read yet reads as `undefined`, and its space is not
+ * the calling code's own.
  *
  * In a reactive computation (`computed()`, `lift()`) the principal is whoever
  * is viewing, and the result is theirs alone, so two users never see each
