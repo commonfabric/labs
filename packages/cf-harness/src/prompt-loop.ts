@@ -4090,11 +4090,18 @@ export class CfHarnessPromptLoop {
         for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
-          if (outcome !== undefined && outcome.outcome !== "completed") {
+          // An admitted ending is the task's answer, so a completed one also
+          // satisfies the piece contract: its words are the result.
+          const endingText = outcome === undefined
+            ? undefined
+            : outcome.outcome === "completed"
+            ? outcome.answer
+            : outcome.outcome === "question"
+            ? outcome.question.text
+            : outcome.reason;
+          if (outcome !== undefined && endingText !== undefined) {
             taskOutcome = outcome;
-            finalAssistantText = outcome.outcome === "question"
-              ? outcome.question.text
-              : outcome.reason;
+            finalAssistantText = endingText;
           }
           transcript.push(toolMessage);
           // After the result rather than after the call that asked for it: a

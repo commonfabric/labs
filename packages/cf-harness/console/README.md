@@ -515,13 +515,17 @@ The completed-turn result is:
 
 `outcome` is `completed`, `question`, or `gave-up`. All three are normally ended
 turns and return **200**. A question includes `question: { "text": "…" }`; a
-give-up includes `reason: "…"`. Each field is present only for its matching
-outcome. `finalText` carries the human-readable answer, question, or reason in
-every case. An older result without `outcome` means `completed`. When reading
-stored artifacts, an unfamiliar nonempty outcome word also means `completed`, so
-a pin change or rollback does not hide a finished turn's result. Its `finalText`
-remains available. Malformed objects remain invalid; new tool calls and writes
-use the closed three-outcome contract.
+give-up includes `reason: "…"`. A completion the model ended with `finish_task`
+includes `answer: "…"` and, when it named any, `actions`: the client actions the
+host performs in order, each an `open_loom` with a `loomId`, a `command` with a
+slash-command `line`, or an `open_url` with an http or https `url` (the
+[harness README](../README.md) gives their shapes). Each field is present only
+for its matching outcome. `finalText` carries the human-readable answer,
+question, or reason in every case. An older result without `outcome` means
+`completed`. When reading stored artifacts, an unfamiliar nonempty outcome word
+also means `completed`, so a pin change or rollback does not hide a finished
+turn's result. Its `finalText` remains available. Malformed objects remain
+invalid; new tool calls and writes use the closed three-outcome contract.
 
 Optional `usage` contains the run report's cumulative `inputTokens`,
 `outputTokens`, and other reported token/cache/cost fields, including research
@@ -603,17 +607,20 @@ Start. The feed then shows, in the order the harness produces them:
   assistant lines as they happen and closing with the child's status.
 - **the final text** of the turn, in a boxed entry, when it completes.
 
-The `turn_completed` event carries the same `outcome` and its matching question
-or reason at the event level, and the structured object under `result`. Its turn
-attribution is unchanged. Live streams and replayed durable events have the same
-shape, so a caller can open `result.pieces[0].url` without parsing assistant
-prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
+The `turn_completed` event carries the same `outcome` and its matching answer,
+actions, question, or reason at the event level, and the structured object under
+`result`. Its turn attribution is unchanged. Live streams and replayed durable
+events have the same shape, so a caller can open `result.pieces[0].url` or
+perform `result.actions` without parsing assistant prose. Pollers read the same
+object from `GET /api/turns/<turnId>/result`.
 
-A completed Fabric task produces a named UI piece. A text answer is rendered by
-a small pattern and named through `assign_slug`; a data-only computation is not
-the user-facing result. Revising an existing piece can confirm its existing
-slug. A plain-text completion without a successful naming receipt is returned to
-the model for correction within its current turn budget.
+A completed Fabric task either produces a named UI piece or ends with a
+`finish_task` answer. Something built or shown is named through `assign_slug`; a
+data-only computation is not the user-facing result. Revising an existing piece
+can confirm its existing slug. An answer in words is the `finish_task` message,
+with no pattern built to hold it. A plain-text completion without a successful
+naming receipt is returned to the model for correction within its current turn
+budget.
 
 During the turn, `turn_usage` events carry `{ turnId, usage?, elapsedMs? }`
 after each completed parent, private research, or child model call. `usage` is
@@ -626,11 +633,12 @@ generated in a provider request. The next turn starts its own total, and updates
 stop when a turn is canceled. An older console without `turn_usage` still
 exposes its existing terminal usage when available.
 
-The parent calls `finish_task` alone to ask a question or explain why it cannot
-proceed. This uses the ordinary tool policy and artifact path, then ends the
-turn without another model request. The live pane shows the sentence as "waiting
-for your answer" or "stopped", without a failure badge. Child agents report
-blockers to their parent; they cannot end the user's task themselves.
+The parent calls `finish_task` alone to give its answer, ask a question, or
+explain why it cannot proceed. This uses the ordinary tool policy and artifact
+path, then ends the turn without another model request. The live pane shows the
+sentence as "done", "waiting for your answer", or "stopped", without a failure
+badge. Child agents report blockers to their parent; they cannot end the user's
+task themselves.
 
 When the run names a piece, the `assign_slug` result carries a `slug` and a
 `url`, and the page raises an **Open your piece** link above the feed. That link

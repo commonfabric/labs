@@ -1538,6 +1538,16 @@ export class ConsoleServer {
         ? { outcome: "question" as const, question: envelope.event.question }
         : envelope.event.outcome === "gave-up"
         ? { outcome: "gave-up" as const, reason: envelope.event.reason }
+        : envelope.event.outcome === "completed"
+        ? {
+          outcome: "completed" as const,
+          ...(envelope.event.answer !== undefined
+            ? { answer: envelope.event.answer }
+            : {}),
+          ...(envelope.event.actions !== undefined
+            ? { actions: envelope.event.actions }
+            : {}),
+        }
         : { outcome: "completed" as const }),
       sessionId: envelope.sessionId,
       continuable: this.#sessionContinuable(envelope.sessionId),
