@@ -4824,6 +4824,33 @@ export declare function revokeSpaceAccess(
 ): void;
 
 /**
+ * Tells `principal`, a member of the space `entry`'s value lives in, about
+ * `entry`: once the handler's commit is accepted, sends a message to
+ * `principal`'s DID inbox naming the space and `entry`'s document, and nothing
+ * else. The inbox tells the recipient who sent it; the recipient trusts none of
+ * what it says, and opening the space is what checks it.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * `principal` must have an entry of its own in the space's access list, as it
+ * stands once the handler's own `grantSpaceAccess()` and `revokeSpaceAccess()`
+ * calls are applied. `principal` must be a DID other than `"*"`, and `entry` a
+ * cell at the root of a document in the space's own scope.
+ *
+ * The message goes out after the handler's writes commit, and is not sent if
+ * they fail. Nothing retries a send that fails, so a notice may not arrive,
+ * and one arrives only if its recipient has enabled their inbox. Every run of
+ * one event sends the same message, which the inbox holds once.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else. A
+ * refusal the runtime can tell at the call throws; the call throws before
+ * staging anything, so one the handler catches sends nothing.
+ */
+export declare function noticeSpaceAccess(
+  principal: DID,
+  entry: AnyCell<unknown>,
+): void;
+
+/**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a
  * cell's `entityId` — to its tagged-hash string, in whichever form the active
  * cell representation uses (a `{ "/": "id-string" }` object or a `FabricHash`).

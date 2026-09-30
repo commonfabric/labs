@@ -10,6 +10,10 @@
  * list, before the handler's transaction commits. The actor keeps `OWNER`
  * throughout, since no call may change the actor's own entry, so the ordering
  * never costs the handler its own writes.
+ *
+ * The module also exports the helpers these calls check with: finding the
+ * running handler, and reading a space's list as this runtime holds it, caught
+ * up with the memory server or not.
  */
 
 import type { SpaceGrantLevel } from "@commonfabric/api";
@@ -22,6 +26,7 @@ import { validateStoredAcl, writeAcl } from "../acl-manager.ts";
 import { spaceReaderRole } from "../cfc/space-membership.ts";
 import type { Runtime } from "../runtime.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { isStaleReadConflict } from "../storage/rejection.ts";
 import { topFrame } from "./frame-context.ts";
 import { spaceOfTarget } from "./space-access.ts";
@@ -96,12 +101,9 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
   if (pending === undefined || runtime === undefined) return;
   frame.pendingSpaceAccessChanges = undefined;
   for (const [space, changes] of pending) {
-    // Loading the list alone can leave a replica that already holds it behind
-    // the memory server. The round trip after it returns once every update the
-    // server had sent is applied, so the no-op decision below is made against
-    // the server's list as of then.
-    await runtime.getCellFromLink(aclLink(space)).sync();
-    await runtime.storageManager.open(space).pullToServerHead?.();
+    // The no-op decision below is made against the server's list as of the
+    // catch-up.
+    await catchUpAcl(runtime, space);
     const tx = runtime.edit();
     tx.tx.immediate = true;
     try {
@@ -159,17 +161,7 @@ function stageChange(
   principal: unknown,
   level: SpaceGrantLevel | undefined,
 ): void {
-  const frame = topFrame();
-  const runtime = frame?.runtime;
-  const tx = frame?.tx;
-  if (
-    frame?.frameKind !== "handler" || runtime === undefined || tx === undefined
-  ) {
-    throw new Error(
-      `\`${call}\` is available only in a handler, not in a pattern body, ` +
-        "a `computed()`, or a `lift()`.",
-    );
-  }
+  const { frame, runtime, tx } = handlerFrame(call);
   if (runtime.servingPosture) {
     throw new Error(
       `\`${call}\` is not available on a serving runtime, which cannot yet ` +
@@ -220,14 +212,37 @@ function stageChange(
 }
 
 /**
- * Helper for {@link stageChange} and {@link commitSpaceAccessChanges}, which
- * returns `current`, the access list of `space`, with `changes` applied in
+ * Returns the frame of the running handler, with its runtime and its
+ * transaction. `call` names the call that needs them, for the error.
+ *
+ * @throws Error when no handler is running: in a pattern body, a
+ *   `computed()`, or a `lift()`.
+ */
+export function handlerFrame(
+  call: string,
+): { frame: Frame; runtime: Runtime; tx: IExtendedStorageTransaction } {
+  const frame = topFrame();
+  const runtime = frame?.runtime;
+  const tx = frame?.tx;
+  if (
+    frame?.frameKind !== "handler" || runtime === undefined || tx === undefined
+  ) {
+    throw new Error(
+      `\`${call}\` is available only in a handler, not in a pattern body, ` +
+        "a `computed()`, or a `lift()`.",
+    );
+  }
+  return { frame, runtime, tx };
+}
+
+/**
+ * Returns `current`, the access list of `space`, with `changes` applied in
  * order. `current` is `null` when the space has no list.
  *
  * @throws Error when a change's actor holds no `OWNER` in the list it
  *   changes, or when a change would leave no concrete `OWNER`.
  */
-function applyChanges(
+export function applyChanges(
   space: MemorySpace,
   current: ACL | null,
   changes: readonly SpaceAccessChange[],
@@ -256,12 +271,15 @@ function applyChanges(
 }
 
 /**
- * Helper for {@link stageChange}, which returns the access list of `space` as
- * this runtime holds it, or `undefined` when it holds none. The read is
- * outside the handler's transaction, so that committing the change does not
- * make the handler's own commit conflict with it.
+ * Returns the access list of `space` as this runtime holds it, or `undefined`
+ * when it holds none. The read is outside any handler's transaction, so that
+ * committing a change to the list does not make the handler's own commit
+ * conflict with it.
  */
-function knownAcl(runtime: Runtime, space: MemorySpace): ACL | undefined {
+export function knownAcl(
+  runtime: Runtime,
+  space: MemorySpace,
+): ACL | undefined {
   const tx = runtime.edit();
   try {
     const envelope = tx.readOrThrow({
@@ -272,6 +290,21 @@ function knownAcl(runtime: Runtime, space: MemorySpace): ACL | undefined {
   } finally {
     tx.abort();
   }
+}
+
+/**
+ * Loads the access list of `space` into this runtime's replica and catches the
+ * replica up with the memory server, so that what {@link knownAcl} then
+ * returns is the server's list as of the catch-up. Loading the list alone can
+ * leave a replica that already holds it behind the server; the round trip
+ * after it returns once every update the server had sent is applied.
+ */
+export async function catchUpAcl(
+  runtime: Runtime,
+  space: MemorySpace,
+): Promise<void> {
+  await runtime.getCellFromLink(aclLink(space)).sync();
+  await runtime.storageManager.open(space).pullToServerHead?.();
 }
 
 /** Returns the link to the access-list document of `space`. */
