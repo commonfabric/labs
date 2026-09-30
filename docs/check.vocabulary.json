@@ -27,6 +27,7 @@
     "cfSqlite",
     "compileAndRun",
     "computed",
+    "currentPrincipal",
     "equals",
     "fetchBinary",
     "fetchJson",

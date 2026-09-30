@@ -106,6 +106,9 @@ instead of hiding it in module-scoped mutable variables.
 - Timers are not part of the authored surface and do not compile, so drive
   timed work through the scheduler rather than reaching for `setTimeout()` or
   `setInterval()` in handler code.
+- Call `currentPrincipal()` for the DID of the user the handler acts for, never
+  a field of the event; [Handling Events](./action.md#who-the-action-acts-for)
+  says what it does and does not tell you.
 
 ## Input Delivery Is Rate-Shaped
 

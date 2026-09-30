@@ -76,6 +76,10 @@ a line for each new document to the index below.
 - [`home-space-internals.md`](home-space-internals.md) — the runtime
   implementation behind home-space behavior, including how the runtime derives
   the user's identity DID
+- [`current-principal.md`](current-principal.md) — the principal a handler acts
+  for: where `currentPrincipal()` gets it on a client and on a serving runtime,
+  what cannot steer it, why it is authority rather than intent, and why it is
+  available only in a handler
 
 ## Talking to the outside world
 
