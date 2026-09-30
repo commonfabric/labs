@@ -6,7 +6,7 @@
  */
 
 import { debugStr, hashStringOf } from "@commonfabric/data-model";
-import { isWellFormedDID } from "@commonfabric/identity/did";
+import { isDIDKey, isWellFormedDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
 import type { DID, MemorySpace, URI } from "@commonfabric/memory/interface";
 
@@ -57,14 +57,18 @@ export type SpaceAccessNotice = {
  * failure to send, is logged and nothing retries it, so a notice may not
  * arrive.
  *
- * Notices are idempotent per event: the inbox operation id is derived from
- * `eventKey()`, `principal` and the payload, so a run of the same event again
- * sends a message the inbox already holds, and the inbox keeps the first.
+ * An event sends a principal at most one notice. The inbox operation id is
+ * derived from `eventKey()` and `principal` alone, and the inbox keeps the
+ * first message it receives under an operation id. A later run of the same
+ * event sends the same operation id: with the same payload the inbox returns
+ * the first message's receipt, and with a different one, as when `entry`
+ * resolves elsewhere on that run, the inbox refuses it, which is logged. A
+ * second call for the same principal in one run stages nothing more.
  *
  * @throws Error when called anywhere but in a handler, on a serving runtime,
- *   for a `principal` that is not a DID in DID Core syntax (`"*"` among them),
- *   and for an `entry` that is not a cell at the root of a document in the
- *   space's own scope.
+ *   for a `principal` that is not a `did:key` DID in DID Core syntax (`"*"`
+ *   among them), since an inbox addresses only those, and for an `entry` that
+ *   is not a cell at the root of a document in the space's own scope.
  */
 export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
   const call = "noticeSpaceAccess()";
@@ -80,9 +84,9 @@ export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
   if (actor === undefined) {
     throw new Error(`\`${call}\` requires an event with an actor.`);
   }
-  if (!isWellFormedDID(principal)) {
+  if (!isWellFormedDID(principal) || !isDIDKey(principal)) {
     throw new Error(
-      `\`${call}\` takes a principal's DID, never \`*\`; ` +
+      `\`${call}\` takes a principal's \`did:key\` DID, never \`*\`; ` +
         debugStr`got $quote${principal}.`,
     );
   }
@@ -101,9 +105,7 @@ export function noticeSpaceAccess(principal: unknown, entry: unknown): void {
     space,
     entry: link.id,
   };
-  const operationId = `notice-${
-    hashStringOf({ eventKey: key, principal, payload })
-  }`;
+  const operationId = `notice-${hashStringOf({ eventKey: key, principal })}`;
   tx.enqueuePostCommitEffect({
     id: `noticeSpaceAccess:${operationId}`,
     kind: "noticeSpaceAccess",

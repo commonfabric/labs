@@ -83,10 +83,16 @@ type NoticePatternResult = Cell<{
 class FakeInbox {
   #store = new InboxStore(":memory:");
   #sends = 0;
+  #refusals: string[] = [];
 
   /** How many `send` requests have arrived, accepted or not. */
   get sends(): number {
     return this.#sends;
+  }
+
+  /** The codes of the `send` requests the store refused, in order. */
+  get refusals(): readonly string[] {
+    return this.#refusals;
   }
 
   /** Enables delivery to `recipient`. */
@@ -117,6 +123,7 @@ class FakeInbox {
       return Response.json(this.#store.send(userDid, await request.json()));
     } catch (error) {
       if (!(error instanceof InboxError)) throw error;
+      this.#refusals.push(error.code);
       return Response.json({ code: error.code }, { status: 409 });
     }
   }
@@ -275,15 +282,19 @@ describe("space-access-notice", () => {
     }
   }
 
-  /** Writes, through `runtime`, a room document in `space`, and returns it. */
+  /**
+   * Writes, through `runtime`, a room document in `space` whose cause is
+   * `name`, and returns it.
+   */
   async function createRoom(
     runtime: Runtime,
     space: MemorySpace,
+    name = "space-access-notice room",
   ): Promise<Cell<{ title: string }>> {
     const tx = runtime.edit();
     const room = runtime.getCell<{ title: string }>(
       space,
-      "space-access-notice room",
+      name,
       undefined,
       tx,
     );
@@ -586,6 +597,23 @@ describe("space-access-notice", () => {
       expect(inbox.messagesFor(bob).length).toBe(2);
     });
 
+    it("sends one message for two runs of one event whose entries differ, and the inbox refuses the second", async () => {
+      const { runtime, space, room } = await owned();
+      const other = await createRoom(
+        runtime,
+        space,
+        "space-access-notice other",
+      );
+
+      await noticeAndCommit(runtime, room, "evk:space-access-notice:moved");
+      await noticeAndCommit(runtime, other, "evk:space-access-notice:moved");
+
+      expect(inbox.sends).toBe(2);
+      expect(inbox.refusals).toEqual(["operation-conflict"]);
+      expect(inbox.messagesFor(bob).map((message) => message.payload))
+        .toEqual([noticeOf(room)]);
+    });
+
     it("sends nothing when the handler's transaction is aborted", async () => {
       const { runtime, room } = await owned();
       const tx = runtime.edit();
@@ -601,6 +629,7 @@ describe("space-access-notice", () => {
       const [description, principal] of [
         ["`*`", "*"],
         ["a string that is not a DID", "bob"],
+        ["a DID that is not a `did:key`", "did:web:example.com"],
       ] as const
     ) {
       it(`throws for ${description} as the principal`, async () => {
@@ -611,7 +640,7 @@ describe("space-access-notice", () => {
             runtime.edit(),
             () => noticeSpaceAccess(principal, room),
           )
-        ).toThrow("takes a principal's DID");
+        ).toThrow("takes a principal's `did:key` DID");
       });
     }
 
