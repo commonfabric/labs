@@ -3985,7 +3985,8 @@ export interface LeaveSpaceOptions {
   /**
    * Who becomes `OWNER` when the actor is the space's last concrete `OWNER`:
    * the first of these, in order, that holds an entry in the space's access
-   * list. Ignored when another concrete `OWNER` remains.
+   * list. Ignored when another concrete `OWNER` remains. A leave that makes
+   * one `OWNER` needs the handler's event to be a trusted gesture.
    */
   readonly successors?: readonly DID[];
 }
@@ -3994,20 +3995,25 @@ export interface LeaveSpaceOptions {
  * Removes the acting principal's own entry from the access list of the space
  * `target`'s value lives in, giving up the access it granted. Leaving a space
  * whose list holds no entry for the actor changes nothing, so a handler run
- * again for the same event converges.
+ * again for the same event converges. Neither does leaving when the actor's
+ * entry is the list's only one: a list cannot be empty, so the entry stays.
  *
- * When the actor is the space's last concrete `OWNER`, the same change sets
- * the entry of the first of `options.successors` that holds one to `OWNER`, so
- * the space keeps a concrete `OWNER`. When none of them holds an entry, or
- * none is named, leaving is refused. So is leaving a space whose list has a
- * `"*"` entry, since the actor would keep what that entry grants, and leaving
- * the actor's own Home space. Leaving needs no trusted gesture: it acts on the
- * actor alone and exposes nothing.
+ * When the actor is the space's last concrete `OWNER` and others remain, the
+ * same change sets the entry of the first of `options.successors` that holds
+ * one to `OWNER`, so the space keeps a concrete `OWNER`. That makes someone
+ * `OWNER`, so it needs the handler's event to be a trusted gesture, as a grant
+ * does. When no successor holds an entry, or none is named, leaving is
+ * refused. So is leaving a space whose list has a `"*"` entry, since the actor
+ * would keep what that entry grants, and leaving the actor's own Home space.
+ * Any other leave needs no trusted gesture: it acts on the actor alone and
+ * exposes nothing.
  *
  * The change commits as a commit of its own, after the handler's other writes
- * commit, since the actor can no longer write to the space once it lands. If
- * the change then fails or is refused, the handler's writes stand and the
- * actor keeps its entry; a failure because the list changed concurrently is
+ * commit, since the actor can no longer write to the space once it lands. So
+ * a leave may not land even though the handler's writes did: if its commit
+ * fails or is refused, the actor keeps its entry, and the failure reaches the
+ * runtime's error handlers, not the pattern. `spaceAccess(target)` afterwards
+ * is how a pattern tells. A failure because the list changed concurrently is
  * repaired by leaving again.
  *
  * Available only in a handler on a client runtime, and throws anywhere else:

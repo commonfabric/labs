@@ -669,8 +669,8 @@ details.
 
 `leaveSpace(target, { successors })` removes the entry of the person who sent
 the event from the access list of the space `target`'s value lives in, so they
-give up the access it granted. It needs no trusted gesture and no `OWNER`: any
-member may leave, from any client.
+give up the access it granted. It needs no `OWNER`, and usually no trusted
+gesture: any member may leave, from any client.
 
 ```tsx
 // Shown at module scope.
@@ -685,18 +685,23 @@ const leave = handler<
 ```
 
 A space always keeps a concrete `OWNER`. When the person leaving is the last
-one, the first of `successors` who is already a member becomes `OWNER` in the
-same change; name them in the order the pattern wants, since the runtime
-cannot tell who has been a member longest. With no such successor the leave is
-refused, and so is the last member leaving. So is leaving a space whose access
-list has a `"*"` entry, since that entry would still admit them, and leaving
-one's own Home space.
+one and others remain, the first of `successors` who is already a member
+becomes `OWNER` in the same change; name them in the order the pattern wants,
+since the runtime cannot tell who has been a member longest. That hands the
+space over, so it needs the event to be a trusted gesture, as a grant does,
+and a client that cannot issue one cannot hand off the last `OWNER`. With no
+such successor the leave is refused. So is leaving a space whose access list
+has a `"*"` entry, since that entry would still admit them, and leaving one's
+own Home space. When the person leaving is the list's only entry, nothing
+changes: a list cannot be empty, so the entry stays.
 
 The leave commits after the handler's other writes, since the person leaving
-can no longer write to the space once it lands. If it then fails, those writes
-stand and the person keeps their access; calling `leaveSpace()` again, for
-example when the pattern finds a leave it already recorded, repairs that.
-Leaving when not on the list does nothing. Like the other two calls,
+can no longer write to the space once it lands. So it may not land even though
+those writes did: if it fails, the writes stand, the person keeps their
+access, and the failure goes to the runtime's error handlers rather than the
+pattern. Read `spaceAccess(target)` afterwards to find out. Calling
+`leaveSpace()` again, for example when the pattern finds a leave it already
+recorded, repairs a failure. Leaving when not on the list does nothing. Like the other two calls,
 `leaveSpace()` works only in a handler, and throws on a serving runtime for
 now.
 

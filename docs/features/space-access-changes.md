@@ -102,10 +102,10 @@ check therefore bites only where the actor holds `OWNER` through the list's
 ## Leaving a space
 
 `leaveSpace(target, { successors })` removes the actor's own entry, whatever
-level it holds. It needs no trusted gesture, and no `OWNER`: it acts on the
-actor alone, and narrows who may read the space rather than widening it. A
-member has to be able to leave from any client acting as them, including one
-that cannot issue a trusted gesture.
+level it holds. It needs no `OWNER`, and unless it promotes a successor, no
+trusted gesture: it acts on the actor alone, and narrows who may read the
+space rather than widening it. A member has to be able to leave from any
+client acting as them, including one that cannot issue a trusted gesture.
 
 | Refused | Where |
 | --- | --- |
@@ -116,21 +116,36 @@ that cannot issue a trusted gesture.
 | `options` that is not an object, or `successors` that is not an array of DIDs in DID Core syntax | the call |
 | The space's own DID, or the actor, as a successor | the call |
 | A list with a `"*"` entry | the call when the runtime holds the list, and always the commit |
-| The last concrete `OWNER` leaving, with no successor holding an entry | the call when the runtime holds the list, and always the commit |
+| The last concrete `OWNER` leaving others behind, with no successor holding an entry | the call when the runtime holds the list, and always the commit |
+| A leave that would make a successor `OWNER`, for an event that is not a trusted gesture | the call when the runtime holds the list, and always the commit |
 
 A list with a `"*"` entry would go on granting the actor what that entry
 grants, so removing their own entry there is not a way out of the space, and
 the call refuses it rather than report a leave that did not happen.
 
-When the actor is the list's last concrete `OWNER`, the same commit makes the
-first of `successors`, in the order given, that holds an entry `OWNER`, so the
-space never loses its concrete `OWNER`. The runtime cannot tell who has been a
-member longest, or apply any other rule the caller has in mind, so the caller
+When the actor is the list's last concrete `OWNER` and others remain, the same
+commit makes the first of `successors`, in the order given, that holds an
+entry `OWNER`, so the space never loses its concrete `OWNER`. The runtime
+cannot tell who has been a member longest, so there is no automatic promotion
+of the longest-standing member, as FabriChat's room specifies: the caller
 names the order. A successor who holds no entry is passed over, since making
-them `OWNER` would be a grant made without a gesture. When no successor holds
-an entry, or none is named, the leave is refused, the last member of a space
-among them: the list cannot be empty, so a space's last member cannot leave
-it. When another concrete `OWNER` remains, `successors` is ignored.
+them `OWNER` would admit someone new. When no successor holds an entry, or
+none is named, the leave is refused. When another concrete `OWNER` remains,
+`successors` is ignored.
+
+Making a successor `OWNER` is a grant of `OWNER`, so a leave that does needs
+the handler's event to be a trusted gesture, checked as a grant's is and
+recorded when the handler runs. Without one, a pattern could hand a space the
+user alone owns to any member, a `READ` one included, with no act of the
+user's. So a client that cannot issue trusted gestures, such as the CLI or a
+native client, cannot hand off a space's last `OWNER` until a host can issue
+gestures of its own. That departs from FabriChat's "leave from any client"
+for the promoting case alone.
+
+When the actor's entry is the list's only one, leaving changes nothing and
+succeeds: the list cannot be empty, so the entry stays. Nobody else can then
+read the space or be added to it, which is FabriChat's "leaving is really
+abandoning".
 
 The memory server admits a leave from a member without `OWNER` through a rule
 of its own (INV-12 in `docs/specs/memory-v2/09-invariants.md`): an access-list
@@ -207,11 +222,14 @@ server refuses the actor's writes to the space, the handler's among them.
    one is needed. When the list holds no entry for the actor, it sends
    nothing.
 
-A failure at the third step, whether a refusal the call could not see or a
-conflict with a concurrent change to the list, cannot fail the run, whose
-writes have committed, and nothing runs the handler again. It is reported
-through the scheduler's error handlers, as a failed run is, and the actor
-keeps their entry. The pattern's records may then say the actor left while the
+So a leave may not land even though the handler's writes did. A failure at the
+third step, whether a refusal the call could not see or a conflict with a
+concurrent change to the list, cannot fail the run, whose writes have
+committed, and nothing runs the handler again. The actor keeps their entry,
+and the failure is reported through the scheduler's error handlers, as a
+failed run is. Those reach the host, not the pattern, and the post-commit
+effect that commits the leave has no other way to report back, so a pattern
+that needs to know reads `spaceAccess(target)` afterwards. The pattern's records may then say the actor left while the
 list still admits them. Leaving again repairs it: a pattern that finds a leave
 it already recorded calls `leaveSpace()` again, which sends nothing once the
 entry is gone.
