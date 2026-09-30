@@ -487,8 +487,9 @@ describe("stage D seal-into-wave", () => {
       }) as const;
 
     it("refuses at the seal a run writing the document, and nothing enters the wave", async () => {
-      // The seal's own result is what the case reads: a transaction the seal
-      // accepted would wait for a wave commit that never comes.
+      // The seal's own result is what the case reads, and the wave is
+      // abandoned before any assertion: a transaction the seal accepted
+      // would otherwise wait for a wave commit that never comes.
 
       const wave = newWave();
       const sealed = Promise.withResolvers<
@@ -515,13 +516,15 @@ describe("stage D seal-into-wave", () => {
       const committed = tx.commit();
       const result = await sealed.promise;
       runtime.clearSealDestination();
+      const contributionCount = wave.contributionCount;
+      wave.abandon("test-only");
 
       expect(isAclDocumentWriteRefusal(result.error)).toBe(true);
       expect(result.error?.message).toContain(
         `of:${space} is the space ACL document`,
       );
       expect((await committed).error?.message).toBe(result.error?.message);
-      expect(wave.contributionCount).toBe(0);
+      expect(contributionCount).toBe(0);
       expect(Engine.read(engine, { id: `of:${space}` })?.value).toEqual({
         "did:key:alice": "OWNER",
       });
