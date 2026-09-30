@@ -43,6 +43,7 @@ import {
   popFrame,
   pushFrameFromCause,
 } from "./builder/pattern.ts";
+import { commitSpaceAccessChanges } from "./builder/space-access-change.ts";
 import {
   type CellScope,
   type FabricExecValue,
@@ -85,6 +86,7 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
+import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
 import { MAX_PATH_RESOLUTION_LENGTH, resolveLink } from "./link-resolution.ts";
@@ -10716,6 +10718,7 @@ export class Runner {
           streamLink,
         ),
       );
+      frame.trustedGesture = isTrustedGesture(event);
       if (policyFacingIdentity) {
         setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
@@ -10796,17 +10799,26 @@ export class Runner {
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
-            const normalized = normalizeSandboxResult(result, name);
-            return this.#handleJavaScriptHandlerResult(
-              tx,
-              module.resultSchema,
-              normalized.value,
-              normalized.hasReactive,
-              frame,
-              resultCell,
-              addCancel,
-              cause,
-            );
+            const handleResult = () => {
+              const normalized = normalizeSandboxResult(result, name);
+              return this.#handleJavaScriptHandlerResult(
+                tx,
+                module.resultSchema,
+                normalized.value,
+                normalized.hasReactive,
+                frame,
+                resultCell,
+                addCancel,
+                cause,
+              );
+            };
+            // Access-list changes commit on their own, ahead of the handler's
+            // transaction: the memory server admits an access-list change
+            // only as a commit's single operation.
+            if ((frame.pendingSpaceAccessChanges?.size ?? 0) > 0) {
+              return commitSpaceAccessChanges(frame).then(handleResult);
+            }
+            return handleResult();
           } finally {
             logger.timeEnd("stream", "postRun");
           }

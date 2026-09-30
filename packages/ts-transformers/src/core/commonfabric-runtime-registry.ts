@@ -292,6 +292,20 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // grantSpaceAccess(target, principal, level) and revokeSpaceAccess(target,
+  // principal) stage an access-list change in the running handler and return
+  // nothing. They build no graph node, so each is a plain call inside the
+  // handler that makes it.
+  {
+    exportName: "grantSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  {
+    exportName: "revokeSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
 ] as const satisfies readonly CommonFabricRuntimeExportSpec[];
 
 export const COMMONFABRIC_RUNTIME_EXPORTS_BY_NAME: ReadonlyMap<
