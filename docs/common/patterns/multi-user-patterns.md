@@ -335,7 +335,8 @@ A DID a pattern reads from its data — a member list, a message's author, an
 invitation — is only a string, and anything can be written there. Before showing
 one to a person or treating it as the principal a record names, ask
 `isWellFormedDID()`, exported from `commonfabric`. It returns whether the value is
-a DID in DID Core syntax, and narrows it to `DID` when it is:
+a DID in DID Core syntax and at most 256 characters long, and narrows it to `DID`
+when it is. A longer DID fails it even when its syntax is valid:
 
 ```tsx
 // Shown inside a pattern body.
