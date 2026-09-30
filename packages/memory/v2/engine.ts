@@ -6984,9 +6984,11 @@ const newestPatchConflict = (
  * or, for a shallow read, `patchOverlapsNonRecursiveRead()` — matches against
  * the read.
  *
- * Patches are read newest first and indexed an op at a time, so a read stops
- * at the op it conflicts with and decodes nothing older. A read that reaches
- * the last patch leaves its indexes in `scans`, and every later read of the
+ * Patches are decoded newest first and indexed an op at a time, so decoding
+ * stops at the op the read conflicts with. The cursor is exhausted even on
+ * an early return or a decoding error, releasing its read snapshot before the
+ * surrounding transaction ends. A read that reaches the last patch leaves
+ * its indexes in `scans`, and every later read of the
  * same document and exclusion at that basis or a later one is decided from
  * them in time proportional to its path's depth, whatever the number of
  * patches.
@@ -7063,22 +7065,31 @@ const findConflictSeq = (
     leaves: new TouchedPathIndex(),
     shapes: new TouchedPathIndex(),
   };
-  for (
-    const conflict of patchStatement.iter(params) as Iterable<{
-      seq: number;
-      data: string | null;
-    }>
-  ) {
-    for (const patch of decodeStoredPatchList(conflict.data)) {
-      const leaves = touchedLeafPathsForPatch(patch);
-      for (const path of leaves) indexes.leaves.add(path, conflict.seq);
-      for (const path of touchedPathsForPatch(patch, leaves)) {
-        indexes.shapes.add(path, conflict.seq);
+  const conflicts = patchStatement.iter(params) as IterableIterator<{
+    seq: number;
+    data: string | null;
+  }>;
+  try {
+    // `for...of` closes the generator on an early exit. `@db/sqlite` 0.13.0
+    // resets its statement only on exhaustion, so keep it resumable for the
+    // `finally` below; a suspended cursor can outlive a transaction rollback.
+    for (let row = conflicts.next(); !row.done; row = conflicts.next()) {
+      const conflict = row.value;
+      for (const patch of decodeStoredPatchList(conflict.data)) {
+        const leaves = touchedLeafPathsForPatch(patch);
+        for (const path of leaves) indexes.leaves.add(path, conflict.seq);
+        for (const path of touchedPathsForPatch(patch, leaves)) {
+          indexes.shapes.add(path, conflict.seq);
+        }
+        const seq = newestPatchConflict(indexes, readPath, nonRecursive);
+        if (seq !== null) {
+          return seq;
+        }
       }
-      const seq = newestPatchConflict(indexes, readPath, nonRecursive);
-      if (seq !== null) {
-        return seq;
-      }
+    }
+  } finally {
+    while (!conflicts.next().done) {
+      // Discard remaining rows without decoding or retaining their patches.
     }
   }
   if (document !== undefined) {

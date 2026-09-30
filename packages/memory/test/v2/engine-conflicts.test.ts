@@ -281,6 +281,89 @@ describe("engine-conflicts", () => {
     expect(patches.calls).toHaveLength(1);
   });
 
+  for (const kind of ["confirmed", "pending"] as const) {
+    for (const malformed of [false, true]) {
+      const failure = malformed
+        ? "failing to decode patches for a"
+        : "rejecting a stale";
+      it(`accepts a commit after ${failure} ${kind} read and another connection writes`, async () => {
+        const other = await open({ url: toFileUrl(path) });
+        try {
+          for (const localSeq of [1, 2]) {
+            applyCommit(engine, {
+              sessionId: "session:updates",
+              commit: {
+                localSeq,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "patch",
+                  id: ids[0],
+                  patches: [{
+                    op: "replace",
+                    path: "/value/a",
+                    value: localSeq + 10,
+                  }],
+                }],
+              },
+            });
+          }
+          if (malformed) {
+            engine.database.exec(
+              "UPDATE revision SET data = NULL WHERE id = ? AND op = 'patch'",
+              ids[0],
+            );
+          }
+          const stale = { id: ids[0], path: toDocumentPath(["value", "a"]) };
+          expect(() =>
+            applyCommit(engine, {
+              sessionId,
+              commit: {
+                localSeq: 2,
+                reads: {
+                  confirmed: kind === "confirmed" ? [{ ...stale, seq: 1 }] : [],
+                  pending: kind === "pending"
+                    ? [{ ...stale, basisSeq: 1, localSeq: [1] }]
+                    : [],
+                },
+                operations: [{
+                  op: "set",
+                  id: "of:output",
+                  value: { value: "rejected" },
+                }],
+              },
+            })
+          ).toThrow(
+            malformed
+              ? "memory v2 stored patches must carry a payload"
+              : ConflictError,
+          );
+          expect(engine.database.inTransaction).toBe(false);
+
+          // Advancing the WAL from another connection makes any read snapshot
+          // retained by the rejected commit too old to upgrade to a writer.
+          const intervening = applyCommit(other, {
+            sessionId: "session:other-connection",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:other-output",
+                value: { value: "intervening" },
+              }],
+            },
+          });
+          expect(commitReads([]).seq).toBe(intervening.seq + 1);
+          expect(read(other, { id: "of:output" })).toEqual({
+            value: "updated",
+          });
+        } finally {
+          close(other);
+        }
+      });
+    }
+  }
+
   for (const invalidFirst of [false, true]) {
     it(`rejects an unknown branch ${invalidFirst ? "before" : "after"} a stale read without reporting a retryable conflict`, () => {
       const stale = { id: ids[0], path: toDocumentPath(["value"]), seq: 0 };
