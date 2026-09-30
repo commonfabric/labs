@@ -47,16 +47,19 @@ export function expandCapturedObjectSpreads(
     }
 
     let changed = false;
-    const properties = visited.properties.flatMap((property) => {
+    const properties = visited.properties.flatMap((
+      property,
+    ): ts.ObjectLiteralElementLike[] => {
       if (!ts.isSpreadAssignment(property)) {
         return [property];
       }
 
       const operand = property.expression;
-      const keys = ts.isIdentifier(operand) &&
-          capturedNames.has(operand.text)
-        ? staticKeysOfCapturedObject(operand, callback, context)
-        : undefined;
+      if (!ts.isIdentifier(operand) || !capturedNames.has(operand.text)) {
+        return [property];
+      }
+
+      const keys = staticKeysOfCapturedObject(operand, callback, context);
       if (!keys) {
         return [property];
       }
