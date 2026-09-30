@@ -4705,9 +4705,8 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
 /**
  * Returns the current principal's own access to the space `target`'s value
  * lives in, as the space's access list states it: the principal's entry in
- * the list, else the list's `"*"` entry, with the space's own identity holding
- * `OWNER` implicitly. `target` is required, so a call about the pattern's own
- * space passes a cell that lives there.
+ * the list, else the list's `"*"` entry. `target` is required, so a call about
+ * the pattern's own space passes a cell that lives there.
  *
  * `"none"` means the principal holds nothing there. `undefined` means the
  * answer is not known yet: the access list has not arrived, the space has no

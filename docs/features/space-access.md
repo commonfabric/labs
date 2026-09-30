@@ -18,18 +18,19 @@ own default when it is constructed without a mode, it checks nothing.
 
 The level is the principal's membership as the space's access list states it:
 the principal's entry in the list (the document `of:<space DID>`), else the
-list's `"*"` entry, with the space's own identity holding `OWNER` without an
-entry. `spaceReaderRole()` in `packages/runner/src/cfc/space-membership.ts`
-makes that decision, and it is the same function the render membership lookup
-uses, so a pattern and the renderer read one list the same way, and the same way
-the memory server resolves a listed principal.
+list's `"*"` entry. A space's own DID is no exception, and holds only what the
+list grants it. `spaceReaderRole()` in
+`packages/runner/src/cfc/space-membership.ts` makes that decision, and it is the
+same function the render membership lookup uses, so a pattern and the renderer
+read one list the same way, and the same way the memory server resolves a listed
+principal.
 
-It is the access-list view, not the whole of what the memory server decides.
-The server also grants `OWNER` to any configured service DID
+It is the access-list view, not the whole of what the memory server decides. The
+server also grants `OWNER` to any configured service DID
 (`MEMORY_SERVICE_DIDS`), and admits any authenticated principal to a space with
-no access list for compatibility. Neither is membership. The first never arises here, because the
-principal `spaceAccess(target)` asks about is always a user, never the service,
-even on a serving runtime. The second is covered below.
+no access list for compatibility. Neither is membership. The first never arises
+here, because the principal `spaceAccess(target)` asks about is always a user,
+never the service, even on a serving runtime. The second is covered below.
 
 `target` picks the space, and it is required: a call about the space the
 calling code runs in passes a cell that lives there, so every call names the
@@ -102,11 +103,11 @@ readmission, so on a client the call also registers the running action with the
 storage manager's access-change observer (`subscribeSpaceAccessChange()`), which
 runs it again through `Scheduler.invalidateAction()` when the verdict changes.
 Each registration lasts until the next change for that space, or until the
-scheduler unsubscribes the action; a run that still asks registers again. The runtime owns that registration
-(`Runtime.spaceAccessWatch`, a `SpaceAccessWatch` in
-`packages/runner/src/space-access-watch.ts`) and cancels its subscription when
-it is disposed, so a storage manager that outlives the runtime keeps no hold on
-it.
+scheduler unsubscribes the action; a run that still asks registers again. The
+runtime owns that registration (`Runtime.spaceAccessWatch`, a `SpaceAccessWatch`
+in `packages/runner/src/space-access-watch.ts`) and cancels its subscription
+when it is disposed, so a storage manager that outlives the runtime keeps no
+hold on it.
 
 A client does not ask the memory server again about a space it was refused on
 its own. The session opens again when something reads a document of that space

@@ -64,8 +64,9 @@ describe("spaceAccess()", () => {
 
   /**
    * Returns a function writing a document in the space `owner` is the
-   * identity of, `space` unless given, as that identity, on the memory server
-   * `on`, the test's own unless given.
+   * identity of, `space` unless given, on the memory server `on`, the test's
+   * own unless given. It writes as the service identity, which the test's
+   * memory server treats as an owner of every space, genesis included.
    */
   async function writerFor(
     owner: Identity = spaceSigner,
@@ -82,7 +83,7 @@ describe("spaceAccess()", () => {
           aud: context.audience,
           challenge: context.challenge.value,
         },
-        authorization: { principal: target },
+        authorization: { principal: service.did() },
       }),
     );
     let localSeq = 0;
@@ -141,11 +142,17 @@ describe("spaceAccess()", () => {
     return runtime;
   }
 
-  /** Brings `space`'s access list into `runtime`'s replica, or tries to. */
-  async function syncAcl(runtime: Runtime): Promise<void> {
+  /**
+   * Brings the access list of `target`, `space` unless given, into
+   * `runtime`'s replica, or tries to.
+   */
+  async function syncAcl(
+    runtime: Runtime,
+    target: MemorySpace = space,
+  ): Promise<void> {
     await runtime.getCellFromLink({
-      space,
-      id: `of:${space}` as URI,
+      space: target,
+      id: `of:${target}` as URI,
       path: [],
     }).sync();
     await runtime.storageManager.synced();
@@ -263,12 +270,13 @@ describe("spaceAccess()", () => {
       expect(callIn(bobRuntime, bobRuntime.edit())).toBe("WRITE");
     });
 
-    it("returns `OWNER` to the space's own identity, which the list does not name", async () => {
+    it("returns `none` to the space's own identity when the list does not name it", async () => {
       const setAcl = await aclWriter();
       await setAcl({ [alice.did()]: "OWNER" });
 
       const runtime = clientRuntime(spaceSigner);
-      expect(callIn(runtime, runtime.edit())).toBe("OWNER");
+      await syncAcl(runtime);
+      expect(callIn(runtime, runtime.edit())).toBe("none");
     });
 
     it("returns `none` to a principal the memory server refuses the space", async () => {
@@ -307,9 +315,12 @@ describe("spaceAccess()", () => {
       const setAcl = await aclWriter();
       await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
 
+      const home = carol.did() as MemorySpace;
+      await (await aclWriter(carol))({ [home]: "OWNER" });
+
       const runtime = clientRuntime(carol);
       await syncAcl(runtime);
-      const home = carol.did() as MemorySpace;
+      await syncAcl(runtime, home);
       const target = runtime.getCell<unknown>(space, "space-access target");
 
       expect(callIn(runtime, runtime.edit(), { frameSpace: home, target }))
@@ -342,8 +353,12 @@ describe("spaceAccess()", () => {
         .toBe("READ");
     });
 
-    it("returns `undefined` for a target passed as `undefined`, not the calling code's level", () => {
+    it("returns `undefined` for a target passed as `undefined`, not the calling code's level", async () => {
+      const home = bob.did() as MemorySpace;
+      await (await aclWriter(bob))({ [home]: "OWNER" });
+
       const runtime = clientRuntime(bob);
+      await syncAcl(runtime, home);
       const frame = pushFrame({
         runtime,
         tx: runtime.edit(),
@@ -385,10 +400,19 @@ describe("spaceAccess()", () => {
       expect(tx.getNarrowestReadScope()).toBe("user");
 
       // An answer that needs no read narrows it all the same.
-      const ownTx = runtime.edit();
-      expect(callIn(runtime, ownTx, { frameSpace: bob.did() as MemorySpace }))
-        .toBe("OWNER");
-      expect(ownTx.getNarrowestReadScope()).toBe("user");
+      const unknownTx = runtime.edit();
+      const frame = pushFrame({
+        runtime,
+        tx: unknownTx,
+        space,
+        frameKind: "lift",
+      });
+      try {
+        expect(spaceAccess(undefined)).toBeUndefined();
+      } finally {
+        popFrame(frame);
+      }
+      expect(unknownTx.getNarrowestReadScope()).toBe("user");
     });
   });
 

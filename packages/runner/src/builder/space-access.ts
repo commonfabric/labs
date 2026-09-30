@@ -20,9 +20,8 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
 /**
  * Returns the current principal's own access to the space `target`'s value
  * lives in: its membership as the space's access list states it,
- * `acl[principal] ?? acl["*"]`, with the space's own identity holding `OWNER`
- * implicitly. {@link spaceReaderRole} decides it, as it does for the render
- * membership lookup. The memory server also grants configured service DIDs
+ * `acl[principal] ?? acl["*"]`. {@link spaceReaderRole} decides it, as it does
+ * for the render membership lookup. The memory server also grants configured service DIDs
  * `OWNER`, which never arises here since the principal is never the service.
  *
  * `"none"` means the principal holds nothing there: the list grants them
@@ -127,7 +126,6 @@ function accessLevel(
   reactive: boolean,
 ): SpaceAccessLevel | undefined {
   if (principal === undefined) return undefined;
-  if (principal === space) return "OWNER";
 
   // A serving runtime reads every space as that space's owner, so what the
   // memory server thinks of its own session says nothing about the principal
@@ -146,7 +144,7 @@ function accessLevel(
 
   if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
   if (acl === undefined) return undefined;
-  const role = spaceReaderRole(acl as ACL, space, principal);
+  const role = spaceReaderRole(acl as ACL, principal);
   return role === null ? "none" : LEVEL_OF_ROLE[role];
 }
 
