@@ -266,6 +266,16 @@ export const EnvSchema = z.object({
   // on; see docs/features/self-serve-ingest-channels.md.
   INGEST_SELF_SERVE_ENABLED: boolFlag(),
 
+  // Gmail push ingest: POST /api/ingest-push/gmail, which Cloud Pub/Sub calls
+  // with each Gmail `users.watch` notification, and the gmail-bind and
+  // gmail-unbind verbs of the ingest-channel control plane. On only when both
+  // are set. The audience is the one the push subscriptions are configured
+  // to put on their OIDC tokens; the service accounts, comma-separated, are
+  // the ones those tokens may be signed for. See
+  // docs/features/gmail-push-ingest.md.
+  INGEST_GMAIL_PUSH_AUDIENCE: z.string().default(""),
+  INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS: z.string().default(""),
+
   // Comma-separated DIDs with implicit OWNER on every space (e.g. the
   // background service operator identity).
   MEMORY_SERVICE_DIDS: z.string().default(""),

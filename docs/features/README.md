@@ -103,6 +103,10 @@ a line for each new document to the index below.
   mints an ingest channel for their own space without an operator: the space-ACL
   authorization model, why the two obvious designs are unsound, and the
   procedure for retiring channels when the trust conditions change
+- [`gmail-push-ingest.md`](gmail-push-ingest.md) — how a Gmail `users.watch`
+  notification, pushed by Cloud Pub/Sub, reaches the ingest channels bound to
+  its mailbox, what proves a caller may bind a mailbox, and what the syncer
+  still owns
 - [`gateway-request-provenance.md`](gateway-request-provenance.md) — how a
   request to the LLM gateway says which workload produced it, what a value is
   allowed to contain given that it reaches the provider, and why the machine

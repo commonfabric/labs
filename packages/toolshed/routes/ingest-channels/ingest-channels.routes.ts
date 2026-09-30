@@ -262,7 +262,82 @@ export const revoke = createRoute({
   },
 });
 
+export const gmailBind = createRoute({
+  path: `${BASE}/gmail-bind`,
+  method: "post",
+  tags,
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            id: z.string(),
+            accessToken: z.string().min(1).max(4096).describe(
+              "A Google access token that can read the mailbox's Gmail " +
+                "profile. Used for one lookup and not stored.",
+            ),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    [HttpStatusCodes.OK]: {
+      content: {
+        "application/json": {
+          schema: z.object({ id: z.string(), emailAddress: z.string() }),
+        },
+      },
+      description:
+        "Gmail push notifications for this mailbox now reach the channel",
+    },
+    ...commonResponses,
+    [HttpStatusCodes.BAD_REQUEST]: {
+      ...jsonError,
+      description: "Invalid input, or Gmail did not accept the access token",
+    },
+    [HttpStatusCodes.CONFLICT]: {
+      ...jsonError,
+      description:
+        "The channel is revoked or expired, the mailbox is at its channel " +
+        "limit, the binding changed concurrently, or this deployment cannot " +
+        "write to the space",
+    },
+    [HttpStatusCodes.BAD_GATEWAY]: {
+      ...jsonError,
+      description: "Storage failure, or the Gmail profile lookup failed",
+    },
+  },
+});
+
+export const gmailUnbind = createRoute({
+  path: `${BASE}/gmail-unbind`,
+  method: "post",
+  tags,
+  request: {
+    body: {
+      content: {
+        "application/json": { schema: z.object({ id: z.string() }) },
+      },
+    },
+  },
+  responses: {
+    [HttpStatusCodes.OK]: {
+      content: {
+        "application/json": {
+          schema: z.object({ id: z.string(), unbound: z.boolean() }),
+        },
+      },
+      description:
+        "The channel is bound to no mailbox; `unbound` says whether it was",
+    },
+    ...commonResponses,
+  },
+});
+
 export type MintRoute = typeof mint;
 export type ListRoute = typeof list;
 export type RotateRoute = typeof rotate;
 export type RevokeRoute = typeof revoke;
+export type GmailBindRoute = typeof gmailBind;
+export type GmailUnbindRoute = typeof gmailUnbind;

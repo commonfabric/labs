@@ -241,6 +241,8 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 | `POST /api/ingest-channels/list` | the caller's own channels; never returns `secretHash` |
 | `POST /api/ingest-channels/rotate` | new token, same id and target |
 | `POST /api/ingest-channels/revoke` | flips `enabled: false` |
+| `POST /api/ingest-channels/gmail-bind` | binds a channel to a Gmail mailbox; see [gmail-push-ingest.md](gmail-push-ingest.md) |
+| `POST /api/ingest-channels/gmail-unbind` | removes that binding |
 
 *Correction found while testing:* not mounting `cors()` here does **not** yield
 an absent `access-control-allow-origin`. `routes/static` and `routes/shell`

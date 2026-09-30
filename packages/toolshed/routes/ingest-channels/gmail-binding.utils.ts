@@ -1,0 +1,122 @@
+/**
+ * The control-plane verbs that bind an ingest channel to a Gmail mailbox, so
+ * that Gmail push notifications for the mailbox reach the channel's journal,
+ * and unbind it again. The binding store itself, and the data plane that
+ * reads it, are in `routes/ingest-push/gmail-push.utils.ts`.
+ *
+ * Two proofs stand behind a binding: the caller owns the space the channel
+ * writes into, which `loadOwned()` checks against the stored registration,
+ * and the caller holds an access token Gmail accepts for the mailbox. Without
+ * the second, anyone could bind someone else's address to a channel of their
+ * own and learn when that person's mail arrives.
+ */
+
+import { channelRefusal } from "@/routes/ingest/ingest.utils.ts";
+import {
+  BindingConflictError,
+  bindMailbox,
+  MailboxBindingFullError,
+  type MailboxLookup,
+  MAX_CHANNELS_PER_MAILBOX,
+  unbindChannel,
+} from "@/routes/ingest-push/gmail-push.utils.ts";
+import {
+  type ControlDeps,
+  type ControlResult,
+  loadOwned,
+} from "./ingest-channels.utils.ts";
+
+/** What the bind verb needs besides the ordinary control-plane dependencies. */
+export interface GmailBindDeps extends ControlDeps {
+  /** Asks Gmail which mailbox an access token reads. */
+  fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
+}
+
+/**
+ * Binds channel `input.id` to the mailbox `input.accessToken` reads, moving it
+ * off any mailbox it was bound to before. The caller must own the channel's
+ * space, and the channel must be live. The access token is used for one
+ * profile lookup and kept nowhere.
+ */
+export async function processGmailBind(
+  deps: GmailBindDeps,
+  callerDid: string,
+  input: { id: string; accessToken: string },
+): Promise<ControlResult<{ id: string; emailAddress: string }>> {
+  const owned = await loadOwned(deps, callerDid, input.id);
+  if (!owned.ok) return owned.result;
+  if (channelRefusal(owned.registration) !== null) {
+    return {
+      status: 409,
+      body: { error: "Channel is revoked or expired; rotate it first" },
+    };
+  }
+
+  const mailbox = await deps.fetchMailbox(input.accessToken);
+  if (!mailbox.ok) {
+    return mailbox.reason === "rejected"
+      ? { status: 400, body: { error: "Gmail did not accept the token" } }
+      : { status: 502, body: { error: "Gmail profile lookup failed" } };
+  }
+
+  try {
+    await bindMailbox(
+      deps.runtime,
+      deps.serviceSpace,
+      input.id,
+      mailbox.emailAddress,
+    );
+  } catch (error) {
+    if (error instanceof MailboxBindingFullError) {
+      return {
+        status: 409,
+        body: {
+          error: `Mailbox already has ${MAX_CHANNELS_PER_MAILBOX} bound ` +
+            "channels; unbind one first",
+        },
+      };
+    }
+    if (error instanceof BindingConflictError) {
+      return {
+        status: 409,
+        body: { error: "Binding changed concurrently; try again" },
+      };
+    }
+    deps.logger?.error({ error, id: input.id }, "gmail-bind: write failed");
+    return { status: 502, body: { error: "Storage failure" } };
+  }
+  deps.logger?.info({ id: input.id }, "gmail-bind: bound a mailbox");
+  return {
+    status: 200,
+    body: { id: input.id, emailAddress: mailbox.emailAddress },
+  };
+}
+
+/**
+ * Unbinds channel `input.id` from its mailbox. The caller must own the
+ * channel's space; the channel need not be live, so that a revoked channel
+ * can still be cleared. `unbound` says whether it was bound to anything.
+ */
+export async function processGmailUnbind(
+  deps: ControlDeps,
+  callerDid: string,
+  input: { id: string },
+): Promise<ControlResult<{ id: string; unbound: boolean }>> {
+  const owned = await loadOwned(deps, callerDid, input.id);
+  if (!owned.ok) return owned.result;
+
+  let unbound: boolean;
+  try {
+    unbound = await unbindChannel(deps.runtime, deps.serviceSpace, input.id);
+  } catch (error) {
+    if (error instanceof BindingConflictError) {
+      return {
+        status: 409,
+        body: { error: "Binding changed concurrently; try again" },
+      };
+    }
+    deps.logger?.error({ error, id: input.id }, "gmail-unbind: write failed");
+    return { status: 502, body: { error: "Storage failure" } };
+  }
+  return { status: 200, body: { id: input.id, unbound } };
+}

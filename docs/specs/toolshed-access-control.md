@@ -22,7 +22,7 @@ These routes require a first-party HTTP request proof:
 - `POST /api/agent-tools/web-search`
 - `POST /api/agent-tools/web-read`
 - `POST /api/sandbox/exec`
-- `POST /api/ingest-channels/{mint,list,rotate,revoke}`
+- `POST /api/ingest-channels/{mint,list,rotate,revoke,gmail-bind,gmail-unbind}`
 - `POST /api/inbox/{enable,status,send,list,get,acknowledge}`
 
 The first three were selected because first-party code calls them through the
@@ -38,7 +38,7 @@ anything (`packages/toolshed/lib/space-authority.ts`). It is called by `cf
 ingest`, not by a fetch builtin, so its paths are deliberately **not** in
 `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES` — adding them would let any pattern mint
 a channel with the user's authority and read the one-time token back, which
-needs the `cf-secret-viewer` treatment webhooks use. All four verbs are POST so
+needs the `cf-secret-viewer` treatment webhooks use. Every verb is POST so
 that remains possible later. See
 `docs/features/self-serve-ingest-channels.md`.
 

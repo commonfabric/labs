@@ -7,6 +7,7 @@ import env from "@/env.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import { requireFirstPartyHttpAuth } from "@/middlewares/first-party-http-auth.ts";
 import { createRateLimiter, rateLimit } from "@/middlewares/rate-limit.ts";
+import { gmailPushEnabled } from "@/routes/ingest-push/gmail-push.config.ts";
 
 const router = createRouter();
 
@@ -16,6 +17,11 @@ const router = createRouter();
 // issues a durable capability that outlives the trust conditions that
 // authorized it.
 router.use(`${routes.BASE}/*`, ingestGate(env.INGEST_SELF_SERVE_ENABLED));
+// The Gmail binding verbs are gated a second time, on Gmail push being
+// configured: a binding nothing will ever deliver to is not worth making.
+for (const verb of ["gmail-bind", "gmail-unbind"]) {
+  router.use(`${routes.BASE}/${verb}`, ingestGate(gmailPushEnabled));
+}
 
 // ORDER MATTERS: the body limit must run BEFORE the auth middleware.
 // `verifyFirstPartyHttpRequest` buffers the entire body (to hash it) *before*
@@ -48,10 +54,15 @@ const readLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 // and rotating are safe to refuse, because nothing bad happens when they do not
 // run. Revoke is the verb where refusing IS the bad outcome.
 const revokeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
-for (const verb of ["mint", "rotate"]) {
+// Binding shares the mint bucket, because each bind costs an outbound call to
+// Gmail. Unbinding, like revoking, is the verb that must stay available, so it
+// shares revoke's.
+for (const verb of ["mint", "rotate", "gmail-bind"]) {
   router.use(`${routes.BASE}/${verb}`, rateLimit(mintLimiter));
 }
-router.use(`${routes.BASE}/revoke`, rateLimit(revokeLimiter));
+for (const verb of ["revoke", "gmail-unbind"]) {
+  router.use(`${routes.BASE}/${verb}`, rateLimit(revokeLimiter));
+}
 router.use(`${routes.BASE}/list`, rateLimit(readLimiter));
 
 // Deliberately NO cors(): a credentialed control plane must not opt into the
@@ -67,4 +78,6 @@ export default router
   .openapi(routes.mint, handlers.mint)
   .openapi(routes.list, handlers.list)
   .openapi(routes.rotate, handlers.rotate)
-  .openapi(routes.revoke, handlers.revoke);
+  .openapi(routes.revoke, handlers.revoke)
+  .openapi(routes.gmailBind, handlers.gmailBind)
+  .openapi(routes.gmailUnbind, handlers.gmailUnbind);

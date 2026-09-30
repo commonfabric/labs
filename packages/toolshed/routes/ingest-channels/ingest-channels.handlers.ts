@@ -10,6 +10,8 @@ import { identity } from "@/lib/identity.ts";
 import env from "@/env.ts";
 import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
 import { hostsSpaceInStore } from "@/lib/space-authority.ts";
+import { fetchGmailMailbox } from "@/routes/ingest-push/gmail-push.utils.ts";
+import { processGmailBind, processGmailUnbind } from "./gmail-binding.utils.ts";
 import {
   type ControlDeps,
   processList,
@@ -18,6 +20,8 @@ import {
   processRotate,
 } from "./ingest-channels.utils.ts";
 import type {
+  GmailBindRoute,
+  GmailUnbindRoute,
   ListRoute,
   MintRoute,
   RevokeRoute,
@@ -82,6 +86,30 @@ export const list: AppRouteHandler<ListRoute> = async (c) => {
   const callerDid = c.get("verifiedUserDid");
   if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
   const result = await processList(
+    deps(c.get("logger")),
+    callerDid,
+    c.req.valid("json"),
+  );
+  if (result.status === 200) return c.json(result.body, 200);
+  return c.json(result.body, result.status);
+};
+
+export const gmailBind: AppRouteHandler<GmailBindRoute> = async (c) => {
+  const callerDid = c.get("verifiedUserDid");
+  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
+  const result = await processGmailBind(
+    { ...deps(c.get("logger")), fetchMailbox: fetchGmailMailbox },
+    callerDid,
+    c.req.valid("json"),
+  );
+  if (result.status === 200) return c.json(result.body, 200);
+  return c.json(result.body, result.status);
+};
+
+export const gmailUnbind: AppRouteHandler<GmailUnbindRoute> = async (c) => {
+  const callerDid = c.get("verifiedUserDid");
+  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
+  const result = await processGmailUnbind(
     deps(c.get("logger")),
     callerDid,
     c.req.valid("json"),

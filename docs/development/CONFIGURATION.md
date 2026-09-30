@@ -113,6 +113,16 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
 | `PLAID_SYNC_ALL_TRANSACTIONS` | `false` | Sync full history vs. incremental. |
 
+### Gmail push ingest
+
+On only when both are set; see
+[`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_GMAIL_PUSH_AUDIENCE` | _(unset)_ | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts those tokens may be signed for. |
+
 ---
 
 ## Identity & auth

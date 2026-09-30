@@ -847,7 +847,7 @@ export async function processList(
  * caller-supplied id would be a one-line confused deputy. A missing
  * registration answers exactly like an unowned one.
  */
-const loadOwned = async (
+export const loadOwned = async (
   deps: ControlDeps,
   callerDid: string,
   id: string,
