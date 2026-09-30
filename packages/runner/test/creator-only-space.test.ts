@@ -532,7 +532,7 @@ describe("creator-only inSpace()", () => {
         secondResult.key("create").send({ name: "room" }),
       ]);
       await Promise.all([settle(first.runtime), settle(second.runtime)]);
-      await waitForCellValue(
+      await waitForCellValue<unknown[]>(
         first.runtime,
         firstResult.key("rooms"),
         (rooms) => rooms?.length === 2,
