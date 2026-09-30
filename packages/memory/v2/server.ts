@@ -29,6 +29,8 @@ import {
   type ClientMessage,
   type CommitClass,
   commitPreconditionValueHash,
+  type ConnectionAuthRequest,
+  type ConnectionAuthResult,
   dbNeedsColumnProvenance,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -300,6 +302,18 @@ const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 const QUERY_EVALUATION_CACHE_BUDGET = 32_768;
 const SLOW_QUERY_BUFFER_SIZE = 100;
 const DEFAULT_SESSION_OPEN_CHALLENGE_TTL_SECONDS = 300;
+
+/**
+ * Authenticated principals one connection holds. A `connection.auth` past it
+ * is refused until the connection releases one.
+ */
+export const MAX_CONNECTION_PRINCIPALS = 64;
+
+/**
+ * Unexpired challenges one connection holds. Issuing one past it retires the
+ * oldest.
+ */
+const MAX_CONNECTION_CHALLENGES = 64;
 const SESSION_OPEN_CHALLENGE_BYTES = 32;
 // SQLite resource caps (mirror the `sqlite.query` wire-parse caps; also applied
 // to the folded-write path, which is parsed loosely as part of a `transact`).
@@ -673,6 +687,14 @@ type SessionOpenAuthContext = {
   challenge: SessionOpenChallenge;
 };
 
+/** A challenge issued to a connection, and the keys that have signed it. */
+type ConnectionChallengeState = {
+  expiresAt: number;
+
+  /** Issuers whose `connection.auth` over this challenge was accepted. */
+  acceptedFor: Set<string>;
+};
+
 type SessionOpenChallengeState = SessionOpenChallenge & {
   consumed: boolean;
 };
@@ -868,6 +890,12 @@ class Connection {
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
 
+  /** Every unexpired challenge issued on this connection, oldest first. */
+  #challenges = new Map<string, ConnectionChallengeState>();
+
+  /** The principals `connection.auth` has authenticated and nothing released. */
+  #principals = new Set<string>();
+
   /**
    * Settles once every frame that names no space, and every frame handed
    * over before the last of those, has been handled.
@@ -981,7 +1009,100 @@ class Connection {
       ...sessionOpen.challenge,
       consumed: false,
     };
+    this.#rememberChallenge(sessionOpen.challenge);
     return sessionOpen;
+  }
+
+  /** Issues a challenge a `connection.auth` on this connection may sign. */
+  issueConnectionChallenge(): SessionOpenChallenge {
+    const { challenge } = this.#server.sessionOpenHandshake();
+    this.#rememberChallenge(challenge);
+    return challenge;
+  }
+
+  /** Whether `connection.auth` has authenticated `principal` here. */
+  hasPrincipal(principal: string): boolean {
+    return this.#principals.has(principal);
+  }
+
+  /** Ends the authentication of `principal`, if it has one. */
+  releasePrincipal(principal: string): void {
+    this.#principals.delete(principal);
+  }
+
+  /**
+   * Holds a `connection.auth` to this connection's state and returns what its
+   * signature is verified against. Throws an `AuthorizationError`: permanent
+   * for a malformed invocation, another audience, or a connection already
+   * holding its limit of principals, and retriable for a challenge this
+   * connection did not issue, one that has expired, and one the issuer has
+   * already signed.
+   */
+  connectionAuthContext(
+    message: ConnectionAuthRequest,
+  ): SessionOpenAuthContext {
+    const audience = this.#server.sessionOpenAudience();
+    const invocation = isFabricPlainObject(message.invocation)
+      ? message.invocation
+      : null;
+    if (invocation === null || typeof invocation.iss !== "string") {
+      throw authorizationError("memory connection.auth requires authorization");
+    }
+    if (typeof invocation.aud !== "string") {
+      throw authorizationError("memory connection.auth requires audience");
+    }
+    if (invocation.aud !== audience) {
+      throw authorizationError("memory connection.auth audience mismatch");
+    }
+    if (typeof invocation.challenge !== "string") {
+      throw authorizationError("memory connection.auth requires challenge");
+    }
+    const challenge = this.#challenges.get(invocation.challenge);
+    if (challenge === undefined) {
+      throw authorizationError("memory connection.auth challenge mismatch", {
+        retriable: true,
+      });
+    }
+    if (challenge.expiresAt <= this.#server.nowSeconds()) {
+      throw authorizationError("memory connection.auth challenge expired", {
+        retriable: true,
+      });
+    }
+    if (challenge.acceptedFor.has(invocation.iss)) {
+      throw authorizationError(
+        "memory connection.auth challenge already used",
+        { retriable: true },
+      );
+    }
+    if (
+      !this.#principals.has(invocation.iss) &&
+      this.#principals.size >= MAX_CONNECTION_PRINCIPALS
+    ) {
+      throw authorizationError(
+        `memory connection holds its limit of ${MAX_CONNECTION_PRINCIPALS} ` +
+          "authenticated principals; release one with `connection.release`",
+      );
+    }
+    return {
+      audience,
+      challenge: {
+        value: invocation.challenge,
+        expiresAt: challenge.expiresAt,
+      },
+    };
+  }
+
+  /**
+   * Records that `issuer`'s `connection.auth` over `challenge` verified as
+   * `principal`, which the connection's later requests may name.
+   */
+  admitPrincipal(
+    principal: string,
+    issuer: string,
+    challenge: SessionOpenChallenge,
+  ): void {
+    this.#challenges.get(challenge.value)?.acceptedFor.add(issuer);
+    this.#principals.add(principal);
   }
 
   sessionOpenAuthContext(message: SessionOpenRequest): SessionOpenAuthContext {
@@ -1170,6 +1291,27 @@ class Connection {
   }
 
   /**
+   * Helper for the methods that issue a challenge, which records `challenge`
+   * as one this connection holds, dropping the expired ones and, past the
+   * limit, the oldest.
+   */
+  #rememberChallenge(challenge: SessionOpenChallenge): void {
+    const now = this.#server.nowSeconds();
+    for (const [value, state] of this.#challenges) {
+      if (state.expiresAt <= now) this.#challenges.delete(value);
+    }
+    while (this.#challenges.size >= MAX_CONNECTION_CHALLENGES) {
+      const oldest = this.#challenges.keys().next().value;
+      if (oldest === undefined) break;
+      this.#challenges.delete(oldest);
+    }
+    this.#challenges.set(challenge.value, {
+      expiresAt: challenge.expiresAt,
+      acceptedFor: new Set(),
+    });
+  }
+
+  /**
    * Helper for `#receiveOrdered()`, which ends a session this connection
    * holds the way closing the connection ends it: the session leaves the
    * connection, its presence memberships end, and the registry keeps it
@@ -1272,6 +1414,20 @@ class Connection {
           requestId: "handshake",
           error: toError("ProtocolError", "hello may only be sent once"),
         });
+        return;
+      case "connection.auth":
+        this.#send(await this.#server.authenticateConnection(parsed, this));
+        return;
+      case "connection.challenge":
+        this.#send({
+          type: "response",
+          requestId: parsed.requestId,
+          ok: { challenge: this.issueConnectionChallenge() },
+        });
+        return;
+      case "connection.release":
+        this.releasePrincipal(parsed.principal);
+        this.#send({ type: "response", requestId: parsed.requestId, ok: {} });
         return;
       case "session.open": {
         const response = await this.#server.openSession(parsed, this);
@@ -1648,7 +1804,8 @@ class Connection {
 
 /**
  * The space whose turn order a frame is handled in, or `undefined` for a
- * frame that names none: a `hello`, and a frame that could not be read.
+ * frame that names none: a `hello`, a `connection.*` request, and a frame
+ * that could not be read.
  */
 const spaceOfFrame = (
   message: ClientMessage | OversizedClientMessage | null,
@@ -1880,6 +2037,17 @@ export class Server {
       ) => Promise<string | undefined> | string | undefined;
 
       /**
+       * Verifies a `connection.auth` and returns the principal it
+       * authenticates, or throws an `AuthorizationError`. A server given one
+       * advertises `connectionAuth`; a server given none refuses every
+       * `connection.auth`, and its clients sign each `session.open`.
+       */
+      authorizeConnection?: (
+        message: ConnectionAuthRequest,
+        context: SessionOpenAuthContext,
+      ) => Promise<string | undefined> | string | undefined;
+
+      /**
        * Authentication data advertised in `hello.ok` and enforced for
        * `session.open` on this server.
        */
@@ -2037,7 +2205,7 @@ export class Server {
     return {
       ...getMemoryProtocolFlags(),
       operationCodecs: this.#operationCodecs.ids(),
-      connectionAuth: false,
+      connectionAuth: this.options.authorizeConnection !== undefined,
     };
   }
 
@@ -3601,12 +3769,71 @@ export class Server {
     };
   }
 
+  /**
+   * Handles one `connection.auth` on behalf of `connection` and returns the
+   * response to send. A request that verifies makes its issuer an
+   * authenticated principal of the connection.
+   */
+  async authenticateConnection(
+    message: ConnectionAuthRequest,
+    connection: Connection,
+  ): Promise<ResponseMessage<ConnectionAuthResult>> {
+    try {
+      const authorize = this.options.authorizeConnection;
+      if (authorize === undefined) {
+        throw authorizationError(
+          "memory connection.auth is not verified by this server",
+        );
+      }
+      const context = connection.connectionAuthContext(message);
+      const principal = await authorize(message, context);
+      if (principal === undefined) {
+        throw authorizationError(
+          "memory connection.auth names no principal",
+        );
+      }
+      connection.admitPrincipal(
+        principal,
+        message.invocation!.iss as string,
+        context.challenge,
+      );
+      return {
+        type: "response",
+        requestId: message.requestId,
+        ok: { principal },
+      };
+    } catch (error) {
+      const wireError = toError(
+        "AuthorizationError",
+        error instanceof Error ? error.message : String(error),
+      );
+      if ((error as { retriable?: unknown }).retriable === true) {
+        wireError.retriable = true;
+      }
+      return respondTypedError<ConnectionAuthResult>(
+        message.requestId,
+        wireError,
+      );
+    }
+  }
+
   async openSession(
     message: SessionOpenRequest,
     connection: Connection,
   ): Promise<ResponseMessage<SessionOpenResult>> {
     try {
-      const authContext = connection.sessionOpenAuthContext(message);
+      // An open naming a principal rests on the connection's authentication
+      // of it, and uses no challenge.
+      const named = message.principal;
+      if (named !== undefined && !connection.hasPrincipal(named)) {
+        throw authorizationError(
+          `memory session.open names ${named}, which this connection has ` +
+            "not authenticated",
+        );
+      }
+      const authContext = named === undefined
+        ? connection.sessionOpenAuthContext(message)
+        : undefined;
       // Refuse at session admission: reconnecting peers understand this verdict
       // as terminal for the session and discard its pending commits and watches.
       if (!connection.stableExpressionResultIds) {
@@ -3619,11 +3846,12 @@ export class Server {
           ),
         );
       }
-      const principal = await this.options.authorizeSessionOpen(
-        message,
-        authContext,
-      );
-      connection.consumeSessionOpenChallenge(authContext.challenge);
+      const principal = authContext === undefined
+        ? named
+        : await this.options.authorizeSessionOpen(message, authContext);
+      if (authContext !== undefined) {
+        connection.consumeSessionOpenChallenge(authContext.challenge);
+      }
       const engine = await this.#openEngine(message.space);
       // The delegated READ binding (OW31, READ side RULED 2026-08-19):
       // `actingAs: "space-owner"` is admitted only for a DELEGATING-class
@@ -8455,9 +8683,43 @@ export const parseClientMessage = (
   }
 
   if (
+    parsed.type === "connection.auth" &&
+    typeof parsed.requestId === "string"
+  ) {
+    return {
+      type: "connection.auth",
+      requestId: parsed.requestId,
+      invocation: isFabricPlainObject(parsed.invocation)
+        ? parsed.invocation
+        : undefined,
+      authorization: parsed.authorization,
+    };
+  }
+
+  if (
+    parsed.type === "connection.challenge" &&
+    typeof parsed.requestId === "string"
+  ) {
+    return { type: "connection.challenge", requestId: parsed.requestId };
+  }
+
+  if (
+    parsed.type === "connection.release" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.principal === "string"
+  ) {
+    return {
+      type: "connection.release",
+      requestId: parsed.requestId,
+      principal: parsed.principal,
+    };
+  }
+
+  if (
     parsed.type === "session.open" &&
     typeof parsed.requestId === "string" &&
     typeof parsed.space === "string" &&
+    (parsed.principal === undefined || typeof parsed.principal === "string") &&
     isFabricPlainObject(parsed.session)
   ) {
     const holdings = parseHoldings(parsed.holdings);
@@ -8474,6 +8736,9 @@ export const parseClientMessage = (
       type: "session.open",
       requestId: parsed.requestId,
       space: parsed.space,
+      ...(parsed.principal === undefined
+        ? {}
+        : { principal: parsed.principal }),
       ...(holdings === undefined ? {} : { holdings }),
       session: {
         sessionId: typeof parsed.session.sessionId === "string"

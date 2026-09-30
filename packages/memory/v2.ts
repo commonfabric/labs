@@ -1091,6 +1091,8 @@ export type SessionOpenResult = {
   caughtUpLocalSeq?: number;
   resumed?: boolean;
   sync?: SessionSync;
+
+  /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
 };
 
@@ -1365,6 +1367,14 @@ export type SessionOpenRequest = {
   type: "session.open";
   requestId: string;
   space: string;
+
+  /**
+   * The authenticated principal of the connection the session opens as. A
+   * request naming one carries no signature of its own, and the server reads
+   * neither `invocation` nor `authorization` from it.
+   */
+  principal?: string;
+
   session: SessionDescriptor;
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
@@ -1889,6 +1899,47 @@ export type SessionAckRequest = {
 };
 
 /**
+ * Authenticates one key for the whole connection. The invocation is signed
+ * over a challenge the server issued on this connection, and names no space.
+ */
+export type ConnectionAuthRequest = {
+  type: "connection.auth";
+  requestId: string;
+  invocation?: FabricPlainObject;
+  authorization?: FabricValue;
+};
+
+/** The `ok` of the response to a `connection.auth`. */
+export type ConnectionAuthResult = {
+  /** The DID the connection may now name in its requests. */
+  principal: string;
+};
+
+/** Asks for a challenge a later `connection.auth` on this connection signs. */
+export type ConnectionChallengeRequest = {
+  type: "connection.challenge";
+  requestId: string;
+};
+
+/** The `ok` of the response to a `connection.challenge`. */
+export type ConnectionChallengeResult = {
+  challenge: SessionOpenChallenge;
+};
+
+/**
+ * Ends a principal's authentication on the connection. Sessions it opened
+ * stay open; later requests naming it are refused.
+ */
+export type ConnectionReleaseRequest = {
+  type: "connection.release";
+  requestId: string;
+  principal: string;
+};
+
+/** The `ok` of the response to a `connection.release`. */
+export type ConnectionReleaseResult = Record<PropertyKey, never>;
+
+/**
  * Ends one session. The server stops sending to it, ends its presence
  * memberships, and keeps it resumable for as long as it keeps a session
  * whose connection closed.
@@ -2059,6 +2110,9 @@ export type V2Result<Value> = { ok: Value } | { error: V2Error };
 
 export type ClientMessage =
   | HelloMessage
+  | ConnectionAuthRequest
+  | ConnectionChallengeRequest
+  | ConnectionReleaseRequest
   | SessionOpenRequest
   | TransactRequest
   | GraphQueryRequest
