@@ -250,10 +250,13 @@ What works today:
 
 The sandbox `bash` tool has a provisional direct-`curl` guard while sandbox
 networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
-hosts such as `localhost`, `127.0.0.1`, and Docker Desktop's
+hosts such as `localhost`, `127.0.0.1`, `[::1]`, and Docker Desktop's
 `host.docker.internal` host alias, but obvious external `curl` targets are
-denied before sandbox execution. This is an integration unblock, not a complete
-network confinement model.
+denied before sandbox execution. The refusal states that rule and names no host
+to try instead, since what answers on those names is the driver's: under Docker
+`host.docker.internal` reaches any port of the host, and under the direct driver
+on macOS only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`

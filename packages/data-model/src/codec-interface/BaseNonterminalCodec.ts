@@ -26,4 +26,9 @@ export abstract class BaseNonterminalCodec<
 > extends BaseFabricCodec<PlusType, FabricValuePlus<PlusType>, State>
   implements NonterminalCodec<PlusType, State> {
   // This space intentionally left blank.
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

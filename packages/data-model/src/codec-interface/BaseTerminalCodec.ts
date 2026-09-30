@@ -28,4 +28,9 @@ export abstract class BaseTerminalCodec<
 > extends BaseFabricCodec<never, Encoded, State>
   implements TerminalCodec<Encoded, State> {
   // This space intentionally left blank.
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

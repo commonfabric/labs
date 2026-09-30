@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   type BatchObservation,
   calibrate,
@@ -937,7 +938,7 @@ describe("calibrate", () => {
         const typical = seen.slice(0, -1);
         const charged = chargeFor(fitSuite(seen), seen[0]!);
         expect(charged).toBeLessThanOrEqual(
-          Math.max(...typical.map((one) => one.spent)) + 1e-9,
+          maxOf(typical.map((one) => one.spent)) + 1e-9,
         );
         const held = seen.filter((one) => one.spent <= charged + 1e-9);
         expect(held.length).toBeGreaterThanOrEqual(0.9 * count);
@@ -956,7 +957,7 @@ describe("calibrate", () => {
       // paid.
       const seen = oneSize(0.5);
       const fitted = fitSuite(seen);
-      const held = Math.max(...seen.map((one) => one.units));
+      const held = maxOf(seen.map((one) => one.units));
       for (const units of [held * 2, held * 10, held * 100]) {
         expect(fitted.overhead + fitted.unitOverhead * units)
           .toBeGreaterThanOrEqual(0.5 * units - 1e-9);
@@ -1475,7 +1476,7 @@ describe("calibrate", () => {
           setup: new Map([["fuse", openings]]),
           batches: [],
         }).setupCost["fuse"]!;
-        expect(charged).toBeLessThanOrEqual(Math.max(...typical));
+        expect(charged).toBeLessThanOrEqual(maxOf(typical));
         const held = openings.filter((seconds) => seconds <= charged);
         expect(held.length).toBeGreaterThanOrEqual(0.9 * count);
         expect(charged).toBeGreaterThan(

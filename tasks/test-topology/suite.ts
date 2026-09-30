@@ -641,7 +641,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
       units.push(file);
       partOf.set(file, part);
     }
-    unavailable.push(...part.unavailable ?? []);
+    for (const entry of part.unavailable ?? []) unavailable.push(entry);
   }
   const surfaces = {
     recordSurfaces,

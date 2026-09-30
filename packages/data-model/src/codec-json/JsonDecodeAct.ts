@@ -245,6 +245,11 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     return this.freezeUnlessMutable(result);
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Unwraps a wire representation. Detects single-key objects with `/`-prefixed
    * keys. Returns `{ tag, state }` or `null` if not a tagged value. The

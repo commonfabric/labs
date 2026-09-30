@@ -274,7 +274,7 @@ async function main() {
       if (finding.kind !== "incompatible") continue;
       breaksUsed.add(acceptedBreakKey(finding.pattern, finding.baseline));
     }
-    forgivenBreaks.push(...forgiven);
+    for (const forgivenBreak of forgiven) forgivenBreaks.push(forgivenBreak);
 
     if (update && current !== undefined) {
       if (shouldRecord(patternFindings)) {
@@ -290,13 +290,13 @@ async function main() {
       // below — `--update` adds evidence, it never clears a finding.
       const kept = patternFindings.filter((f) => f.kind !== "missing-baseline");
       if (kept.length > 0) failedKeys.add(key);
-      findings.push(...kept);
+      for (const finding of kept) findings.push(finding);
       appendRecord(key);
       continue;
     }
 
     if (patternFindings.length > 0) failedKeys.add(key);
-    findings.push(...patternFindings);
+    for (const finding of patternFindings) findings.push(finding);
     appendRecord(key);
   }
 

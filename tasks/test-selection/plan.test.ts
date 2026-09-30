@@ -1948,6 +1948,32 @@ describe("a unit its runner runs whole", () => {
     expect(merged(["2026-08-01", undefined]).lastRun).toBeUndefined();
   });
 
+  it("merges a unit holding more tests than one call takes arguments", () => {
+    // Each test is an entry, and the merged entry takes the largest of
+    // their flake rates and repeat counts, so a unit of this size is one
+    // whose entries cannot all be passed to one call.
+    const count = 500_000;
+    const { entries } = foldWholeUnits(
+      sampleManifest({
+        entries: Array.from(
+          { length: count },
+          (_, i) =>
+            sampleEntry({ k: "browser", s: "ui", n: `half ${i}` }, {
+              unit: HALF,
+              cost: 1,
+              flakeRate: i === count / 2 ? 0.25 : 0,
+              repeats: i === count / 2 ? 3 : 1,
+            }),
+        ),
+      }),
+      WHOLE,
+    );
+    expect(entries.length).toBe(1);
+    expect(entries[0]!.cost).toBe(count);
+    expect(entries[0]!.flakeRate).toBe(0.25);
+    expect(entries[0]!.repeats).toBe(3);
+  });
+
   it("refuses a corpus already holding the name a merged unit takes", () => {
     const manifest = corpus();
     manifest.entries.push(
@@ -2023,7 +2049,7 @@ describe("a unit its runner runs whole", () => {
       })
     );
     const manifest = corpus();
-    manifest.entries.push(...other);
+    for (const entry of other) manifest.entries.push(entry);
     const result = run(manifest, {
       wholeUnits: new Set([...WHOLE, `pattern-integration\t${HALF}`]),
       policy: "everything",

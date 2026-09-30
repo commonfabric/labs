@@ -141,6 +141,7 @@ export class FabricBytes extends BaseFabricPrimitive implements ApiFabricBytes {
   //
 
   static {
+    Object.freeze(this);
     Object.freeze(this.prototype);
   }
 

@@ -80,8 +80,18 @@ for (const name of TRACED_METHODS) {
     return original.apply(this, args);
   };
 
-  (Tracing.prototype as unknown as Record<TracedMethod, AnyMethod>)[name] =
-    traced;
+  // Defined rather than assigned. An assignment would only ever create a
+  // property on `Tracing.prototype`, but it is refused all the same, because
+  // the member it would shadow is read-only on the frozen
+  // `DefaultValueVisitor.prototype`. Defining the override puts it on the
+  // subclass's own prototype directly, with the attributes a method declared
+  // there has.
+  Object.defineProperty(Tracing.prototype, name, {
+    value: traced,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
 }
 
 /** The error `visitUnhandledValue()` throws, as a case expects it. */
