@@ -1369,9 +1369,10 @@ export class Runtime {
    * handler run that records them. */
   readonly #preparedCreatorSpaces = new Map<string, MemorySpace>();
 
-  /** Keys of creator-only spaces whose genesis is not yet confirmed, by
-   * request key, kept so that a retry resubmits the same genesis. */
-  readonly #creatorSpaceKeys = new Map<string, Identity>();
+  /** Space identities of creator-only spaces whose genesis is not yet
+   * confirmed, by request key, kept so that a retry resubmits the same
+   * genesis. */
+  readonly #creatorSpaceIdentities = new Map<string, Identity>();
 
   /** Creator-only space creations in flight, by request key. */
   readonly #creatorSpaceCreations = new Map<string, Promise<MemorySpace>>();
@@ -4321,7 +4322,8 @@ export class Runtime {
           "accept genesisAcl: served provisioning names the run's acting " +
           "identity OWNER through the owner path (OW31, RULED 2026-08-18), " +
           "and a caller-supplied document would bypass it; a space " +
-          'admitting only the acting identity is `inSpace(name, { access: "creator" })`',
+          "admitting only the acting identity is " +
+          '`inSpace(name, { access: "creator" })`',
       );
     }
     if (this.servingPosture && options?.owner === undefined) {
@@ -4431,7 +4433,7 @@ export class Runtime {
       );
     }
     const creation = (async (): Promise<MemorySpace> => {
-      let identity = this.#creatorSpaceKeys.get(key);
+      let identity = this.#creatorSpaceIdentities.get(key);
       if (identity === undefined) {
         identity = await Identity.generate();
         if (Object.hasOwn(members, identity.did())) {
@@ -4441,12 +4443,12 @@ export class Runtime {
           owner: creator,
           grants: { ...members },
         });
-        this.#creatorSpaceKeys.set(key, identity);
+        this.#creatorSpaceIdentities.set(key, identity);
       }
       const space = identity.did() as MemorySpace;
       await storage.ensureSpaceInitialized!(space);
       storage.forgetSpaceIdentity!(space);
-      this.#creatorSpaceKeys.delete(key);
+      this.#creatorSpaceIdentities.delete(key);
       this.#preparedCreatorSpaces.set(key, space);
       return space;
     })();

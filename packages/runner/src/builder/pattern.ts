@@ -7,6 +7,7 @@ import {
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   RECORD_SUBSCHEMA_KEYS,
@@ -1287,7 +1288,10 @@ function resolveCreatorSpaceTarget(
     allocationLink.space,
     allocationLink.id,
     creator,
-    Object.entries(target.members).sort(([a], [b]) => a < b ? -1 : 1),
+    utf8SortedKeysOf(target.members).map((member) => [
+      member,
+      target.members[member as DID],
+    ]),
   ]);
   const recorded = allocation.get();
   if (recorded !== undefined) {
