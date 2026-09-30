@@ -9,6 +9,8 @@ import {
   excusedMeasurement,
   excusedMeasurementName,
   LANE_MEASUREMENT_PREFIX,
+  laneMeasurement,
+  laneMeasurementName,
   setupMeasurement,
 } from "./lane-measurement.ts";
 
@@ -21,6 +23,7 @@ const KINDS = [
   "passes",
   "start",
   "processes",
+  "projected",
 ] as const;
 
 describe("lane-measurement", () => {
@@ -33,6 +36,11 @@ describe("lane-measurement", () => {
     it("names what a batch's own tests took", () => {
       expect(batchMeasurementName("workspace-unit", false, "ran"))
         .toBe("ci-lane ran batch workspace-unit");
+    });
+
+    it("names what the packer charged a lane for a batch", () => {
+      expect(batchMeasurementName("workspace-unit", false, "projected"))
+        .toBe("ci-lane projected batch workspace-unit");
     });
 
     it("names a batch run with coverage apart from one run without", () => {
@@ -121,6 +129,35 @@ describe("lane-measurement", () => {
     it("returns `undefined` for a name that is not a batch measurement", () => {
       expect(batchMeasurement("ci-lane setup fuse")).toBeUndefined();
       expect(batchMeasurement("space > writes a fact")).toBeUndefined();
+    });
+  });
+
+  describe("laneMeasurement()", () => {
+    it("returns which of a lane's figures every composed name is", () => {
+      for (const kind of ["spent", "projected", "bound"] as const) {
+        expect(laneMeasurement(laneMeasurementName(kind))).toBe(kind);
+      }
+    });
+
+    it("names what a lane spent as `ci-lane lane`", () => {
+      expect(laneMeasurementName("spent")).toBe("ci-lane lane");
+    });
+
+    it("returns `undefined` for a batch's or a setup's measurement", () => {
+      expect(laneMeasurement("ci-lane projected batch workspace-unit"))
+        .toBeUndefined();
+      expect(laneMeasurement("ci-lane setup fuse")).toBeUndefined();
+      expect(laneMeasurement("ci-lane lane ")).toBeUndefined();
+    });
+
+    it("is none of a batch's or a setup's measurements", () => {
+      // The calibration fits costs from those, and a lane's own total
+      // read as one of them would be fitted as a batch.
+      for (const kind of ["spent", "projected", "bound"] as const) {
+        const name = laneMeasurementName(kind);
+        expect(batchMeasurement(name)).toBeUndefined();
+        expect(setupMeasurement(name)).toBeUndefined();
+      }
     });
   });
 

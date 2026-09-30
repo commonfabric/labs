@@ -31,7 +31,10 @@ import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
   type MappedResult,
+  type VisitingEntryResult,
+  type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -329,7 +332,8 @@ export abstract class DefaultValueVisitor<
   override mappedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -341,7 +345,8 @@ export abstract class DefaultValueVisitor<
    */
   override mappedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<ResultType>,
+    _state: FabricValuePlus<PlusType>,
+    _resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -354,7 +359,9 @@ export abstract class DefaultValueVisitor<
   override mappedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultKey: string,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -473,7 +480,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _index: number,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -486,7 +493,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _start: number,
     _count: number,
-  ): VisitingResult<ResultType> {
+  ): VisitingGapResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -498,7 +505,7 @@ export abstract class DefaultValueVisitor<
   override visitingFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingStateResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -511,7 +518,7 @@ export abstract class DefaultValueVisitor<
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingEntryResult<PlusType, ResultType> {
     return undefined;
   }
 }

@@ -69,9 +69,10 @@ import type {
   SettleStats,
   Stream,
 } from "@commonfabric/runner";
-import type {
-  CfcEnforcementMode,
-  CfcFlowLabelsMode,
+import {
+  type CfcEnforcementMode,
+  type CfcFlowLabelsMode,
+  resetCfcDenialAnnouncements,
 } from "@commonfabric/runner/cfc";
 import {
   type CDFPoint,
@@ -91,6 +92,7 @@ import {
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
+import { printCfcDenials, warningsCountCfcDenial } from "./cfc-denials.ts";
 import {
   evaluateReadBudget,
   parseReadBudgets,
@@ -396,6 +398,9 @@ export interface TestRunnerOptions {
 
   /** Override flow-label propagation for every test runtime. */
   cfcFlowLabels?: CfcFlowLabelsMode;
+
+  /** Print each CFC denial, with the inputs behind it, as it happens. */
+  cfcDenials?: boolean;
 
   /** Shared compiled-module-byte cache for direct harness compiles. */
   moduleByteCache?: ModuleByteCache;
@@ -1106,6 +1111,12 @@ export async function runTestPattern(
   testPath: string,
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
+  // A denial logs its warning once per kind, and a denial's warning is what
+  // fails a file that does not allow for one, so each file starts with every
+  // kind unannounced. Otherwise a second file denied the same way would log
+  // nothing, and pass.
+  resetCfcDenialAnnouncements();
+
   // The effective import root: an explicit `root` wins; otherwise the nearest
   // package root above the test file, so imports that span the package (shared
   // helpers, sibling patterns) resolve without a flag. When neither exists the
@@ -1285,6 +1296,9 @@ export async function runTestPattern(
     runtime.scheduler.setReadStatsEnabled(true);
   }
   runtime.telemetry.addEventListener("telemetry", onReadCost);
+  const stopPrintingDenials = options.cfcDenials
+    ? printCfcDenials((line) => console.log(`    ${line}`))
+    : undefined;
   // Channel 1: capture pattern-code console.error / console.warn calls that
   // flow through the scheduler's harness console event.  The handler must
   // return args unchanged so the call still appears in the host console.
@@ -2254,6 +2268,7 @@ export async function runTestPattern(
     };
   } finally {
     runtime.telemetry.removeEventListener("telemetry", onReadCost);
+    stopPrintingDenials?.();
     if (
       patternCoverage && options.patternCoverageDir &&
       writeLocalPatternCoverage
@@ -2560,6 +2575,16 @@ export async function runTests(
               ? msg.slice(0, 120) + "..."
               : msg;
             console.log(`    ${truncated}`);
+          }
+          // The `cfc` logger names each kind of denial once and keeps the
+          // reasons at debug, so say where the reasons are.
+          if (
+            !options.cfcDenials &&
+            warningsCountCfcDenial(result.consoleWarnings)
+          ) {
+            console.log(
+              "    Run again with `--cfc-denials` to see what CFC denied, and why.",
+            );
           }
         }
       }

@@ -374,20 +374,21 @@ abstract class FabricInstance {
 // single source of truth for how its instances encode -- as a static
 // getter keyed by a well-known symbol. `PlusType` is what the values may
 // hold beyond `FabricValue`, `never` for a codec over `FabricValue` alone;
-// `Encoded` is the domain the essential state lives in.
-interface FabricCodec<PlusType, Encoded> {
+// `Encoded` is the domain the essential state lives in; `State` narrows
+// it to this codec's own states.
+interface FabricCodec<PlusType, Encoded, State extends Encoded = Encoded> {
   get uniqueHandledClass(): Constructor | undefined;
   get recognizedTypeTag(): string | undefined;
   canEncode(value: FabricValuePlus<PlusType>): boolean;
-  canDecode(state: Encoded): boolean;
+  canDecode(state: Encoded): state is State;
   tagForValue(value: FabricValuePlus<PlusType>): string;
   encode(                                    // shallow
     value: FabricValuePlus<PlusType>,
     env: LiveEnvironment,
-  ): Encoded;
+  ): State;
   decode(                                    // shallow
     typeTag: string,
-    state: Encoded,
+    state: State,
     env: LiveEnvironment,
   ): FabricValuePlus<PlusType>;
 }
@@ -395,12 +396,15 @@ interface FabricCodec<PlusType, Encoded> {
 // Nonterminal: state made of the same values the codec takes, which the
 // walker expands in turn. One such instance can serve every wire format;
 // only one at `never` has a wire form.
-type NonterminalCodec<PlusType = never> =
-  FabricCodec<PlusType, FabricValuePlus<PlusType>>;
+type NonterminalCodec<
+  PlusType = never,
+  State extends FabricValuePlus<PlusType> = FabricValuePlus<PlusType>,
+> = FabricCodec<PlusType, FabricValuePlus<PlusType>, State>;
 
 // Terminal: state already in one format's own domain, which the walker
 // passes through. Serves that one format alone, over `FabricValue`s.
-type TerminalCodec<Encoded> = FabricCodec<never, Encoded>;
+type TerminalCodec<Encoded, State extends Encoded = Encoded> =
+  FabricCodec<never, Encoded, State>;
 
 // The symbol a class binds under is a separate question from the kind.
 // `CODEC` is the claim that one codec serves every format, which a

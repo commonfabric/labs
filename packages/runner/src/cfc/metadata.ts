@@ -457,7 +457,7 @@ export const storedCfcMetadataAppliesToPath = (
     .map((entry) => entry.path);
   // labelMap entries are persisted both for paths with confidentiality /
   // integrity values AND for paths whose schema carried a policy claim
-  // (writeAuthorizedBy / uiContract / exactCopyOf — see
+  // (writeAuthorizedBy / writePolicyAnyOf / uiContract / exactCopyOf — see
   // `derivePersistedLabel` and the persistence guard in `prepare.ts`). The
   // mere presence of an entry signals "policy applies on this path"; do NOT
   // filter on `hasLabelValues` here, or claim-only entries get silently

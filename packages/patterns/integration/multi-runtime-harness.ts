@@ -64,6 +64,10 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
+import {
+  awaitAdmitted,
+  type CommitWatchableServer,
+} from "../../runner/test/support/serving-waits.ts";
 
 import type { initializePiecesController } from "./pieces-controller.ts";
 
@@ -584,6 +588,9 @@ export class MultiRuntimeSession {
 
 /** The in-process server a harness hosts, when it hosts one. */
 type HostedServer = {
+  /** The memory server, whose admitted commits include the serving loop's. */
+  readonly server: CommitWatchableServer;
+
   /** The server's `idle()`, which covers storage and not a serving loop. */
   idle(): Promise<void>;
 
@@ -757,7 +764,7 @@ export class MultiRuntimeHarness {
    * event a served handler itself emits) is no session's intent and commits
    * in a LATER wave, outside the wait; cascades ride the ordinary barrier
    * rounds, so a test asserting on cascade results still needs enough rounds
-   * (or a `waitFor`). The wait shares ONE budget across the whole `settle()`
+   * (or `settleUntil()`, or `waitFor()` against a toolshed). The wait shares ONE budget across the whole `settle()`
    * call, so a genuinely wedged consequence leaves the caller's assert to
    * speak instead of hanging the harness — LOUDLY: exhausting the budget
    * with intents still outstanding warns once, so a red assert after it
@@ -807,6 +814,30 @@ export class MultiRuntimeHarness {
       await Promise.all(this.sessions.map((session) => session.barrier()));
       await Promise.all(this.sessions.map((session) => session.idle()));
     }
+  }
+
+  /**
+   * Settle, then resolve once `predicate` holds, settling again and asking
+   * again each time the hosted server admits a commit.
+   *
+   * This is the wait for state the serving loop writes on its own account,
+   * which `settle()` does not cover because no session fired an event for
+   * it: the surface a wish opens under server execution is one. The loop's
+   * wave commits are admitted like any other commit, so the commit that
+   * writes the state wakes the attempt that sees it. Throws on a harness that
+   * targets a running toolshed, whose commits this process does not see.
+   */
+  async settleUntil(predicate: () => Promise<boolean>): Promise<void> {
+    if (this.#server === undefined) {
+      throw new Error(
+        "settleUntil() watches the server the harness hosts, and this " +
+          "harness targets a running toolshed",
+      );
+    }
+    await awaitAdmitted(this.#server.server, async () => {
+      await this.settle();
+      return await predicate();
+    });
   }
 
   /**

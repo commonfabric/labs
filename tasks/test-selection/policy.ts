@@ -187,6 +187,65 @@ export const MIN_CORRECTION_SPAN_SECONDS = LANE_BUDGET_SECONDS / 10;
  */
 export const MIN_CORRECTION_SAMPLES = 3;
 
+/**
+ * How many times the count of identities too long for any lane has to
+ * grow from one manifest to the next before the cost model is reported
+ * broken, with `HEALTH_TOO_LONG_JUMP`. Both have to be passed.
+ *
+ * A suite whose fixed charge passes the lane's bound moves the count by
+ * the size of the suite, which is hundreds of tests or thousands, where
+ * tests growing slow one at a time move it by a dozen at the most.
+ * [Knowing when the cost model is
+ * wrong](../../docs/plans/pull-request-test-selection.md#knowing-when-the-cost-model-is-wrong)
+ * has the manifests this was read from.
+ */
+export const HEALTH_TOO_LONG_FACTOR = 2;
+
+/**
+ * How many identities the count too long for any lane has to grow by,
+ * beside `HEALTH_TOO_LONG_FACTOR`, so that a count going from one to
+ * three is not reported as the model breaking.
+ */
+export const HEALTH_TOO_LONG_JUMP = 20;
+
+/**
+ * The share of the lanes projected to finish inside their bound that may
+ * run past it before the cost model is reported broken. A lane projected
+ * past its bound running past it is a plan the packer knew it could not
+ * fit, which is capacity rather than calibration, so those lanes are not
+ * counted.
+ *
+ * The fit charges a suite what nine batches in ten spent, so some lanes
+ * run long by design: a day's pull-request lanes run past their bound
+ * something under one time in ten while the model holds.
+ */
+export const HEALTH_OVERRUN_SHARE = 0.15;
+
+/**
+ * Lanes projected inside their bound that the cost window has to hold
+ * before `HEALTH_OVERRUN_SHARE` is judged, so that one slow lane in a
+ * quiet week is not a share.
+ */
+export const HEALTH_MIN_LANES = 20;
+
+/**
+ * How far from one the ninetieth percentile of a suite's batches' spending
+ * over what they were charged may drift, either way, before the cost
+ * model is reported broken for that suite.
+ *
+ * The fit charges a suite what nine batches in ten spent, so that
+ * percentile sits near one while the model holds, and within about a
+ * third of one for every suite that ten batches have measured.
+ */
+export const HEALTH_DRIFT_FACTOR = 2;
+
+/**
+ * Batches recording what they were charged that a suite has to have in
+ * the cost window before its drift is judged. Over nine or fewer the
+ * ninetieth percentile is the largest of them.
+ */
+export const HEALTH_MIN_BATCHES = 10;
+
 /** The flake rate above which an item leaves the selectable set. */
 export const FLAKE_EXCLUSION_RATE = 0.005;
 
@@ -727,6 +786,60 @@ export const DIALS: readonly Dial[] = [
       "down when a suite's real slope takes too long to be believed. It " +
       "is also how many of the batches a suite's fit is still reading " +
       "must carry a figure before the batches lacking it are left out.",
+  },
+  {
+    name: "HEALTH_TOO_LONG_FACTOR",
+    value: HEALTH_TOO_LONG_FACTOR,
+    unit: "multiplier",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red for ordinary growth in " +
+      "the tests too long for any lane; down when a jump that took tests " +
+      "out of every pull request went unreported.",
+  },
+  {
+    name: "HEALTH_TOO_LONG_JUMP",
+    value: HEALTH_TOO_LONG_JUMP,
+    unit: "identities",
+    setBy: "chosen",
+    why: "Up when a handful of newly slow tests turns the test selection " +
+      "tile red; down when a suite's worth of tests left pull requests " +
+      "without it going red.",
+  },
+  {
+    name: "HEALTH_OVERRUN_SHARE",
+    value: HEALTH_OVERRUN_SHARE,
+    unit: "share of lanes",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red over lanes a slow " +
+      "runner held up; down when lanes ran past their bound for days " +
+      "without it going red.",
+  },
+  {
+    name: "HEALTH_MIN_LANES",
+    value: HEALTH_MIN_LANES,
+    unit: "lanes",
+    setBy: "chosen",
+    why: "Up when a quiet week's few lanes turn the test selection tile " +
+      "red; down when lanes running long go unjudged for want of enough " +
+      "of them.",
+  },
+  {
+    name: "HEALTH_DRIFT_FACTOR",
+    value: HEALTH_DRIFT_FACTOR,
+    unit: "multiplier",
+    setBy: "chosen",
+    why: "Up when the test selection tile goes red for a suite whose " +
+      "charges are off in a way nobody will fix; down when a suite " +
+      "charged twice or half what it spends went unreported.",
+  },
+  {
+    name: "HEALTH_MIN_BATCHES",
+    value: HEALTH_MIN_BATCHES,
+    unit: "batches",
+    setBy: "chosen",
+    why: "Up when a suite few lanes run turns the test selection tile red " +
+      "on a handful of batches; down when a suite's drift goes unjudged " +
+      "for want of enough of them.",
   },
   {
     name: "FLAKE_EXCLUSION_RATE",

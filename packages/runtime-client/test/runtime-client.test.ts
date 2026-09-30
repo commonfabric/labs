@@ -1173,4 +1173,19 @@ describe("attachOptionsFrom()", () => {
     expect(attach.cfcReadMaxConfidentiality).toEqual([identity.did()]);
     expect(attach.cfcReadOnExceed).toBe("skip");
   });
+
+  it("carries the page's settings, which the attaching client keeps", async () => {
+    const identity = await Identity.fromPassphrase("attach-options-page");
+    const options = {
+      apiUrl: new URL("http://backend.test/"),
+      identity,
+      spaceDid: identity.did(),
+    };
+
+    expect(
+      attachOptionsFrom({ ...options, iframeOuterFrameUrl: "/outer-frame" })
+        .iframeOuterFrameUrl,
+    ).toBe("/outer-frame");
+    expect(attachOptionsFrom(options).iframeOuterFrameUrl).toBeUndefined();
+  });
 });

@@ -97,6 +97,9 @@ describe("initialize-init-data", () => {
       // case is what pins each key to the host's own value. `Required` holds
       // the fixture to setting every option, so a field added to the options
       // type lands in the test and in the literal together.
+      //
+      // The page's settings are options too, and are the ones that stay
+      // behind: the client keeps them and the worker is sent none.
 
       const identity = await Identity.fromPassphrase("init-data forwarding");
       const spaceIdentity = await Identity.fromPassphrase(
@@ -129,9 +132,10 @@ describe("initialize-init-data", () => {
         patternCoverage: true,
         concurrentWatchRefresh: true,
         awaitHealth: true,
+        iframeOuterFrameUrl: "/outer-frame",
       } satisfies Required<RuntimeClientOptions>;
 
-      await RuntimeClient.initialize(transport, options);
+      const client = await RuntimeClient.initialize(transport, options);
 
       const init = transport.sent.find(
         (m): m is IPCClientMessage =>
@@ -146,6 +150,7 @@ describe("initialize-init-data", () => {
         identity: _identity,
         spaceIdentity: _spaceIdentity,
         apiUrl: _apiUrl,
+        iframeOuterFrameUrl: pageSetting,
         ...expected
       } = options;
       expect(carried).toEqual({
@@ -154,6 +159,8 @@ describe("initialize-init-data", () => {
       });
       expect(sent).toEqual(identity.keyPair);
       expect(sentSpace).toEqual(spaceIdentity.keyPair);
+      expect("iframeOuterFrameUrl" in data).toBe(false);
+      expect(client.iframeOuterFrameUrl()).toBe(pageSetting);
     });
   });
 

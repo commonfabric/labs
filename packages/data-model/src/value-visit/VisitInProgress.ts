@@ -28,10 +28,14 @@ import { debugStr } from "@/value-debug";
 
 import {
   type MainResultForm,
+  type MapToEntryForm,
   type MapToForm,
+  type OmitForm,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
+  type VisitingEntryResult,
+  type VisitingResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -360,14 +364,14 @@ export class VisitInProgress<
           element,
         );
 
-        if (visitingResult?.type === "mainResult") {
-          return visitingResult;
+        if (visitingResult?.type === "omit") {
+          // Nothing is visited, placed, or reported. A mapped result keeps a
+          // hole here, which is a difference from the original.
+          anyChanges = true;
+          continue;
         }
 
-        const elemResult = this.#handleMappingAsAppropriate(
-          element,
-          this.#visitValue(element),
-        );
+        const elemResult = this.#resolveVisitingResult(element, visitingResult);
 
         switch (elemResult?.type) {
           case "mainResult": {
@@ -385,6 +389,7 @@ export class VisitInProgress<
             const result = vis.mappedFabricArrayElement(
               array,
               idxNumber,
+              element,
               mappedTo,
             );
 
@@ -451,14 +456,7 @@ export class VisitInProgress<
         state,
       );
 
-      if (visitingResult?.type === "mainResult") {
-        return visitingResult;
-      }
-
-      const stateResult = this.#handleMappingAsAppropriate(
-        state,
-        this.#visitValue(state),
-      );
+      const stateResult = this.#resolveVisitingResult(state, visitingResult);
 
       switch (stateResult?.type) {
         case "mainResult": {
@@ -484,7 +482,7 @@ export class VisitInProgress<
       }
 
       const mappedTo = stateResult.value;
-      const result = vis.mappedFabricInstanceState(instance, mappedTo);
+      const result = vis.mappedFabricInstanceState(instance, state, mappedTo);
       if (result?.type === "mainResult") {
         return result;
       }
@@ -541,88 +539,57 @@ export class VisitInProgress<
           value,
         );
 
-        if (visitingResult?.type === "mainResult") {
-          return visitingResult;
+        if (visitingResult?.type === "omit") {
+          // Nothing is visited, placed, or reported. A mapped result lacks the
+          // entry, which is a difference from the original.
+          anyChanges = true;
+          continue;
         }
 
-        const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
+        const entryResult = this.#resolveVisitingEntryResult(
           key,
-          doKeys ? this.#visitValue(key) : undefined,
-        );
-        let keyMappedTo: string | undefined;
-
-        switch (keyResult?.type) {
-          case "mainResult": {
-            return keyResult;
-          }
-
-          case "mapTo": {
-            keyMappedTo = keyResult.value;
-            if (Object.hasOwn(mapResult!, keyMappedTo)) {
-              throw new Error(
-                debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
-              );
-            }
-            break;
-          }
-
-          case undefined: {
-            keyMappedTo = undefined;
-            break;
-          }
-
-          default: {
-            // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(keyResult);
-          }
-            // deno-coverage-ignore-stop
-        }
-
-        const valueResult = this.#handleMappingAsAppropriate(
           value,
-          this.#visitValue(value),
+          doKeys,
+          visitingResult,
+          mapResult,
         );
-        let valueMappedTo: ResultType | undefined;
 
-        switch (valueResult?.type) {
+        switch (entryResult?.type) {
           case "mainResult": {
-            return valueResult;
+            return entryResult;
           }
 
           case "mapTo": {
-            valueMappedTo = valueResult.value;
+            const { key: finalKey, value: valueMappedTo } = entryResult;
+            const result = vis.mappedFabricPlainObjectEntry(
+              plainObj,
+              key,
+              value,
+              finalKey,
+              valueMappedTo,
+            );
+
+            if (result?.type === "mainResult") {
+              return result;
+            }
+
+            // `!` is valid, because we'll only see `mapTo` when we're actually
+            // mapping.
+            mapResult![finalKey] = valueMappedTo;
+            anyChanges ||= !Object.is(key, finalKey) ||
+              !Object.is(value, valueMappedTo);
             break;
           }
 
           case undefined: {
-            valueMappedTo = undefined;
             break;
           }
 
           default: {
             // deno-coverage-ignore-start
-            this.#throwShouldntHappenResultType(valueResult);
+            this.#throwShouldntHappenResultType(entryResult);
           }
             // deno-coverage-ignore-stop
-        }
-
-        if (mapResult) {
-          // `keyMappedTo!` is safe, because if we made it here, it necessarily
-          // got set to a `string`.
-          const finalKey: string = keyMappedTo!;
-          const result = vis.mappedFabricPlainObjectEntry(
-            plainObj,
-            finalKey,
-            valueMappedTo,
-          );
-
-          if (result?.type === "mainResult") {
-            return result;
-          }
-
-          mapResult[finalKey] = valueMappedTo;
-          anyChanges ||= !Object.is(key, finalKey) ||
-            !Object.is(value, valueMappedTo);
         }
       }
 
@@ -765,10 +732,12 @@ export class VisitInProgress<
   /**
    * Converts a `#visitValue()` result being used as a plain object key, from a
    * `recurse`-induced sub-value iteration, as appropriate, based on `#mapMode`.
+   * A key settled by a `visiting*()` method's `mapTo` arrives here as a `mapTo`
+   * of its own, and is validated the same way.
    */
   #handlePlainObjectKeyMappingAsAppropriate(
     original: string,
-    visitResult: MainVisitResult<PlusType, ResultType>,
+    visitResult: MainVisitResult<PlusType, ResultType> | MapToForm<string>,
   ): MainResultForm<ResultType> | MapToForm<string> | undefined {
     if (!this.#mapMode) {
       return (visitResult?.type === "mainResult") ? visitResult : undefined;
@@ -880,6 +849,170 @@ export class VisitInProgress<
         debugStr`Codec of $quote${originalInstance} accepted but then failed to decode replacement state $quote${resultState}`,
         { cause },
       );
+    }
+  }
+
+  /**
+   * Helper for `#recurseFabricPlainObject()`, which acts on a
+   * `visitingFabricPlainObjectEntry()` result for the entry `key` and `value`,
+   * as `#resolveVisitingResult()` does for a value-only one. A `mainResult`,
+   * whether that result or one from visiting either half of the entry, is
+   * returned as-is. Otherwise this returns an entry `mapTo` of the final key and
+   * mapped value when mapping, and `undefined` when not.
+   *
+   * A `mapTo` settles the entry without visiting either half of it, a `replace`
+   * visits its key and value in place of the entry's own, and `undefined`
+   * visits the entry's own. A key is visited only when `doKeys`. A final key
+   * which `mapResult` already holds is refused before the value is visited. An
+   * `omit` is the caller's to act on, before this is called.
+   */
+  #resolveVisitingEntryResult(
+    key: string,
+    value: FabricValuePlus<PlusType>,
+    doKeys: boolean,
+    visitingResult: Exclude<
+      VisitingEntryResult<PlusType, ResultType>,
+      OmitForm
+    >,
+    mapResult: MutableFabricPlainObjectPlusLayer<ResultType> | undefined,
+  ): MainResultForm<ResultType> | MapToEntryForm<ResultType> | undefined {
+    let settled: MapToEntryForm<ResultType> | undefined;
+    let entryKey = key;
+    let entryValue = value;
+
+    switch (visitingResult?.type) {
+      case "mainResult": {
+        return visitingResult;
+      }
+
+      case "mapTo": {
+        settled = visitingResult;
+        break;
+      }
+
+      case "replace": {
+        entryKey = visitingResult.key;
+        entryValue = visitingResult.value;
+        break;
+      }
+
+      case undefined: {
+        break;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitingResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+
+    const keyResult = this.#handlePlainObjectKeyMappingAsAppropriate(
+      entryKey,
+      settled
+        ? { type: "mapTo", value: settled.key }
+        : doKeys
+        ? this.#visitValue(entryKey)
+        : undefined,
+    );
+    let keyMappedTo: string | undefined;
+
+    switch (keyResult?.type) {
+      case "mainResult": {
+        return keyResult;
+      }
+
+      case "mapTo": {
+        keyMappedTo = keyResult.value;
+        if (Object.hasOwn(mapResult!, keyMappedTo)) {
+          throw new Error(
+            debugStr`Visit of key $quote${key} mapped to already-mapped key: $quote${keyMappedTo}`,
+          );
+        }
+        break;
+      }
+
+      case undefined: {
+        break;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(keyResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+
+    const valueResult = this.#handleMappingAsAppropriate(
+      entryValue,
+      settled ?? this.#visitValue(entryValue),
+    );
+
+    switch (valueResult?.type) {
+      case "mainResult": {
+        return valueResult;
+      }
+
+      case "mapTo": {
+        // `keyMappedTo!` is safe: when mapping, the key's result was a `mapTo`
+        // too, so it got set to a `string`.
+        return { type: "mapTo", key: keyMappedTo!, value: valueResult.value };
+      }
+
+      case undefined: {
+        return undefined;
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(valueResult);
+      }
+        // deno-coverage-ignore-stop
+    }
+  }
+
+  /**
+   * Helper for `#recurseFabricArray()` and `#recurseFabricInstance()`, which
+   * acts on a value-only `visiting*()` result for the sub-value `original`,
+   * returning the sub-value's result as `#handleMappingAsAppropriate()` would.
+   * A `mainResult` is returned as-is. A `mapTo` settles the position without
+   * visiting it, and a `replace` visits its replacement in the original's
+   * place. `undefined` visits the original. An `omit` is the caller's to act
+   * on, before this is called.
+   */
+  #resolveVisitingResult(
+    original: FabricValuePlus<PlusType>,
+    visitingResult: Exclude<VisitingResult<PlusType, ResultType>, OmitForm>,
+  ): MainVisitResult<PlusType, ResultType> {
+    switch (visitingResult?.type) {
+      case "mainResult": {
+        return visitingResult;
+      }
+
+      case "mapTo": {
+        return this.#handleMappingAsAppropriate(original, visitingResult);
+      }
+
+      case "replace": {
+        const replacement = visitingResult.value;
+        return this.#handleMappingAsAppropriate(
+          replacement,
+          this.#visitValue(replacement),
+        );
+      }
+
+      case undefined: {
+        return this.#handleMappingAsAppropriate(
+          original,
+          this.#visitValue(original),
+        );
+      }
+
+      default: {
+        // deno-coverage-ignore-start
+        this.#throwShouldntHappenResultType(visitingResult);
+      }
+        // deno-coverage-ignore-stop
     }
   }
 

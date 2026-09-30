@@ -27,6 +27,11 @@ export const PROD_SERVICE = "toolshed-production";
 export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commonfabric/loom";
 export const LOOM_CI_WORKFLOW = "test-fast.yml";
 
+// The weaver repo and its CI workflow, for the weaver-repo CI tiles.
+export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
+  "commonfabric/commonfabric-weaver";
+export const WEAVER_CI_WORKFLOW = "ci.yml";
+
 // Shared fetch window: the fetch stops at whichever of these two yields fewer
 // workflow runs. Every CI tile slices from it.
 export const CI_RUNS_MAX = 200; // workflow runs

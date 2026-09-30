@@ -195,6 +195,51 @@ reviewed values after the write.
 Keep action and surface constants local to the helper file. Export the surface
 identity constant; do not export local demo vocabulary as shared policy.
 
+### More than one writer
+
+A policy names one writer, and a record that several handlers write — a message
+that one handler sends and another edits — needs a policy naming each of them.
+`WritePolicyAnyOf<T, [P, …]>` lists the writer policies, and a write is
+admitted when any one of them admits it whole: its handler wrote, through its
+own reviewed action if it names one. The pairing is the point. One handler's
+action never admits another handler's write, so each writer keeps exactly the
+authority its own policy gives it.
+
+```ts
+import {
+  handler,
+  type TrustedActionWrite,
+  Writable,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const NOTE_SURFACE = "NoteSurface";
+const SEND_ACTION = "SendNote";
+const EDIT_ACTION = "EditNote";
+
+export type Note = WritePolicyAnyOf<string, [
+  TrustedActionWrite<unknown, typeof send, typeof SEND_ACTION, typeof NOTE_SURFACE>,
+  TrustedActionWrite<unknown, typeof edit, typeof EDIT_ACTION, typeof NOTE_SURFACE>,
+]>;
+
+export const send = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("sent");
+});
+
+export const edit = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("edited");
+});
+```
+
+Each member is a whole policy over `unknown`: a `WriteAuthorizedBy`, a
+`TrustedActionWrite`, or a `TrustedActionWriteWithIntegrity`. Write the tuple in
+place, not through an alias of its own. Once stored, the list is fixed, so a
+later version of the pattern cannot add a writer to it, drop one, or change
+one's action, and a record whose policy names one writer cannot move to a list
+or back. Settle the writers before the record holds data that matters.
+`AuthoredByCurrentUser` combines with it only when every member names an
+action, so that every admitted write carries a reviewed gesture.
+
 ## Authoring Trusted Surfaces
 
 Put one reusable surface per file under

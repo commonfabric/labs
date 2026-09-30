@@ -484,6 +484,14 @@ dependencies are the ones `tree-sitter-python` already brings. Roll it with the
 runtime, then run the `cf view` TOML tests and `cf view` against a `.toml`
 file.
 
+Shell reaches its grammar through `packages/cli/lib/view/languages/shell/shell.ts`,
+and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
+grammar and ships its WebAssembly build, which the pager loads for Bash and
+POSIX shell alike. Like `tree-sitter-python`, it also ships generated C source,
+native bindings, and an install script, which the pager never uses; its
+dependencies are the two `tree-sitter-python` already brings. Roll it with the
+runtime, then run the `cf view` shell tests and `cf view` against a `.sh` file.
+
 ### Viz.js
 
 The scripts workspace pins `@viz-js/viz` exactly. `scripts/docs-links.ts`

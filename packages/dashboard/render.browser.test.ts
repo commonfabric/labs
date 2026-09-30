@@ -139,7 +139,7 @@ function assertStandardTileLayout(
         `${label} duration must share the benchmark left offset at ${width}px`,
       );
     }
-    if (label === "labs ci trust" || label === "loom ci trust") {
+    if (label.endsWith(" ci trust")) {
       const grid = tile.querySelector<HTMLElement>(".cells.labeled");
       const firstCell = grid?.querySelector<HTMLElement>(".cell");
       const lastCell = grid?.querySelector<HTMLElement>(".cell:last-child");

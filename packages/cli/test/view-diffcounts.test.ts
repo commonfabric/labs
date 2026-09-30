@@ -752,6 +752,58 @@ describe("diffcounts", () => {
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
   });
 
+  it("does not start shell heredocs from arithmetic shifts", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,2 +1,2 @@",
+      " x=$((1 << count))",
+      "-# old comment",
+      "+# new comment",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("does not start shell heredocs from here-strings", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,2 +1,2 @@",
+      " tr a b <<< word",
+      "-# old comment",
+      "+# new comment",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("starts shell heredocs from escaped delimiters", () => {
+    const diff = [
+      "diff --git a/run.sh b/run.sh",
+      "--- a/run.sh",
+      "+++ b/run.sh",
+      "@@ -1,3 +1,3 @@",
+      " cat <<\\EOF",
+      "-# old data",
+      "+# new data",
+      " EOF",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
   it("does not start shell heredocs from quoted operators", () => {
     const diff = [
       "diff --git a/run.sh b/run.sh",

@@ -11,10 +11,21 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
-import { runSource, type Ctx, type Run } from "./types.ts";
-import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
-import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
-import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
+import { type Ctx, type Run, runSource, type RunSource } from "./types.ts";
+import {
+  CI_WORKFLOW,
+  LOOM_CI_WORKFLOW,
+  LOOM_REPO,
+  REPO,
+  WEAVER_CI_WORKFLOW,
+  WEAVER_REPO,
+} from "./config.ts";
+import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
+import {
+  labsCiDuration,
+  loomCiDuration,
+  weaverCiDuration,
+} from "./tiles/ci-duration.ts";
 import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
 import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
 import { githubMembers } from "./tiles/github-members.ts";
@@ -31,6 +42,7 @@ import { benchmark, trendPct, trendStatus } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
 import {
   byUrl,
+  collectFromWorkingRuns,
   type GithubAnswer,
   withGithubAttempt,
 } from "./test/github-attempts.ts";
@@ -42,7 +54,7 @@ function ctx(
 ): Ctx {
   return {
     runs: () => Promise.resolve(runs),
-    runsFor: (repo: string) =>
+    runsFor: ({ repo }) =>
       Promise.resolve(runsByRepo ? runsByRepo(repo) : runs),
     env: (k) => env[k],
   };
@@ -501,8 +513,8 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
   // 25 runs within the last ~25 min -> the 6h window wins (25 >= 20).
   const busy = Array.from({ length: 25 }, (_, i) => at(i));
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(busy))).sub ?? "",
-    "25 passing runs in the last 6h",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(busy))).sub ?? "",
+    "25 passing PR runs in the last 6h",
   );
   // 5 recent + 30 from two days ago -> only 5 in 6h (< 20) -> fall back to the last 20.
   const quiet = [
@@ -510,8 +522,8 @@ Deno.test("ci-duration window: the 6h window when it has >= 20 runs, else the mo
     ...Array.from({ length: 30 }, () => at(60 * 48)),
   ];
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(quiet))).sub ?? "",
-    "last 20 passing runs",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(quiet))).sub ?? "",
+    "last 20 passing PR runs",
   );
 });
 
@@ -530,12 +542,13 @@ Deno.test("ci-duration: only runs that passed end to end count", async () => {
     at(1, { conclusion: "cancelled" }),
     at(2, { conclusion: "timed_out" }),
     at(3, { status: "in_progress", conclusion: null }),
-    at(4, { event: "workflow_dispatch", conclusion: "success" }),
+    // Passed on a rerun, so its span includes the wait before the rerun.
+    at(4, { run_attempt: 2, conclusion: "success" }),
   ];
-  // Only the 20 successful push runs are counted; the rest are ignored.
+  // Only the 20 runs that passed on their first attempt are counted.
   assertStringIncludes(
-    (await labsCiDuration.collect(ctx(runs))).sub ?? "",
-    "20 passing runs in the last 6h",
+    (await collectFromWorkingRuns(labsCiDuration, ctx(runs))).sub ?? "",
+    "20 passing PR runs in the last 6h",
   );
 });
 
@@ -560,17 +573,122 @@ Deno.test("ci-duration: a run without a usable landing span is dropped", async (
     updated_at: new Date(now).toISOString(),
   });
 
-  const mixed = await labsCiDuration.collect(
+  const mixed = await collectFromWorkingRuns(labsCiDuration, 
     ctx([usable, endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(mixed.value, "10m");
-  assertStringIncludes(mixed.sub ?? "", "last 1 passing runs");
+  assertStringIncludes(mixed.sub ?? "", "last 1 passing PR runs");
 
-  const none = await labsCiDuration.collect(
+  const none = await collectFromWorkingRuns(labsCiDuration, 
     ctx([endsBeforeItLands, unparseableLanding]),
   );
   assertEquals(none.status, "unknown");
   assertEquals(none.value, "—");
+});
+
+// Where page `page` of the job listing of `attempt` is requested.
+function jobPageUrl(attempt: Run, page: number, repo = REPO): string {
+  return `${attemptUrl(attempt, repo)}/jobs?per_page=100&page=${page}`;
+}
+
+// A job listing page holding one job for each conclusion in `conclusions`.
+function jobPage(total: number, conclusions: readonly string[]): GithubAnswer {
+  return {
+    total_count: total,
+    jobs: conclusions.map((conclusion) => ({ conclusion })),
+  };
+}
+
+Deno.test("weaver ci duration: a run that ran no job, or ran one job and skipped the rest, did no work and is left out", async () => {
+  const now = Date.now();
+  const minutes = (m: number) =>
+    run({
+      created_at: new Date(now - m * 60_000).toISOString(),
+      run_started_at: new Date(now - m * 60_000).toISOString(),
+      updated_at: new Date(now).toISOString(),
+    });
+  const statusOnly = minutes(1);
+  const jobless = minutes(2);
+  const oneJobWorkflow = minutes(8);
+  const worked = minutes(12);
+  const view = await withGithubAttempt(
+    byUrl([
+      [
+        jobPageUrl(statusOnly, 1, WEAVER_REPO),
+        jobPage(3, ["skipped", "success", "skipped"]),
+      ],
+      [jobPageUrl(jobless, 1, WEAVER_REPO), jobPage(0, [])],
+      [jobPageUrl(oneJobWorkflow, 1, WEAVER_REPO), jobPage(1, ["success"])],
+      [
+        jobPageUrl(worked, 1, WEAVER_REPO),
+        jobPage(3, ["skipped", "success", "success"]),
+      ],
+    ]),
+    () =>
+      weaverCiDuration.collect(
+        ctx([statusOnly, jobless, oneJobWorkflow, worked]),
+      ),
+  );
+  // The median of 8 and 12 minutes; the one- and two-minute runs are not
+  // counted.
+  assertEquals(view.value, "10m");
+  assertStringIncludes(view.sub ?? "", "last 2 passing PR runs");
+});
+
+Deno.test("ci-duration: a job listing is read to its last page, once", async () => {
+  const now = Date.now();
+  const long = run({
+    created_at: new Date(now - 20 * 60_000).toISOString(),
+    run_started_at: new Date(now - 20 * 60_000).toISOString(),
+    updated_at: new Date(now).toISOString(),
+  });
+  const skippedPage = Array.from({ length: 100 }, () => "skipped");
+  const pages = [jobPageUrl(long, 1), jobPageUrl(long, 2)];
+  await withGithubAttempt(
+    byUrl([
+      [pages[0], jobPage(102, skippedPage)],
+      [pages[1], jobPage(102, ["success", "success"])],
+    ]),
+    async (urls) => {
+      // Only the second page shows that more than one job ran.
+      assertEquals((await labsCiDuration.collect(ctx([long]))).value, "20m");
+      assertEquals(urls, pages);
+      await labsCiDuration.collect(ctx([long]));
+      assertEquals(urls, pages, "a completed run's job counts are held");
+    },
+  );
+});
+
+Deno.test("ci-duration: a job listing that cannot be read fails the collection", async () => {
+  const unreadable = run({});
+  await withGithubAttempt(
+    byUrl([[jobPageUrl(unreadable, 1), { total_count: 1 }]]),
+    () =>
+      assertRejects(
+        () => labsCiDuration.collect(ctx([unreadable])),
+        Error,
+        "job listing page 1",
+      ),
+  );
+});
+
+Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snapshot", async () => {
+  const kept = run({});
+  const passing = run({});
+  const listing = jobPage(2, ["success", "success"]);
+  await withGithubAttempt(
+    byUrl([[jobPageUrl(kept, 1), listing], [jobPageUrl(passing, 1), listing]]),
+    async (urls) => {
+      await labsCiDuration.collect(ctx([kept, passing]));
+      await labsCiDuration.collect(ctx([kept]));
+      await labsCiDuration.collect(ctx([kept, passing]));
+      assertEquals(urls, [
+        jobPageUrl(kept, 1),
+        jobPageUrl(passing, 1),
+        jobPageUrl(passing, 1),
+      ]);
+    },
+  );
 });
 
 Deno.test("recent-runs: wide, failure tip -> bad, rows link to the landing PR", async () => {
@@ -680,29 +798,49 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
   assertStringIncludes(html, '>42s</a><a class="evarrow"');
 });
 
-Deno.test("ci trust: both repositories keep their strip at the tile bottom", async () => {
+Deno.test("ci trust: every repository keeps its strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  assertEquals((await labsCiTrust.collect(one)).alignChartBottom, true);
-  assertEquals((await loomCiTrust.collect(one)).alignChartBottom, true);
+  for (const tile of [labsCiTrust, loomCiTrust, weaverCiTrust]) {
+    assertEquals((await tile.collect(one)).alignChartBottom, true);
+  }
 });
 
 Deno.test("runSource creates workflow snapshot metadata", () => {
-  assertEquals(runSource(REPO, CI_WORKFLOW), {
+  assertEquals(runSource(REPO, CI_WORKFLOW, "main"), {
     repo: REPO,
     workflow: CI_WORKFLOW,
+    scope: "main",
+  });
+  assertEquals(runSource(REPO, CI_WORKFLOW, "pull requests"), {
+    repo: REPO,
+    workflow: CI_WORKFLOW,
+    scope: "pull requests",
   });
 });
 
 Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
-  const labsSource = [{ repo: REPO, workflow: CI_WORKFLOW }];
-  const loomSource = [{ repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW }];
-  for (const tile of [labsCiTrust, labsCiDuration]) {
-    assertEquals(tile.runSources, labsSource);
-  }
-  for (const tile of [loomCiTrust, loomCiDuration]) {
-    assertEquals(tile.runSources, loomSource);
-  }
-  assertEquals(recentRuns.runSources, [...labsSource, ...loomSource]);
+  const main = (repo: string, workflow: string): RunSource[] => [
+    { repo, workflow, scope: "main" },
+  ];
+  const pulls = (repo: string, workflow: string): RunSource[] => [
+    { repo, workflow, scope: "pull requests" },
+  ];
+  assertEquals(labsCiTrust.runSources, main(REPO, CI_WORKFLOW));
+  assertEquals(loomCiTrust.runSources, main(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(
+    weaverCiTrust.runSources,
+    main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
+  );
+  assertEquals(labsCiDuration.runSources, pulls(REPO, CI_WORKFLOW));
+  assertEquals(loomCiDuration.runSources, pulls(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(
+    weaverCiDuration.runSources,
+    pulls(WEAVER_REPO, WEAVER_CI_WORKFLOW),
+  );
+  assertEquals(recentRuns.runSources, [
+    ...main(REPO, CI_WORKFLOW),
+    ...main(LOOM_REPO, LOOM_CI_WORKFLOW),
+  ]);
 });
 
 Deno.test("recent runs: labs and loom runs interleave chronologically, each tagged", async () => {

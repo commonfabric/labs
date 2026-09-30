@@ -241,10 +241,11 @@ describe("DefaultValueVisitor", () => {
       it("return `undefined`", () => {
         const vis = new Tracing();
 
-        expect(vis.mappedFabricArrayElement([1], 0, 1)).toBeUndefined();
-        expect(vis.mappedFabricInstanceState(new FabricMap(new Map()), {}))
+        expect(vis.mappedFabricArrayElement([1], 0, 1, 2)).toBeUndefined();
+        expect(vis.mappedFabricInstanceState(new FabricMap(new Map()), {}, {}))
           .toBeUndefined();
-        expect(vis.mappedFabricPlainObjectEntry({}, "k", 1)).toBeUndefined();
+        expect(vis.mappedFabricPlainObjectEntry({}, "k", 1, "j", 2))
+          .toBeUndefined();
       });
     });
 

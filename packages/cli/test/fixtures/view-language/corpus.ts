@@ -391,7 +391,63 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "tools", className: "interfaceName" },
   },
   {
+    languageId: "shell",
+    surveyRepository: "infra",
+    surveyCommit: "e86055db01424713770930acc24b5a20d2e96448",
+    surveyPath: "k8s/scripts/force-sync-externalsecrets.sh",
+    before: new URL("./shell-infra/before.sh", import.meta.url),
+    after: new URL("./shell-infra/after.sh", import.meta.url),
+    incomplete: new URL("./shell-infra/incomplete.sh", import.meta.url),
+    selection: {
+      filenames: [
+        "k8s/scripts/force-sync-externalsecrets.sh",
+        "scripts/completion.bash",
+        "install.command",
+        ".bashrc",
+        ".profile",
+        // Git hooks and extensionless programs select shell through the
+        // fixture's `bash` shebang.
+        ".githooks/pre-commit",
+        ".ops/hooks/post-merge",
+        "android/gradlew",
+        "images/arm-qemu/initramfs/init",
+      ],
+      aliases: ["shell", "sh", "bash"],
+      shebangs: [
+        "#!/bin/sh",
+        "#!/bin/bash",
+        "#!/usr/bin/env bash",
+        "#!/usr/bin/env sh",
+        "#!/bin/dash",
+      ],
+    },
+    beforeEvidence: { text: "force_sync_and_wait", className: "functionName" },
+    afterEvidence: { text: "read_status_snapshot", className: "functionName" },
+    incompleteEvidence: { text: "local", className: "storageKeyword" },
+  },
+  {
+    languageId: "shell",
+    surveyRepository: "loom",
+    surveyCommit: "12d633c0e865491b4d006c883f4201eab1edcaec",
+    surveyPath: "src/bin/check-deno-setup-gate.sh",
+    before: new URL("./shell-loom/before.sh", import.meta.url),
+    after: new URL("./shell-loom/after.sh", import.meta.url),
+    incomplete: new URL("./shell-loom/incomplete.sh", import.meta.url),
+    beforeEvidence: {
+      text: "setup_version_from_file",
+      className: "functionName",
+    },
+    afterEvidence: {
+      text: "setup_version_from_file",
+      className: "functionName",
+    },
+    incompleteEvidence: { text: "fi", className: "controlKeyword" },
+  },
+  {
     languageId: "properties",
+    // A shell variable assignment is a `name=value` line, and shell colors the
+    // name as properties files color their keys.
+    highlightingPeers: ["shell"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",

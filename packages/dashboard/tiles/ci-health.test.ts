@@ -14,19 +14,40 @@ import {
   REPO,
 } from "../config.ts";
 import { compactSpan } from "../lib.ts";
-import type { Ctx } from "../types.ts";
-import { createCiHealth } from "./ci-health.ts";
+import { type Ctx, type Run, type RunSource, runSource, type TileView } from "../types.ts";
+import { type CiHealthTile, createCiHealth, SWEEP_TTL_MS } from "./ci-health.ts";
 
 const ORG = REPO.split("/")[0];
 const HOUR = 3_600_000;
 const T0 = Date.UTC(2026, 6, 1, 12);
 
+// The runs of the two main builds come to the tile as the snapshots the ci
+// trust tiles read, which here are read from the same stand-in for GitHub.
 function ctx(env: Record<string, string> = { GH_TOKEN: "token" }): Ctx {
+  const runsFor = async (source: RunSource): Promise<Run[]> => {
+    const answer = await fetch(
+      `https://api.github.com/repos/${source.repo}/actions/workflows/` +
+        `${workflowId(source.repo, source.workflow)}/runs?branch=main&per_page=100`,
+    );
+    if (!answer.ok) throw new Error(`GitHub ${answer.status}`);
+    return (await answer.json()).workflow_runs;
+  };
   return {
-    runs: () => Promise.resolve([]),
-    runsFor: () => Promise.resolve([]),
+    runs: () => runsFor(runSource(REPO, CI_WORKFLOW, "main")),
+    runsFor,
     env: (key) => env[key],
   };
+}
+
+// Collects once, which starts a sweep when one is due, waits for the sweep to
+// finish, and collects again, which is the first collection to show it.
+async function collectSwept(
+  tile: CiHealthTile,
+  context = ctx(),
+): Promise<TileView> {
+  await tile.collect(context);
+  await tile.sweeping();
+  return await tile.collect(context);
 }
 
 interface WorkflowSpec {
@@ -79,6 +100,8 @@ const green: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
 interface Wire {
   calls: string[];
   logged: string[];
+  // Moves the clock on far enough that the next collection sweeps again.
+  sweepAgain(): void;
 }
 
 function workflowId(repo: string, file: string): number {
@@ -94,7 +117,14 @@ async function withGitHub(
   body: (wire: Wire) => Promise<void>,
 ): Promise<void> {
   const real = { fetch: globalThis.fetch, now: Date.now, error: console.error };
-  const wire: Wire = { calls: [], logged: [] };
+  let now = T0;
+  const wire: Wire = {
+    calls: [],
+    logged: [],
+    sweepAgain: () => {
+      now += SWEEP_TTL_MS + 1;
+    },
+  };
   const byFullName = new Map<string, RepoSpec>(
     repos.map((repo) => [`${ORG}/${repo.name}`, repo]),
   );
@@ -206,7 +236,7 @@ async function withGitHub(
         created_at: new Date(T0 - createdAgo * 60_000).toISOString(),
         run_started_at: new Date(T0 - createdAgo * 60_000).toISOString(),
         updated_at: new Date(T0 - endedAgo * 60_000).toISOString(),
-        html_url: `https://github.com/${repo}/actions/runs/${workflowNumber}`,
+        html_url: `https://github.com/${repo}/actions/runs/${id}`,
         head_commit: null,
       };
     };
@@ -256,7 +286,7 @@ async function withGitHub(
     }
     throw new Error(`unexpected request ${url}`);
   }) as typeof fetch;
-  Date.now = () => T0;
+  Date.now = () => now;
   console.error = (...args: unknown[]) => {
     wire.logged.push(args.map(String).join(" "));
   };
@@ -269,6 +299,18 @@ async function withGitHub(
     console.error = real.error;
   }
 }
+
+// A job outside the two main builds, which the tile reads in its sweep of the
+// organization rather than from the snapshots the ci trust tiles read.
+const pond = (runs: RunSpec[]): RepoSpec => ({
+  name: "pond",
+  workflows: [{ name: "Nightly", file: "nightly.yml", runs }],
+});
+const pondPages = (wire: Wire) =>
+  wire.calls.filter((call) =>
+    call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
+    call.includes("/runs?")
+  ).length;
 
 const standingOrg = (
   labsRuns: RunSpec[],
@@ -283,7 +325,7 @@ const standingOrg = (
 Deno.test("ci: every job passing keeps labs and loom green in the body", async () => {
   await withGitHub(standingOrg(green, green), async () => {
     const tile = createCiHealth();
-    const view = await tile.collect(ctx());
+    const view = await collectSwept(tile);
 
     assertEquals(tile.label, "ci");
     assertEquals(view.href, "/ci");
@@ -309,7 +351,7 @@ Deno.test("ci: one failing job names its repository in the headline", async () =
   await withGitHub(
     standingOrg(green, [{ conclusion: "failure", minutesAgo: 190 }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
@@ -335,7 +377,7 @@ Deno.test("ci: a failing job outside the two main builds is found and named", as
       }],
     }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "infra failing");
@@ -364,7 +406,7 @@ Deno.test("ci: several failing jobs are counted and all of them listed", async (
       }],
     ),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "3 failing");
@@ -405,7 +447,7 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
   ];
   for (const testCase of cases) {
     await withGitHub(standingOrg(green, testCase.newest), async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.status, testCase.status);
       assertEquals(view.value, testCase.value);
     });
@@ -422,7 +464,7 @@ Deno.test("ci: a cancelled run that ran jobs is a failure, not a run to pass ove
       { conclusion: "success", minutesAgo: 200 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
@@ -436,7 +478,7 @@ Deno.test("ci: a failure nobody has fixed in two days goes orange, still failing
   await withGitHub(
     standingOrg(green, [{ conclusion: "failure", minutesAgo: stale }]),
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       // It is still one of the failing jobs, and still named as one, with how
@@ -469,7 +511,7 @@ Deno.test("ci: one fresh failure keeps the tile red beside an older one", async 
       [{ conclusion: "failure", minutesAgo: stale }],
     ),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "2 failing");
@@ -484,7 +526,7 @@ Deno.test("ci: a failure an hour short of the threshold is still red", async () 
   await withGitHub(
     standingOrg(green, [{ conclusion: "failure", minutesAgo: fresh }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
     },
@@ -505,7 +547,7 @@ Deno.test("ci: a failure made by a workflow since changed is no longer counted",
       }],
     }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "good");
       assertEquals(view.value, "passing");
@@ -540,7 +582,7 @@ Deno.test("ci: a job gated off after it failed stops counting, while its runs go
       }]),
       async () => {
         const tile = createCiHealth();
-        const view = await tile.collect(ctx());
+        const view = await collectSwept(tile);
         assertEquals(view.status, "good", `${days} skipped`);
         assertEquals(view.value, "passing");
 
@@ -575,7 +617,7 @@ Deno.test("ci: a job gated off after it passed stays green however many runs ski
       },
     ],
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "good");
       assertEquals(view.value, "passing");
@@ -598,9 +640,188 @@ Deno.test("ci: runs still going do not hide the verdict before them", async () =
   await withGitHub(
     standingOrg(green, [...going, { conclusion: "failure", minutesAgo: 60 }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
+    },
+  );
+});
+
+Deno.test("ci: the main builds are judged afresh on every collection, between sweeps", async () => {
+  const labsRuns: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
+  await withGitHub(standingOrg(labsRuns, green, [pond(green)]), async (wire) => {
+    const tile = createCiHealth();
+    assertEquals((await collectSwept(tile)).value, "passing");
+    assertEquals(pondPages(wire), 1);
+
+    // A newer labs run fails before the sweep is due. The next collection
+    // reports it from the snapshot it is handed, and reads no other job.
+    labsRuns.unshift({ conclusion: "failure", minutesAgo: 5 });
+    const view = await tile.collect(ctx());
+    assertEquals(view.status, "bad");
+    assertEquals(view.value, "labs failing");
+    assertStringIncludes(view.extra ?? "", "labs · CI");
+    assertEquals(pondPages(wire), 1, "the other jobs wait for the sweep");
+  });
+});
+
+Deno.test("ci: a collection never waits for a sweep", async () => {
+  const nightly: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
+  await withGitHub(standingOrg(green, green, [pond(nightly)]), async (wire) => {
+    const tile = createCiHealth();
+    const first = await tile.collect(ctx());
+    assertEquals(first.status, "unknown");
+    assertEquals(first.sub, "reading every repository");
+
+    await tile.sweeping();
+    assertEquals((await tile.collect(ctx())).value, "passing");
+
+    // While the next sweep is under way, a collection shows the last one.
+    nightly.unshift({ conclusion: "failure", minutesAgo: 5 });
+    wire.sweepAgain();
+    assertEquals((await tile.collect(ctx())).value, "passing");
+    await tile.sweeping();
+    assertEquals((await tile.collect(ctx())).value, "pond failing");
+  });
+});
+
+Deno.test("ci: a main build whose snapshot has a problem is unreadable, and the rest still shows", async () => {
+  const nightly: RunSpec[] = [{ conclusion: "success", minutesAgo: 5 }];
+  await withGitHub(standingOrg(green, green, [pond(nightly)]), async () => {
+    const context: Ctx = {
+      ...ctx(),
+      runSourceProblem: (source) =>
+        source.repo === LOOM_REPO ? "GitHub 503 Service Unavailable" : undefined,
+    };
+    const tile = createCiHealth();
+    const view = await collectSwept(tile, context);
+    assertEquals(view.status, "warn");
+    assertEquals(view.value, "1 unreadable");
+    assertStringIncludes(view.extra ?? "", "loom · Tests (fast)");
+    assertStringIncludes(view.extra ?? "", "temporarily unavailable");
+
+    // A failure elsewhere is not hidden behind it.
+    nightly.unshift({ conclusion: "failure", minutesAgo: 1 });
+    const worse = await collectSwept(createCiHealth(), context);
+    assertEquals(worse.status, "bad");
+    assertEquals(worse.value, "pond failing");
+  });
+});
+
+Deno.test("ci: a failed sweep is tried again only when the next one is due", async () => {
+  await withGitHub(standingOrg(green, green), async (wire) => {
+    const listings = () =>
+      wire.calls.filter((call) => call.startsWith(`/orgs/${ORG}/repos`)).length;
+    const real = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response("nope", { status: 403 }))) as typeof fetch;
+    let asked = 0;
+    const context: Ctx = { ...ctx(), collectAgain: () => asked++ };
+    const tile = createCiHealth();
+    const failed = await collectSwept(tile, context);
+    globalThis.fetch = real;
+    assertEquals(failed.status, "unknown");
+    assertEquals(failed.sub, "auth failed");
+    assertEquals(asked, 1, "a failed sweep asks to be shown too");
+
+    assertEquals((await collectSwept(tile)).sub, "auth failed");
+    assertEquals(listings(), 0, "the sweep is not due again yet");
+
+    wire.sweepAgain();
+    assertEquals((await collectSwept(tile)).value, "passing");
+    assertEquals(listings(), 1);
+  });
+});
+
+Deno.test("ci: a finished sweep asks for the tile to be collected again", async () => {
+  await withGitHub(standingOrg(green, green), async () => {
+    let asked = 0;
+    const context: Ctx = { ...ctx(), collectAgain: () => asked++ };
+    const tile = createCiHealth();
+    await tile.collect(context);
+    assertEquals(asked, 0);
+    await tile.sweeping();
+    assertEquals(asked, 1, "once the sweep has finished");
+
+    // A collection between sweeps starts none, and asks for nothing.
+    await tile.collect(context);
+    await tile.sweeping();
+    assertEquals(asked, 1);
+  });
+});
+
+Deno.test("ci: the page keeps the collection that started last, whichever finishes last", async () => {
+  await withGitHub(
+    standingOrg([{ conclusion: "failure", minutesAgo: 5 }], green),
+    async () => {
+      const tile = createCiHealth();
+      await collectSwept(tile);
+      const pageText = async () =>
+        (await (await tile.routes![0].handler(
+          new Request("http://dashboard/ci"),
+          new URL("http://dashboard/ci"),
+        )).text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
+      // An earlier collection holds an older snapshot, in which labs passed,
+      // and finishes after a later one that holds the failure.
+      const current = ctx();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const earlier: Ctx = {
+        ...current,
+        runsFor: async (source) => {
+          await held;
+          return (await current.runsFor(source)).map((run) => ({
+            ...run,
+            conclusion: "success",
+          }));
+        },
+      };
+      const slow = tile.collect(earlier);
+      assertEquals((await tile.collect(current)).value, "labs failing");
+      release();
+      assertEquals((await slow).value, "passing");
+
+      assertStringIncludes(await pageText(), "labs CI push failure");
+    },
+  );
+});
+
+Deno.test("ci: a fork's pull request in a main build's snapshot is passed over", async () => {
+  // The snapshot holds every run on a branch named main, which a fork's pull
+  // request can carry.
+  await withGitHub(
+    standingOrg([
+      { conclusion: "success", event: "pull_request", minutesAgo: 5 },
+      { conclusion: "failure", minutesAgo: 30 },
+    ], green),
+    async () => {
+      const view = await collectSwept(createCiHealth());
+      assertEquals(view.status, "bad");
+      assertEquals(view.value, "labs failing");
+    },
+  );
+});
+
+Deno.test("ci: a failing main build's workflow history is read once per sweep", async () => {
+  await withGitHub(
+    standingOrg([{ conclusion: "failure", minutesAgo: 30 }], green),
+    async (wire) => {
+      const histories = () =>
+        wire.calls.filter((call) => call.startsWith(`/repos/${REPO}/commits`))
+          .length;
+      const tile = createCiHealth();
+      assertEquals((await collectSwept(tile)).value, "labs failing");
+      for (let collection = 0; collection < 2; collection++) {
+        assertEquals((await tile.collect(ctx())).value, "labs failing");
+      }
+      assertEquals(histories(), 1);
+
+      wire.sweepAgain();
+      assertEquals((await collectSwept(tile)).value, "labs failing");
+      assertEquals(histories(), 2);
     },
   );
 });
@@ -613,32 +834,33 @@ Deno.test("ci: a verdict found far back is not read again on the next collection
     })),
     { conclusion: "success", minutesAgo: 30 * 60 },
   ];
-  await withGitHub(standingOrg(green, runs), async (wire) => {
-    const loomPages = () =>
+  await withGitHub(standingOrg(green, green, [pond(runs)]), async (wire) => {
+    const pondRunReads = () =>
       wire.calls.filter((call) =>
-        call.startsWith(`/repos/${LOOM_REPO}/actions/workflows/`) &&
-        call.includes("/runs?")
-      ).length;
-    const loomRunReads = () =>
-      wire.calls.filter((call) =>
-        call.startsWith(`/repos/${LOOM_REPO}/actions/runs/`)
+        call.startsWith(`/repos/${ORG}/pond/actions/runs/`)
       ).length;
     const tile = createCiHealth();
-    assertEquals((await tile.collect(ctx())).value, "passing");
-    assertEquals(loomPages(), 2, "the pass is on the second page");
+    assertEquals((await collectSwept(tile)).value, "passing");
+    assertEquals(pondPages(wire), 2, "the pass is on the second page");
 
-    // One more run skips before the next collection, which reads down to the
-    // runs the first one settled and no further, and asks after the pass
-    // behind them on its own.
+    // A collection before the sweep is due reads none of the job's runs.
+    await tile.collect(ctx());
+    assertEquals(pondPages(wire), 2, "a collection between sweeps reads none");
+
+    // One more run skips before the next sweep, which reads down to the runs
+    // the first one settled and no further, and asks after the pass behind
+    // them on its own.
     runs.unshift({ conclusion: "skipped", minutesAgo: 60 });
-    const view = await tile.collect(ctx());
+    wire.sweepAgain();
+    const view = await collectSwept(tile);
     assertEquals(view.value, "passing");
-    assertStringIncludes(
-      view.extra ?? "",
-      `<span class="dot green"></span>loom · Tests (fast)`,
-    );
-    assertEquals(loomPages(), 3, "the second collection reads one page");
-    assertEquals(loomRunReads(), 1, "and the pass once");
+    assertEquals(pondPages(wire), 3, "the second sweep reads one page");
+    assertEquals(pondRunReads(), 1, "and the pass once");
+    const page = await (await tile.routes![0].handler(
+      new Request("http://dashboard/ci"),
+      new URL("http://dashboard/ci"),
+    )).text();
+    assertStringIncludes(page, "Nightly");
   });
 });
 
@@ -650,27 +872,23 @@ Deno.test("ci: a job that could not be read reads its runs afresh", async () => 
     })),
     { conclusion: "success", minutesAgo: 30 * 60 },
   ];
-  const org = standingOrg(green, runs);
-  const loom = org.find((repo) => repo.name === LOOM_REPO.split("/")[1])!;
-  await withGitHub(org, async (wire) => {
-    const loomPages = () =>
-      wire.calls.filter((call) =>
-        call.startsWith(`/repos/${LOOM_REPO}/actions/workflows/`) &&
-        call.includes("/runs?")
-      ).length;
+  const nightly = pond(runs);
+  await withGitHub(standingOrg(green, green, [nightly]), async (wire) => {
     const tile = createCiHealth();
-    assertEquals((await tile.collect(ctx())).value, "passing");
-    assertEquals(loomPages(), 2);
+    assertEquals((await collectSwept(tile)).value, "passing");
+    assertEquals(pondPages(wire), 2);
 
-    loom.runsStatus = 503;
-    assertEquals((await tile.collect(ctx())).value, "1 unreadable");
-    assertEquals(loomPages(), 3);
+    nightly.runsStatus = 503;
+    wire.sweepAgain();
+    assertEquals((await collectSwept(tile)).value, "1 unreadable");
+    assertEquals(pondPages(wire), 3);
 
     // Nothing settled survives the failed read, so the pass is found again
-    // the way the first collection found it.
-    delete loom.runsStatus;
-    assertEquals((await tile.collect(ctx())).value, "passing");
-    assertEquals(loomPages(), 5);
+    // the way the first sweep found it.
+    delete nightly.runsStatus;
+    wire.sweepAgain();
+    assertEquals((await collectSwept(tile)).value, "passing");
+    assertEquals(pondPages(wire), 5);
   });
 });
 
@@ -683,9 +901,9 @@ Deno.test("ci: a failure run again and still going is no longer the verdict", as
     })),
     { conclusion: "failure", event: "schedule", minutesAgo: 10 * 60 },
   ];
-  await withGitHub(standingOrg(green, runs), async () => {
+  await withGitHub(standingOrg(green, green, [pond(runs)]), async (wire) => {
     const tile = createCiHealth();
-    assertEquals((await tile.collect(ctx())).value, "loom failing");
+    assertEquals((await collectSwept(tile)).value, "pond failing");
 
     runs[3] = {
       ...runs[3],
@@ -693,12 +911,11 @@ Deno.test("ci: a failure run again and still going is no longer the verdict", as
       status: "in_progress",
       attempt: 2,
     };
-    const view = await tile.collect(ctx());
+    wire.sweepAgain();
+    const view = await collectSwept(tile);
     assertEquals(view.status, "good");
-    assertStringIncludes(
-      view.extra ?? "",
-      `<span class="dot gray"></span>loom · Tests (fast)`,
-    );
+    assertEquals(view.value, "passing");
+    assertStringIncludes(view.aside ?? "", "2 jobs · 3 repos");
   });
 });
 
@@ -713,12 +930,13 @@ Deno.test("ci: a failure far back that was run again and passed is read again", 
     { conclusion: "failure", event: "schedule", minutesAgo: 10 * 60 },
     { conclusion: "success", event: "schedule", minutesAgo: 34 * 60 },
   ];
-  await withGitHub(standingOrg(green, runs), async () => {
+  await withGitHub(standingOrg(green, green, [pond(runs)]), async (wire) => {
     const tile = createCiHealth();
-    assertEquals((await tile.collect(ctx())).value, "loom failing");
+    assertEquals((await collectSwept(tile)).value, "pond failing");
 
     runs[25] = { ...runs[25], conclusion: "success", attempt: 2 };
-    const view = await tile.collect(ctx());
+    wire.sweepAgain();
+    const view = await collectSwept(tile);
     assertEquals(view.status, "good");
     assertEquals(view.value, "passing");
   });
@@ -737,7 +955,7 @@ Deno.test("ci: a failure made after the workflow's last change still counts", as
       },
     ],
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
     },
@@ -757,7 +975,7 @@ Deno.test("ci: a pinned build changed since its failure reads gray and says why"
       },
     ],
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "good");
       assertStringIncludes(
@@ -778,7 +996,7 @@ Deno.test("ci: a failure stands when its workflow's history cannot be read", asy
           : repo,
     ),
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
@@ -794,7 +1012,7 @@ Deno.test("ci: a failure stands when its workflow's history cannot be read", asy
 
 Deno.test("ci: a passing job never asks for its workflow's history", async () => {
   await withGitHub(standingOrg(green, green), async (wire) => {
-    await createCiHealth().collect(ctx());
+    await collectSwept(createCiHealth());
     assertEquals(wire.calls.filter((call) => call.includes("/commits?")), []);
   });
 });
@@ -810,7 +1028,7 @@ Deno.test("ci: a run cancelled because a newer one replaced it judges nothing", 
       { conclusion: "success", minutesAgo: 6 * 24 * 60 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "good");
       assertEquals(view.value, "passing");
@@ -827,7 +1045,7 @@ Deno.test("ci: a run cancelled before any newer run began is still a failure", a
       { conclusion: "success", minutesAgo: 6 * 24 * 60 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
@@ -842,9 +1060,38 @@ Deno.test("ci: a run still going is not a verdict", async () => {
       { conclusion: "failure", minutesAgo: 60 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       // The newest completed run decides; the one still going says nothing.
       assertEquals(view.value, "loom failing");
+    },
+  );
+});
+
+Deno.test("ci: the page links a job to its run in progress, and not to one queued", async () => {
+  await withGitHub(
+    standingOrg(green, [
+      { conclusion: null, status: "queued", minutesAgo: 1 },
+      { conclusion: null, status: "in_progress", minutesAgo: 5 },
+      { conclusion: "success", minutesAgo: 60 },
+    ]),
+    async () => {
+      const tile = createCiHealth();
+      const view = await tile.collect(ctx());
+      assertEquals(view.value, "passing");
+
+      const page = await (await tile.routes![0].handler(
+        new Request("http://dashboard/ci"),
+        new URL("http://dashboard/ci"),
+      )).text();
+      // The loom workflow's runs are numbered from the oldest, so the one in
+      // progress is its second.
+      const loomCiId = workflowId(LOOM_REPO, LOOM_CI_WORKFLOW) * 100 + 1;
+      assertStringIncludes(
+        page,
+        `>Tests (fast)</a><a class="dot run" href="https://github.com/${LOOM_REPO}/actions/runs/${loomCiId}"`,
+      );
+      // The labs job has nothing going, so only loom's carries the dot.
+      assertEquals(page.match(/class="dot run"/g)?.length, 1);
     },
   );
 });
@@ -858,17 +1105,20 @@ Deno.test("ci: a fork's pull request from a branch named main does not crowd out
     minutesAgo: index + 1,
   }));
   await withGitHub(
-    standingOrg(green, [...forkRuns, { conclusion: "failure", minutesAgo: 100 }]),
+    standingOrg(green, green, [
+      pond([...forkRuns, { conclusion: "failure", minutesAgo: 100 }]),
+    ]),
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
-      assertEquals(view.value, "loom failing");
-      const loomPages = wire.calls.filter((call) =>
-        call.startsWith(`/repos/${LOOM_REPO}/actions/workflows/`) &&
-        call.includes("/runs?")
+      assertEquals(view.value, "pond failing");
+      assertEquals(pondPages(wire), 2, "the second page holds the job's run");
+      assert(
+        wire.calls.some((call) =>
+          call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
+          call.endsWith("&page=2")
+        ),
       );
-      assertEquals(loomPages.length, 2, "the second page holds the job's run");
-      assertStringIncludes(loomPages[1], "&page=2");
     },
   );
 });
@@ -889,7 +1139,7 @@ Deno.test("ci: a workflow only pull requests start has no verdict and says so", 
     }]),
     async () => {
       const tile = createCiHealth();
-      const view = await tile.collect(ctx());
+      const view = await collectSwept(tile);
       assertEquals(view.status, "good");
       assertStringIncludes(view.aside ?? "", "2 jobs · 3 repos");
 
@@ -913,7 +1163,7 @@ Deno.test("ci: runs a pull request review started are a pull request's too", asy
       { conclusion: "failure", minutesAgo: 60 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.value, "loom failing");
     },
   );
@@ -925,7 +1175,7 @@ Deno.test("ci: a red tile lists only its failing jobs", async () => {
       { name: "pond", workflowsStatus: 403 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
       assertStringIncludes(view.extra ?? "", "loom · Tests (fast)");
@@ -940,7 +1190,7 @@ Deno.test("ci: a workflow listing that is not a list of workflows is unreadable"
   await withGitHub(
     standingOrg(green, green, [{ name: "pond", workflowsBody: { workflows: "none" } }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "1 unreadable");
@@ -967,7 +1217,7 @@ Deno.test("ci: a failure stands when its workflow's history makes no sense", asy
             : repo,
       ),
       async (wire) => {
-        const view = await createCiHealth().collect(ctx());
+        const view = await collectSwept(createCiHealth());
 
         assertEquals(view.value, "loom failing", JSON.stringify(testCase.body));
         assertEquals(
@@ -989,7 +1239,7 @@ Deno.test("ci: a cancelled run whose job count cannot be read is unreadable, not
       { conclusion: "success", minutesAgo: 200 },
     ]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "1 unreadable");
@@ -1012,17 +1262,17 @@ Deno.test("ci: a repository that leaves the inventory takes its job counts with 
     const counts = () =>
       wire.calls.filter((call) => call.includes("/attempts/1/jobs")).length;
     try {
-      await tile.collect(ctx());
+      await collectSwept(tile);
       assertEquals(counts(), 1);
 
       repos.splice(1, 1);
       Date.now = () => T0 + HOUR + 60_000;
-      await tile.collect(ctx());
+      await collectSwept(tile);
       assertEquals(counts(), 1, "a repository not in the inventory is not read");
 
       repos.push(loom);
       Date.now = () => T0 + 2 * HOUR + 120_000;
-      const view = await tile.collect(ctx());
+      const view = await collectSwept(tile);
       assertEquals(counts(), 2, "its count was read again");
       assertEquals(view.value, "loom failing");
     } finally {
@@ -1041,11 +1291,12 @@ Deno.test("ci: a job with no run carrying a verdict is not counted as failing", 
         runs: [{ conclusion: "cancelled", minutesAgo: 10, startedJobs: 0 }],
       }],
     }]),
-    async () => {
+    async (wire) => {
       const tile = createCiHealth();
-      // The second collection starts from what the first one settled.
+      // The second sweep starts from what the first one settled.
       for (const collection of [1, 2]) {
-        const view = await tile.collect(ctx());
+        if (collection === 2) wire.sweepAgain();
+        const view = await collectSwept(tile);
 
         assertEquals(view.status, "good", `collection ${collection}`);
         assertEquals(view.value, "passing");
@@ -1090,7 +1341,7 @@ Deno.test("ci: archived repositories and disabled workflows are left out", async
       },
     ]),
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "good");
       assertStringIncludes(view.aside ?? "", "2 jobs · 3 repos");
@@ -1117,7 +1368,7 @@ Deno.test("ci: a run on a repository's own default branch is the one read", asyn
       }],
     }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "good");
       assertEquals(view.value, "passing");
     },
@@ -1128,7 +1379,7 @@ Deno.test("ci: a repository whose workflows cannot be read is reported, not hidd
   await withGitHub(
     standingOrg(green, green, [{ name: "pond", workflowsStatus: 403 }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "1 unreadable");
@@ -1150,7 +1401,7 @@ Deno.test("ci: a tile with everything to list does not also carry a line saying 
       { name: LOOM_REPO.split("/")[1], workflowsStatus: 403 },
     ],
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "2 unreadable");
@@ -1165,7 +1416,7 @@ Deno.test("ci: a tile with everything to list does not also carry a line saying 
 
 Deno.test("ci: an organization with nothing in it says so, having no list to show", async () => {
   await withGitHub([], async () => {
-    const view = await createCiHealth().collect(ctx());
+    const view = await collectSwept(createCiHealth());
 
     assertEquals(view.status, "unknown");
     assertEquals(view.value, "—");
@@ -1175,21 +1426,18 @@ Deno.test("ci: an organization with nothing in it says so, having no list to sho
 });
 
 Deno.test("ci: the repository inventory is read once an hour and shared", async () => {
-  await withGitHub(standingOrg(green, green), async (wire) => {
+  await withGitHub(standingOrg(green, green, [pond(green)]), async (wire) => {
     const tile = createCiHealth();
-    await tile.collect(ctx());
-    await tile.collect(ctx());
+    await collectSwept(tile);
+    wire.sweepAgain();
+    await collectSwept(tile);
 
     const inventory = wire.calls.filter((call) =>
       call.startsWith(`/orgs/${ORG}/repos`) ||
       call.includes("/actions/workflows?per_page=100")
     );
-    assertEquals(inventory.length, 3, "one repo listing and two workflow listings");
-    assertEquals(
-      wire.calls.filter((call) => call.includes("/runs?")).length,
-      4,
-      "the results behind the inventory are read every collection",
-    );
+    assertEquals(inventory.length, 4, "one repo listing and three workflow listings");
+    assertEquals(pondPages(wire), 2, "the results behind it are read every sweep");
   });
 });
 
@@ -1200,7 +1448,7 @@ Deno.test("ci: an unavailable organization listing stays gray", async () => {
     Promise.resolve(new Response("nope", { status: 403 }))) as typeof fetch;
   console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
   try {
-    const view = await createCiHealth().collect(ctx());
+    const view = await collectSwept(createCiHealth());
     assertEquals(view.status, "unknown");
     assertEquals(view.value, "—");
     assertEquals(view.sub, "auth failed");
@@ -1222,7 +1470,7 @@ Deno.test("ci: an organization listing that is not a list of repositories stays 
     Promise.resolve(Response.json({ message: "moved" }))) as typeof fetch;
   console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
   try {
-    const view = await createCiHealth().collect(ctx());
+    const view = await collectSwept(createCiHealth());
     assertEquals(view.status, "unknown");
     assertEquals(view.value, "—");
     assert(
@@ -1267,7 +1515,7 @@ Deno.test("ci: the organization listing is walked to its last page", async () =>
       }],
     }],
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(
         wire.calls.filter((call) => call.startsWith(`/orgs/${ORG}/repos`)),
@@ -1291,7 +1539,7 @@ Deno.test("ci: a workflow whose runs cannot be read is reported, not passed over
       workflows: [{ name: "Nightly", file: "nightly.yml", runs: green }],
     }]),
     async (wire) => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "1 unreadable");
@@ -1319,7 +1567,7 @@ Deno.test("ci: a workflow name carrying markup is escaped into the body", async 
       }],
     }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const view = await collectSwept(createCiHealth());
 
       assert(!(view.extra ?? "").includes("<img"));
       assertStringIncludes(view.extra ?? "", "&lt;img src=x onerror=&quot;");
@@ -1332,9 +1580,9 @@ Deno.test("ci: a stale inventory is read again on the next collection", async ()
     const tile = createCiHealth();
     const realNow = Date.now;
     try {
-      await tile.collect(ctx());
+      await collectSwept(tile);
       Date.now = () => T0 + HOUR + 60_000;
-      await tile.collect(ctx());
+      await collectSwept(tile);
     } finally {
       Date.now = realNow;
     }
