@@ -3092,14 +3092,18 @@ export class CfHarnessPromptLoop {
     // A host that could back `assign_slug` but left it out of the run's tools
     // has not asked this run for a piece: it could never satisfy the contract,
     // and every final answer it gave would be refused. A resume that cannot
-    // back the tool keeps the requirement its recorded Fabric session implies.
+    // back the tool has no tool list to decide from, so it keeps what the run
+    // it resumes decided. A record from a harness that did not keep that
+    // decision falls back to the requirement its Fabric session implies.
+    const fabricRun = this.engine.config.fabricSession !== undefined ||
+      this.engine.getRunState().fabricSessionCfc !== undefined;
+    const requiredByRun = withheld.has("assign_slug")
+      ? this.engine.getRunState().pieceOutputRequired ?? fabricRun
+      : fabricRun && requestedToolIds.includes("assign_slug");
     this.#requirePieceOutput = !isSubagent &&
       (options.requirePieceOutput === true ||
-        (!this.engine.structuredResultAvailable &&
-          (withheld.has("assign_slug") ||
-            requestedToolIds.includes("assign_slug")) &&
-          (this.engine.config.fabricSession !== undefined ||
-            this.engine.getRunState().fabricSessionCfc !== undefined)));
+        (!this.engine.structuredResultAvailable && requiredByRun));
+    this.engine.setPieceOutputRequired(this.#requirePieceOutput);
     this.#allowedToolIds = new Set(
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&
