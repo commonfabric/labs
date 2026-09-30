@@ -358,9 +358,10 @@ images the VM attached. The daemon answers it after asking its guest, which it
 gives up on after ten seconds, so the row waits fifteen for the answer. The
 daemon counts the question as client activity, which restarts its idle timer. So
 the row asks nothing where there is no socket, and asks a running daemon at most
-once per idle timeout and 30 seconds, whatever the answer said. It asks at once
-where the socket is not the one the last answer came on, or where the last
-question got no status. In between, it connects and hangs up without a word,
+once per idle timeout and 30 seconds, whatever the answer said, a status or
+anything else. It asks at once where the socket is not the one the last answer
+came on, or where the last question got no answer: none within the bound, or a
+hang-up with nothing said. In between, it connects and hangs up without a word,
 which the daemon closes without counting as activity, and reports the last
 answer, with the time it was given, against the store as it is: installing a
 missing image's block file clears that row at the next refresh without a

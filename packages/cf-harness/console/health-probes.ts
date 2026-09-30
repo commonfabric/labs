@@ -531,7 +531,9 @@ export type ConsoleVmReading =
   | { found: "no-daemon" }
   /** The daemon answered with a JSON object. */
   | { found: "status"; status: Readonly<Record<string, unknown>> }
-  /** A daemon took the connection and gave no status within the bound. */
+  /** The daemon answered with something other than one JSON object. */
+  | { found: "other"; answer: string }
+  /** A daemon took the connection and gave no answer within the bound. */
   | { found: "no-answer"; reason: string };
 
 /**
@@ -549,8 +551,10 @@ export const CFC_VM_STATUS_BOUND_MS = 15_000;
  * Asks the cfc-vm daemon listening at `socket` for its status, with the one
  * line `#cfcvm status`. The daemon counts the request as client activity,
  * which restarts its idle timer. A socket with nothing listening on it, or no
- * socket, is no daemon; any other failure, and an answer that is not one JSON
- * object within `boundMs`, is no answer.
+ * socket, is no daemon. An answer is a status where it is one JSON object,
+ * and other where it is anything else but nothing; any other failure, a
+ * hang-up with nothing said among them, and no answer within `boundMs`, is no
+ * answer.
  */
 export const askCfcVmStatus = async (
   socket: string,
@@ -586,17 +590,21 @@ export const askCfcVmStatus = async (
     clearTimeout(timer);
     closeQuietly(connection);
   }
+  if (text.trim() === "") {
+    return {
+      found: "no-answer",
+      reason: "The daemon hung up without an answer.",
+    };
+  }
   let status: unknown;
   try {
     status = JSON.parse(text);
   } catch {
-    // Not JSON: reported below with what came back.
+    // Not JSON: an answer all the same, handed back as it came.
   }
-  return isObjectNotArray(status) ? { found: "status", status } : {
-    found: "no-answer",
-    reason:
-      debugStr`The daemon answered with something other than its status: $quote${text.trim()}`,
-  };
+  return isObjectNotArray(status)
+    ? { found: "status", status }
+    : { found: "other", answer: text.trim() };
 };
 
 /**
@@ -641,12 +649,13 @@ const closeQuietly = (connection: Deno.Conn): void => {
  * `idleTimeoutSec` without a client, and the daemon counts a status request
  * as one. So every read looks for the daemon's socket, where no socket is
  * no daemon, and a daemon is asked for its status at most once per idle
- * timeout and two of its idle checks, whatever its answer said, and at once
- * where the socket is not the one it last answered on, or the last question
- * got no status. Between two questions a read connects and hangs up without
- * asking, which the daemon does not count as activity, and reports the last
- * answer as of when it was given, against the block images the store holds
- * now. So a daemon that stops, however it stops, reads idle at the next read.
+ * timeout and two of its idle checks, whatever its answer said, status or
+ * not, and at once where the socket is not the one it last answered on, or
+ * the last question got no answer. Between two questions a read connects and
+ * hangs up without asking, which the daemon does not count as activity, and
+ * reports the last answer as of when it was given, against the block images
+ * the store holds now. So a daemon that stops, however it stops, reads idle
+ * at the next read.
  *
  * Polling the row never starts a VM, and does not on its own keep one up: a
  * VM that nothing else uses stops before the next question, which then finds
@@ -710,16 +719,23 @@ export const consoleVmHealthProbe = (
    * for on the interval's clock, and when it was given.
    */
   let last:
-    | { askedAt: number; socket: string; status: VmStatus; answeredAt: string }
+    | { askedAt: number; socket: string; answer: VmAnswer; answeredAt: string }
     | undefined;
-  const statusRow = (status: VmStatus, checkedAt: string, answeredAt: string) =>
-    vmStatusRow(fact, store, status, {
-      checkedAt,
-      answeredAt,
-      askIntervalMs,
-      examine,
-      socket,
-    });
+  const answerRow = (answer: VmAnswer, checkedAt: string, answeredAt: string) =>
+    "status" in answer
+      ? vmStatusRow(fact, store, answer.status, {
+        checkedAt,
+        answeredAt,
+        askIntervalMs,
+        examine,
+        socket,
+      })
+      : notAnswering(
+        checkedAt,
+        `The daemon answered at ${answeredAt} ${answer.notStatus}, so it is ` +
+          "not a status. The answer is held as a status would be, since " +
+          "asking again is activity that would keep the VM up.",
+      );
   return {
     id: "sandbox.vm",
     initial: [fact],
@@ -757,7 +773,7 @@ export const consoleVmHealthProbe = (
       ) {
         const found = await touch(socket);
         if (found === "listening") {
-          return [statusRow(last.status, checkedAt, last.answeredAt)];
+          return [answerRow(last.answer, checkedAt, last.answeredAt)];
         }
         last = undefined;
         return [
@@ -771,23 +787,14 @@ export const consoleVmHealthProbe = (
       if (reading.found === "no-daemon") {
         return [idle(checkedAt, nothingListening)];
       }
-      const status = reading.found === "status"
-        ? readVmStatus(reading.status)
-        : undefined;
-      if (status === undefined) {
-        return [
-          notAnswering(
-            checkedAt,
-            reading.found === "no-answer"
-              ? reading.reason
-              : "The daemon's answer carries no `guest` object or no `images` list, so it is not a status.",
-          ),
-        ];
+      if (reading.found === "no-answer") {
+        return [notAnswering(checkedAt, reading.reason)];
       }
       // Held whatever it says: the daemon answered, and asking it again is
       // activity that would keep the VM up for as long as the row is read.
-      last = { askedAt, socket: identity, status, answeredAt: checkedAt };
-      return [statusRow(status, checkedAt, checkedAt)];
+      const answer = vmAnswer(reading);
+      last = { askedAt, socket: identity, answer, answeredAt: checkedAt };
+      return [answerRow(answer, checkedAt, checkedAt)];
     },
   };
 };
@@ -812,6 +819,33 @@ const vmNotAnsweringRow = (
     join(store.directory, "daemon.log")
   }; ending the cfc-vm process that serves this store lets the next sandbox command start a fresh VM.`,
 });
+
+/**
+ * What the VM row holds of a daemon's answer: the status it read, or, for an
+ * answer that is none, what the answer was, as a phrase.
+ */
+type VmAnswer = { status: VmStatus } | { notStatus: string };
+
+/**
+ * Helper for the VM probe, which returns what the row holds of `reading`, an
+ * answer the daemon gave.
+ */
+const vmAnswer = (
+  reading:
+    | { found: "status"; status: Readonly<Record<string, unknown>> }
+    | { found: "other"; answer: string },
+): VmAnswer => {
+  if (reading.found === "other") {
+    return {
+      notStatus:
+        debugStr`with something other than JSON, $quote${reading.answer}`,
+    };
+  }
+  const status = readVmStatus(reading.status);
+  return status !== undefined ? { status } : {
+    notStatus: "with JSON that carries no `guest` object or no `images` list",
+  };
+};
 
 /** What the VM row reads of a daemon's status. */
 interface VmStatus {

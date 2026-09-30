@@ -1096,15 +1096,74 @@ describe("health-probes", () => {
       });
     });
 
-    it("asks again at the next read after an answer that was no status", async () => {
+    for (
+      const [what, reply] of [
+        ["a line that is not JSON", "error: unknown control status"],
+        ["a JSON object that is not a status", JSON.stringify({ ok: true })],
+      ] as const
+    ) {
+      it(`asks once in five reads within its interval where the daemon answers ${what}`, async () => {
+        // An answer is activity whatever it says, so asking again at every
+        // read would keep a daemon speaking another protocol up for as long as
+        // anything reads the row.
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(directory, () => reply);
+          try {
+            let now = 1_000_000;
+            const probe = consoleVmHealthProbe(store(directory), {
+              now: () => now,
+            });
+
+            for (let read = 0; read < 5; read += 1) {
+              expect(await readRow(probe)).toMatchObject({
+                state: "failed",
+                value: "the VM daemon does not answer",
+              });
+              now += 30_000;
+            }
+
+            expect(daemon.lines).toEqual(["#cfcvm status"]);
+          } finally {
+            await daemon.close();
+          }
+        });
+      });
+    }
+
+    it("asks again at the next read after the daemon hung up without an answer", async () => {
       await withStore(async (directory) => {
-        let reply = "error: busy";
+        let reply = "";
         const daemon = fakeVmDaemon(directory, () => reply);
         try {
           const probe = consoleVmHealthProbe(store(directory));
           expect(await readRow(probe)).toMatchObject({ state: "failed" });
 
           reply = JSON.stringify(STATUS);
+
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("asks again at the next read after no answer within the bound", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        let answered = false;
+        const daemon = fakeVmDaemon(
+          directory,
+          () => answered ? JSON.stringify(STATUS) : undefined,
+        );
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          const reading = probe.read();
+          await daemon.asked;
+          time.tick(CFC_VM_STATUS_BOUND_MS);
+          expect((await reading)[0]).toMatchObject({ state: "failed" });
+
+          answered = true;
 
           expect(await readRow(probe)).toMatchObject({ value: "running" });
           expect(daemon.lines.length).toBe(2);
