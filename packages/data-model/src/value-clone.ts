@@ -248,6 +248,7 @@ export function cloneHelper(
     case VALUE_TAGS.undefined:
     case VALUE_TAGS.FabricEpochNsec:
     case VALUE_TAGS.FabricEpochDay:
+    case VALUE_TAGS.FabricDurationNsec:
     case VALUE_TAGS.FabricBytes:
     case VALUE_TAGS.FabricKeyPair:
     case VALUE_TAGS.FabricRegExp:
