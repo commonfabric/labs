@@ -45,8 +45,10 @@ capability belongs only to the trusted host's real user-input path.
 
 Before placing a direct room, a client must read both space access lists and
 verify that the container admits nobody beyond the room's two principals. An
-unknown list or wildcard grant fails this check. A group room can be placed in a
-wider container, where nonmembers see only its inaccessible link.
+unknown list or wildcard grant fails this check. The placement also enforces
+this boundary reactively, hiding its data face when the container widens. A
+group room can be placed in a wider container, where nonmembers see only its
+inaccessible link.
 
 The manager and room expose outgoing notices for delivery by a client. A notice
 contains a room link and recipient, never conversation contents. The client

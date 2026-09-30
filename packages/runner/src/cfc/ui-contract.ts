@@ -322,17 +322,19 @@ const uiContractsFromSchemaInternal = (
       ),
     );
   }
-
   if (
-    includeAlternatives && Array.isArray(resolvedSchema.ifc?.writePolicyAnyOf)
+    includeAlternatives && isObjectOrArray(resolvedSchema.ifc) &&
+    Array.isArray(resolvedSchema.ifc.writePolicyAnyOf)
   ) {
     for (const policy of resolvedSchema.ifc.writePolicyAnyOf) {
-      const candidate = uiContractFromSchema({ ifc: policy });
-      if (candidate !== undefined) {
+      const alternative = isObjectOrArray(policy)
+        ? uiContractFromSchemaInternal({ ifc: policy }, childRoot, new Set())
+        : undefined;
+      if (alternative !== undefined) {
         entries.push(
           uiContractEntry(
             [...path],
-            candidate,
+            alternative,
             resolvedSchema,
             childRoot,
             conditional,
@@ -471,7 +473,15 @@ export const uiContractsFromSchema = (
 ): UiContractEntry[] =>
   uiContractsFromSchemaInternal(schema, schema, [], new Set());
 
-/** Contracts eligible for provenance capture, including atomic alternatives. */
+/**
+ * Like {@link uiContractsFromSchema}, except that it also returns the contract
+ * of each `writePolicyAnyOf` alternative. A trusted event matching any of them
+ * is evidence for the write: which alternative, if any, admits the write is
+ * decided at commit. The one place an alternative's contract is not returned
+ * is the fallback that reads an unknown-typed schema's `$defs`, which returns
+ * a contract only when it finds exactly one; a definition with two gestured
+ * alternatives yields none, and a write relying on it is refused.
+ */
 const uiContractCandidatesFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContractEntry[] =>

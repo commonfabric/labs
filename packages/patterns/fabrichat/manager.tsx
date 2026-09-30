@@ -68,6 +68,7 @@ interface ManagerState {
 
 /** Creation handlers queue a continuation after their first durable step. */
 interface StartState extends ManagerState {
+  profile: Cell<ChatProfile | undefined>;
   resume: Stream<{ requestId: string }>;
   uiTitle?: Writable<string>;
 }
@@ -196,6 +197,14 @@ function writeOpenDirect(
 ): void {
   if (!canRequest(event.requestId, state)) return;
   if (resumePending(event.requestId, state)) return;
+  if (!state.profile.get()) {
+    refuse(
+      event.requestId,
+      "Create a profile before starting a conversation.",
+      state,
+    );
+    return;
+  }
   const actor = currentPrincipal();
   if (
     !actor || !event.counterpart?.startsWith("did:") ||
@@ -262,6 +271,14 @@ function writeCreateGroup(
 ): void {
   if (!canRequest(event.requestId, state)) return;
   if (resumePending(event.requestId, state)) return;
+  if (!state.profile.get()) {
+    refuse(
+      event.requestId,
+      "Create a profile before starting a conversation.",
+      state,
+    );
+    return;
+  }
   const actor = currentPrincipal();
   if (
     !actor || typeof event.title !== "string" || !event.title.trim() ||
@@ -439,8 +456,8 @@ const PrivateRoom = pattern<{
       Omit<ChatRoomAbout, "policy"> & { policy: Cell<Created<ChatRoomPolicy>> }
     >
   >;
-  configured?: Writable<Managed<boolean>>;
-}, CreationTarget>(({ about, configured, initialMembers }) => {
+}, CreationTarget>(({ about, initialMembers }) => {
+  const configured = new Writable<Managed<boolean>>(false);
   const profile = wish<ChatProfile>({ query: "#profile" });
   const room = FabriChatRoom({
     about,
@@ -460,7 +477,7 @@ const PrivateRoom = pattern<{
       notices: [],
     }),
   });
-  return { room, configured: configured! };
+  return { room, configured };
 });
 
 /** The handlers permitted to update the private index and request memory. */
@@ -511,7 +528,12 @@ export default pattern<
       Managed<{ id: string; room: Cell<ChatRoomOutput>; recipient: string }[]>
     >([]),
   };
-  const starts = { ...state, resume: resumeCreation(state) };
+  const profile = wish<ChatProfile>({ query: "#profile" });
+  const starts = {
+    ...state,
+    profile: profile.result,
+    resume: resumeCreation(state),
+  };
   const facts = {
     rooms: state.rooms,
     direct: state.direct,

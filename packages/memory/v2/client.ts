@@ -1092,11 +1092,6 @@ export class SpaceSession {
   ): Promise<AppliedCommit> {
     this.#assertOpen();
     if (
-      commit.aclChange && this.#client.serverFlags?.atomicAclChanges !== true
-    ) {
-      throw protocolError("memory server does not support atomic ACL changes");
-    }
-    if (
       commit.operations.some((operation) =>
         operation.op === "apply-op" || operation.op === "release-op-field"
       ) && this.#client.serverFlags?.applyOp !== true
@@ -2549,6 +2544,14 @@ export class SpaceSession {
       }
 
       try {
+        if (
+          pendingCommit.commit.aclChange &&
+          this.#client.serverFlags?.atomicAclChanges !== true
+        ) {
+          throw protocolError(
+            "memory server does not support atomic ACL changes",
+          );
+        }
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
           requestId: crypto.randomUUID(),

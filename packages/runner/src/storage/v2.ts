@@ -5845,7 +5845,7 @@ export class SpaceReplica
     const sqliteOps = transaction.sqliteOps ?? [];
 
     if (
-      operations.length === 0 &&
+      transaction.aclChange === undefined && operations.length === 0 &&
       !preconditions?.length &&
       sqliteOps.length === 0
     ) {
@@ -6604,7 +6604,8 @@ export class SpaceReplica
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     if (
-      operations.length === 0 && sqliteOps.length === 0 &&
+      aclChange === undefined && operations.length === 0 &&
+      sqliteOps.length === 0 &&
       activePreconditions.length === 0
     ) {
       return { ok: {} };
@@ -6628,6 +6629,20 @@ export class SpaceReplica
           : {}),
       }),
     );
+    if (aclChange && operations.length === 0) {
+      return {
+        error: toRejectedError(
+          Object.assign(
+            new Error(
+              "An atomic ACL change requires companion metadata writes",
+            ),
+            { name: "ProtocolError" },
+          ),
+          commit,
+          this.#space,
+        ),
+      };
+    }
     // The export refusal (server-execution v2 Phase 2, speculation.md
     // §6; RULED 2026-08-13): a commit basis naming a SPECULATIVE
     // overlay layer must not reach the wire — the layer exists only in

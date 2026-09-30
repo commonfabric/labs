@@ -73,6 +73,14 @@ import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
+
+/** The aliases a `WritePolicyAnyOf` member may be, each a whole writer policy. */
+const WRITER_POLICY_ALIAS_NAMES: ReadonlySet<string> = new Set([
+  "AuthenticatedActionWrite",
+  "WriteAuthorizedBy",
+  "TrustedActionWrite",
+  "TrustedActionWriteWithIntegrity",
+]);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
 /**
@@ -2580,56 +2588,8 @@ export class CommonFabricFormatter implements TypeFormatter {
           ),
           authenticatedAction: true,
         };
-      case "WritePolicyAnyOf": {
-        const argument = aliasArgNodes?.[1];
-        const tuple = argument && ts.isTypeOperatorNode(argument)
-          ? argument.type
-          : argument;
-        if (
-          !tuple || !ts.isTupleTypeNode(tuple) || tuple.elements.length === 0
-        ) {
-          throw new Error(
-            "`WritePolicyAnyOf` requires a nonempty tuple of writer policies.",
-          );
-        }
-        const policies = tuple.elements.map((node) => {
-          const policyContext = { ...context, typeNode: node };
-          const policy = this.#resolveAliasChainInstantiation(
-            context.typeChecker.getTypeFromTypeNode(node) as TypeWithInternals,
-            policyContext,
-            new Set([
-              "WriteAuthorizedBy",
-              "AuthenticatedActionWrite",
-              "TrustedActionWrite",
-              "TrustedActionWriteWithIntegrity",
-            ]),
-          );
-          if (!policy) {
-            throw new Error(
-              "Each `WritePolicyAnyOf` member must declare a writer policy.",
-            );
-          }
-          const metadata = this.#buildIfcMetadataForAlias(
-            policy.aliasName,
-            policy.aliasArgs,
-            policyContext,
-            this.#withBoundArgumentsWritten(
-              ts.isTypeReferenceNode(node)
-                ? node.typeArguments
-                : policy.aliasArgNodes,
-              policyContext,
-            ),
-            policy.parameterTypes ?? NO_PARAMETER_TYPES,
-          );
-          if (!metadata?.writeAuthorizedBy) {
-            throw new Error(
-              "A `WritePolicyAnyOf` member has no resolved writer.",
-            );
-          }
-          return metadata;
-        });
-        return { writePolicyAnyOf: policies };
-      }
+      case "WritePolicyAnyOf":
+        return this.#buildWritePolicyAnyOfMetadata(context, aliasArgNodes);
       case "TrustedActionWriteWithIntegrity":
         return this.#buildTrustedActionWriteMetadata({
           context,
@@ -2722,6 +2682,82 @@ export class CommonFabricFormatter implements TypeFormatter {
         path: directPath,
       },
     };
+  }
+
+  /**
+   * The lowered `WritePolicyAnyOf`: each member of the tuple written as its
+   * second argument, lowered as the writer policy it names. A member that is
+   * not a writer policy, or whose writer does not resolve, would leave that
+   * alternative with no writer, and an empty tuple would leave no way to
+   * write at all, so each is an error here. So is an optional or rest member:
+   * the list is a fixed set of writers, which a member that may be absent, or
+   * may repeat, is not.
+   */
+  #buildWritePolicyAnyOfMetadata(
+    context: GenerationContext,
+    aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
+  ): Record<string, unknown> {
+    let tuple = aliasArgNodes?.[1];
+    while (
+      tuple &&
+      (ts.isParenthesizedTypeNode(tuple) ||
+        (ts.isTypeOperatorNode(tuple) &&
+          tuple.operator === ts.SyntaxKind.ReadonlyKeyword))
+    ) {
+      tuple = tuple.type;
+    }
+    if (!tuple || !ts.isTupleTypeNode(tuple) || tuple.elements.length === 0) {
+      throw new Error(
+        "`WritePolicyAnyOf` requires a nonempty tuple of writer policies, " +
+          "written in place.",
+      );
+    }
+    const policies = tuple.elements.map((element) => {
+      const node = ts.isNamedTupleMember(element) ? element.type : element;
+      if (
+        ts.isOptionalTypeNode(node) || ts.isRestTypeNode(node) ||
+        (ts.isNamedTupleMember(element) &&
+          (element.questionToken !== undefined ||
+            element.dotDotDotToken !== undefined))
+      ) {
+        throw new Error(
+          "A `WritePolicyAnyOf` member cannot be optional or rest: the list " +
+            "is a fixed set of writers.",
+        );
+      }
+      const policyContext = { ...context, typeNode: node };
+      const policy = this.#resolveAliasChainInstantiation(
+        context.typeChecker.getTypeFromTypeNode(node) as TypeWithInternals,
+        policyContext,
+        WRITER_POLICY_ALIAS_NAMES,
+      );
+      if (!policy) {
+        throw new Error(
+          "Each `WritePolicyAnyOf` member must be a `WriteAuthorizedBy`, " +
+            "`AuthenticatedActionWrite`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity`.",
+        );
+      }
+      const metadata = this.#buildIfcMetadataForAlias(
+        policy.aliasName,
+        policy.aliasArgs,
+        policyContext,
+        // The arguments are read as `#formatResolvedCfcAlias()` reads them.
+        this.#withBoundArgumentsWritten(
+          policy.aliasArgNodes ??
+            this.#referenceArgumentNodes(policy.aliasName, policyContext),
+          policyContext,
+        ),
+        policy.parameterTypes ?? NO_PARAMETER_TYPES,
+      );
+      if (metadata?.writeAuthorizedBy === undefined) {
+        throw new Error(
+          "A `WritePolicyAnyOf` member's writer must be a direct `typeof` " +
+            "of a binding.",
+        );
+      }
+      return metadata;
+    });
+    return { writePolicyAnyOf: policies };
   }
 
   #buildTrustedActionWriteMetadata(

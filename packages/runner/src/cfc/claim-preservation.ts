@@ -30,20 +30,22 @@ const CLAIMS: Readonly<
   Record<string, (stored: unknown, merged: unknown) => boolean>
 > = {
   authenticatedAction: (stored, merged) => deepEqual(stored, merged),
+  uiContract: (stored, merged) => deepEqual(stored, merged),
+  exactCopyOf: (stored, merged) => deepEqual(stored, merged),
+  projection: (stored, merged) => deepEqual(stored, merged),
+  ownerPrincipal: (stored, merged) => deepEqual(stored, merged),
+  writeAuthorizedBy: (stored, merged) => keepsWriterClaim(stored, merged),
+  // The same alternatives, each keeping its writer claim and its contract.
   writePolicyAnyOf: (stored, merged) =>
-    Array.isArray(stored) && Array.isArray(merged) && stored.length > 0 &&
-    stored.length === merged.length && stored.every((policy, index) => {
+    Array.isArray(stored) && Array.isArray(merged) &&
+    stored.length === merged.length &&
+    stored.every((policy, index) => {
       const other = merged[index];
       return isObjectNotArray(policy) && isObjectNotArray(other) &&
         deepEqual(policy.uiContract, other.uiContract) &&
         policy.authenticatedAction === other.authenticatedAction &&
         keepsWriterClaim(policy.writeAuthorizedBy, other.writeAuthorizedBy);
     }),
-  uiContract: (stored, merged) => deepEqual(stored, merged),
-  exactCopyOf: (stored, merged) => deepEqual(stored, merged),
-  projection: (stored, merged) => deepEqual(stored, merged),
-  ownerPrincipal: (stored, merged) => deepEqual(stored, merged),
-  writeAuthorizedBy: (stored, merged) => keepsWriterClaim(stored, merged),
   // A floor may rise, never fall.
   requiredIntegrity: (stored, merged) => containsAll(merged, stored),
   // A ceiling may narrow, never widen.

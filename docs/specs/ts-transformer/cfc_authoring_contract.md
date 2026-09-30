@@ -179,20 +179,12 @@ Path tuple encoding rules:
 - `[]` encodes to `/`
 - otherwise encode as `/${segments.join("/")}`
 
-### `WritePolicyAnyOf<T, Policies>`
-
-The base value schema is `T`. Each tuple member in `Policies` supplies one
-complete writer policy: `writeAuthorizedBy`, and its optional `uiContract` or
-`authenticatedAction`. Lower these policies to `ifc.writePolicyAnyOf` without
-flattening writer and UI alternatives into independent unions. An accepted
-write must satisfy one complete branch. Empty or malformed alternatives are
-rejected.
-
 ### `AuthenticatedActionWrite<T, typeof binding>`
 
 Lower the value as `T`, resolve the writer as for `WriteAuthorizedBy`, and add
-`ifc.authenticatedAction: true`. The runtime requires an authenticated event
-actor and the named verified writer. A UI contract is not required.
+`ifc.authenticatedAction: true`. The runtime requires the named verified writer.
+Combined with `AuthoredByCurrentUser`, it requires an authenticated actor and
+attributes the value to that actor without requiring a reviewed UI contract.
 
 ### `WriteAuthorizedBy<T, typeof binding>`
 
@@ -257,6 +249,39 @@ One valid marker shape is:
 `moduleIdentity` is absent for compatibility callers that do not supply source
 identities and for aged stored claims. The marker is an implementation detail,
 but the implementation still needs an equivalent cross-stage identity channel.
+
+### `WritePolicyAnyOf<T, [P, …]>`
+
+`WritePolicyAnyOf` admits a write through any one of several complete writer
+policies, for a record that more than one handler writes. Each member `P` is a
+`WriteAuthorizedBy`, `AuthenticatedActionWrite`, `TrustedActionWrite`, or
+`TrustedActionWriteWithIntegrity` over `unknown`, written directly or through a user alias.
+
+Normative behavior:
+
+1. It lowers to `ifc.writePolicyAnyOf`, a list holding, for each member in
+   order, the `writeAuthorizedBy` and any `uiContract` or `authenticatedAction` that member lowers to on
+   its own. Each member's binding follows every rule above for
+   `WriteAuthorizedBy`, and `WriteAuthorizedByValidationTransformer` reports a
+   member's binding exactly as it reports a lone one's.
+2. The tuple must be written in place, nonempty; parentheses around it, a
+   `readonly`, and member labels are allowed. A tuple named through an alias,
+   an empty one, an optional or rest member, a member that is not a writer
+   policy, and a member whose writer does not lower each fail compilation.
+3. The runtime admits a write when one member admits it whole: its writer
+   wrote, and a trusted event matching its contract, if it names one, was
+   recorded for the write. Writer and gesture are of the same member, so one
+   member's gesture never admits another's writer.
+4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
+   `writeAuthorizedBy`, `uiContract`, or `authenticatedAction`, whether one
+   schema declares both or a
+   later schema declares one where the stored schema declares the other, and
+   refuses a later schema that adds, drops, reorders, or changes a stored
+   member. Each member's claim is stamped with its module identity where the
+   list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
+   stamp admits no writer, as a stored lone claim with none does.
+5. An `AuthoredByCurrentUser` label beside it requires every member to name a
+   reviewed contract or explicitly declare `authenticatedAction: true`.
 
 ## Pipeline Contract
 
@@ -326,6 +351,9 @@ Required failure modes:
 
 - `WriteAuthorizedBy` only supports bindings the checker resolves to a
   declaration in an authored module; dynamic lookup is rejected.
+- `WritePolicyAnyOf` takes its members as a tuple written in place, and has no
+  form beside an `ownerPrincipal`, which still requires a lone
+  `writeAuthorizedBy`.
 - Exchange-rule declarations use a closed static expression grammar and must be
   module-level exports.
 - `PolicyOf` supports local, direct imported, and pinned `cf:` bindings; general
@@ -344,3 +372,5 @@ coverage exists:
 
 - `packages/ts-transformers/test/cfc-authoring.test.ts`
 - `packages/schema-generator/test/schema/cfc-authoring.test.ts`
+- `packages/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `packages/runner/test/cfc-write-policy-any-of.test.ts`

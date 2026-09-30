@@ -2688,13 +2688,6 @@ export type JSONSchemaObj = {
     readonly maxConfidentiality?: readonly JSONValue[];
     readonly ownerPrincipal?: string | CurrentPrincipal;
     readonly authenticatedAction?: true;
-    readonly writePolicyAnyOf?: readonly {
-      readonly authenticatedAction?: true;
-      readonly writeAuthorizedBy: NonNullable<
-        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
-      >;
-      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
-    }[];
     readonly writeAuthorizedBy?:
       | readonly string[]
       | {
@@ -2705,6 +2698,16 @@ export type JSONSchemaObj = {
           readonly moduleIdentity?: string;
         };
       };
+    // The lowered form of `WritePolicyAnyOf`: alternative complete writer
+    // policies, any one of which admits a write whole. A position declaring
+    // it declares no `writeAuthorizedBy` or `uiContract` of its own.
+    readonly writePolicyAnyOf?: readonly {
+      readonly authenticatedAction?: true;
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly exactCopyOf?: readonly string[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON

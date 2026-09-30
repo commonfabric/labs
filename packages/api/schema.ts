@@ -284,7 +284,7 @@ type SchemaInner<
  * processes the schema, handling:
  * - $ref resolution (both "#" and "#/path/to/def")
  * - anyOf unions
- * - Primitive types (string, number, boolean, null)
+ * - Primitive types (string, number, bigint, boolean, null)
  * - `FabricPrimitive` types (every `FabricPrimitiveSchemaType`, "FabricBytes"
  *   among them), each inferring the `FabricPrimitive` interface from this
  *   package whose instances report that name as `.schemaType`

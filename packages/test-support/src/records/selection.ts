@@ -346,6 +346,90 @@ export interface CoverageBaseline {
   uncoveredLines: number;
 }
 
+/**
+ * How one suite's charges compared with what its batches spent, over the
+ * cost window, and what its charges came to in this manifest.
+ */
+export interface SuiteHealth {
+  /**
+   * Seconds a lane pays before it runs anything of the suite: its
+   * overhead, one unit's charge, the setup of the process its unit runs
+   * in where it names one, and the setup of every capability it needs.
+   */
+  fixed: number;
+
+  /** How many of its identities cost more than any lane can hold. */
+  tooLong: number;
+
+  /** Batches of it that recorded what the packer charged for them. */
+  batches: number;
+
+  /**
+   * What those batches spent over what they were charged, at the middle
+   * batch and at the ninetieth percentile. Absent where no batch
+   * recorded a charge.
+   */
+  ratio?: { median: number; p90: number };
+}
+
+/** A suite's charges in the manifest before the one carrying them. */
+export interface PreviousSuiteHealth {
+  fixed: number;
+  tooLong: number;
+}
+
+/**
+ * Whether the cost model a manifest carries still describes what lanes
+ * spend, from the lanes' own measurements over the cost window and from
+ * the manifest before it.
+ *
+ * Nothing obeys this. A manifest carrying none, or one this reader cannot
+ * read, is read as carrying none, rather than being refused: the packing
+ * does not depend on it.
+ */
+export interface CalibrationHealth {
+  /** Per suite, by suite identifier. */
+  suites: Record<string, SuiteHealth>;
+
+  /** Lanes that recorded their work whole, and how many ran long. */
+  lanes: {
+    /** Lanes that recorded their work, their projection and their bound. */
+    observed: number;
+
+    /** How many of those ran past their bound. */
+    pastBound: number;
+
+    /** How many of those the packer projected to finish inside it. */
+    projectedInside: number;
+
+    /** How many of those ran past it all the same. */
+    overran: number;
+  };
+
+  /**
+   * The same suites' charges in the manifest before this one, where the
+   * publisher could read one.
+   */
+  previous?: {
+    generatedAt: string;
+    suites: Record<string, PreviousSuiteHealth>;
+  };
+
+  /**
+   * The count of tests too long for any lane that this manifest's count is
+   * judged against, where there is a manifest before it: that manifest's
+   * count, or, while that count stood reported as grown, the count it was
+   * judged against.
+   */
+  tooLongBaseline?: number;
+
+  /**
+   * What the publisher found broken in the model, one sentence each,
+   * naming the suite and the figure. Empty for a model that holds.
+   */
+  alarms: string[];
+}
+
 /** One publisher run's whole output. */
 export interface Manifest {
   schema: typeof MANIFEST_SCHEMA_VERSION;
@@ -376,6 +460,9 @@ export interface Manifest {
   known: { count: number; digest: string };
 
   coverageBaselines: CoverageBaseline[];
+
+  /** Absent from a manifest whose publisher did not measure it. */
+  health?: CalibrationHealth;
 }
 
 /**
@@ -609,10 +696,7 @@ function parseFits(
   value: unknown,
   schema: number,
 ): Record<string, SuiteFit> | undefined {
-  if (!isRecord(value)) return undefined;
-  const suites: Record<string, SuiteFit> = {};
-  for (const [suite, fitted] of Object.entries(value)) {
-    if (!isRecord(fitted)) return undefined;
+  return parseSuites(value, (fitted) => {
     if (
       !isFiniteNumber(fitted.overhead) || fitted.overhead < 0 ||
       !isFiniteNumber(fitted.correction) || fitted.correction <= 0
@@ -640,14 +724,13 @@ function parseFits(
     if (fitted.process !== undefined && process === undefined) {
       return undefined;
     }
-    suites[suite] = {
+    return {
       overhead: fitted.overhead,
       correction: fitted.correction,
       unitOverhead,
       ...(process === undefined ? {} : { process }),
     };
-  }
-  return suites;
+  });
 }
 
 /** Reads a suite's process fit, or `undefined` for one it cannot read. */
@@ -705,6 +788,105 @@ function parseBaseline(value: unknown): CoverageBaseline | undefined {
     commit: value.commit,
     createdAt: value.createdAt,
     uncoveredLines: value.uncoveredLines,
+  };
+}
+
+/** Whether a value is a count: a finite whole number of nothing or more. */
+function isCount(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
+/** Whether a value is a number of seconds, or a ratio of two of them. */
+function isAmount(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+/** Reads a map of suites through a parser, failing whole if any fails. */
+function parseSuites<T>(
+  value: unknown,
+  parse: (raw: Record<string, unknown>) => T | undefined,
+): Record<string, T> | undefined {
+  if (!isRecord(value)) return undefined;
+  const suites: Record<string, T> = {};
+  for (const [suite, raw] of Object.entries(value)) {
+    const parsed = isRecord(raw) ? parse(raw) : undefined;
+    if (parsed === undefined) return undefined;
+    suites[suite] = parsed;
+  }
+  return suites;
+}
+
+/** Reads a suite's charges in the manifest before, or `undefined`. */
+function parsePreviousSuite(
+  value: Record<string, unknown>,
+): PreviousSuiteHealth | undefined {
+  if (!isAmount(value.fixed) || !isCount(value.tooLong)) return undefined;
+  return { fixed: value.fixed, tooLong: value.tooLong };
+}
+
+/** Reads one suite's health figures, or `undefined`. */
+function parseSuiteHealth(
+  value: Record<string, unknown>,
+): SuiteHealth | undefined {
+  const charges = parsePreviousSuite(value);
+  if (charges === undefined || !isCount(value.batches)) return undefined;
+  if (value.ratio === undefined) {
+    return { ...charges, batches: value.batches };
+  }
+  const ratio = value.ratio;
+  if (!isRecord(ratio) || !isAmount(ratio.median) || !isAmount(ratio.p90)) {
+    return undefined;
+  }
+  return {
+    ...charges,
+    batches: value.batches,
+    ratio: { median: ratio.median, p90: ratio.p90 },
+  };
+}
+
+/**
+ * Reads a manifest's health, or returns `undefined` where it carries none
+ * this reader can read. A field this reader does not know is dropped.
+ */
+function parseHealth(value: unknown): CalibrationHealth | undefined {
+  if (!isRecord(value) || !isRecord(value.lanes)) return undefined;
+  const suites = parseSuites(value.suites, parseSuiteHealth);
+  const { observed, pastBound, projectedInside, overran } = value.lanes;
+  if (
+    suites === undefined || !isCount(observed) || !isCount(pastBound) ||
+    !isCount(projectedInside) || !isCount(overran) ||
+    // Lanes past their bound and lanes projected inside it are among the
+    // lanes observed, and lanes that overran are among both.
+    pastBound > observed || projectedInside > observed ||
+    overran > pastBound || overran > projectedInside
+  ) {
+    return undefined;
+  }
+  const alarms = value.alarms;
+  if (
+    !Array.isArray(alarms) ||
+    !alarms.every((alarm): alarm is string => typeof alarm === "string")
+  ) {
+    return undefined;
+  }
+  const baseline = value.tooLongBaseline;
+  if (baseline !== undefined && !isCount(baseline)) return undefined;
+  const health: CalibrationHealth = {
+    suites,
+    lanes: { observed, pastBound, projectedInside, overran },
+    ...(baseline === undefined ? {} : { tooLongBaseline: baseline }),
+    alarms,
+  };
+  if (value.previous === undefined) return health;
+  const previous = value.previous;
+  if (!isRecord(previous) || !isTimestamp(previous.generatedAt)) {
+    return undefined;
+  }
+  const before = parseSuites(previous.suites, parsePreviousSuite);
+  if (before === undefined) return undefined;
+  return {
+    ...health,
+    previous: { generatedAt: previous.generatedAt, suites: before },
   };
 }
 
@@ -778,6 +960,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     if (seen.has(key)) return undefined;
     seen.add(key);
   }
+  const health = parseHealth(value.health);
   return {
     schema: MANIFEST_SCHEMA_VERSION,
     generatedAt: value.generatedAt,
@@ -793,6 +976,7 @@ export function parseManifest(value: unknown): Manifest | undefined {
     lanes,
     known: { count: value.known.count, digest: value.known.digest },
     coverageBaselines,
+    ...(health === undefined ? {} : { health }),
   };
 }
 

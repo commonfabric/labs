@@ -343,7 +343,9 @@ per batch, three are counts, of the times it opened a unit, of its passes and
 of the processes it started, and two hold time another already counts, since
 the longest units' time is part of what the batch's tests took and the
 processes' setup is part of what the batch spent, so a sum over them is a
-number that means nothing.
+number that means nothing. An eighth per batch is what the packer charged the
+lane for the batch rather than anything it spent, and the three a lane writes
+about its work as a whole overlap the batches' figures in the same way.
 `Status`, the job that scores a push run's coverage, writes its figures as
 measurements too, named `ci-lane coverage …`, each holding a count of
 uncovered lines, and three things read them back: the test-selection

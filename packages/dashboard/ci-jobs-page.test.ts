@@ -110,9 +110,43 @@ Deno.test("ci jobs page: the summary counts each state of a job", () => {
     // and the orange failure counts with the failures rather than here.
     ["unreadable", "2"],
     ["no verdict", "1"],
+    ["running", "0"],
   ]) {
     assertStringIncludes(html, `<dt>${term}</dt><dd>${value}</dd>`);
   }
+});
+
+Deno.test("ci jobs page: a job with a run in progress has a running dot after its name", () => {
+  const running = "https://github.com/commonfabric/loom/actions/runs/7";
+  const html = pageHtml(
+    collection({
+      jobs: [
+        job(),
+        job({ repo: "loom", runningHref: running }),
+        // A workflow whose first run is still going has no verdict yet.
+        job({
+          repo: "pond",
+          status: "unknown",
+          result: "no completed run",
+          runningHref: "https://github.com/commonfabric/pond/actions/runs/8",
+        }),
+      ],
+      repoCount: 3,
+    }),
+    NOW,
+  );
+
+  // The dot follows the workflow's own link and leads to the run in progress.
+  assertStringIncludes(
+    html,
+    `>CI</a><a class="dot run" href="${running}" target="_blank" rel="noopener" title="running" aria-label="CI running"></a></td>`,
+  );
+  assertStringIncludes(
+    html,
+    `>CI</a><a class="dot run" href="https://github.com/commonfabric/pond/actions/runs/8"`,
+  );
+  assertEquals(html.match(/class="dot run"/g)?.length, 2);
+  assertStringIncludes(html, `<dt>running</dt><dd>2</dd>`);
 });
 
 Deno.test("ci jobs page: jobs are ordered worst first, then by name", () => {

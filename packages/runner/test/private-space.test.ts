@@ -94,9 +94,13 @@ describe("private-space", () => {
             setSpaceMembers({ ...spaceMembers(), [event.principal]: "WRITE" });
             revision.set(revision.get() + 1);
           });
+          const unchanged = handler<void, { revision: Writable<number> }>((_, { revision }) => {
+            setSpaceMembers(spaceMembers()!);
+            revision.set(revision.get());
+          });
           const child = pattern(() => {
             const revision = new Writable(0);
-            return { value: "private", revision, grant: grant({ revision }) };
+            return { value: "private", revision, grant: grant({ revision }), unchanged: unchanged({ revision }) };
           });
           const create = handler<void, { selected: Writable<Cell<{ value: string }> | undefined> }>((_, { selected }) => {
             selected.set(child.inPrivateSpace("test-room")({}));
@@ -127,6 +131,9 @@ describe("private-space", () => {
       await selected.key("grant").send({ principal: invited.did() });
       await runtime.idle();
       expect(selected.key("revision").get()).toBe(1);
+      await selected.key("unchanged").send(undefined);
+      await runtime.idle();
+      expect(selected.key("revision").get()).toBe(1);
       const observer = await MemoryClient.connect({
         transport: MemoryClient.loopback(server),
       });
@@ -146,6 +153,15 @@ describe("private-space", () => {
         [creator.did()]: "OWNER",
         [invited.did()]: "WRITE",
       });
+      const replica = manager.open(link.space).replica;
+      const emptyAclCommit = await replica.commitNative!({
+        operations: [],
+        aclChange: {
+          before: { [creator.did()]: "OWNER", [invited.did()]: "WRITE" },
+          after: { [creator.did()]: "OWNER" },
+        },
+      });
+      expect(emptyAclCommit.error?.name).toBe("ProtocolError");
       await result.key("create").send(undefined);
       await runtime.idle();
       expect(

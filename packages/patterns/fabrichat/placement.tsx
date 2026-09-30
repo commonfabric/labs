@@ -9,6 +9,7 @@ import {
   pattern,
   type PerSpace,
   spaceAccess,
+  spaceMembers,
   VIEWS,
 } from "commonfabric";
 import type {
@@ -44,9 +45,18 @@ export const FabriChatPlacement = pattern<
 >(({ room }) => {
   const state = computed(() => {
     const access = spaceAccess(room);
-    return access === "member" && !room.key("about").get()
-      ? "unavailable"
-      : access;
+    if (access !== "member") return access;
+    const about = room.key("about").get();
+    if (!about) return "unavailable";
+    if (about.kind === "direct") {
+      const container = spaceMembers();
+      const members = spaceMembers(room);
+      if (!container || !members) return "unavailable";
+      if (Object.keys(container).some((principal) => !members[principal])) {
+        return "unavailable";
+      }
+    }
+    return "member";
   });
   return {
     room,

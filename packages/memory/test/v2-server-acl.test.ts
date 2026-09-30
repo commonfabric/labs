@@ -291,6 +291,70 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("republishes the durable ACL companion when an atomic commit is replayed", async () => {
+      const server = createAclServer("memory://atomic-replay", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-atomic-replay";
+      try {
+        const before = { [ALICE]: "OWNER" } as const;
+        await initializeSpaceAcl(server, space, before);
+        const alice = await connect(server);
+        const opened = await openSession(alice, space, ALICE);
+        expectExists(opened.ok);
+        const notices: {
+          seq: number;
+          class: string;
+          writes: readonly { id: string }[];
+        }[] = [];
+        server.setServerExecutionObserver({
+          commitAdmitted: (notice) => notices.push(notice),
+        });
+        const change = {
+          before,
+          after: { ...before, [BOB]: "WRITE" as const },
+        };
+        const operation = {
+          op: "set" as const,
+          id: "of:membership",
+          value: { value: "added" },
+        };
+        expect(
+          (await transactOperation(
+            alice,
+            space,
+            opened.ok.sessionId,
+            operation,
+            1,
+            change,
+          )).error,
+        ).toBeUndefined();
+        const firstCompanion = notices.find((notice) =>
+          notice.class === "system"
+        );
+        expect(firstCompanion?.writes).toContainEqual({
+          id: `of:${space}`,
+          scopeKey: "space",
+        });
+        notices.length = 0;
+        expect(
+          (await transactOperation(
+            alice,
+            space,
+            opened.ok.sessionId,
+            operation,
+            1,
+            change,
+          )).error,
+        ).toBeUndefined();
+        expect(notices.find((notice) => notice.class === "system")).toEqual(
+          firstCompanion,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
     it("rolls back metadata when the atomic ACL basis is stale", async () => {
       const server = createAclServer("memory://atomic-stale", {
         mode: "enforce",

@@ -211,6 +211,7 @@ import {
 import {
   pathPatternMatches,
   recordedTrustedEventProvenanceMatchesUiContract,
+  type UiContract,
   uiContractFromSchema,
   uiContractsFromSchema,
 } from "./ui-contract.ts";
@@ -1087,13 +1088,13 @@ const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
 /**
  * The logical positions of `root` at which a writer claim holds whatever
  * value the position takes: a position whose schema declares
- * `writeAuthorizedBy`, or an `anyOf`/`oneOf` every branch of which does, so
- * no value written there escapes a claim (the group chat's admin flag is a
- * union of a `true` and a `false` branch, both the toggle handler's). A
- * union with an unclaimed branch is not such a position — which branch a
- * value takes is the value's to decide — and the positions inside a union's
- * branches are not visited: a claim there holds for that branch's values
- * only. `allOf` holds where any of its parts does.
+ * `writeAuthorizedBy` or `writePolicyAnyOf`, or an `anyOf`/`oneOf` every
+ * branch of which does, so no value written there escapes a claim (the group
+ * chat's admin flag is a union of a `true` and a `false` branch, both the
+ * toggle handler's). A union with an unclaimed branch is not such a position
+ * — which branch a value takes is the value's to decide — and the positions
+ * inside a union's branches are not visited: a claim there holds for that
+ * branch's values only. `allOf` holds where any of its parts does.
  *
  * Paths spell array items and record entries as `*` and tuple slots by
  * index, as `cfcSchemaEntries` does; references resolve against `root`, and
@@ -1274,6 +1275,113 @@ const writeAuthorizedByReason = (
   return undefined;
 };
 
+/** One alternative of a `writePolicyAnyOf`: a writer, and its gesture. */
+type WritePolicyAlternative = {
+  /**
+   * The alternative's writer claim, as a schema `writeAuthorizedByReason()`
+   * reads.
+   */
+  readonly writer: JSONSchema;
+
+  /** Whether the alternative names a reviewed gesture. */
+  readonly namesGesture: boolean;
+
+  /** Whether authenticated execution suffices to establish authorship. */
+  readonly authenticatedAction: boolean;
+
+  /**
+   * The gesture's contract, where it names one that parses. One that does
+   * not parse is matched by no event.
+   */
+  readonly contract?: UiContract;
+};
+
+/**
+ * The alternatives of the `writePolicyAnyOf` that `ifc` declares, or
+ * `undefined` when it declares none.
+ */
+const writePolicyAlternatives = (
+  ifc: unknown,
+): readonly WritePolicyAlternative[] | undefined => {
+  if (!isObjectOrArray(ifc) || !Array.isArray(ifc.writePolicyAnyOf)) {
+    return undefined;
+  }
+  return ifc.writePolicyAnyOf.map((policy) => {
+    const writeAuthorizedBy = isObjectNotArray(policy)
+      ? policy.writeAuthorizedBy
+      : undefined;
+    const writer = { ifc: { writeAuthorizedBy } } as JSONSchema;
+    if (!isObjectNotArray(policy) || policy.uiContract === undefined) {
+      return {
+        writer,
+        namesGesture: false,
+        authenticatedAction: isObjectNotArray(policy) &&
+          policy.authenticatedAction === true,
+      };
+    }
+    const contract = uiContractFromSchema({ ifc: policy } as JSONSchema);
+    return {
+      writer,
+      namesGesture: true,
+      contract,
+      authenticatedAction: policy.authenticatedAction === true,
+    };
+  });
+};
+
+/**
+ * Why no alternative of a `writePolicyAnyOf` at `path` admits the write, or
+ * `undefined` when one admits it for every identity that wrote there. An
+ * alternative admits a write when its gesture is satisfied — it names none,
+ * a matching trusted event was recorded for the path, or `waived.gesture` —
+ * and its writer is the identity that wrote, or `waived.writer`. Both halves
+ * are of one alternative, so one writer's gesture never admits another
+ * writer. A writer refusal where some alternative's gesture was satisfied is
+ * offered to `deferWriterRefusal`, as a lone claim's is.
+ *
+ * Each claim is read as the schema holds it, as a lone claim is. A stamped
+ * claim admits the module it was stamped with, and a stored claim with no
+ * stamp admits no writer, since nothing ties it to a module. A compile that
+ * knows module identities stamps every member where it lowers the list.
+ */
+const writePolicyAnyOfReason = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+  alternatives: readonly WritePolicyAlternative[],
+  identities: readonly (ImplementationIdentity | undefined)[],
+  waived: { readonly writer: boolean; readonly gesture: boolean },
+  deferWriterRefusal?: (reason: string, path: readonly string[]) => boolean,
+): string | undefined => {
+  const gestured = alternatives.filter((alternative) =>
+    !alternative.namesGesture || waived.gesture ||
+    (alternative.contract !== undefined &&
+      trustedEventMatchesContract(tx, target, path, alternative.contract))
+  );
+  const reason = `writePolicyAnyOf failed at /${path.join("/")}`;
+  if (gestured.length === 0) return reason;
+  if (waived.writer) return undefined;
+  for (const identity of identities) {
+    const refusals = gestured.map((alternative) =>
+      writeAuthorizedByReason(
+        tx,
+        alternative.writer,
+        path,
+        target.space,
+        identity,
+      )
+    );
+    if (refusals.includes(undefined)) continue;
+    if (deferWriterRefusal?.(reason, path) === true) continue;
+    return reason;
+  }
+  return undefined;
+};
+
 const parseWriteAuthorizedByBindingIdentity = (
   claim: unknown,
 ): {
@@ -1450,7 +1558,9 @@ const writeIsPatternSetupInitialization = (
  * and receives no write. `waived` names the declaration the calling gate
  * would waive for it: one the stored envelope already makes on the slot keeps
  * its requirement, so the initialization waives only a declaration the
- * candidate schema introduces.
+ * candidate schema introduces. A stored `writePolicyAnyOf` makes both
+ * declarations, since each of its alternatives names a writer and may name a
+ * gesture.
  */
 const writeIsRuntimeInitialization = (
   tx: IExtendedStorageTransaction,
@@ -2791,75 +2901,103 @@ const rebindWriteAuthorizedByClaimsInner = (
     next[key] = rebound;
   }
 
-  if (
-    isObjectOrArray(value.ifc) && isObjectOrArray(value.ifc.writeAuthorizedBy)
-  ) {
-    const claim = value.ifc.writeAuthorizedBy;
-    // Stamp an unstamped claim with the content-addressed moduleIdentity —
-    // the only verification arm (the legacy bundleId arm retired with the
-    // legacy read path, identity E5). A claim carrying a legacy bundleId
-    // stamp is NOT unstamped: it is recognized as stamped — and unservable —
-    // so it fails closed at verification instead of being silently re-bound
-    // to whichever verified writer touches it next.
-    const bindingFile = isObjectOrArray(claim.__ctWriterIdentityOf) &&
-        typeof claim.__ctWriterIdentityOf.file === "string"
-      ? normalizeIdentitySource(claim.__ctWriterIdentityOf.file)
-      : undefined;
-    const bindingPath = isObjectOrArray(claim.__ctWriterIdentityOf) &&
-        Array.isArray(claim.__ctWriterIdentityOf.path)
-      ? claim.__ctWriterIdentityOf.path as readonly string[]
-      : undefined;
-    // The writer must BE the function named by the binding (see the binding
-    // match rationale in rebindWriteAuthorizedByClaims). When we can identify
-    // both bindings, require they match; a mismatch means a foreign writer is
-    // initializing the field, so we leave the claim unstamped.
-    // Minting the FIRST stamp requires exact (slash-normalized) file
-    // equality, not the tolerant spelling correspondence: a claim being
-    // stamped here rides a schema emitted by the SAME compile as the live
-    // writer, so their spellings agree whenever the writer genuinely is the
-    // named binding. Cross-spelling healing of stored claims deliberately
-    // does NOT happen here — the current compile's claim gets stamped
-    // exactly, and reconcileWriterClaimStamp adopts that stamp onto the
-    // stored spelling (schema-merge.ts). Keeping the mint exact means the
-    // tolerance never widens who can create authority, only how an
-    // already-minted stamp meets an aged spelling.
-    const writerOwnsBinding = ids.writerFile !== undefined &&
-      ids.writerPath !== undefined && bindingFile !== undefined &&
-      bindingPath !== undefined &&
-      ids.writerFile === bindingFile &&
-      arraysEqual(ids.writerPath, bindingPath);
-    if (
-      isObjectOrArray(claim.__ctWriterIdentityOf) &&
-      claim.__ctWriterIdentityOf.bundleId === undefined &&
-      claim.__ctWriterIdentityOf.moduleIdentity === undefined &&
-      writerOwnsBinding
-    ) {
-      const nextIfc = { ...value.ifc };
-      nextIfc.writeAuthorizedBy = {
-        ...claim,
-        __ctWriterIdentityOf: {
-          ...claim.__ctWriterIdentityOf,
-          ...(ids.moduleIdentity ? { moduleIdentity: ids.moduleIdentity } : {}),
-        },
-      };
+  if (isObjectOrArray(value.ifc)) {
+    const ifc = value.ifc;
+    const nextIfc: Record<string, unknown> = { ...ifc };
+    let ifcChanged = false;
+    const stamped = stampWriterClaim(ifc.writeAuthorizedBy, ids);
+    if (stamped !== undefined) {
+      nextIfc.writeAuthorizedBy = stamped;
+      ifcChanged = true;
+    }
+    // Each alternative's writer is stamped by that writer alone, exactly as a
+    // lone claim is.
+    if (Array.isArray(ifc.writePolicyAnyOf)) {
+      let alternativesChanged = false;
+      const alternatives = ifc.writePolicyAnyOf.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const stampedPolicy = stampWriterClaim(policy.writeAuthorizedBy, ids);
+        if (stampedPolicy === undefined) return policy;
+        alternativesChanged = true;
+        return { ...policy, writeAuthorizedBy: stampedPolicy };
+      });
+      if (alternativesChanged) {
+        nextIfc.writePolicyAnyOf = alternatives;
+        ifcChanged = true;
+      }
+    }
+    if (ifcChanged) {
       next.ifc = nextIfc;
       changed = true;
     }
   }
 
-  if (isObjectOrArray(value.ifc) && Array.isArray(value.ifc.writePolicyAnyOf)) {
-    const policies = value.ifc.writePolicyAnyOf.map((policy) => {
-      const rebound = rebindWriteAuthorizedByClaimsInner({ ifc: policy }, ids);
-      return isObjectOrArray(rebound) ? rebound.ifc : policy;
-    });
-    next.ifc = {
-      ...(isObjectOrArray(next.ifc) ? next.ifc : value.ifc),
-      writePolicyAnyOf: policies,
-    };
-    changed = true;
-  }
-
   return changed ? next : value;
+};
+
+/**
+ * Helper for `rebindWriteAuthorizedByClaimsInner()`, which returns `claim`
+ * stamped with the writer's content-addressed module identity when it is an
+ * unstamped claim naming exactly the writer `ids` describes, or `undefined`
+ * when it is anything else and stays as it is.
+ */
+const stampWriterClaim = (
+  claim: unknown,
+  ids: {
+    moduleIdentity?: string;
+    writerFile?: string;
+    writerPath?: readonly string[];
+  },
+): unknown => {
+  if (!isObjectOrArray(claim)) return undefined;
+  // Stamp an unstamped claim with the content-addressed moduleIdentity —
+  // the only verification arm (the legacy bundleId arm retired with the
+  // legacy read path, identity E5). A claim carrying a legacy bundleId
+  // stamp is NOT unstamped: it is recognized as stamped — and unservable —
+  // so it fails closed at verification instead of being silently re-bound
+  // to whichever verified writer touches it next.
+  const bindingFile = isObjectOrArray(claim.__ctWriterIdentityOf) &&
+      typeof claim.__ctWriterIdentityOf.file === "string"
+    ? normalizeIdentitySource(claim.__ctWriterIdentityOf.file)
+    : undefined;
+  const bindingPath = isObjectOrArray(claim.__ctWriterIdentityOf) &&
+      Array.isArray(claim.__ctWriterIdentityOf.path)
+    ? claim.__ctWriterIdentityOf.path as readonly string[]
+    : undefined;
+  // The writer must BE the function named by the binding (see the binding
+  // match rationale in rebindWriteAuthorizedByClaims). When we can identify
+  // both bindings, require they match; a mismatch means a foreign writer is
+  // initializing the field, so we leave the claim unstamped.
+  // Minting the FIRST stamp requires exact (slash-normalized) file
+  // equality, not the tolerant spelling correspondence: a claim being
+  // stamped here rides a schema emitted by the SAME compile as the live
+  // writer, so their spellings agree whenever the writer genuinely is the
+  // named binding. Cross-spelling healing of stored claims deliberately
+  // does NOT happen here — the current compile's claim gets stamped
+  // exactly, and reconcileWriterClaimStamp adopts that stamp onto the
+  // stored spelling (schema-merge.ts). Keeping the mint exact means the
+  // tolerance never widens who can create authority, only how an
+  // already-minted stamp meets an aged spelling.
+  const writerOwnsBinding = ids.writerFile !== undefined &&
+    ids.writerPath !== undefined && bindingFile !== undefined &&
+    bindingPath !== undefined &&
+    ids.writerFile === bindingFile &&
+    arraysEqual(ids.writerPath, bindingPath);
+  if (
+    !isObjectOrArray(claim.__ctWriterIdentityOf) ||
+    claim.__ctWriterIdentityOf.bundleId !== undefined ||
+    claim.__ctWriterIdentityOf.moduleIdentity !== undefined ||
+    !writerOwnsBinding
+  ) {
+    return undefined;
+  }
+  return {
+    ...claim,
+    __ctWriterIdentityOf: {
+      ...claim.__ctWriterIdentityOf,
+      ...(ids.moduleIdentity ? { moduleIdentity: ids.moduleIdentity } : {}),
+    },
+  };
 };
 
 // The schema placed below the path segments is a document of its own, so its
@@ -4763,31 +4901,44 @@ const unsupportedTrustSensitiveReason = (
   ) {
     return `invalid authenticatedAction at /${path.join("/")}`;
   }
-  if (ifc.writePolicyAnyOf !== undefined) {
-    const policies = ifc.writePolicyAnyOf;
-    if (
-      !Array.isArray(policies) || policies.length === 0 ||
-      policies.some((policy) =>
-        !isObjectNotArray(policy) || policy.writeAuthorizedBy === undefined ||
-        Object.keys(policy).some((key) =>
-          key !== "writeAuthorizedBy" && key !== "uiContract" &&
-          key !== "authenticatedAction"
-        ) ||
-        (policy.authenticatedAction !== undefined &&
-          policy.authenticatedAction !== true) ||
-        (policy.uiContract !== undefined &&
-          uiContractFromSchema({ ifc: policy }) === undefined)
-      )
-    ) {
-      return `invalid writePolicyAnyOf at /${path.join("/")}`;
-    }
-  }
   for (const key of unsupportedKeys) {
     if (ifc[key] !== undefined) {
       return `unsupported trust-sensitive claim ${key} at /${path.join("/")}`;
     }
   }
+  if (
+    ifc.writePolicyAnyOf !== undefined &&
+    !isWellFormedWritePolicyAnyOf(ifc)
+  ) {
+    return `malformed writePolicyAnyOf at /${path.join("/")}`;
+  }
   return undefined;
+};
+
+/**
+ * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
+ * enforces: a nonempty list of alternatives, each a writer claim with at most a
+ * UI contract that parses and an authenticated-action marker beside it, and no
+ * writer, contract, or authenticated-action marker of the
+ * position's own beside the list, which would leave unclear which of the two
+ * governs.
+ */
+const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
+  const alternatives = ifc.writePolicyAnyOf;
+  return Array.isArray(alternatives) && alternatives.length > 0 &&
+    ifc.writeAuthorizedBy === undefined && ifc.uiContract === undefined &&
+    ifc.authenticatedAction === undefined &&
+    alternatives.every((policy) =>
+      isObjectNotArray(policy) && policy.writeAuthorizedBy !== undefined &&
+      Object.keys(policy).every((key) =>
+        key === "writeAuthorizedBy" || key === "uiContract" ||
+        key === "authenticatedAction"
+      ) &&
+      (policy.authenticatedAction === undefined ||
+        policy.authenticatedAction === true) &&
+      (policy.uiContract === undefined ||
+        uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined)
+    );
 };
 
 // FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES (the §3.1.8 principal-like
@@ -5136,19 +5287,24 @@ const currentPrincipalIntegrityReason = (
       path.join("/")
     }`;
   }
-  if (
-    ifc.writeAuthorizedBy === undefined && ifc.writePolicyAnyOf === undefined
-  ) {
+  // Each admitted writer must carry a reviewed gesture or explicitly use
+  // authenticated execution as its authorship authority.
+  const alternatives = writePolicyAlternatives(ifc);
+  if (alternatives !== undefined) {
+    return alternatives.every((alternative) =>
+        alternative.namesGesture || alternative.authenticatedAction
+      )
+      ? undefined
+      : `current-principal integrity requires uiContract on every ` +
+        `writePolicyAnyOf alternative at /${path.join("/")}`;
+  }
+  if (ifc.writeAuthorizedBy === undefined) {
     return `current-principal integrity requires writeAuthorizedBy at /${
       path.join("/")
     }`;
   }
   if (
-    ifc.uiContract === undefined && ifc.authenticatedAction !== true &&
-    !(Array.isArray(ifc.writePolicyAnyOf) && ifc.writePolicyAnyOf.length > 0 &&
-      ifc.writePolicyAnyOf.every((policy) =>
-        policy.uiContract !== undefined || policy.authenticatedAction === true
-      ))
+    ifc.uiContract === undefined && ifc.authenticatedAction !== true
   ) {
     return `current-principal integrity requires uiContract at /${
       path.join("/")
@@ -6401,6 +6557,17 @@ const verifyInputRequirements = (
     if (currentPrincipalFailure !== undefined) {
       return { reason: currentPrincipalFailure, verdict: true };
     }
+    let writeAuthorizedByFailure: string | undefined;
+    for (const identity of identitiesForPath(entry.path)) {
+      writeAuthorizedByFailure = writeAuthorizedByReason(
+        tx,
+        entry.schema,
+        entry.path,
+        target.space,
+        identity,
+      );
+      if (writeAuthorizedByFailure !== undefined) break;
+    }
     const setupProjection = setupProjectionSourceMatchesValue(
       tx,
       target,
@@ -6413,80 +6580,34 @@ const verifyInputRequirements = (
         "writeAuthorizedBy",
       ) ||
       writeIsOwnerAdoption(tx, target, entry.path) || policyApplication;
-    let writeAuthorizedByFailure: string | undefined;
-    for (const identity of identitiesForPath(entry.path)) {
-      writeAuthorizedByFailure = writeAuthorizedByReason(
-        tx,
-        entry.schema,
-        entry.path,
-        target.space,
-        identity,
-      );
-      if (
-        ifc?.writePolicyAnyOf !== undefined
-      ) {
-        const policies = ifc.writePolicyAnyOf;
-        const uiInitialization =
-          setupProjectionSourceMatchesValue(tx, target, entry.path) ||
-          writeInstallsInitialSchemaDefault(
-            tx,
-            target,
-            entry.path,
-            entry.schema,
-          ) ||
-          writeIsRuntimeInitialization(tx, target, entry.path, "uiContract") ||
-          policyApplication;
-        const eligible = Array.isArray(policies)
-          ? policies.flatMap((policy) => {
-            if (
-              !isObjectOrArray(policy) || policy.writeAuthorizedBy === undefined
-            ) return [];
-            const contract = uiContractFromSchema({ ifc: policy });
-            const uiMatches = policy.uiContract === undefined ||
-              uiInitialization ||
-              (contract !== undefined &&
-                tx.getCfcState().writePolicyInputs.some((input) =>
-                  input.kind === "trusted-event" &&
-                  input.target.space === target.space &&
-                  input.target.id === target.id &&
-                  input.target.scope === target.scope &&
-                  pathPatternMatches(entry.path, input.target.path) &&
-                  recordedTrustedEventProvenanceMatchesUiContract(
-                    input.provenance,
-                    contract,
-                  )
-                ));
-            if (!uiMatches) return [];
-            const failure = writeAuthorizedByReason(
-              tx,
-              { ifc: policy },
-              entry.path,
-              target.space,
-              identity,
-            );
-            return [{ failure }];
-          })
-          : [];
-        const matched = eligible.some(({ failure }) =>
-          failure === undefined || setupProjection
-        ) ||
-          eligible.some(({ failure }) =>
-            failure !== undefined &&
-            deferWriterRefusal?.(failure, entry.path) === true
-          );
-        if (!matched) {
-          return {
-            reason: `writePolicyAnyOf failed at /${entry.path.join("/")}`,
-            verdict: true,
-          };
-        }
-      }
-      if (writeAuthorizedByFailure !== undefined) break;
-    }
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
       if (deferWriterRefusal?.(writeAuthorizedByFailure, entry.path) !== true) {
         return { reason: writeAuthorizedByFailure, verdict: true };
       }
+    }
+    const alternatives = writePolicyAlternatives(ifc);
+    if (alternatives !== undefined) {
+      const failure = writePolicyAnyOfReason(
+        tx,
+        target,
+        entry.path,
+        alternatives,
+        identitiesForPath(entry.path),
+        {
+          writer: setupProjection,
+          gesture: policyApplication ||
+            setupProjectionSourceMatchesValue(tx, target, entry.path) ||
+            writeInstallsInitialSchemaDefault(
+              tx,
+              target,
+              entry.path,
+              entry.schema,
+            ) ||
+            writeIsRuntimeInitialization(tx, target, entry.path, "uiContract"),
+        },
+        deferWriterRefusal,
+      );
+      if (failure !== undefined) return { reason: failure, verdict: true };
     }
     const requiredIntegrity = ifc?.requiredIntegrity ?? [];
     const maxConfidentiality = ifc?.maxConfidentiality;
@@ -6732,18 +6853,7 @@ const verifyTrustedEventRequirements = (
     if (writeIsRuntimeInitialization(tx, target, entry.path, "uiContract")) {
       continue;
     }
-    const matched = tx.getCfcState().writePolicyInputs.some((input) =>
-      input.kind === "trusted-event" &&
-      input.target.space === target.space &&
-      input.target.id === target.id &&
-      input.target.scope === target.scope &&
-      pathPatternMatches(entry.path, input.target.path) &&
-      recordedTrustedEventProvenanceMatchesUiContract(
-        input.provenance,
-        entry.contract,
-      )
-    );
-    if (!matched) {
+    if (!trustedEventMatchesContract(tx, target, entry.path, entry.contract)) {
       return `missing trusted-event policy input for ${target.id} at /${
         entry.path.join("/")
       }`;
@@ -6751,6 +6861,29 @@ const verifyTrustedEventRequirements = (
   }
   return undefined;
 };
+
+/**
+ * Whether the transaction recorded a trusted event for a write to `path` of
+ * `target` whose provenance matches `contract`.
+ */
+const trustedEventMatchesContract = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+  contract: UiContract,
+): boolean =>
+  tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "trusted-event" &&
+    input.target.space === target.space &&
+    input.target.id === target.id &&
+    input.target.scope === target.scope &&
+    pathPatternMatches(path, input.target.path) &&
+    recordedTrustedEventProvenanceMatchesUiContract(input.provenance, contract)
+  );
 
 const verifyExactCopyRequirements = (
   tx: IExtendedStorageTransaction,
@@ -8398,9 +8531,9 @@ const transactionReleasesStore = (
 /**
  * The positions of a stored document whose claims beneath belong to another
  * document: those where it holds links and nothing else, and those where it
- * holds nothing but the stored schema puts a writer claim (`writeAuthorizedBy`
- * or `uiContract`) at the position itself, which then decides what may come
- * to be held there.
+ * holds nothing but the stored schema puts a writer claim (`writeAuthorizedBy`,
+ * `writePolicyAnyOf`, or `uiContract`) at the position itself, which then
+ * decides what may come to be held there.
  */
 const storedForeignPositions = (
   valuesAt: (path: readonly string[]) => readonly FabricValue[] | undefined,
@@ -11539,17 +11672,17 @@ export function* prepareBoundaryCommitSteps(
     // set, by a declared entry with an empty label, wherever no declared
     // entry at the position or above it already routes a write there.
     //
-    // Only `writeAuthorizedBy` is marked. A copy claim (`exactCopyOf`,
-    // `projection`) is verified when its target is written, and an unwritten
-    // target keeps no entry (cfc-projection.test.ts); an input floor and a
-    // UI contract gate what a write brings, which §8.15 does not make a
-    // property of an absent position. A claim on one branch of a union is
-    // not marked either: which branch a position takes is decided by the
-    // value written there, so a position holding nothing is on no branch —
-    // and an envelope persisted for it ahead of a value would meet every
-    // later writer of another branch with the merge's refusal of divergent
-    // branch ifc. A union every branch of which carries the claim is marked:
-    // no value written there escapes it.
+    // Only a writer claim (`writeAuthorizedBy`, `writePolicyAnyOf`) is marked.
+    // A copy claim (`exactCopyOf`, `projection`) is verified when its target
+    // is written, and an unwritten target keeps no entry
+    // (cfc-projection.test.ts); an input floor and a UI contract gate what a
+    // write brings, which §8.15 does not make a property of an absent
+    // position. A claim on one branch of a union is not marked either: which
+    // branch a position takes is decided by the value written there, so a
+    // position holding nothing is on no branch — and an envelope persisted
+    // for it ahead of a value would meet every later writer of another branch
+    // with the merge's refusal of divergent branch ifc. A union every branch
+    // of which carries the claim is marked: no value written there escapes it.
     //
     // The marker is what routes a writer's later write, so what already
     // routes one decides where it goes: a declared entry (or a legacy one,

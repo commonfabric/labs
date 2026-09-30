@@ -40,10 +40,8 @@ function getBasicSchema(key: string) {
 export function schemaForValueType(
   value: FabricValue,
 ): JSONSchemaObj | undefined {
-  // TODO(danfuzz): This is a place that will need to get smarter once we
-  // actually want to accept values beyond what's strictly allowed in JSON. This
-  // notably includes `undefined` and all the other non-plain-object
-  // `FabricValue` possibilities.
+  // TODO(danfuzz): Define schema types for `undefined`, symbols, and remaining
+  // non-plain-object `FabricValue` possibilities.
 
   const type = typeof value;
   switch (type) {

@@ -14,6 +14,7 @@ import {
   isCell,
   Runtime,
   UI,
+  VIEWS,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForCell,
@@ -128,9 +129,9 @@ describe("FabriChat manager", () => {
       await result.pull();
       const member = (await Identity.fromPassphrase("chat-manager-member"))
         .did();
-      const send = async (status: string) => {
+      const send = async (status: string, requestId = "create-1") => {
         const event = {
-          requestId: "create-1",
+          requestId,
           title: "A private group",
           members: [member, member],
           provenance: {
@@ -147,12 +148,38 @@ describe("FabriChat manager", () => {
         await result.key("createGroup").send(event);
         await waitForCellValue(
           runtime,
-          result.key("requests").key("create-1").key("status"),
+          result.key("requests").key(requestId).key("status"),
           (value) => value === status,
         );
         await manager.synced();
         await result.pull();
       };
+      await send("refused", "without-profile");
+      expect(result.key("rooms").get()).toHaveLength(0);
+      expect(result.key("outgoingNotices").get()).toHaveLength(0);
+      const profileSpace = await runtime.resolvePrivateSpace(
+        "test-profile",
+        creator.did(),
+      );
+      const profileTx = runtime.edit();
+      const profile = runtime.getCell(
+        profileSpace,
+        "test-profile",
+        undefined,
+        profileTx,
+      );
+      profile.set({ name: "Creator" });
+      expect((await profileTx.commit()).error).toBeUndefined();
+      const homeTx = runtime.edit();
+      home.withTx(homeTx).set({
+        chatManager: result,
+        profiles: [profile],
+        defaultProfile: profile,
+      });
+      expect((await homeTx.commit()).error).toBeUndefined();
+      await runtime.idle();
+      await result.pull();
+      await send("refused", "without-profile");
       await send("done");
       expect(result.key("requests").key("create-1").key("status").get()).toBe(
         "done",
@@ -237,6 +264,37 @@ describe("FabriChat manager", () => {
             .resolveAsCell().getAsNormalizedFullLink(),
         ).toEqual(directLink);
       }
+      const placementProgram = await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        { main: join(root, "fabrichat", "placement.tsx"), root },
+      );
+      const placementPattern = await runtime.patternManager.compilePattern(
+        placementProgram,
+      );
+      const container = await runtime.resolvePrivateSpace(
+        "direct-container",
+        creator.did(),
+      );
+      const placement = runtime.getCell<Record<string, unknown>>(
+        container,
+        "placement",
+      );
+      await runtime.runSynced(placement, placementPattern, { room: direct });
+      await waitForCellValue(
+        runtime,
+        placement.key(VIEWS).key("chat").key("state"),
+        (value) => value === "member",
+      );
+      const outsider = (await Identity.fromPassphrase("placement-outsider"))
+        .did();
+      await new ACLManager(runtime, container).set(outsider, "READ");
+      await waitForCellValue(
+        runtime,
+        placement.key(VIEWS).key("chat").key("state"),
+        (value) => value === "unavailable",
+      );
+      expect(placement.key(VIEWS).key("chat").key("messages").get())
+        .toBeUndefined();
       await result.key("forget").send({ requestId: "forget-1", room: direct });
       await runtime.idle();
       expect(result.key("rooms").get()).toHaveLength(1);

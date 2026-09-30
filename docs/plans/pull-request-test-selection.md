@@ -2453,14 +2453,15 @@ cost by the lane and starts the costliest first for that reason.
 The measurements travel through the machinery that already exists: the
 lane runner writes them as ordinary test records of kind `gate` and
 scope `ci`, named `ci-lane setup <capability>` and `ci-lane batch
-<suite>`. A batch is written seven times, the others named `ci-lane ran
+<suite>`. A batch is written eight times, the others named `ci-lane ran
 batch <suite>`, `ci-lane units batch <suite>`, `ci-lane longest batch
-<suite>`, `ci-lane passes batch <suite>`, `ci-lane start batch <suite>`
-and `ci-lane processes batch <suite>`, because none of what its tests
-took between them, how many times its passes opened a unit, what the
-longest unit of each pass took, how many passes it made, or what its
-processes spent before their units began can be recovered from the
-records the batch produced: a reader of a report cannot tell which of
+<suite>`, `ci-lane passes batch <suite>`, `ci-lane start batch <suite>`,
+`ci-lane processes batch <suite>` and `ci-lane projected batch <suite>`,
+because none of what its tests took between them, how many times its
+passes opened a unit, what the longest unit of each pass took, how many
+passes it made, what its processes spent before their units began, or
+what the packer charged for it can be recovered from the records the
+batch produced: a reader of a report cannot tell which of
 its records came from which batch, and a unit whose tests all recorded
 nothing leaves no trace of having been opened. The names are what a
 reader knows a figure by, so a reader passes over a name it does not
@@ -2470,7 +2471,9 @@ the way the name of another kind of figure does, so a reader that
 predates a kind reads a figure of that kind as no measurement at all
 rather than as one it knows. A batch that repeats nothing makes one
 pass, and for such a batch the first five figures are what one run of
-each unit comes to.
+each unit comes to. The fit reads the first seven; the eighth is what
+[Knowing when the cost model is
+wrong](#knowing-when-the-cost-model-is-wrong) reads.
 
 The correction is fitted twice over whichever of the suite's batches it
 is read from, which the paragraph on stored figures below describes. The
@@ -2521,7 +2524,7 @@ whole window. So an expectation that was briefly wrong takes lanes away
 from everything else, for a week.
 The record format carries one number and calls it a duration, so the
 unit, pass and process counts travel in that field as counts, and the
-measurement's name is what says which of the seven figures it is. A
+measurement's name is what says which of the eight figures it is. A
 batch run
 with coverage on carries `with coverage` on the end of its name, because
 instrumenting a run costs it time and how much is a property of the
@@ -2562,6 +2565,99 @@ writes is preferred as soon as enough batches carry it. The aggregate needs
 no marker saying which figures it holds: a publisher reading one written by
 a later publisher keeps the figures it does not know, and writes them back
 as they were.
+
+### Knowing when the cost model is wrong
+
+The packer trusts the fitted model entirely, and a model that has gone
+wrong fails nothing. A suite charged more than a lane can hold has every
+one of its tests listed as unschedulable, and those tests stop running on
+pull requests while every lane stays green. That happened on 2026-09-25:
+the pattern unit suite's fixed charge reached 350 seconds and then 395,
+past the 300-second bound, and about 180 pattern tests left every pull
+request for a day and a half. It showed only in a table on the dashboard.
+A suite charged far less than it spends does the opposite, and runs lanes
+past their bound. So the model is measured against what the lanes it
+packed actually spent, and a broken one turns the dashboard's test
+selection tile red.
+
+What the lanes record makes the comparison possible. Each batch records
+what the packer charged the lane for it, `ci-lane projected batch
+<suite>`, beside what it spent, and each lane records three figures about
+its work as a whole once that work is done: `ci-lane lane`, the seconds
+from opening its first capability to the end of its own work, coverage
+conversion included;
+`ci-lane projected lane`, what the packer projected those to come to;
+and `ci-lane bound lane`, the most they may come to before the job is
+past the bound the lane was packed to finish inside, which is that bound
+less the prologue. The charge a batch records is `suiteCharge()`, the
+same function the packer's projection is the sum of, so a lane's batch
+charges and its capabilities' setup add up to its projection by
+construction. These travel as the other lane measurements do, and only
+a passing one is read, since a lane that went red stopped early and reads
+as cheap.
+
+The publisher reads them over the cost window and writes a `health`
+block into each manifest: for each suite, its fixed charge (overhead, one
+unit, its process's setup, and its capabilities' setup, the figure the
+crowding report compares against the budget) and how many of its tests are too long for
+any lane, both beside the same figures in the manifest before; how many
+batches recorded a charge, and the median and ninetieth percentile of
+what they spent over what they were charged; and, over every lane that
+recorded its work, how many ran past their bound and how many of those
+the packer had projected to finish inside it. The block also carries
+what the publisher found broken, one sentence each, naming the suite and
+the figure. The dashboard shows the verdict rather than judging the
+figures again, so the thresholds live in one place.
+
+Four things count as broken, each a dial in `policy.ts`:
+
+- The tests too long for any lane more than doubling since the manifest
+  before, and growing by more than twenty. Once that is reported, the
+  manifests after it are judged against the same count from before the
+  jump, so the alarm holds for as long as the tests stay out rather than
+  for one publisher run. Across the 138 manifests
+  published from 2026-09-06 to 2026-09-28, the count went from 3 to 192
+  when the pattern unit suite broke and from 12 to 22,322 when the
+  workspace unit suite had, and otherwise held, fell, or rose by twelve at
+  the most.
+- Any suite's fixed charge past a lane's budget. Past it nothing can
+  share a lane with the suite; past the bound no lane can hold it at all.
+  The pattern unit suite sat at 186 and then 211 seconds either side of
+  the break, against a budget of 230.
+- More than 15% of the lanes projected to finish inside their bound
+  running past it, over at least twenty lanes. A lane projected past its
+  bound running past it is a plan the packer knew it could not fit —
+  every lane of the full run while it is capped at thirty lanes is one —
+  so those are left out. The fit charges what nine batches in ten spent,
+  so some lanes overrun by design: between 4.6% and 7.7% of each day's
+  pull-request lanes did over 2026-09-26 to 2026-09-28, read from the
+  lanes' own setup and batch records.
+- A suite whose ninetieth percentile of spent over charged leaves the
+  range one half to two, over at least ten batches. That percentile is
+  what the fit targets, so it sits near one while the model holds;
+  charging each batch of the week to 2026-09-28 what the manifest of its
+  day would have charged for what its tests actually took put it between
+  0.74 and 1.30 for every suite with ten batches or more. That reading is
+  a proxy: it uses what the tests took rather than what the manifest's
+  costs said they would, which are padded higher, so the lower edge is
+  the one to revisit once a cost window of recorded charges exists.
+
+Replayed over the same 138 manifests, the first two trip on the
+manifest of 2026-09-25 20:25 and on every manifest until the model
+recovered on 2026-09-26 16:27, and on the break of 2026-09-17, and
+nowhere else. The last two need the recorded charges, which no manifest
+before this change has.
+
+The manifest is created whether or not anything is broken, and the
+publisher's run succeeds either way. Nothing obeys the health block, so
+nothing it says is a reason to withhold a manifest or fail a run. What
+shows it is the dashboard: the test selection tile goes red while the
+newest manifest names anything broken, and links to the page's cost model
+section, which names each suite and figure. `deno task test-selection
+health` prints the same report for the newest manifest, or for any stored
+one with `--at`; one published before the publisher measured its model is
+judged on what it and its predecessor hold, which is the first two
+signals.
 
 ### The budget, and why it is derived rather than chosen
 
@@ -2923,7 +3019,12 @@ The object carries:
   unknown-item rule;
 - each measured set's uncovered-line count, against the commit it was
   measured at, which is what the coverage gate compares a pull request
-  against.
+  against;
+- the model's health, measured against what lanes spent over the cost
+  window, with what the publisher found broken in it (see [Knowing when
+  the cost model is wrong](#knowing-when-the-cost-model-is-wrong)). It is
+  optional and nothing obeys it, so a manifest without one, or with one a
+  reader cannot read, is read without it rather than refused.
 
 The size is measured rather than bounded. A publisher run over one day of
 the store — 18,849 objects holding 5,487,611 executions — produced 20,091
@@ -2967,7 +3068,8 @@ The job:
    an empty diff to produce the reference packing, and writes a new state
    object and a new manifest.
 4. Reports, in the job summary, the projected per-lane times, the spread
-   between them, what fell off the budget, and anything unschedulable.
+   between them, what fell off the budget, anything unschedulable, and
+   the model's health.
 
 A cold start reads a much wider window. The bootstrap is a manual
 dispatch with `--bootstrap --days 60`, run once, after which the
@@ -4127,7 +4229,8 @@ is pinned to the commit's date. And if none of that settles it,
 | A change reaches more than two measured sets | None is forced, and `Status` says so. A set some run measured anyway is still scored, and a set the cap left unforced that nothing measured is reported rather than failed. The full run on `main` still measures every set, and a rise it finds is reported back to the pull request. |
 | No lane's report measuring a forced set reaches the gate: a lane dies before uploading, an upload or the download carries nothing, or a lane writes an empty report | That set fails the gate, whether or not any lane failed, because the change was made to measure those sets and a rise in them cannot be ruled out. A set the cap left unforced is reported rather than failed. |
 | Two measured sets over one member disagree | Nothing joins them. Each carries its own baseline and its own verdict, and an `ACCEPT_COVERAGE_DEBT` marker naming the member accepts a rise in either. |
-| A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If it persists, the publisher's summary shows the miss and somebody looks. |
+| A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If more than 15% of the lanes projected inside their bound overrun it over the cost window, the dashboard's test selection tile goes red and says so. |
+| The cost model breaks | The manifest is published anyway, carrying what broke, and the publisher's run succeeds. The dashboard's test selection tile goes red and links to the page's cost model section, which names each suite and figure. |
 | Two attempts of one run straddle a UTC midnight | The later attempt's relay writes the earlier attempt's records a second time, under the later day, and the publisher folds both. Not observed in the store so far; see [What the store is missing](#what-the-store-is-missing). |
 | A fork pull request | Works unchanged. The manifest is world-readable, and the existing member gate decides whether the fork's records ship. |
 | A re-run of one failed lane | Runs the same set, because the manifest is resolved by the commit's date, which no attempt changes. |
@@ -4668,6 +4771,12 @@ exercised on the branch on its own.
       for every suite of the full run, and for the gate's sets' suites on a pull
       request — falling back to the other fit, and a lane runs first the batches
       of a suite whose charge was not fitted the way it runs them.
+- [x] Each batch records what the packer charged for it, and each lane its
+      work, its projection and its bound. The publisher writes the model's
+      health into the manifest with what it found broken, the dashboard's
+      test selection tile goes red while it names anything broken, with the
+      details on the page behind it, and `deno task test-selection health`
+      reports it for any stored manifest.
 - [ ] Before merging: `plan --verify` against the last `main` run, proving
       the manifest accounts for every item the topology enumerates under
       its exact variant, apart from explicitly unavailable skip entries.

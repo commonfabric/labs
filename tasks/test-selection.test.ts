@@ -24,6 +24,7 @@ import {
   sampleManifest,
 } from "./test-selection/testing.ts";
 import type { Manifest, ManifestEntry } from "./test-selection/manifest.ts";
+import { alarms } from "./test-selection/health.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
   DIALS,
@@ -999,5 +1000,117 @@ describe("dispatch()", () => {
     });
     expect(result.code).toBe(1);
     expect(result.out).toContain("no identity for workspace-unit: unrun");
+  });
+
+  describe("health", () => {
+    /**
+     * A manifest carrying health that says `pattern-unit` costs `fixed`,
+     * judged as the publisher judges it.
+     */
+    function carrying(fixed: number): Manifest {
+      const figures = {
+        suites: { "pattern-unit": { fixed, tooLong: 0, batches: 0 } },
+        lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+      };
+      return sampleManifest({
+        health: { ...figures, alarms: alarms(figures) },
+      });
+    }
+
+    it("reads the newest manifest rather than the commit's", async () => {
+      const asked: string[] = [];
+      const before = new Date().toISOString();
+      const result = await ran(["health"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({ manifest: carrying(10) });
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]! >= before).toBe(true);
+    });
+
+    it("reads the manifest current at --at", async () => {
+      const asked: string[] = [];
+      await ran(["health", "--at", "2026-09-25T20:45:00Z"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({ manifest: carrying(10) });
+        },
+      });
+      expect(asked).toEqual(["2026-09-25T20:45:00.000Z"]);
+    });
+
+    it("passes and says so for a model that holds", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ manifest: carrying(10) }),
+      });
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("the cost model holds");
+    });
+
+    it("fails naming the suite and the figure for a model that broke", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ manifest: carrying(351) }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        "the cost model is broken: pattern-unit: a lane pays 5m51s before " +
+          "it runs any of it",
+      );
+    });
+
+    it("measures a manifest carrying no health against the one before it", async () => {
+      // A manifest published before the publisher measured its model is
+      // judged on what it and its predecessor hold.
+      const asked: string[] = [];
+      const newest = sampleManifest({
+        generatedAt: "2026-09-25T20:25:44.885Z",
+        unschedulable: Array.from({ length: 30 }, (_, i) => ({
+          test: { k: "unit", s: "memory", n: `slow ${i}` },
+          suite: "workspace-unit",
+          cost: 400,
+        })),
+      });
+      const result = await ran(["health"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({
+            manifest: asked.length === 1
+              ? newest
+              : sampleManifest({ generatedAt: "2026-09-25T16:30:32.893Z" }),
+          });
+        },
+      });
+      expect(asked[1]).toBe("2026-09-25T20:25:44.885Z");
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        "30 tests are too long for any lane, up from 0: workspace-unit 30",
+      );
+    });
+
+    it("fails where there is no manifest to judge", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ absent: "the store holds none" }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.err).toContain("the store holds none");
+    });
+
+    it("fails where the manifest before one carrying no health cannot be read", async () => {
+      let calls = 0;
+      const result = await ran(["health"], {
+        manifest: () =>
+          Promise.resolve(
+            calls++ === 0 ? { manifest: sampleManifest() } : {
+              absent: "listing failed",
+              unreachable: true as const,
+            },
+          ),
+      });
+      expect(result.code).toBe(1);
+      expect(result.err).toContain("no previous manifest: listing failed");
+    });
   });
 });

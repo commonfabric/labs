@@ -48,6 +48,9 @@ is what labels it `authored-by` this user.
 
 ## Prerequisites
 
+Starting a conversation requires a resolved `#profile`. A request without one
+is recorded as refused before the manager allocates a space or publishes a link.
+
 - Private creation and grants use the room's
   [runtime support](FabriChatRoom.md#runtime-support).
 - **A principal from a profile.** A client that starts a direct room from a

@@ -1,3 +1,4 @@
+import { sameAcl } from "@commonfabric/memory/acl";
 import type { ClientCommit } from "@commonfabric/memory/v2";
 import type { IStorageTransaction, MemorySpace } from "./interface.ts";
 
@@ -12,6 +13,7 @@ export function stageAclChange(
   space: MemorySpace,
   change: AclChange,
 ): void {
+  if (sameAcl(change.before, change.after)) return;
   let bySpace = changes.get(tx);
   if (!bySpace) {
     bySpace = new Map();

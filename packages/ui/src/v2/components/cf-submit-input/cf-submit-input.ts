@@ -93,7 +93,11 @@ export class CFSubmitInput extends BaseElement {
     disabled: { type: Boolean, reflect: true },
     initialValue: { type: String, attribute: "initial-value" },
     value: { type: String },
-    clearOnSubmit: { type: Boolean, attribute: "clear-on-submit" },
+    clearOnSubmit: {
+      type: Boolean,
+      attribute: "clear-on-submit",
+      converter: { fromAttribute: (value: string | null) => value !== "false" },
+    },
   };
 
   declare placeholder: string;
@@ -130,8 +134,8 @@ export class CFSubmitInput extends BaseElement {
   private _seeded = false;
 
   /**
-   * Whether a submit is in flight, between the click and the deferred
-   * field-clear. A second submit that arrives in that window — whether a button
+   * Whether a submit is in flight, until the local deferred clear or a
+   * controlled value change. A second submit that arrives in that window — whether a button
    * click or an Enter keypress — is a duplicate (the field still holds the
    * submitted text), so its propagation to the host is stopped to suppress a
    * second create. The flag is reset when the clear runs, including the case
@@ -140,6 +144,9 @@ export class CFSubmitInput extends BaseElement {
    */
   private _submitting = false;
 
+  /** The controlled draft held until its value changes. */
+  #submittedValue: string | undefined;
+
   /**
    * Copies `initialValue` into the editable `value` once, the first time it is
    * present. Later `initialValue` changes and the user's own typing are left
@@ -147,6 +154,10 @@ export class CFSubmitInput extends BaseElement {
    */
   override willUpdate(changed: PropertyValues) {
     super.willUpdate(changed);
+    if (!this.clearOnSubmit && this.value !== this.#submittedValue) {
+      this._submitting = false;
+      this.#submittedValue = undefined;
+    }
     if (!this._seeded && this.initialValue) {
       this._seeded = true;
       this.value = this.initialValue;
@@ -203,8 +214,11 @@ export class CFSubmitInput extends BaseElement {
       event.stopPropagation();
       return;
     }
-    if (!this.clearOnSubmit) return;
     this._submitting = true;
+    if (!this.clearOnSubmit) {
+      this.#submittedValue = submitted;
+      return;
+    }
     // Clear the field only after the submit click has been handled — the
     // framework's host-level click listener reads `event.target.value` while
     // handling the click. A `setTimeout` runs after that dispatch (a microtask

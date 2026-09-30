@@ -73,7 +73,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     view: {
       status: "good",
       value: "17m",
-      sub: "median · 31 passing runs in the last 6h",
+      sub: "median · 31 passing PR runs in the last 6h",
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
@@ -94,11 +94,13 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "your metric here",
+    label: "weaver ci duration",
     view: {
       status: "good",
-      value: "—",
-      sub: "do you have data to show?",
+      value: "4m",
+      sub: "median · last 20 passing PR runs",
+      extra: history(),
+      duration: 3 * DAY,
     },
   },
   {
@@ -117,7 +119,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     view: {
       status: "good",
       value: "6m",
-      sub: "median · last 20 passing runs",
+      sub: "median · last 20 passing PR runs",
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
@@ -248,11 +250,14 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "cubic spend",
+    label: "weaver ci trust",
     view: {
       status: "good",
-      value: "—",
-      sub: "api does not expose value",
+      value: "95.0%",
+      sub: "first-try green · last 160 runs",
+      extra: trustStrip("weaver-runs", 20),
+      duration: 30 * DAY,
+      alignChartBottom: true,
     },
   },
   {

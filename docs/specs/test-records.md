@@ -245,13 +245,17 @@ Their figures are not all durations. A lane writes seven measurements per
 batch — what the batch spent, what its own tests took between them, how many
 times its passes opened a unit, what the longest unit of each pass took added
 together, how many passes it made, what the processes it started spent before
-their units began, and how many such processes it started — and the record
-format carries one number and calls it a duration, so which of the seven a
+their units began, and how many such processes it started — and an eighth, what
+the packer charged the lane for the batch. It writes three more once its
+batches have run, about its work as a whole: what that work took, what it was
+projected to take, and the most it could take inside the lane's bound. The
+record format carries one number and calls it a duration, so which of these a
 record holds is decided by its name. No name starts the way the name of
 another kind does, so a reader that predates a kind reads a record of that
 kind as no measurement at all rather than as one it knows.
 A batch that ended badly is written as a failure, and a test in it
-failing is enough to end it badly.
+failing is enough to end it badly. A lane with a batch that ended badly
+writes its three as failures too.
 
 `Status` writes what a push run's tests covered the same way, in the step that
 scores the run's coverage. That step is a check no lane can be asked to run,

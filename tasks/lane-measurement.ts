@@ -33,7 +33,7 @@ export { isLaneMeasurement, LANE_MEASUREMENT_PREFIX, LANE_MEASUREMENT_SURFACE };
  */
 export const MEASURED_BATCH_SUFFIX = " with coverage";
 
-/** What each of a batch's seven measurements is, as its name says it. */
+/** What each of a batch's eight measurements is, as its name says it. */
 export type BatchMeasurementKind =
   | "spent"
   | "ran"
@@ -41,10 +41,11 @@ export type BatchMeasurementKind =
   | "longest"
   | "passes"
   | "start"
-  | "processes";
+  | "processes"
+  | "projected";
 
 /**
- * The word a measurement's name carries to say which of the seven it is.
+ * The word a measurement's name carries to say which of the eight it is.
  * What a batch spent is the one the lane has always written, and it is
  * unmarked. No name a word makes starts the way a name of another kind
  * does, or the way a capability's setup measurement does, so a reader
@@ -59,19 +60,21 @@ const BATCH_MEASUREMENT_LEAD: Record<BatchMeasurementKind, string> = {
   passes: "passes ",
   start: "start ",
   processes: "processes ",
+  projected: "projected ",
 };
 
 /**
  * What a lane's measurement of one batch is called.
  *
- * A lane writes seven of these per batch: what the batch spent, what its
+ * A lane writes eight of these per batch: what the batch spent, what its
  * tests took between them, how many times it opened a unit, what the
  * longest unit of each of its passes took added together, how many passes
  * it made, what the processes it started spent before their units began,
- * and how many of those processes it started. A batch that repeats a unit
- * makes one pass per run, each a fresh invocation of the suite's command
- * over the units still running. The seven together are what the
- * calibration is fitted from.
+ * how many of those processes it started, and what the packer charged the
+ * lane for the batch. A batch that repeats a unit makes one pass per run,
+ * each a fresh invocation of the suite's command over the units still
+ * running. The first seven are what the calibration is fitted from; the
+ * eighth is what says how far the calibration it was charged by was out.
  */
 export function batchMeasurementName(
   suite: string,
@@ -84,7 +87,7 @@ export function batchMeasurementName(
 
 /**
  * The suite one batch measurement names, whether coverage was on for it,
- * and which of the seven figures it carries. Nothing else for the name: a
+ * and which of the eight figures it carries. Nothing else for the name: a
  * reader that took it apart itself would be a second answer to how it is
  * composed, and the two would part company the first time either moved.
  *
@@ -107,6 +110,7 @@ export function batchMeasurement(
       "passes",
       "start",
       "processes",
+      "projected",
       "spent",
     ] as const
   ) {
@@ -119,6 +123,41 @@ export function batchMeasurement(
       ? rest.slice(0, -MEASURED_BATCH_SUFFIX.length)
       : rest;
     return suite.length === 0 ? undefined : { suite, measured, kind };
+  }
+  return undefined;
+}
+
+/** What each of a lane's three measurements of itself is. */
+export type LaneMeasurementKind = "spent" | "projected" | "bound";
+
+/**
+ * What a lane's measurement of itself as a whole is called. What it
+ * spent is unmarked, as a batch's is.
+ */
+const LANE_MEASUREMENT_NAMES: Record<LaneMeasurementKind, string> = {
+  spent: `${LANE_MEASUREMENT_PREFIX}lane`,
+  projected: `${LANE_MEASUREMENT_PREFIX}projected lane`,
+  bound: `${LANE_MEASUREMENT_PREFIX}bound lane`,
+};
+
+/**
+ * What a lane's measurement of its own work is called.
+ *
+ * A lane writes three of these once its work is done: the seconds from
+ * opening its first capability to the end of its own work, what
+ * the packer projected those would come to, and the most they may come
+ * to before the job is past the bound the lane was packed to finish
+ * inside. Together they say whether the lane ran past its bound, and
+ * whether the packer expected it to.
+ */
+export function laneMeasurementName(kind: LaneMeasurementKind): string {
+  return LANE_MEASUREMENT_NAMES[kind];
+}
+
+/** Which of the three a lane measurement is, from its name. */
+export function laneMeasurement(name: string): LaneMeasurementKind | undefined {
+  for (const kind of ["spent", "projected", "bound"] as const) {
+    if (name === LANE_MEASUREMENT_NAMES[kind]) return kind;
   }
   return undefined;
 }

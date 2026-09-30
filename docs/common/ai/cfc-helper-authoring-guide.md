@@ -49,20 +49,6 @@ as policy decisions. A helper can build atoms like `PromptSlotBound` or
 `UserSurfaceInput`, but the caller must supply the user, surface, source, role,
 digest, and route-specific integrity requirements.
 
-## Alternative Reviewed Writers
-
-`WritePolicyAnyOf<T, [A, B]>` permits a write through one complete policy
-alternative. Each alternative can be a `TrustedActionWrite` naming its writer,
-action, and surface. The writer and UI evidence must match the same alternative;
-evidence from different alternatives cannot be combined. Use this when one
-record supports separate reviewed controls for sending, editing, and removal.
-
-`AuthenticatedActionWrite<T, typeof handler>` permits the named verified handler
-when its event has an authenticated actor, without requiring a reviewed UI
-control. It is appropriate for actions such as leaving a conversation. The
-handler must still check which record and principal the actor may affect.
-Neither helper replaces the space's access checks.
-
 ## Binding Private Stores To Their Creator
 
 A `Confidential` declaration with a direct `User` clause whose subject is
@@ -214,6 +200,59 @@ reviewed values after the write.
 
 Keep action and surface constants local to the helper file. Export the surface
 identity constant; do not export local demo vocabulary as shared policy.
+
+### More than one writer
+
+A policy names one writer, and a record that several handlers write — a message
+that one handler sends and another edits — needs a policy naming each of them.
+`WritePolicyAnyOf<T, [P, …]>` lists the writer policies, and a write is
+admitted when any one of them admits it whole: its handler wrote, through its
+own reviewed action if it names one. The pairing is the point. One handler's
+action never admits another handler's write, so each writer keeps exactly the
+authority its own policy gives it.
+
+```ts
+import {
+  handler,
+  type TrustedActionWrite,
+  Writable,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const NOTE_SURFACE = "NoteSurface";
+const SEND_ACTION = "SendNote";
+const EDIT_ACTION = "EditNote";
+
+export type Note = WritePolicyAnyOf<string, [
+  TrustedActionWrite<unknown, typeof send, typeof SEND_ACTION, typeof NOTE_SURFACE>,
+  TrustedActionWrite<unknown, typeof edit, typeof EDIT_ACTION, typeof NOTE_SURFACE>,
+]>;
+
+export const send = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("sent");
+});
+
+export const edit = handler<void, { note: Writable<Note> }>((_, { note }) => {
+  note.set("edited");
+});
+```
+
+Each member is a whole policy over `unknown`: a `WriteAuthorizedBy`, a
+`AuthenticatedActionWrite`, `TrustedActionWrite`, or a
+`TrustedActionWriteWithIntegrity`. Write the tuple in
+place, not through an alias of its own. Once stored, the list is fixed, so a
+later version of the pattern cannot add a writer to it, drop one, or change
+one's action, and a record whose policy names one writer cannot move to a list
+or back. Settle the writers before the record holds data that matters.
+`AuthoredByCurrentUser` combines with it when every member names a reviewed
+action or explicitly uses `AuthenticatedActionWrite`.
+
+`AuthenticatedActionWrite<T, typeof handler>` permits the named verified handler
+without requiring a reviewed UI control. Combined with `AuthoredByCurrentUser`,
+it attributes the value to the authenticated actor. It is appropriate for
+actions such as leaving a conversation. The handler must still check which
+record and principal the actor may affect. Neither helper replaces the space’s
+access checks.
 
 ## Authoring Trusted Surfaces
 

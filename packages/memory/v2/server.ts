@@ -4278,7 +4278,6 @@ export class Server {
             { principal: session.principal, sessionId: message.sessionId },
           );
           let commit: Engine.AppliedCommit;
-          let aclCompanion: Engine.AppliedCommit | undefined;
           const operationIntegrationStartedAt = applyOperations.length === 0
             ? undefined
             : performance.now();
@@ -4315,7 +4314,7 @@ export class Server {
                     const stored = Engine.readState(engine, {
                       id: aclDocId(message.space),
                     });
-                    aclCompanion = apply({
+                    const aclCompanion = apply({
                       sessionId: this.#directSessionId,
                       space: message.space,
                       commitClass: "system",
@@ -4435,8 +4434,17 @@ export class Server {
               ? { eventAppends: admittedEventAppends }
               : {}),
           });
-          if (aclCompanion) {
-            const writes = aclCompanion.revisions.map(({ id, scopeKey }) => ({
+          if (commit.aclCompanionSeq !== undefined) {
+            const [companion] = Engine.selectCommitsSince(engine, {
+              fromSeq: commit.aclCompanionSeq - 1,
+              limit: 1,
+            });
+            if (companion?.seq !== commit.aclCompanionSeq) {
+              throw new Error(
+                "The atomic ACL companion is missing from the commit log",
+              );
+            }
+            const writes = companion.writes.map(({ id, scopeKey }) => ({
               id,
               scopeKey: scopeKey as ScopeKey,
             }));
@@ -4446,9 +4454,9 @@ export class Server {
             );
             this.#notifyCommitAdmitted({
               space: message.space,
-              seq: aclCompanion.seq,
+              seq: companion.seq,
               class: "system",
-              sessionId: this.#directSessionId,
+              sessionId: companion.sessionId,
               writes,
             });
           }

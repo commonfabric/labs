@@ -11,9 +11,15 @@ import {
   CI_WORKFLOW,
   REPO,
 } from "./config.ts";
-import type { Ctx, Run } from "./types.ts";
+import {
+  type Ctx,
+  type Run,
+  runSource,
+  type RunSource,
+  runSourceKey,
+} from "./types.ts";
 
-// Up to CI_RUNS_MAX main-branch runs of one workflow, stopping early once runs
+// Up to CI_RUNS_MAX runs of one source, stopping early once runs
 // pass the age cutoff — i.e. min(CI_RUNS_MAX, ~2 months). Each run is tagged with
 // the repo it came from so a combined stream (recent-runs) can link each row to
 // the right repo. Each tile slices this base to its own window.
@@ -39,7 +45,10 @@ function tileRun(run: Run, repo: string): Run {
   };
 }
 
-async function fetchRuns(repo: string, workflow: string): Promise<Run[]> {
+async function fetchRuns(
+  { repo, workflow, scope }: RunSource,
+): Promise<Run[]> {
+  const filter = scope === "main" ? "branch=main" : "event=pull_request";
   const cutoff = Date.now() - CI_RUNS_MAX_AGE_DAYS * 86_400_000;
   const collected = new Map<number, Run>();
   const pages = Math.ceil(CI_RUNS_MAX / 100);
@@ -57,7 +66,7 @@ async function fetchRuns(repo: string, workflow: string): Promise<Run[]> {
       ? `&created=${encodeURIComponent(`<=${anchor.created_at}`)}`
       : "";
     const r = await github<{ workflow_runs: Run[] }>(
-      `repos/${repo}/actions/workflows/${workflow}/runs?branch=main&per_page=100${anchored}`,
+      `repos/${repo}/actions/workflows/${workflow}/runs?${filter}&per_page=100${anchored}`,
     );
     const batch = r.workflow_runs ?? [];
     if (!batch.length) break;
@@ -84,20 +93,20 @@ async function fetchRuns(repo: string, workflow: string): Promise<Run[]> {
 }
 
 export function makeCtx(): Ctx {
-  // One memoized fetcher per (repo, workflow), created on first use and shared for
-  // ~20s across every tile that reads it.
+  // One memoized fetcher per source, created on first use and shared for ~20s
+  // across every tile that reads it.
   const fetchers = new Map<string, () => Promise<Run[]>>();
-  const runsFor = (repo: string, workflow: string): Promise<Run[]> => {
-    const key = `${repo} ${workflow}`;
+  const runsFor = (source: RunSource): Promise<Run[]> => {
+    const key = runSourceKey(source);
     let f = fetchers.get(key);
     if (!f) {
-      f = memo(20_000, () => fetchRuns(repo, workflow));
+      f = memo(20_000, () => fetchRuns(source));
       fetchers.set(key, f);
     }
     return f();
   };
   return {
-    runs: () => runsFor(REPO, CI_WORKFLOW),
+    runs: () => runsFor(runSource(REPO, CI_WORKFLOW, "main")),
     runsFor,
     env: (k) => Deno.env.get(k),
   };

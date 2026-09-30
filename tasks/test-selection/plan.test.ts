@@ -4,6 +4,7 @@ import { testIdentityKey } from "@commonfabric/test-support/records";
 
 import {
   crowdingLine,
+  fixedCharges,
   foldWholeUnits,
   fullLaneCount,
   plan,
@@ -11,6 +12,7 @@ import {
   seededOrder,
   type Selection,
   type SelectionReason,
+  suiteCharge,
   suiteLoad,
   testsOf,
 } from "./plan.ts";
@@ -1216,6 +1218,112 @@ describe("plan", () => {
       });
       const result = run(manifest, { lanes: 1 });
       expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(18, 6);
+    });
+
+    it("projects a lane as its suites' charges and its capabilities' setup", () => {
+      // A lane records each batch's charge beside what the batch spent,
+      // so the charges have to add up to the lane's projection, or the
+      // two records would describe different packings.
+      const suites = ["workspace-unit", "runner-unit", "cli-core"];
+      const manifest = sampleManifest({
+        entries: suites.flatMap((suite, s) =>
+          entries(40, (i) => ({
+            suite,
+            cost: 1 + ((i * 7 + s) % 11),
+            unit: `packages/${suite}/${i % 9}.test.ts`,
+            repeats: i % 13 === 0 ? 2 : 1,
+          })).map((entry) => ({
+            ...entry,
+            test: { ...entry.test, s: suite },
+          }))
+        ),
+        calibration: {
+          setupCost: { fuse: 14, toolshed: 3 },
+          suites: {
+            "workspace-unit": {
+              overhead: 9,
+              correction: 0.8,
+              unitOverhead: 2,
+              process: {
+                setup: 5,
+                overhead: 1,
+                correction: 0.7,
+                unitOverhead: 1,
+              },
+            },
+            "runner-unit": { overhead: 4, correction: 0.4, unitOverhead: 1 },
+            "cli-core": { overhead: 21, correction: 1.2, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const capabilities = new Map([
+        ["workspace-unit", ["fuse"]],
+        ["runner-unit", ["fuse", "toolshed"]],
+      ]);
+      // Three files of the workspace suite to a process.
+      const processes = new Map(
+        Array.from({ length: 9 }, (_, i) => [
+          `workspace-unit\tpackages/workspace-unit/${i}.test.ts`,
+          `process ${Math.floor(i / 3)}`,
+        ]),
+      );
+      const result = run(manifest, { capabilities, processes });
+      for (const lane of result.lanes) {
+        const bySuite = Map.groupBy(
+          lane.selections,
+          ({ entry }) => entry.suite,
+        );
+        const setup = lane.capabilities.reduce(
+          (total, capability) =>
+            total + manifest.calibration.setupCost[capability]!,
+          0,
+        );
+        const charges = [...bySuite].reduce(
+          (total, [suite, held]) =>
+            total + suiteCharge({ manifest, processes }, suite, held),
+          0,
+        );
+        expect(charges + setup).toBeCloseTo(lane.projectedSeconds, 6);
+      }
+      expect(result.lanes.some((lane) => lane.selections.length > 0))
+        .toBe(true);
+    });
+
+    it("charges nothing for a suite a lane holds nothing of", () => {
+      expect(
+        suiteCharge(
+          { manifest: sampleManifest(), processes: NO_PROCESSES },
+          "workspace-unit",
+          [],
+        ),
+      ).toBe(0);
+    });
+
+    it("gives every suite's fixed charge, inside the budget or past it", () => {
+      const manifest = sampleManifest({
+        entries: [
+          ...entries(2, () => ({ suite: "workspace-unit" })),
+          ...entries(2, () => ({ suite: "cli-core" })).map((entry, i) => ({
+            ...entry,
+            test: { ...entry.test, n: `cli ${i}` },
+          })),
+        ],
+        calibration: {
+          setupCost: { fuse: 14 },
+          suites: {
+            "workspace-unit": { overhead: 9, correction: 1, unitOverhead: 2 },
+            "cli-core": { overhead: 400, correction: 1, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const capabilities = new Map([["workspace-unit", ["fuse"]]]);
+      expect(fixedCharges({ manifest, capabilities, processes: NO_PROCESSES }))
+        .toEqual({ "workspace-unit": 25, "cli-core": 400 });
+      // The same figure the crowding report compares against the budget.
+      expect(run(manifest, { capabilities }).crowding.map((c) => c.fixed))
+        .toEqual([400]);
     });
 
     describe("a suite whose processes each pay a setup", () => {
