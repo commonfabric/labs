@@ -5323,6 +5323,69 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  it("admits any new result field under an unconstrained additionalProperties", () => {
+    // A TypeScript index signature `[key: string]: unknown` records
+    // `{ type: "unknown" }`, which its readers treat the same as `true`.
+    const resultSchema = (
+      additionalProperties: JSONSchema,
+      addedProperty?: JSONSchema,
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        ...(addedProperty === undefined ? {} : { addValue: addedProperty }),
+      },
+      additionalProperties,
+    });
+    const stream: JSONSchema = { type: "object", asCell: ["stream"] };
+    for (
+      const additionalProperties of [
+        {},
+        { type: "unknown" },
+        { type: "unknown", description: "Anything." },
+      ] as JSONSchema[]
+    ) {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            oldPattern.argumentSchema,
+            resultSchema(additionalProperties),
+          ),
+          pattern(
+            oldPattern.argumentSchema,
+            resultSchema(additionalProperties, stream),
+          ),
+        )
+      ).not.toThrow();
+    }
+
+    // A marker beside `type: "unknown"` is a constraint readers rely on.
+    const cells: JSONSchema = { type: "unknown", asCell: ["cell"] };
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        pattern(oldPattern.argumentSchema, resultSchema(cells)),
+        pattern(oldPattern.argumentSchema, resultSchema(cells, stream)),
+      )
+    ).toThrow(/result\.addValue: asCell changed/);
+  });
+
+  it("admits a new optional argument field under an unconstrained additionalProperties", () => {
+    const argumentSchema = (addedProperty?: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        ...(addedProperty === undefined ? {} : { label: addedProperty }),
+      },
+      additionalProperties: { type: "unknown" },
+    });
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        pattern(argumentSchema(), oldPattern.resultSchema),
+        pattern(argumentSchema({ type: "string" }), oldPattern.resultSchema),
+      )
+    ).not.toThrow();
+  });
+
   it("checks new named fields against prior patternProperties", () => {
     const previousArgument = pattern(
       {
