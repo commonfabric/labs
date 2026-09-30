@@ -105,9 +105,9 @@ export function isInertPlainObject(
  *
  * @param proto The prototype whose constructor is wanted.
  */
-export function constructorOfPrototype(
-  proto: object | null,
-): { prototype: unknown } | undefined {
+export function constructorOfPrototype<T extends object>(
+  proto: T | null,
+): { prototype: T } | undefined {
   const ctor = (proto === null) ? undefined : proto.constructor;
 
   return (typeof ctor === "function") ? ctor : undefined;
@@ -128,8 +128,8 @@ export function constructorOfPrototype(
  *
  * @param value The object whose constructor is wanted.
  */
-export function constructorOfObject(
-  value: object,
-): { prototype: unknown } | undefined {
+export function constructorOfObject<T extends object>(
+  value: T,
+): { prototype: T } | undefined {
   return constructorOfPrototype(Object.getPrototypeOf(value));
 }
