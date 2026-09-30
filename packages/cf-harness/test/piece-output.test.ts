@@ -305,6 +305,44 @@ describe("piece-output", () => {
     expect(loop.engine.getRunState().terminalReason).toBe("max_model_turns");
   });
 
+  it("completes on the first plain-text answer when a Fabric run's tools cannot name a piece", async () => {
+    // Loom's GTD lane opens a Fabric session but grants no authoring tools;
+    // a contract it could never meet refused every answer until the budget ran out.
+
+    const requests: HarnessModelTurnRequest[] = [];
+    const loop = new CfHarnessPromptLoop({
+      sandboxRuntime: sandbox,
+      fabricSession,
+      model: "test-model",
+      allowedToolIds: ["read_file"],
+      fabricSessionFactory: () => {
+        throw new Error("A plain-text answer must not open Fabric");
+      },
+      modelClient: {
+        providerId: "test-provider",
+        complete: (request) => {
+          requests.push({ ...request, transcript: [...request.transcript] });
+          return Promise.resolve({
+            assistant: { role: "assistant", content: "Linux cf-harness" },
+          });
+        },
+      },
+    });
+    const result = await loop.runPrompt({
+      prompt: "Run uname -a and report the output.",
+      maxModelTurns: 3,
+      promptSlotBinding: directPromptSlotBindingFor("no-naming-tool"),
+    });
+    expect(requests).toHaveLength(1);
+    expect(
+      requests[0].transcript.some((message) =>
+        message.content === PIECE_OUTPUT_GUIDANCE
+      ),
+    ).toBe(false);
+    expect(result.finalAssistantText).toBe("Linux cf-harness");
+    expect(result.runState.assignedPieces).toBeUndefined();
+  });
+
   for (const outcome of ["question", "gave-up"] as const) {
     it(`allows a piece-less ${outcome} after refusing a plain-text ending`, async () => {
       const requests: HarnessModelTurnRequest[] = [];
@@ -312,7 +350,7 @@ describe("piece-output", () => {
         sandboxRuntime: sandbox,
         fabricSession,
         model: "test-model",
-        allowedToolIds: ["finish_task"],
+        allowedToolIds: ["assign_slug", "finish_task"],
         modelClient: {
           providerId: "test-provider",
           complete: (request) => {
@@ -474,7 +512,7 @@ describe("piece-output", () => {
         engine,
         ...(mode === "child" ? { requirePieceOutput: true } : {}),
         finalizeOnTurnLimit: mode === "budget",
-        allowedToolIds: ["finish_task"],
+        allowedToolIds: ["assign_slug", "finish_task"],
         modelClient: {
           providerId: "test-provider",
           complete: () => {

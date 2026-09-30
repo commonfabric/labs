@@ -261,7 +261,8 @@ export interface CreateHarnessPromptLoopOptions
 
   /**
    * Requires a library parent to name a UI piece before completing.
-   * Ordinary configured or recorded Fabric sessions require it automatically.
+   * Ordinary configured or recorded Fabric sessions require it automatically,
+   * unless the run could back `assign_slug` and its tools leave it out.
    * Host-configured structured results use their document contract by default.
    * Children retain their profile's return contract.
    */
@@ -3088,9 +3089,15 @@ export class CfHarnessPromptLoop {
     // through, so it is where the rule is enforced rather than restated; a
     // run with a lineage is a subagent, and only a subagent may hold them.
     const isSubagent = this.engine.getRunState().lineage !== undefined;
+    // A host that could back `assign_slug` but left it out of the run's tools
+    // has not asked this run for a piece: it could never satisfy the contract,
+    // and every final answer it gave would be refused. A resume that cannot
+    // back the tool keeps the requirement its recorded Fabric session implies.
     this.#requirePieceOutput = !isSubagent &&
       (options.requirePieceOutput === true ||
         (!this.engine.structuredResultAvailable &&
+          (withheld.has("assign_slug") ||
+            requestedToolIds.includes("assign_slug")) &&
           (this.engine.config.fabricSession !== undefined ||
             this.engine.getRunState().fabricSessionCfc !== undefined)));
     this.#allowedToolIds = new Set(
