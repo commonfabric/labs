@@ -237,7 +237,7 @@ setup has to satisfy that policy just to store the step, and CFC refuses it:
 
 ```
 CFC denied (write-policy-gate): a policy check refused the commit
-  - writeAuthorizedBy requires a trusted verified binding identity at /$TESTS/*/event/message
+  - writeAuthorizedBy requires a trusted verified binding identity at /$TESTS/*/event/note
 ```
 
 Give the link the type the handler's event declares, in a local with a type
@@ -246,20 +246,35 @@ and the event's type names no policy. A cast is refused by the transformer.
 
 ```tsx
 // Shown for illustration only.
-// `messages` holds policy-typed messages; the event's `message` is a
-// `Cell<MessageRecord>`.
-const first: Cell<MessageRecord> = messages.key(0);
+// `Notes` stores `StoredNote`s, a `TrustedActionWrite` naming its `add`
+// handler; `pick` takes `{ note: Cell<NoteRecord> }`.
+const board = Notes({
+  notes: Writable.of<StoredNote[]>([]),
+  picked: Writable.of<string>(""),
+});
+const first: Cell<NoteRecord> = board.notes.key(0);
 
 return {
   [TESTS]: [
     {
-      action: room.editMessage,
-      event: { message: first, target: { value: "Edited" } },
-      trustedUi: messageGesture,
+      action: board.add,
+      event: { text: "hello" },
+      trustedUi: { surface: SURFACE, action: ADD },
     },
+    { action: board.pick, event: { note: first } },
+    { assertion: assert(() => board.picked === "hello") },
   ],
 };
 ```
+
+`packages/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
+example whole, and `policy-link-inferred.test.tsx` beside it is the refused
+form.
+
+Take the link from a cell the test reaches some other way as well: an output
+of the pattern under test, as `board.notes` is here, or a cell the test also
+passes to that pattern or returns. A `.key()` link into a cell the test uses
+nowhere else fails the build with `Cell not found in pattern aliases`.
 
 `cf test --cfc-denials` prints a setup refusal like this one with its reason.
 
