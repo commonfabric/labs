@@ -2344,6 +2344,39 @@ export class Server {
   }
 
   /**
+   * Whether `commit`, whose shape {@link #validateAclCommit} admitted, is
+   * `principal` removing its own entry from the access list of `space` and
+   * nothing else: the stored document, every field and every other entry as
+   * stored, less `principal`'s entry. A stored list with a `"*"` entry admits
+   * no such removal, since `principal` would keep what that entry grants, and
+   * neither does a list without an entry for `principal`. Any member may make
+   * this change, whatever level its entry holds (INV-12).
+   */
+  #isSelfRemoval(
+    engine: Engine.Engine,
+    space: string,
+    principal: string | undefined,
+    commit: ClientCommit,
+  ): boolean {
+    if (principal === undefined || principal === ANYONE_USER) return false;
+    const state = this.#aclState(engine, space);
+    if (
+      state.kind !== "valid" || state.acl[ANYONE_USER] !== undefined ||
+      state.acl[principal] === undefined
+    ) {
+      return false;
+    }
+    const stored = Engine.readState(engine, { id: aclDocId(space) });
+    const operation = commit.operations[0];
+    if (stored?.document == null || operation?.op !== "set") return false;
+    const { [principal]: _removed, ...remaining } = state.acl;
+    return valueEqual(
+      operation.value as FabricValue,
+      { ...stored.document, value: remaining } as FabricValue,
+    );
+  }
+
+  /**
    * Writer sessions that de-authorized themselves in a commit: their
    * `session/revoked` is held until after the transact verdict goes out.
    */
@@ -4233,16 +4266,27 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space — OWNER only.
+          // ACL-document writes change who may access the space — OWNER only,
+          // but for a member removing its own entry, which any member may do.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
           );
+          const requirement: Capability = !aclTouched
+            ? "WRITE"
+            : this.#isSelfRemoval(
+                engine,
+                message.space,
+                session.principal,
+                message.commit,
+              )
+            ? "READ"
+            : "OWNER";
           const deny = this.#authorizeMessageWithEngine(
             engine,
             message.space,
             session.principal,
-            aclTouched ? "OWNER" : "WRITE",
+            requirement,
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(
