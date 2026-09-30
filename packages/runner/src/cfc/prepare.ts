@@ -7819,13 +7819,6 @@ const derivePersistedLinkLabel = (
     );
     return { reason: sourceRootIsReadable ? verdictReason(reason) : reason };
   }
-  if (
-    sourceMetadata === undefined && pendingSourceSchema === undefined &&
-    !hasLabelValues(linkSchemaLabel) && hasCarriedLabel &&
-    pendingSourceView === undefined
-  ) {
-    return {};
-  }
   // A pending reference covering this source supplies its author. A stored
   // container's claim cannot become the reference's claim when an obsolete
   // child entry is removed from the source view.
@@ -7894,6 +7887,9 @@ const derivePersistedLinkLabel = (
       ),
     };
   }
+  // Every accepted link gets root evidence, including one whose only labels
+  // are carried descendants. This entry bounds the container's principal
+  // claims at the reference slot.
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
