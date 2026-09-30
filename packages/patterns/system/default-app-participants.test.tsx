@@ -8,7 +8,12 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { countElements, hasText } from "../test/vnode-helpers.ts";
+import {
+  countElements,
+  findElementByExactText,
+  hasText,
+  propValue,
+} from "../test/vnode-helpers.ts";
 import DefaultApp from "./default-app.tsx";
 
 type TestProfile = Confidential<
@@ -37,6 +42,17 @@ export default pattern(() => {
     allowConsoleWarnings: true,
     [TESTS]: [
       { assertion: assert(() => subject.participants.length === 0) },
+
+      // A viewer with no profile is offered Join, disabled until one exists.
+      { render: subject[UI] },
+      {
+        assertion: assert(() =>
+          propValue(
+            findElementByExactText(subject[UI], "cf-button", "Join this space"),
+            "disabled",
+          ) === true
+        ),
+      },
 
       { action: join },
       {

@@ -335,25 +335,19 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                 ))}
               </cf-hstack>
               {
-                /* Static branches only: a `$profile` binding inside an
-                  authored `computed(() => …)` VNode blanks the render, and a
-                  JSX ternary lowers to a static-branch `ifElse`. Without a
-                  profile, the `#profile` wish renders its own create and pick
-                  surface. */
+                /* The `#profile` wish's own surface: it creates a profile
+                  when the viewer has none, and picks among several when no
+                  default is set, where `.result` already names the most
+                  recently used one. A JSX ternary lowers to a static-branch
+                  `ifElse`. */
               }
-              {isParticipant
-                ? null
-                : hasProfile
-                ? (
-                  <cf-hstack gap="2" align="center">
-                    <cf-profile-badge
-                      $profile={viewerProfile.result}
-                      variant="chip"
-                      size="sm"
-                      noNavigate
-                    />
+              {isParticipant ? null : (
+                <cf-vstack gap="2">
+                  {viewerProfile[UI]}
+                  <cf-hstack>
                     <cf-button
                       size="sm"
+                      disabled={!hasProfile}
                       onClick={joinAsViewer({
                         join,
                         profile: viewerProfile.result,
@@ -362,8 +356,8 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                       Join this space
                     </cf-button>
                   </cf-hstack>
-                )
-                : viewerProfile[UI]}
+                </cf-vstack>
+              )}
             </cf-vstack>
 
             <cf-vstack gap="4">
