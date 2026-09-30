@@ -162,6 +162,29 @@ Deno.test("login view renders each key store ready state", async () => {
       })),
       "Please follow the browser's prompts to continue...",
     );
+    assertStringIncludes(
+      renderText(view({ flow: "login", method: null })),
+      "Pair with Loom",
+    );
+    assert(
+      !renderText(view({ flow: "register", method: null }))
+        .includes("Pair with Loom"),
+    );
+    const pairing = renderText(view({ flow: "login", method: "loom-pairing" }));
+    assertStringIncludes(pairing, 'name="pairing-code"');
+    assertStringIncludes(pairing, "http://localhost:9900");
+    assertStringIncludes(
+      renderText(view({
+        flow: "login",
+        method: "loom-pairing",
+        pairingError: "That code did not pair this device.",
+      })),
+      "That code did not pair this device.",
+    );
+    assertStringIncludes(
+      renderText(view({ method: "loom-pairing", isProcessing: true })),
+      "Pairing with Loom...",
+    );
   } finally {
     restore();
   }

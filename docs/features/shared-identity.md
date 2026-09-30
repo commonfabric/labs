@@ -119,6 +119,34 @@ deno run -A packages/cli/mod.ts id derive -- passphrase.txt > .cf/shared-dev.key
 The file must be a PKCS8/PEM private key. `*.key` and `.cf/` are gitignored in
 this repository.
 
+## Loom Identity To Browser
+
+A browser can sign in as the identity a Loom holds by redeeming a pairing code.
+On the Mac that runs Loom, open Weaver Settings > Pair a device, or run
+`loom identity pair`. Loom shows a code such as `7KQ2M-XH4RD`, good for ten
+minutes and one use. Then either:
+
+- on the shell's login screen, choose `Login`, then `Pair with Loom`, and enter
+  the code and Loom's address (`http://localhost:9900` unless it runs
+  elsewhere); or
+- open a shell URL whose fragment carries the code: `…/#pair=7KQ2M-XH4RD`, or
+  `…/#pair=7KQ2M-XH4RD&loom=<URL-encoded Loom address>` for a Loom that is not
+  at `http://localhost:9900`.
+
+The shell posts the code to Loom's `/identity-pairing/redeem` from the page
+itself, so Loom has to admit a browser request from another origin on that
+route. The key goes from Loom to the browser directly and never passes through
+toolshed. The browser stores it in IndexedDB like an imported CLI key, and
+quick unlock offers it as an imported key.
+
+A link signs in at once when nobody is signed in. When someone is, the shell
+asks whether to replace that identity before it redeems the code, because the
+redeem spends the code and Loom records this browser as holding the key. The
+link's fragment is removed from the address bar as soon as the shell reads it,
+and a shell running in a frame never acts on one.
+`packages/shell/src/lib/loom-pairing.ts` holds the code and fragment rules, and
+`loom-pairing-login.ts` beside it the sign-in.
+
 ## Verify Before Debugging
 
 Always compare DIDs before testing scoped behavior:

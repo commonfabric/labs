@@ -75,76 +75,82 @@ export function activateModalDialog(
   });
 }
 
+/**
+ * The look of a pairing dialog in the top layer, which the device-link and
+ * Loom pairing dialogs share.
+ */
+export const pairingDialogStyles = css`
+  :host {
+    display: contents;
+  }
+  dialog {
+    border: 1px solid var(--border-color, #000);
+    border-radius: 0.5rem;
+    background: var(--shell-surface, #fff);
+    color: var(--font-color, #000);
+    font-family: var(--font-primary, system-ui, sans-serif);
+    font-size: 1rem;
+    line-height: 1.5;
+    padding: 1.5rem;
+    /* Respect the notch/home-indicator in landscape; portrait is unaffected. */
+    padding-top: max(1.5rem, env(safe-area-inset-top));
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    max-width: 30rem;
+    width: calc(100vw - 2rem);
+    box-sizing: border-box;
+  }
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0 0 0.75rem;
+  }
+  h1:focus {
+    outline: none;
+  }
+  .did {
+    font-family: var(--font-primary, ui-monospace, monospace);
+    font-size: 0.95rem;
+    word-break: break-all;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    border-radius: 0.375rem;
+    padding: 0.6rem 0.75rem;
+    margin: 0.5rem 0 1rem;
+  }
+  .label {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin-bottom: 0.15rem;
+  }
+  .warn {
+    font-size: 0.9rem;
+    opacity: 0.85;
+    margin: 0 0 1.25rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  button {
+    font: inherit;
+    font-family: inherit;
+    padding: 0.55rem 1.1rem;
+    border-radius: 0.375rem;
+    border: 1px solid var(--border-color, currentColor);
+    background: var(--bg-primary, transparent);
+    color: inherit;
+    cursor: pointer;
+  }
+  button[disabled] {
+    opacity: 0.5;
+    cursor: default;
+  }
+`;
+
 export class XDeviceLinkView extends LitElement {
-  static override styles = css`
-    :host {
-      display: contents;
-    }
-    dialog {
-      border: 1px solid var(--border-color, #000);
-      border-radius: 0.5rem;
-      background: var(--shell-surface, #fff);
-      color: var(--font-color, #000);
-      font-family: var(--font-primary, system-ui, sans-serif);
-      font-size: 1rem;
-      line-height: 1.5;
-      padding: 1.5rem;
-      /* Respect the notch/home-indicator in landscape; portrait is unaffected. */
-      padding-top: max(1.5rem, env(safe-area-inset-top));
-      padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
-      max-width: 30rem;
-      width: calc(100vw - 2rem);
-      box-sizing: border-box;
-    }
-    dialog::backdrop {
-      background: rgba(0, 0, 0, 0.6);
-    }
-    h1 {
-      font-size: 1.25rem;
-      margin: 0 0 0.75rem;
-    }
-    h1:focus {
-      outline: none;
-    }
-    .did {
-      font-family: var(--font-primary, ui-monospace, monospace);
-      font-size: 0.95rem;
-      word-break: break-all;
-      background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
-      border-radius: 0.375rem;
-      padding: 0.6rem 0.75rem;
-      margin: 0.5rem 0 1rem;
-    }
-    .label {
-      font-size: 0.8rem;
-      opacity: 0.7;
-      margin-bottom: 0.15rem;
-    }
-    .warn {
-      font-size: 0.9rem;
-      opacity: 0.85;
-      margin: 0 0 1.25rem;
-    }
-    .actions {
-      display: flex;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-    button {
-      font: inherit;
-      font-family: inherit;
-      padding: 0.55rem 1.1rem;
-      border-radius: 0.375rem;
-      border: 1px solid var(--border-color, currentColor);
-      background: var(--bg-primary, transparent);
-      color: inherit;
-      cursor: pointer;
-    }
-    button[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
-  `;
+  static override styles = pairingDialogStyles;
 
   /** DID the scanned code would sign as. */
   @property({ attribute: false })
