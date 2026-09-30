@@ -54,7 +54,7 @@ export function spaceAccess(
   if (kind !== "lift" && kind !== "handler") {
     throw new Error(
       "`spaceAccess()` can only be called from a handler or a reactive " +
-        "computation, where there is one principal to answer for.",
+        "computation, where there is one principal to ask about.",
     );
   }
   const { runtime, tx, space } = frame!;
@@ -119,7 +119,7 @@ function accessLevel(
 
   // A serving runtime reads every space as that space's owner, so what the
   // memory server thinks of its own session says nothing about the principal
-  // it is answering for. Only a client's session is that principal's.
+  // whose level it returns. Only a client's session is that principal's.
   const sessionIsPrincipal = !runtime.servingPosture;
   if (sessionIsPrincipal && reactive) {
     rerunOnAccessChange(runtime, space);

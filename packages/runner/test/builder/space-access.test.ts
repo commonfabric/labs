@@ -134,10 +134,10 @@ describe("spaceAccess()", () => {
   }
 
   /** Brings `space`'s access list into `runtime`'s replica, or tries to. */
-  async function syncAcl(runtime: Runtime, target = space): Promise<void> {
+  async function syncAcl(runtime: Runtime): Promise<void> {
     await runtime.getCellFromLink({
-      space: target,
-      id: `of:${target}` as URI,
+      space,
+      id: `of:${space}` as URI,
       path: [],
     }).sync();
     await runtime.storageManager.synced();

@@ -23,7 +23,7 @@ pattern, the renderer and the server resolve one list the same way.
 `target` picks the space. Omitted, it is the space the calling code runs in. A
 cell, or a value read through one, stands for the space its value lives in,
 after following any links it holds, so a reference to a piece in another space
-answers for that piece's space.
+returns the level in that piece's space.
 
 ## Who the principal is
 
@@ -62,9 +62,9 @@ space would be the wrong answer.
 
 The refusal counts only on a client, where the session the memory server
 refused is the principal's own. A serving runtime reads every space as that
-space's owner, so its session says nothing about the principal it answers for,
-and there the access list alone decides. Two principals demanding the same
-computation on a serving runtime get their own levels.
+space's owner, so its session says nothing about the principal whose level it
+returns, and there the access list alone decides. Two principals demanding the
+same computation on a serving runtime get their own levels.
 
 ## Keeping the answer current
 

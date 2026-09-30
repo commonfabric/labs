@@ -564,18 +564,18 @@ which operations require which integrity.
 `spaceAccess()` returns what the current principal may do in a space, as the
 space's access list grants it: `"OWNER"`, `"WRITE"`, `"READ"`, or `"none"`. It
 returns `undefined` while that is not known yet, so treat `undefined` as
-"still loading" rather than as "no access". With no argument it answers for the
-space the pattern runs in; given a cell, for the space that cell's value lives
-in.
+"still loading" rather than as "no access". With no argument it returns the
+level in the space the pattern runs in; given a cell, the level in the space
+that cell's value lives in.
 
 ```tsx
 // Shown inside a pattern body.
 const canManage = computed(() => spaceAccess() === "OWNER");
 ```
 
-Call it inside `computed()`, `lift()`, or a handler. In a computation it answers
-for whoever is viewing, and each viewer sees their own answer; in a handler it
-answers for the person who sent the event. Called directly in a pattern body it
+Call it inside `computed()`, `lift()`, or a handler. In a computation the level
+is that of whoever is viewing, and each viewer sees their own; in a handler, it
+is that of the person who sent the event. Called directly in a pattern body it
 throws, because the body builds one graph for every viewer.
 
 It decides what to offer, not what is allowed. The memory server checks every
