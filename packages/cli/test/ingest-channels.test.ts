@@ -12,7 +12,7 @@
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import {
@@ -182,14 +182,26 @@ describe("resolveSpaceDid", () => {
 
   it("derives a DID from a space name", async () => {
     const did = await resolveSpaceDid(config.identityPath, "ingest-test-space");
-    expect(did.startsWith("did:key:")).toBe(true);
+    expect(did).toBe(await legacySpaceDid("ingest-test-space"));
     expect(did).not.toBe(SPACE_DID);
   });
 
+  it("resolves a space name with no network and no identity file", async () => {
+    // A name resolves through the legacy derivation alone, so resolving it
+    // opens nothing: no request, and no read of the caller's key.
+
+    await withStubbedFetch({ status: 503 }, async (calls) => {
+      expect(
+        await resolveSpaceDid(`${tmpRoot}/absent.key`, "ingest-offline-space"),
+      ).toBe(await legacySpaceDid("ingest-offline-space"));
+      expect(calls).toEqual([]);
+    });
+  });
+
   it("derives the same DID for a name regardless of who asks", async () => {
-    // Named-space keys come from a shared public passphrase plus the name, not
-    // from the caller — which is exactly why the docstring says to prefer a
-    // DID. Pin the property so a change to the derivation is loud.
+    // A legacy name's DID is derived from a shared public passphrase plus the
+    // name, not from the caller. Pin the property so a change to the
+    // derivation is loud.
     const second = `${tmpRoot}/other.key`;
     await Deno.writeFile(second, await Identity.generatePkcs8());
 

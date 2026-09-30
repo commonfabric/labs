@@ -72,6 +72,7 @@ import {
 import { tagCollectionKey } from "./collection-key.ts";
 import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
+import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import {
   action,
@@ -271,6 +272,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
     currentPrincipal,
+    eventKey,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):

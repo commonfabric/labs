@@ -135,8 +135,8 @@ is the natural next step.
 
 Run from a repo with local space DBs (discovery walks up to the cache), or point
 at any directory with `--dir` / `MEMORY_DIR` / `DB_PATH`. `<space>` is a DID, a
-unique DID-prefix, a space **name** (resolved the way the runtime derives it),
-or a path. Every command takes `--json` for agents.
+unique DID-prefix, a legacy space **name** (resolved to a DID the way the shell
+resolves a name in its URL), or a path. Every command takes `--json` for agents.
 
 ```bash
 # discover what's inspectable, then drill in

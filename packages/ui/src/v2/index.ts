@@ -137,6 +137,7 @@ export * from "./components/cf-cell-context/index.ts";
 // Retired with the background piece service, kept as an inert passthrough
 // because durable pattern source may still emit it.
 export * from "./components/cf-updater/index.ts";
+export * from "./components/cf-space-create/index.ts";
 export * from "./components/cf-space-link/index.ts";
 export * from "./components/cf-drag-source/index.ts";
 export * from "./components/cf-drop-zone/index.ts";

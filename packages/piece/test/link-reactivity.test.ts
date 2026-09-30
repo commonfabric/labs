@@ -27,9 +27,9 @@ describe("PiecesController.link() reactivity", () => {
       storageManager,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "test-space-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();

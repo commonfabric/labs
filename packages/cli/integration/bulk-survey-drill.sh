@@ -62,10 +62,27 @@ check() {
 MEMBERS_TOTAL=113
 
 WORK="$(mktemp -d)"
-SPACE="${SPACE:-$(mktemp -u bulkXXXXXXXX)}"
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY=$(mktemp)
   $CF id new >"$CF_IDENTITY" 2>/dev/null
+fi
+# A space named in $SPACE is used as it stands; otherwise the identity creates
+# one, since opening a space never creates it. `cf space create` prints the
+# new space's DID. A create that fails and one that prints nothing are two
+# outcomes, so its status is kept apart from its output.
+if [ -z "${SPACE:-}" ]; then
+  SPACE=$($CF space create --quiet --api-url="$API_URL" \
+    --identity="$CF_IDENTITY" 2>"$WORK/space-create.err")
+  CREATE_STATUS=$?
+  if [ "$CREATE_STATUS" -ne 0 ]; then
+    echo "cf space create exited $CREATE_STATUS" >&2
+    sed 's/^/  | /' "$WORK/space-create.err" >&2
+    exit 1
+  fi
+fi
+if [ -z "$SPACE" ]; then
+  echo "cf space create printed no space" >&2
+  exit 1
 fi
 ARGS="--api-url=$API_URL --identity=$CF_IDENTITY --space=$SPACE"
 echo "API_URL=$API_URL"

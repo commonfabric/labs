@@ -374,7 +374,7 @@ const handlers: Record<
   async init(
     {
       identity: keyPair,
-      spaceName,
+      spaceDid,
       apiUrl,
       diagnostics,
       recordRejections,
@@ -397,7 +397,7 @@ const handlers: Record<
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
-      space: spaceName as string,
+      space: spaceDid as string,
       ...(cfc as MultiRuntimeCfcOptions | undefined),
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }

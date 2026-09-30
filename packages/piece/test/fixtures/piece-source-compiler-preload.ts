@@ -25,9 +25,9 @@ const runtime = new Runtime({
 let outcome: { history?: string[]; error?: string };
 try {
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: storageManager.as as Identity,
-      spaceName: `piece-source-compiler-preload-${crypto.randomUUID()}`,
+      spaceDid: await runtime.createSpace(),
     }),
     runtime,
   );

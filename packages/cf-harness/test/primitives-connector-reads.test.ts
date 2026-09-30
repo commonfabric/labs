@@ -200,9 +200,9 @@ describe("connector-reading primitives", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `connector-atoms-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );

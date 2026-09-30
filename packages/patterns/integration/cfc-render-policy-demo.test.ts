@@ -1,4 +1,4 @@
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -17,7 +17,7 @@ import {
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("cfc render policy demo integration test", () => {
   const shell = new ShellIntegration({
@@ -33,7 +33,7 @@ describe("cfc render policy demo integration test", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -72,7 +72,7 @@ describe("cfc render policy demo integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,
@@ -132,7 +132,7 @@ describe("cfc render policy demo integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,

@@ -1,10 +1,8 @@
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
-import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   initializePiecesController,
   PiecesController,
@@ -15,7 +13,7 @@ import {
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 const testComponents = [
   { name: "cf-checkbox-cell", file: "examples/cf-checkbox-cell.tsx" },
@@ -28,13 +26,14 @@ const testComponents = [
  */
 const openPiece = async (
   shell: ShellIntegration,
+  spaceDid: DID,
   pieceId: string,
   identity: Identity,
 ) => {
   await shell.goto({
     frontendUrl: FRONTEND_URL,
     view: {
-      spaceName: SPACE_NAME,
+      spaceDid,
       pieceId,
     },
     identity,
@@ -46,14 +45,16 @@ testComponents.forEach(({ name, file }) => {
     const shell = new ShellIntegration();
     shell.bindLifecycle();
 
+    let spaceDid: DID;
     let pieceId: string;
     let identity: Identity;
     let cc: PiecesController;
 
     beforeAll(async () => {
       identity = await Identity.generate({ implementation: "noble" });
+      spaceDid = await createTestSpace(identity);
       cc = await initializePiecesController({
-        space: SPACE_NAME,
+        space: spaceDid,
         apiUrl: new URL(API_URL),
         identity: identity,
       });
@@ -68,8 +69,6 @@ testComponents.forEach(({ name, file }) => {
         { start: false },
       );
       pieceId = piece.id;
-
-      await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     });
 
     afterAll(async () => {
@@ -77,13 +76,13 @@ testComponents.forEach(({ name, file }) => {
     });
 
     it(`should load the ${name} piece`, async () => {
-      await openPiece(shell, pieceId, identity);
+      await openPiece(shell, spaceDid, pieceId, identity);
 
       await shell.page().waitForSelector("cf-checkbox", { strategy: "pierce" });
     });
 
     it("should show disabled content initially", async () => {
-      await openPiece(shell, pieceId, identity);
+      await openPiece(shell, spaceDid, pieceId, identity);
 
       await waitForText(
         shell.page(),
@@ -101,7 +100,7 @@ testComponents.forEach(({ name, file }) => {
       // text it waits for is already present, so each step asserts the state
       // it starts from, and the first step asserts it here.
 
-      await openPiece(shell, pieceId, identity);
+      await openPiece(shell, spaceDid, pieceId, identity);
 
       await waitForText(
         shell.page(),
@@ -134,14 +133,16 @@ describe("cf-checkbox waitForDisabled fallback integration test", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
+  let spaceDid: DID;
   let pieceId: string;
   let identity: Identity;
   let cc: PiecesController;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -156,7 +157,6 @@ describe("cf-checkbox waitForDisabled fallback integration test", () => {
       { start: false },
     );
     pieceId = piece.id;
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
   });
 
   afterAll(async () => {
@@ -165,7 +165,7 @@ describe("cf-checkbox waitForDisabled fallback integration test", () => {
 
   it("resolves both the enabled and disabled readings of a control with no inner button", async () => {
     const page = shell.page();
-    await openPiece(shell, pieceId, identity);
+    await openPiece(shell, spaceDid, pieceId, identity);
     await page.waitForSelector("#probe-checkbox", { strategy: "pierce" });
 
     // The checkbox starts enabled; the helper must read the host fallback and

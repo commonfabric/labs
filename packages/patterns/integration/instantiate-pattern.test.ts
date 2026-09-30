@@ -1,6 +1,7 @@
 import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
+  createTestSpace,
   env,
   type ProbeApi,
   waitForCondition,
@@ -9,14 +10,14 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   initializePiecesController,
   PiecesController,
 } from "./pieces-controller.ts";
 import { clickCfButton } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 // In-page predicate: the page has soft-navigated away from `urlBefore`.
 const urlChangedFrom = (_probe: ProbeApi, urlBefore: string): boolean =>
@@ -28,12 +29,14 @@ describe("instantiate-pattern integration test", () => {
 
   let pieceId: string;
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: identity,
     });
@@ -61,7 +64,7 @@ describe("instantiate-pattern integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceId,
       },
       identity,

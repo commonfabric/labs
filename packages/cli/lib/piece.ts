@@ -12,7 +12,12 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, type Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  type Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -74,6 +79,7 @@ import {
   Runtime,
   runtimePresets,
   RuntimeProgram,
+  SpaceNotFoundError,
   UI,
   VNode,
 } from "@commonfabric/runner";
@@ -566,11 +572,12 @@ export async function withRuntimeCleanupOnFailure<T>(
 
 async function makeSession(config: SpaceConfig): Promise<Session> {
   const identity = await loadIdentity(config.identity);
-  if (isDID(config.space)) {
-    return createSession({ identity, spaceDid: config.space });
-  } else {
-    return createSession({ identity, spaceName: config.space });
-  }
+  return createSession({
+    identity,
+    spaceDid: isDID(config.space)
+      ? config.space
+      : await legacySpaceDid(config.space),
+  });
 }
 
 /**
@@ -670,7 +677,6 @@ export async function loadPieces(
           storageManager: StorageManager.open({
             as: session.as,
             memoryHost: new URL(config.apiUrl),
-            spaceIdentity: session.spaceIdentity,
           }),
           experimental,
           errorHandlers: [
@@ -731,6 +737,7 @@ export async function loadPieces(
       () =>
         new PiecesController(session, runtime, {
           deferSpaceCellSync,
+          ...(isDID(config.space) ? {} : { spaceName: config.space }),
         }),
     );
     if (deferSpaceCellSync) {
@@ -1806,6 +1813,13 @@ export async function newPiece(
       );
     }
   } catch (error) {
+    if (error instanceof SpaceNotFoundError) {
+      throw new Error(
+        `${error.message}. Opening a space never creates one; create one ` +
+          `with: ${cliCommand(["space", "create"])}`,
+        { cause: error },
+      );
+    }
     throw new Error(
       `Could not initialize the space's default pattern: ${
         error instanceof Error ? error.message : String(error)
@@ -6050,6 +6064,23 @@ export async function setHomePattern(
     repository: entry.repository,
   });
   noteWroteTo(homeConfig.space);
+}
+
+/**
+ * Creates a space owned by the configured identity and returns its DID. The
+ * space gets a random DID and is born granting its creator alone; it is
+ * recorded in the identity's Home space list under `label`.
+ */
+export async function createSpace(
+  config: Omit<SpaceConfig, "space">,
+  label?: string,
+): Promise<string> {
+  const identity = await loadIdentity(config.identity);
+  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
+  const pieces = await loadPieces(homeConfig);
+  const space = await pieces.createSpace(label);
+  noteWroteTo(homeConfig.space);
+  return space;
 }
 
 /**

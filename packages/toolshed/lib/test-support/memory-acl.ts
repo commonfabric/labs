@@ -88,7 +88,8 @@ export const createAclServer = (
  * Write a space's genesis ACL as the space identity itself — the one principal
  * the memory server lets initialize a missing ACL (`principal === space`). This
  * lets a test pin an ARBITRARY ACL shape rather than accept the bootstrap
- * default, which is what makes the wildcard cases testable.
+ * default, which names the owner alone, and is what makes the wildcard cases
+ * testable.
  */
 export const genesisAcl = async (
   factory: LoopbackSessionFactory,

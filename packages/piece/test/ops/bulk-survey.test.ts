@@ -89,9 +89,9 @@ describe("bulk-survey", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `bulk-survey-${crypto.randomUUID()}`,
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );

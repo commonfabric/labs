@@ -165,10 +165,7 @@ describe("RuntimeInternals navigation", () => {
 
   it("creates worker runtime options with explicit CFC enforcement and principal trust", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
-      identity,
-      spaceName: "shell-cfc-runtime-options",
-    });
+    const session = createSession({ identity, spaceDid: identity.did() });
 
     const options = createRuntimeClientOptions({
       session,
@@ -184,6 +181,5 @@ describe("RuntimeInternals navigation", () => {
       actingPrincipal: session.as.did(),
     });
     expect(options.spaceDid).toBe(session.space);
-    expect(options.spaceName).toBe(session.spaceName);
   });
 });

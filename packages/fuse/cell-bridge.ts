@@ -10,6 +10,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import {
   type PatternUpdateReceipt,
   type PieceController,
@@ -22,6 +23,7 @@ import {
   parseExternalSchemaRef,
   recomposeSchema,
   schemaToTypeString,
+  SpaceNotFoundError,
 } from "@commonfabric/runner";
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
@@ -2508,6 +2510,20 @@ export class CellBridge {
     let state: SpaceState | undefined;
     try {
       pieces = await this.#createSpacePieces(spaceName);
+      // A name that reaches no space is reported rather than opened: the
+      // mount never brings a space into being. The one exception is the
+      // user's Home space, whose DID is the user's own, which comes into
+      // being on its first open.
+      const space = pieces.getSpace();
+      if (
+        space !== pieces.runtime.userIdentityDID &&
+        !(await pieces.runtime.spaceExists(space))
+      ) {
+        throw new SpaceNotFoundError(
+          space,
+          isDID(spaceName) ? undefined : spaceName,
+        );
+      }
       await this.#verifyPiecesConnection(pieces);
       state = this.#buildSpaceTree(spaceName, pieces);
 

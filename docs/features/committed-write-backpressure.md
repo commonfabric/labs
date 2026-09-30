@@ -195,8 +195,10 @@ The same `retries` boolean also gates the inSpace-name resolution path
 (`RetryImmediately`), which re-runs the handler to resolve a
 `PatternFactory.inSpace("name")` target. That loop needs no count either: name
 resolution is monotonic — each re-run resolves at least one previously-unresolved
-name into a cache, and a resolved name never becomes pending again — so a handler
-that references finitely many distinct names terminates on its own. A
+name, either by reading the calling space's allocation record or by creating a
+space the runtime remembers for that name, and a resolved name never becomes
+pending again — so a handler that references finitely many distinct names
+terminates on its own. A
 `retries: false` event does not take this path; it drops instead of re-running.
 
 ## Configuration

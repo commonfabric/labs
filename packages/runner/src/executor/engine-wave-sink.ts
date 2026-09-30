@@ -277,11 +277,12 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // this refusal the sink silently
         // bypassed the invariant (a served `.inSpace()` create whose
         // data commit won the race with the provider mount's genesis
-        // minted an ACL-less space). The wave commit step forces the
-        // genesis for every creation-granted target before applying, so
-        // hitting this refusal means the forcing failed or no bootstrap
-        // authority exists — foreign failure ⇒ home withheld ⇒ replay
-        // (§2b's existing failure semantics). Populated ACL-less legacy
+        // minted an ACL-less space). A served `.inSpace()` target is
+        // created, genesis included, before its handler re-runs, and the
+        // accept gate refuses a write into a space no store holds, so
+        // hitting this refusal means a write aimed at a space nobody
+        // created got past the gate — foreign failure ⇒ home withheld ⇒
+        // replay (§2b's existing failure semantics). Populated ACL-less legacy
         // spaces (serverSeq > 0) are not this refusal's subject — the
         // accept gate already fails closed on them.
         if (

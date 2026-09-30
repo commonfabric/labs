@@ -2306,11 +2306,11 @@ export class SpaceServer implements TransactionSealDestination {
         // foreignWriteRefusals.
         foreignWrites: "accept",
         // The co-hosted memory server's structural grant supply
-        // (protocol.md §2b): owner-by-identity (the actor's own home
-        // space), fresh-store creation (§2b's sanctioned provisioning,
-        // DID-shape-checked), or the target's own ACL granting the
-        // actor WRITE — fail-closed otherwise. The refusal reason is
-        // logged here; the wave's refusal message stays generic.
+        // (protocol.md §2b): the target's own ACL granting the actor
+        // WRITE — fail-closed otherwise, for a malformed DID or a space
+        // no store holds as much as for an ungranted actor. The refusal
+        // reason is logged here; the wave's refusal message stays
+        // generic.
         foreignWriteGrant: async (foreignSpace, acting) => {
           const verdict = await this.#options.server
             .foreignWriteAuthorityFor(foreignSpace, acting.user);
@@ -2321,10 +2321,7 @@ export class SpaceServer implements TransactionSealDestination {
               `${verdict.reason} (protocol.md §2b)`,
             ]);
           }
-          // The FULL verdict, not just the boolean (OW31 B4): the wave
-          // retains the `via` arm so the commit step forces a
-          // `creation`-granted target's genesis ACL before the sink.
-          return verdict;
+          return verdict.granted;
         },
         onForeignWriteRefusal: () => {
           this.#options.stats.foreignWriteRefusals += 1;
@@ -6446,37 +6443,6 @@ export class SpaceServer implements TransactionSealDestination {
     // wave's foreign provisioning targets BEFORE the commit step — the
     // sink's engineFor is synchronous. Same host, same process.
     await this.#resolveForeignEngines(closing);
-
-    // OW31 B4 (RULED 2026-08-18; protocol.md §2's genesis clause): for
-    // every foreign target this wave was granted via the `creation`
-    // arm, force the fresh space's GENESIS ACL — signed by the space's
-    // own keys, naming the acting user OWNER — BEFORE the sink applies
-    // the data batch, so the space's commit #1 IS the ACL commit
-    // (INV-13's precedence, mirrored onto the engine-direct plane; the
-    // sink refuses a foreign batch into a seq-0/no-ACL engine as the
-    // backstop). The forcing is the provider mount's own bootstrap
-    // (`#createInitializedSession`): an in-process loopback round trip,
-    // idempotent on replay (the ACL exists → the bootstrap skips, and
-    // the accept gate re-granted via `acl` through the owner). Failure
-    // is isolated per space, exactly like a failed engine resolution:
-    // the sink's refusal then fails the contributions targeting the
-    // space (requeue for events, drop for derivations) and the wave
-    // commits the rest.
-    for (const creationSpace of closing.creationGrantedForeignSpaces()) {
-      try {
-        await this.#runtime!.storageManager.ensureSpaceInitialized?.(
-          creationSpace,
-        );
-      } catch (error) {
-        logger.warn("foreign-genesis-forcing-failed", () => [
-          `forcing the genesis ACL of creation-granted foreign space ` +
-          `${creationSpace} failed; its contributions will be refused ` +
-          `by the sink's INV-13 mirror and replay (OW31 B4; ` +
-          "protocol.md §2b)",
-          error,
-        ]);
-      }
-    }
 
     const derivedThrough = advanceSealed ? advanceTo : this.#watermark;
     const outcome = await closing.commitWave(this.#sink!, { derivedThrough });

@@ -55,6 +55,11 @@ type JournalEntry = {
   space?: string;
 };
 
+// An entry of the space list. An entry with a `did` opens that space, and its
+// `name` is only what the entry is called: two entries may share one, and
+// renaming one changes nothing else. An entry written before spaces had random
+// identities has only a `name`, which resolves as a legacy space name until the
+// runtime adopts the entry (`adoptSpace`) under the DID the name resolves to.
 type SpaceEntry = {
   name: string;
   did?: string;
@@ -98,8 +103,12 @@ export type HomeOutput = {
   }>;
   removeFavorite: Stream<{ piece?: Writable<unknown>; id?: string }>;
   addJournalEntry: Stream<{ entry: JournalEntry }>;
-  addSpace: Stream<{ detail: { message: string } }>;
-  removeSpace: Stream<{ name?: string }>;
+  addSpace: Stream<
+    { did?: string; name?: string; detail?: { message: string } }
+  >;
+  removeSpace: Stream<{ did?: string; name?: string }>;
+  adoptSpace: Stream<{ name: string; did: string }>;
+  renameSpace: Stream<{ did: string; name: string }>;
 };
 
 // Handler to add a favorite
@@ -165,33 +174,68 @@ const addJournalEntry = handler<
   journal.push(entry);
 });
 
-// Handler to add a space to the managed list
+// Handler to add a space to the managed list. The space already exists: the
+// runtime creates it and sends its DID here. The entry is addressed by the DID,
+// so two sessions adding one space resolve to one entry, and adds of distinct
+// spaces merge, without reading the whole list. An event with no label, or an
+// empty one, keeps the label an existing entry has. An event carrying only a
+// typed name (`detail.message`) records a name-only entry, which opens the
+// legacy space the name resolves to and which the runtime later adopts under
+// that DID.
 const addSpaceHandler = handler<
-  { detail: { message: string } },
+  { did?: string; name?: string; detail?: { message: string } },
   { spaces: Writable<SpaceEntry[]> }
->(({ detail }, { spaces }) => {
-  const name = detail?.message?.trim();
-  if (!name) return;
-  // Address the space entity by its name. Setting the entity and add-uniquing
-  // it means two sessions adding the same name resolve to one membership entry,
-  // and adds of distinct names merge, without reading the whole list.
-  const entry = spaces.elementById(name);
-  entry.set({ name });
+>(({ did, name, detail }, { spaces }) => {
+  if (did) {
+    const entry = spaces.elementById(did);
+    entry.set({ name: name || entry.get()?.name || "", did });
+    spaces.addUnique(entry);
+    return;
+  }
+  const legacyName = detail?.message?.trim();
+  if (!legacyName) return;
+  const entry = spaces.elementById(legacyName);
+  entry.set({ name: legacyName });
   spaces.addUnique(entry);
 });
 
 // Handler to remove a space from the managed list. The per-row button binds the
-// name as state; the exported `removeSpace` stream passes it in the event.
+// entry's DID, or a legacy entry's name, as state; the exported `removeSpace`
+// stream passes one in the event. Removing an entry changes nothing about the
+// space it named.
 const removeSpaceHandler = handler<
-  { name?: string },
-  { name?: string; spaces: Writable<SpaceEntry[]> }
->(({ name: eventName }, { name: stateName, spaces }) => {
-  const name = eventName ?? stateName;
-  if (!name) return;
-  // Remove the membership entry addressed by name. removeByValue matches by the
-  // deterministic link, so concurrent removes of distinct spaces merge instead
-  // of clobbering through a whole-list set.
+  { did?: string; name?: string },
+  { did?: string; name?: string; spaces: Writable<SpaceEntry[]> }
+>((event, state) => {
+  // removeByValue matches by the deterministic link, so concurrent removes of
+  // distinct spaces merge instead of clobbering through a whole-list set.
+  const key = event.did ?? event.name ?? state.did ?? state.name;
+  if (!key) return;
+  state.spaces.removeByValue(state.spaces.elementById(key));
+});
+
+// Handler that replaces a legacy entry, addressed by its name, with an entry
+// addressed by the DID the name resolves to and called by the same name.
+const adoptSpaceHandler = handler<
+  { name: string; did: string },
+  { spaces: Writable<SpaceEntry[]> }
+>(({ name, did }, { spaces }) => {
+  if (!name || !did) return;
+  const entry = spaces.elementById(did);
+  entry.set({ name, did });
+  spaces.addUnique(entry);
   spaces.removeByValue(spaces.elementById(name));
+});
+
+// Handler that changes what an entry is called, and nothing else.
+const renameSpaceHandler = handler<
+  { did: string; name: string },
+  { spaces: Writable<SpaceEntry[]> }
+>(({ did, name }, { spaces }) => {
+  if (!did) return;
+  const entry = spaces.elementById(did);
+  entry.set({ name: name ?? "", did });
+  spaces.addUnique(entry);
 });
 
 const homeArgumentSchema = toSchema<Record<string, never>>();
@@ -297,6 +341,7 @@ const Home = pattern(
                         size="sm"
                         variant="ghost"
                         onClick={removeSpaceHandler({
+                          did: space.did,
                           name: space.name,
                           spaces,
                         })}
@@ -315,7 +360,7 @@ const Home = pattern(
                             textAlign: "center",
                           }}
                         >
-                          No spaces yet. Add one below.
+                          No spaces yet. Create one below.
                         </p>
                       )
                       : null
@@ -328,15 +373,12 @@ const Home = pattern(
 
                 <cf-vstack gap="1">
                   <h3 style={{ margin: 0, fontSize: "14px" }}>
-                    Add or Create Space
+                    Create Space
                   </h3>
-                  <cf-message-input
-                    placeholder="Space name..."
-                    appearance="rounded"
-                    oncf-send={addSpaceHandler({ spaces })}
-                  />
+                  <cf-space-create placeholder="Space label..." />
                   <span style={{ fontSize: "11px", color: "#888" }}>
-                    Type a name and press enter. Click the link to navigate.
+                    Type a label and press enter to create a new space. Click
+                    the link to open it.
                   </span>
                 </cf-vstack>
 
@@ -389,6 +431,8 @@ const Home = pattern(
       addJournalEntry: addJournalEntry({ journal }),
       addSpace: addSpaceHandler({ spaces }),
       removeSpace: removeSpaceHandler({ spaces }),
+      adoptSpace: adoptSpaceHandler({ spaces }),
+      renameSpace: renameSpaceHandler({ spaces }),
       createProfile: createProfileStream,
     };
   },

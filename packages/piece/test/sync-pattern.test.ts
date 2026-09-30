@@ -55,9 +55,9 @@ describe("syncPattern", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "sync-pattern-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();

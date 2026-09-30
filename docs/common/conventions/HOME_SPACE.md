@@ -95,10 +95,11 @@ most-recently-used (MRU) ordering:
   after the default.
 
 Each profile lives in its own space, created with the anonymous
-`PatternFactory.inSpace()` (CT-1650 — a *named* `inSpace(name)` would derive the
-space DID from the display name alone and collide same-named profiles across
-users) running `/api/patterns/system/profile-home.tsx`; the link is appended to
-`profiles`. The home Profile tab renders the **profile picker**
+`PatternFactory.inSpace()` — one allocation per creation, each a new space with
+a random DID owned by the creating user and readable by anyone, since its ACL
+grants the wildcard `"*"` READ (a *named* `inSpace(name)` would put every
+profile created under one name in one space) — running `/api/patterns/system/profile-home.tsx`; the link
+is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
@@ -126,9 +127,14 @@ sees their own profile.
 ## Spaces
 
 The home space maintains a managed list of spaces in
-`defaultPattern.spaces`. Each entry has a `name` (required) and optional `did`.
-Users add spaces via the Spaces tab in the home pattern. Clicking a space link
-navigates to it (creating it if it doesn't exist yet).
+`defaultPattern.spaces`. An entry with a `did` opens that space, and its `name`
+is only what it is called; two entries may share a name. Users
+create spaces from the Spaces tab in the home pattern, which gives each new
+space a random DID and adds its entry. Clicking a space link opens the space by
+its DID. Opening a space never creates one; the one exception is the user's
+own Home space, which is initialized on its first open (see
+[Identity Matching](#identity-matching)). An entry is a label and a route and
+grants nothing: the space's own access-control document decides who may use it.
 
 ## Agent Queue
 
@@ -232,11 +238,14 @@ The home space DID equals the user's identity DID. This means **the CLI identity
 must match the browser identity** for `set-home` to affect what the browser
 displays.
 
-That equality is also the ACL bootstrap authority. When remote storage finds no
-ACL for the home space, it opens a temporary session with the same identity and
-writes `{ [homeSpaceDid]: "OWNER" }` before returning the normal session. This
-also privatizes a populated ACL-less legacy home; named legacy spaces remain
-public under the temporary compatibility rule.
+That equality is also the ACL genesis authority. When the home space has no ACL
+document and no history, remote storage opens a temporary session with the same
+identity and writes `{ [homeSpaceDid]: "OWNER" }` before returning the normal
+session. A home space that has history but no ACL document is opened as it
+stands: the memory server grants a space's own DID OWNER only while the space
+has no history, so its user cannot claim it, and it stays public under the
+temporary compatibility rule, like a named legacy space with no ACL document,
+until an operator gives it one with `cf acl set`, as a memory service identity.
 
 For local development, prefer one shared PKCS8/PEM key imported into the browser
 and exported through `CF_IDENTITY` for CLI commands. The browser login screen has

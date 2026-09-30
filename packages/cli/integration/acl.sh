@@ -26,7 +26,6 @@ if [ -z "$API_URL" ]; then
 fi
 
 # Setup test environment
-SPACE=$(mktemp -u XXXXXXXXXX) # generates a random space name
 IDENTITY_OWNER=$(mktemp)
 IDENTITY_USER1=$(mktemp)
 IDENTITY_USER2=$(mktemp)
@@ -44,6 +43,13 @@ DID_OWNER=$(cf id did $IDENTITY_OWNER)
 DID_USER1=$(cf id did $IDENTITY_USER1)
 DID_USER2=$(cf id did $IDENTITY_USER2)
 DID_USER3=$(cf id did $IDENTITY_USER3)
+
+# The owner creates the space. Opening a space never creates one, so the space
+# comes from `cf space create`, which prints its DID.
+SPACE=$(cf space create --quiet --api-url="$API_URL" --identity="$IDENTITY_OWNER")
+if [[ "$SPACE" != did:key:* ]]; then
+  error "cf space create printed no DID: $SPACE"
+fi
 
 # Helper to create space args for each identity
 SPACE_ARGS_OWNER="--api-url=$API_URL --identity=$IDENTITY_OWNER --space=$SPACE"
@@ -63,8 +69,8 @@ echo "DID_USER3=$DID_USER3"
 echo "WORK_DIR=$WORK_DIR"
 echo ""
 
-# Test 1: Initial space creation - owner should have automatic access
-echo "Test 1: Initial space creation and owner access"
+# Test 1: The creator of a space has access to it
+echo "Test 1: Space creation and owner access"
 PIECE_ID=$(cf piece new --main-export customPatternExport $SPACE_ARGS_OWNER $PATTERN_SRC)
 echo "Created piece: $PIECE_ID"
 
@@ -85,30 +91,49 @@ if ! echo "$ACL_OUTPUT" | grep -q "OWNER"; then
 fi
 success "ACL initialized with owner having OWNER capability"
 
-# Test 3: Default access posture for an unlisted user
+# Test 3: A new space is private
 #
-# This test used to assert that an unlisted user had NO access, because a named
-# space was private by default. That stopped being true in 4eb3026d1 (#4670,
-# 2026-07-10, "re-enable space ACL enforcement" / "default named spaces to
-# public write"): genesis now writes `"*": "WRITE"` alongside the owner entry
-# (see the bootstrapAcl in packages/runner/src/storage/v2.ts), so every
-# authenticated principal legitimately has WRITE on a named space. The old
-# assertion was not flaky, it was structurally unpassable — do not restore it.
-#
-# What still holds, and is what this test now pins, is that enforcement is ON
-# rather than OFF: the wildcard grants WRITE, not OWNER. An unlisted user can
-# read and write, but cannot touch the ACL. The private-by-default case is
-# covered at the end of the script, after the wildcard has been removed.
+# Genesis writes an ACL that names the creator as OWNER and grants nobody
+# else anything, so an unlisted user can neither read, write, nor manage the
+# ACL.
 echo ""
-echo "Test 3: Default access posture (genesis wildcard)"
+echo "Test 3: A new space is private"
 
-# The wildcard is an explicit part of the contract, so assert it is there
-# rather than inferring it from the access checks below.
+ACL_OUTPUT=$(cf acl ls $SPACE_ARGS_OWNER)
+if echo "$ACL_OUTPUT" | grep -q '\*'; then
+  error "Genesis should not grant the wildcard '*' anything"
+fi
+success "Genesis ACL has no '*' entry"
+
+if cf piece ls $SPACE_ARGS_USER1 2>/dev/null | grep -q "$PIECE_ID"; then
+  error "USER1 should not be able to read a new space it is not listed in"
+fi
+success "Unlisted user cannot read a new space"
+
+if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC 2>/dev/null; then
+  error "USER1 should not be able to write a new space it is not listed in"
+fi
+success "Unlisted user cannot write a new space"
+
+if cf acl set $DID_USER1 WRITE $SPACE_ARGS_USER1 2>/dev/null; then
+  error "USER1 should not be able to grant itself access to a new space"
+fi
+success "Unlisted user cannot grant itself access"
+
+# Test 3b: Opening the space to everyone
+#
+# The owner grants the wildcard '*' WRITE. Every authenticated principal can
+# then read and write, but WRITE is not OWNER, so the wildcard does not hand
+# out ACL management. Tests 9 and 14 depend on this grant.
+echo ""
+echo "Test 3b: Opening the space to everyone"
+# "ANYONE" is the CLI spelling of "*", so the shell does not glob it.
+cf acl set ANYONE WRITE $SPACE_ARGS_OWNER
 ACL_OUTPUT=$(cf acl ls $SPACE_ARGS_OWNER)
 if ! echo "$ACL_OUTPUT" | grep '\*' | grep -q "WRITE"; then
-  error "Genesis should grant the wildcard '*' WRITE on a named space"
+  error "The ACL should list the '*' => WRITE entry the owner granted"
 fi
-success "Genesis ACL contains the '*' => WRITE entry"
+success "Owner granted the '*' => WRITE entry"
 
 if ! cf piece ls $SPACE_ARGS_USER1 | grep -q "$PIECE_ID"; then
   error "USER1 should inherit read access from the '*' entry"
@@ -121,8 +146,8 @@ if [ -z "$PIECE_ID_WILDCARD" ]; then
 fi
 success "Unlisted user can write via the wildcard"
 
-# The load-bearing assertion: WRITE is not OWNER, so the wildcard does not
-# hand out ACL management. If this ever passes, enforcement is off entirely.
+# WRITE is not OWNER, so the wildcard does not hand out ACL management. If
+# this ever passes, enforcement is off entirely.
 if cf acl set $DID_USER2 READ $SPACE_ARGS_USER1 2>/dev/null; then
   error "USER1 with only the wildcard WRITE should not be able to modify the ACL"
 fi
@@ -228,14 +253,12 @@ fi
 success "USER1 successfully removed from ACL"
 
 # Removing an entry revokes that entry, not all access: USER1 falls back to the
-# genesis `"*": "WRITE"` wildcard (see the note on Test 3). This assertion used
-# to read "USER1 should not have access after removal" and became unpassable in
-# #4670 for the same reason Test 3 did. Test 14 is where removal actually
+# `"*": "WRITE"` wildcard the owner granted in Test 3b. Test 14 is where removal
 # reduces access to nothing, once the wildcard itself has been removed.
 if ! cf piece ls $SPACE_ARGS_USER1 | grep -q "$PIECE_ID"; then
   error "USER1 should fall back to the wildcard after removal, not lose all access"
 fi
-success "USER1 falls back to the wildcard default after ACL removal"
+success "USER1 falls back to the wildcard after ACL removal"
 
 # Test 10: Multiple ACL entries
 echo ""
@@ -311,13 +334,11 @@ if ! echo "$ACL_OUTPUT" | grep "$DID_OWNER" | grep -q "OWNER"; then
 fi
 success "Last concrete OWNER is preserved"
 
-# Test 14: Lockdown - removing the wildcard makes the space private
+# Test 14: Lockdown - removing the wildcard makes the space private again
 #
-# This is where the original Test 3 intent now lives. A named space is created
-# world-writable by the genesis `"*": "WRITE"` entry (#4670); removing that
-# entry is the only way to make it private, and it is a post-genesis ACL
-# mutation like any other. Keep this last: every test above depends on the
-# wildcard being present.
+# Removing the `"*": "WRITE"` entry the owner granted in Test 3b is a
+# post-genesis ACL mutation like any other. Keep this last: every test from
+# Test 3b onward depends on the wildcard being present.
 echo ""
 echo "Test 14: Lockdown - remove the wildcard"
 # "ANYONE" is the CLI spelling of "*", so the shell does not glob it.

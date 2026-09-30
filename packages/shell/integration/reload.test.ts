@@ -1,7 +1,7 @@
 import { assert } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
 
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 
 import { ShellIntegration } from "../../integration/shell-utils.ts";
@@ -28,12 +28,12 @@ describe("shell reload tests", () => {
     // answers.
 
     const identity = await Identity.generate({ implementation: "noble" });
-    const spaceName = globalThis.crypto.randomUUID();
+    const spaceDid = await createTestSpace(identity);
     const page = shell.page();
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName },
+      view: { spaceDid },
       identity,
     });
 

@@ -125,7 +125,7 @@ export async function agentRunObservationCeiling(
   }
   const personal = { type: CFC_ATOM_TYPE.User, subject: options.requester };
   const member = space !== options.requester &&
-    spaceReaderRole(acl ?? undefined, space, options.requester) !== null;
+    spaceReaderRole(acl ?? undefined, options.requester) !== null;
   const hostCeiling: CfcObservationMaxConfidentiality = member
     ? [personal, { type: CFC_ATOM_TYPE.Space, id: space }]
     : [personal];

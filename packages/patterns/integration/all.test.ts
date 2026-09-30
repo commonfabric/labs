@@ -1,4 +1,4 @@
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert } from "@std/assert";
@@ -35,7 +35,7 @@ describe("Compile all patterns", () => {
       // fresh Runtime (via PiecesController) each time to avoid OOM in CI
       const identity = await Identity.generate();
       const cc = await initializePiecesController({
-        space: `${name}-${crypto.randomUUID()}`,
+        space: await createTestSpace(identity),
         apiUrl: new URL(API_URL),
         identity: identity,
       });

@@ -347,49 +347,22 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
 
   /**
-   * Register a derived space identity for fresh-space ACL genesis. Optional:
-   * storage managers without ACL bootstrap support may ignore this capability.
-   * The identity is never used as the principal for ordinary storage work.
+   * Creates a space and returns its DID, once the space's genesis commit is
+   * confirmed. The space's key is generated from random data, and signs one
+   * commit that writes `acl` as the space's access-control document and, when
+   * `root` is given, reserves the space's root pattern. The key is used for
+   * nothing else, and is never stored, returned, or logged.
    *
-   * `options.owner` names the genesis ACL's OWNER (OW31, RULED 2026-08-18:
-   * a provisioned space's first commit is signed by the space's own keys
-   * and names the ACTING user OWNER — the serving identity appears nowhere
-   * in the ACL). Absent, the genesis owner is the manager's own signer —
-   * the active user on a client, byte-identical to the pre-OW31 shape.
+   * `acl` must name a concrete OWNER, and must grant this manager's signer at
+   * least READ if this manager will open the space. `root` requires a host
+   * that supports root reservations; its complete source, cause, arguments,
+   * and attached source roots are snapshotted in the genesis receipt, and a
+   * later mount that declares a root intent must match it.
    *
-   * `options.genesisAcl` is the exact document a fresh space is born with
-   * (its first and only commit; no intermediate default is ever written),
-   * validated by the memory server's genesis admission rather than here.
-   * It is a demand: the open proceeds only if the space is fresh or is
-   * already owned exactly as the document says (grants below OWNER are the
-   * owner's to evolve), and is refused otherwise — never silently entered
-   * under someone else's ACL. It never reaches the home arm.
-   * The signer that will open the space must be granted at least READ by
-   * it. Supplying it together with `owner` in one registration is refused;
-   * a later registration for the same space replaces an earlier one, but
-   * not once the space's first mount has begun. A manager that cannot
-   * bootstrap an ACL refuses it rather than accept a document it would
-   * never write.
-   *
-   * `options.genesisRoot` requires an explicit `genesisAcl`. Its complete
-   * source, cause, arguments, and attached source roots are snapshotted in
-   * the genesis receipt and authenticated on every mount. Later mounts must
-   * match that immutable reservation.
+   * @throws If the memory server refuses the genesis commit. No DID is
+   *   returned then, and the space that was being created is abandoned.
    */
-  registerSpaceIdentity?(
-    identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
-  ): void;
-
-  /**
-   * Force `space`'s provider session — and with it any fresh-space ACL
-   * genesis the manager's session factory performs — to have completed
-   * (OW31 B4). Optional: managers without ACL bootstrap support resolve
-   * after a plain session mount; the serving loop's commit step calls it
-   * for `creation`-granted foreign targets so the genesis lands before
-   * the sink's data batch (protocol.md §2b's genesis clause).
-   */
-  ensureSpaceInitialized?(space: MemorySpace): Promise<void>;
+  createSpace?(acl: ACL, root?: GenesisRoot): Promise<MemorySpace>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage

@@ -10,4 +10,5 @@ export {
 } from "./key-pair-transport.ts";
 export { KeyStore } from "./key-store.ts";
 export * from "./interface.ts";
+export { legacySpaceDid } from "./legacy-space.ts";
 export { createSession, type Session } from "./session.ts";

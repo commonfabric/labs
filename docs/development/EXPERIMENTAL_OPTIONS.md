@@ -1514,25 +1514,24 @@ the per-epic implementation notes).
 - **Current default and planned end state.** Off by default. The gate exists
   because minting issues a durable bearer capability that outlives the trust
   conditions that authorized it, and because authorization rests on the memory
-  ACL — which, for a NAMED space, is only as strong as a key currently derived
-  from the public passphrase `"common user"`
-  ([`packages/identity/src/session.ts`](../../packages/identity/src/session.ts)).
-  Anyone can derive that key today, so on a deployment with named spaces the
-  owner check is not yet a real boundary. That derivation supports the legacy
-  space names used during development and nothing else, and is removed once
-  those development-only spaces have been migrated
-  ([random space identities](../plans/random-space-identities.md)). The end
+  ACL. New spaces get random keys and the memory server grants a space's own
+  DID nothing past genesis
+  ([random space identities](../specs/random-space-identities.md)), but a
+  legacy named space was given a key derived from the public passphrase
+  `"common user"`, and while the server treated that key as a permanent owner,
+  anyone who could reach the server could have granted themselves OWNER on
+  such a space, and such a grant survives until an operator removes it. The end
   state is on by default.
-- **Status on 2026-08-07.** Implemented, off by default. The derivation
-  weakness is pinned by a tripwire test
-  ([`space-key-derivation-tripwire.test.ts`](../../packages/toolshed/routes/ingest-channels/space-key-derivation-tripwire.test.ts))
-  that FAILS once the derivation is fixed — the signal to flip the default and
-  to sweep any channels minted under the old trust conditions with
-  `retire-ingest-channels`. See
-  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md).
-- **Path to removal.** Fix named-space key derivation, run the retirement
-  sweep, turn the flag on by default, then delete the gate and mount the router
-  unconditionally.
+- **Status on 2026-09-29.** Implemented, off by default. Space creation
+  generates a random key. Every deployment has been reachable only on the
+  team's private network, so nobody outside the team minted a channel or
+  granted themselves OWNER under the old trust conditions; a deployment
+  reachable more widely would first retire its channels with
+  `retire-ingest-channels` and review its space ACLs, as
+  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md)
+  describes.
+- **Path to removal.** Turn the flag on by default, then delete the gate and
+  mount the router unconditionally.
 
 ### `SERVER_EXECUTION_STORE_READ_THROUGH`
 

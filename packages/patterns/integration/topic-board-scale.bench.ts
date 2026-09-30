@@ -24,6 +24,7 @@
  * nothing but the JSON report on stdout.
  */
 
+import type { DID } from "@commonfabric/identity";
 import { env } from "@commonfabric/integration";
 import {
   parseTopicBoardDemand,
@@ -141,8 +142,8 @@ function board(topicCount: number): Promise<TopicBoardFixture> {
     const startedAt = performance.now();
     seeding = seedTopicBoardOutOfProcess({
       apiUrl: new URL(env.API_URL),
-      // One space per size, so each board holds only its own topics.
-      spaceName: `${env.SPACE_NAME}-${topicCount}`,
+      // The seed creates a space for each size, so each board holds only its
+      // own topics.
       passphrase: PASSPHRASE,
       topicCount,
       demand: DEMAND,
@@ -198,16 +199,16 @@ const reopenTopic = (topicCount: number): number => topicCount - 1;
  */
 async function showPiece(
   session: BoardSession,
-  spaceName: string,
+  spaceDid: DID,
   pieceId: string,
 ): Promise<void> {
   await session.page.evaluate(
-    async (space: string, piece: string) => {
-      await globalThis.app.setView({ spaceName: space, pieceId: piece });
+    async (space: DID, piece: string) => {
+      await globalThis.app.setView({ spaceDid: space, pieceId: piece });
     },
-    { args: [spaceName, pieceId] },
+    { args: [spaceDid, pieceId] },
   );
-  await waitForPieceView(session.page, spaceName, pieceId);
+  await waitForPieceView(session.page, spaceDid, pieceId);
 }
 
 /**
@@ -222,7 +223,7 @@ async function showTopicPage(
   fixture: TopicBoardFixture,
   index: number,
 ): Promise<void> {
-  await showPiece(session, fixture.spaceName, fixture.topics[index].fid);
+  await showPiece(session, fixture.spaceDid, fixture.topics[index].fid);
   await waitForSettledText(session.page, "body", EMPTY_THREAD);
   await waitForSettledText(session.page, "body", topicTitle(index));
   await waitForSettledText(session.page, "body", COMMENT_COUNT);
@@ -250,7 +251,7 @@ async function reachReopen(
   await session.signIn();
   await session.showBoard();
   await showTopicPage(session, fixture, index);
-  await showPiece(session, fixture.spaceName, fixture.boardId);
+  await showPiece(session, fixture.spaceDid, fixture.boardId);
   await session.showBoard();
   return () => showTopicPage(session, fixture, index);
 }

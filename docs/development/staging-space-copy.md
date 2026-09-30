@@ -57,10 +57,13 @@ source DID for that reason.
 
 Two consequences worth holding on to:
 
-- **A named space derives the same DID everywhere**, from its name alone
-  (`deriveSpaceDid` in `packages/state-inspector/discover.ts`). Open the same
-  name on rapids and you reach the copy. This is what makes the copy usable
-  without anyone typing a DID.
+- **A legacy space name resolves to the same DID everywhere**, from the name
+  alone (`legacySpaceDid` in `packages/identity/src/legacy-space.ts`, which
+  `resolveSpace` in `packages/state-inspector/discover.ts` uses for a name).
+  Open the same name on rapids and you reach the copy. This is what makes the
+  copy of a legacy space usable without anyone typing a DID. A space created
+  with a random DID has no name that resolves to it, so its copy is opened by
+  that DID.
 - **Two hosts now answer for one space id, with content that diverges from the
   moment anything writes.** The api-url is the only thing that tells them
   apart, so pin it explicitly in every command that touches either. A copy is

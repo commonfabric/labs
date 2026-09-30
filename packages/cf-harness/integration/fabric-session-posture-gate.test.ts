@@ -21,6 +21,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { createTestSpace } from "@commonfabric/integration/test-space";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
@@ -54,7 +55,9 @@ describe(
       const factory = createHarnessFabricSessionFactory({
         apiUrl: API_URL!,
         identityKeyPath: tempIdentity.path,
-        space: `cf-harness-posture-gate-${Date.now()}`,
+        space: await createTestSpace(tempIdentity.identity, {
+          apiUrl: API_URL!,
+        }),
       });
       const session = await factory();
       try {
