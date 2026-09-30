@@ -18,7 +18,13 @@ import {
   type TileView,
 } from "../types.ts";
 import { CompletedAttempts } from "../completed-attempts.ts";
-import { escapeHtml, friendlyError, median, sparkline } from "../lib.ts";
+import {
+  ciDurationSub,
+  escapeHtml,
+  friendlyError,
+  median,
+  sparkline,
+} from "../lib.ts";
 import {
   CI_WORKFLOW,
   DUR_GOOD,
@@ -776,9 +782,10 @@ function makeCiDuration(
       return {
         status: s,
         value: window.length === 0 ? "—" : `${medianMins}m`,
-        sub: usingTime
-          ? `median · ${window.length} passing PR runs in the last ${DUR_MAX_AGE_HOURS}h`
-          : `median · last ${window.length} passing PR runs`,
+        sub: ciDurationSub(
+          window.length,
+          usingTime ? DUR_MAX_AGE_HOURS : undefined,
+        ),
         extra: sparkline(series, CHART_LINE, {
           count: window.length,
           color: CHART_HIGHLIGHT,

@@ -34,6 +34,7 @@ Deno.test("diffedit gate: save skips a verified hunk whose path parsed but has n
     lines: new Map([[5, { absPath: "/ghost/m.ts", newLine: 0, markerLen: 1 }]]),
     fileText: new Map([["/unrelated/other.ts", "kept\n"]]),
     oldFileLines: [],
+    languages: [],
     hunks: [
       { absPath: "/ghost/m.ts", newStart: 1, newCount: 1, verified: true },
     ],

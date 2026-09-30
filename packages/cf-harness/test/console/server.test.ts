@@ -244,6 +244,53 @@ describe("console/server", () => {
     return await response.json();
   };
 
+  /** A started turn that keeps running until `finish()` is called. */
+  interface HeldTurn {
+    server: ConsoleServer;
+    sessionId: string;
+    turnId: string;
+
+    /** Lets the turn's model loop return, and waits for the turn to end. */
+    finish(): Promise<void>;
+  }
+
+  /**
+   * Starts a task on a server of its own whose model loop does not return
+   * until the test says so, so the turn is still running when the test acts
+   * on it.
+   */
+  const startHeldTurn = async (): Promise<HeldTurn> => {
+    const gate = Promise.withResolvers<void>();
+    const held = new ConsoleServer(
+      await config(),
+      (onEvent) =>
+        new HarnessInteractiveChatService({
+          createPromptLoop: () => ({
+            runTranscript: async (options) => {
+              await gate.promise;
+              return await answeringLoop({} as never).runTranscript(options);
+            },
+          }),
+          now: advancingClock(),
+          onEvent,
+        }),
+    );
+    const response = await held.handle(
+      jsonRequest("/api/task", { text: "keep working" }),
+    );
+    expect(response.status).toBe(200);
+    const { sessionId, turnId } = await response.json();
+    return {
+      server: held,
+      sessionId,
+      turnId,
+      finish: async () => {
+        gate.resolve();
+        await held.service.waitForTurn(sessionId, turnId);
+      },
+    };
+  };
+
   /** What the index client was asked for, as it composed the request. */
   interface IndexRequest {
     url: string;
@@ -1887,51 +1934,113 @@ describe("console/server", () => {
     });
 
     it("answers 410 `turn_canceled` for a turn that was canceled", async () => {
-      let finish: (() => void) | undefined;
-      const gate = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      const waitingServer = new ConsoleServer(
-        await config(),
-        (onEvent) =>
-          new HarnessInteractiveChatService({
-            createPromptLoop: () => ({
-              runTranscript: async (options) => {
-                await gate;
-                return await answeringLoop({} as never).runTranscript(options);
-              },
-            }),
-            now: advancingClock(),
-            onEvent,
-          }),
-      );
-      const page = await waitingServer.handle(getRequest("/"));
-      await page.body?.cancel();
-      const startedResponse = await waitingServer.handle(
-        jsonRequest("/api/task", { text: "keep working" }, {}),
-      );
-      const started = await startedResponse.json();
-      const canceled = await waitingServer.handle(
-        jsonRequest("/api/cancel", { sessionId: started.sessionId }, {}),
+      const held = await startHeldTurn();
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
       );
       expect(canceled.status).toBe(200);
-      finish!();
-      await waitingServer.service.waitForTurn(
-        started.sessionId,
-        started.turnId,
-      );
+      await held.finish();
 
-      const response = await waitingServer.handle(getRequest(
-        `/api/turns/${started.turnId}/result`,
-        {},
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
       ));
 
       expect(response.status).toBe(410);
       expect(await response.json()).toEqual({
         code: "turn_canceled",
-        error: `turn ${started.turnId} was canceled`,
-        detail: "canceled from the console page",
+        error: `turn ${held.turnId} was canceled`,
+        detail: "stopped by the test",
       });
+    });
+  });
+
+  describe("POST /api/cancel", () => {
+    /** What the turn's result route gives as the reason it was canceled. */
+    const cancelReason = async (held: HeldTurn): Promise<unknown> => {
+      await held.finish();
+      const response = await held.server.handle(getRequest(
+        `/api/turns/${held.turnId}/result`,
+      ));
+      expect(response.status).toBe(410);
+      return (await response.json()).detail;
+    };
+
+    it("records the reason the caller gives for the cancel", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped from the Weaver pill",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped from the Weaver pill");
+    });
+
+    it("records only the route for a cancel that gives no reason", async () => {
+      const held = await startHeldTurn();
+
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", { sessionId: held.sessionId }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe(
+        "canceled by a request to the console",
+      );
+    });
+
+    it("refuses a turn id that is not a string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const turnId of [7, null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, turnId }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "turnId, when given, must be a string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          turnId: held.turnId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
+    });
+
+    it("refuses a reason that is not a non-empty string, and leaves the turn running", async () => {
+      const held = await startHeldTurn();
+
+      for (const reason of [42, "", "  ", null]) {
+        const refused = await held.server.handle(
+          jsonRequest("/api/cancel", { sessionId: held.sessionId, reason }),
+        );
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: "reason, when given, must be a non-empty string",
+        });
+      }
+      const canceled = await held.server.handle(
+        jsonRequest("/api/cancel", {
+          sessionId: held.sessionId,
+          reason: "stopped by the test",
+        }),
+      );
+
+      expect(canceled.status).toBe(200);
+      expect(await cancelReason(held)).toBe("stopped by the test");
     });
   });
 

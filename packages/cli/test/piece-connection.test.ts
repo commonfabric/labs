@@ -29,7 +29,7 @@ import {
   setCellValue,
 } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
-import { captureStderr } from "./utils.ts";
+import { captureStderr, sendThroughStandIn } from "./utils.ts";
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 const PIECE = "fid1:connection-piece";
@@ -447,6 +447,7 @@ describe("piece-connection", () => {
           "addItem",
           { title: "Milk" },
           {
+            sendEvent: sendThroughStandIn,
             loadPieces: () => Promise.resolve(stubController(sent)),
             loadPiece: (pieces) => pieces.get(),
           },
@@ -469,7 +470,10 @@ describe("piece-connection", () => {
       resetWriteReceipts();
       const sent: Dispatch[] = [];
       await captureStderr(() =>
-        callPieceHandler(config, "addItem", { title: "Milk" }, {
+        callPieceHandler(config, "addItem", {
+          title: "Milk",
+        }, {
+          sendEvent: sendThroughStandIn,
           loadPieces: () => Promise.resolve(stubController(sent)),
           loadPiece: (pieces) => pieces.get(),
           invocation: { id: "inv-7", session: "sess-3" },
@@ -490,7 +494,10 @@ describe("piece-connection", () => {
       const sent: Dispatch[] = [];
       const phases: string[] = [];
       await captureStderr(() =>
-        callPieceHandler(config, "addItem", { title: "Milk" }, {
+        callPieceHandler(config, "addItem", {
+          title: "Milk",
+        }, {
+          sendEvent: sendThroughStandIn,
           loadPieces: () => Promise.resolve(stubController(sent)),
           loadPiece: (pieces) => pieces.get(),
           invocation: { id: "inv-7", session: "sess-3" },

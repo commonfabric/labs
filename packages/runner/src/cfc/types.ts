@@ -84,9 +84,8 @@ export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
 /**
  * Marks a write-policy input as one the runtime itself recorded.
  *
- * `recordCfcWritePolicyInput` is on the public transaction interface, and
- * pattern-authored code runs in the runtime's own realm holding runtime cells,
- * so it reaches `cell.tx` and can record an input naming whatever it likes.
+ * `recordCfcWritePolicyInput` is on the public transaction interface, so any
+ * code holding a transaction can record an input naming whatever it likes.
  * An input a gate ACTS on — rather than one a gate measures — therefore has to
  * say who recorded it. This is the mark, and it works the way
  * `rawMetaWriteAuthorization` does: a symbol cannot be named by a module that

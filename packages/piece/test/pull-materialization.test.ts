@@ -36,6 +36,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   assertSuppliedLinkSchemasCompatible,
   assertWritablePiecePath,
@@ -460,7 +461,7 @@ async function withInputRootPullSpy<T>(
   piece: Cell<unknown>,
   action: (rootPulls: () => number) => Promise<T>,
 ): Promise<T> {
-  const inputRoot = pieces.getArgument(piece);
+  const inputRoot = patchableCell(pieces.getArgument(piece));
   const originalGetArgument = pieces.getArgument.bind(pieces);
   const originalPull = inputRoot.pull.bind(inputRoot);
   let pullCount = 0;
@@ -1778,11 +1779,13 @@ describe("piece pull materialization", () => {
       compiledMultiplierProgram("bounded-pattern-load", 2),
       { space: pieces.getSpace() },
     );
-    const piece = await pieces.runPersistent(
-      pattern,
-      { input: 5 },
-      undefined,
-      { start: false },
+    const piece = patchableCell(
+      await pieces.runPersistent(
+        pattern,
+        { input: 5 },
+        undefined,
+        { start: false },
+      ),
     );
     const schemas: unknown[] = [];
     const originalAsSchema = piece.asSchema.bind(piece);

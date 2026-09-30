@@ -273,6 +273,22 @@ describe("objects", () => {
       expect(constructorOfPrototype(proto)).toBe(undefined);
     });
 
+    it("returns `undefined` when the constructor names a different prototype", () => {
+      // This one only inherits its `constructor`, from `Map.prototype`, and
+      // `Map` is not the class whose instances have it as their prototype.
+
+      const proto = Object.create(Map.prototype);
+      expect(constructorOfPrototype(proto)).toBe(undefined);
+    });
+
+    it("returns `undefined` when the constructor has no `prototype`", () => {
+      for (const ctor of [() => {}, function () {}.bind(null)]) {
+        const proto = Object.create(null) as { constructor?: unknown };
+        proto.constructor = ctor;
+        expect(constructorOfPrototype(proto)).toBe(undefined);
+      }
+    });
+
     it("agrees with `constructorOfObject()` on the same object", () => {
       // The two are one question asked from two places, so an object's answer
       // must not depend on which of them was asked.
@@ -347,6 +363,11 @@ describe("objects", () => {
         const proto = Object.create(null) as { constructor?: unknown };
         proto.constructor = "not a function";
         expect(constructorOfObject(Object.create(proto))).toBe(undefined);
+      });
+
+      it("returns `undefined` when the prototype only inherits its `constructor`", () => {
+        const value = Object.create(Object.create(Map.prototype));
+        expect(constructorOfObject(value)).toBe(undefined);
       });
     });
   });

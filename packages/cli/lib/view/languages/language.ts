@@ -603,7 +603,8 @@ function decodeTextInput(
   };
 }
 
-function languageMatchingFilename(
+/** The language filename metadata selects, or undefined when none claims it. */
+export function languageMatchingFilename(
   fileName: string | undefined,
 ): Language | undefined {
   for (const language of allLanguages()) {
@@ -632,10 +633,30 @@ export function languageForSource(
   fileName: string | undefined,
   text: string,
 ): Language {
+  return languageMatchingSources(fileName, [text]) ?? plainTextLanguage;
+}
+
+/**
+ * The language a recognized filename selects, or else the first language that
+ * one of `sources` selects through a shared extension or a shebang, or
+ * undefined when nothing selects one. Each source is a file's complete text or
+ * a prefix of it. Sources are read in order and only until one selects a
+ * language, so an expensive source can be produced on demand.
+ */
+export function languageMatchingSources(
+  fileName: string | undefined,
+  sources: Iterable<string>,
+): Language | undefined {
   const byFilename = languageMatchingFilename(fileName);
   if (byFilename !== undefined) return byFilename;
-  const source = text.replace(/^\uFEFF/, "");
-  return languageMatchingSource(fileName, source) ?? plainTextLanguage;
+  for (const source of sources) {
+    const selected = languageMatchingSource(
+      fileName,
+      source.replace(/^\uFEFF/, ""),
+    );
+    if (selected !== undefined) return selected;
+  }
+  return undefined;
 }
 
 let languagesByName: ReadonlyMap<string, Language> | undefined;
@@ -1008,44 +1029,24 @@ function envTextIsStable(text: string, atStart: boolean): boolean {
   return !/[ \t\\'"$]/.test(text) && !(atStart && text.startsWith("#"));
 }
 
-/** The distinct languages a set of files resolves to, in first-seen order. */
-export function distinctLanguages(
-  fileNames: readonly (string | undefined)[],
-): Language[] {
-  const seen = new Set<string>();
-  const out: Language[] = [];
-  for (const name of fileNames) {
-    const language = languageForFile(name);
-    if (!seen.has(language.id)) {
-      seen.add(language.id);
-      out.push(language);
-    }
-  }
-  return out;
-}
-
 /**
- * The semantic service for a diff view, from the languages the diff touches. A
- * diff spans potentially many files of different languages; the service is the
- * first language present that offers one, scoped to just its own files (so a
- * TypeScript program is not seeded with the diff's non-TypeScript files). Only
- * TypeScript offers one today, so this resolves to it whenever the diff includes
- * a TypeScript file and to nothing otherwise. When a second semantic language
- * appears this becomes a per-file composite; the per-language slot the pager
- * dispatches through is already here.
+ * The semantic service for a diff view, from the languages of the workspace
+ * files the diff leaves behind: that of the first language, in file order,
+ * that offers one, scoped to just its own files so that one language's
+ * program is not seeded with another language's files.
  */
 export function diffSemanticsFor(
-  languages: readonly Language[],
   diffText: string,
   maps: DiffMaps,
   options: SemanticsOptions,
 ): Semantics | undefined {
-  for (const language of languages) {
+  for (const language of new Set(maps.rootFiles.values())) {
     if (!language.createDiffSemantics) continue;
-    const rootFiles = maps.rootFiles.filter((path) =>
-      languageForFile(path) === language
+    const rootFiles = new Map(
+      [...maps.rootFiles].filter(([, fileLanguage]) =>
+        fileLanguage === language
+      ),
     );
-    if (rootFiles.length === 0) continue;
     const semantics = language.createDiffSemantics(
       diffText,
       { ...maps, rootFiles },

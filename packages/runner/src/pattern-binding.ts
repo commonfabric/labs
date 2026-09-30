@@ -28,7 +28,12 @@ import {
   type Pattern,
   type SchemaScope,
 } from "./builder/types.ts";
-import { type AnyCell, internCellLinkSchema } from "./cell.ts";
+import {
+  type AnyCell,
+  cellRuntime,
+  cellTx,
+  internCellLinkSchema,
+} from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
@@ -338,7 +343,7 @@ function sendValueToBindingInner<T>(
 
     const bindingLink = parseLink(binding, cell)!;
     const ref = resolveLink(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       bindingLink,
       "writeRedirect",
@@ -356,7 +361,7 @@ function sendValueToBindingInner<T>(
         !areNormalizedLinksSame(valueLink, scopedRef)
       ) {
         diffAndUpdate(
-          cell.runtime,
+          cellRuntime(cell),
           tx,
           scopedRef,
           value,
@@ -450,7 +455,7 @@ function sendValueToBindingInner<T>(
       }
     }
     diffAndUpdate(
-      cell.runtime,
+      cellRuntime(cell),
       tx,
       ref,
       value,
@@ -914,7 +919,7 @@ export function findAllWriteRedirectCells<T>(
         if (seen.find((s) => areNormalizedLinksSame(s, link))) return;
         seen.push(link);
         if (options?.followRedirectChains === false) return;
-        const tx = (chainTx ??= baseCell.runtime.readTx(baseCell.tx));
+        const tx = (chainTx ??= cellRuntime(baseCell).readTx(cellTx(baseCell)));
         // Whether the target holds a further redirect is a question about
         // which reference sits there, so the probe stops at the reference and
         // leaves the target's content unread: it consumes the pointer's own
@@ -925,7 +930,7 @@ export function findAllWriteRedirectCells<T>(
         // resolution honors along the path, interned so that the schema-keyed
         // caches downstream of the walk stay warm.
         const target = resolveLink(
-          baseCell.runtime,
+          cellRuntime(baseCell),
           tx,
           link.schema === undefined
             ? link

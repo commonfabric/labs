@@ -17,6 +17,7 @@ import { parseDiff } from "../lib/view/diff.ts";
 import {
   buildDiffDocument,
   type DiffEdit,
+  diffLanguages,
   type DiffWorkspace,
   realWorkspace,
 } from "../lib/view/diffdoc.ts";
@@ -973,6 +974,7 @@ Deno.test("diffedit cov: a diff matching no file on disk yields a read-only sour
     lines: new Map(),
     fileText: new Map(),
     oldFileLines: [],
+    languages: diffLanguages(DIFF, parseDiff(DIFF)!),
     hunks: [],
   };
   const ws: DiffWorkspace = { resolve: () => null, read: () => null };
@@ -1006,6 +1008,7 @@ Deno.test("diffedit cov: save skips a verified hunk whose file was not captured 
     lines: new Map([[5, { absPath: "/ghost/m.ts", newLine: 0, markerLen: 1 }]]),
     fileText: new Map(), // deliberately missing /ghost/m.ts
     oldFileLines: [],
+    languages: [],
     hunks: [
       { absPath: "/ghost/m.ts", newStart: 1, newCount: 1, verified: true },
     ],

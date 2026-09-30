@@ -8,6 +8,7 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
+import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark.ts";
@@ -166,11 +167,11 @@ describe("SpaceServer", () => {
           const sync = manager.syncCell.bind(manager);
           manager.syncCell = async (cell, options) => {
             const result = await sync(cell, options);
+            const tx = cellTx(cell);
             if (
-              cell.getAsNormalizedFullLink().id === rootId &&
-              cell.tx?.tx.immediate
+              cell.getAsNormalizedFullLink().id === rootId && tx?.tx.immediate
             ) {
-              transactions.add(cell.tx.tx);
+              transactions.add(tx.tx);
               if (transactions.size === 1 && held === 0) {
                 held++;
                 await release.promise;

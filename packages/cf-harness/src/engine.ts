@@ -1620,6 +1620,17 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  // The decision is part of setting the run up, not something that happened
+  // in it, so recording it leaves `updatedAt` and the clock where they were.
+  setPieceOutputRequired(pieceOutputRequired: boolean): HarnessRunState {
+    this.#runState = patchHarnessRunState(
+      this.#runState,
+      { pieceOutputRequired },
+      this.#runState.updatedAt,
+    );
+    return this.getRunState();
+  }
+
   setPromptSlotBinding(
     promptSlotBinding: PromptSlotBinding,
   ): HarnessRunState {

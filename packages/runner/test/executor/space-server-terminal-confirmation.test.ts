@@ -9,6 +9,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 
+import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -425,7 +426,7 @@ describe("SpaceServer", () => {
           const result = await sync(cell, options);
           if (
             cell.getAsNormalizedFullLink().id === ids[2] &&
-            cell.tx?.tx.immediate && !closed
+            cellTx(cell)?.tx.immediate && !closed
           ) {
             closed = true;
             await server.close();
@@ -461,7 +462,7 @@ describe("SpaceServer", () => {
           fixture.manager.syncCell = async (cell, options) => {
             if (
               cell.getAsNormalizedFullLink().id === ids[0] &&
-              cell.tx?.tx.immediate && ++rootSyncs === 2
+              cellTx(cell)?.tx.immediate && ++rootSyncs === 2
             ) {
               reAsked.resolve();
               await release.promise;
@@ -532,7 +533,7 @@ describe("SpaceServer", () => {
           const result = await sync(cell, options);
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && ++reads === 1
+            cellTx(cell)?.tx.immediate && ++reads === 1
           ) {
             held++;
             await release.promise;
@@ -564,7 +565,7 @@ describe("SpaceServer", () => {
         fixture.manager.syncCell = async (cell, options) => {
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && failing
+            cellTx(cell)?.tx.immediate && failing
           ) {
             throw new Error("injected chain sync failure");
           }
@@ -591,7 +592,7 @@ describe("SpaceServer", () => {
         fixture.manager.syncCell = async (cell, options) => {
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && ++matching >= 2 && failing
+            cellTx(cell)?.tx.immediate && ++matching >= 2 && failing
           ) {
             throw new Error("injected chain sync failure");
           }
@@ -641,7 +642,7 @@ describe("SpaceServer", () => {
               const result = await sync(cell, options);
               if (
                 cell.getAsNormalizedFullLink().id === ids[1] &&
-                cell.tx?.tx.immediate &&
+                cellTx(cell)?.tx.immediate &&
                 ++matching === pass
               ) {
                 held++;

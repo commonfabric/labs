@@ -908,15 +908,15 @@ describe("validation", () => {
 
         it("refuses a value whose class will not say its name", () => {
           // `name` is an accessor too, so guarding the constructor read alone
-          // leaves the next read out in the open.
+          // leaves the next read out in the open. It goes on the class itself,
+          // which keeps the class its prototype's actual constructor, so that
+          // the lookup finds it and the accessor is really read.
 
           class NameThrows {}
-          Object.defineProperty(NameThrows.prototype, "constructor", {
-            value: Object.defineProperty(function () {}, "name", {
-              get() {
-                throw new Error("this must not reach the caller");
-              },
-            }),
+          Object.defineProperty(NameThrows, "name", {
+            get() {
+              throw new Error("this must not reach the caller");
+            },
           });
 
           expect(() => assertValidFabricValueLayer(new NameThrows())).toThrow(

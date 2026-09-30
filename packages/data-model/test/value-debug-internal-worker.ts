@@ -9,6 +9,8 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as internal from "@/value-debug-internal.ts";
 
@@ -24,19 +26,24 @@ export type InternalRequest = {
 export type ForwarderOutcome = { returned: unknown } | { threw: string };
 
 /** What the worker reports back. */
-export type InternalReport = {
-  /** Whether the debug renderers were installed. */
-  installed: boolean;
+export type InternalReport =
+  & {
+    /** The worker's lifetime lock, which `terminateWorker()` waits on. */
+    lifetimeLock: string | undefined;
+  }
+  & ({
+    /** Whether the debug renderers were installed. */
+    installed: boolean;
 
-  /** What each forwarder did, by name. */
-  forwarders: Record<string, ForwarderOutcome>;
+    /** What each forwarder did, by name. */
+    forwarders: Record<string, ForwarderOutcome>;
 
-  /** What `Deno.inspect()` makes of an instance of the root class. */
-  inspected: string;
-} | {
-  /** The failure message, when the load threw. */
-  error: string;
-};
+    /** What `Deno.inspect()` makes of an instance of the root class. */
+    inspected: string;
+  } | {
+    /** The failure message, when the load threw. */
+    error: string;
+  });
 
 /** A concrete subclass of the root class, to have something to inspect. */
 class Probe extends BaseFabricSpecialObject {}
@@ -46,7 +53,10 @@ const scope = self as unknown as {
   postMessage(report: InternalReport): void;
 };
 
+const heldLifetimeLock = holdWorkerLifetimeLock();
+
 scope.onmessage = async (ev) => {
+  const lifetimeLock = await heldLifetimeLock;
   try {
     if (ev.data.load !== null) {
       // The load is the thing under test, and which module it is arrives in
@@ -66,11 +76,15 @@ scope.onmessage = async (ev) => {
     }
 
     scope.postMessage({
+      lifetimeLock,
       installed: internal.areDebugRenderersInstalled(),
       forwarders,
       inspected: Deno.inspect(new Probe()),
     });
   } catch (e) {
-    scope.postMessage({ error: e instanceof Error ? e.message : String(e) });
+    scope.postMessage({
+      lifetimeLock,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 };

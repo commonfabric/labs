@@ -57,6 +57,7 @@ import {
 import type { CfcWriteFloorMode } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import {
   type CommitRejection,
   type RuntimeDiagnosticsSnapshot,
@@ -205,6 +206,7 @@ const coverageFile =
 class WorkerClient {
   #worker: Worker;
   #ready = false;
+  #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -225,6 +227,7 @@ class WorkerClient {
     this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       if ("ready" in event.data) {
         this.#ready = true;
+        this.#lifetimeLock = event.data.lifetimeLock;
         for (const pending of this.#pending.values()) {
           this.#worker.postMessage(pending.request);
         }
@@ -311,12 +314,16 @@ class WorkerClient {
     await this.call("dispose");
   }
 
-  terminate(): void {
-    this.#worker.terminate();
+  /**
+   * Rejects every call in flight, and terminates the worker, settling once it
+   * has been torn down.
+   */
+  async terminate(): Promise<void> {
     for (const pending of this.#pending.values()) {
       pending.reject(new Error(`[${this.label}] worker terminated`));
     }
     this.#pending.clear();
+    await terminateWorker(this.#worker, this.#lifetimeLock);
   }
 }
 
@@ -576,7 +583,7 @@ export class MultiRuntimeSession {
     try {
       await this.#client.dispose();
     } finally {
-      this.#client.terminate();
+      await this.#client.terminate();
     }
   }
 
@@ -701,7 +708,7 @@ export class MultiRuntimeHarness {
         input: options.input,
       }) as { pieceId: string };
       await bootstrap.dispose();
-      bootstrap.terminate();
+      await bootstrap.terminate();
       bootstrap = undefined;
 
       for (const session of sessions) {
@@ -717,7 +724,7 @@ export class MultiRuntimeHarness {
         server === undefined || serverExecutionOn,
       );
     } catch (error) {
-      bootstrap?.terminate();
+      await bootstrap?.terminate();
       for (const session of sessions) {
         await session.disposeSession().catch(() => {});
       }
@@ -884,6 +891,6 @@ export class MultiRuntimeHarness {
    * has nothing outside this process to release.
    */
   terminate(): void {
-    for (const session of this.sessions) session.client().terminate();
+    for (const session of this.sessions) void session.client().terminate();
   }
 }

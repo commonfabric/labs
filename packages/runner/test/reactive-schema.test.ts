@@ -6,6 +6,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { exportCell } from "../src/cell.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -49,7 +50,7 @@ describe("Reactive Schema Support", () => {
       const ref = cell<{ name: string; age: number }>(undefined, schema);
 
       // Export the ref and check the schema is included
-      const exported = ref.export();
+      const exported = exportCell(ref);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual(schema);
     });
@@ -76,7 +77,7 @@ describe("Reactive Schema Support", () => {
       ).key("details");
 
       // Export the ref and check both schemas are included
-      const exported = ref.export();
+      const exported = exportCell(ref);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual(fullSchema.properties.details);
     });
@@ -100,7 +101,7 @@ describe("Reactive Schema Support", () => {
       const nameRef = ref.key("name");
 
       // Export the child ref and check it has the correct schema
-      const exported = nameRef.export();
+      const exported = exportCell(nameRef);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual({ type: "string" });
     });
@@ -135,7 +136,7 @@ describe("Reactive Schema Support", () => {
       const idRef = firstItemRef.key("id");
 
       // Check schema for array element property
-      const exported = idRef.export();
+      const exported = exportCell(idRef);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual({ type: "number" });
     });
@@ -183,7 +184,7 @@ describe("Reactive Schema Support", () => {
       );
 
       // Check schema was correctly propagated
-      const exported = themeRef.export();
+      const exported = exportCell(themeRef);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual({ type: "string" });
     });
@@ -215,7 +216,7 @@ describe("Reactive Schema Support", () => {
       const detailsRef = ref.key("details");
 
       // Check schema was correctly propagated
-      const exported = detailsRef.export();
+      const exported = exportCell(detailsRef);
       expect(exported.schema).toBeDefined();
       expect(exported.schema).toEqual({
         type: "object",
@@ -255,7 +256,7 @@ describe("Reactive Schema Support", () => {
       const nicknameRef = ref.key("nickname");
 
       // Check schema is undefined for this field that isn't in the schema
-      const exported = nicknameRef.export();
+      const exported = exportCell(nicknameRef);
       expect(exported.schema).toBeUndefined();
     });
   });
@@ -368,7 +369,7 @@ describe("Reactive Schema Support", () => {
 
       // Navigate to user
       const userRef = ref.key("user");
-      const userExport = userRef.export();
+      const userExport = exportCell(userRef);
 
       // Person and its Address dependency are both still reachable.
       expect(userExport.schema).toBeDefined();
@@ -378,7 +379,7 @@ describe("Reactive Schema Support", () => {
 
       // Navigate further to home (which references Address via $ref)
       const homeRef = userRef.key("home");
-      const homeExport = homeRef.export();
+      const homeExport = exportCell(homeRef);
 
       // Person is no longer reachable, but Address is needed by the cursor.
       expect(homeExport.schema).toBeDefined();
@@ -388,7 +389,7 @@ describe("Reactive Schema Support", () => {
 
       // Navigate to street (final property)
       const streetRef = homeRef.key("street");
-      const streetExport = streetRef.export();
+      const streetExport = exportCell(streetRef);
 
       // No definitions are reachable from the concrete leaf.
       expect(streetExport.schema).toEqual({ type: "string" });
@@ -436,22 +437,22 @@ describe("Reactive Schema Support", () => {
       // Each step retains the remaining transitive closure and drops definitions
       // that can no longer be reached.
       const outerRef = ref.key("outer");
-      expect(Object.keys((outerRef.export().schema as any).$defs)).toEqual([
+      expect(Object.keys((exportCell(outerRef).schema as any).$defs)).toEqual([
         "Inner",
         "Middle",
         "Outer",
       ]);
       const middleRef = outerRef.key("middle");
-      expect(Object.keys((middleRef.export().schema as any).$defs)).toEqual([
+      expect(Object.keys((exportCell(middleRef).schema as any).$defs)).toEqual([
         "Inner",
         "Middle",
       ]);
       const innerRef = middleRef.key("inner");
-      expect(Object.keys((innerRef.export().schema as any).$defs)).toEqual([
+      expect(Object.keys((exportCell(innerRef).schema as any).$defs)).toEqual([
         "Inner",
       ]);
       const valueRef = innerRef.key("value");
-      const exported = valueRef.export();
+      const exported = exportCell(valueRef);
 
       // The concrete leaf no longer needs the chain's definitions.
       expect(exported.schema).toEqual({ type: "number" });

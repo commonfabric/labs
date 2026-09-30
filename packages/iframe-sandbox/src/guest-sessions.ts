@@ -1,6 +1,7 @@
 /**
  * Decides which of the capability sessions offered to one guest frame is the
- * one that matters. A session is offered per load report, and a load report
+ * one that matters. A session is offered per load report, and per port request
+ * from a guest that started listening after its document loaded. A load report
  * cannot be matched to a document: a guest can renavigate its own frame, and
  * the inner frame's initial `about:blank` navigation can complete after a
  * document was asked for, so the reports do not stand one to one with the

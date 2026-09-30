@@ -13,6 +13,7 @@ import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
   type Cell,
+  cellRuntime,
   Console as RuntimeConsole,
   createSpaceRootIfAbsent,
   EntityId,
@@ -51,6 +52,7 @@ import {
   runtimePresets,
   RuntimeProgram,
   type Schema,
+  sendEvent,
   setPatternRepository,
   setPatternSource,
   type SpaceCellContents,
@@ -781,7 +783,7 @@ export class PiecesController<T = unknown> {
           "add.send",
           () =>
             new Promise<void>((resolve, reject) => {
-              addPieceHandler.send({ piece }, (tx) => {
+              sendEvent(addPieceHandler, { piece }, (tx) => {
                 const txStatus = tx.status();
                 if (txStatus.status === "error") {
                   console.error(
@@ -1393,7 +1395,7 @@ export class PiecesController<T = unknown> {
         );
       }
       await new Promise<void>((resolve, reject) =>
-        remove.send({ piece }, (tx) => {
+        sendEvent(remove, { piece }, (tx) => {
           const status = tx.status();
           if (status.status === "error") {
             reject(new Error(status.error.message));
@@ -1912,7 +1914,7 @@ export class PiecesController<T = unknown> {
         if (targetArgumentLink === undefined) {
           throw new Error("Target piece has no argument cell");
         }
-        targetInputCell = resultCell.runtime.getCellFromLink(
+        targetInputCell = cellRuntime(resultCell).getCellFromLink(
           targetArgumentLink,
           undefined,
           tx,
@@ -2912,7 +2914,7 @@ function followCellToResult(
       // If document has result metadata, follow it to the owning result cell.
       const resultLink = getMetaLink(cell, "result");
       if (resultLink !== undefined) {
-        const resultCell = cell.runtime.getCellFromLink(resultLink);
+        const resultCell = cellRuntime(cell).getCellFromLink(resultLink);
         return followCellToResult(
           resultCell,
           diagnosticConsole,

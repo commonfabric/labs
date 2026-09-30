@@ -1,7 +1,7 @@
 /** Enumerates occupied index keys when a consumer demands that surface. */
 
 import type { AddCancel } from "../cancel.ts";
-import type { Cell } from "../cell.ts";
+import { type Cell, cellRuntime } from "../cell.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -23,7 +23,11 @@ export function readCollectionIndexKeys(
     .sort((a, b) => compareCollectionKeys(a.identity, b.identity));
   return occupied.map((entry) => {
     if (entry.cell) {
-      const cell = state.runtime.getCellFromLink(entry.cell, undefined, tx);
+      const cell = cellRuntime(state).getCellFromLink(
+        entry.cell,
+        undefined,
+        tx,
+      );
       return tagged ? { kind: "cell", cell } : cell;
     }
     return tagged

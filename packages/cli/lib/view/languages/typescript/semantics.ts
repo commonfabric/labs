@@ -179,7 +179,7 @@ export function createDiffSemantics(
   const { importMap, root } = safe(() => discoverConfig(options.cwd)) ??
     { importMap: {}, root: options.cwd };
   const libDir = safe(() => defaultLibDir());
-  const rootFiles = maps.rootFiles.filter((p) => within(p, root));
+  const rootFiles = [...maps.rootFiles.keys()].filter((p) => within(p, root));
   if (rootFiles.length === 0) return undefined;
 
   let service: ts.LanguageService | undefined;
@@ -489,6 +489,10 @@ function makeHost(
   };
 
   const compilerOptions: ts.CompilerOptions = {
+    // Program roots include scripts whose names carry no TypeScript extension,
+    // such as a `#!/usr/bin/env -S deno run` script named `tool`, which the
+    // compiler reads as TypeScript.
+    allowNonTsExtensions: true,
     allowJs: true,
     checkJs: false,
     target: ts.ScriptTarget.ES2023,

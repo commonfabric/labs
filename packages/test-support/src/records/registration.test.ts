@@ -408,6 +408,20 @@ describe("registration", () => {
       expect(seen[1]!.only).toBe(true);
     });
 
+    it("carries the registrar's lifecycle hooks as they are", () => {
+      const beforeEach = (_fn: () => void) => {};
+      const afterAll = (_fn: () => void) => {};
+      const registrar = Object.assign(recorder().registrar, {
+        beforeEach,
+        afterAll,
+      });
+      const built = buildCapture({ registrar });
+      expect(built.registrar.beforeEach).toBe(beforeEach);
+      expect(built.registrar.afterAll).toBe(afterAll);
+      expect(built.registrar.beforeAll).toBeUndefined();
+      expect(built.registrar.afterEach).toBeUndefined();
+    });
+
     it("writes the captured map into the spool it was given", async () => {
       const spool = await Deno.makeTempDir();
       try {

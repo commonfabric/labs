@@ -11017,9 +11017,8 @@ export function* prepareBoundaryCommitSteps(
       // The route ACTS on the runtime's claim rather than measuring it, which
       // is why the transaction answers only for markers that arrived carrying
       // the runtime's authorization. `recordCfcWritePolicyInput` is on the
-      // public transaction interface and pattern-authored code reaches the
-      // transaction its cells are bound to, so an input's own fields say only
-      // what its recorder wrote. The two sibling markers in this file
+      // public transaction interface, so an input's own fields say only what
+      // its recorder wrote. The two sibling markers in this file
       // corroborate against transaction state instead, which suits a claim
       // about a write that has already happened; this one is a claim about
       // whose write it is.

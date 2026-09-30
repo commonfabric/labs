@@ -9,7 +9,6 @@ import {
   type CfcLabelViewEntry,
   cfcLabelViewOriginSpaces,
   cfcLabelViewPathKey,
-  cloneCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
   withCfcLabelViewOrigins,
@@ -32,12 +31,6 @@ export {
   rebaseCfcLabelView,
   withCfcLabelViewOrigins,
 } from "./label-view-core.ts";
-
-export const cfcLabelViewSymbol: unique symbol = Symbol("cfcLabelView");
-
-type CfcLabelCarrier = {
-  [cfcLabelViewSymbol]?(): CfcLabelView | undefined;
-};
 
 /**
  * The entries of a stored label map as label view entries, in stored order,
@@ -277,13 +270,3 @@ export const cfcLabelViewForDereferenceTraces = (
       cfcLabelViewForDereference(tx, trace.source, trace.target)
     ),
   );
-
-export const getCarriedCfcLabelView = (
-  value: unknown,
-): CfcLabelView | undefined => {
-  const carrier = value as Partial<CfcLabelCarrier> | undefined;
-  if (typeof carrier?.[cfcLabelViewSymbol] !== "function") {
-    return undefined;
-  }
-  return cloneCfcLabelView(carrier[cfcLabelViewSymbol]());
-};

@@ -278,7 +278,7 @@ one.
 | `GET`  | `/api/health`                | Console health, configured Fabric API URL, and honestly limited Fabric-session liveness |
 | `GET`  | `/api/health/detail`         | Cached operator observations with deciding records, times, causes, and remedies         |
 | `POST` | `/api/task`                  | Starts a session or a follow-up turn                                                    |
-| `POST` | `/api/cancel`                | Cancels the active turn                                                                 |
+| `POST` | `/api/cancel`                | Cancels the active turn, recording the reason the caller gives                          |
 | `GET`  | `/api/sessions`              | Durable session summaries                                                               |
 | `GET`  | `/api/status`                | Session status and artifact roots                                                       |
 | `GET`  | `/api/policy`                | What a new session here would run under                                                 |
@@ -673,6 +673,29 @@ top-level root as the console-wide fallback.
 Status is read directly, with no preceding request. The top-level fields are
 present even before the console has any sessions, so an unattended client can
 check the route contract before starting a model turn.
+
+### Cancel route
+
+`POST /api/cancel` cancels a session's active turn. Its body names the session,
+and optionally the turn and the reason:
+
+```json
+{
+  "sessionId": "…",
+  "turnId": "…",
+  "reason": "canceled from the console page"
+}
+```
+
+A cancel naming a turn is refused unless that turn is the one running, so it
+cannot stop a later turn in the same session. `reason` says what stopped the
+turn. It becomes the reason on the turn's `turn_canceled` event and the `detail`
+the turn's result route answers with, and the run's `cancelReason` quotes it,
+which is how a person reading the run later learns who stopped it. The console
+page sends `canceled from the console page`. A cancel without a reason is
+recorded as `canceled by a request to the console`, because nothing in the
+request says who sent it. A `turnId` that is not a string, or a `reason` that is
+not a non-empty string, is refused with `400`, and the turn keeps running.
 
 ### Policy route
 

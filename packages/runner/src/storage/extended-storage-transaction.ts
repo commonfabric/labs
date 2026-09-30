@@ -342,7 +342,7 @@ export type CfcInstrumentationHooks = {
 
 // Read-only view of the transaction's CFC state, returned by getCfcState().
 // `Readonly<CfcTxState>` is compile-time only, so handing out the live state
-// object would let handler code reaching the tx via `cell.tx` flip
+// object would let code holding the transaction flip
 // `triggerReadGating` past its setter pin, clear `relevant`, forge
 // `prepare.status`, or truncate `triggerReads`/`writePolicyInputs` — every
 // enforcement decision reads this state (cubic/codex review on #4517).
@@ -450,8 +450,8 @@ export const readOnlyCfcView = <T>(value: T): T => {
 };
 
 // The transaction's trust state — who is acting, and which implementation is
-// writing — is what the CFC gates decide on, and pattern-authored code reaches
-// the transaction its cells are bound to. So no method sets it. The classes
+// writing — is what the CFC gates decide on, so no method sets it, and code
+// holding a transaction cannot change whose writes it carries. The classes
 // below hand these module-private functions their private fields, and the
 // exported `setCfcTrustSnapshot` and `setCfcImplementationIdentity` are the
 // only way in: a module the sandbox does not let pattern code import, and a
@@ -467,6 +467,7 @@ let assignCfcImplementationIdentity: (
 let unwrapTransaction: (
   tx: object,
 ) => IExtendedStorageTransaction | undefined;
+let isExtendedStorageTransaction: (value: object) => boolean;
 
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
@@ -539,9 +540,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * The CFC state. ECMAScript-private (`#`), like `#privilegedSystemWriteDepth`
    * below: the CFC state is the enforcement substrate (dials, pins, relevance,
-   * trigger reads, policy inputs, prepare status), and handler code reaching
-   * the tx via `(cell.tx as any)` must not be able to grab the raw object and
-   * mutate it. Reads go through `getCfcState()`, which returns a read-only view
+   * trigger reads, policy inputs, prepare status), and code holding the
+   * transaction must not be able to grab the raw object and mutate it. Reads go through `getCfcState()`, which returns a read-only view
    * (see `readOnlyCfcView`).
    */
   #cfcState: CfcTxState = {
@@ -586,8 +586,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   /**
    * Highest enforcing strictness ever set on this tx; the mode cannot drop
    * below it. This pin and the ones below are ECMAScript-private for the same
-   * reason as `#cfcState`: a TS-`private` pin could be cleared via
-   * `(cell.tx as any)` and the dial then legally weakened through its setter.
+   * reason as `#cfcState`: a TS-`private` pin could be cleared through a cast
+   * and the dial then legally weakened through its setter.
    */
   #cfcEnforcementFloor = 0;
 
@@ -609,8 +609,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once pin for the deployment policy snapshot. Distinct from the slot's
    * value being defined: the `Runtime` configures _many_ tx with _no_ policies
    * (`undefined`), and that no-policies state must be just as write-once as a
-   * configured one — otherwise handler code reaching the concrete tx via
-   * `(cell.tx as any)` could install an attacker-supplied snapshot after the
+   * configured one — otherwise code holding the transaction could install
+   * an attacker-supplied snapshot after the
    * `Runtime`'s `undefined` call left the slot open. Set on the _first_ call
    * (always the `Runtime`'s, in `edit()`), regardless of value.
    */
@@ -620,9 +620,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once pin for the deployment trust config. Distinct from the slot's
    * value being defined: the `Runtime` configures many tx with _no_ trust
    * config (`undefined`), and that state (no config; every concept guard fails
-   * closed) must be just as write-once as a configured one. Otherwise handler
-   * code reaching the concrete tx via `(cell.tx as any)` could install an
-   * arbitrary config before the concept guards read it. Set on the _first_ call
+   * closed) must be just as write-once as a configured one. Otherwise code
+   * holding the transaction could install an arbitrary config before the
+   * concept guards read it. Set on the _first_ call
    * (always the `Runtime`'s, in `edit()`), regardless of value.
    */
   #cfcTrustConfigPinned = false;
@@ -633,9 +633,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Depth of the runtime's privileged system-write scope. The runtime's own
    * label/schema persistence (`prepareBoundaryCommit()`) runs inside it; any
    * write to a protected system path outside it is recorded as unprivileged
-   * (S18). ECMAScript-private (`#`) so handler code reaching `cell.tx` cannot
-   * enter the scope via `(cell.tx as any)` — `as any` cannot touch a `#private`
-   * member.
+   * (S18). ECMAScript-private (`#`) so code holding the transaction cannot
+   * enter the scope — a cast cannot touch a `#private` member.
    */
   #privilegedSystemWriteDepth = 0;
 
@@ -674,9 +673,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * and ambient read metadata. A hit never crosses read classifications.
    * Replaced wholesale on any write (see `#invalidateReadResultCache()`), so a
    * hit is only ever served when nothing has been written since the cached
-   * read. This is a `Map` rather than a `WeakMap`, but the transaction owns it
-   * and writes drop it wholesale, bounding retention to reads-without-writes in
-   * one tx.
+   * read. This is a `Map` rather than a `WeakMap`, but the transaction owns it,
+   * and writes and settling drop it wholesale, bounding retention to
+   * reads-without-writes in one open tx.
    */
   #readResultCache = new Map<string, Map<string, { value: unknown }>>();
 
@@ -692,6 +691,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * `getSnapshotMemo()` picks between them. Dropped on any write alongside
    * the read cache above, unless a reader holds the instant it describes, in
    * which case `#retireSnapshotMemos()` files it under that reader's epoch.
+   * Dropped as well when the transaction settles.
    */
   #snapshotMemo = new Map<string, unknown>();
 
@@ -718,8 +718,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * the same shape as `#cfcPolicySnapshotPinned`: the `Runtime` configures
    * every tx exactly once in `edit()` (usually with `undefined` — every client,
    * and the server-execution OFF arm always), and that state must be just as
-   * write-once as an installed destination, or handler code reaching the
-   * concrete tx via `(cell.tx as any)` could hijack the commit path.
+   * write-once as an installed destination, or code holding the transaction
+   * could hijack the commit path.
    */
   #sealDestination: TransactionSealDestination | undefined;
 
@@ -951,8 +951,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // The floor below is a comparison of ranks, and `cfcEnforcementStrictness`
     // ranks the members of `CFC_ENFORCEMENT_MODES` and nothing else. A name it
     // cannot rank is refused here, so the comparison always has two ranks to
-    // compare. The surface is public and cell.tx is reachable, so the argument
-    // arrives from code the type checker may never have seen.
+    // compare. The surface is public, so the argument may arrive from code the
+    // type checker has never seen.
     if (!isCfcEnforcementMode(mode)) {
       throw new Error(
         `CFC enforcement mode ${String(mode)} is not one of ` +
@@ -961,8 +961,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     // Enforcement may be raised but never weakened below the highest enforcing
     // level set on this transaction (audit S3). The control surface is on the
-    // public transaction interface and cell.tx is reachable, so this prevents
-    // code holding a Cell from disabling enforcement mid-transaction to commit a
+    // public transaction interface, so this prevents code holding the
+    // transaction from disabling enforcement mid-transaction to commit a
     // policy violation. `disabled`/`observe` impose no floor (neither enforces),
     // so they may still be juggled before any enforcing mode is set.
     if (cfcEnforcementStrictness(mode) < this.#cfcEnforcementFloor) {
@@ -1200,8 +1200,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Write-once, off the public tx interface, deep-frozen on store. The pin (not
    * the slot value) is what enforces write-once: the _first_ call — always the
    * `Runtime`'s, even when it configures no policies (`undefined`) — pins the
-   * slot, so a later `(cell.tx as any).setCfcPolicySnapshot(attackerSnapshot)`
-   * is ignored. (`buildCfcPolicySnapshot()` already froze a configured
+   * slot, so a later `setCfcPolicySnapshot(attackerSnapshot)` is ignored. (`buildCfcPolicySnapshot()` already froze a configured
    * snapshot; this `deepFreeze()` is the cheap short-circuiting backstop for
    * any other caller.)
    */
@@ -1218,8 +1217,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Sets the deployment trust config for concept-guard satisfaction. The pin
    * (not the slot value) enforces write-once: the _first_ call — always the
    * `Runtime`'s, even when it configures no trust (`undefined`) — pins the
-   * slot, so a later `(cell.tx as any).setCfcTrustConfig(attackerConfig)` is
-   * ignored and the state where there is no config and concept guards fail
+   * slot, so a later `setCfcTrustConfig(attackerConfig)` is ignored and the state where there is no config and concept guards fail
    * closed holds.
    */
   setCfcTrustConfig(config: CfcTrustConfig | undefined): void {
@@ -1275,9 +1273,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * label-map) permitted. Boundary preparation runs each synchronous step
    * inside this scope and leaves it before a cooperative yield. The method is
    * ECMAScript-private (`#`) and absent from `IExtendedStorageTransaction`.
-   * Handler code reaching `cell.tx` cannot enter the scope —
-   * `(cell.tx as any).#runPrivilegedSystemWrite` is a `TypeError`, not a bypass
-   * (audit S18). A fixture that needs stored `["cfc"]` metadata reaches one
+   * Code holding the transaction cannot enter the scope — calling
+   * `#runPrivilegedSystemWrite` from outside the class is a `TypeError`, not a
+   * bypass (audit S18). A fixture that needs stored `["cfc"]` metadata reaches one
    * write inside this scope through `accessForTestingOnly`, which names what
    * it is for.
    */
@@ -1923,8 +1921,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     reference?: CfcAddress,
   ): void {
     // A root widens where a flow stamp lands, so a record without the
-    // runtime's mark is dropped: pattern code reaches this transaction, and
-    // a root it named could re-stamp values it never wrote.
+    // runtime's mark is dropped: a root named by other code holding this
+    // transaction could re-stamp values it never wrote.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
     // A root decides where preparation stamps the writer's flow label, so
     // recording one retires the digest memo and aborts a preparation it
@@ -1941,6 +1939,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   static {
+    isExtendedStorageTransaction = (value) => #cfcState in value;
     assignCfcTrustSnapshot = (tx, snapshot) => {
       if (!(#cfcState in tx)) return false;
       tx.#noteCfcActivity();
@@ -2108,9 +2107,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): boolean {
     // Answers about the whole runtime's enrollment, not this transaction's, so
     // it takes the runtime's mark like the recorders do. Every store id here
-    // is derivable from a piece's cause, so an ungated answer would tell
-    // pattern-authored code — which reaches `cell.tx` — whether a given piece
-    // is running in this runtime.
+    // is derivable from a piece's cause, so an ungated answer would tell any
+    // code holding the transaction whether a given piece is running in this
+    // runtime.
     if (!runtimeWritePolicyAuthorized(authorization)) return false;
     const key = runtimeOwnedStoreKey(space, id);
     return this.#markedOwnedStores.has(key) ||
@@ -3614,6 +3613,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // callback's closure, and through those closures the cells and registries
     // of the action that committed it.
     this.#commitCallbacks.clear();
+    // A settled transaction admits no reads, so its read memos serve nothing
+    // further, and holding them would retain every value its reads returned.
+    this.#readResultCache = new Map();
+    this.#snapshotMemo = new Map();
+    this.#scopedSnapshotMemos = new Map();
   }
 
   #runVerdictCallbacks(result: Result<Unit, CommitError>): void {
@@ -4717,6 +4721,21 @@ const assignTrustState = (
     `${what} requires a transaction the runtime created`,
   );
 };
+
+/**
+ * Returns whether `value` is a transaction the runtime created: an
+ * `ExtendedStorageTransaction`, or a `TransactionWrapper` around such a
+ * transaction. The check is a private brand, which no object pattern code
+ * builds or reshapes carries, and it holds all the way down a chain of
+ * wrappers, since a wrapper can be built around anything.
+ */
+export function isStorageTransaction(
+  value: unknown,
+): value is IExtendedStorageTransaction {
+  return typeof value === "object" && value !== null &&
+    (isExtendedStorageTransaction(value) ||
+      isStorageTransaction(unwrapTransaction(value)));
+}
 
 /**
  * Sets (or clears) the CFC trust snapshot for `tx`: the acting principal the

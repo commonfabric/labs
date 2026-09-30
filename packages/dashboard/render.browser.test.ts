@@ -316,6 +316,12 @@ Deno.test("every standard tile shares text baselines and fits under benchmarks",
     assertStandardTileLayout(dashboard, standard);
     assertStandardTileLayout(intermediate, standard);
     assertStandardTileLayout(minimum, standard);
+    for (const sub of dashboard.querySelectorAll<HTMLElement>(".sub")) {
+      assert(
+        sub.scrollWidth <= sub.clientWidth,
+        `"${sub.textContent}" is cut short at full width: ${sub.scrollWidth}px in ${sub.clientWidth}px`,
+      );
+    }
   } finally {
     fixture.remove();
   }

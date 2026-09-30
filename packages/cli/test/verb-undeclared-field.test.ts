@@ -24,6 +24,7 @@ import {
   VerbInputValidationError,
 } from "../lib/callable.ts";
 import { executePieceCallable } from "../lib/piece.ts";
+import { sendThroughStandIn } from "./utils.ts";
 
 /**
  * Dispatch `payload` at a verb publishing `schema`, through the same
@@ -52,14 +53,18 @@ async function dispatchedPayload(
       onCommit?.({ status: () => ({ status: "ok" }) });
     },
   };
-  await executeResolvedCallable({
-    callableCell: callableCell as never,
-    callableKind: "handler",
-    cellKey: "probe",
-    pieces: { runtime: {} } as never,
-    space: "did:key:undeclared-field-probe" as never,
-    inputSchema: schema,
-  }, payload);
+  await executeResolvedCallable(
+    {
+      callableCell: callableCell as never,
+      callableKind: "handler",
+      cellKey: "probe",
+      pieces: { runtime: {} } as never,
+      space: "did:key:undeclared-field-probe" as never,
+      inputSchema: schema,
+    },
+    payload,
+    { sendEvent: sendThroughStandIn },
+  );
   return sent;
 }
 

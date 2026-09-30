@@ -16,8 +16,8 @@ describe("CFC transaction control guard", () => {
   // Regression guard for the transaction control surface (audit S3).
   //
   // setCfcEnforcementMode / prepareCfc are on the public
-  // IExtendedStorageTransaction and cell.tx is public, so code holding a Cell
-  // can reach them. prepareCfc was fixed to always verify (S2); the remaining
+  // IExtendedStorageTransaction, so code holding a transaction can reach
+  // them. prepareCfc was fixed to always verify (S2); the remaining
   // weakening lever is setCfcEnforcementMode lowering an enforcing transaction
   // back to disabled/observe. The mode must not be lowerable below the highest
   // enforcing level set on a tx.

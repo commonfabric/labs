@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
-import { dirname, fromFileUrl, join, relative } from "@std/path";
+import { dirname, extname, fromFileUrl, join, relative } from "@std/path";
 
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
 
@@ -20,6 +20,7 @@ import {
   type UncheckedTree,
 } from "./typecheck.ts";
 import { collectPatternFiles, isPatternSource } from "./pattern-files.ts";
+import { repositoryFiles } from "./repository-files.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
@@ -27,22 +28,6 @@ const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 /** Whether a checked path or unchecked tree covers a repository file. */
 function covers(tree: string, file: string): boolean {
   return file === tree || file.startsWith(`${tree}/`);
-}
-
-/**
- * The declared members, less any that another member already contains.
- *
- * A member lying inside another member's tree is dropped, keeping the one that
- * contains it. Walking both reaches the inner modules twice, and while a set of
- * paths absorbs that, a count of them does not — which is how two honest
- * censuses of this repository come to disagree. Reducing the forest first makes
- * the population walked the same thing as the population counted.
- */
-function outermost(members: readonly string[]): string[] {
-  const paths = members.map((member) => member.replace(/^\.\//, ""));
-  return paths.filter((path) =>
-    !paths.some((other) => other !== path && path.startsWith(`${other}/`))
-  );
 }
 
 /**
@@ -82,6 +67,10 @@ describe("typecheck", () => {
       expect(scopeOfPath("packages/connectors/github/host/src/host.ts")).toBe(
         "connectors/github/host",
       );
+      expect(scopeOfPath("packages/connectors/pattern-sources.ts")).toBe(
+        "connectors",
+      );
+      expect(scopeOfPath(".claude/scripts")).toBe(".claude");
       expect(scopeOfPath("tasks/typecheck.ts")).toBe("tasks");
       expect(scopeOfPath("scripts/bundle.ts")).toBe("scripts");
     });
@@ -105,46 +94,38 @@ describe("typecheck", () => {
       }
     });
 
-    it("names every workspace module no recorded tree excuses", async () => {
-      // The membership this walks is the workspace the repository declares,
-      // not a list restated here, so a package added to `deno.jsonc` is held
-      // to the claim on the day it arrives rather than on the day somebody
-      // remembers to add it. What the assertion buys is the distinction the
-      // checked paths cannot draw on their own: a tree left out on purpose
-      // and a tree left out by accident are both simply absent from the
-      // list, and this fails on the second while `UNCHECKED_TREES` excuses
-      // the first. Naming the files is the point of the failure — the
-      // defect this guards against is a gate reporting a clean run over
-      // code it never opened, which no green result can reveal.
+    it("names every repository module no recorded tree excuses", async () => {
+      // The population is every file the repository holds, not a list
+      // restated here and not only the workspace members, so a module added
+      // anywhere — in a new package, or in a tree no package owns, such as
+      // the hook scripts under `.claude/` — is held to the claim on the day
+      // it arrives rather than on the day somebody remembers to add it. What
+      // the assertion buys is the distinction the checked paths cannot draw
+      // on their own: a tree left out on purpose and a tree left out by
+      // accident are both simply absent from the list, and this fails on the
+      // second while `UNCHECKED_TREES` excuses the first. Naming the files is
+      // the point of the failure — the defect this guards against is a gate
+      // reporting a clean run over code it never opened, which no green
+      // result can reveal.
 
       const checked = [...(await collectPathsByScope(REPO_ROOT)).values()]
         .flat();
       const declared = await readWorkspaceMembers(
         join(REPO_ROOT, "deno.jsonc"),
       );
-      const members = outermost(declared);
-      // Every declared member, not the outermost ones: a nested member's
-      // manifest carries its own `exclude` and the checker reads it.
+      // Every declared member: a nested member's manifest carries its own
+      // `exclude` and the checker reads it.
       const dropped = await excludedByManifest(
         REPO_ROOT,
         declared.map((member) => member.replace(/^\.\//, "")),
       );
-      const uncovered: string[] = [];
-      for (const member of members) {
-        for await (
-          const entry of walk(join(REPO_ROOT, member), {
-            includeDirs: false,
-            exts: MODULE_EXTENSIONS,
-          })
-        ) {
-          const file = relative(REPO_ROOT, entry.path);
-          if (dropped.some((pattern) => pattern.test(file))) continue;
-          if (checked.some((checkPath) => covers(checkPath, file))) continue;
-          if (excuses(file)) continue;
-          uncovered.push(file);
-        }
-      }
-      expect([...new Set(uncovered)].sort()).toEqual([]);
+      const uncovered = (await repositoryFiles(REPO_ROOT)).filter((file) =>
+        MODULE_EXTENSIONS.includes(extname(file)) &&
+        !dropped.some((pattern) => pattern.test(file)) &&
+        !checked.some((checkPath) => covers(checkPath, file)) &&
+        !excuses(file)
+      );
+      expect(uncovered).toEqual([]);
     });
 
     it("splits the patterns tree where cfcheck's own population splits", async () => {
@@ -719,35 +700,6 @@ describe("typecheck", () => {
       } finally {
         await Deno.remove(root, { recursive: true });
       }
-    });
-  });
-
-  describe("outermost()", () => {
-    it("drops a member another member contains, and keeps the rest", () => {
-      // Dropping too much is the dangerous direction: a member wrongly
-      // removed here is a tree the coverage walk stops visiting, which is
-      // the silence this file exists to break. So the sibling and the
-      // lookalike prefix are asserted alongside the nesting.
-
-      expect(outermost([
-        "./packages/patterns",
-        "./packages/patterns/nested",
-        "./packages/patterns-adjacent",
-        "./packages/runner",
-        "./tasks",
-      ])).toEqual([
-        "packages/patterns",
-        "packages/patterns-adjacent",
-        "packages/runner",
-        "tasks",
-      ]);
-    });
-
-    it("keeps every member when the workspace nests nowhere", () => {
-      expect(outermost(["./packages/api", "./scripts"])).toEqual([
-        "packages/api",
-        "scripts",
-      ]);
     });
   });
 });

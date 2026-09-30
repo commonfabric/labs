@@ -263,10 +263,14 @@ A load report cannot be matched to a document: a guest can renavigate its own
 frame, and the inner frame's initial `about:blank` navigation can complete after
 a document was asked for, so reports do not stand one to one with the documents
 the host asks for. The host offers a fresh port per report and lets use decide
-which offer matters. A session's first request retires every session offered
-before it, and a guest already holding a port refuses the new offer rather than
-losing the session it has. Two offers are kept at most, which is what stops a
-guest renavigating its own frame from accumulating them.
+which offer matters. A guest need not have started listening by the time its
+document has loaded, so a guest that starts listening only after that asks for a
+port up the parent chain, and the host offers one on that request as it does on
+a report, unless it is still loading a document, whose report is still to come.
+A session's first request retires every session offered before it, and a guest
+already holding a port refuses the new offer rather than losing the session it
+has. Two offers are kept at most, which is what stops a guest renavigating its
+own frame from accumulating them.
 
 ## Security considerations
 

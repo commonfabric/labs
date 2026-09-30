@@ -35,6 +35,7 @@ import {
   type Runtime,
   type RuntimeProgram,
   scopeCallerEventId,
+  sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -737,7 +738,7 @@ export async function completeServedRegistration(
         throw new Error("The default pattern has no addPiece handler");
       }
       await new Promise<void>((resolve, reject) => {
-        handler.send({ piece }, (tx) => {
+        sendEvent(handler, { piece }, (tx) => {
           const status = tx.status();
           if (status.status === "error") {
             reject(new Error(status.error.message));
