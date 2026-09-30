@@ -78,6 +78,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal the running handler acts for, and returns a plain DID
+  // rather than a reactive value.
+  {
+    exportName: "currentPrincipal",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // `assertCapture` records one operand of an `assert` body and returns it
   // unchanged. AssertDiagnosticsTransformer emits the calls; authored code
   // does not call it. It takes a resolved value and hands the same value back,

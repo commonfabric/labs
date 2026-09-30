@@ -4133,6 +4133,24 @@ export class Runtime {
     return principal as DID | undefined;
   }
 
+  /**
+   * Returns the principal a handler run on `tx` acts for: the actor of the
+   * event it handles. On a client runtime that is the runtime's own user. On a
+   * serving runtime it is the acting user stamped on the run's wave context,
+   * which the serving loop takes from the event's server-stamped `firedAt` or
+   * from the run that emitted the event, and `undefined` for a run with no
+   * actor. It is never the serving runtime's own identity, and nothing in the
+   * event's payload reaches it.
+   *
+   * Like `homeSpacePrincipalFor()`, except that a run on another principal's
+   * scope instance still returns the actor rather than the instance's owner,
+   * and the transaction's read scope is left as it is.
+   */
+  actingPrincipalFor(tx: IExtendedStorageTransaction): DID | undefined {
+    if (!this.servingPosture) return this.userIdentityDID;
+    return waveRunContextOf(tx)?.acting?.user as DID | undefined;
+  }
+
   getHomeSpaceCell(
     tx?: IExtendedStorageTransaction,
   ): Cell<SpaceCellContents> {
