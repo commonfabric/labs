@@ -10,6 +10,8 @@ import {
 import {
   type ClientCommit,
   compatibleMemoryProtocolFlags,
+  type ConnectionAuthResult,
+  type ConnectionChallengeResult,
   decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityId,
@@ -155,6 +157,37 @@ export type SessionOpenAuthFactory = (
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
 
+/** A signed `connection.auth`: the invocation and the signature over it. */
+export type ConnectionAuth = {
+  invocation: FabricPlainObject;
+  authorization: FabricValue;
+};
+
+/** Signs a `connection.auth` over the audience and challenge in `context`. */
+export type ConnectionAuthFactory = (
+  context: SessionOpenAuthContext,
+) => Promise<ConnectionAuth> | ConnectionAuth;
+
+/**
+ * The key a session acts as, and how that key signs. Against a server
+ * advertising `connectionAuth` the key signs once per connection, whatever
+ * the number of sessions mounted as it; against any other server it signs
+ * each `session.open`.
+ */
+export type SessionPrincipal = {
+  /** DID of the key. */
+  readonly did: string;
+
+  /** Signs the key's `connection.auth`. */
+  readonly authorizeConnection: ConnectionAuthFactory;
+
+  /** Signs a `session.open`, for a server that verifies only those. */
+  readonly authorizeSessionOpen: SessionOpenAuthFactory;
+};
+
+/** How a session is authenticated when it opens and each time it reopens. */
+export type SessionAuth = SessionOpenAuthFactory | SessionPrincipal;
+
 /**
  * What a presence room delivers to an observer, in the order it happens. A
  * `snapshot` opens the membership and reopens it after every reconnect, each
@@ -299,6 +332,28 @@ export class Client {
   #helloPending: PromiseWithResolvers<void> | null = null;
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
+
+  /**
+   * Per key, the `connection.auth` it made on the current connection.
+   * Emptied by every `hello`, since a new connection has authenticated
+   * nobody.
+   */
+  #authenticated = new Map<string, Promise<void>>();
+
+  /**
+   * The keys that have signed the challenge `#sessionOpenAuthContext` holds.
+   * A challenge accepts each key once, so a key in here authenticates over a
+   * challenge it asks for.
+   */
+  #challengeSigners = new Set<string>();
+
+  /**
+   * Settles once every signed `session.open` issued so far has been
+   * responded to. Each one uses the connection's single current challenge
+   * and receives the next, so they are issued one at a time.
+   */
+  #signedOpens: Promise<unknown> = Promise.resolve();
+
   #reconnecting: Promise<void> | null = null;
   #cancelReconnectDelay: (() => void) | null = null;
   #connected = false;
@@ -388,7 +443,7 @@ export class Client {
   async mount(
     space: string,
     options: MountOptions = {},
-    openAuthFactory?: SessionOpenAuthFactory,
+    auth?: SessionAuth,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
     options = {
@@ -397,16 +452,6 @@ export class Client {
         genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
       }),
     };
-    const auth = await runWithAbortSignal(
-      signal,
-      "memory session mount cancelled",
-      () =>
-        openAuthFactory?.(
-          space,
-          options,
-          this.sessionOpenAuthContext(),
-        ),
-    );
     const result = await runWithAbortSignal(
       signal,
       "memory session mount cancelled",
@@ -429,7 +474,7 @@ export class Client {
       result.sessionId,
       result.sessionToken,
       result.serverSeq,
-      openAuthFactory,
+      auth,
       signal,
       options.actingAs,
       options.readCeiling,
@@ -443,7 +488,22 @@ export class Client {
     this.#spaces.delete(session);
   }
 
-  async request<Result>(message: FabricPlainObject): Promise<Result> {
+  /**
+   * Sends `message` and returns the `ok` of the server's response, or throws
+   * its error. A request made while the connection is down waits for the
+   * reconnect, unless `options.whileConnected` is set, in which case it
+   * throws a `ConnectionError`: a request a session's restore makes would
+   * otherwise wait for the reconnect that is running that restore.
+   */
+  async request<Result>(
+    message: FabricPlainObject,
+    options: { whileConnected?: boolean } = {},
+  ): Promise<Result> {
+    if (options.whileConnected === true && !this.#connected) {
+      throw toConnectionError(
+        new Error("memory connection lost while restoring the session"),
+      );
+    }
     await this.#ensureConnected();
     // `ensureConnected()` is async even when the transport is already live, so
     // close() can run while this request is suspended there. Recheck before
@@ -498,12 +558,35 @@ export class Client {
     return result.ok as Result;
   }
 
+  /**
+   * Ends the authentication of the key `did` on the current connection.
+   * Sessions mounted as it stay open, and a later mount as it authenticates
+   * again. Sends nothing for a key this connection has not authenticated.
+   */
+  async release(did: string): Promise<void> {
+    if (!this.#authenticated.delete(did)) return;
+    await this.request({
+      type: "connection.release",
+      requestId: this.#nextRequestId(),
+      principal: did,
+    });
+  }
+
+  /**
+   * Opens or reopens a session, authenticated as `auth` says: named as a
+   * principal the connection has authenticated where the server advertises
+   * `connectionAuth`, and otherwise signed for this one session. A reopen
+   * that a session's restore makes sets `options.restoring`, and is then
+   * rejected with a `ConnectionError` if the connection drops under it.
+   */
   async openSession(
     space: string,
     session: MountOptions,
-    auth?: SessionOpenAuth,
+    auth?: SessionAuth,
     holdings?: SessionHolding[],
+    options: { restoring?: boolean } = {},
   ): Promise<SessionOpenResult> {
+    const whileConnected = options.restoring === true;
     // Every open passes through here — a first mount and each reopen after
     // a dropped connection alike — so this is where a declared ceiling is
     // held to the server it is declared to. A server that does not
@@ -527,16 +610,41 @@ export class Client {
         "memory server does not support a custom root intent",
       );
     }
-    const result = await this.request<SessionOpenResult>({
-      type: "session.open",
-      requestId: this.#nextRequestId(),
-      space,
-      session,
-      ...(auth ? auth : {}),
-      ...(holdings !== undefined ? { holdings } : {}),
+    if (
+      typeof auth === "object" && this.serverFlags?.connectionAuth === true
+    ) {
+      await this.#authenticate(auth, whileConnected);
+      const result = await this.request<SessionOpenResult>({
+        type: "session.open",
+        requestId: this.#nextRequestId(),
+        space,
+        principal: auth.did,
+        session,
+        ...(holdings !== undefined ? { holdings } : {}),
+      }, { whileConnected });
+      this.#updateSessionOpenAuthContext(result.sessionOpen);
+      return result;
+    }
+    const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
+    const opened = this.#signedOpens.then(async () => {
+      const signed = await sign?.(
+        space,
+        session,
+        this.sessionOpenAuthContext(),
+      );
+      const result = await this.request<SessionOpenResult>({
+        type: "session.open",
+        requestId: this.#nextRequestId(),
+        space,
+        session,
+        ...(signed ? signed : {}),
+        ...(holdings !== undefined ? { holdings } : {}),
+      }, { whileConnected });
+      this.#updateSessionOpenAuthContext(result.sessionOpen);
+      return result;
     });
-    this.#updateSessionOpenAuthContext(result.sessionOpen);
-    return result;
+    this.#signedOpens = opened.catch(() => undefined);
+    return await opened;
   }
 
   isConnected(): boolean {
@@ -613,6 +721,57 @@ export class Client {
 
   #updateSessionOpenAuthContext(sessionOpen: unknown): void {
     this.#sessionOpenAuthContext = requireSessionOpenAuthMetadata(sessionOpen);
+    this.#challengeSigners.clear();
+  }
+
+  /**
+   * Helper for `openSession()`, which authenticates the key of `principal`
+   * on the current connection unless it already has, or is about to have.
+   * Every caller naming one key waits for the same `connection.auth`, whose
+   * requests are made `whileConnected` if the first of those callers asks.
+   */
+  async #authenticate(
+    principal: SessionPrincipal,
+    whileConnected: boolean,
+  ): Promise<void> {
+    const existing = this.#authenticated.get(principal.did);
+    if (existing !== undefined) {
+      return await existing;
+    }
+    const held = this.sessionOpenAuthContext();
+    // The server refuses a challenge that has expired, and one this key has
+    // already signed, so either case takes a challenge of its own.
+    const needsChallenge = this.#challengeSigners.has(principal.did) ||
+      held.challenge.expiresAt <= Math.floor(Date.now() / 1000);
+    if (!needsChallenge) {
+      this.#challengeSigners.add(principal.did);
+    }
+    const authenticated = (async () => {
+      const context = needsChallenge
+        ? {
+          audience: held.audience,
+          challenge: (await this.request<ConnectionChallengeResult>({
+            type: "connection.challenge",
+            requestId: this.#nextRequestId(),
+          }, { whileConnected })).challenge,
+        }
+        : held;
+      const signed = await principal.authorizeConnection(context);
+      await this.request<ConnectionAuthResult>({
+        type: "connection.auth",
+        requestId: this.#nextRequestId(),
+        ...signed,
+      }, { whileConnected });
+    })();
+    this.#authenticated.set(principal.did, authenticated);
+    try {
+      await authenticated;
+    } catch (error) {
+      if (this.#authenticated.get(principal.did) === authenticated) {
+        this.#authenticated.delete(principal.did);
+      }
+      throw error;
+    }
   }
 
   /** Waits for the transport handshake and restoration of existing sessions. */
@@ -623,6 +782,8 @@ export class Client {
 
   async #hello(): Promise<void> {
     this.#transport.setMessageCompressionEnabled?.(false);
+    this.#authenticated.clear();
+    this.#challengeSigners.clear();
     const ack = Promise.withResolvers<void>();
     this.#helloPending = ack;
     const expectedFlags = getMemoryProtocolFlags();
@@ -832,8 +993,14 @@ export class Client {
       while (!this.#closed) {
         try {
           await this.#hello();
-          for (const session of this.#spaces) {
-            await session.restore();
+          // Every session restores at once. A failure is thrown only after
+          // all of them have settled, so a retry starts from a connection
+          // nothing is still using.
+          const restored = await Promise.allSettled(
+            [...this.#spaces].map((session) => session.restore()),
+          );
+          for (const outcome of restored) {
+            if (outcome.status === "rejected") throw outcome.reason;
           }
           return;
         } catch (error) {
@@ -1016,7 +1183,7 @@ export class SpaceSession {
   }[] = [];
 
   readonly #client: Client;
-  readonly #openAuthFactory?: SessionOpenAuthFactory;
+  readonly #auth?: SessionAuth;
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
@@ -1028,14 +1195,14 @@ export class SpaceSession {
     sessionId: string,
     sessionToken: string | undefined,
     serverSeq: number,
-    openAuthFactory?: SessionOpenAuthFactory,
+    auth?: SessionAuth,
     routeSignal?: AbortSignal,
     actingAs?: "space-owner",
     readCeiling?: SessionReadCeiling,
     genesisRoot?: GenesisRoot,
   ) {
     this.#client = client;
-    this.#openAuthFactory = openAuthFactory;
+    this.#auth = auth;
     this.#routeSignal = routeSignal;
     this.#actingAs = actingAs;
     this.#readCeiling = readCeiling;
@@ -1075,10 +1242,18 @@ export class SpaceSession {
     }
   }
 
-  /** Waits for restored session identity before constructing an ordinary request. */
+  /**
+   * Waits for restored session identity before constructing an ordinary
+   * request: for this session's own restore where one is pending, whatever
+   * the client's other sessions are doing, and otherwise for the connection.
+   */
   async #ensureSessionRestored(): Promise<void> {
     this.#assertOpen();
-    await this.#client.restoreConnection();
+    if (this.#restoreComplete !== undefined) {
+      await this.#restoreComplete.promise;
+    } else if (!this.#client.isConnected()) {
+      await this.#client.restoreConnection();
+    }
     this.#assertOpen();
   }
 
@@ -1861,18 +2036,33 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
-    // The relay keeps a membership until it hears otherwise, and a closed
-    // session sends nothing further on its own, so each room is left now;
-    // the leave is not waited for. Observers hear the close as a failure.
-    for (const state of this.#presenceRooms.values()) {
+    if (
+      this.#client.serverFlags?.sessionClose === true &&
+      this.#client.isConnected() && this.#readyOnConnection
+    ) {
+      // The server ends the session, and with it the session's presence
+      // memberships. The response is not waited for.
       void this.#client.request({
-        type: "presence.leave",
+        type: "session.close",
         requestId: crypto.randomUUID(),
         space: this.space,
         sessionId: this.#sessionId,
-        room: state.room,
       }).catch(() => undefined);
+    } else {
+      // The relay keeps a membership until it hears otherwise, and a closed
+      // session sends nothing further on its own, so each room is left now;
+      // the leave is not waited for.
+      for (const state of this.#presenceRooms.values()) {
+        void this.#client.request({
+          type: "presence.leave",
+          requestId: crypto.randomUUID(),
+          space: this.space,
+          sessionId: this.#sessionId,
+          room: state.room,
+        }).catch(() => undefined);
+      }
     }
+    // Observers hear the close as a failure.
     this.#endPresenceRooms(this.#closeError);
     this.#restoreComplete?.reject(this.#closeError);
     this.#restoreComplete = undefined;
@@ -1956,6 +2146,12 @@ export class SpaceSession {
       return;
     }
     this.#readyOnConnection = false;
+    // The restore this session now needs is pending from here on, so a
+    // request made before the reconnect reaches it waits for it.
+    if (this.#restoreComplete === undefined) {
+      this.#restoreComplete = Promise.withResolvers<void>();
+      this.#restoreComplete.promise.catch(() => {});
+    }
   }
 
   async #joinPresence(state: PresenceRoomState): Promise<void> {
@@ -2253,9 +2449,9 @@ export class SpaceSession {
   /**
    * Whether a watch mutation sent now would reach a session its server does
    * not have open: the connection is down, or this session has not reopened
-   * on the current connection. The second is separate because a reconnect
-   * restores its client's sessions one after another, so a session can sit
-   * connected with its restore not yet begun. `#readyOnConnection` is false
+   * on the current connection. The second is separate because a session's
+   * restore takes as long as its own reopening takes, so a session can sit
+   * connected with its restore unfinished. `#readyOnConnection` is false
    * only while a reconnect is running, while this session's restore is
    * pending, or once the session has closed, and `#waitForSessionRestore()`
    * waits on the first two and throws on the third, so a turn waiting on this
@@ -2266,8 +2462,8 @@ export class SpaceSession {
   }
 
   /**
-   * Helper for `#runWatchMutation()`, which waits for the reconnect in
-   * progress, if any, and then for this session's restore, if one is pending.
+   * Helper for `#runWatchMutation()`, which waits for this session's restore,
+   * if one is pending, and otherwise for the reconnect in progress, if any.
    * The caller checks `#watchMutationWaitsForRestore()` again afterwards, in
    * the same synchronous step as its send, since the connection can drop in
    * between. Throws the session's close error when the session closes, and the
@@ -2275,8 +2471,11 @@ export class SpaceSession {
    */
   async #waitForSessionRestore(): Promise<void> {
     this.#assertOpen();
-    await this.#client.restoreConnection();
-    await this.#restoreComplete?.promise;
+    if (this.#restoreComplete !== undefined) {
+      await this.#restoreComplete.promise;
+    } else if (!this.#client.isConnected()) {
+      await this.#client.restoreConnection();
+    }
   }
 
   /**
@@ -2447,23 +2646,19 @@ export class SpaceSession {
         ? { readCeiling: this.#readCeiling }
         : {}),
     };
-    const auth = await runWithAbortSignal(
-      this.#routeSignal,
-      "memory session route cancelled",
-      () =>
-        this.#openAuthFactory?.(
-          this.space,
-          session,
-          this.#client.sessionOpenAuthContext(),
-        ),
-    );
     const holdings = this.#declaredHoldings();
     const restored = await runWithAbortSignal(
       this.#routeSignal,
       "memory session route cancelled",
       () => {
         this.#throwIfDisconnectedDuringRestore();
-        return this.#client.openSession(this.space, session, auth, holdings);
+        return this.#client.openSession(
+          this.space,
+          session,
+          this.#auth,
+          holdings,
+          { restoring: true },
+        );
       },
     );
     const sessionChanged = restored.sessionId !== oldSessionId;
