@@ -28,7 +28,9 @@ import {
   createCacheHeaders,
   generateETag,
 } from "@commonfabric/static/etag";
+import { LRUCache } from "@commonfabric/utils/cache";
 import { decode } from "@commonfabric/utils/encoding";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
 import { PATTERNS_ROUTE_PREFIX } from "../pattern-source-scheme.ts";
 import { resolveEntryIdentity } from "./entry-identity.ts";
@@ -52,6 +54,9 @@ export interface PatternFileRequest {
   /** Answer with the entry closure's identity rather than the source. */
   identity?: boolean;
 
+  /** Retained source entries, named by their full patterns-route pathname. */
+  sourceRoots?: readonly string[];
+
   /** The request's `If-None-Match`, which a matching ETag answers 304 to. */
   ifNoneMatch?: string | null;
 }
@@ -62,13 +67,13 @@ export class PatternsRoute {
   #extraSources: Array<{ routePrefix: string; baseUrl: URL }>;
 
   /**
-   * Each pattern file's content identity, computed once and cached forever:
-   * pattern files are fixed for the process's lifetime (baked into the binary
-   * or static on disk). A rejected computation is evicted so a transient
+   * Each requested program's content identity. Pattern files are fixed for
+   * the process's lifetime; request-selected root combinations have bounded
+   * retention. A rejected computation is evicted so a transient
    * failure (e.g. an incomplete closure during a partial deploy) can be
    * retried.
    */
-  #identityCache = new Map<string, Promise<string>>();
+  #identityCache = new LRUCache<string, Promise<string>>({ capacity: 256 });
 
   /**
    * `root` holds the patterns every route path reaches by default.
@@ -129,17 +134,31 @@ export class PatternsRoute {
    * `system/default-app.tsx`. Rejects if the closure is incomplete or reaches
    * a `cf:` fabric import, which the light path does not model.
    */
-  identity(filename: string): Promise<string> {
-    let cached = this.#identityCache.get(filename);
+  identity(
+    filename: string,
+    sourceRoots: readonly string[] = [],
+  ): Promise<string> {
+    const roots = [...new Set(sourceRoots)].sort();
+    if (roots.length > 32 || !roots.every(validSourceRoot)) {
+      throw new Error("Invalid source root path");
+    }
+    const key = stringTupleKey([filename, ...roots]);
+    let cached = this.#identityCache.get(key);
     if (!cached) {
       // Name modules by their URL pathname so the identity equals the one the
       // worker computes when it compiles the same source over HTTP.
       cached = resolveEntryIdentity(
         `${PATTERNS_ROUTE_PREFIX}${filename}`,
         (name) => this.getText(name.slice(PATTERNS_ROUTE_PREFIX.length)),
+        { sourceRoots: roots },
       );
-      this.#identityCache.set(filename, cached);
-      cached.catch(() => this.#identityCache.delete(filename));
+      this.#identityCache.put(key, cached);
+      const pending = cached;
+      cached.catch(() => {
+        if (this.#identityCache.get(key) === pending) {
+          this.#identityCache.delete(key);
+        }
+      });
     }
     return cached;
   }
@@ -167,6 +186,7 @@ export class PatternsRoute {
     }
     return await this.serveFile(filename, {
       identity: url.searchParams.has("identity"),
+      sourceRoots: url.searchParams.getAll("sourceRoot"),
       ifNoneMatch: request.headers.get("If-None-Match"),
     });
   }
@@ -198,7 +218,7 @@ export class PatternsRoute {
       }
 
       if (options.identity) {
-        const identity = await this.identity(filename);
+        const identity = await this.identity(filename, options.sourceRoots);
         return patternResponse(
           identity,
           "text/plain; charset=utf-8",
@@ -269,7 +289,8 @@ export function classifyPatternError(
   }
   if (
     error instanceof Error &&
-    (error.message.includes("incomplete closure") ||
+    (error.message.includes("Invalid source root path") ||
+      error.message.includes("incomplete closure") ||
       error.message.includes("fabric import"))
   ) {
     return { status: 400, body: { error: error.message } };
@@ -298,4 +319,13 @@ function directoryUrl(directory: string): URL {
   const url = toFileUrl(directory);
   if (!url.href.endsWith("/")) url.href += "/";
   return url;
+}
+
+/** Whether an attached entry stays within the public patterns namespace. */
+function validSourceRoot(name: string): boolean {
+  if (!name.startsWith(PATTERNS_ROUTE_PREFIX)) return false;
+  const path = name.slice(PATTERNS_ROUTE_PREFIX.length);
+  return path.length > 0 && path.length <= 2048 && !/[\\:%?#]/.test(path) &&
+    !path.startsWith("/") &&
+    !path.split("/").some((part) => part === "." || part === "..");
 }
