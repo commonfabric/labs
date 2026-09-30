@@ -1169,6 +1169,18 @@ class Connection {
     return false;
   }
 
+  /**
+   * Helper for `#receiveOrdered()`, which ends a session this connection
+   * holds the way closing the connection ends it: the session leaves the
+   * connection, its presence memberships end, and the registry keeps it
+   * detached, resumable until its grace runs out.
+   */
+  #closeSession(space: string, sessionId: string): void {
+    this.#sessions.delete(sessionKey(space, sessionId));
+    this.#server.endPresenceForSession(space, sessionId, this.id);
+    this.#server.detachSession(space, sessionId, this.id);
+  }
+
   #receivePresence(
     message:
       | PresenceJoinRequest
@@ -1471,6 +1483,19 @@ class Connection {
             response,
           );
         }
+        return;
+      case "session.close":
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        this.#closeSession(parsed.space, parsed.sessionId);
+        this.#send({ type: "response", requestId: parsed.requestId, ok: {} });
         return;
       case "event.attention.resolve":
         if (
@@ -2012,6 +2037,7 @@ export class Server {
     return {
       ...getMemoryProtocolFlags(),
       operationCodecs: this.#operationCodecs.ids(),
+      connectionAuth: false,
     };
   }
 
@@ -8701,6 +8727,20 @@ export const parseClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       watches: parsed.watches as WatchSpec[],
+    };
+  }
+
+  if (
+    parsed.type === "session.close" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    return {
+      type: "session.close",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
     };
   }
 

@@ -1211,6 +1211,34 @@ export type MemoryProtocolFlags = {
    * sending a message the server would refuse.
    */
   presenceV1?: boolean;
+
+  /**
+   * Server capability: `session.close` ends one session and leaves the
+   * connection and its other sessions open. Build-inherent, so a server of
+   * this version always advertises it. Absent (an older server) parses to
+   * false, and a client then closes a session locally and leaves it
+   * attached on the server until the connection closes.
+   */
+  sessionClose?: boolean;
+
+  /**
+   * Server capability: a key authenticates once per connection with
+   * `connection.auth`, and `session.open` names the authenticated principal
+   * it opens as in place of carrying a signature (04-protocol.md §4.5).
+   * Advertised by a server whose host verifies `connection.auth`. Absent (an
+   * older server, or a host that verifies only `session.open`) parses to
+   * false, and a client then signs each `session.open`.
+   */
+  connectionAuth?: boolean;
+
+  /**
+   * Server capability: `space.genesis` installs a fresh space's ACL as an
+   * authenticated principal of the connection, without a session.
+   * Build-inherent wherever `connectionAuth` is advertised. Absent parses to
+   * false, and a client then writes the genesis ACL through a session opened
+   * as the space identity.
+   */
+  spaceGenesis?: boolean;
 };
 
 /**
@@ -1239,6 +1267,9 @@ export type WireMemoryProtocolFlags = {
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
   presenceV1?: boolean;
+  sessionClose?: boolean;
+  connectionAuth?: boolean;
+  spaceGenesis?: boolean;
 };
 
 export type HelloMessage = {
@@ -1857,6 +1888,21 @@ export type SessionAckRequest = {
   seenSeq: number;
 };
 
+/**
+ * Ends one session. The server stops sending to it, ends its presence
+ * memberships, and keeps it resumable for as long as it keeps a session
+ * whose connection closed.
+ */
+export type SessionCloseRequest = {
+  type: "session.close";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+};
+
+/** The `ok` of the response to a `session.close`. */
+export type SessionCloseResult = Record<PropertyKey, never>;
+
 export type EventAttentionResolveRequest = {
   type: "event.attention.resolve";
   requestId: string;
@@ -2024,6 +2070,7 @@ export type ClientMessage =
   | WatchSetRequest
   | WatchAddRequest
   | SessionAckRequest
+  | SessionCloseRequest
   | EventAttentionResolveRequest
   | PresenceJoinRequest
   | PresencePublishRequest
@@ -2249,6 +2296,12 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   sessionReadCeiling: true,
   // Build-inherent: this build's server relays presence rooms.
   presenceV1: true,
+  // Build-inherent: this build's server ends one session on request.
+  sessionClose: true,
+  // What this build can do. A server advertises it only when its host
+  // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
+  connectionAuth: true,
+  spaceGenesis: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2416,6 +2469,21 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionClose = value.sessionClose;
+  if (sessionClose !== undefined && typeof sessionClose !== "boolean") {
+    return null;
+  }
+
+  const connectionAuth = value.connectionAuth;
+  if (connectionAuth !== undefined && typeof connectionAuth !== "boolean") {
+    return null;
+  }
+
+  const spaceGenesis = value.spaceGenesis;
+  if (spaceGenesis !== undefined && typeof spaceGenesis !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2453,6 +2521,14 @@ export const parseMemoryProtocolFlags = (
     // join a presence room rather than send a message the server would
     // refuse.
     presenceV1: presenceV1 === true,
+    // Absent (an older server) parses to false: a client then leaves a
+    // session it closes attached until the connection closes.
+    sessionClose: sessionClose === true,
+    // Absent parses to false: a client then signs each `session.open`.
+    connectionAuth: connectionAuth === true,
+    // Absent parses to false: a client then writes a genesis ACL through a
+    // session opened as the space identity.
+    spaceGenesis: spaceGenesis === true,
   };
 };
 
@@ -2483,6 +2559,9 @@ export const wireMemoryProtocolFlags = (
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
   presenceV1: flags.presenceV1,
+  sessionClose: flags.sessionClose,
+  connectionAuth: flags.connectionAuth,
+  spaceGenesis: flags.spaceGenesis,
 });
 
 /**
