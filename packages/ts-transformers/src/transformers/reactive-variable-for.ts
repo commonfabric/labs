@@ -909,7 +909,14 @@ function assertsNonNull(expression: ts.Expression): boolean {
  * `undefined`, or `void`. A type that could not be determined admits none.
  */
 function admitsNullish(type: ts.Type | undefined): boolean {
-  const parts = type?.isUnion() ? type.types : type ? [type] : [];
+  // deno-coverage-ignore-start -- the type is `undefined` only when the
+  // checker throws inside `getTypeAtLocationWithFallback()`
+  if (!type) {
+    return false;
+  }
+  // deno-coverage-ignore-stop
+
+  const parts = type.isUnion() ? type.types : [type];
   return parts.some((part) =>
     (part.flags &
       (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
