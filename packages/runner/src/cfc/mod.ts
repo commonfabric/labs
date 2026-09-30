@@ -211,16 +211,20 @@ export {
 } from "./exchange-eval.ts";
 export type {
   CfcGrant,
+  CfcGrantCandidate,
   CfcGrantConsumptionReceipt,
   CfcGrantIdentity,
+  CfcGrantSource,
   CfcGrantWriteInput,
 } from "./grants.ts";
 export {
   CFC_GRANT_ABSENT_DIGEST,
   CFC_GRANT_ID_PREFIX,
+  cfcGrantCandidateOf,
   cfcGrantConsumedReceiptId,
   cfcGrantDocId,
   cfcGrantIsLive,
+  createRuntimeCfcGrantSource,
   createTxCfcGrantResolver,
   disallowedGrantAudienceEntryReason,
   expandCfcGrantFacts,

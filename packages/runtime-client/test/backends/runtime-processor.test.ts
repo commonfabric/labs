@@ -171,6 +171,7 @@ describe("runtime-processor", () => {
             undefined,
             undefined,
             undefined,
+            undefined,
           ),
         ).toBeUndefined();
       } finally {
@@ -186,6 +187,7 @@ describe("runtime-processor", () => {
           runtime,
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
           undefined,
           undefined,
           undefined,
@@ -226,6 +228,7 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
           sessionSpace,
+          undefined,
           undefined,
           undefined,
         );
@@ -274,6 +277,7 @@ describe("runtime-processor", () => {
           cfcSigner,
           { atoms: [cfcAtom.user(delegate)] },
           sessionSpace,
+          undefined,
           undefined,
           undefined,
         );
@@ -343,6 +347,7 @@ describe("runtime-processor", () => {
           runtime,
           cfcSigner,
           { atoms: [cfcAtom.user(cfcSigner.did())] },
+          undefined,
           undefined,
           undefined,
           undefined,
@@ -427,6 +432,7 @@ describe("runtime-processor", () => {
           undefined,
           undefined,
           createRuntimeCfcModulePolicySource(runtime),
+          undefined,
         );
         const ceiling = [cfcAtom.user(cfcSigner.did())];
         expect(
@@ -568,6 +574,7 @@ describe("runtime-processor", () => {
           undefined,
           undefined,
           createRuntimeCfcModulePolicySource(runtime),
+          undefined,
         );
         // The label read from `holding`, where a labeling commit installs
         // the manifest; by default the subject space itself.
