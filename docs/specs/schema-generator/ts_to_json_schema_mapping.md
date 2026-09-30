@@ -1062,6 +1062,26 @@ Mechanics:
   (`type Id<X> = X`) denotes the argument it writes for that parameter, so the
   chain, and the labels and defaults read from its syntax, start at that
   argument (`readThroughIdentityAliases`, `src/typescript/type-node.ts`).
+- A plain generic interface or object alias whose arguments carry authored
+  `typeof` identities binds its parameters to those written arguments before
+  reading members. Forwarded alias references and inherited interface members
+  use the bindings of their own declarations, and defaults read under preceding
+  parameters. A readable property or index-signature value is read from its
+  declaration under those bindings, with its instantiated type retained beside
+  it. This preserves both a whole policy passed as a parameter
+  (`Box<WriteAuthorizedBy<string, typeof save>>`) and a writer passed into a
+  member's policy (`Pair<typeof save, typeof other>`). `Record` reads its value
+  argument by syntax when it carries an authored query, including through a
+  named policy alias. Recursive definitions retain those same bindings and query
+  origins: same-typed writers remain distinct below `$ref` boundaries. Plain
+  generics without authored query arguments retain their type-based analysis.
+  An indexed access or conditional member over bound parameters can leave a
+  writer policy's instantiated carrier without readable binding syntax. That
+  authored read reports `cfc-write-authorized-by:unread` and explains the
+  unsupported operator; compilation cannot silently discard its restriction.
+  See `packages/ts-transformers/test/generic-writer-policy.test.ts` for both
+  pattern schemas and `packages/runner/test/generic-writer-policy.test.ts` for
+  authorized and refused writes, including stored reloads.
 - The payload is read from the declaration of the last alias along the chain,
   as written, with each parameter bound to its argument
   (`GenerationContext.boundTypeParameters`), never from a substituted node,

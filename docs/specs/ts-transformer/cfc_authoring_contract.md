@@ -221,7 +221,12 @@ Normative behavior:
    `cfc-write-authorized-by:unread` rather than yield a schema with no write
    restriction. A reload of stored source fails the same way: the error guards
    a write restriction, not an authoring shape, and a pattern does not run
-   without the restriction its author wrote. A schema
+   without the restriction its author wrote. Plain generic interfaces and
+   object aliases preserve whole policy arguments and writer parameters through
+   their member declarations, forwarded aliases, inherited members, defaults,
+   and recursive definitions. A generic member operator that leaves a writer
+   carrier without readable binding syntax must report that unsupported form
+   rather than silently discard its restriction. A schema
    generated from a type alone, such as a computed's capture, has no reference
    to read a binding from: it carries no write claim, and nothing reports that.
 

@@ -31,7 +31,11 @@ import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
-import { unwrapTypeParentheses } from "../typescript/type-node.ts";
+import {
+  holdsTypeParameter,
+  unwrapTypeParentheses,
+} from "../typescript/type-node.ts";
+import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "./common-fabric-formatter.ts";
 import { withIfcLabels } from "../ifc-labels.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
@@ -300,12 +304,15 @@ export class ObjectFormatter implements TypeFormatter {
       if ((prop.flags & ts.SymbolFlags.Method) !== 0) continue;
 
       // Get the actual property type and recursively delegate to the main schema generator
-      const resolvedPropType = safeGetPropertyType(
-        prop,
-        type,
-        checker,
-        propTypeNode,
-      );
+      const resolvedPropType = propTypeNode && context.boundTypeParameters &&
+          holdsTypeParameter(
+            propTypeNode,
+            checker,
+            context.boundTypeParameters.arguments,
+          ) &&
+          !usesParameterUnreachably(propTypeNode, checker)
+        ? checker.getTypeFromTypeNode(propTypeNode)
+        : safeGetPropertyType(prop, type, checker, propTypeNode);
 
       if (isFunctionLike(resolvedPropType)) {
         // Special case: ModuleFactory/HandlerFactory types that return Stream or Cell
@@ -381,10 +388,22 @@ export class ObjectFormatter implements TypeFormatter {
     const numberIndex = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
     const chosenIndex = stringIndex ?? numberIndex;
     if (chosenIndex) {
+      const indexNode = checker.getIndexInfoOfType(
+        type,
+        stringIndex ? ts.IndexKind.String : ts.IndexKind.Number,
+      )?.declaration?.type;
+      const boundIndex = indexNode && context.boundTypeParameters &&
+        holdsTypeParameter(
+          indexNode,
+          checker,
+          context.boundTypeParameters.arguments,
+        );
+      const readIndex = boundIndex &&
+        !usesParameterUnreachably(indexNode, checker);
       const apSchema = this.#schemaGenerator.formatChildType(
-        chosenIndex,
+        readIndex ? checker.getTypeFromTypeNode(indexNode) : chosenIndex,
         context,
-        undefined,
+        boundIndex ? indexNode : undefined,
         instantiatedValueType(context.instantiatedAs, checker),
       );
       // Attempt to read JSDoc from index signature declarations

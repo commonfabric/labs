@@ -2514,6 +2514,20 @@ Special path:
   pinned by `test/cfc-authoring.test.ts`,
   `packages/schema-generator/test/schema/cfc-authoring.test.ts`, and
   `test/cfc-ui-helper.test.ts`
+- Authored writer identities also survive plain generic interfaces and object
+  aliases, forwarded aliases, inherited members, index signatures, and `Record`
+  value arguments, in both pattern input and explicit output schemas. A whole
+  `WriteAuthorizedBy` can be passed as a type argument, or a member can apply it
+  to a writer parameter supplied as a direct `typeof` query. Defaults read under
+  preceding parameters. Recursive `$defs` preserve the declaration identity of
+  each writer even when two handlers have identical types. Unread authored
+  bindings remain fatal; secondary type-only reads retain the exemption
+  described in §6.8. An indexed access or conditional generic member whose
+  instantiated carrier retains a writer policy but loses its binding syntax
+  also reports `cfc-write-authorized-by:unread`, including on stored-source
+  compilation. Pinned by `test/generic-writer-policy.test.ts` and
+  `packages/runner/test/generic-writer-policy.test.ts`; the schema-generator
+  mapping spec §11 describes the binding rules.
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 
