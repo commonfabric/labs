@@ -614,7 +614,7 @@ const addMember = handler<
   { members: Writable<DID[]> }
 >(({ member }, { members }) => {
   grantSpaceAccess(members, member, "WRITE");
-  members.push(member);
+  members.addUnique(member);
 });
 ```
 
@@ -623,8 +623,10 @@ action on a rendered surface; anywhere else, or for an event without one, they
 throw. The person who sent the event must hold `OWNER` in the space, which
 may not be their own Home space, and `principal` must be a DID other than
 theirs, the space's own, and `"*"`. A change that would leave the space with
-no concrete `OWNER` is refused. Every refusal throws, and a throw drops the
-handler's whole transaction, so the handler's other writes are dropped too.
+no concrete `OWNER` is refused. Every refusal throws. A throw the handler lets
+escape drops its whole transaction, so its other writes are dropped too; the
+call throws before staging anything, so a handler that catches the throw has
+changed nothing for that call.
 
 Granting a level someone already holds, or revoking an entry that is not
 there, does nothing, so a handler that runs again for the same event is safe.

@@ -1,6 +1,7 @@
 /**
- * Thrown from a handler/action `postRun` to have the scheduler abort the
- * current transaction and re-run the same handler/action. Two things throw it:
+ * Thrown to have the scheduler abort the current transaction and re-run the
+ * same handler/action, once what the run was missing is in place. Among the
+ * runs that throw it:
  *
  * - A run that referenced a pattern space by name
  *   (`PatternFactory.inSpace("name")`) whose DID had not yet been resolved.

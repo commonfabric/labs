@@ -27,8 +27,12 @@ The call acts for the event's actor, `Runtime.actingPrincipalFor()`, the same
 principal `currentPrincipal()` returns. Nothing in the event's payload chooses
 it, and it is not an argument.
 
-Every refusal throws from the call or from the commit that follows the handler
-body, and either way drops the handler's whole transaction.
+Every refusal throws, from the call or from the commit that follows the
+handler body. A refusal at the commit, and a refusal at the call that the
+handler lets escape, drop the handler's whole transaction. A refusal at the
+call is an ordinary exception, though, and a handler may catch it; the call
+throws before it stages anything, so a caught refusal leaves nothing staged
+for that call, and the handler's other writes commit as usual.
 
 | Refused | Where |
 | --- | --- |
@@ -63,8 +67,8 @@ through, is not settled, and a refusal at the memory server of an access list
 that names either kind is the way to close it.
 
 The trusted gesture is the renderer's mark on an event a person caused on a
-rendered surface, the test `commitSnapshotShare()` applies without its match on
-which surface. The runner records it on the handler's frame when the run
+rendered surface, the test `commitSnapshotShare()` and `commitCustodySeal()`
+apply without their match on which surface. The runner records it on the handler's frame when the run
 starts, from the event object the renderer marked. A handler that sends its
 event on to another stream does not pass the mark along, so the handler it
 reaches cannot change a list. The check does not follow the CFC enforcement
@@ -97,14 +101,17 @@ so the change cannot share its commit. It goes in two, in order:
 1. The call checks what it can and stages the change on the handler's frame.
    When the runtime holds the space's list, it checks the actor's `OWNER` and
    the surviving concrete `OWNER` too, so the refusal throws from the call where
-   the handler could catch it. A change that would leave the list as it is
-   stages nothing. The call reads the list outside the handler's transaction,
-   so the handler's own commit does not conflict with the access-list commit.
+   the handler could catch it. The call reads the list outside the handler's
+   transaction, so the handler's own commit does not conflict with the
+   access-list commit. It does not decide whether the change is a no-op,
+   since the list this runtime holds may be behind the memory server's.
 2. After the handler body returns, the runner commits each space's staged
    changes, applied in call order, as one commit per space. The commit loads
-   the list first and reads it in its own transaction, so its checks run
-   against the list the memory server last confirmed, and a concurrent change
-   to the list makes it conflict rather than be overwritten.
+   the list, catches up with the memory server (a round trip that returns
+   once every update the server had sent is applied), and reads the list in
+   its own transaction, so its checks and its no-op decision run against the
+   server's list as of then. A concurrent change after that makes the commit
+   conflict rather than be overwritten.
 3. The handler's own transaction then commits, as it would have without the
    change.
 

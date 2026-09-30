@@ -15,19 +15,14 @@
 import type { SpaceGrantLevel } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
 import { isWellFormedDID } from "@commonfabric/identity/did";
-import {
-  type ACL,
-  aclDocId,
-  hasConcreteOwner,
-  sameAcl,
-} from "@commonfabric/memory/acl";
+import { type ACL, aclDocId, hasConcreteOwner } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { validateStoredAcl, writeAcl } from "../acl-manager.ts";
 import { spaceReaderRole } from "../cfc/space-membership.ts";
 import type { Runtime } from "../runtime.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
-import { isRetryableCommitRejection } from "../storage/rejection.ts";
+import { isStaleReadConflict } from "../storage/rejection.ts";
 import { topFrame } from "./frame-context.ts";
 import { spaceOfTarget } from "./space-access.ts";
 import type { Frame, SpaceAccessChange } from "./types.ts";
@@ -44,7 +39,7 @@ const GRANT_LEVELS: ReadonlySet<unknown> = new Set<SpaceGrantLevel>([
  * lives in to exactly `level`. See {@link stageChange} for what is checked
  * when, and `docs/features/space-access-changes.md` for the whole contract.
  *
- * @throws Error on every refusal, which drops the handler's transaction.
+ * @throws Error on every refusal, before anything is staged.
  */
 export function grantSpaceAccess(
   target: unknown,
@@ -69,7 +64,7 @@ export function grantSpaceAccess(
  * Removes `principal`'s entry from the access list of the space `target`'s
  * value lives in. See {@link stageChange} for what is checked when.
  *
- * @throws Error on every refusal, which drops the handler's transaction.
+ * @throws Error on every refusal, before anything is staged.
  */
 export function revokeSpaceAccess(target: unknown, principal: unknown): void {
   stageChange("revokeSpaceAccess()", target, principal, undefined);
@@ -78,19 +73,22 @@ export function revokeSpaceAccess(target: unknown, principal: unknown): void {
 /**
  * Commits the access-list changes the handler run of `frame` staged, one
  * commit per space, each holding the space's changes applied in call order to
- * the list as the memory server last confirmed it. A space whose changes
- * leave its list as it was sends nothing, since writing the value a document
- * already holds changes nothing. The runner calls this after the handler body
- * returns and before the handler's own transaction commits.
+ * the list as this runtime holds it once it has caught up with the memory
+ * server. This is where a change that leaves the list as it was is found out:
+ * that space sends nothing, since writing the value a document already holds
+ * changes nothing. A change that lands at the server after that catch-up is
+ * ordered after this one. The runner calls this after the handler body returns
+ * and before the handler's own transaction commits.
  *
  * Each commit reads the list it replaces, so a concurrent change to the list
- * makes it conflict; that throws `RetryImmediately`, and the handler runs
- * again against the list as it now stands.
+ * makes it conflict. The memory server's refusal of a stale read throws
+ * `RetryImmediately`, and the handler runs again against the list as it now
+ * stands. Every other failure fails the handler run, and nothing retries it.
  *
  * @throws Error when the actor holds no `OWNER` in a space, when a change
- *   would leave a space with no concrete `OWNER`, or when the memory server
- *   refuses a commit, which fails the handler run. Changes already committed
- *   for another space stand.
+ *   would leave a space with no concrete `OWNER`, or when a commit fails for
+ *   any reason but a stale read, which fails the handler run. Changes already
+ *   committed for another space stand.
  */
 export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
   const pending = frame.pendingSpaceAccessChanges;
@@ -98,7 +96,12 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
   if (pending === undefined || runtime === undefined) return;
   frame.pendingSpaceAccessChanges = undefined;
   for (const [space, changes] of pending) {
+    // Loading the list alone can leave a replica that already holds it behind
+    // the memory server. The round trip after it returns once every update the
+    // server had sent is applied, so the no-op decision below is made against
+    // the server's list as of then.
     await runtime.getCellFromLink(aclLink(space)).sync();
+    await runtime.storageManager.open(space).pullToServerHead?.();
     const tx = runtime.edit();
     tx.tx.immediate = true;
     try {
@@ -110,14 +113,14 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
     runtime.prepareTxForCommit(tx);
     const { error } = await tx.commit();
     if (error === undefined) continue;
-    if (isRetryableCommitRejection(error)) {
+    if (isStaleReadConflict(error)) {
       await runtime.awaitCommitRetryReadiness(error);
       throw new RetryImmediately(
         `The access list of ${space} changed while a handler changed it`,
       );
     }
     throw new Error(
-      `The memory server refused the change to the access list of ${space}: ` +
+      `The change to the access list of ${space} did not commit: ` +
         error.message,
       { cause: error },
     );
@@ -137,8 +140,10 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
  * space's own and the actor's. When this runtime already holds the list, the
  * actor's `OWNER` and the survival of a concrete `OWNER` are checked here as
  * well, so a refusal throws from the call; {@link commitSpaceAccessChanges}
- * checks both again against the list it replaces. A change that would leave
- * the list as it is stages nothing.
+ * checks both again against the list it replaces. A refusal throws before
+ * anything is staged, so a handler that catches it has staged nothing for
+ * that call. Whether a change leaves the list as it is is not decided here,
+ * since the list this runtime holds may be stale; the commit decides it.
  *
  * Refusing the actor's Home space keeps one click from exposing everything a
  * user keeps there. Every other space the actor holds `OWNER` in stays
@@ -207,11 +212,7 @@ function stageChange(
   const change: SpaceAccessChange = { principal, level, actor };
   const staged = frame.pendingSpaceAccessChanges?.get(space) ?? [];
   const current = knownAcl(runtime, space);
-  if (current !== undefined) {
-    const before = applyChanges(space, current, staged);
-    const after = applyChanges(space, current, [...staged, change]);
-    if (sameAcl(before, after)) return;
-  }
+  if (current !== undefined) applyChanges(space, current, [...staged, change]);
   (frame.pendingSpaceAccessChanges ??= new Map()).set(space, [
     ...staged,
     change,

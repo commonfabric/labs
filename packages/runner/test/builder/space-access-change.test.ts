@@ -547,8 +547,28 @@ describe("space-access-change", () => {
       await send(runtime, result, "grant", gesture({ principal: bob.did() }));
 
       expect(errors.join("\n")).toContain(
-        "The memory server refused the change to the access list",
+        "did not commit: refused for the test",
       );
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+      expect(result.key("notes").get()).toEqual([]);
+    });
+
+    it("fails the run without running it again when the list's commit fails for a reason other than a stale read", async () => {
+      const { runtime, factory, errors } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const result = await runAccessPattern(runtime, space);
+      const before = aclCommitCount(factory, space);
+      factory.beforeNextAclCommit = () =>
+        Promise.reject(
+          Object.assign(new Error("connection lost for the test"), {
+            name: "ConnectionError",
+          }),
+        );
+
+      await send(runtime, result, "grant", gesture({ principal: bob.did() }));
+
+      expect(errors.join("\n")).toContain("did not commit");
+      expect(aclCommitCount(factory, space)).toBe(before + 1);
       expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
       expect(result.key("notes").get()).toEqual([]);
     });
@@ -797,7 +817,7 @@ describe("space-access-change", () => {
       ).toThrow(`which ${bob.did()} does not hold`);
     });
 
-    it("stages nothing for a grant of the level the list this runtime holds already gives", async () => {
+    it("stages a grant of the level the list this runtime holds already gives, for the commit to decide", async () => {
       const { runtime } = clientRuntime(alice);
       const space = await createSpace(runtime, {
         [alice.did()]: "OWNER",
@@ -809,16 +829,40 @@ describe("space-access-change", () => {
         runtime.edit(),
         () => grantSpaceAccess(target, bob.did(), "READ"),
       );
-      expect(frame.pendingSpaceAccessChanges?.get(space)).toBeUndefined();
-
-      // The same call with another level is what does stage a change.
-      const control = inHandler(
-        runtime,
-        runtime.edit(),
-        () => grantSpaceAccess(target, bob.did(), "WRITE"),
-      );
-      expect(control.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
+      expect(frame.pendingSpaceAccessChanges?.get(space)).toHaveLength(1);
     });
+
+    for (
+      const [description, call] of [
+        ["`*` as the principal", "wildcard"],
+        ["an actor without `OWNER` in the list this runtime holds", "owner"],
+      ] as const
+    ) {
+      it(`stages nothing for a refusal the handler catches, for ${description}`, async () => {
+        const owner = clientRuntime(alice);
+        const space = await createSpace(owner.runtime, {
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+        const { runtime } = clientRuntime(bob);
+        await syncAcl(runtime, space);
+        const target = runtime.getCell(space, "target");
+        let caught: unknown;
+        const frame = inHandler(runtime, runtime.edit(), () => {
+          try {
+            grantSpaceAccess(
+              target,
+              call === "wildcard" ? "*" : carol.did(),
+              "READ",
+            );
+          } catch (error) {
+            caught = error;
+          }
+        });
+        expect(caught).toBeInstanceOf(Error);
+        expect(frame.pendingSpaceAccessChanges).toBeUndefined();
+      });
+    }
 
     it("throws for lowering the last concrete `OWNER`", async () => {
       // Bob holds `OWNER` through the `*` entry alone, so alice is the list's
@@ -856,7 +900,7 @@ describe("space-access-change", () => {
       ).toThrow("the entry of the principal it acts for");
     });
 
-    it("throws for a target in the actor's own Home space", async () => {
+    it("throws for a target in the actor's own Home space", () => {
       const { runtime } = clientRuntime(alice);
       const target = runtime.getCell(alice.did() as MemorySpace, "target");
       expect(() =>
@@ -935,6 +979,28 @@ describe("space-access-change", () => {
       await commitSpaceAccessChanges(frame);
 
       expect(factory.commits.length).toBe(before);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+    });
+
+    it("commits a grant the list held when it was staged already gave, once the memory server's list lacks it", async () => {
+      const { runtime } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => grantSpaceAccess(target, bob.did(), "WRITE"),
+      );
+      await writeAclAs(alice, space, { [alice.did()]: "OWNER" });
+
+      await commitSpaceAccessChanges(frame);
+
       expect(await storedAcl(space)).toEqual({
         [alice.did()]: "OWNER",
         [bob.did()]: "WRITE",

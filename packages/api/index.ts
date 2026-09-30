@@ -3910,7 +3910,9 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  *
  * Available only in a handler on a client runtime, and throws anywhere else:
  * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws, which drops the handler's whole transaction.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
  */
 export declare function grantSpaceAccess(
   target: AnyCell<unknown>,
@@ -3935,7 +3937,9 @@ export declare function grantSpaceAccess(
  *
  * Available only in a handler on a client runtime, and throws anywhere else:
  * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws, which drops the handler's whole transaction.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
  */
 export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,
