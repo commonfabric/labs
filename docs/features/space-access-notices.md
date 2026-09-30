@@ -57,11 +57,14 @@ also the identity that signs its requests.
 | --- | --- |
 | A call anywhere but a handler: a pattern body, a `computed()`, a `lift()` | the call |
 | A call on a serving runtime | the call |
-| A `principal` that is not a DID in DID Core syntax, `"*"` among them | the call |
+| A `principal` that is not a `did:key` DID in DID Core syntax, `"*"` among them | the call |
 | An `entry` that is not a cell | the call |
 | An `entry` below the root of its document, or in a scope other than the space's | the call |
 | An actor without `OWNER` in the space | the send |
 | A `principal` without an entry of its own in the space's list | the send |
+
+An inbox addresses only `did:key` principals, so the call refuses a DID of any
+other method, which no inbox could deliver to.
 
 An entry for `"*"` does not count as the principal's own: a notice goes only to
 a principal the list names. A principal may be told about a space in which they
@@ -71,7 +74,8 @@ The two checks on the access list run only at the send, after the handler's
 own `grantSpaceAccess()` and `revokeSpaceAccess()` changes and its other writes
 have committed, against the list caught up with the memory server. So a
 handler can admit someone and tell them in one run, and a principal whose entry
-is gone by then is not told.
+is gone by then is not told. The list checked is that of the space `entry` lives
+in, so a grant counts only when its `target` is in that same space.
 
 The call does not check the list. The list this runtime holds may be behind the
 memory server's, for instance just after another client granted the principal
@@ -103,12 +107,21 @@ reads a list that holds it.
 The message goes to the inbox at the host this runtime's `apiUrl` names, the
 host a client of the same deployment reads its own inbox from.
 
-The inbox operation id is derived from `eventKey()`, `principal` and the
-payload. Every run of one event therefore sends the same operation id and the
-same payload, and the inbox keeps the first and returns its receipt for the
-rest, so two runs of one event that both commit leave one message. An event
-delivered twice ordinarily commits once, since the second delivery's commit is
-refused, and then only one run sends at all.
+An event sends a principal at most one notice. The inbox operation id is
+derived from `eventKey()` and `principal` alone, so every run of one event
+sends the same operation id, and the inbox keeps the first message it receives
+under one. A later run that sends the same payload gets the first message's
+receipt back. A later run whose `entry` resolved to another document, as it
+can when a linked cell changes between runs, sends a different payload under
+the same operation id, which the inbox refuses as an operation conflict; the
+refusal is logged, and the first message stands. A second call for the same
+principal in one run stages nothing more.
+
+A second delivery of the same event may be refused at its commit, or, once the
+stream has handled the first, admitted again and committed as a new run of the
+same event, as [`event-key.md`](event-key.md#re-admission-of-the-same-id)
+describes. Either way it sends the same operation id, so the notice stays
+single.
 
 Nothing retries a send that fails. A refusal at the send, an inbox that is not
 enabled or is full, a network failure, and a tab closed between the commit and

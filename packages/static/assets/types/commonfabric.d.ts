@@ -4830,18 +4830,18 @@ export declare function revokeSpaceAccess(
  * else. The inbox tells the recipient who sent it; the recipient trusts none of
  * what it says, and opening the space is what checks it.
  *
- * `principal` must be a DID other than `"*"`, and `entry` a cell at the root
- * of a document in the space's own scope. The acting principal, the event's
- * actor, must hold `OWNER` in the space, and `principal` must have an entry of
- * its own in the space's access list, including any the handler's own
- * `grantSpaceAccess()` added. Those two are checked only just before the
- * message is sent, after the handler's writes commit; a notice that fails them
- * is dropped, and only the log shows it.
+ * `principal` must be a `did:key` DID, which an inbox can address, and `entry`
+ * a cell at the root of a document in the space's own scope. The acting
+ * principal, the event's actor, must hold `OWNER` in the space, and `principal`
+ * must have an entry of its own in the space's access list, including any the
+ * handler's own `grantSpaceAccess()` added to that space. Those two are checked
+ * only just before the message is sent, after the handler's writes commit; a
+ * notice that fails them is dropped, and only the log shows it.
  *
  * The message goes out after the handler's writes commit, and is not sent if
  * they fail. Nothing retries a send that fails, so a notice may not arrive,
- * and one arrives only if its recipient has enabled their inbox. Every run of
- * one event sends the same message, which the inbox holds once.
+ * and one arrives only if its recipient has enabled their inbox. An event
+ * sends a principal at most one notice, however many times the handler runs.
  *
  * Available only in a handler on a client runtime, and throws anywhere else.
  * The call throws for a malformed `principal` or `entry`, before staging

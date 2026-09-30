@@ -680,26 +680,26 @@ const invite = handler<
   { member: DID },
   { board: Writable<{ title: string }>; members: Writable<DID[]> }
 >(({ member }, { board, members }) => {
-  grantSpaceAccess(members, member, "WRITE");
+  grantSpaceAccess(board, member, "WRITE");
   noticeSpaceAccess(member, board);
   members.addUnique(member);
 });
 ```
 
 The call works only in a handler, and throws anywhere else, on a serving
-runtime, for a `principal` that is not a DID, and for an `entry` that is not the
-root of a document. The person who sent the event must hold `OWNER` in the
-space, and `principal` must have an entry of their own in its access list,
-counting any `grantSpaceAccess()` the same handler made; an entry for `"*"`
-does not count. Those two are checked only when the message is about to go
-out, after the handler's writes commit: a notice that fails them is dropped,
-the handler's writes stand, and only the log shows it.
+runtime, for a `principal` that is not a `did:key` DID, and for an `entry` that
+is not the root of a document. The person who sent the event must hold `OWNER`
+in the space, and `principal` must have an entry of their own in its access
+list, counting any `grantSpaceAccess()` the same handler made to that same
+space; an entry for `"*"` does not count. Those two are checked only when the
+message is about to go out, after the handler's writes commit: a notice that
+fails them is dropped, the handler's writes stand, and only the log shows it.
 
-The message goes out only after the handler's writes commit. Every run of one
-event sends the same message, which the inbox holds once. Nothing retries a
-message that fails to send, and one reaches only a recipient who has enabled
-their inbox, so a notice may not arrive: keep another way for the person to
-find the space. The recipient cannot trust what a notice says beyond who sent
+The message goes out only after the handler's writes commit. An event sends a
+principal at most one notice, however many times its handler runs. Nothing
+retries a message that fails to send, and one reaches only a recipient who has
+enabled their inbox, so a notice may not arrive: keep another way for the person
+to find the space. The recipient cannot trust what a notice says beyond who sent
 it, and opening the space is what checks the rest.
 [`space-access-notices.md`](../../features/space-access-notices.md) has the
 details.
