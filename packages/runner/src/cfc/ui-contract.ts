@@ -2,7 +2,7 @@ import {
   isFabricDataUri,
   valueFromDataUri,
 } from "@commonfabric/data-model/codec-data-uri";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope, FabricValue, JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
@@ -615,6 +615,18 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
 
   return candidates;
 };
+
+/**
+ * Whether `event` is a trusted gesture: an event the renderer marked, whose
+ * provenance says the browser trusted a DOM event on a UI surface. This is
+ * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
+ * their match on which surface it was, so it shows that a person acted and
+ * not on what.
+ */
+export const isTrustedGesture = (event: unknown): boolean =>
+  isRendererTrustedEvent(event) && isObjectNotArray(event) &&
+  isTrustedDomProvenance(event.provenance) &&
+  isObjectNotArray(event.provenance.ui);
 
 const pathsEqual = (
   left: readonly unknown[],

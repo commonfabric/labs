@@ -43,7 +43,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import type { EntityKind } from "../entity-kind.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import { type Runtime } from "../runtime.ts";
+import { type CreatorSpaceRequest, type Runtime } from "../runtime.ts";
 import {
   type IExtendedStorageTransaction,
   type MemorySpace,
@@ -337,6 +337,12 @@ export type Frame = {
    */
   eventTime?: number;
 
+  /**
+   * Whether the event that opened this handler frame is a trusted gesture, as
+   * `isTrustedGesture()` decides. Only meaningful on handler frames.
+   */
+  trustedGesture?: boolean;
+
   unsafe_binding?: UnsafeBinding;
 
   /**
@@ -353,8 +359,22 @@ export type Frame = {
    */
   pendingSpaceNames?: Set<string>;
 
+  /**
+   * `PatternFactory.inSpace(name, { access: "creator" })` targets encountered
+   * during this frame whose calling space holds no record yet, by request key.
+   * The runner creates each space after the run and re-runs, like a pending
+   * name.
+   */
+  pendingCreatorSpaces?: Map<string, PendingCreatorSpace>;
+
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;
+};
+
+/** A creator-only space a handler run found no allocation record for. */
+export type PendingCreatorSpace = CreatorSpaceRequest & {
+  /** The allocation record, in the calling space, that will hold its DID. */
+  readonly allocation: NormalizedFullLink;
 };
 
 /**

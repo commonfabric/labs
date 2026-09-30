@@ -2557,8 +2557,43 @@ export type PatternFactory<T, R> =
   & toEncodableForm
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
-    inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
+    inSpace(
+      space?: string | AnyCell<unknown>,
+      options?: InSpaceOptions,
+    ): PatternFactory<T, R>;
   };
+
+/**
+ * How `PatternFactory.inSpace()` creates the space it names. With
+ * `access: "creator"` the space is new, under a random key the runtime forgets
+ * once the space exists, and its access list names exactly the handler's
+ * `currentPrincipal()` as `OWNER` plus `members`. The calling space records
+ * which space a name reached, so a re-run reaches the same one.
+ *
+ * Available only in a handler, and only with a name or no argument; a DID or a
+ * cell names a space that already exists. A non-empty `members` needs a
+ * trusted gesture on the handler's event, since it lets each member read what
+ * the space will hold, and a serving runtime refuses it.
+ */
+export type InSpaceOptions = {
+  /** Who the new space admits: its creator, and the `members` listed here. */
+  readonly access: "creator";
+
+  /**
+   * The principals admitted beside the creator, each named by its DID and at
+   * most once. None may be the creator, and the wildcard is not a DID.
+   */
+  readonly members?: readonly SpaceMember[];
+};
+
+/** One principal a creator-only space admits beside its creator. */
+export type SpaceMember = {
+  /** The principal admitted. */
+  readonly principal: DID;
+
+  /** The access the principal holds. */
+  readonly level: "WRITE" | "OWNER";
+};
 
 export type ModuleFactory<T, R> =
   & ((inputs: FactoryInput<T>) => Reactive<R>)

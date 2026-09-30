@@ -442,6 +442,21 @@ export type PatternInstantiationObserver = (
   instantiation: PatternInstantiation,
 ) => void;
 
+/** One creator-only space a handler run asked `Runtime` to create. */
+export type CreatorSpaceRequest = {
+  /**
+   * Names the request: the allocation record that will hold the space's DID,
+   * the creator and the members. Equal keys reach the same space.
+   */
+  readonly key: string;
+
+  /** The principal the genesis names OWNER. */
+  readonly creator: DID;
+
+  /** The principals the genesis admits beside the creator, at their levels. */
+  readonly members: Readonly<Record<DID, "WRITE" | "OWNER">>;
+};
+
 /**
  * What the scheduler knows about a run when it mints the run's
  * transaction (server-execution v2 stage F): the durable action identity
@@ -1349,6 +1364,17 @@ export class Runtime {
    * rather than racing it to registration, so two documents for one name
    * cannot both register before either is cached. */
   readonly #spaceNameResolutions = new Map<string, Promise<MemorySpace>>();
+
+  /** Creator-only spaces whose genesis is confirmed, by request key, for the
+   * handler run that records them. */
+  readonly #preparedCreatorSpaces = new Map<string, MemorySpace>();
+
+  /** Keys of creator-only spaces whose genesis is not yet confirmed, by
+   * request key, kept so that a retry resubmits the same genesis. */
+  readonly #creatorSpaceKeys = new Map<string, Identity>();
+
+  /** Creator-only space creations in flight, by request key. */
+  readonly #creatorSpaceCreations = new Map<string, Promise<MemorySpace>>();
 
   #defaultFrame?: Frame;
   #queues = new Map<string, AsyncSemaphoreQueue>();
@@ -4224,8 +4250,10 @@ export class Runtime {
    * runtime refuses it outright: served provisioning names the run's
    * acting user OWNER through the OW31 owner path, and a document that
    * bypassed that path could name any principal — including the service —
-   * on a space the acting user asked for. A creator that wants a sealed
-   * space mints it from its own (client) runtime.
+   * on a space the acting user asked for. A handler that wants a space
+   * admitting only its actor asks for `inSpace(name, { access: "creator" })`,
+   * which {@link createCreatorSpace} creates on the same owner path, with no
+   * grants beside the owner.
    */
   async resolveSpaceName(
     name: string,
@@ -4292,7 +4320,8 @@ export class Runtime {
         `space-name resolution for "${name}" on a serving runtime does not ` +
           "accept genesisAcl: served provisioning names the run's acting " +
           "identity OWNER through the owner path (OW31, RULED 2026-08-18), " +
-          "and a caller-supplied document would bypass it",
+          "and a caller-supplied document would bypass it; a space " +
+          'admitting only the acting identity is `inSpace(name, { access: "creator" })`',
       );
     }
     if (this.servingPosture && options?.owner === undefined) {
@@ -4344,6 +4373,88 @@ export class Runtime {
       return await resolution;
     } finally {
       this.#spaceNameResolutions.delete(name);
+    }
+  }
+
+  /**
+   * Returns the creator-only space {@link createCreatorSpace} made for
+   * `key`, or `undefined` if it has made none.
+   */
+  preparedCreatorSpace(key: string): MemorySpace | undefined {
+    return this.#preparedCreatorSpaces.get(key);
+  }
+
+  /** Forgets the creator-only space {@link createCreatorSpace} made for `key`. */
+  releasePreparedCreatorSpace(key: string): void {
+    this.#preparedCreatorSpaces.delete(key);
+  }
+
+  /**
+   * Creates a space for `PatternFactory.inSpace(name, { access: "creator" })`
+   * under a freshly generated key, and returns its DID. Its genesis names
+   * `request.creator` as OWNER and `request.members` at their levels, and
+   * nothing else. The key is dropped once genesis is confirmed, so after this
+   * returns no process holds it; a genesis whose outcome is unknown keeps it,
+   * and a later call with the same key resubmits the same genesis. A second
+   * call with a key that already succeeded returns the same space.
+   *
+   * `request.key` names one request: the allocation record that will hold the
+   * DID, the creator and the members. A different creator or member list is a
+   * different key, so no run reaches a space made for another principal.
+   *
+   * @throws Error on a serving runtime when `request.members` is not empty, or
+   *   when this runtime's storage cannot write a genesis document.
+   */
+  async createCreatorSpace(
+    request: CreatorSpaceRequest,
+  ): Promise<MemorySpace> {
+    const { key, creator, members } = request;
+    const prepared = this.#preparedCreatorSpaces.get(key);
+    if (prepared !== undefined) return prepared;
+    const inFlight = this.#creatorSpaceCreations.get(key);
+    if (inFlight !== undefined) return await inFlight;
+    if (this.servingPosture && Object.keys(members).length > 0) {
+      throw new Error(
+        "A serving runtime does not create a space with `members`: nothing " +
+          "there checks the grant against the person who asked for it.",
+      );
+    }
+    const storage = this.storageManager;
+    if (
+      storage.registerSpaceIdentity === undefined ||
+      storage.ensureSpaceInitialized === undefined ||
+      storage.forgetSpaceIdentity === undefined
+    ) {
+      throw new Error(
+        "This runtime's storage cannot create a creator-only space: it " +
+          "writes no genesis document.",
+      );
+    }
+    const creation = (async (): Promise<MemorySpace> => {
+      let identity = this.#creatorSpaceKeys.get(key);
+      if (identity === undefined) {
+        identity = await Identity.generate();
+        if (Object.hasOwn(members, identity.did())) {
+          throw new Error("A space cannot be its own member.");
+        }
+        storage.registerSpaceIdentity!(identity, {
+          owner: creator,
+          grants: { ...members },
+        });
+        this.#creatorSpaceKeys.set(key, identity);
+      }
+      const space = identity.did() as MemorySpace;
+      await storage.ensureSpaceInitialized!(space);
+      storage.forgetSpaceIdentity!(space);
+      this.#creatorSpaceKeys.delete(key);
+      this.#preparedCreatorSpaces.set(key, space);
+      return space;
+    })();
+    this.#creatorSpaceCreations.set(key, creation);
+    try {
+      return await creation;
+    } finally {
+      this.#creatorSpaceCreations.delete(key);
     }
   }
 

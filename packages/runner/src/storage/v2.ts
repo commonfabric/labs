@@ -834,11 +834,14 @@ export const DEFAULT_GENESIS_GRANTS: Readonly<ACL> = Object.freeze({
   "*": "WRITE",
 });
 
-/** The fallback genesis document for a fresh non-home space: `owner` as
- *  OWNER plus the rollout default grants. */
-const defaultGenesisAcl = (owner: string): ACL => ({
+/** The genesis document for a fresh non-home space: `owner` as OWNER plus
+ *  `grants`, which default to the rollout default grants. */
+const defaultGenesisAcl = (
+  owner: string,
+  grants: Readonly<ACL> = DEFAULT_GENESIS_GRANTS,
+): ACL => ({
+  ...grants,
   [owner]: "OWNER",
-  ...DEFAULT_GENESIS_GRANTS,
 });
 
 /** The OWNER principals of a stored ACL document, the wildcard included —
@@ -1404,12 +1407,13 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
-   * The CFC schema document syncer a test may supply, the pending-load
-   * registration step, and the linked-cell sync collector, which a test
-   * drives directly.
+   * The CFC schema document syncer a test may supply, the space identities
+   * this manager holds, the pending-load registration step, and the
+   * linked-cell sync collector, which a test drives directly.
    */
   get accessForTestingOnly(): {
     cfcSchemaDocumentSyncer: CfcSchemaDocumentSyncer | undefined;
+    readonly spaceIdentities: ReadonlyMap<MemorySpace, Signer>;
     registerPendingLoad(address: {
       space: MemorySpace;
       scope: CellScope;
@@ -1433,6 +1437,7 @@ export class StorageManager implements IStorageManager {
       set cfcSchemaDocumentSyncer(value) {
         outerThis.#cfcSchemaDocumentSyncer = value;
       },
+      spaceIdentities: this.#spaceIdentities,
       registerPendingLoad: (address) => this.#registerPendingLoad(address),
       collectLinkedCellSyncs: (value, base, schema, promises, seen) =>
         this.#collectLinkedCellSyncs(
@@ -1594,16 +1599,41 @@ export class StorageManager implements IStorageManager {
    * two descriptions of one document, so supplying both in one
    * registration is refused rather than silently ranked; a registration
    * after the space's first mount has begun is refused too.
+   *
+   * `options.grants` replaces the rollout default grants beside `owner`, so
+   * the document is exactly the owner plus `grants`. Like `genesisAcl`, it is
+   * refused by a manager whose session factory cannot bootstrap an ACL, and
+   * after the space's first mount has begun: a space born without the
+   * document would be one it did not ask for.
    */
   registerSpaceIdentity(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
+    options?: {
+      owner?: string;
+      grants?: ACL;
+      genesisAcl?: ACL;
+      genesisRoot?: GenesisRoot;
+    },
   ): void {
     const space = identity.did() as MemorySpace;
     const owner = options?.owner;
+    const grants = options?.grants;
     const genesisAcl = options?.genesisAcl;
     if (options?.genesisRoot !== undefined && genesisAcl === undefined) {
       throw new Error("genesisRoot requires an explicit genesisAcl");
+    }
+    if (grants !== undefined) {
+      if (owner === undefined) {
+        throw new Error(
+          `registerSpaceIdentity(${space}): grants requires owner, beside ` +
+            "whom they are granted",
+        );
+      }
+      if (Object.hasOwn(grants, owner)) {
+        throw new Error(
+          `registerSpaceIdentity(${space}): grants may not name the owner`,
+        );
+      }
     }
     if (owner !== undefined && genesisAcl !== undefined) {
       throw new Error(
@@ -1612,31 +1642,34 @@ export class StorageManager implements IStorageManager {
           "only names the OWNER of the default one",
       );
     }
-    if (genesisAcl !== undefined && this.#genesisPhase.has(space)) {
+    if (
+      (genesisAcl !== undefined || grants !== undefined) &&
+      this.#genesisPhase.has(space)
+    ) {
       // The document is read during the space's first mount; that mount is
       // under way or done, without it.
       throw new Error(
         `registerSpaceIdentity(${space}): the space is already open on this ` +
-          "manager, so the supplied genesisAcl could never be its genesis — " +
+          "manager, so the supplied document could never be its genesis — " +
           "register the document before the first open",
       );
     }
     if (
-      genesisAcl !== undefined &&
+      (genesisAcl !== undefined || grants !== undefined) &&
       this.#sessionFactory.supportsAclBootstrap !== true
     ) {
       // A document nobody will write is a seal that never lands; the
       // caller asked for a closed space and would get an ACL-less one.
       throw new Error(
         `registerSpaceIdentity(${space}): this manager's session factory ` +
-          "cannot bootstrap an ACL, so the supplied genesisAcl would never " +
+          "cannot bootstrap an ACL, so the supplied document would never " +
           "be written",
       );
     }
     this.#spaceIdentities.set(space, identity);
     if (owner !== undefined) {
       this.#spaceGenesisAcls.set(space, {
-        document: defaultGenesisAcl(owner),
+        document: defaultGenesisAcl(owner, grants),
         supplied: false,
       });
     }
@@ -1651,6 +1684,11 @@ export class StorageManager implements IStorageManager {
         supplied: true,
       });
     }
+  }
+
+  /** See `IStorageManager.forgetSpaceIdentity`. */
+  forgetSpaceIdentity(space: MemorySpace): void {
+    this.#spaceIdentities.delete(space);
   }
 
   /**

@@ -56,6 +56,7 @@ import {
   type Node,
   type NodeFactory,
   type Pattern,
+  type PendingCreatorSpace,
   UI,
 } from "./builder/types.ts";
 import {
@@ -85,6 +86,7 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
+import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
 import { MAX_PATH_RESOLUTION_LENGTH, resolveLink } from "./link-resolution.ts";
@@ -1889,6 +1891,15 @@ type PieceVariantRegistration = {
   registrations: Map<string, PieceRegistration>;
   selection: ImplementationSelection;
 };
+
+/**
+ * Whether a run left `inSpace()` targets for the runner to resolve before it
+ * re-runs: a name not yet resolved, or a creator-only space not yet recorded.
+ */
+function hasPendingSpaceResolution(frame: Frame): boolean {
+  return (frame.pendingSpaceNames?.size ?? 0) > 0 ||
+    (frame.pendingCreatorSpaces?.size ?? 0) > 0;
+}
 
 export class Runner {
   #runtime: Runtime;
@@ -10381,21 +10392,41 @@ export class Runner {
     tx?: IExtendedStorageTransaction,
   ): Promise<never> {
     const names = [...(frame.pendingSpaceNames ?? [])];
+    const creations = [...(frame.pendingCreatorSpaces?.values() ?? [])];
     let owner: DID | undefined;
     if (this.#runtime.servingPosture && tx !== undefined) {
       owner = waveRunContextOf(tx)?.acting?.user as DID | undefined;
     }
-    await Promise.all(
-      names.map((name) =>
+    await Promise.all([
+      ...names.map((name) =>
         this.#runtime.resolveSpaceName(
           name,
           owner !== undefined ? { owner } : undefined,
         )
       ),
-    );
+      ...creations.map((creation) => this.#createCreatorSpace(creation)),
+    ]);
     throw new RetryImmediately(
-      `Resolving in-space target spaces: ${names.join(", ")}`,
+      `Resolving in-space target spaces: ${
+        [...names, ...creations.map(({ allocation }) => allocation.id)]
+          .join(", ")
+      }`,
     );
+  }
+
+  /**
+   * Helper for `#resolvePendingSpaceNamesAndRetry()`, which creates the space
+   * a creator-only `inSpace()` asked for, unless its allocation record turns
+   * out to exist once synced. A replica that had not loaded the record read
+   * it as absent, and the re-run reads what the sync brought in.
+   */
+  async #createCreatorSpace(creation: PendingCreatorSpace): Promise<void> {
+    const allocation = this.#runtime.getCellFromLink<string>(
+      creation.allocation,
+    );
+    await allocation.sync();
+    if (allocation.get() !== undefined) return;
+    await this.#runtime.createCreatorSpace(creation);
   }
 
   #handlerResultPatternHasNavigateTo(
@@ -10711,6 +10742,7 @@ export class Runner {
         true,
         policyFacingIdentity,
       );
+      frame.trustedGesture = isTrustedGesture(event);
       if (policyFacingIdentity) {
         setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
@@ -10788,7 +10820,7 @@ export class Runner {
         const postRun = (result: any) => {
           logger.timeStart("stream", "postRun");
           try {
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (hasPendingSpaceResolution(frame)) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
@@ -10821,7 +10853,7 @@ export class Runner {
         // pending names and retry instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          hasPendingSpaceResolution(frame)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)
@@ -11139,7 +11171,7 @@ export class Runner {
               );
               result = undefined;
             }
-            if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
+            if (hasPendingSpaceResolution(frame)) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
@@ -11208,7 +11240,7 @@ export class Runner {
         // instead of surfacing the error.
         if (
           !(error instanceof RetryImmediately) &&
-          frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0
+          hasPendingSpaceResolution(frame)
         ) {
           popFrameAfterReturn = false;
           return this.#resolvePendingSpaceNamesAndRetry(frame, tx)

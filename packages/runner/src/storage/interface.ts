@@ -357,6 +357,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * in the ACL). Absent, the genesis owner is the manager's own signer —
    * the active user on a client, byte-identical to the pre-OW31 shape.
    *
+   * `options.grants` requires `owner`, and replaces the default grants the
+   * owner's genesis document carries beside it: the document is exactly the
+   * owner as OWNER plus `grants`, which may not name the owner. A manager
+   * that cannot bootstrap an ACL refuses it, as it refuses `genesisAcl`.
+   *
    * `options.genesisAcl` is the exact document a fresh space is born with
    * (its first and only commit; no intermediate default is ever written),
    * validated by the memory server's genesis admission rather than here.
@@ -378,8 +383,20 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   registerSpaceIdentity?(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
+    options?: {
+      owner?: string;
+      grants?: ACL;
+      genesisAcl?: ACL;
+      genesisRoot?: GenesisRoot;
+    },
   ): void;
+
+  /**
+   * Drops the space identity registered for `space`, so this manager holds no
+   * key for it and can perform no further genesis for it. The call to make
+   * once a space's genesis is confirmed and its key is not to be kept.
+   */
+  forgetSpaceIdentity?(space: MemorySpace): void;
 
   /**
    * Force `space`'s provider session — and with it any fresh-space ACL

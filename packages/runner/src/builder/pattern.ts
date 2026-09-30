@@ -1,4 +1,4 @@
-import type { JSONSchemaObj } from "@commonfabric/api";
+import type { DID, JSONSchemaObj } from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
@@ -698,8 +698,13 @@ function factoryFromPattern<T, R>(
       noteDerivedCopy(derived, factory);
       return derived;
     };
-    factory.inSpace = (space?: string | unknown) => {
-      const derived = makePatternFactory(defaultScope, space ?? "");
+    factory.inSpace = (space?: string | unknown, options?: unknown) => {
+      const derived = makePatternFactory(
+        defaultScope,
+        options === undefined
+          ? space ?? ""
+          : creatorSpaceTarget(space, options),
+      );
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -1090,6 +1095,77 @@ function assignComputedCellKinds(
   });
 }
 
+/** What a creator-only `inSpace()` target asked for. */
+type CreatorSpaceTarget = {
+  /** The name given, or the empty string for the anonymous form. */
+  readonly name: string;
+
+  /** The principals the genesis admits beside the creator. */
+  readonly members: Readonly<Record<DID, "WRITE" | "OWNER">>;
+};
+
+/** Creator-only targets, by the object `inSpace()` minted to stand for one. */
+const creatorSpaceTargets = new WeakMap<object, CreatorSpaceTarget>();
+
+/**
+ * Helper for `PatternFactory.inSpace()`, which checks the options a pattern
+ * passed and returns the object that stands for the creator-only space they
+ * describe.
+ *
+ * @throws Error when the options are not `{ access: "creator", members? }`,
+ *   when `space` names a space that already exists, or when a member is not a
+ *   DID at `WRITE` or `OWNER`, or is listed twice.
+ */
+function creatorSpaceTarget(space: unknown, options: unknown): object {
+  if (!isObjectNotArray(options) || options.access !== "creator") {
+    throw new Error(
+      '`inSpace()` options must be `{ access: "creator" }`, optionally ' +
+        debugStr`with \`members\`; got $quote${options}.`,
+    );
+  }
+  if (space !== undefined && (typeof space !== "string" || isDID(space))) {
+    throw new Error(
+      '`inSpace()` with `access: "creator"` creates a space, so it takes a ' +
+        "name or no argument, not a DID or a cell naming a space that exists.",
+    );
+  }
+  const members: Record<DID, "WRITE" | "OWNER"> = {};
+  const given = options.members ?? [];
+  if (!Array.isArray(given)) {
+    throw new Error(
+      debugStr`\`inSpace()\` \`members\` must be an array; got $quote${given}.`,
+    );
+  }
+  for (const entry of given) {
+    const principal = isObjectNotArray(entry) ? entry.principal : undefined;
+    const level = isObjectNotArray(entry) ? entry.level : undefined;
+    if (typeof principal !== "string" || !isDID(principal)) {
+      throw new Error(
+        "A creator-only space's member must be a principal's DID, never " +
+          debugStr`the wildcard; got $quote${principal}.`,
+      );
+    }
+    if (level !== "WRITE" && level !== "OWNER") {
+      throw new Error(
+        "A creator-only space's member is admitted at `WRITE` or `OWNER`; " +
+          debugStr`got $quote${level} for ${principal}.`,
+      );
+    }
+    if (Object.hasOwn(members, principal)) {
+      throw new Error(
+        `A creator-only space lists ${principal} as a member twice.`,
+      );
+    }
+    members[principal] = level;
+  }
+  const target = {};
+  creatorSpaceTargets.set(target, {
+    name: typeof space === "string" ? space : "",
+    members: Object.freeze(members),
+  });
+  return target;
+}
+
 /**
  * Resolves a `PatternFactory.inSpace(...)` target to a concrete space DID at
  * graph-construction time.
@@ -1109,6 +1185,12 @@ function resolveInSpaceTargetSpace(
   space: unknown,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
+  const creatorTarget = isObjectOrArray(space)
+    ? creatorSpaceTargets.get(space)
+    : undefined;
+  if (creatorTarget !== undefined) {
+    return resolveCreatorSpaceTarget(creatorTarget, frame);
+  }
   if (isDID(space)) {
     return optIntoInSpaceMultiSpaceCommit(frame, space);
   }
@@ -1128,6 +1210,107 @@ function resolveInSpaceTargetSpace(
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   (frame!.pendingSpaceNames ??= new Set<string>()).add(name);
+  return undefined;
+}
+
+/**
+ * Like `resolveInSpaceTargetSpace()`, except for a creator-only target. The
+ * calling space's allocation record for the name decides: a record holding a
+ * DID is the space, whatever that space's access list has become since. With
+ * no record, a space the runtime has already created for this request is
+ * recorded in this transaction; otherwise the request is left pending on the
+ * frame, for the runner to create the space and re-run. The transaction read
+ * the record as absent, so a record another run commits first is a conflict:
+ * this run re-runs, reads that record, and abandons the space it created.
+ *
+ * The record is addressed by the calling space and the name (the anonymous
+ * name derives from the frame's cause), in a namespace no plain `inSpace()`
+ * reaches. The creator is the principal the handler acts for, never anything
+ * the pattern passed.
+ *
+ * A non-empty `members` needs the handler's event to be a trusted gesture,
+ * checked here on every run, before the record is read or a creation is left
+ * pending. The CFC enforcement mode does not govern this check: the space's
+ * genesis, which is what grants the members, lands before the handler's
+ * commit is prepared, so a check at commit preparation could refuse the
+ * commit but not the space.
+ *
+ * @throws Error outside a handler, in a run acting for no principal, when a
+ *   member is the creator, or when `members` is not empty and the handler's
+ *   event is not a trusted gesture.
+ */
+function resolveCreatorSpaceTarget(
+  target: CreatorSpaceTarget,
+  frame: Frame | undefined,
+): MemorySpace | undefined {
+  const runtime = frame?.runtime;
+  const tx = frame?.tx;
+  const callingSpace = frame?.space;
+  if (
+    frame?.inHandler !== true || runtime === undefined || tx === undefined ||
+    callingSpace === undefined
+  ) {
+    throw new Error(
+      '`inSpace()` with `access: "creator"` is available only in a handler, ' +
+        "not in a pattern body, a `computed()`, or a `lift()`.",
+    );
+  }
+  const creator = runtime.actingPrincipalFor(tx);
+  if (creator === undefined) {
+    throw new Error(
+      '`inSpace()` with `access: "creator"` needs the principal the handler ' +
+        "acts for, and this run acts for none.",
+    );
+  }
+  if (Object.hasOwn(target.members, creator)) {
+    throw new Error(
+      `A creator-only space lists its creator, ${creator}, as a member.`,
+    );
+  }
+  if (
+    Object.keys(target.members).length > 0 && frame.trustedGesture !== true
+  ) {
+    throw new Error(
+      "A creator-only space with `members` grants each of them what it will " +
+        "hold, so it needs a trusted gesture on the handler's event.",
+    );
+  }
+  const name = target.name !== "" ? target.name : anonymousSpaceName(frame);
+  const allocation = runtime.getCell<string>(
+    callingSpace,
+    { creatorSpaceAllocation: { space: callingSpace, name } },
+    { type: "string" },
+    tx,
+  );
+  const allocationLink = allocation.getAsNormalizedFullLink();
+  const key = JSON.stringify([
+    allocationLink.space,
+    allocationLink.id,
+    creator,
+    Object.entries(target.members).sort(([a], [b]) => a < b ? -1 : 1),
+  ]);
+  const recorded = allocation.get();
+  if (recorded !== undefined) {
+    if (!isDID(recorded)) {
+      throw new Error(
+        "The allocation record for a creator-only space holds " +
+          debugStr`$quote${recorded}, not a space DID.`,
+      );
+    }
+    runtime.releasePreparedCreatorSpace(key);
+    return optIntoInSpaceMultiSpaceCommit(frame, recorded);
+  }
+  const prepared = runtime.preparedCreatorSpace(key);
+  if (prepared !== undefined) {
+    allocation.set(prepared);
+    return optIntoInSpaceMultiSpaceCommit(frame, prepared);
+  }
+  (frame.pendingCreatorSpaces ??= new Map()).set(key, {
+    key,
+    creator,
+    members: target.members,
+    allocation: allocationLink,
+  });
   return undefined;
 }
 
