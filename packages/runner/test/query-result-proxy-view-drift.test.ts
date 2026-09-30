@@ -1,16 +1,17 @@
 /**
- * A query-result view is bound to the kind of container it was built over:
- * the proxy target is a stub of that kind, `Array.isArray` on the view answers
- * for it, and the traps' array paths are keyed on it. The JS spec offers no
- * trap for `Array.isArray`, so the view cannot follow a document that changes
- * kind. Rather than answer for the old kind -- an array's `length` read off a
- * record, a record's keys read off an array, an instance's accessor read off
- * a record -- every trap first checks the kind and refuses with
- * `ViewDriftError` when it no longer matches. A fresh read of the cell builds
- * a view over the current value, because the view cache is keyed on the kind.
+ * A query-result view is bound to the kind of container it was built over, an
+ * array or a plain object: the proxy target is a stub of that kind,
+ * `Array.isArray` on the view answers for it, and the traps' array paths are
+ * keyed on it. The JS spec offers no trap for `Array.isArray`, so the view
+ * cannot follow a document that changes kind. Rather than answer for the old
+ * kind -- an array's `length` read off a record, a record's keys read off an
+ * array or off a `FabricInstance` -- every trap first checks the kind and
+ * refuses with `ViewDriftError` when it no longer matches. A fresh read of the
+ * cell returns the current value: a view over a container of the new kind,
+ * because the view cache is keyed on the kind, or the instance itself.
  *
- * The cases run over every ordered pair of kinds, since each pair used to
- * answer wrongly in its own way.
+ * The cases run over every kind a view is built over, paired with every other
+ * kind the document can come to hold.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -29,7 +30,13 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 const signer = await Identity.fromPassphrase("query-result-proxy view drift");
 const space = signer.did();
 
-type Kind = "array" | "plainObject" | "FabricInstance";
+/** The kinds of container a view is built over. */
+type ViewKind = "array" | "plainObject";
+
+/** The kinds of value a document can hold, a view's kinds among them. */
+type Kind = ViewKind | "FabricInstance";
+
+const VIEW_KINDS: ViewKind[] = ["array", "plainObject"];
 
 const KINDS: Record<Kind, { make: () => unknown; named: string }> = {
   array: { make: () => [1, 2, 3], named: "an array" },
@@ -72,7 +79,7 @@ describe("query-result-proxy view drift", () => {
     await storageManager?.close();
   });
 
-  for (const from of Object.keys(KINDS) as Kind[]) {
+  for (const from of VIEW_KINDS) {
     for (const to of Object.keys(KINDS) as Kind[]) {
       if (from === to) continue;
       describe(`${from} -> ${to}`, () => {
@@ -96,11 +103,7 @@ describe("query-result-proxy view drift", () => {
             }
             expect(thrown, what).toBeInstanceOf(ViewDriftError);
             const message = (thrown as Error).message;
-            expect(message, what).toContain(
-              from === "FabricInstance"
-                ? "a `FabricInstance`"
-                : KINDS[from].named,
-            );
+            expect(message, what).toContain(KINDS[from].named);
             expect(message, what).toContain(`now holds ${KINDS[to].named}`);
           }
         });

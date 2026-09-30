@@ -312,14 +312,11 @@ describe("stored-argument-validation", () => {
   });
 
   it("hands a stored instance under an object-typed slot through whole", () => {
-    // The materialized argument is a query-result view, and a view over a
-    // `FabricInstance` has `Object.prototype` for its prototype, so the
-    // defaults merge took one for a record and copied it: the copy threw a
-    // proxy-invariant `TypeError` before any verdict while the view reported
-    // the instance's freeze shield, and without that it would rebuild the
-    // instance as a record, with any default inside the slot filled in. The
-    // merge hands it back whole now. The untyped slot above (`failure:
-    // true`) never descends, which is why that case passed all along.
+    // The materialized argument is a query-result view, and reading the slot
+    // hands back the stored `FabricInstance` itself. The defaults merge hands
+    // it back whole rather than rebuilding it as a record with a default
+    // inside the slot filled in, and the validator admits an instance under
+    // `{ type: "object" }`.
     const tx = runtime.edit();
     try {
       const absent = runtime.getCell(space, "absent", undefined, tx);
@@ -350,11 +347,9 @@ describe("stored-argument-validation", () => {
         }) as { err: object };
         expect(merged.err).toBe(view.err);
         expect(merged.err.constructor.name).toBe("FabricError");
-        // The validator judges the view as the keyless record it looks like
-        // (the gap the marker in `query-result-proxy.ts` records), so the
-        // verdict is the one the untyped slot gets above. Whether
-        // `{ type: "object" }` should admit an instance at all is a separate
-        // question.
+        // `{ type: "object" }` admits an instance today, so the verdict is the
+        // one the untyped slot gets above; the `TODO` on the validator's
+        // `object` arm records when that narrows.
         expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
           .toBeUndefined();
       }

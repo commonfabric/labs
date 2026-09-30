@@ -58,10 +58,7 @@ import {
 
 import { mergeDefaults } from "../src/schema.ts";
 import { mergeAnyOfMatches } from "../src/traverse.ts";
-import {
-  isFabricInstanceOrView,
-  snapshotQueryResult,
-} from "../src/query-result-proxy.ts";
+import { snapshotQueryResult } from "../src/query-result-proxy.ts";
 import {
   extractDefaultValues,
   mergeSchemaDefaults,
@@ -219,8 +216,11 @@ describe("fabric special objects through the runner's walks", () => {
   });
 
   describe("snapshotQueryResult()", () => {
+    // Either kind leafs through: a `FabricInstance` a read hands back is the
+    // deep-frozen value the document holds, with no view to detach it from.
+
     forEachSpecialObject(
-      FABRIC_PRIMITIVES,
+      SPECIAL_OBJECTS,
       (name) => `snapshots a \`${name}\` by identity`,
       (_kind, special) => {
         expect(snapshotQueryResult(special)).toBe(special);
@@ -228,7 +228,7 @@ describe("fabric special objects through the runner's walks", () => {
     );
 
     forEachSpecialObject(
-      FABRIC_PRIMITIVES,
+      SPECIAL_OBJECTS,
       (name) => `snapshots a \`${name}\` held under a key by identity`,
       (_kind, special) => {
         const snapshot = snapshotQueryResult({ a: [{ b: special }] });
@@ -358,45 +358,14 @@ describe("fabric special objects through the runner's walks", () => {
     // would be wrong, in one direction or the other. When the codec-mediated
     // descent lands, these are the cases that change.
     //
-    // These cases hand each walk a raw instance, which is what a walk reading
-    // stored values gets. A walk handed the result of a cell read gets
-    // something else: a query-result proxy erases the prototype, so
-    // `instanceof FabricInstance` is `false` for a proxied one and neither this
-    // refusal nor a guard testing for an instance ahead of it fires.
-    // `query-result-proxy.ts` carries that gap and the marker for closing it,
-    // and the identity case above pins it.
-
-    forEachSpecialObject(
-      FABRIC_PRIMITIVES,
-      (name) => `is not a \`${name}\` to \`isFabricInstanceOrView()\``,
-      (_kind, special) => {
-        expect(isFabricInstanceOrView(special)).toBe(false);
-      },
-    );
-
-    it("is not a plain record to `isFabricInstanceOrView()`", () => {
-      expect(isFabricInstanceOrView({ a: 1 })).toBe(false);
-      expect(isFabricInstanceOrView([1])).toBe(false);
-      expect(isFabricInstanceOrView(null)).toBe(false);
-      // An own `constructor` is data sharing the name, not the class, and
-      // cannot answer for an instance; the answer never reads the name.
-      expect(isFabricInstanceOrView({ constructor: FabricError })).toBe(false);
-    });
+    // These cases hand each walk a raw instance, which is what a walk gets
+    // from stored values and from a cell read alike: a read hands back an
+    // instance rather than a view over one (the identity case below).
 
     for (const kind of FABRIC_INSTANCES) {
-      it(`is a \`${kind.name}\` to \`isFabricInstanceOrView()\``, () => {
-        expect(isFabricInstanceOrView(kind.make())).toBe(true);
-      });
-
       it(`is refused by \`mergeAnyOfMatches()\` for a \`${kind.name}\``, () => {
         const special = kind.make();
         expect(() => mergeAnyOfMatches([special, special])).toThrow(
-          "`FabricInstance`) in a structural walk",
-        );
-      });
-
-      it(`is refused by \`snapshotQueryResult()\` for a \`${kind.name}\``, () => {
-        expect(() => snapshotQueryResult({ a: kind.make() })).toThrow(
           "`FabricInstance`) in a structural walk",
         );
       });
@@ -472,18 +441,9 @@ describe("fabric special objects through the runner's walks", () => {
       expect((cell.get()[0] as { message: string }).message).toBe("boom");
     });
 
-    it("hands back a stored `FabricError` that is not one by `instanceof`", () => {
-      // The message above is what the assertion turns on because the class is
-      // not available: a read hands back a query-result proxy whose target is
-      // an empty stub with no `getPrototypeOf` trap, so `constructor` resolves
-      // through the get trap while `instanceof` consults `Object.prototype`.
-      // `query-result-proxy.ts` records that above the proxy construction,
-      // where a `TODO(danfuzz)` names the fix and says it lands at around ten
-      // guard sites at once.
-      //
-      // TODO(danfuzz): this test asserts the WRONG behavior on purpose. Once a
-      // proxied `FabricInstance` is perceived as one, the class comes back and
-      // this inverts. The work is at that `TODO` in `query-result-proxy.ts`.
+    it("hands back a stored `FabricError` that is one by `instanceof`", () => {
+      // A read hands back an instance rather than a view over one, so every
+      // `instanceof FabricInstance` guard sees what the document holds.
 
       const cell = runtime.getCell<unknown[]>(
         space,
@@ -496,15 +456,14 @@ describe("fabric special objects through the runner's walks", () => {
 
       const read = cell.get()[0] as object;
       expect(read.constructor.name).toBe("FabricError");
-      expect(read instanceof FabricError).toBe(false);
+      expect(read instanceof FabricError).toBe(true);
     });
 
     it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {
-      // The read hands back a view whose prototype is `Object.prototype` (the
-      // identity case above), which the merge's plain-object test takes for a
-      // record, and the slot's schema declares a default inside it, which the
-      // record path would add. The merge asks `isFabricInstanceOrView()` first
-      // and hands the view back as the leaf `traverseDAG` made it.
+      // The read hands back the stored instance (the identity case above), and
+      // the slot's schema declares a default inside it, which the record path
+      // would add. The merge tests for an instance first and hands it back
+      // whole, as the leaf `traverseDAG` made it.
       const cell = runtime.getCell<{ err: unknown }>(
         space,
         "walks-merge-defaults-error",

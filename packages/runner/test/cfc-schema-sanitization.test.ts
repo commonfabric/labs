@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -676,6 +677,23 @@ describe("cfc schema sanitization", () => {
     // A `FabricPrimitive`-typed schema is not gated by `required`.
     expect(validateSchemaValue({ type: "FabricBytes", required: ["x"] }, bytes))
       .toBeUndefined();
+  });
+
+  it("admits a FabricInstance under object, checking required keys against its accessors", () => {
+    // A cell read hands back a stored instance as itself, and "object" admits
+    // one, as it admits a `FabricPrimitive`. Its surface is class accessors,
+    // so a required key is present when the class declares it.
+    const error = FabricError.fromNativeError(new Error("boom"));
+
+    expect(validateSchemaValue({ type: "object" }, error)).toBeUndefined();
+    expect(
+      validateSchemaValue({ type: "object", required: ["message"] }, error),
+    )
+      .toBeUndefined();
+    expect(validateSchemaValue({ type: "object", required: ["x"] }, error))
+      .toContain("missing required property x");
+    expect(validateSchemaValue({ type: "string" }, error))
+      .toContain("value does not match type string");
   });
 
   it("resolves a referenced definition body's refs against the document's map", () => {

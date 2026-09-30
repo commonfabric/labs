@@ -15,6 +15,7 @@ import {
   FabricPrimitive,
   type FabricValue,
   isFabricPlainObject,
+  isFabricSpecialObject,
 } from "@commonfabric/data-model";
 import {
   FABRIC_PRIMITIVE_SCHEMA_TYPES,
@@ -633,9 +634,19 @@ const typeMatches = (
     case "object":
       // A `FabricPrimitive` satisfies "object" too: each `FabricPrimitive`
       // type is a subtype of "object" (the same rule the read side's
-      // schemaTypeMatchesValueType applies in traverse.ts).
+      // schemaTypeMatchesValueType applies in traverse.ts). So does a
+      // `FabricInstance`, which a cell read hands back as itself.
+      //
+      // TODO(ubik2): "object" is to mean a plain object only, admitting
+      // neither a `FabricInstance` nor a `FabricPrimitive`; a schema admits
+      // one by naming its type, e.g. `{ type: ["object", "FabricBytes"] }`,
+      // with umbrella `FabricInstance` and `FabricPrimitive` types to add.
+      // Narrow this arm and `schemaTypeMatchesValueType` together once an
+      // instance has a type name a schema can give it; until then, refusing
+      // one here would refuse at setup a piece whose stored argument holds
+      // an error under an object-typed slot, with no schema able to admit it.
       return isFabricPlainObjectValue(value) ||
-        value instanceof FabricPrimitive;
+        isFabricSpecialObject(value);
     default:
       if (isFabricPrimitiveSchemaType(type)) {
         return value instanceof FabricPrimitive &&
@@ -1920,12 +1931,13 @@ const validateAgainstSchemaUncached = (
       if (failure !== undefined) return failure;
     }
 
-    if (value instanceof FabricPrimitive) {
-      // An object-typed schema's `required` keys must exist on the opaque
-      // leaf. Unlike the plain-object loop below (own-props via
-      // `Object.hasOwn`), a primitive carries its surface as class
+    if (isFabricSpecialObject(value)) {
+      // An object-typed schema's `required` keys must exist on the special
+      // object. Unlike the plain-object loop below (own-props via
+      // `Object.hasOwn`), a special object carries its surface as class
       // accessors, so the check is `in` — `FabricBytes.length` satisfies
-      // `required: ["length"]`. `typeMatches` stays a permissive filter;
+      // `required: ["length"]`, and `FabricError.message` satisfies
+      // `required: ["message"]`. `typeMatches` stays a permissive filter;
       // this is the complete check behind it. A `FabricPrimitive`-typed
       // schema is not gated (its type never includes "object").
       //

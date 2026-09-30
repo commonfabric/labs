@@ -679,9 +679,10 @@ using them is not optional in code that can reach a stored value:
   caller whose operands may hold views compares them with the runner's
   `fabricAwareEqualThroughViews()`, which walks the views and hands the value
   model only the special objects they read, or compares stored values (a
-  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
-  copies a `FabricInstance` read through a view as an empty record. It is a
-  structural walk that decides every `FabricSpecialObject` it
+  cell's `getRaw()`). A read hands back a special object as itself rather
+  than as a view, so either route reaches the value itself.
+  `fabricAwareEqual()` is a structural walk that decides every
+  `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on
   one side only, is unequal without either one's contents being read. Neither half serves alone: `valueEqual()` throws
@@ -725,10 +726,8 @@ caller. Five shapes cover the tree today:
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
   `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
-  in place of merging into it, and asks `isFabricInstanceOrView()` rather
-  than `instanceof`, so an instance seen through a cell read -- whose
-  prototype the view erases -- gets the same answer instead of being rebuilt
-  as a record with defaults filled into it.
+  in place of merging into it, instead of rebuilding it as a record with
+  defaults filled into it.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty

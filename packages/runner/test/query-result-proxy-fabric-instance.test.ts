@@ -1,15 +1,9 @@
 /**
- * A `FabricInstance` holds all of its state in private fields and exposes it
- * through accessors on its prototype. Reading one through the query-result
- * proxy has to evaluate the accessor against the instance itself: a private
- * field is unreachable from the proxy, which does not declare it, so an
- * accessor run with the proxy as receiver throws outright rather than
- * returning a wrong answer.
- *
- * A method is the same problem one step later. The proxy hands the function
- * back and the caller invokes it, with the proxy as `this`, so a method
- * returned as it was found reads its private fields through the proxy and
- * throws in the same way. It has to come back bound to the instance.
+ * A read hands back a stored `FabricInstance` as itself rather than as a view
+ * over it. An instance keeps all of its state in private fields behind
+ * accessors and methods on its prototype, and a proxy cannot carry the brand a
+ * private-field read checks, so no view can stand in for one: `instanceof`,
+ * the accessors, and the methods all need the instance itself.
  *
  * `FabricError` stands in for the whole tree here because it is the instance a
  * cell write actually produces -- `Cell.set()` of a JS `Error` wraps one --
@@ -18,20 +12,10 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import {
-  resetModernCellRepConfig,
-  setModernCellRepConfig,
-} from "@commonfabric/data-model/cell-rep";
-import {
-  FabricError,
-  FabricLink,
-} from "@commonfabric/data-model/fabric-instances";
+import { deepFreeze, FabricInstance } from "@commonfabric/data-model";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
-import {
-  createQueryResultProxy,
-  isFabricInstanceOrView,
-  ViewDriftError,
-} from "../src/query-result-proxy.ts";
+import { createQueryResultProxy } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -115,207 +99,102 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     expect((clone as FabricError).getExtra("code")).toBe(42);
   });
 
-  it("reads a method's receiver through the transaction, not the view's snapshot", () => {
-    // A view is cached for its transaction, and a method is called after
-    // the trap returns. Its receiver has to be the instance the document
-    // holds at the call, read through the transaction the way the
-    // symbol-keyed members already are -- not the instance the view was
-    // built over. Both are checked, since `deepClone` reaches its core by
-    // symbol and `getExtra` by name.
+  it("returns the stored instance itself, an instance of its class", () => {
+    const cell = runtime.getCell<unknown>(space, "itselfCell", undefined, tx);
+    cell.set(new TypeError("boom"));
+
+    const result = cell.get();
+    expect(result).toBe(cell.getRaw());
+    expect(result).toBeInstanceOf(FabricError);
+    // `FabricInstance` is abstract, so `toBeInstanceOf` will not take it.
+    expect(result instanceof FabricInstance).toBe(true);
+    expect(cell.get()).toBe(result);
+  });
+
+  it("returns the stored instance from a record, an array, and a link", () => {
+    const target = runtime.getCell<unknown>(space, "linkedErr", undefined, tx);
+    target.set(new Error("linked"));
+    const holder = runtime.getCell<unknown>(space, "holderCell", undefined, tx);
+    holder.set({
+      wrap: new Error("wrapped"),
+      list: [new Error("listed")],
+      link: target,
+    });
+
+    const view = holder.get() as {
+      wrap: unknown;
+      list: unknown[];
+      link: unknown;
+    };
+    const raw = holder.getRaw() as { wrap: unknown; list: unknown[] };
+    expect(view.wrap).toBe(raw.wrap);
+    expect(view.wrap).toBeInstanceOf(FabricError);
+    expect(view.list[0]).toBe(raw.list[0]);
+    expect([...view.list][0]).toBe(raw.list[0]);
+    expect(view.list.map((entry) => entry)[0]).toBe(raw.list[0]);
+    expect(view.link).toBe(target.getRaw());
+  });
+
+  it("keeps what it read after a rewrite, and a fresh read returns the rewrite", () => {
+    // An instance is a value, as a primitive is: what a reader holds is what
+    // the document held when it read, and the document is rewritten by
+    // replacing it whole.
     const cell = runtime.getCell<unknown>(space, "rewriteCell", undefined, tx);
     cell.set(Object.assign(new Error("before"), { code: 1 }));
-    const view = cell.get() as FabricError;
-    expect(view.getExtra("code")).toBe(1);
+    const held = cell.get() as FabricError;
 
     cell.set(Object.assign(new Error("after"), { code: 2 }));
 
-    expect(view.getExtra("code")).toBe(2);
-    const clone = view.deepClone(false) as FabricError;
-    expect(clone.message).toBe("after");
-    expect(clone.getExtra("code")).toBe(2);
+    expect(held.message).toBe("before");
+    expect(held.getExtra("code")).toBe(1);
+    expect((cell.get() as FabricError).message).toBe("after");
+    expect((cell.get() as FabricError).getExtra("code")).toBe(2);
   });
 
-  it("reads an accessor through the transaction as well", () => {
-    // The same rule for the accessors an instance exposes, which are its
-    // data: a fixed-schema slot follows the document, not the snapshot.
-    const cell = runtime.getCell<unknown>(
+  it("re-fires a reactive consumer when the stored instance is replaced", async () => {
+    const cell = runtime.getCell<{ err: unknown }>(
       space,
-      "rewriteAccessor",
+      "reactCell",
       undefined,
       tx,
     );
-    cell.set(new Error("before"));
-    const view = cell.get() as FabricError;
-    expect(view.message).toBe("before");
+    cell.set({ err: new Error("first") });
+    await tx.commit();
 
-    cell.set(new Error("after"));
+    const seen: string[] = [];
+    const cancel = cell.key("err").sink((value: unknown) => {
+      seen.push((value as FabricError).message);
+    });
+    await runtime.idle();
 
-    expect(view.message).toBe("after");
+    tx = runtime.edit();
+    cell.withTx(tx).key("err").set(new Error("second"));
+    await tx.commit();
+    await runtime.idle();
+    cancel();
+    tx = runtime.edit();
+
+    expect(seen).toEqual(["first", "second"]);
   });
 
-  it("resolves a saved method's instance when it is called, not when it was read", () => {
-    // A method is read off the view once and may be called any time later.
-    // The instance it runs against is the one the document holds at the
-    // call, however the caller holds the method -- detached, or rebound to
-    // the view.
-    const cell = runtime.getCell<unknown>(space, "savedMethod", undefined, tx);
-    cell.set(Object.assign(new Error("before"), { code: 1 }));
-    const view = cell.get() as FabricError;
-    const getExtra = view.getExtra;
-    const clone = view.deepClone.bind(view);
-
-    cell.set(Object.assign(new Error("after"), { code: 2 }));
-
-    expect(getExtra("code")).toBe(2);
-    const copy = clone(false) as FabricError;
-    expect(copy.message).toBe("after");
-    expect(copy.getExtra("code")).toBe(2);
-  });
-
-  it("refuses a saved method once the document no longer holds an instance", () => {
-    const cell = runtime.getCell<unknown>(space, "savedDrift", undefined, tx);
-    cell.set(new Error("before"));
-    const view = cell.get() as FabricError;
-    const getExtra = view.getExtra;
-    const clone = view.deepClone.bind(view);
-
-    cell.set({ getExtra: 1 });
-
-    expect(() => getExtra("code")).toThrow(ViewDriftError);
-    expect(() => clone(false)).toThrow(ViewDriftError);
-  });
-
-  it("refuses a saved method on a pinned view whose transaction has finished", async () => {
-    const seedTx = runtime.edit();
-    const cell = runtime.getCell<unknown>(
-      space,
-      "savedPinned",
-      undefined,
-      seedTx,
-    );
-    cell.set(Object.assign(new Error("boom"), { code: 42 }));
-    await seedTx.commit();
-
-    const readTx = runtime.edit();
-    readTx.markLazyMaterialize(true);
-    const view = createQueryResultProxy<FabricError>(
-      runtime,
-      readTx,
-      cell.getAsNormalizedFullLink(),
-    );
-    const getExtra = view.getExtra;
-    const clone = view.deepClone.bind(view);
-    expect(getExtra("code")).toBe(42);
-    await readTx.commit();
-
-    expect(() => getExtra("code")).toThrow("Transaction is complete");
-    expect(() => clone(false)).toThrow("Transaction is complete");
-  });
-
-  it("follows a rewrite to an instance of another class", () => {
-    // The kind check keeps a view to the kind it was built over, and an
-    // instance of another class is the same kind. So membership is decided
-    // against the instance the document holds now, when a name is read and
-    // again when a saved method is called: a name the new class lacks is not
-    // a member, a saved method of the old class refuses at the call, naming
-    // the class it met, and a saved generic member still runs against the
-    // view. A \`FabricLink\` is stored as a plain instance only under the
-    // legacy cell representation, so this pins that representation.
-    setModernCellRepConfig(false);
-    try {
-      const cell = runtime.getCell<unknown>(
-        space,
-        "classChange",
-        undefined,
-        tx,
-      );
-      cell.set(Object.assign(new Error("before"), { code: 1 }));
-      const view = cell.get() as Record<string, unknown>;
-      const getExtra = view.getExtra as (key: string) => unknown;
-      const valueOf = view.valueOf as () => unknown;
-      expect(getExtra("code")).toBe(1);
-
-      cell.set(new FabricLink({ id: "of:fid1:class-change-target" }) as never);
-
-      expect(view.constructor).toBe(FabricLink);
-      expect(typeof view.getExtra).not.toBe("function");
-      expect(() => getExtra("code")).toThrow(
-        "`getExtra` is not a method of the `FabricLink`",
-      );
-      expect(valueOf()).toBe(view);
-    } finally {
-      resetModernCellRepConfig();
-    }
-  });
-
-  it("reports no own properties, so it can be spread and copied", () => {
-    // An instance has no own properties by contract. Its one own key, the
-    // freeze shield, is machinery kept out of every structural view, and a
-    // view could not report it anyway: it is non-configurable on the
-    // instance and absent from the view's stub target, so the proxy
-    // invariant refuses the descriptor. Reporting it made a spread of the
-    // view throw a `TypeError` before the copy began.
-    const cell = runtime.getCell<unknown>(space, "ownKeys", undefined, tx);
+  it("spreads and copies to an empty record", () => {
+    // An instance has no enumerable own property by contract: its one own
+    // key, the freeze shield, is not enumerable.
+    const cell = runtime.getCell<unknown>(space, "spreadCell", undefined, tx);
     cell.set(Object.assign(new Error("boom"), { code: 1 }));
-    const view = cell.get() as FabricError;
+    const result = cell.get() as object;
 
-    expect(Reflect.ownKeys(view)).toEqual([]);
-    expect(Object.getOwnPropertyDescriptors(view)).toEqual({});
-    expect({ ...view }).toEqual({});
-    expect(Object.assign({}, view)).toEqual({});
-    expect(view.message).toBe("boom");
-    expect(view.getExtra("code")).toBe(1);
-
-    // The descriptor trap agrees with the key list: none of an instance's
-    // own keys is an own property of the view, the freeze shield included,
-    // though any raw instance hands that key out to whoever asks it.
-    const rawKeys = Reflect.ownKeys(
-      FabricError.fromNativeError(new Error("x")),
-    );
-    expect(rawKeys.length).toBeGreaterThan(0);
-    for (const key of rawKeys) {
-      expect(Object.hasOwn(view, key)).toBe(false);
-      expect(Object.getOwnPropertyDescriptor(view, key)).toBeUndefined();
-    }
+    const spread = { ...result };
+    const assigned = Object.assign({}, result);
+    expect(Object.getPrototypeOf(spread)).toBe(Object.prototype);
+    expect(Object.keys(spread)).toEqual([]);
+    expect(Object.keys(assigned)).toEqual([]);
   });
 
-  it("is an instance to `isFabricInstanceOrView()`", () => {
-    const cell = runtime.getCell<unknown>(space, "predicate", undefined, tx);
-    cell.set({ err: new Error("boom"), list: [1], record: { a: 1 } });
-    const view = cell.get() as Record<string, unknown>;
-
-    expect(isFabricInstanceOrView(view.err)).toBe(true);
-    expect(isFabricInstanceOrView(view)).toBe(false);
-    expect(isFabricInstanceOrView(view.list)).toBe(false);
-    expect(isFabricInstanceOrView(view.record)).toBe(false);
-  });
-
-  it("refuses a member once the document no longer holds an instance", () => {
-    // The kind a view was built over is the kind it reads (`ViewDriftError`
-    // otherwise), so a method name, an accessor, or an inherited member read
-    // off an instance view after the document was rewritten to a record
-    // refuses rather than answering for either value.
-    const cell = runtime.getCell<unknown>(space, "shapeChange", undefined, tx);
-    cell.set(Object.assign(new Error("before"), { code: 1 }));
-    const view = cell.get() as Record<string, unknown>;
-    expect(typeof view.getExtra).toBe("function");
-
-    cell.set({ getExtra: { nested: 1 }, message: "record" });
-
-    for (const name of ["getExtra", "message", "hasOwnProperty", "valueOf"]) {
-      expect(() => view[name], name).toThrow(ViewDriftError);
-    }
-    expect(() => view.constructor).toThrow(ViewDriftError);
-    // A fresh read is a view over the record.
-    const fresh = cell.get() as { getExtra: { nested: number } };
-    expect(fresh.getExtra.nested).toBe(1);
-  });
-
-  it("refuses a method call on a pinned view whose transaction has finished", async () => {
-    // A pinned view describes the instant its transaction saw, and refuses
-    // a read once that transaction is done. A method's receiver is such a
-    // read, so calling one after the commit refuses rather than answering
-    // from the snapshot.
+  it("stays readable after a pinned read's transaction has finished", async () => {
+    // What a pinned read hands back is the instance itself, not a view that
+    // reads through the transaction, so it outlives the transaction as a
+    // primitive read the same way does.
     const seedTx = runtime.edit();
     const cell = runtime.getCell<unknown>(
       space,
@@ -328,24 +207,49 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
 
     const readTx = runtime.edit();
     readTx.markLazyMaterialize(true);
-    const view = createQueryResultProxy<FabricError>(
+    const result = createQueryResultProxy<FabricError>(
       runtime,
       readTx,
       cell.getAsNormalizedFullLink(),
     );
-    expect(view.getExtra("code")).toBe(42);
-    expect(view.message).toBe("boom");
     await readTx.commit();
 
-    expect(() => view.getExtra("code")).toThrow("Transaction is complete");
-    expect(() => view.deepClone(false)).toThrow("Transaction is complete");
-    expect(() => view.message).toThrow("Transaction is complete");
+    expect(result).toBeInstanceOf(FabricError);
+    expect(result.getExtra("code")).toBe(42);
+    expect((result.deepClone(false) as FabricError).message).toBe("boom");
+  });
+
+  it("hands back a link the instance holds as the link itself", () => {
+    // What an instance holds comes back as it holds it, not as a view over
+    // what a link points at (the marker on the special-object return in
+    // `query-result-proxy.ts`). No cell write stores a link inside an
+    // instance, so the document is written directly.
+    const target = runtime.getCell<unknown>(
+      space,
+      "causeTarget",
+      undefined,
+      tx,
+    );
+    target.set({ greeting: "hi" });
+    const holder = runtime.getCell<unknown>(space, "causeLink", undefined, tx);
+    const stored = deepFreeze(
+      new FabricError({
+        type: "Error",
+        message: "has a link",
+        stack: undefined,
+        cause: target.getAsLink() as never,
+      }),
+    );
+    tx.writeValueOrThrow(holder.getAsNormalizedFullLink(), stored);
+
+    const result = holder.get() as FabricError;
+    expect(result).toBe(stored);
+    expect(result.cause).toBe(stored.cause);
   });
 
   it("meets a mutator with the stored instance's own refusal", () => {
-    // An instance's own mutator runs against the instance, and what refuses
-    // it is that a stored instance is deep-frozen. (A generic mutator the
-    // instance inherits meets a different refusal; the case below.)
+    // What refuses an instance's own mutator is that a stored instance is
+    // deep-frozen.
     const cell = runtime.getCell<unknown>(space, "mutatorCell", undefined, tx);
     cell.set(new Error("boom"));
 
@@ -359,9 +263,7 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
   });
 
   it("leaves `constructor` the class rather than a bound copy of it", () => {
-    // Binding is for methods. `constructor` names the class, and a bound
-    // function is a different function that reports itself as
-    // `bound FabricError`.
+    // `constructor` names the class, as it does on any instance of it.
     const cell = runtime.getCell<unknown>(space, "ctorCell", undefined, tx);
     cell.set(new Error("boom"));
 
@@ -370,45 +272,10 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
     expect(result.constructor.name).toBe("FabricError");
   });
 
-  it("still runs what an instance inherits from `Object.prototype` against the view", () => {
-    // Binding is for what the class hierarchy declares, which is what may
-    // touch private state. A member inherited unchanged from
-    // `Object.prototype` is generic, and has to keep running against the
-    // view: bound to the instance, `valueOf()` would hand the stored
-    // instance out from behind its view.
-    const cell = runtime.getCell<unknown>(space, "genericCell", undefined, tx);
-    cell.set(new Error("boom"));
-
-    const result = cell.get() as FabricError;
-    expect(result.valueOf()).toBe(result);
-    expect(result.valueOf()).not.toBeInstanceOf(FabricError);
-    // deno-lint-ignore no-prototype-builtins
-    expect(result.hasOwnProperty("message")).toBe(false);
-  });
-
-  it("meets a generic mutator with the view's own refusal", () => {
-    // Unbound, `__defineGetter__` runs against the view, so the refusal is
-    // the view's trap rather than the instance's frozen state.
-    const cell = runtime.getCell<unknown>(
-      space,
-      "genericMutator",
-      undefined,
-      tx,
-    );
-    cell.set(new Error("boom"));
-
-    const result = cell.get() as {
-      __defineGetter__: (name: string, getter: () => unknown) => void;
-    };
-    expect(() => result.__defineGetter__("x", () => 1)).toThrow(
-      "Cannot define properties on a live cell-result proxy",
-    );
-  });
-
   it("still runs a plain record's prototype method against the view", () => {
-    // Only an instance's methods are bound. A plain record's have to keep
-    // running against the view, so that what they read goes through its
-    // traps, live, rather than off the snapshot the view was built over.
+    // A plain record is read through a view, and its prototype methods run
+    // against the view, so that what they read goes through its traps, live,
+    // rather than off the snapshot the view was built over.
     const cell = runtime.getCell<Record<string, unknown>>(
       space,
       "plainRecordCell",
