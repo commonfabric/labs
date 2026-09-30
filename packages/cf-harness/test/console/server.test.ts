@@ -9,6 +9,7 @@ import {
   consoleSandboxBanner,
   ConsoleServer,
   consoleStartupBanner,
+  consoleVmHealthProbes,
   createConsoleHealth,
   createConsoleInteractiveServiceOptions,
   resolveConsoleConfig,
@@ -980,6 +981,65 @@ describe("console/server", () => {
       } finally {
         await Deno.remove(store, { recursive: true });
       }
+    });
+
+    describe("consoleVmHealthProbes()", () => {
+      /** A macOS store holding `config.json`, removed after `body`. */
+      const withStore = async (body: (store: string) => Promise<void>) => {
+        const store = await Deno.makeTempDir({ prefix: "cf-vm-store-" });
+        try {
+          await Deno.writeTextFile(join(store, "config.json"), "{}");
+          await body(store);
+        } finally {
+          await Deno.remove(store, { recursive: true });
+        }
+      };
+
+      /** A runsc console whose rootfs names an image of `store`. */
+      const runscConsole = (store: string) =>
+        resolveConsoleConfig(ARGS, {
+          ...RUNSC_ENV,
+          CF_HARNESS_SANDBOX_ROOTFS: join(store, "images", "kitchensink"),
+        }, "/console");
+
+      it("returns the VM probe for a runsc console on macOS whose store holds a `config.json`", async () => {
+        await withStore(async (store) => {
+          const probes = consoleVmHealthProbes(
+            await runscConsole(store),
+            { CFC_VM_HOME: store },
+            { platform: "darwin" },
+          );
+
+          expect(probes.map((probe) => probe.id)).toEqual(["sandbox.vm"]);
+        });
+      });
+
+      it("returns no VM probe for a console on Docker, on macOS or not", async () => {
+        await withStore(async (store) => {
+          const onDocker = {
+            ...await runscConsole(store),
+            sandboxRuntimeKind: "docker" as const,
+          };
+
+          expect(
+            consoleVmHealthProbes(onDocker, { CFC_VM_HOME: store }, {
+              platform: "darwin",
+            }),
+          ).toEqual([]);
+        });
+      });
+
+      it("returns no VM probe off macOS", async () => {
+        await withStore(async (store) => {
+          expect(
+            consoleVmHealthProbes(
+              await runscConsole(store),
+              { CFC_VM_HOME: store },
+              { platform: "linux" },
+            ),
+          ).toEqual([]);
+        });
+      });
     });
 
     /** The runsc selection with no CFC policy named, and none under `HOME`. */

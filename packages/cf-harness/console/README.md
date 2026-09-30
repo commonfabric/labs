@@ -350,17 +350,22 @@ only on macOS and only where that store holds a `config.json`:
 | a status with the guest's figures                                                  | ok, `running`                           |
 | a status without the image the rootfs names, and no `ext4/<key>.ext4` to attach it | failed, `the VM has no <key> image`     |
 | a status without the guest's figures                                               | failed, `the VM guest does not answer`  |
-| no answer within two seconds, or an answer that is not a status                    | failed, `the VM daemon does not answer` |
+| no answer within fifteen seconds, or an answer that is not a status                | failed, `the VM daemon does not answer` |
 
 The question is the one line `#cfcvm status` on the daemon's socket, and the
 running row's `detail` carries the answer's uptime, the guest's memory and the
-images the VM attached. The daemon counts that question as client activity,
-which restarts its idle timer, so the row asks nothing where there is no socket,
-asks a running daemon at most once per idle timeout and 30 seconds, and shows
-the last answer, with its time, in between; a socket that has gone reads idle at
-once. Watching the row therefore never starts a VM, and does not on its own keep
-one up: a VM nothing else uses stops before the next question, which finds no
-socket. The most it does is keep a VM up for one idle timeout after its last
+images the VM attached. The daemon answers it after asking its guest, which it
+gives up on after ten seconds, so the row waits fifteen for the answer. The
+daemon counts the question as client activity, which restarts its idle timer. So
+the row asks nothing where there is no socket, and asks a running daemon at most
+once per idle timeout and 30 seconds. It asks at once where the socket is not
+the one the last answer came on, or that answer was not ok. In between, it
+connects and hangs up without a word, which the daemon closes without counting
+as activity, and reports the last answer, with the time it was given; a daemon
+that has stopped, whether it removed its socket or not, reads idle at the next
+refresh. Watching the row therefore never starts a VM, and does not on its own
+keep one up: a VM nothing else uses stops before the next question, which finds
+no daemon. The most it does is keep a VM up for one idle timeout after its last
 use. Another client asking in between, a second console's row among them, counts
 as use.
 

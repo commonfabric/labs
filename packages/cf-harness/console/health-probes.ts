@@ -502,7 +502,7 @@ export const consoleVmStore = (
     // what the row goes on to ask about.
   }
   const configured = isObjectNotArray(config)
-    ? (config as Record<string, unknown>).idleTimeoutSec
+    ? config.idleTimeoutSec
     : undefined;
   const idleTimeoutSec = typeof configured === "number" &&
       Number.isFinite(configured) && configured > 0
@@ -536,12 +536,14 @@ export type ConsoleVmReading =
 
 /**
  * How long a status request may go unanswered before the daemon counts as not
- * answering. A daemon that answers does so in milliseconds, having asked its
- * guest. The bound is what keeps one that accepts a connection and never
- * answers from holding the observation open, and with it every later refresh
- * of the row, which waits on an observation already in flight.
+ * answering. The daemon answers after asking its guest, which it gives up on
+ * after ten seconds, answering then without the guest's figures; five more
+ * seconds cover taking the locks it reads the rest under. A daemon that has
+ * not answered by then is stuck, and the bound is what keeps it from holding
+ * the observation open, and with it every later refresh of the row, since the
+ * console shares an observation in flight with each refresh that asks for it.
  */
-export const CFC_VM_STATUS_BOUND_MS = 2_000;
+export const CFC_VM_STATUS_BOUND_MS = 15_000;
 
 /**
  * Asks the cfc-vm daemon listening at `socket` for its status, with the one
@@ -558,59 +560,75 @@ export const askCfcVmStatus = async (
   try {
     connection = await Deno.connect({ transport: "unix", path: socket });
   } catch (error) {
-    return error instanceof Deno.errors.ConnectionRefused ||
-        error instanceof Deno.errors.NotFound
+    return noDaemon(error)
       ? { found: "no-daemon" }
       : { found: "no-answer", reason: `The connection failed: ${error}` };
   }
-  const exchange = (async () => {
+  // Closing the connection is what ends a read the bound cuts short, so the
+  // one wait below is the whole of the request.
+  let late = false;
+  const timer = setTimeout(() => {
+    late = true;
+    closeQuietly(connection);
+  }, boundMs);
+  let text: string;
+  try {
     await connection.write(new TextEncoder().encode("#cfcvm status\n"));
-    return await new Response(connection.readable).text();
-  })().then(
-    (text) => ({ text }),
-    (error: unknown) => ({ error }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const outcome = await Promise.race([
-    exchange,
-    new Promise<"late">((resolve) => {
-      timer = setTimeout(() => resolve("late"), boundMs);
-    }),
-  ]);
-  clearTimeout(timer);
+    text = await new Response(connection.readable).text();
+  } catch (error) {
+    return {
+      found: "no-answer",
+      reason: late
+        ? `The daemon gave no answer within ${boundMs} ms.`
+        : `The exchange with the daemon failed: ${error}`,
+    };
+  } finally {
+    clearTimeout(timer);
+    closeQuietly(connection);
+  }
+  let status: unknown;
+  try {
+    status = JSON.parse(text);
+  } catch {
+    // Not JSON: reported below with what came back.
+  }
+  return isObjectNotArray(status) ? { found: "status", status } : {
+    found: "no-answer",
+    reason:
+      debugStr`The daemon answered with something other than its status: $quote${text.trim()}`,
+  };
+};
+
+/**
+ * Connects to the cfc-vm daemon listening at `socket` and hangs up without
+ * sending a byte. The daemon closes such a connection and counts it as no
+ * activity, so this finds out whether a daemon listens without restarting its
+ * idle timer. A socket with nothing listening on it, or no socket, is no
+ * daemon.
+ */
+export const touchCfcVmDaemon = async (
+  socket: string,
+): Promise<"listening" | "no-daemon" | { failed: string }> => {
+  try {
+    closeQuietly(await Deno.connect({ transport: "unix", path: socket }));
+    return "listening";
+  } catch (error) {
+    return noDaemon(error) ? "no-daemon" : { failed: String(error) };
+  }
+};
+
+/** Helper for the VM probe, which returns whether `error` means no daemon. */
+const noDaemon = (error: unknown): boolean =>
+  error instanceof Deno.errors.ConnectionRefused ||
+  error instanceof Deno.errors.NotFound;
+
+/** Helper for the VM probe, which closes `connection` if it is still open. */
+const closeQuietly = (connection: Deno.Conn): void => {
   try {
     connection.close();
   } catch {
     // Reading the answer to its end has closed it already.
   }
-  // Closing ends a read the bound cut short; waiting for it leaves nothing of
-  // this request running.
-  await exchange;
-  if (outcome === "late") {
-    return {
-      found: "no-answer",
-      reason: `The daemon gave no answer within ${boundMs} ms.`,
-    };
-  }
-  if ("error" in outcome) {
-    return {
-      found: "no-answer",
-      reason: `The exchange with the daemon failed: ${outcome.error}`,
-    };
-  }
-  let status: unknown;
-  try {
-    status = JSON.parse(outcome.text);
-  } catch {
-    // Not JSON: reported below with what came back.
-  }
-  return isObjectNotArray(status)
-    ? { found: "status", status: status as Record<string, unknown> }
-    : {
-      found: "no-answer",
-      reason:
-        debugStr`The daemon answered with something other than its status: $quote${outcome.text.trim()}`,
-    };
 };
 
 /**
@@ -621,32 +639,41 @@ export const askCfcVmStatus = async (
  *
  * The VM starts on a sandbox command's first use and stops itself after
  * `idleTimeoutSec` without a client, and the daemon counts a status request
- * as one. So the probe connects only where the daemon's socket is present,
- * reads a socket with nothing listening on it as no daemon, and asks a running
- * daemon at most once per idle timeout and two of the daemon's idle checks,
- * reporting the last answer, at the time it was given, in between. A socket
- * that has gone reads as idle at once. Polling the row never starts a VM, and
- * does not on its own keep one up: a VM that nothing else uses stops before
- * the next request, which then finds no socket. What it can do is keep a VM up
- * for one idle timeout past its last use. Another client asking in between,
- * a second console's row among them, counts as use.
+ * as one. So every read looks for the daemon's socket, where no socket is
+ * no daemon, and a daemon is asked for its status at most once per idle
+ * timeout and two of its idle checks, and at once where the socket is not the
+ * one it last answered on, or the answer was not ok. Between two questions a
+ * read connects and hangs up without asking, which the daemon does not count
+ * as activity, and reports the last answer as of when it was given. So a
+ * daemon that stops, however it stops, reads idle at the next read.
  *
- * `lstat` looks at the socket, `ask` puts the question, `examine` looks for an
- * image's block file, and `now` is the clock the interval runs on.
+ * Polling the row never starts a VM, and does not on its own keep one up: a
+ * VM that nothing else uses stops before the next question, which then finds
+ * no daemon. What it can do is keep a VM up for one idle timeout past its
+ * last use. Another client asking in between, a second console's row among
+ * them, counts as use.
+ *
+ * `lstat` looks at the socket, `touch` and `ask` reach the daemon, `examine`
+ * looks for an image's block file, and `now` is the monotonic clock, in
+ * milliseconds, the interval runs on.
  */
 export const consoleVmHealthProbe = (
   store: ConsoleVmStore,
   options: {
     lstat?: (path: string) => Deno.FileInfo;
+    touch?: (
+      socket: string,
+    ) => Promise<"listening" | "no-daemon" | { failed: string }>;
     ask?: (socket: string) => Promise<ConsoleVmReading>;
     examine?: (path: string) => ConsolePathReading;
     now?: () => number;
   } = {},
 ): ConsoleHealthProbe => {
   const lstat = options.lstat ?? Deno.lstatSync;
+  const touch = options.touch ?? touchCfcVmDaemon;
   const ask = options.ask ?? askCfcVmStatus;
   const examine = options.examine ?? readConsolePath;
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now());
   const socket = join(store.directory, "daemon.sock");
   const askIntervalMs = (store.idleTimeoutSec + 2 * CFC_VM_IDLE_CHECK_SEC) *
     1_000;
@@ -665,7 +692,22 @@ export const consoleVmHealthProbe = (
     value: "idle; starts on first use",
     reason,
   });
-  let last: { askedAt: number; row: ConsoleHealthRow } | undefined;
+  const notAnswering = (checkedAt: string, reason: string) =>
+    vmNotAnsweringRow(
+      fact,
+      store,
+      checkedAt,
+      "the VM daemon does not answer",
+      reason,
+    );
+  const noSocket =
+    "No VM daemon is running for this store; the next sandbox command starts one.";
+  const nothingListening =
+    "Nothing listens on the daemon socket, which is what a daemon that stopped without removing it leaves; the next sandbox command starts one.";
+  /** The last ok answer, the socket it came on, and when it was asked for. */
+  let last:
+    | { askedAt: number; socket: string; row: ConsoleHealthRow }
+    | undefined;
   return {
     id: "sandbox.vm",
     initial: [fact],
@@ -677,10 +719,10 @@ export const consoleVmHealthProbe = (
       reason: "The VM daemon could not be looked for.",
     }],
     read: async () => {
-      const lookedAt = now();
-      const checkedAt = new Date(lookedAt).toISOString();
+      const checkedAt = new Date().toISOString();
+      let info: Deno.FileInfo;
       try {
-        lstat(socket);
+        info = lstat(socket);
       } catch (error) {
         if (!(error instanceof Deno.errors.NotFound)) {
           return [{
@@ -692,35 +734,38 @@ export const consoleVmHealthProbe = (
           }];
         }
         last = undefined;
-        return [idle(
-          checkedAt,
-          "No VM daemon is running for this store; the next sandbox command starts one.",
-        )];
+        return [idle(checkedAt, noSocket)];
       }
-      if (last !== undefined && lookedAt - last.askedAt < askIntervalMs) {
-        return [last.row];
+      // A daemon binds its socket afresh, so one that has replaced the daemon
+      // last asked is on a socket the last answer did not come on.
+      const identity = `${info.dev}:${info.ino}:${info.mtime?.getTime()}`;
+      if (
+        last !== undefined && last.socket === identity &&
+        now() - last.askedAt < askIntervalMs
+      ) {
+        const found = await touch(socket);
+        if (found === "listening") return [{ ...last.row, checkedAt }];
+        last = undefined;
+        return [
+          found === "no-daemon"
+            ? idle(checkedAt, nothingListening)
+            : notAnswering(checkedAt, `The connection failed: ${found.failed}`),
+        ];
       }
+      const askedAt = now();
       const reading = await ask(socket);
       if (reading.found === "no-daemon") {
-        last = undefined;
-        return [idle(
-          checkedAt,
-          "Nothing listens on the daemon socket, which is what a daemon that stopped without removing it leaves; the next sandbox command starts one.",
-        )];
+        return [idle(checkedAt, nothingListening)];
       }
       const row = reading.found === "status"
         ? vmStatusRow(fact, store, reading.status, checkedAt, askIntervalMs, {
           examine,
           socket,
         })
-        : vmNotAnsweringRow(
-          fact,
-          store,
-          checkedAt,
-          "the VM daemon does not answer",
-          reading.reason,
-        );
-      last = { askedAt: lookedAt, row };
+        : notAnswering(checkedAt, reading.reason);
+      last = row.state === "ok"
+        ? { askedAt, socket: identity, row }
+        : undefined;
       return [row];
     },
   };
@@ -776,7 +821,7 @@ const vmStatusRow = (
       "The daemon's answer carries no `guest` object or no `images` list, so it is not a status.",
     );
   }
-  const { memAvailableKiB, memTotalKiB } = guest as Record<string, unknown>;
+  const { memAvailableKiB, memTotalKiB } = guest;
   if (typeof memAvailableKiB !== "number" || typeof memTotalKiB !== "number") {
     return vmNotAnsweringRow(
       fact,
@@ -794,9 +839,11 @@ const vmStatusRow = (
     } MiB`,
     `images ${images.length === 0 ? "none" : images.join(", ")}`,
   ].join("; ");
-  const asked =
-    "The daemon answered `#cfcvm status`. A status request counts as activity, which restarts the VM's idle timer, so this row asks at most once every " +
-    `${askIntervalMs / 1_000} s and shows the last answer between.`;
+  const asked = `The daemon answered \`#cfcvm status\` at ${checkedAt}. A ` +
+    "status request counts as activity, which restarts the VM's idle timer, " +
+    `so this row asks at most once every ${askIntervalMs / 1_000} s and in ` +
+    "between only connects, which does not count, to see that the daemon " +
+    "still listens.";
   const key = store.imageKey;
   if (key === undefined || images.includes(key)) {
     return {

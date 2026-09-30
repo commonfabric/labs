@@ -1266,14 +1266,15 @@ export const runscWithoutPolicyRefusesTurns = (
 };
 
 /**
- * Helper for `createConsoleHealth()`, which returns the VM row's probe for a
- * console on the direct runsc driver whose runsc keeps a macOS cfc-vm store,
- * named by `env` as runsc names it. None where the runsc configuration does
- * not resolve, which the runsc probe reports.
+ * The VM row's probe for a console on the direct runsc driver whose runsc
+ * keeps a macOS cfc-vm store, named by `env` as runsc names it, and otherwise
+ * none. None too where the runsc configuration does not resolve, which the
+ * runsc probe reports. `platform` replaces `Deno.build.os`.
  */
-const consoleVmHealthProbes = (
+export const consoleVmHealthProbes = (
   config: ConsoleConfig,
   env: Record<string, string | undefined>,
+  options: { platform?: string } = {},
 ): ConsoleHealthProbe[] => {
   if (config.sandboxRuntimeKind !== "runsc") return [];
   let rootfs: string;
@@ -1282,7 +1283,7 @@ const consoleVmHealthProbes = (
   } catch {
     return [];
   }
-  const store = consoleVmStore(rootfs, env);
+  const store = consoleVmStore(rootfs, env, options);
   return store === undefined ? [] : [consoleVmHealthProbe(store)];
 };
 

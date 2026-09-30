@@ -1,8 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
   askCfcVmStatus,
+  CFC_VM_STATUS_BOUND_MS,
   type ConsolePathReading,
   consolePatternIndexHealthProbes,
   type ConsolePolicyReading,
@@ -44,36 +46,64 @@ const searchesDespiteMode = (): boolean => {
 };
 
 /**
- * A fake cfc-vm daemon at `<directory>/daemon.sock`. It reads one line from
- * each connection and records it without its newline, then writes back what
- * `answer` returns and hangs up, or, where that is `undefined`, holds the
- * connection open without answering until it is closed.
+ * A fake cfc-vm daemon at `<directory>/daemon.sock`, serving each connection
+ * the way the real one does. A connection closed before it sends a line is
+ * counted and closed in turn, and nothing else happens: the real daemon does
+ * not count it as activity. A line is recorded without its newline and
+ * answered with what `answer` returns before the daemon hangs up, or, where
+ * that is `undefined`, held open unanswered until the daemon is closed.
+ * `leaveSocket` makes closing the daemon leave its socket file behind, as a
+ * daemon that is killed does.
  */
 const fakeVmDaemon = (
   directory: string,
   answer: (line: string) => string | undefined,
+  options: { leaveSocket?: boolean } = {},
 ) => {
-  const listener = Deno.listen({
-    transport: "unix",
-    path: join(directory, "daemon.sock"),
-  });
+  const socket = join(directory, "daemon.sock");
+  // Closing a listener removes the path it bound; one bound elsewhere and
+  // moved into place leaves its socket where the probe looks.
+  const bound = options.leaveSocket ? join(directory, "bound.sock") : socket;
+  const listener = Deno.listen({ transport: "unix", path: bound });
+  if (options.leaveSocket) Deno.renameSync(bound, socket);
   const lines: string[] = [];
   const held: Deno.Conn[] = [];
+  const asked = Promise.withResolvers<void>();
+  let connections = 0;
+  const serve = async (connection: Deno.Conn) => {
+    const line = await readLine(connection);
+    if (line === undefined) {
+      connection.close();
+      return;
+    }
+    lines.push(line);
+    asked.resolve();
+    const reply = answer(line);
+    if (reply === undefined) {
+      held.push(connection);
+      return;
+    }
+    await connection.write(new TextEncoder().encode(`${reply}\n`));
+    connection.close();
+  };
   const serving = (async () => {
     for await (const connection of listener) {
-      const line = await readLine(connection);
-      lines.push(line);
-      const reply = answer(line);
-      if (reply === undefined) {
-        held.push(connection);
-        continue;
-      }
-      await connection.write(new TextEncoder().encode(`${reply}\n`));
-      connection.close();
+      connections += 1;
+      await serve(connection).catch(() => {});
     }
   })().catch(() => {});
   return {
     lines,
+    connections: () => connections,
+    /** Settles once the daemon has read its first line. */
+    asked: asked.promise,
+    /** Answers every connection held so far with `reply`, and hangs up. */
+    answerHeld: async (reply: string) => {
+      for (const connection of held.splice(0)) {
+        await connection.write(new TextEncoder().encode(`${reply}\n`));
+        connection.close();
+      }
+    },
     close: async () => {
       for (const connection of held) connection.close();
       listener.close();
@@ -82,14 +112,19 @@ const fakeVmDaemon = (
   };
 };
 
-/** Reads from `connection` up to its first newline, or to its end. */
-const readLine = async (connection: Deno.Conn): Promise<string> => {
+/**
+ * Reads from `connection` up to its first newline, or to its end, or returns
+ * `undefined` for a connection that ended without a byte.
+ */
+const readLine = async (
+  connection: Deno.Conn,
+): Promise<string | undefined> => {
   const decoder = new TextDecoder();
   const buffer = new Uint8Array(256);
   let text = "";
   while (!text.includes("\n")) {
     const read = await connection.read(buffer);
-    if (read === null) break;
+    if (read === null) return text === "" ? undefined : text;
     text += decoder.decode(buffer.subarray(0, read), { stream: true });
   }
   return text.split("\n")[0];
@@ -788,21 +823,55 @@ describe("health-probes", () => {
       });
     });
 
-    it("returns failed when the daemon does not answer within the bound", async () => {
+    it("returns failed when the daemon takes the question and gives no answer within the bound", async () => {
       await withStore(async (directory) => {
+        using time = new FakeTime();
         const daemon = fakeVmDaemon(directory, () => undefined);
         try {
-          const row = await readRow(
-            consoleVmHealthProbe(store(directory), {
-              ask: (socket) => askCfcVmStatus(socket, 50),
-            }),
-          );
+          const reading = consoleVmHealthProbe(store(directory)).read();
+          await daemon.asked;
+          time.tick(CFC_VM_STATUS_BOUND_MS);
+          const [row] = await reading;
 
           expect(row).toMatchObject({
             state: "failed",
             value: "the VM daemon does not answer",
           });
+          expect(row.reason).toContain(`${CFC_VM_STATUS_BOUND_MS} ms`);
           expect(row.remedy).toContain("daemon.log");
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("returns running for an answer that comes after the ten seconds the daemon gives its guest", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => undefined);
+        try {
+          const reading = consoleVmHealthProbe(store(directory)).read();
+          await daemon.asked;
+          time.tick(12_000);
+          await daemon.answerHeld(JSON.stringify(STATUS));
+          const [row] = await reading;
+
+          expect(row).toMatchObject({ state: "ok", value: "running" });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    it("leaves no timer running once the daemon has answered", async () => {
+      await withStore(async (directory) => {
+        using time = new FakeTime();
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const reading = await askCfcVmStatus(join(directory, "daemon.sock"));
+
+          expect(reading.found).toBe("status");
+          expect(time.next()).toBe(false);
         } finally {
           await daemon.close();
         }
@@ -844,26 +913,32 @@ describe("health-probes", () => {
       });
     });
 
-    it("returns failed when the daemon answers without the guest's own figures", async () => {
-      await withStore(async (directory) => {
-        const daemon = fakeVmDaemon(
-          directory,
-          () => JSON.stringify({ ...STATUS, guest: {} }),
-        );
-        try {
-          const row = await readRow(consoleVmHealthProbe(store(directory)));
+    for (
+      const guest of [{}, { memTotalKiB: 2_040_268 }, {
+        memAvailableKiB: 1_883_096,
+      }]
+    ) {
+      it(`returns failed when the daemon answers with the guest's figures ${JSON.stringify(Object.keys(guest))} alone`, async () => {
+        await withStore(async (directory) => {
+          const daemon = fakeVmDaemon(
+            directory,
+            () => JSON.stringify({ ...STATUS, guest }),
+          );
+          try {
+            const row = await readRow(consoleVmHealthProbe(store(directory)));
 
-          expect(row).toMatchObject({
-            state: "failed",
-            value: "the VM guest does not answer",
-          });
-        } finally {
-          await daemon.close();
-        }
+            expect(row).toMatchObject({
+              state: "failed",
+              value: "the VM guest does not answer",
+            });
+          } finally {
+            await daemon.close();
+          }
+        });
       });
-    });
+    }
 
-    it("asks a running daemon no more often than its idle timeout and two of its idle checks", async () => {
+    it("asks a running daemon no more often than its idle timeout and two of its idle checks, finding it listening between", async () => {
       await withStore(async (directory) => {
         const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
         try {
@@ -874,9 +949,16 @@ describe("health-probes", () => {
 
           const first = await readRow(probe);
           now += 629_999;
-          const cached = await readRow(probe);
-          expect(daemon.lines.length).toBe(1);
-          expect(cached).toEqual(first);
+          const between = await readRow(probe);
+
+          expect(daemon.lines).toEqual(["#cfcvm status"]);
+          expect(daemon.connections()).toBe(2);
+          expect(between).toMatchObject({
+            state: first.state,
+            value: first.value,
+            detail: first.detail,
+          });
+          expect(between.reason).toContain(first.checkedAt);
 
           now += 1;
           await readRow(probe);
@@ -887,26 +969,96 @@ describe("health-probes", () => {
       });
     });
 
-    it("returns idle, and asks again, once the socket has gone and come back", async () => {
+    it("returns idle, and asks nothing, once the daemon it last asked has stopped and left its socket", async () => {
+      await withStore(async (directory) => {
+        const probe = consoleVmHealthProbe(store(directory));
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS), {
+          leaveSocket: true,
+        });
+        expect(await readRow(probe)).toMatchObject({ value: "running" });
+        await daemon.close();
+
+        expect(await readRow(probe)).toMatchObject({
+          state: "ok",
+          value: "idle; starts on first use",
+        });
+        expect(daemon.lines).toEqual(["#cfcvm status"]);
+      });
+    });
+
+    it("asks a daemon that has replaced the one it last asked at once", async () => {
       await withStore(async (directory) => {
         const probe = consoleVmHealthProbe(store(directory));
         const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
         await readRow(probe);
         await first.close();
-
-        expect(await readRow(probe)).toMatchObject({
-          value: "idle; starts on first use",
-        });
-
-        const second = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        const second = fakeVmDaemon(directory, () => "error: busy");
         try {
-          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(await readRow(probe)).toMatchObject({
+            state: "failed",
+            value: "the VM daemon does not answer",
+          });
           expect(second.lines).toEqual(["#cfcvm status"]);
         } finally {
           await second.close();
         }
       });
     });
+
+    it("asks again at the next read after an answer that was no status", async () => {
+      await withStore(async (directory) => {
+        let reply = "error: busy";
+        const daemon = fakeVmDaemon(directory, () => reply);
+        try {
+          const probe = consoleVmHealthProbe(store(directory));
+          expect(await readRow(probe)).toMatchObject({ state: "failed" });
+
+          reply = JSON.stringify(STATUS);
+
+          expect(await readRow(probe)).toMatchObject({ value: "running" });
+          expect(daemon.lines.length).toBe(2);
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
+    for (const gone of ["no socket", "a socket nothing listens on"] as const) {
+      it(`asks again after it found ${gone}, even where the socket then looks unchanged`, async () => {
+        // The socket's identity is held fixed, so that only having found no
+        // daemon stands between the last answer and the next question.
+        await withStore(async (directory) => {
+          const unchanged = Deno.lstatSync(directory);
+          let present = true;
+          const probe = consoleVmHealthProbe(store(directory), {
+            lstat: () => {
+              if (!present) throw new Deno.errors.NotFound("no socket");
+              return unchanged;
+            },
+          });
+          const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+          await readRow(probe);
+          await first.close();
+          present = gone === "a socket nothing listens on";
+          expect(await readRow(probe)).toMatchObject({
+            value: "idle; starts on first use",
+          });
+
+          present = true;
+          const second = fakeVmDaemon(
+            directory,
+            () => JSON.stringify(STATUS),
+          );
+          try {
+            await readRow(probe);
+
+            expect(second.lines).toEqual(["#cfcvm status"]);
+          } finally {
+            await second.close();
+          }
+        });
+      });
+    }
 
     it("returns unknown when the socket could not be looked at", async () => {
       const row = await readRow(
