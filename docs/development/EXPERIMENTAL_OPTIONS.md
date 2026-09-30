@@ -53,6 +53,7 @@ was last checked against the code.
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
+| [`patchReplay`](#patchreplay) | `CF_MEMORY_PATCH_REPLAY=off` env on the memory server, or `setPatchReplayConfig()` (server-side; advertised as the `patchReplayVersion` hello capability) | on | Alex Komoroske (#8151) | keep as the rollback lever for a patch-semantics divergence until a `PATCH_SEMANTICS_VERSION` change has crossed mixed client builds cleanly | implemented, on by default |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`INGEST_SELF_SERVE_ENABLED`](#ingest_self_serve_enabled) | `INGEST_SELF_SERVE_ENABLED` env on toolshed | off | Alex Komoroske (self-serve ingest channels) | graduate on once named-space keys stop deriving from a public passphrase | implemented, off by default |
@@ -1231,14 +1232,52 @@ the per-epic implementation notes).
 - **Purpose.** A sync frame includes a doc unless the writing session provably
   holds it: own accepted `patch`-produced heads ride the covering frame as full
   post-apply documents (merged state the writer cannot extrapolate), while own
-  `set`- and `delete`-produced heads stay elided. Off restores full echo
-  suppression — the pre-CT-1965 behavior, where promotion extrapolates every own
-  write from the client's own ops.
+  `set`- and `delete`-produced heads stay elided, and so does a patch head the
+  engine applied over the very document the patch named as its base
+  (`exactBase`, while [`patchReplay`](#patchreplay) is on; see "4.11.2
+  Server-Side Ordering" in
+  [the memory protocol chapter](../specs/memory-v2/04-protocol.md)). Off
+  restores full echo suppression, where promotion extrapolates every own write
+  from the client's own ops.
 - **Current default and planned end state.** On by default. The switch exists as
   an operational backstop while the echo field-soaks.
-- **Status on 2026-08-08.** Implemented and on by default.
+- **Status on 2026-09-27.** Implemented and on by default. With it and
+  [`patchReplay`](#patchreplay) on, an own patch head the engine applied over
+  the base the patch declared is elided too; with `patchReplay` off, every own
+  patch head is delivered in full.
 - **Path to removal.** After the echo has soaked in production, delete the
   config trio and the suppression branch it re-enables.
+
+### `patchReplay`
+
+- **Toggle via.** `CF_MEMORY_PATCH_REPLAY` set to `off`, `false` or `0` in the
+  memory server's environment, or `setPatchReplayConfig()` in
+  [`packages/memory/v2.ts`](../../packages/memory/v2.ts), which takes
+  precedence. Server-side; the server advertises the result to each connecting
+  client as the `patchReplayVersion` hello capability.
+- **Added by.** Alex Komoroske (#8151).
+- **Purpose.** Lets a session's own patch head stand on the session's replay of
+  its patch. A client names the `replayBaseSeq` its patch replays over, only to
+  a server advertising the `PATCH_SEMANTICS_VERSION` the client was built
+  with, and the server leaves the head out of the writer's frame when the
+  engine applied the patch over that base (INV-15 in
+  [the invariants chapter](../specs/memory-v2/09-invariants.md)). Off, the
+  server advertises no version and, from its next flush, delivers every own
+  patch head in full, including heads committed while it was on and to
+  sessions that connected then: the rollback lever for a suspected divergence
+  between a client's patch replay and the server's.
+- **Current default and planned end state.** On by default. The switch stays
+  as that lever. `ct.memory.sync.own_patch_heads` on the server counts own
+  patch heads by exactness and elision, and a client logs
+  `exact-base-replay-refused` at error level when operations the server
+  applied over its declared base do not apply there; a replay that applies
+  and differs is not detectable on the client, which is what the version
+  guards against.
+- **Status on 2026-09-27.** Implemented and on by default.
+- **Path to removal.** Once a change of `PATCH_SEMANTICS_VERSION` has crossed a
+  fleet of mixed client builds without a divergence traced to replay, delete
+  the config trio and the environment read, and advertise the version
+  unconditionally.
 
 ### `syncSchemaTableV2`
 

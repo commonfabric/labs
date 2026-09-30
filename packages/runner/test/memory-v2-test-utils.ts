@@ -67,6 +67,48 @@ export const newSharedServer = (options?: {
     audience: TEST_SESSION_OPEN_AUDIENCE,
   });
 
+/**
+ * What {@link tapServer} captured: every message `server` sent a client, after
+ * the tap's rewrite, and every message a client sent it, decoded. Both are
+ * wire shapes, so a test narrows an entry by its `type`.
+ */
+export type ServerTap = {
+  fromServer: Record<string, unknown>[];
+  fromClients: Record<string, unknown>[];
+};
+
+/**
+ * Taps every connection `server` opens from here on, passing each message the
+ * server sends through `rewrite` before the client's transport encodes it. A
+ * runtime opens its connection at its first use of a space, so a tap placed
+ * before that sees all of that runtime's traffic.
+ */
+export const tapServer = (
+  server: MemoryV2Server.Server,
+  rewrite: (message: Record<string, unknown>) => Record<string, unknown> = (
+    message,
+  ) => message,
+): ServerTap => {
+  const tap: ServerTap = { fromServer: [], fromClients: [] };
+  const connect = server.connect.bind(server);
+  server.connect = (send) => {
+    const connection = connect((message) => {
+      const rewritten = rewrite(message as Record<string, unknown>);
+      tap.fromServer.push(rewritten);
+      send(rewritten as typeof message);
+    });
+    const receive = connection.receive.bind(connection);
+    connection.receive = (payload: string) => {
+      tap.fromClients.push(
+        decodeMemoryBoundary(payload) as Record<string, unknown>,
+      );
+      return receive(payload);
+    };
+    return connection;
+  };
+  return tap;
+};
+
 export const testSessionOpenAuthFactory: MemoryV2Client.SessionOpenAuthFactory =
   (
     _space,

@@ -16,14 +16,18 @@ import {
   type EntityDocument,
   getEntityDocumentMetadata,
   getMemoryProtocolFlags,
+  getPatchReplayConfig,
   MEMORY_PROTOCOL,
   parseMemoryProtocolFlags,
+  PATCH_SEMANTICS_VERSION,
   resetCommitPreconditionsConfig,
   resetMessageCompressionConfig,
+  resetPatchReplayConfig,
   resetServerExecutionConfig,
   resetSyncSchemaTableConfig,
   setCommitPreconditionsConfig,
   setMessageCompressionConfig,
+  setPatchReplayConfig,
   setServerExecutionConfig,
   setSyncSchemaTableConfig,
   toDocumentPath,
@@ -160,6 +164,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      patchReplayVersion: PATCH_SEMANTICS_VERSION,
       presenceV1: true,
       syncSchemaTableV2: false,
     });
@@ -187,6 +192,7 @@ describe("memory v2 flags", () => {
       sessionHoldings: true,
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
+      patchReplayVersion: PATCH_SEMANTICS_VERSION,
       presenceV1: true,
       syncSchemaTableV2: true,
     });
@@ -297,6 +303,66 @@ describe("parseMemoryProtocolFlags", () => {
         wireMemoryProtocolFlags(getMemoryProtocolFlags()),
       )?.sqliteQueryReader,
       true,
+    );
+  });
+
+  it("parses the patch replay version as a positive integer or absent", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.patchReplayVersion, undefined);
+    assertEquals(
+      parseMemoryProtocolFlags({ patchReplayVersion: 3 })?.patchReplayVersion,
+      3,
+    );
+    for (const invalid of ["1", 0, -1, 1.5, true]) {
+      assertEquals(
+        parseMemoryProtocolFlags({ patchReplayVersion: invalid }),
+        null,
+      );
+    }
+    assertEquals(
+      parseMemoryProtocolFlags(
+        wireMemoryProtocolFlags(getMemoryProtocolFlags()),
+      )?.patchReplayVersion,
+      PATCH_SEMANTICS_VERSION,
+    );
+  });
+
+  it("switches patch replay off when `CF_MEMORY_PATCH_REPLAY` says so", () => {
+    const previous = Deno.env.get("CF_MEMORY_PATCH_REPLAY");
+    try {
+      for (const off of ["off", "FALSE", " 0 "]) {
+        Deno.env.set("CF_MEMORY_PATCH_REPLAY", off);
+        assertEquals(getPatchReplayConfig(), false);
+      }
+      Deno.env.set("CF_MEMORY_PATCH_REPLAY", "on");
+      assertEquals(getPatchReplayConfig(), true);
+      setPatchReplayConfig(true);
+      Deno.env.set("CF_MEMORY_PATCH_REPLAY", "off");
+      assertEquals(getPatchReplayConfig(), true);
+    } finally {
+      resetPatchReplayConfig();
+      if (previous === undefined) {
+        Deno.env.delete("CF_MEMORY_PATCH_REPLAY");
+      } else {
+        Deno.env.set("CF_MEMORY_PATCH_REPLAY", previous);
+      }
+    }
+  });
+
+  it("advertises no patch replay version while patch replay is switched off", () => {
+    try {
+      setPatchReplayConfig(false);
+      assertEquals(getMemoryProtocolFlags().patchReplayVersion, undefined);
+      assertEquals(
+        "patchReplayVersion" in
+          wireMemoryProtocolFlags(getMemoryProtocolFlags()),
+        false,
+      );
+    } finally {
+      resetPatchReplayConfig();
+    }
+    assertEquals(
+      getMemoryProtocolFlags().patchReplayVersion,
+      PATCH_SEMANTICS_VERSION,
     );
   });
 

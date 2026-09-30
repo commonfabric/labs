@@ -60,6 +60,7 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
+    "patchReplayVersion": 1,
     "presenceV1": true
   }
 }
@@ -82,6 +83,7 @@ If the server accepts the protocol, it returns:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
+    "patchReplayVersion": 1,
     "presenceV1": true
   },
   "sessionOpen": {
@@ -266,6 +268,22 @@ older server would accept the descriptor and serve every query unbounded, so
 the client refuses to open the session against a server that does not
 advertise it, before signing a `session.open`. A client declaring none is
 unaffected on any server.
+
+`patchReplayVersion` advertises the `PATCH_SEMANTICS_VERSION` the server
+applies patches with: the version of what applying a list of patch operations
+to a document produces. The server reads a `patch` operation's declared
+`replayBaseSeq` and reports, on the revision it writes, whether the head it
+applied the patch over was that one (`03-commit-model.md` section 3.1; section
+4.11.2 says what the committing session's frame then omits). A client declares
+`replayBaseSeq` only to a server advertising the version the client was built
+with; against a server advertising another version or none, it declares
+nothing, and every own patch head reaches it in full. A client advertises its
+own version in its `hello` too, and the server reports an exact base only on
+a session opened over a connection that advertised the server's version, so
+a commit resent to a server of another version after a reconnect is not
+reported exact. A server advertises none while its patch replay is switched
+off (`setPatchReplayConfig(false)`, or `CF_MEMORY_PATCH_REPLAY=off` in its
+environment), and from its next flush delivers every own patch head.
 
 `presenceV1` advertises that the server relays presence rooms over this
 connection — the `presence.join`, `presence.publish`, and `presence.leave`
@@ -1321,18 +1339,39 @@ enforced through the catch-up marker and CLIENT-side verdict parking (CT-1927):
   own `set`- and `delete`-produced heads are elided — the writer supplied
   the bytes (or the absence), and the verdict plus marker promote them —
   while own `patch`-produced heads are delivered as full post-apply
-  documents, since merged state is truth the writer cannot extrapolate. A
-  head moved past the session's own write, and all foreign novelty, is
-  delivered in full. REJECTED commits' docs are staged origin-less, so
-  repair frames DO cover them, and a frame lost in flight re-stages its
-  docs origin-less, so the retry delivers full documents.
+  documents, since merged state is truth the writer cannot extrapolate.
+  The exception is a patch whose `replayBaseSeq` (`03-commit-model.md`
+  section 3.1) equals the seq of the head the engine applied it over — a
+  head written before the commit, never one an earlier operation of the
+  same commit wrote — with the operation stored as its writer sent it; the
+  verdict's revision for it carries `exactBase: true`. Such a head is
+  elided like a `set` head while the snapshot of that document the server
+  last sent the session, or left out of its frame, is at `replayBaseSeq`,
+  and the session's connection advertised the server's
+  `PATCH_SEMANTICS_VERSION`, so that its document is
+  the writer's own edits replayed over a document the writer holds
+  (`09-invariants.md` INV-15); one retracted from the session since is
+  delivered. The engine checks only a default-branch, non-delegated
+  operation that no server transform rewrote, a replayed verdict, read back
+  from the store, carries no `exactBase`, and with patch replay switched
+  off every own patch head is delivered. An `apply-op` never declares a
+  base. A head moved past the session's own
+  write, and all foreign novelty, is delivered in full. REJECTED commits'
+  docs are staged origin-less, so repair frames DO cover them, and a frame
+  lost in flight re-stages its docs origin-less, so the retry delivers
+  full documents.
 - the CLIENT MUST NOT apply a verdict's state effects ahead of the marker
   that covers it: an accept's promotion (pending overlay to confirmed
   mirror, removing the pending local copy) is PARKED until
   `caughtUpLocalSeq` reaches its localSeq. For an elided `set` head the
-  promotion installs the client's own value; for a `patch` head the
-  covering frame has already delivered the post-apply document, so
-  promotion retires the overlay against delivered truth. Extrapolating the
+  promotion installs the client's own value; for an elided `exactBase`
+  patch head it replays the patch over the very document the patch named
+  as its base, which reproduces the server's; for any other `patch` head
+  the covering frame has already delivered the post-apply document, so
+  promotion retires the overlay against delivered truth. A client names a
+  replay base only where its replica holds that document as the server
+  stores it — delivered by a frame, or promoted from an `exactBase` patch —
+  with no pending write of its own beneath the patch. Extrapolating the
   post-apply state from the client's own ops remains the fallback where no
   frame channel exists — unwatched docs, servers that still suppress; a
   conflict rejection's drop/revert is held by the read-repair gate

@@ -75,6 +75,12 @@ Repaired result certifies the rule, not the whole pipeline:
   paired with a named-set `InvalidatedBy` — a violation witness under
   session-wide exclusion, a pass under named-set — is the natural
   refinement if omission ever becomes more than a hardening concern.
+- **Promotion is the durable value.** `Integrate` installs the log's value
+  for an own accepted entry. For an own patch head the server delivers, the
+  runtime does the same; for one it elides, the replica's replay of its own
+  patch stands in, and what makes that the durable value is INV-15
+  (`09-invariants.md`) — the same base, the same operations, and the same
+  `PATCH_SEMANTICS_VERSION` on both sides — which the model does not check.
 
 ## Running
 

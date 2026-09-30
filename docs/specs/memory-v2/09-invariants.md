@@ -619,6 +619,67 @@ the wire-boundary parse, and the zero-watch retraction by
 reconnect paths and the terminal restore against a server that cannot take
 one by `packages/memory/test/v2-client-holdings.test.ts`.
 
+### INV-15 — Own-patch replay fidelity
+
+> A session's frame omits the head of its own accepted patch only when the
+> session's replay of that patch reproduces the head: the engine applied the
+> patch, stored as the writer sent it, over the head at the writer's
+> declared `replayBaseSeq`; the snapshot of the document the server last sent
+> that session, or left out of its frame, is at that seq; and writer and
+> server apply patches at the same `PATCH_SEMANTICS_VERSION`, the one the
+> writer's connection advertised. The replay then equals the server's stored
+> document as a value. Key order is not part of that equality: the codec
+> delivers keys in canonical order, and a replay keeps its own.
+
+Layer: client (`#declareReplayBases`, `ConfirmedVersion.serverEqual` and
+`replaysServerDocument()` in `packages/runner/src/storage/v2.ts`); engine
+(the `replayBaseSeq` comparison in `writeOperation`,
+`AppliedRevision.exactBase`, in `packages/memory/v2/engine.ts`); server
+(`writerHolds()`, the `patchReplayVersion` advertisement, and
+`setPatchReplayConfig()`, in `packages/memory/v2/server.ts` and
+`packages/memory/v2.ts`); the version (`packages/memory/v2/patch-semantics.ts`).
+
+Soundness direction: the server MAY deliver a head the writer could have
+rebuilt — the frame replaces the writer's confirmed value with an equal one —
+and MUST NOT elide a head the writer cannot rebuild. The client MAY name no
+replay base, and the head is then delivered; it MUST NOT name a base it does
+not hold as the server stores it, so it names only a confirmed version a
+frame delivered or one promoted from a patch the server reported exact, with
+no pending layer of its own beneath, and only while the server it is
+connected to advertises the version it was built with. The engine check, the
+session check, and the version its connection advertised are checked by the
+server against its own state, so a commit resent after a reconnect is judged
+by the version of the server it reaches. Patch semantics themselves are the
+input neither side can check at run time, and the version holds them: a
+change to what applying a patch produces takes a new
+`PATCH_SEMANTICS_VERSION`. `setPatchReplayConfig(false)`, or
+`CF_MEMORY_PATCH_REPLAY=off` in the server's environment, delivers every own
+patch head from the server's next flush on, including heads committed
+before the switch; a replica whose replay already diverged is sent the
+server's document with its next patch to it, a foreign write, or a reconnect.
+A replica can detect one kind of divergence: holding the declared base, it
+finds that operations the server applied do not apply here, and logs
+`exact-base-replay-refused` at error level. A replay that applies and still
+differs from the server's result is not detectable on the client. Holdings
+stay delivery-derived (INV-14): an exact promotion is not declared, so a
+reconnect re-delivers the document, which also heals a replica whose replay
+went wrong.
+
+Checked by: `packages/memory/test/v2-engine-exact-base.test.ts` (when the
+engine reports `exactBase`, and each exclusion);
+`packages/memory/test/v2-server.test.ts` (elision over the declared base;
+delivery of a stale base, of a second operation in one commit, of a document
+retracted from the session before the flush, to a client advertising another
+version or none, and with patch replay switched off before the commit or
+between the commit and the flush);
+`packages/runner/test/own-write-echo-live.test.ts` (which bases the replica
+names: after a delivery, after an exact promotion, and none over a
+promotion whose verdict does not report exact, to a server at another
+version, or over a pending layer);
+`packages/memory/test/v2-patch-semantics.test.ts` (what version 1
+produces). The TLA+ models do not model the echo shape (`tla/README.md`,
+"Promotion is the durable value").
+
 ## Change discipline
 
 When a change narrows dependency recording, overlap matching, staleness

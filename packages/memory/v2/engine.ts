@@ -1302,6 +1302,16 @@ export type AppliedRevision = {
   op: SetOperation["op"] | PatchOperation["op"] | DeleteOperation["op"];
   document?: EntityDocument;
   patches?: PatchOp[];
+
+  /**
+   * True on a `patch` revision whose operation declared a `replayBaseSeq` equal to
+   * the seq of the head it was applied over, a head written before the
+   * commit, with the operation applied exactly as received. The revision's document is then the writer's own
+   * operations replayed over a document its replica holds, so the writer
+   * reproduces it without being sent it. Absent on a replayed commit's
+   * revisions, which are read back from the store.
+   */
+  exactBase?: true;
 };
 
 export type CommitReadDropReason =
@@ -6156,6 +6166,12 @@ const applyCommitTransaction = (
       seq,
       opIndex,
       operation: effectiveOperation,
+      // A stamped or transformed operation stores content its writer never
+      // sent, so its writer's replay cannot reproduce the result, and a
+      // delegated one writes an instance keyed for its actor rather than for
+      // the committing session.
+      checkReplayBase: effectiveOperation === operation &&
+        branch === DEFAULT_BRANCH && delegated === undefined,
       // A delegated commit's scoped writes key from the validated CARRIED
       // identity (protocol.md §2's delegated row; scopes.md §5 —
       // consequences land in the ACTOR's instances, never the delegating
@@ -6415,6 +6431,14 @@ const writeOperation = (
      * session-derived resolution — the service envelope has no session to
      * resolve from. */
     scopeKeyOverride?: string;
+
+    /**
+     * Whether a `patch` operation's declared `replayBaseSeq` is compared with the
+     * head it applies over. Only for an operation applied exactly as its
+     * writer sent it, on the default branch, whose head rows hold every
+     * document it has.
+     */
+    checkReplayBase?: boolean;
   },
 ): AppliedRevision => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
@@ -6461,6 +6485,19 @@ const writeOperation = (
       };
     }
     case "patch": {
+      // Read before this revision replaces the head. A document with no head
+      // row is absent, which a writer holding it as absent declares as 0. A
+      // head an earlier operation of this commit wrote carries this commit's
+      // seq, which no document a writer holds can have, so only a base below
+      // it can match.
+      const exactBase = options.checkReplayBase === true &&
+        operation.replayBaseSeq !== undefined &&
+        operation.replayBaseSeq < seq &&
+        ((engine.statements.selectHead.get({
+            branch,
+            id: operation.id,
+            scope_key: scopeKey,
+          }) as HeadRow | undefined)?.seq ?? 0) === operation.replayBaseSeq;
       engine.statements.insertRevision.run({
         branch,
         id: operation.id,
@@ -6488,6 +6525,7 @@ const writeOperation = (
         commitSeq: seq,
         op: "patch",
         patches: operation.patches,
+        ...(exactBase ? { exactBase: true as const } : {}),
       };
     }
     case "delete": {
