@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -468,6 +469,59 @@ describe("schema-view", () => {
           .toBe(true);
       } finally {
         await lazy.tx.commit();
+      }
+    });
+  });
+
+  describe("a `FabricInstance`", () => {
+    // A lazy view hands one back as itself, as a schemaless read does: no view
+    // can stand in for an instance. An eager read of an instance at a typed
+    // position refuses it (`schema traversal`), so these read lazily only.
+
+    it("returns a stored `FabricError` at an object-typed position as itself", async () => {
+      const read = await seeded(
+        "instance-leaf",
+        { err: new Error("boom") },
+        {
+          type: "object",
+          properties: { err: { type: "object" } },
+        } as const,
+      );
+
+      const lazy = read(true);
+      try {
+        const err = (lazy.get() as { err: unknown }).err;
+        expect(err).toBeInstanceOf(FabricError);
+        expect((err as FabricError).message).toBe("boom");
+      } finally {
+        await lazy.tx.commit();
+      }
+    });
+
+    it("checks an object schema's required keys against the instance's accessors", async () => {
+      const readWith = (required: string[]) =>
+        seeded(
+          `instance-required-${required.join("-")}`,
+          { err: new Error("boom") },
+          {
+            type: "object",
+            properties: { err: { type: "object", required } },
+            required: ["err"],
+          } as const,
+        );
+
+      const present = (await readWith(["message"]))(true);
+      const absent = (await readWith(["x"]))(true);
+      try {
+        expect((present.get() as { err: FabricError }).err.message).toBe(
+          "boom",
+        );
+        expect(() => (absent.get() as { err: unknown }).err).toThrow(
+          "opaque leaf is missing a required property",
+        );
+      } finally {
+        await present.tx.commit();
+        await absent.tx.commit();
       }
     });
   });

@@ -106,4 +106,44 @@ describe("fabric-instance-pattern-binding", () => {
 
     expect(errors.map((error) => error.message)).toEqual([]);
   });
+
+  it("hands a `FabricError` a computation reads from a cell to a pattern it calls, as an instance", async () => {
+    // The pattern's argument stores the error; the computation's read of it
+    // hands back the instance itself, so the pattern it is passed to receives
+    // one, and a lift there sees it as one.
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const card = pattern<{ error: unknown }>(({ error }) => ({
+      message: lift((e: unknown) => (e as FabricError).message)(error),
+      isError: lift((e: unknown) => e instanceof FabricError)(error),
+    }));
+    const produce = lift((error: unknown) => card({ error }));
+    const root = pattern<{ source: unknown }>(({ source }) => ({
+      card: produce(source),
+    }));
+
+    const tx = runtime.edit();
+    const rootCell = runtime.getCell<{ card: unknown }>(
+      space,
+      "instance read root",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(
+      tx,
+      root,
+      { source: new Error("stored") },
+      rootCell,
+    );
+    await tx.commit();
+    const stop = result.key("card").sink(() => {});
+    try {
+      await runtime.idle();
+      await result.pull();
+      expect(errors.map((error) => error.message)).toEqual([]);
+      expect(result.key("card").key("message" as never).get()).toBe("stored");
+      expect(result.key("card").key("isError" as never).get()).toBe(true);
+    } finally {
+      stop();
+    }
+  });
 });

@@ -2,6 +2,7 @@ import type { JSONSchemaObj, SchemaPathSelector } from "@commonfabric/api";
 import {
   FabricInstance,
   FabricPrimitive,
+  type FabricSpecialObject,
   type FabricValue,
   hashStringOf,
   isDeepFrozen,
@@ -6218,10 +6219,10 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
 
 /**
  * Whether an object-typed schema names a required property the opaque leaf
- * (a `FabricPrimitive`) does not have. Required keys are checked with `in`
+ * (a `FabricSpecialObject`) does not have. Required keys are checked with `in`
  * — prototype chain included, the same check the anyOf prefilters apply —
  * so a class accessor such as `FabricBytes.length` satisfies
- * `required: ["length"]` while a key the primitive lacks rejects it. The
+ * `required: ["length"]` while a key the leaf lacks rejects it. The
  * nominal brand key that schemas from pre-vocabulary compilations require,
  * `FABRIC_SPECIAL_OBJECT_BRAND`, has no runtime existence and is satisfied
  * by the instance itself. A `FabricPrimitive`-typed schema is not gated here
@@ -6237,7 +6238,7 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
  */
 export function opaqueLeafMissesRequired(
   schema: JSONSchemaObj,
-  value: FabricPrimitive,
+  value: FabricSpecialObject,
 ): boolean {
   return schemaTypeIncludesObject(schema.type) &&
     Array.isArray(schema.required) &&
