@@ -325,7 +325,24 @@ function directoryUrl(directory: string): URL {
 function validSourceRoot(name: string): boolean {
   if (!name.startsWith(PATTERNS_ROUTE_PREFIX)) return false;
   const path = name.slice(PATTERNS_ROUTE_PREFIX.length);
-  return path.length > 0 && path.length <= 2048 && !/[\\:%?#]/.test(path) &&
-    !path.startsWith("/") &&
-    !path.split("/").some((part) => part === "." || part === "..");
+  if (path.length === 0 || path.length > 2048 || /%2f/i.test(path)) {
+    return false;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch (error) {
+    if (error instanceof URIError) return false;
+    throw error;
+  }
+  // Check traversal after decoding, but retain the encoded name in the
+  // program: the HTTP compiler hashes URL pathnames. A second escape layer
+  // or URL delimiter would be interpreted differently by the file route.
+  for (const character of decoded) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return false;
+  }
+  return !/[\\:%?#]/.test(decoded) &&
+    !decoded.startsWith("/") &&
+    !decoded.split("/").some((part) => part === "." || part === "..");
 }
