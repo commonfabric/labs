@@ -1047,9 +1047,10 @@ const performReactionAct = (
  * Performs one membership act: showing the sender's profile, leaving, adding
  * or removing a member, or reporting a notice delivered.
  *
- * Only a host can change a space's access list, so `leave`, `add`, and
- * `remove` record what a pattern can: the roster, the members who left, the
- * notice, and the activity entry.
+ * `add` and `remove` grant and revoke access to the room's space, which the
+ * runtime admits only from an OWNER's trusted gesture on a client runtime.
+ * `leave` gives up no access, which no pattern can yet do, and records what
+ * it can: the roster, and the members who left.
  */
 const performMembershipAct = (
   op: MembershipAct,
@@ -2023,20 +2024,21 @@ export interface ChatRoomView {
 
   /**
    * Leaves a group room of its own: removes the sender's roster entry and
-   * records them as having left. It changes no access list, which a pattern
-   * can't do.
+   * records them as having left. It gives up no access, which no pattern can
+   * yet do.
    */
   leave: Stream<RoomStreamEvent>;
 
   /**
-   * Adds a notice for a person to a group room of its own, for a client to
-   * deliver. It grants no access, which only the room space's host can do.
+   * Admits a person to a group room of its own, granting them access from an
+   * OWNER's trusted gesture on a client runtime, and adds a notice for a
+   * client to deliver.
    */
   add: Stream<RoomStreamEvent>;
 
   /**
-   * Removing a person from a group room of its own: refused, since no pattern
-   * can revoke access.
+   * Removes a person from a group room of its own, revoking their access, from
+   * an OWNER's trusted gesture on a client runtime.
    */
   remove: Stream<RoomStreamEvent>;
 

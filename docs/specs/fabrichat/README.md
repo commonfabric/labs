@@ -284,18 +284,14 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
 
 ### Access and principals
 
-- **Access changes only at creation.** The manager creates a room of its own
-  with `FabriChatRoom.inSpace()`, naming grants, so its space grants the
-  creator OWNER and each other member WRITE, as the design says. After that,
-  nothing grants, revokes, or gives up access: `leave` removes the sender's
-  roster entry and records them as having left, and `add` adds its notice, so
-  a member added later can open the room only once a host grants them access.
-  Each records its activity entry. `remove` is refused, since a removal that
-  changed nothing would be recorded falsely.
-- **One OWNER.** A room knows one OWNER, its creator, whose profile the manager
-  passes when it creates the room, and takes the OWNER-only rules to mean the
-  creator. A space's own chat knows no OWNER. `canSend` is whether the
-  reader's profile resolves.
+- **Access changes from a client only, and leaving gives up none.** The
+  manager creates a room of its own with `FabriChatRoom.inSpace()`, naming
+  grants: the creator OWNER, each other member WRITE. `add` and `remove`
+  grant and revoke access (`grantSpaceAccess()`, `revokeSpaceAccess()`), each
+  from an OWNER's trusted gesture, but only on a client runtime: where a
+  room's handlers run served, they are refused, and record nothing. `leave`
+  removes the sender's roster entry and records them as having left, but
+  gives up no access, since no pattern can leave a space yet.
 - **Principals from handlers only.** A handler learns the principal it acts
   for (`currentPrincipal()`), so a room keys its request memory, and the
   members who left, by the sender's principal, and refuses to `add` someone
@@ -309,9 +305,9 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   rather than in the design's resumable steps, and a request's outcome is
   `done` or `refused` from the start. A request already
   decided changes nothing when it arrives again.
-- **Placements don't know who is a member.** A placement can't read access, so
-  a viewer who can't read the room sees it as `"unavailable"`, never as
-  `"not-member"`. No container creates placements yet: a client does.
+- **No container creates placements.** A client does. A placement reads its
+  viewer's access to the room's space, so `"none"` shows as `"not-member"`,
+  and a level not known yet as `"unavailable"`.
 
 ### Writers and labels
 
@@ -320,14 +316,13 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
   used times, activity and its numbering, roster, departures, notices, and
   each session's windows) has a write policy listing the handlers that write
   it (`WritePolicyAnyOf`), so no other code can write it, even code a member
-  runs in the room's space. `remove` is on the lists it will write once it can
-  revoke access.
-- **Membership and starts are not gesture-checked.** `add` and `remove` are
-  sent from controls marked `ChatMembersSurface`, and `openDirect` and
-  `createGroup` from controls marked `ChatStartSurface`, but no write policy
-  requires either gesture, since the records they write are also written by
-  acts with none. One handler, `commitManager`, writes the manager's records,
-  and each of its streams is a binding of it.
+  runs in the room's space.
+- **Starts are not gesture-checked.** `openDirect` and `createGroup` are sent
+  from controls marked `ChatStartSurface`, but no write policy requires the
+  gesture, since the manager's records are also written by acts with none.
+  `add` and `remove` are gesture-checked, by the runtime's grant and revoke.
+  One handler, `commitManager`, writes the manager's records, and each of its
+  streams is a binding of it.
 - **Only messages and reactions are labeled `authored-by`.** The runtime gives
   that label only to a record every one of whose writers names a reviewed
   gesture, so neither `about`, which the creator's manager writes, nor a
