@@ -57,7 +57,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     const withPrototype = __cf_pattern_input.params.withPrototype;
     const prefix = __cf_pattern_input.key("params", "prefix");
     const ownProto = __cf_pattern_input.params.ownProto;
-    return (<cf-button style={{ ...moduleStyle }} onClick={record({ log: records.key("log"), prefix: records.key("prefix"), id: item.key("id") })} onDblClick={record({ log: withPrototype.key("log"), prefix, id: item.key("id") })} data={{ ["__proto__"]: ownProto.key("__proto__") }}>
+    const nested = __cf_pattern_input.params.nested;
+    const numbered = __cf_pattern_input.params.numbered;
+    return (<cf-button style={{ ...moduleStyle }} onClick={record({ log: records.key("log"), prefix: records.key("prefix"), id: item.key("id") })} onDblClick={record({ log: withPrototype.key("log"), prefix, id: item.key("id") })} data={{ ["__proto__"]: ownProto.key("__proto__") }} nested={{ ...nested }} numbered={{ ...numbered }}>
             {item.key("id")}
           </cf-button>);
 }, {
@@ -114,9 +116,39 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                         }
                     },
                     required: ["__proto__"]
+                },
+                nested: {
+                    type: "object",
+                    properties: {
+                        log: {
+                            type: "array",
+                            items: {
+                                type: "string"
+                            },
+                            asCell: ["cell"]
+                        },
+                        prefix: {
+                            type: "string",
+                            asCell: ["cell"]
+                        }
+                    },
+                    required: ["log", "prefix"]
+                },
+                numbered: {
+                    type: "object",
+                    properties: {
+                        "0": {
+                            type: "array",
+                            items: {
+                                type: "string"
+                            },
+                            asCell: ["cell"]
+                        }
+                    },
+                    required: ["0"]
                 }
             },
-            required: ["records", "withPrototype", "prefix", "ownProto"]
+            required: ["records", "withPrototype", "prefix", "ownProto", "nested", "numbered"]
         }
     },
     required: ["element", "params"],
@@ -161,6 +193,10 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //                                 `__proto__: null` sets the prototype
 //   { ...ownProto }             → { ["__proto__"]: ownProto.key("__proto__") },
 //                                 since the shorthand makes an own property
+//   { ...nested }, { ...numbered }
+//                               → unchanged, since neither literal's keys are
+//                                 all static: one holds a spread, one a
+//                                 numeric key
 // Context: the capture reaches the callback as an opaque reference, which has
 //   no keys to spread
 export default pattern((__cf_pattern_input) => {
@@ -171,13 +207,17 @@ export default pattern((__cf_pattern_input) => {
     const withPrototype = { __proto__: null, log: log.for(["withPrototype", "log"], true) };
     const __proto__ = "own";
     const ownProto = { __proto__ };
+    const nested = { ...records };
+    const numbered = { 0: log.for(["numbered", "0"], true) };
     return {
         [UI]: (<div>
         {items.mapWithPattern(__cfPattern_1, {
                 records: records,
                 withPrototype: withPrototype,
                 prefix: prefix,
-                ownProto: ownProto
+                ownProto: ownProto,
+                nested: nested,
+                numbered: numbered
             })}
       </div>),
     };

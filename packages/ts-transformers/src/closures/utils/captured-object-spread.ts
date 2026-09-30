@@ -111,9 +111,12 @@ function staticKeysOfCapturedObject(
   context: TransformationContext,
 ): StaticKey[] | undefined {
   const authored = ts.getOriginalNode(operand);
+  // deno-coverage-ignore-start -- no stage before this one stands an
+  // identifier in for another kind of node inside a collection callback
   if (!ts.isIdentifier(authored)) {
     return undefined;
   }
+  // deno-coverage-ignore-stop
 
   const declaration = context.checker.getSymbolAtLocation(authored)
     ?.valueDeclaration;

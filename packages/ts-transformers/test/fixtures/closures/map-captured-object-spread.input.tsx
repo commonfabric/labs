@@ -36,6 +36,10 @@ const moduleStyle = { color: "red" };
 //                                 `__proto__: null` sets the prototype
 //   { ...ownProto }             → { ["__proto__"]: ownProto.key("__proto__") },
 //                                 since the shorthand makes an own property
+//   { ...nested }, { ...numbered }
+//                               → unchanged, since neither literal's keys are
+//                                 all static: one holds a spread, one a
+//                                 numeric key
 // Context: the capture reaches the callback as an opaque reference, which has
 //   no keys to spread
 export default pattern<State>(({ items, log, prefix }) => {
@@ -43,6 +47,8 @@ export default pattern<State>(({ items, log, prefix }) => {
   const withPrototype = { __proto__: null, log };
   const __proto__ = "own";
   const ownProto = { __proto__ };
+  const nested = { ...records };
+  const numbered = { 0: log };
   return {
     [UI]: (
       <div>
@@ -52,6 +58,8 @@ export default pattern<State>(({ items, log, prefix }) => {
             onClick={record({ ...records, id: item.id })}
             onDblClick={record({ ...withPrototype, prefix, id: item.id })}
             data={{ ...ownProto }}
+            nested={{ ...nested }}
+            numbered={{ ...numbered }}
           >
             {item.id}
           </cf-button>
