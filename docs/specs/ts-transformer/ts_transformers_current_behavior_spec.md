@@ -1536,7 +1536,9 @@ Result shape:
   it, is written out as the properties it copies when the capture is a `const`
   declared outside module scope and initialized with an object literal whose
   properties all have static keys (identifiers or string literals; no spread,
-  method, accessor, or computed key):
+  method, accessor, or computed key). A `__proto__:` assignment sets the
+  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
+  property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
   `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
   callback reads a capture as an opaque reference, which has no keys to spread;

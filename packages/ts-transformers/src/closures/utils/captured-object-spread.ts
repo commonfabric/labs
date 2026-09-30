@@ -147,9 +147,11 @@ function staticKeysOfCapturedObject(
       return undefined;
     }
 
-    // `__proto__: x` sets the prototype rather than making a property.
-    if (name.text === "__proto__") {
-      return undefined;
+    // `__proto__: x` sets the prototype rather than making a property, so a
+    // spread has nothing of it to copy. The shorthand `{ __proto__ }` does
+    // make one, and `copyKey()` keeps it an own property.
+    if (ts.isPropertyAssignment(property) && name.text === "__proto__") {
+      continue;
     }
 
     keys.push(name);
@@ -158,8 +160,18 @@ function staticKeysOfCapturedObject(
   return keys;
 }
 
-/** Helper for `expandCapturedObjectSpreads()`, which copies a static key. */
-function copyKey(key: StaticKey, factory: ts.NodeFactory): StaticKey {
+/**
+ * Helper for `expandCapturedObjectSpreads()`, which copies a static key. A key
+ * named `__proto__` is written as a computed name, the one form in which an
+ * object literal makes it an own property rather than setting the prototype.
+ */
+function copyKey(key: StaticKey, factory: ts.NodeFactory): ts.PropertyName {
+  if (key.text === "__proto__") {
+    return factory.createComputedPropertyName(
+      factory.createStringLiteral(key.text),
+    );
+  }
+
   return ts.isIdentifier(key)
     ? factory.createIdentifier(key.text)
     : factory.createStringLiteral(key.text);

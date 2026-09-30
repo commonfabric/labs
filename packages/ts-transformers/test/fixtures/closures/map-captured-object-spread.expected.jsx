@@ -54,7 +54,10 @@ const moduleStyle = __cfHelpers.__cf_data({ color: "red" });
 const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
     const records = __cf_pattern_input.params.records;
-    return (<cf-button style={{ ...moduleStyle }} onClick={record({ log: records.key("log"), prefix: records.key("prefix"), id: item.key("id") })}>
+    const withPrototype = __cf_pattern_input.params.withPrototype;
+    const prefix = __cf_pattern_input.key("params", "prefix");
+    const ownProto = __cf_pattern_input.params.ownProto;
+    return (<cf-button style={{ ...moduleStyle }} onClick={record({ log: records.key("log"), prefix: records.key("prefix"), id: item.key("id") })} onDblClick={record({ log: withPrototype.key("log"), prefix, id: item.key("id") })} data={{ ["__proto__"]: ownProto.key("__proto__") }}>
             {item.key("id")}
           </cf-button>);
 }, {
@@ -82,9 +85,38 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                         }
                     },
                     required: ["log", "prefix"]
+                },
+                withPrototype: {
+                    type: "object",
+                    properties: {
+                        __proto__: {
+                            type: "null"
+                        },
+                        log: {
+                            type: "array",
+                            items: {
+                                type: "string"
+                            },
+                            asCell: ["readonly"]
+                        }
+                    },
+                    required: ["__proto__", "log"]
+                },
+                prefix: {
+                    type: "string",
+                    asCell: ["readonly"]
+                },
+                ownProto: {
+                    type: "object",
+                    properties: {
+                        __proto__: {
+                            type: "string"
+                        }
+                    },
+                    required: ["__proto__"]
                 }
             },
-            required: ["records"]
+            required: ["records", "withPrototype", "prefix", "ownProto"]
         }
     },
     required: ["element", "params"],
@@ -125,6 +157,10 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   a reactive `.map()` callback, is written out as the properties it copies
 //   { ...records, id: item.id } → { log: records.key("log"), prefix: records.key("prefix"), id: ... }
 //   { ...moduleStyle }          → unchanged (a module binding is not captured)
+//   { ...withPrototype }        → { log: withPrototype.key("log") }, since
+//                                 `__proto__: null` sets the prototype
+//   { ...ownProto }             → { ["__proto__"]: ownProto.key("__proto__") },
+//                                 since the shorthand makes an own property
 // Context: the capture reaches the callback as an opaque reference, which has
 //   no keys to spread
 export default pattern((__cf_pattern_input) => {
@@ -132,10 +168,16 @@ export default pattern((__cf_pattern_input) => {
     const log = __cf_pattern_input.key("log");
     const prefix = __cf_pattern_input.key("prefix");
     const records = { log: log.for(["records", "log"], true), prefix: prefix.for(["records", "prefix"], true) };
+    const withPrototype = { __proto__: null, log: log.for(["withPrototype", "log"], true) };
+    const __proto__ = "own";
+    const ownProto = { __proto__ };
     return {
         [UI]: (<div>
         {items.mapWithPattern(__cfPattern_1, {
-                records: records
+                records: records,
+                withPrototype: withPrototype,
+                prefix: prefix,
+                ownProto: ownProto
             })}
       </div>),
     };

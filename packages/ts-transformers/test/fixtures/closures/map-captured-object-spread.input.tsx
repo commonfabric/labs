@@ -32,10 +32,17 @@ const moduleStyle = { color: "red" };
 //   a reactive `.map()` callback, is written out as the properties it copies
 //   { ...records, id: item.id } → { log: records.key("log"), prefix: records.key("prefix"), id: ... }
 //   { ...moduleStyle }          → unchanged (a module binding is not captured)
+//   { ...withPrototype }        → { log: withPrototype.key("log") }, since
+//                                 `__proto__: null` sets the prototype
+//   { ...ownProto }             → { ["__proto__"]: ownProto.key("__proto__") },
+//                                 since the shorthand makes an own property
 // Context: the capture reaches the callback as an opaque reference, which has
 //   no keys to spread
 export default pattern<State>(({ items, log, prefix }) => {
   const records = { log, prefix };
+  const withPrototype = { __proto__: null, log };
+  const __proto__ = "own";
+  const ownProto = { __proto__ };
   return {
     [UI]: (
       <div>
@@ -43,6 +50,8 @@ export default pattern<State>(({ items, log, prefix }) => {
           <cf-button
             style={{ ...moduleStyle }}
             onClick={record({ ...records, id: item.id })}
+            onDblClick={record({ ...withPrototype, prefix, id: item.id })}
+            data={{ ...ownProto }}
           >
             {item.id}
           </cf-button>
