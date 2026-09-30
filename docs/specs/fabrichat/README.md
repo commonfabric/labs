@@ -292,16 +292,12 @@ and [`FabriChatRoom`](FabriChatRoom.md#as-built) and
   keys its request memory, and the members who left, by profile. The manager
   takes the principals the contract names, and can't refuse a direct room with
   the user themself.
-- **One writer, and one message surface.** The runtime admits one writer, one
-  action, and one surface for a stored record. So one handler, `commitRoom`,
-  writes the room's record, and sending, editing, deleting, and obliterating
-  are all admitted from one reviewed surface, `ChatMessageSurface`, with the
-  action `ChatMessageWrite`. Reactions keep `ChatReactSurface`, with the action
-  `ChatReact`. `ChatMembersSurface` and `ChatStartSurface` mark their controls,
-  but no write policy names them.
+- **Membership and starts are not gesture-checked.** `ChatMembersSurface` and
+  `ChatStartSurface` mark their controls, but no write policy requires either
+  gesture, since the records they write are also written by acts with none.
 - **Only messages and reactions are labeled `authored-by`.** The runtime labels
-  a value with its writer only when a trusted gesture on one named surface made
-  the write, so neither `about` nor a `recentActivity` entry carries the label.
+  a record with its writer only when every one of its writers names a reviewed
+  gesture, so neither `about` nor a `recentActivity` entry carries the label.
 - **Creation takes one transaction.** With no access list to change, a room is
   created, noticed, and recorded in one commit, so no request is ever left
   pending.

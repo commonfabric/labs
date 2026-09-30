@@ -249,29 +249,23 @@ the room is created from the same settings the handlers read.
 `packages/patterns/fabrichat/room.tsx` departs from the design above where the
 runtime lacks a prerequisite:
 
-- **One writer.** The runtime admits one writer handler, one action, and one
-  surface for a stored record, and a write beneath a record is held to the
-  record's policy too. So one handler, `commitRoom`, writes the room's whole
-  record, and each stream is a binding of it with the act it performs. A
-  message is written from `ChatMessageSurface` with the action
-  `ChatMessageWrite`, whichever of the four message streams sent it; a reaction
-  is written from `ChatReactSurface` with the action `ChatReact`. The roster is
-  written only by `commitRoom`, with no gesture. `commitWindow` writes the
-  sending session's windows.
+- **Membership gestures.** `add` and `remove` are sent from controls marked
+  `ChatMembersSurface`, but no write policy requires that gesture: the
+  records `add` writes (its notice, the roster, and its activity entry) are
+  also written by acts with no gesture. `commitWindow` writes the sending
+  session's windows.
 - **Reactions are a list the message links.** Each message links a list of its
-  own reactions, a document the send creates empty and only reactions write
-  after that. A deletion, or an obliteration, drops that link, which takes the
-  reactions out of the room's record as readers reach it. Their documents stay
-  in the room space's storage: they admit only a reaction's gesture, so a
-  deletion can't clear them.
+  own reactions, a document the send creates empty and only the reaction
+  handlers write after that, until a deletion or an obliteration clears it and
+  drops the link.
 - **Keyed records.** Each message, each reaction, and each `recentActivity`
   entry is a document of its own, addressed by a key (`elementById`), so
   writing one never rewrites another, and a record keeps the label its own
   writer gave it.
 - **Labels.** Messages and reactions are `AuthoredByCurrentUser`. The runtime
-  requires a trusted gesture on one named surface for that label, so `about`,
-  which the creator's manager writes, and `recentActivity` entries, which acts
-  from every surface write, carry none. `about` is a plain argument of the
+  gives that label only to a record every one of whose writers names a
+  reviewed gesture, so `about`, which the creator's manager writes, and
+  `recentActivity` entries, which acts with no gesture write too, carry none. `about` is a plain argument of the
   room, written when the room is created. Its `policy` links a document the
   room writes when it starts.
 - **Senders are profiles.** A handler can't learn the principal that sent an

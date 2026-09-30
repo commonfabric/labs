@@ -238,8 +238,8 @@
       },
       "ChatRoomKind": {
         "enum": [
-          "direct",
-          "group"
+          "group",
+          "direct"
         ]
       },
       "ChatRoomNotice": {
@@ -349,15 +349,41 @@
           "items": {
             "description": "The profiles, in the order they were shown.",
             "ifc": {
-              "writeAuthorizedBy": {
-                "__ctWriterIdentityOf": {
-                  "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "eUXZp8fdOXANNK_KQDLRmkgj3cRWg4BPeXnQvnNIvFA",
-                  "path": [
-                    "commitRoom"
-                  ]
+              "writePolicyAnyOf": [
+                {
+                  "writeAuthorizedBy": {
+                    "__ctWriterIdentityOf": {
+                      "file": "/packages/patterns/fabrichat/room.tsx",
+                      "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                      "path": [
+                        "commitShowProfile"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "writeAuthorizedBy": {
+                    "__ctWriterIdentityOf": {
+                      "file": "/packages/patterns/fabrichat/room.tsx",
+                      "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                      "path": [
+                        "commitLeave"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "writeAuthorizedBy": {
+                    "__ctWriterIdentityOf": {
+                      "file": "/packages/patterns/fabrichat/room.tsx",
+                      "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                      "path": [
+                        "commitAdd"
+                      ]
+                    }
+                  }
                 }
-              }
+              ]
             },
             "items": {
               "$ref": "#/$defs/ChatProfile",
@@ -373,15 +399,107 @@
       "SentActivity": {
         "$ref": "#/$defs/ChatRoomActivity",
         "ifc": {
-          "writeAuthorizedBy": {
-            "__ctWriterIdentityOf": {
-              "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "eUXZp8fdOXANNK_KQDLRmkgj3cRWg4BPeXnQvnNIvFA",
-              "path": [
-                "commitRoom"
-              ]
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitShowProfile"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitLeave"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitAdd"
+                  ]
+                }
+              }
             }
-          }
+          ]
         }
       },
       "SentMessage": {
@@ -395,23 +513,84 @@
               }
             }
           ],
-          "uiContract": {
-            "action": "ChatMessageWrite",
-            "helper": "UiAction",
-            "requiredEventIntegrity": [
-              "ChatMessageSurface"
-            ],
-            "trustedPattern": "ChatMessageSurface"
-          },
-          "writeAuthorizedBy": {
-            "__ctWriterIdentityOf": {
-              "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "eUXZp8fdOXANNK_KQDLRmkgj3cRWg4BPeXnQvnNIvFA",
-              "path": [
-                "commitRoom"
-              ]
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
             }
-          }
+          ]
         }
       },
       "SentReaction": {
@@ -425,23 +604,84 @@
               }
             }
           ],
-          "uiContract": {
-            "action": "ChatReact",
-            "helper": "UiAction",
-            "requiredEventIntegrity": [
-              "ChatReactSurface"
-            ],
-            "trustedPattern": "ChatReactSurface"
-          },
-          "writeAuthorizedBy": {
-            "__ctWriterIdentityOf": {
-              "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "eUXZp8fdOXANNK_KQDLRmkgj3cRWg4BPeXnQvnNIvFA",
-              "path": [
-                "commitRoom"
-              ]
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatUnreact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
             }
-          }
+          ]
         }
       },
       "ShownIn": {
@@ -484,7 +724,7 @@
         "type": "object"
       }
     },
-    "description": "What a room stores. Every field has a default, for a space's own chat.",
+    "description": "What a room stores. A space's own chat starts with none of these: each has a\ndefault except `creatorProfile`, which such a chat does without.",
     "properties": {
       "about": {
         "$ref": "#/$defs/AboutRecord",
@@ -918,8 +1158,8 @@
       },
       "ChatRoomKind": {
         "enum": [
-          "direct",
-          "group"
+          "group",
+          "direct"
         ]
       },
       "ChatRoomNotice": {
@@ -1334,23 +1574,84 @@
               }
             }
           ],
-          "uiContract": {
-            "action": "ChatReact",
-            "helper": "UiAction",
-            "requiredEventIntegrity": [
-              "ChatReactSurface"
-            ],
-            "trustedPattern": "ChatReactSurface"
-          },
-          "writeAuthorizedBy": {
-            "__ctWriterIdentityOf": {
-              "file": "/packages/patterns/fabrichat/room.tsx",
-              "moduleIdentity": "eUXZp8fdOXANNK_KQDLRmkgj3cRWg4BPeXnQvnNIvFA",
-              "path": [
-                "commitRoom"
-              ]
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatUnreact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "_3HjQRPNhehIMHOTFU7YZTh_YNA41_VQ7SrPP1yUMj0",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
             }
-          }
+          ]
         }
       },
       "ShownIn": {
