@@ -2159,6 +2159,17 @@ describe("run-measurement-batch", () => {
       }
     });
 
+    it("returns 2 with its usage for a dotted flag and no suite, rather than throwing with the value of the flag before the dot", async () => {
+      const lines: string[] = [];
+      const code = await main(
+        ["--console", "http://secret.example/", "--console.x", "y"],
+        (line) => lines.push(line),
+      );
+
+      expect(code).toBe(2);
+      expect(lines.join("\n")).toContain("usage: measure-batch");
+    });
+
     it("returns 3 and runs no task when the index does not answer the pre-flight", async () => {
       const { code, dir, logs } = await runMain({
         streams: [completedStream()],

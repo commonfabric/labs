@@ -158,6 +158,8 @@ import {
 import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
 import { parseInputCellArgument } from "./input-cells.ts";
 import {
+  argvHolds,
+  HELP_SPELLINGS,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
@@ -1348,7 +1350,7 @@ export const parseCfHarnessCliArgs = async (
     unknown: recordUndeclaredFlags(undeclared),
   });
 
-  if (args.help) {
+  if (argvHolds(normalizedArgv, HELP_SPELLINGS)) {
     return { help: true };
   }
   refuseFlagsWithoutValue(normalizedArgv, CLI_STRING_FLAGS);
@@ -2937,18 +2939,6 @@ export const formatCfHarnessCliResult = (
   return `${lines.join("\n")}\n`;
 };
 
-const parseCfHarnessCliControlArgs = (
-  argv: readonly string[],
-): ReturnType<typeof parseArgs> => {
-  const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
-  return parseArgs([...normalizedArgv], {
-    boolean: ["help", "describe-capabilities"],
-    alias: {
-      h: "help",
-    },
-  });
-};
-
 export type CfHarnessCliInformationalControl =
   | "help"
   | "describe-capabilities";
@@ -2958,9 +2948,11 @@ export const cfHarnessCliInformationalControl = (
   argv: readonly string[],
 ): CfHarnessCliInformationalControl | undefined => {
   if (cfHarnessCliCommandName(argv) !== "prompt") return undefined;
-  const args = parseCfHarnessCliControlArgs(argv);
-  if (args.help) return "help";
-  if (args["describe-capabilities"]) return "describe-capabilities";
+  const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+  if (argvHolds(normalizedArgv, HELP_SPELLINGS)) return "help";
+  if (argvHolds(normalizedArgv, ["--describe-capabilities"])) {
+    return "describe-capabilities";
+  }
   return undefined;
 };
 

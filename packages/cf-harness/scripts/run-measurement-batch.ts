@@ -46,6 +46,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
+import { keepDottedFlagsOut } from "../src/cli-flags.ts";
 import type {
   HarnessChatEventEnvelope,
   HarnessChatSessionStatus,
@@ -2024,6 +2025,7 @@ export const main = async (
         DEFAULT_FABRIC_API_URL,
       base: "origin/main",
     },
+    unknown: keepDottedFlagsOut,
   });
   const suitePath = flags._.map(String)[0];
   if (suitePath === undefined) {

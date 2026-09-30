@@ -99,7 +99,9 @@ import {
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
+  argvHolds,
   flagUsageLines,
+  HELP_SPELLINGS,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
@@ -663,9 +665,7 @@ const CONSOLE_USAGE = [
  * else they hold, and otherwise `undefined`.
  */
 export const consoleHelpText = (args: readonly string[]): string | undefined =>
-  parseArgs([...args], { boolean: ["help"], alias: { h: "help" } }).help
-    ? CONSOLE_USAGE
-    : undefined;
+  argvHolds(args, HELP_SPELLINGS) ? CONSOLE_USAGE : undefined;
 
 /**
  * Parses the console's arguments. The batch CLI's sandbox selection flags are

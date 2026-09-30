@@ -2,7 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { parseArgs } from "@std/cli/parse-args";
 
+import { fromFileUrl, join, relative } from "@std/path";
+
 import {
+  argvHolds,
+  keepDottedFlagsOut,
   nearestDeclaredFlag,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
@@ -10,6 +14,35 @@ import {
   undeclaredFlagMessage,
 } from "../src/cli-flags.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
+
+/** Every TypeScript source under `directory`, tests and built pages aside. */
+async function* walkSources(directory: string): AsyncGenerator<string> {
+  for await (const entry of Deno.readDir(directory)) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory) {
+      if (!["test", "dist", "public", "fixtures"].includes(entry.name)) {
+        yield* walkSources(path);
+      }
+    } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+      yield path;
+    }
+  }
+}
+
+/**
+ * The text of a call's arguments, from `start`, just past its opening
+ * parenthesis, to the parenthesis that closes it.
+ */
+const callText = (text: string, start: number): string => {
+  let depth = 1;
+  let index = start;
+  while (depth > 0 && index < text.length) {
+    if (text[index] === "(") depth += 1;
+    if (text[index] === ")") depth -= 1;
+    index += 1;
+  }
+  return text.slice(start, index);
+};
 
 describe("cli-flags", () => {
   describe("nearestDeclaredFlag()", () => {
@@ -82,6 +115,8 @@ describe("cli-flags", () => {
     it("returns a sentence naming nothing for an argument that is not a flag name", () => {
       for (
         const argument of [
+          "-15",
+          "--5x",
           "--Remember my password is hunter2",
           "---\ntitle: notes\n---",
           "- ",
@@ -118,14 +153,16 @@ describe("cli-flags", () => {
       expect(undeclared).toEqual(["--no-transcript"]);
     });
 
-    it("records a negative number standing alone as the flag `parseArgs()` reads it as", () => {
+    it("records a word after a single dash whole, not letter by letter", () => {
       const undeclared: string[] = [];
-      parseArgs(["--port=8100", "-5x"], {
+      parseArgs(["--port=8100", "-5x", "-hidden", "-15"], {
         string: ["port"],
+        boolean: ["help"],
+        alias: { h: "help" },
         unknown: recordUndeclaredFlags(undeclared),
       });
 
-      expect(undeclared).toEqual(["-5", "-x"]);
+      expect(undeclared).toEqual(["-5x", "-hidden", "-15"]);
     });
 
     it("records a negated switch given a value by the name it was typed as", () => {
@@ -197,6 +234,52 @@ describe("cli-flags", () => {
           "the batch CLI",
         )
       ).toThrow("`--no-skill-catalog` takes no value.");
+    });
+  });
+
+  describe("keepDottedFlagsOut()", () => {
+    it("keeps a dotted flag out of the result, where it would write into the flag before the dot", () => {
+      const parsed = parseArgs(["--prompt", "hunter2", "--prompt.x", "y"], {
+        unknown: keepDottedFlagsOut,
+      });
+
+      expect(parsed.prompt).toBe("hunter2");
+      expect(parsed._).toEqual([]);
+    });
+  });
+
+  describe("argvHolds()", () => {
+    it("returns whether one of the spellings stands as a word of its own before `--`", () => {
+      const spellings = ["--help", "-h"];
+
+      expect(argvHolds(["--port", "1", "-h"], spellings)).toBe(true);
+      expect(argvHolds(["--help"], spellings)).toBe(true);
+      expect(argvHolds(["--store", "-hidden"], spellings)).toBe(false);
+      expect(argvHolds(["--prompt=-h"], spellings)).toBe(false);
+      expect(argvHolds(["--", "--help"], spellings)).toBe(false);
+    });
+  });
+
+  describe("every parseArgs() over a caller's arguments in the package", () => {
+    it("is handed an `unknown` callback", async () => {
+      // Without one, a dotted flag makes `parseArgs()` throw a TypeError
+      // quoting the value of the flag before the dot.
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      const unguarded: string[] = [];
+      for (const tree of ["src", "console", "scripts", "audit"]) {
+        for await (const file of walkSources(join(root, tree))) {
+          const text = await Deno.readTextFile(file);
+          for (const call of text.matchAll(/\bparseArgs\((?!\))/g)) {
+            if (
+              !callText(text, call.index + call[0].length).includes("unknown:")
+            ) {
+              unguarded.push(relative(root, file));
+            }
+          }
+        }
+      }
+
+      expect(unguarded).toEqual([]);
     });
   });
 

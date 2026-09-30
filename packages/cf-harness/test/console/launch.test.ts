@@ -1643,6 +1643,45 @@ describe("launch", () => {
       }
     });
 
+    it("refuses a dotted flag, before `--` or after it, without the value of the flag before the dot", async () => {
+      for (
+        const [args, refusal] of [
+          [
+            ["--store", "/secret/store", "--store.x", "y"],
+            "`--store.x` is not a flag of `console:launch`.",
+          ],
+          [
+            [...ARGS, "--", "--workspace", "SECRETWS", "--workspace.a", "b"],
+            "`--workspace.a` is not a flag of the console. Did you mean " +
+            "`--workspace`?",
+          ],
+        ] as const
+      ) {
+        const message = await launchConsole(
+          args,
+          {},
+          () => Promise.resolve(),
+          io,
+        ).then(() => undefined, (error: Error) => error.message);
+
+        expect(message).toBe(refusal);
+      }
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      let served = false;
+      await expect(
+        launchConsole(["--store", "-hidden"], {}, () => {
+          served = true;
+          return Promise.resolve();
+        }, io),
+      ).rejects.toThrow(
+        "`--store` was given no value; a value starting with `-` needs the " +
+          "`--store=<value>` spelling",
+      );
+      expect(served).toBe(false);
+    });
+
     it("serves under the environment it resolved", async () => {
       await withEnvironmentRestored(async () => {
         let served: string[] | undefined;

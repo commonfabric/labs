@@ -45,7 +45,9 @@ import { join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
+  argvHolds,
   flagUsageLines,
+  HELP_SPELLINGS,
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
@@ -932,11 +934,8 @@ const LAUNCH_USAGE = [
 export const consoleLaunchHelpText = (
   args: readonly string[],
 ): string | undefined => {
+  if (argvHolds(args, HELP_SPELLINGS)) return LAUNCH_USAGE;
   const split = args.indexOf("--");
-  const own = split === -1 ? args : args.slice(0, split);
-  if (parseArgs([...own], { boolean: ["help"], alias: { h: "help" } }).help) {
-    return LAUNCH_USAGE;
-  }
   return split === -1 ? undefined : consoleHelpText(args.slice(split + 1));
 };
 

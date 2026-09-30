@@ -984,6 +984,83 @@ Deno.test("parseCfHarnessCliArgs suggests no flag of the opposite meaning", asyn
   );
 });
 
+Deno.test("runCfHarnessCli refuses a dotted flag without the value of the flag before the dot", async () => {
+  for (
+    const [argv, flag] of [
+      [["--prompt", "hunter2", "--prompt.x", "y"], "--prompt.x"],
+      [["--prompt=hunter2", "--prompt.x=y"], "--prompt.x"],
+      [
+        [
+          "--system-prompt",
+          "SECRETSYS",
+          "--system-prompt.a",
+          "b",
+          "--prompt",
+          "hi",
+        ],
+        "--system-prompt.a",
+      ],
+    ] as const
+  ) {
+    const buffers = createIoBuffers();
+    assertEquals(
+      await runCfHarnessCli(argv, {
+        io: buffers.io,
+        cwd: "/tmp/project",
+        env: {},
+      }),
+      1,
+    );
+    const output = buffers.stderr.join("") + buffers.stdout.join("");
+    assertStringIncludes(output, `\`${flag}\` is not a flag of the batch CLI.`);
+    assertEquals(/hunter2|SECRETSYS/.test(output), false);
+  }
+});
+
+Deno.test("runCfHarnessCli refuses a value holding an `h` as given no value, rather than printing help", async () => {
+  const buffers = createIoBuffers();
+  assertEquals(
+    await runCfHarnessCli(["--prompt", "-hidden"], {
+      io: buffers.io,
+      cwd: "/tmp/project",
+      env: {},
+    }),
+    1,
+  );
+  assertEquals(buffers.stdout, []);
+  assertStringIncludes(
+    buffers.stderr.join(""),
+    "`--prompt` was given no value; a value starting with `-` needs the `--prompt=<value>` spelling",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs refuses a lone negative number without naming it", async () => {
+  const error = await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(["--prompt", "hi", "-15"], {
+        cwd: "/tmp/project",
+        env: {},
+      }),
+    HarnessControlError,
+  );
+  assertEquals(
+    error.message,
+    "An argument starting with `-` is not a flag of the batch CLI. A value starting with `-` needs the `--<flag>=<value>` spelling.",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs names a word after a single dash whole", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(["--prompt", "hi", "-hidden"], {
+        cwd: "/tmp/project",
+        env: {},
+      }),
+    HarnessControlError,
+    "`-hidden` is not a flag of the batch CLI.",
+  );
+});
+
 Deno.test("runCfHarnessCli names an undeclared flag in a host's structured failure", async () => {
   const buffers = createIoBuffers();
   assertEquals(

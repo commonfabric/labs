@@ -427,9 +427,9 @@ it, nor a word that could not be a flag's name. The control commands (`config`,
 `auth`, `models`, `whoami`), the interactive stdio entrypoint, the local Loom
 host's `batch` and `interactive` modes over those two, the console and
 `console:launch` refuse the same way; through the local Loom host the refusal is
-an `invalid-request` host failure carrying that message. `--help` answers
-whatever else is on the line, and text after `--` is prompt text, flags
-included.
+an `invalid-request` host failure carrying that message. `--help` or `-h`,
+written as a word of its own, answers whatever else is on the line, and text
+after `--` is prompt text, flags included.
 
 The batch CLI, the console and `console:launch` also refuse a flag that takes a
 value when nothing follows it or the word after it starts with `-`, since the

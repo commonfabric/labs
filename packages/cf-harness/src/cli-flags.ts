@@ -89,8 +89,9 @@ export const nearestDeclaredFlag = (
  * `surface` does not take, followed by the nearest of `declared` where one is
  * close. `declared` is written without dashes. A declared flag here is a
  * switch that was given a value, which is said instead. A word that could not
- * be a flag's name, one with a space in it, say, is not repeated, since what
- * starts with `-` and is no flag is most likely a value.
+ * be a flag's name, one with a space in it, say, is not repeated, and neither
+ * is one that starts with a digit, since what starts with `-` and is no flag
+ * is most likely a value, a negative number among them.
  */
 export const undeclaredFlagMessage = (
   flag: string,
@@ -98,7 +99,7 @@ export const undeclaredFlagMessage = (
   surface: string,
 ): string => {
   const name = flag.replace(/^-+/, "");
-  if (!FLAG_NAME.test(name)) {
+  if (!FLAG_NAME.test(name) || /^[0-9]/.test(name)) {
     return `An argument starting with \`-\` is not a flag of ${surface}. A ` +
       "value starting with `-` needs the `--<flag>=<value>` spelling.";
   }
@@ -110,23 +111,50 @@ export const undeclaredFlagMessage = (
 };
 
 /**
+ * A callback for the `unknown` option of `parseArgs()` that keeps a dotted
+ * flag, `--prompt.x`, out of the parsed result and passes everything else.
+ * `parseArgs()` would write a dotted flag into the flag before the dot, and,
+ * where that holds a string, throw a TypeError quoting it. Every
+ * `parseArgs()` over a caller's arguments is handed this, or
+ * `recordUndeclaredFlags()`, which does the same.
+ */
+export const keepDottedFlagsOut = (_arg: string, key?: string): boolean =>
+  key === undefined || !key.includes(".");
+
+/**
  * A callback for the `unknown` option of `parseArgs()` that records, in
- * `into`, each undeclared flag once, by its name as it was typed and without
- * any value. That is the name `parseArgs()` was handed, which is not always
- * the one it files the flag under: `--no-x=true` goes under `x`. The callback
- * keeps the flag in the parsed result, so a surface that refuses one
- * particular flag with a message of its own still finds it there, and it
- * leaves positional arguments as they are. A dotted flag, `--prompt.x`, is
- * the exception: `parseArgs()` would write it into the flag before the dot,
- * and throw quoting that flag's value where it is a string.
+ * `into`, each undeclared flag once, as the word it was typed as up to any
+ * `=`. That is the name `parseArgs()` was handed, which is not always the one
+ * it files the flag under: `--no-x=true` goes under `x`, and `-hidden` is
+ * taken letter by letter. The callback keeps the flag in the parsed result, so
+ * a surface that refuses one particular flag with a message of its own still
+ * finds it there, and it leaves positional arguments as they are. A dotted
+ * flag is the exception, kept out as `keepDottedFlagsOut()` keeps it out.
  */
 export const recordUndeclaredFlags =
   (into: string[]) => (arg: string, key?: string): boolean => {
     if (key === undefined) return true;
-    const flag = arg.startsWith("--") ? arg.split("=")[0] : `-${key}`;
+    const flag = arg.split("=")[0];
     if (!into.includes(flag)) into.push(flag);
-    return !key.includes(".");
+    return keepDottedFlagsOut(arg, key);
   };
+
+/** The words that ask an entrypoint for its usage. */
+export const HELP_SPELLINGS: readonly string[] = ["--help", "-h"];
+
+/**
+ * Whether `argv`, up to its first `--`, holds one of `spellings` as a word of
+ * its own, which is how help is asked for. A `-h` inside another word asks for
+ * nothing: `parseArgs()` would read the value `-hidden` as `-h` and five more
+ * letters, where what its flag needs is the refusal of a flag given no value.
+ */
+export const argvHolds = (
+  argv: readonly string[],
+  spellings: readonly string[],
+): boolean => {
+  const end = argv.indexOf("--") === -1 ? argv.length : argv.indexOf("--");
+  return argv.slice(0, end).some((argument) => spellings.includes(argument));
+};
 
 /**
  * Refuses the first flag named in `valued` that is written with no value:

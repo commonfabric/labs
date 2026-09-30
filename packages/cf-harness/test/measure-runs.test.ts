@@ -1297,6 +1297,16 @@ describe("measure-runs", () => {
       expect(out).toContain("===== ALL 5 FAMILIES");
     });
 
+    it("returns 0 for a dotted flag, rather than throwing with the value of the flag before the dot", async () => {
+      const { code, out } = await runMain([
+        `--artifact-root=${FIXTURE_ROOT}`,
+        "--artifact-root.x=y",
+      ]);
+
+      expect(code).toBe(0);
+      expect(out).toContain(`artifact root: ${FIXTURE_ROOT}`);
+    });
+
     it("reports only the families it is named", async () => {
       const { out } = await runMain([
         `--artifact-root=${FIXTURE_ROOT}`,

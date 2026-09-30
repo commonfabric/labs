@@ -2715,14 +2715,16 @@ describe("console/server", () => {
       }
     });
 
-    it("throws naming a negative number standing alone", async () => {
+    it("throws naming no negative number standing alone", async () => {
       await expect(
         resolveConsoleConfig(
           ["--fabric-identity", "k", "--fabric-space", "s", "-5x"],
           {},
           "/console",
         ),
-      ).rejects.toThrow("`-5` is not a flag of the console.");
+      ).rejects.toThrow(
+        "An argument starting with `-` is not a flag of the console.",
+      );
     });
 
     it("throws saying a negated switch takes no value", async () => {
@@ -2782,6 +2784,28 @@ describe("console/server", () => {
     it("prints usage for `--help` rather than resolving a configuration", async () => {
       // Resolving one would throw: no fabric session is named here.
       await startConsoleServer(["--help"], {}, "/console");
+    });
+
+    it("refuses a value holding an `h` as given no value, rather than printing usage", async () => {
+      await expect(
+        startConsoleServer(["--workspace", "-hidden"], {}, "/console"),
+      ).rejects.toThrow(
+        "`--workspace` was given no value; a value starting with `-` needs " +
+          "the `--workspace=<value>` spelling",
+      );
+    });
+
+    it("refuses a dotted flag without the value of the flag before the dot", async () => {
+      const refusal = await startConsoleServer(
+        ["--fabric-identity", "/secret/key.pem", "--fabric-identity.x", "y"],
+        {},
+        "/console",
+      ).then(() => undefined, (error: Error) => error.message);
+
+      expect(refusal).toBe(
+        "`--fabric-identity.x` is not a flag of the console. Did you mean " +
+          "`--fabric-identity`?",
+      );
     });
   });
 
