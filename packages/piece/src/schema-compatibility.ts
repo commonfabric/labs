@@ -1115,7 +1115,8 @@ function isScalarSchemaType(type: string): boolean {
  * The `additionalProperties` of `schema`, with every schema that admits any
  * value written as `true`: an absent keyword, `{}`, and `{ type: "unknown" }`,
  * which is what a TypeScript index signature `[key: string]: unknown` records.
- * Descriptive annotations beside `type` leave it unconstrained. Any other
+ * A `type` list containing `unknown` admits any value as well, and descriptive
+ * annotations beside `type` leave it unconstrained. Any other
  * keyword, `asCell` and `$comment` among them, is a constraint, and the schema
  * is returned as written.
  */
@@ -1123,7 +1124,9 @@ function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
   const additional = schema.additionalProperties ?? true;
   if (typeof additional === "boolean") return additional;
   const unconstrained = Object.entries(additional).every(([key, value]) =>
-    (key === "type" && value === "unknown") ||
+    (key === "type" &&
+      (value === "unknown" ||
+        (Array.isArray(value) && value.includes("unknown")))) ||
     (key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key))
   );
   return unconstrained ? true : additional;
@@ -1215,9 +1218,11 @@ function objectSubsetIssue(
         );
         if (issue) return issue;
       }
-      // Open objects remain evolvable by adding optional/defaulted fields.
-      // A typed index signature is different: it promised that every unknown
-      // property accepted values of that type, including this newly named one.
+      // Open objects remain evolvable by adding optional/defaulted fields, and
+      // an index signature over `unknown` leaves an object open. An index
+      // signature over any narrower type is different: it promised that every
+      // unnamed property accepted values of that type, including this newly
+      // named one.
       if (
         Object.hasOwn(previousProperties, property) ||
         matchedPatterns.length > 0 ||

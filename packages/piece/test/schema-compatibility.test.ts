@@ -5370,20 +5370,36 @@ describe("piece schema compatibility", () => {
   });
 
   it("admits a new optional argument field under an unconstrained additionalProperties", () => {
-    const argumentSchema = (addedProperty?: JSONSchema): JSONSchema => ({
+    const argumentSchema = (
+      additionalProperties: JSONSchema,
+      addedProperty?: JSONSchema,
+    ): JSONSchema => ({
       type: "object",
       properties: {
         value: { type: "number" },
         ...(addedProperty === undefined ? {} : { label: addedProperty }),
       },
-      additionalProperties: { type: "unknown" },
+      additionalProperties,
     });
-    expect(() =>
-      assertPatternSchemasBackwardCompatible(
-        pattern(argumentSchema(), oldPattern.resultSchema),
-        pattern(argumentSchema({ type: "string" }), oldPattern.resultSchema),
-      )
-    ).not.toThrow();
+    for (
+      const additionalProperties of [
+        { type: "unknown" },
+        { type: ["unknown", "object"] },
+      ] as JSONSchema[]
+    ) {
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(
+            argumentSchema(additionalProperties),
+            oldPattern.resultSchema,
+          ),
+          pattern(
+            argumentSchema(additionalProperties, { type: "string" }),
+            oldPattern.resultSchema,
+          ),
+        )
+      ).not.toThrow();
+    }
   });
 
   it("checks new named fields against prior patternProperties", () => {
