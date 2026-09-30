@@ -1707,6 +1707,23 @@ export type NodeFactory<T, R> =
     asScope(scope: CellScope): NodeFactory<T, R>;
   };
 
+/**
+ * Access a space created by `PatternFactory.inSpace()` grants beyond its
+ * owner, by principal DID, or `"*"` for anyone. The grants
+ * apply when the space is created, and the first call to name a space in a
+ * run is the one that creates it; a space that already exists keeps its own
+ * access-control document.
+ */
+export type InSpaceGrants = Readonly<
+  { [principal in DID | "*"]?: "READ" | "WRITE" }
+>;
+
+/** Options for `PatternFactory.inSpace()`. */
+export interface InSpaceOptions {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+}
+
 export type PatternFactory<T, R> =
   & ((inputs: FactoryInput<T>) => Reactive<R>)
   & Pattern
@@ -1714,7 +1731,10 @@ export type PatternFactory<T, R> =
   & toEncodableForm
   & {
     asScope(scope: CellScope): PatternFactory<T, R>;
-    inSpace(space?: string | AnyCell<unknown>): PatternFactory<T, R>;
+    inSpace(
+      space?: string | AnyCell<unknown>,
+      options?: InSpaceOptions,
+    ): PatternFactory<T, R>;
   };
 
 export type ModuleFactory<T, R> =

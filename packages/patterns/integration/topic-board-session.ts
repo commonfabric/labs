@@ -63,9 +63,9 @@ export class BoardSession {
 
   /** Cold page load: the shell boots and routes to the board. */
   async load(): Promise<void> {
-    const { spaceName, boardId } = this.#target.fixture;
-    await this.#page.goto(`${env.FRONTEND_URL}${spaceName}/${boardId}`);
-    await waitForPieceView(this.#page, spaceName, boardId);
+    const { spaceDid, boardId } = this.#target.fixture;
+    await this.#page.goto(`${env.FRONTEND_URL}${spaceDid}/${boardId}`);
+    await waitForPieceView(this.#page, spaceDid, boardId);
   }
 
   /** Sign in, and wait for the runtime the board's data arrives through. */
@@ -98,7 +98,7 @@ export class BoardSession {
     expected: (openedPieceId: string) => readonly string[],
   ): Promise<string> {
     const pieceId = await clickCellLink(this.#page, "Open");
-    await waitForPieceView(this.#page, this.#target.fixture.spaceName, pieceId);
+    await waitForPieceView(this.#page, this.#target.fixture.spaceDid, pieceId);
     for (const text of expected(pieceId)) {
       await waitForSettledText(this.#page, "body", text);
     }
@@ -109,7 +109,7 @@ export class BoardSession {
   /** Follow the crossref labelled `title` to the sibling it names. */
   async followCrossref(title: string): Promise<void> {
     const pieceId = await clickCellLink(this.#page, title);
-    await waitForPieceView(this.#page, this.#target.fixture.spaceName, pieceId);
+    await waitForPieceView(this.#page, this.#target.fixture.spaceDid, pieceId);
     await waitForSettledText(this.#page, "body", title);
     await settleView(this.#page);
   }

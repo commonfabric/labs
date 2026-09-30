@@ -90,7 +90,7 @@ import {
   waitForPieceView,
 } from "./topics-navigation-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 /**
  * Topics on the demo's board. Small by default: seeding cost grows faster than
@@ -167,12 +167,11 @@ describe("Topics board demo", () => {
   let citingTopic: PieceController;
 
   beforeAll(async () => {
-    // A space of the demo's own, so the board it opens is the board it seeded.
-    const spaceName = `${SPACE_NAME}-topic-board-demo`;
     identity = await seedIdentity(`topic board demo ${crypto.randomUUID()}`);
+    // The seed creates a space of the demo's own, so the board it opens is the
+    // board it seeded.
     fixture = await seedTopicBoard({
       apiUrl: new URL(API_URL),
-      spaceName,
       identity,
       topicCount: SIZE,
       crossrefsPerTopic: CROSSREF_SHAPE.crossrefsPerTopic,
@@ -185,7 +184,7 @@ describe("Topics board demo", () => {
     // installs a sink on the one key it watches and drops it again. So the
     // browser is what demands the board, in this run as in a candidate's.
     reader = await initializePiecesController({
-      space: spaceName,
+      space: fixture.spaceDid,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -203,10 +202,10 @@ describe("Topics board demo", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: fixture.spaceName, pieceId: fixture.boardId },
+      view: { spaceDid: fixture.spaceDid, pieceId: fixture.boardId },
       identity,
     });
-    await waitForPieceView(page, fixture.spaceName, fixture.boardId);
+    await waitForPieceView(page, fixture.spaceDid, fixture.boardId);
     await waitForRuntimeIdle(page);
 
     // Not one of the four. A fresh identity has no Profile, and the thread's
@@ -237,7 +236,7 @@ describe("Topics board demo", () => {
     // address that same topic. A pivot rebuilt around a copy of a topic rather
     // than the topic itself is what this catches.
     expect(fidOf(opened)).toBe(fixture.topics[CITED].fid);
-    await waitForPieceView(page, fixture.spaceName, opened);
+    await waitForPieceView(page, fixture.spaceDid, opened);
     await waitForSettledText(page, "body", topicTitle(CITED));
 
     const followed = await timeline.run(
@@ -252,7 +251,7 @@ describe("Topics board demo", () => {
       },
     );
     expect(fidOf(followed)).toBe(fixture.topics[CITING].fid);
-    await waitForPieceView(page, fixture.spaceName, followed);
+    await waitForPieceView(page, fixture.spaceDid, followed);
     await waitForSettledText(page, "body", topicTitle(CITING));
 
     await timeline.run("Adding a comment to the thread", async () => {

@@ -9,6 +9,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { join } from "@std/path";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 
 import type { Ctx } from "../types.ts";
 import {
@@ -203,9 +204,9 @@ describe("coverage-debt", () => {
       expect(highlight).toHaveLength(recent.length);
       expect(history[0]).toBeGreaterThan(height);
       expect(history[1]).toBeLessThan(0);
-      expect(Math.min(...highlight)).toBeGreaterThan(0);
-      expect(Math.max(...highlight)).toBeLessThan(height);
-      expect(Math.max(...highlight) - Math.min(...highlight))
+      expect(minOf(highlight)).toBeGreaterThan(0);
+      expect(maxOf(highlight)).toBeLessThan(height);
+      expect(maxOf(highlight) - minOf(highlight))
         .toBeGreaterThan(height / 2);
     });
 

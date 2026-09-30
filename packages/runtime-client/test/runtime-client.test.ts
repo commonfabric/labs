@@ -828,9 +828,8 @@ describe("RuntimeClient", () => {
     });
   });
 
-  describe("resolveSpaceName", () => {
-    it("resolves the name inside the worker runtime", async () => {
-      const space = "did:key:z6Mk-runtime-client-named-space";
+  describe("createSpace", () => {
+    function clientCreating(space: string) {
       const requests: unknown[] = [];
       const conn = {
         on: () => {},
@@ -842,12 +841,26 @@ describe("RuntimeClient", () => {
       const client = new (RuntimeClient as unknown as {
         new (conn: never, options: unknown): RuntimeClient;
       })(conn, undefined);
+      return { client, requests };
+    }
 
-      expect(await client.resolveSpaceName("notebook")).toBe(space);
+    it("sends the label to the worker and returns the DID it created", async () => {
+      const space = "did:key:z6Mk-runtime-client-created-space";
+      const { client, requests } = clientCreating(space);
+
+      expect(await client.createSpace("notebook")).toBe(space);
       expect(requests).toEqual([{
-        type: RequestType.ResolveSpaceName,
-        name: "notebook",
+        type: RequestType.CreateSpace,
+        label: "notebook",
       }]);
+    });
+
+    it("sends no label when none is given", async () => {
+      const space = "did:key:z6Mk-runtime-client-unlabeled-space";
+      const { client, requests } = clientCreating(space);
+
+      expect(await client.createSpace()).toBe(space);
+      expect(requests).toEqual([{ type: RequestType.CreateSpace }]);
     });
   });
 
@@ -1131,23 +1144,19 @@ describe("RuntimeClient", () => {
 
 describe("attachOptionsFrom()", () => {
   // What it drops is the point: a document that attaches holds no signer, so
-  // neither `Identity` survives the mapping. `findKeyMaterial` refuses a frame
-  // holding one; this is what keeps one from being built.
+  // the `Identity` does not survive the mapping. `findKeyMaterial` refuses a
+  // frame holding one; this is what keeps one from being built.
 
   it("returns the acting principal as a DID and keeps no `Identity`", async () => {
     const identity = await Identity.fromPassphrase("attach-options-signer");
-    const spaceIdentity = await Identity.fromPassphrase("attach-options-space");
     const attach = attachOptionsFrom({
       apiUrl: new URL("http://backend.test/"),
       identity,
-      spaceIdentity,
       spaceDid: identity.did(),
     });
 
     expect(attach.identity).toBe(identity.did());
     expect(Object.values(attach)).not.toContain(identity);
-    expect(Object.values(attach)).not.toContain(spaceIdentity);
-    expect("spaceIdentity" in attach).toBe(false);
     expect(findKeyMaterial(attach)).toBeUndefined();
   });
 

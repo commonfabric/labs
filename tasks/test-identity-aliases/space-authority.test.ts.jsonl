@@ -1,0 +1,1 @@
+{"date": "2026-09-28", "from": {"k": "unit", "s": "toolshed", "n": "isExplicitSpaceOwner > refuses a principal covered only by the `*: WRITE` genesis default"}, "to": {"k": "unit", "s": "toolshed", "n": "isExplicitSpaceOwner > refuses a principal covered only by a `*: WRITE` grant"}}

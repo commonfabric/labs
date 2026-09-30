@@ -370,9 +370,10 @@ stream is passed to other spaces, which then append intents to it.
   resolution backstop). Its home-space bootstrap writes ride
   protocol.md §2b's `.inSpace` sanctioned crossing — authored-class,
   foreign-first, under the demanding principal's acting identity +
-  grant, ADMITTED at the wave's accept gate because the target IS the
-  demander's own home space (the gate's owner-by-identity structural
-  grant, serving-loop.md §3d — carriage alone admits nothing). A
+  grant, ADMITTED at the wave's accept gate because the target's ACL
+  names the demander OWNER of their own home space (the gate's
+  structural grant, serving-loop.md §3d — carriage alone admits
+  nothing). A
   carriage-less or UNGRANTED foreign write — the lunch-wall class,
   and an actor reaching beyond its authority — still refuses at
   accumulation, action-scoped and counted (`foreignWriteRefusals`).

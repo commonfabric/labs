@@ -39,13 +39,14 @@ const capToRole: Record<Capability, SpaceRole> = {
  * populated ACL-less space as public.
  *
  * Resolution order:
- *  1. Implicit `OWNER` when `principal === space` (a principal owns its own
- *     identity space) or `principal` is a configured service DID — these hold
- *     regardless of ACL contents or deployment ACL mode.
+ *  1. Implicit `OWNER` when `principal` is a configured service DID, which
+ *     holds regardless of ACL contents or deployment ACL mode.
  *  2. Otherwise the ACL document decides: `acl[principal] ?? acl["*"]`. A
  *     missing/malformed/ownerless ACL, an unlisted principal with no `"*"`
- *     grant, or a capability short of READ all yield `null` (fail closed). The
- *     implicit owners above are unaffected by an absent ACL.
+ *     grant, or a capability short of READ all yield `null` (fail closed).
+ *     A space's own DID is no exception: a Home space's user is its owner
+ *     through the OWNER entry its ACL names, so a Home that has no ACL
+ *     document yet yields `null` for its own user too.
  *
  * `acl` is the space's ACL doc value (`undefined` = not yet read / absent):
  * both `undefined` and a malformed value fail closed. A returned role is
@@ -55,12 +56,11 @@ const capToRole: Record<Capability, SpaceRole> = {
  */
 export const spaceReaderRole = (
   acl: ACL | undefined,
-  space: string,
   principal: string,
   serviceDids: readonly string[] = [],
 ): SpaceRole | null => {
-  // Implicit OWNER: you own your own identity space; service principals.
-  if (principal === space || serviceDids.includes(principal)) return "owner";
+  // Implicit OWNER: service principals.
+  if (serviceDids.includes(principal)) return "owner";
   // Missing, malformed, or ownerless ACL grants no membership evidence.
   if (!isACL(acl) || !hasConcreteOwner(acl)) return null;
   const byPrincipal = acl as Record<string, Capability | undefined>;
@@ -150,13 +150,11 @@ export const createRuntimeSpaceMembershipProvider = (
   const cells = new Map<string, Cell<unknown>>();
   return {
     readerRole(space) {
-      // Own-space and service principals are implicit OWNER — decided WITHOUT
-      // reading (or syncing) any ACL doc.
-      if (space === actingPrincipal || serviceDids.includes(actingPrincipal)) {
-        return "owner";
-      }
+      // Service principals are implicit OWNER — decided WITHOUT reading (or
+      // syncing) any ACL doc.
+      if (serviceDids.includes(actingPrincipal)) return "owner";
       const acl = aclCellFor(runtime, cells, space).get() as ACL | undefined;
-      return spaceReaderRole(acl, space, actingPrincipal, serviceDids);
+      return spaceReaderRole(acl, actingPrincipal, serviceDids);
     },
     subscribe(space, onChange) {
       // `Cell.sink` runs its action once synchronously at subscribe time (the

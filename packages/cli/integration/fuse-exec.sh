@@ -48,7 +48,7 @@ dump_mount_state() {
   if [ -z "${MOUNTPOINT:-}" ] || [ -z "${SPACE:-}" ]; then
     return 0
   fi
-  local pieces_dir="$MOUNTPOINT/$SPACE/pieces"
+  local pieces_dir="$MOUNTPOINT/$SPACE_DIR/pieces"
   >&2 echo "--- mount state dump ---"
   if path_exists "$pieces_dir" 2; then
     >&2 bounded 5 ls -la "$pieces_dir" 2>&1 || true
@@ -689,8 +689,17 @@ fi
 # the mount rather than as the script.
 run_mount() {
   phase "A background FUSE daemon mounts a space holding one stepped piece"
-  SPACE=$(mktemp -u XXXXXXXXXX)
   IDENTITY=$(mktemp)
+  cf id new >"$IDENTITY"
+  # Opening a space never creates it, so the run makes its own; `cf space
+  # create` prints the new space's DID. The mount names the space's directory
+  # by that DID with each `:` escaped, as every path component is.
+  SPACE=$(cf space create --quiet --api-url="$API_URL" --identity="$IDENTITY")
+  case "$SPACE" in
+    did:key:*) ;;
+    *) error "cf space create printed no DID: $SPACE" ;;
+  esac
+  SPACE_DIR=${SPACE//:/%3A}
   MOUNTPOINT=$(mktemp -d)
   # Resolve the mountpoint's physical path now, while it is still an empty plain
   # directory. After 'cf fuse mount' it is the mount root, and resolving it then
@@ -720,8 +729,6 @@ run_mount() {
   echo "SPACE=$SPACE"
   echo "IDENTITY=$IDENTITY"
   echo "MOUNTPOINT=$MOUNTPOINT"
-
-  cf id new >"$IDENTITY"
 
   PIECE_ID=$(cf piece new --main-export "$CUSTOM_EXPORT" $SPACE_ARGS "$PATTERN_SRC")
   echo "Created piece: $PIECE_ID"
@@ -793,10 +800,10 @@ run_mount() {
 
   # The layout of the mounted tree, named once so every phase addresses the
   # same paths whichever section reached it.
-  ENTITIES_DIR="$MOUNTPOINT/$SPACE/entities"
+  ENTITIES_DIR="$MOUNTPOINT/$SPACE_DIR/entities"
   STATUS_FILE="$MOUNTPOINT/.status"
   PIECE_NAME="Fuse-Exec-Fixture"
-  PIECE_DIR="$MOUNTPOINT/$SPACE/pieces/$PIECE_NAME"
+  PIECE_DIR="$MOUNTPOINT/$SPACE_DIR/pieces/$PIECE_NAME"
   INPUT_DIR="$PIECE_DIR/input"
   INPUT_LAST_MESSAGE="$INPUT_DIR/lastMessage"
   RESULT_DIR="$PIECE_DIR/result"
@@ -840,7 +847,7 @@ run_entity_listing() {
 # entity listing addresses. It records for the same reason the mount does.
 run_piece_paths() {
   phase "The mounted piece's directory and documents hydrate"
-  wait_for_path "$MOUNTPOINT/$SPACE/pieces"
+  wait_for_path "$MOUNTPOINT/$SPACE_DIR/pieces"
   wait_for_path "$PIECE_DIR"
   wait_for_path "$RESULT_DIR"
   wait_for_path "$RESULT_JSON"

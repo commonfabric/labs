@@ -5,8 +5,13 @@
  * person's message, and the first person sees who reacted.
  */
 import { debugStr } from "@commonfabric/data-model";
-import { env, Page, waitForCondition } from "@commonfabric/integration";
-import { Identity } from "@commonfabric/identity";
+import {
+  createTestSpace,
+  env,
+  Page,
+  waitForCondition,
+} from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -23,7 +28,7 @@ import {
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 // Trusted action names: the runtime's profile create form, and FabriChat's
 // send and reaction (`fabrichat/chat.tsx`).
@@ -57,6 +62,7 @@ describe("fabrichat integration test", () => {
   let firstIdentity: Identity;
   let secondIdentity: Identity;
   let thirdIdentity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
@@ -66,8 +72,14 @@ describe("fabrichat integration test", () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
     thirdIdentity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(firstIdentity, {
+      grants: {
+        [secondIdentity.did()]: "WRITE",
+        [thirdIdentity.did()]: "WRITE",
+      },
+    });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: firstIdentity,
     });
@@ -99,7 +111,7 @@ describe("fabrichat integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid, pieceId },
       identity: firstIdentity,
     });
     await createProfile(page, "Ada Lovelace");
@@ -108,7 +120,7 @@ describe("fabrichat integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid, pieceId },
       identity: secondIdentity,
     });
     await waitForText(page, "#fabrichat-messages", "Hello from Ada");
@@ -127,7 +139,7 @@ describe("fabrichat integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid, pieceId },
       identity: thirdIdentity,
     });
     await waitForText(page, "#fabrichat-messages", "😺 1");
@@ -139,7 +151,7 @@ describe("fabrichat integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid, pieceId },
       identity: firstIdentity,
     });
     await waitForText(page, "#fabrichat-messages", "😺 2");

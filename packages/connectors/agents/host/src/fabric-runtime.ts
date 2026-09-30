@@ -1,4 +1,8 @@
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -47,10 +51,12 @@ export async function openAgentFabricRuntime(options: {
   const identity = await Identity.fromPkcs8(identityBytes);
   assertConfiguredOwner(identity, options.ownerDid);
   options.signal?.throwIfAborted();
-  const session =
-    await (isDID(options.space)
-      ? createSession({ identity, spaceDid: options.space })
-      : createSession({ identity, spaceName: options.space }));
+  const session = createSession({
+    identity,
+    spaceDid: isDID(options.space)
+      ? options.space
+      : await legacySpaceDid(options.space),
+  });
   options.signal?.throwIfAborted();
   // The deployment's posture, with this host's explicit EXPERIMENTAL_* still
   // winning per flag: an agents host is deployed separately from the toolshed
@@ -69,7 +75,6 @@ export async function openAgentFabricRuntime(options: {
     const storageManager = StorageManager.open({
       as: session.as,
       memoryHost: apiUrl,
-      spaceIdentity: session.spaceIdentity,
     });
     const resourceIndex = allocatedResources.push(
       () => storageManager.close(),

@@ -13,11 +13,12 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 
 const ROOT = join(import.meta.dirname!, "..");
 
-async function makeController(
-  spaceName: string,
-): Promise<PiecesController> {
+// A space of its own for each case. The emulated storage enforces no ACL, and
+// nothing here asks the space to exist, so a fresh DID is enough.
+async function gatedController(): Promise<PiecesController> {
   const identity = await Identity.generate({ implementation: "noble" });
-  const session = await createSession({ identity, spaceName });
+  const spaceDid = (await Identity.generate({ implementation: "noble" })).did();
+  const session = createSession({ identity, spaceDid });
   const runtime = new Runtime({
     apiUrl: new URL("http://localhost:8000/"),
     storageManager: StorageManager.emulate({ as: session.as }),
@@ -31,10 +32,6 @@ async function makeController(
   return pieces;
 }
 
-function gatedController(spaceName: string): Promise<PiecesController> {
-  return makeController(spaceName);
-}
-
 async function instantiate(cc: PiecesController, rel: string) {
   const program = await resolveLocalProgram(
     (resolver) => cc.runtime.harness.resolve(resolver),
@@ -45,7 +42,7 @@ async function instantiate(cc: PiecesController, rel: string) {
 
 describe("W6: gated Date/Math intrinsics", () => {
   it("raw new Date() in a lift throws a TimeCapabilityError", async () => {
-    const cc = await gatedController(`w6-lift-${crypto.randomUUID()}`);
+    const cc = await gatedController();
     const errors: string[] = [];
     cc.runtime.scheduler.onError((e) => {
       if (e?.name === "TimeCapabilityError") errors.push(e.message);
@@ -72,7 +69,7 @@ describe("W6: gated Date/Math intrinsics", () => {
   });
 
   it("new Date(arg) in a lift passes through (deterministic)", async () => {
-    const cc = await gatedController(`w6-arg-${crypto.randomUUID()}`);
+    const cc = await gatedController();
     const errors: string[] = [];
     cc.runtime.scheduler.onError((e) => {
       if (e?.name === "TimeCapabilityError") errors.push(e.message);
@@ -97,7 +94,7 @@ describe("W6: gated Date/Math intrinsics", () => {
   });
 
   it("raw new Date()/Math.random() in a handler work, coarsened to 1s", async () => {
-    const cc = await gatedController(`w6-handler-${crypto.randomUUID()}`);
+    const cc = await gatedController();
     const errors: string[] = [];
     cc.runtime.scheduler.onError((e) => {
       if (e?.name === "TimeCapabilityError") errors.push(e.message);
@@ -130,7 +127,7 @@ describe("W6: gated Date/Math intrinsics", () => {
   });
 
   it("a handler's clock is carried forward to the event it emits", async () => {
-    const cc = await gatedController(`w6-carryforward-${crypto.randomUUID()}`);
+    const cc = await gatedController();
     const errors: string[] = [];
     cc.runtime.scheduler.onError((e) => {
       if (e?.name === "TimeCapabilityError") errors.push(e.message);

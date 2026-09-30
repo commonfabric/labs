@@ -28,7 +28,6 @@ import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
-  ACLManager,
   type Cell,
   type IExtendedStorageTransaction,
   type JSONSchema,
@@ -169,12 +168,11 @@ const sealAndRelease = async (
   repoint?: Repoint,
 ): Promise<void> => {
   const witnessed = file === ANSWER_ROOM;
-  const [alice, bob, roomKey] = await Promise.all(
-    ["alice", "bob", "room"].map((name) =>
+  const [alice, bob] = await Promise.all(
+    ["alice", "bob"].map((name) =>
       Identity.fromPassphrase(`custody projector ${name}`)
     ),
   );
-  const S = roomKey.did();
   const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
   const managers: EmulatedStorageManager[] = [];
   const runtimes: Runtime[] = [];
@@ -198,13 +196,10 @@ const sealAndRelease = async (
     return runtime;
   };
   try {
-    // The room space's access list names both members.
-    const roomAcl = new ACLManager(runtimeFor(roomKey), S);
-    await roomAcl.set(alice.did(), "OWNER");
-    await roomAcl.set(bob.did(), "WRITE");
-
-    // Alice starts the room.
+    // Alice starts the room, in a space she creates whose access list names
+    // both members.
     const host = runtimeFor(alice);
+    const S = await host.createSpace({ grants: { [bob.did()]: "WRITE" } });
     const program = await resolveLocalProgram(
       (resolver) => host.harness.resolve(resolver),
       { main: join(ROOT, "cfc-exchange-rules", file), root: ROOT },

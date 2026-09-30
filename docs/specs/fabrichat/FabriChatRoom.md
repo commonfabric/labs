@@ -198,14 +198,12 @@ the room is created from the same settings the handlers read.
 
 ## Prerequisites
 
-- **A private space, created from a pattern.** A host can already create a space
-  whose genesis grants only its creator (`registerSpaceIdentity` with a
-  `genesisAcl`). A pattern can't: `FabriChatRoom.inSpace()` works today, but the
-  space it creates takes the default grants, including `"*": "WRITE"`. Exposing
-  creator-only creation to patterns is the direction of [random space
-  identities](../random-space-identities.md). Until then, a prototype MAY use
-  `inSpace()`, and MUST say that the room is open to any authenticated
-  principal.
+- **A private space, created from a pattern.** `FabriChatRoom.inSpace()`
+  creates a space with a random DID whose genesis document names its creator as
+  the only OWNER and grants nobody else anything
+  ([random space identities](../random-space-identities.md)). A name given to
+  `inSpace(name)` names the room as the calling space calls it; two calling
+  spaces using one name get two rooms, and nobody can recompute a room's key.
 - **Pattern-facing access control.** `commitAdd` and `commitRemove` need a way
   for a pattern to ask its host to change an access list. Today only hosts can
   do that (`ACLManager`, the runtime client's `space:setAclEntry`).

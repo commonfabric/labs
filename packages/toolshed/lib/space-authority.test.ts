@@ -37,11 +37,12 @@ describe("isExplicitSpaceOwner", () => {
     expect(isExplicitSpaceOwner({ [ALICE]: "READ" }, ALICE)).toBe(false);
   });
 
-  it("refuses a principal covered only by the `*: WRITE` genesis default", () => {
-    // THE load-bearing case. The genesis default for a named space is `{ owner:
-    // "OWNER", "*": "WRITE" }`, so every authenticated principal holds WRITE. A
-    // proof-of-write ceremony (the rejected Option A) would admit Mallory here;
-    // the OWNER predicate must not.
+  it("refuses a principal covered only by a `*: WRITE` grant", () => {
+    // THE load-bearing case. A space whose ACL is `{ owner: "OWNER", "*":
+    // "WRITE" }` gives every authenticated principal WRITE. Legacy named spaces
+    // carry that document from their creation, and an owner can grant it to
+    // any space. A proof-of-write ceremony (the rejected Option A) would admit
+    // Mallory here; the OWNER predicate must not.
 
     const acl = { [ALICE]: "OWNER", "*": "WRITE" } as const;
     expect(isExplicitSpaceOwner(acl, ALICE)).toBe(true);
@@ -156,7 +157,7 @@ describe("authorizeSpaceOwner against real ACL enforcement", () => {
   });
 
   it("admits the explicit owner and refuses a wildcard-WRITE stranger", async () => {
-    // The genesis default shape for a named space.
+    // A space open to every authenticated writer, as a legacy named space is.
     await genesisAcl(factory, spaceIdentity, {
       [alice.did()]: "OWNER",
       "*": "WRITE",

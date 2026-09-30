@@ -5,6 +5,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { encodeBase64 } from "@std/encoding/base64";
 import { bqRows, METADATA_TOKEN_URL, saAssertion } from "./gcp.ts";
 
 const b64urlToBytes = (s: string): Uint8Array<ArrayBuffer> => {
@@ -17,7 +18,7 @@ const b64urlToJson = (s: string) => JSON.parse(new TextDecoder().decode(b64urlTo
 
 // Export a generated private key as PEM PKCS#8, the shape a service-account key uses.
 const toPem = (der: ArrayBuffer): string =>
-  `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...new Uint8Array(der)))}\n-----END PRIVATE KEY-----`;
+  `-----BEGIN PRIVATE KEY-----\n${encodeBase64(der)}\n-----END PRIVATE KEY-----`;
 
 Deno.test("saAssertion: signs a verifiable RS256 JWT with the expected claims", async () => {
   const pair = await crypto.subtle.generateKey(

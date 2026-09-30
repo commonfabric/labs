@@ -333,9 +333,9 @@ describe("run-pattern over the pattern index", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-index-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       runtime,
     );
@@ -366,9 +366,9 @@ describe("run-pattern over the pattern index", () => {
     });
     extraRuntimes.push(own);
     const controller = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-index-${mode}-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       own,
     );
@@ -393,9 +393,9 @@ describe("run-pattern over the pattern index", () => {
     });
     extraRuntimes.push(own);
     const controller = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: `run-pattern-index-recorded-${crypto.randomUUID()}`,
+        spaceDid: (await Identity.generate()).did(),
       }),
       own,
     );
