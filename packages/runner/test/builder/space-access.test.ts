@@ -160,6 +160,28 @@ describe("spaceAccess()", () => {
   }
 
   /**
+   * Returns a transaction for a served handler run on `owner`'s instance,
+   * fired by `actor` if one is given.
+   */
+  function handlerTx(
+    runtime: Runtime,
+    owner: Identity,
+    actor?: Identity,
+  ): IExtendedStorageTransaction {
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, {
+      actionId: "space-access/handler",
+      kind: "event-handler",
+      eventId: "space-access-event",
+      scopeKeyIdentity: { principal: owner.did(), sessionId: "owner" },
+      ...(actor === undefined
+        ? {}
+        : { acting: { user: actor.did(), session: "actor" } }),
+    });
+    return tx;
+  }
+
+  /**
    * Calls `spaceAccess()` as code in a `kind` frame of `frameSpace` would,
    * through `tx`, and returns what it returns.
    */
@@ -321,6 +343,17 @@ describe("spaceAccess()", () => {
       }
     });
 
+    it("returns the runtime user's level in a handler", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      await syncAcl(runtime);
+      expect(callIn(runtime, runtime.edit(), { kind: "handler" })).toBe(
+        "WRITE",
+      );
+    });
+
     it("narrows a computation's read scope to `user`", async () => {
       const setAcl = await aclWriter();
       await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
@@ -378,6 +411,36 @@ describe("spaceAccess()", () => {
       const undemanded = servedTx(runtime);
       expect(callIn(runtime, undemanded)).toBeUndefined();
       expect(undemanded.getNarrowestReadScope()).toBe("user");
+    });
+  });
+
+  describe("in a served handler", () => {
+    it("returns the event's actor's level, not the instance owner's", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+        [carol.did()]: "READ",
+      });
+
+      const runtime = servingRuntime();
+      await syncAcl(runtime);
+      expect(
+        callIn(runtime, handlerTx(runtime, bob, carol), { kind: "handler" }),
+      ).toBe("READ");
+      expect(
+        callIn(runtime, handlerTx(runtime, carol, bob), { kind: "handler" }),
+      ).toBe("WRITE");
+    });
+
+    it("returns `undefined` to a run with no actor", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = servingRuntime();
+      await syncAcl(runtime);
+      expect(callIn(runtime, handlerTx(runtime, bob), { kind: "handler" }))
+        .toBeUndefined();
     });
   });
 

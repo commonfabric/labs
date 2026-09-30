@@ -76,8 +76,7 @@ export function spaceAccess(
     }
     principal = runtime.homeSpacePrincipalFor(tx);
   } else {
-    // TODO(danfuzz): The event's actor, once the runtime exposes it.
-    throw new Error("`spaceAccess()` in a handler is not available yet.");
+    principal = runtime.actingPrincipalFor(tx);
   }
 
   let targetSpace = space;
