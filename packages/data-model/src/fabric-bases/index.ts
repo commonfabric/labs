@@ -34,8 +34,8 @@ export {
   SHALLOW_UNFROZEN_CLONE,
 } from "./BaseFabricInstance.ts";
 
-// Note: This intentionally omits `blessFabricPrimitiveClass()`, because it
-// should _only_ be accessible internally to the `data-model`.
+// Note: This intentionally omits `BLESSING_TOKEN`, because it should _only_ be
+// accessible internally to the `data-model`.
 export { BaseFabricPrimitive, VALUE_TAG } from "./BaseFabricPrimitive.ts";
 
 export { BaseFabricSpecialObject } from "./BaseFabricSpecialObject.ts";

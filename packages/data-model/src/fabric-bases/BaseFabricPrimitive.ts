@@ -22,19 +22,14 @@ import type { FabricPrimitiveValueTag } from "@/fabric-primitives";
 export const VALUE_TAG: unique symbol = Symbol("data-model.valueTag");
 
 /**
- * Access key used to authorize calls to `BaseFabricPrimitive[BLESS]()`. It is
- * _not_ `export`ed from this file, so that only `blessFabricPrimitiveClass()`
- * can succeed in performing a blessing.
+ * Token a concrete primitive class hands to the base constructor, along with
+ * itself, to show that it is one of the `data-model`'s own. It reaches those
+ * classes through `blessing.ts`, which no barrel and no export-map entry names,
+ * so code outside the package has no way to hold it.
  */
-const BLESSING_KEY: unique symbol = Symbol(
+export const BLESSING_TOKEN: unique symbol = Symbol(
   "data-model.FabricPrimitiveBlessing",
 );
-
-/**
- * Symbol bound on the `BaseFabricPrimitive` constructor (class object) and
- * instances to a method which can bless such objects.
- */
-const BLESS: unique symbol = Symbol("data-model.bless");
 
 /**
  * Abstract base class for `FabricPrimitive` subclasses. Concrete
@@ -43,8 +38,11 @@ const BLESS: unique symbol = Symbol("data-model.bless");
  * against, while `BaseFabricPrimitive` is the designated home for shared
  * implementation. Its counterpart `BaseFabricInstance` carries the
  * `shallowClone()` template method; this class carries the construction-time
- * freeze, the static invariant guard, and the `[VALUE_TAG]` getter that each
- * subclass supplies.
+ * check and freeze, the static invariant guard, and the `[VALUE_TAG]` getter
+ * that each subclass supplies.
+ *
+ * Each concrete class calls `super(BLESSING_TOKEN, <itself>)`, and freezes its
+ * own prototype in a `static` block.
  */
 export abstract class BaseFabricPrimitive extends FabricPrimitive {
   /**
@@ -53,9 +51,25 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
    */
   readonly #instanceBlessed = true;
 
-  /** Constructs an instance. */
-  constructor() {
-    if (!BaseFabricPrimitive.#blessedClasses.has(new.target)) {
+  /**
+   * Constructs an instance, on behalf of the concrete class `cls`, which must
+   * be the class being constructed. Only a class holding `BLESSING_TOKEN` can
+   * succeed.
+   *
+   * The class being named is what ties the check to the constructor that is
+   * actually running: `new.target` alone can be any class a caller chooses, by
+   * way of `Reflect.construct()`, and a caller that could get the base
+   * constructor, or some other concrete class's, to run for it would get an
+   * instance missing the concrete class's private state.
+   *
+   * @throws If `token` is not `BLESSING_TOKEN`, or `cls` is not the class
+   *   being constructed.
+   */
+  constructor(
+    token: typeof BLESSING_TOKEN,
+    cls: Constructor<BaseFabricPrimitive>,
+  ) {
+    if ((token !== BLESSING_TOKEN) || (cls !== new.target)) {
       throw new Error(
         "Invalid attempt to construct an instance of an unblessed `FabricPrimitive` class.",
       );
@@ -90,28 +104,6 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
   //
 
   /**
-   * Set of blessed classes.
-   */
-  static #blessedClasses = new WeakSet<Constructor<BaseFabricPrimitive>>();
-
-  /**
-   * Blesses a class as genuinely minted by the `data-model`, if authorized by
-   * `blessingKey`. This also freezes its prototype, to more fully guarantee
-   * inertness.
-   */
-  protected static [BLESS](
-    ctor: Constructor<BaseFabricPrimitive>,
-    blessingKey: typeof BLESSING_KEY,
-  ) {
-    if (blessingKey === BLESSING_KEY) {
-      this.#blessedClasses.add(ctor);
-      Object.freeze(ctor.prototype);
-    } else {
-      throw new Error("Invalid attempt to bless `FabricPrimitive` class.");
-    }
-  }
-
-  /**
    * Type guard for `BaseFabricPrimitive`, which also enforces the invariant
    * that every `FabricPrimitive` is in fact a `BaseFabricPrimitive` which was
    * minted inside the `data-model`. Concrete `FabricPrimitive` classes are
@@ -141,15 +133,4 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
       return false;
     }
   }
-}
-
-/**
- * Blesses a constructor (class object) as being a `data-model`-owned
- * `FabricPrimitive` constructor. In addition to simply marking the constructor,
- * this also freezes its `prototype`, to more fully guarantee inertness.
- */
-export function blessFabricPrimitiveClass(
-  ctor: Constructor<BaseFabricPrimitive>,
-) {
-  BaseFabricPrimitive[BLESS](ctor, BLESSING_KEY);
 }

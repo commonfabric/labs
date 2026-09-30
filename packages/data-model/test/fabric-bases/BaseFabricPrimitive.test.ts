@@ -4,13 +4,14 @@
  * blessed.
  *
  * The constructor enforces that for construction, by refusing any class that
- * was not blessed, and the type guard enforces it for everything else, by
+ * does not hold the blessing token, or names a class other than the one being
+ * constructed, and the type guard enforces it for everything else, by
  * throwing for a value that is a `FabricPrimitive` without having been built
  * that way instead of quietly returning `false` and letting the forgery
  * travel.
  *
- * The genuine instances here are of a production class, since a test cannot
- * bless a class of its own. `FabricEpochDay` has the shape every concrete
+ * The genuine instances here are of a production class, since the tests do not
+ * use the token themselves. `FabricEpochDay` has the shape every concrete
  * primitive has, a private field assigned after `super()`.
  */
 
@@ -19,13 +20,23 @@ import { expect } from "@std/expect";
 
 import { FabricPrimitive } from "@";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
-import { FabricEpochDay } from "@/fabric-primitives";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  fabricPrimitiveClassesByName,
+} from "@/fabric-primitives";
 
 /**
- * A `BaseFabricPrimitive` subclass that nothing blessed, as is true of any
- * class defined outside the `data-model`.
+ * A `BaseFabricPrimitive` subclass defined outside the `data-model`, which has
+ * no token to hand over and so offers a look-alike.
  */
 class UnblessedPrimitive extends BaseFabricPrimitive {
+  /** Constructs an instance, or tries to. */
+  constructor() {
+    // @ts-expect-error -- A look-alike is not the token's `unique symbol` type.
+    super(Symbol("data-model.FabricPrimitiveBlessing"), UnblessedPrimitive);
+  }
+
   get [VALUE_TAG](): never {
     throw new Error("Unimplemented.");
   }
@@ -57,6 +68,12 @@ describe("BaseFabricPrimitive", () => {
       expect(day instanceof BaseFabricPrimitive).toBe(true);
       expect(day instanceof FabricPrimitive).toBe(true);
     });
+
+    for (const [name, cls] of Object.entries(fabricPrimitiveClassesByName())) {
+      it(`has a frozen prototype on \`${name}\``, () => {
+        expect(Object.isFrozen(cls.prototype)).toBe(true);
+      });
+    }
   });
 
   describe("constructor()", () => {
@@ -94,6 +111,23 @@ describe("BaseFabricPrimitive", () => {
 
     it("throws for a subclass of a blessed class", () => {
       expect(() => new SubEpochDay(1n)).toThrow("unblessed");
+    });
+
+    it("throws for the base constructor run on behalf of a blessed class", () => {
+      // No concrete constructor runs, so nothing hands over the token, and the
+      // instance would have none of the concrete class's private state.
+
+      expect(() => Reflect.construct(BaseFabricPrimitive, [], FabricEpochDay))
+        .toThrow("unblessed");
+    });
+
+    it("throws for one blessed class's constructor run on behalf of another", () => {
+      // `FabricBytes` hands over the token, but names itself, which is not the
+      // class being constructed.
+
+      expect(() =>
+        Reflect.construct(FabricBytes, [new Uint8Array([1])], FabricEpochDay)
+      ).toThrow("unblessed");
     });
 
     it("throws for a blessed class constructed on behalf of another", () => {
@@ -145,34 +179,6 @@ describe("BaseFabricPrimitive", () => {
         expect(() => BaseFabricPrimitive.isInstance(proxy))
           .toThrow("counterfeit");
       });
-    });
-  });
-
-  describe("blessFabricPrimitiveClass()", () => {
-    it("leaves a blessed class's prototype frozen", () => {
-      expect(Object.isFrozen(FabricEpochDay.prototype)).toBe(true);
-    });
-
-    it("cannot be bypassed by calling the hook it uses without its key", () => {
-      // The hook is keyed by a symbol the module keeps to itself, but a
-      // symbol-keyed static is an own property of the class, so any caller can
-      // find it. What refuses that caller is the key, which is never exposed.
-      // The class is local to this test, so that a hook which failed to refuse
-      // could not bless a class any other test relies on being unblessed.
-
-      class Hopeful extends UnblessedPrimitive {}
-      const hook = Object.getOwnPropertySymbols(BaseFabricPrimitive)
-        .find((symbol) => symbol.description === "data-model.bless");
-
-      expect(hook).not.toBe(undefined);
-      expect(() =>
-        Reflect.apply(
-          Reflect.get(BaseFabricPrimitive, hook!),
-          BaseFabricPrimitive,
-          [Hopeful, Symbol("data-model.FabricPrimitiveBlessing")],
-        )
-      ).toThrow("Invalid attempt to bless");
-      expect(() => new Hopeful()).toThrow("unblessed");
     });
   });
 });
