@@ -1634,6 +1634,17 @@ export class StorageManager implements IStorageManager {
     this.#providers.get(space)?.noteAclChanged();
   }
 
+  /** @inheritDoc */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    // Already-open providers only, as in `noteSpaceAclChanged()`: a space
+    // this manager has never opened has no refusal to retry.
+    const provider = this.#providers.get(space);
+    await provider?.retryAccess(() =>
+      this.#spaceAccessErrors.has(space) ||
+      provider.authorizationError() !== undefined
+    );
+  }
+
   isContentAddressedDocPersisted(space: MemorySpace, hash: string): boolean {
     // Already-open replicas only: creating a provider is a session-level
     // side effect no elision probe should carry. A space this manager has
@@ -3356,6 +3367,30 @@ class Provider
     this.replica.noteAclChanged();
   }
 
+  /**
+   * Opens a session on this space again, as an ACL change would, when
+   * `refused()` says the memory server refused the last one, and resolves
+   * once the server has admitted or refused it. A refusal is recorded where
+   * the first one was, and does not reject. A session that stands is left
+   * alone.
+   */
+  async retryAccess(refused: () => boolean): Promise<void> {
+    // An open already in flight may be decided on the access list as it
+    // stood before this call, so the retry waits for it before deciding
+    // anything.
+    await this.#followReplacement((replica) => replica.sessionSettled());
+    // Arming the latch on a session that stands would remount it the next
+    // time some other verdict ended it.
+    if (this.#destroyed || !refused()) return;
+    this.replica.noteAclChanged();
+    try {
+      await this.ensureSession();
+    } catch {
+      // The session's own failure path records a refusal, and anything else
+      // leaves the space as refused as it was.
+    }
+  }
+
   listEntityIds(): Promise<string[] | undefined> {
     return this.#followReplacement((replica) => replica.listEntityIds());
   }
@@ -3600,9 +3635,10 @@ export class SpaceReplica
 
   /** THE SESSION REMOUNT's latch (see `noteAclChanged` /
    *  `#consumeOwedSessionRemount`): an admitted commit touched this space's
-   *  ACL doc, so the verdict a terminated session died of may have changed.
-   *  Cleared when the owed remount is consumed — or immediately, when there
-   *  is no memoized mount to replace. */
+   *  ACL doc, or a host retried the space, so the verdict a terminated
+   *  session died of may have changed. Cleared when the owed remount is
+   *  consumed — or immediately, when there is no memoized mount to
+   *  replace. */
   #aclChangedSinceMount = false;
 
   readonly #docs = new Map<string, DocumentRecord>();
@@ -4328,9 +4364,18 @@ export class SpaceReplica
   }
 
   /**
+   * Resolves once the session open in flight, if there is one, has been
+   * admitted or refused, and at once otherwise. Opens nothing.
+   */
+  async sessionSettled(): Promise<void> {
+    await this.#sessionHandle?.then(() => {}, () => {});
+  }
+
+  /**
    * THE SESSION REMOUNT's latch (the fifth face of profile starvation).
    *
-   * An admitted commit touched this space's ACL document, so the
+   * An admitted commit touched this space's ACL document, or a host that
+   * has word of a grant retried the space (`Provider.retryAccess()`), so the
    * AUTHORIZATION VERDICT that terminated this replica's session may have
    * changed. Record it; `#memoizedSessionHandle()` consumes it on the next
    * load.
@@ -4374,14 +4419,16 @@ export class SpaceReplica
    * written: "the convergence argument is sound, only the remount is
    * missing."
    *
-   * WHY AN ACL COMMIT IS THE ONLY TRIGGER. The verdict that killed the
+   * WHY ONLY WORD OF AN ACL CHANGE TRIGGERS IT. The verdict that killed the
    * session is a function of the space's ACL, so re-opening on any other
    * schedule re-runs a decision whose inputs have not changed — one doomed
    * round-trip per retry, exactly the cost `isTransientCommitRejection`
    * refuses to pay for `SessionError`. This is the space-root ensure's own
    * discipline for the very same boot order, one layer down: latch the owed
    * work at the fail-closed refusal, consume it when a commit touches
-   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`).
+   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`). A
+   * client sees no ACL commit for a space it was refused, so its word is a
+   * host's retry instead, one attempt per call.
    *
    * WHY IT CANNOT WIDEN AUTHORITY. This re-opens a session; it does not
    * decide one. `session.open` re-runs the server's full admission against
@@ -4440,8 +4487,9 @@ export class SpaceReplica
     // recorded (the reconnect case that never produced a watch result;
     // see `authorizationError`'s own note), `authorizationError()` reads
     // undefined between the remount arming and the next pull re-recording it.
-    // No serving-loop caller reads it in that window, and no CLIENT manager is
-    // ever notified at all (the host is the only caller). FLAGGED, not filled.
+    // No serving-loop caller reads it in that window. A retry acts only on a
+    // space whose refusal the manager's `spaceAccessError()` holds until an
+    // admitted open clears it, and `spaceAccess()` reads that first.
     this.#sessionSession = undefined;
     // The dead session's views. `terminateSession` already closed the
     // SESSION's own view; these are the replica's references to it, which a
@@ -4457,7 +4505,7 @@ export class SpaceReplica
     stale.then(({ client }) => client.close()).catch(() => {});
     sessionRemountLogger.warn("session-remount", () => [
       `space ${this.#space}: the memoized session was terminated by ` +
-      `${closeError.name} and a commit touched its ACL doc; remounting. ` +
+      `${closeError.name} and its ACL may have changed; remounting. ` +
       "A fresh session.open re-runs the server's admission against the " +
       "ACL as it now stands (OW31: a serving mount's READ decisions " +
       "resolve as the space's OWNER), so a genuine de-authorization is " +

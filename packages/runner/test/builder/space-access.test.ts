@@ -41,12 +41,18 @@ describe("spaceAccess()", () => {
   let server: Server;
   let cleanups: (() => Promise<void>)[];
   let serverCount = 0;
+  let sessionOpens: { principal?: string; space: string }[];
 
   beforeEach(() => {
     cleanups = [];
+    sessionOpens = [];
     server = new Server({
       store: new URL(`memory://space-access-${++serverCount}`),
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      authorizeSessionOpen: async (message, context) => {
+        const principal = await authorizeLoopbackSessionOpen(message, context);
+        sessionOpens.push({ principal, space: message.space });
+        return principal;
+      },
       sessionOpenAuth: { audience: AUDIENCE },
       acl: {
         mode: "enforce",
@@ -105,6 +111,16 @@ describe("spaceAccess()", () => {
   ): Promise<(acl: AclValue) => Promise<void>> {
     const write = await writerFor(owner);
     return (acl) => write(`of:${owner.did()}`, acl);
+  }
+
+  /**
+   * Returns how many sessions `user` has asked the memory server to open on
+   * `target`, `space` unless given, whether it admitted them or not.
+   */
+  function sessionOpensBy(user: Identity, target: MemorySpace = space): number {
+    return sessionOpens.filter((open) =>
+      open.principal === user.did() && open.space === target
+    ).length;
   }
 
   /** Returns a client runtime acting as `user`. */
@@ -640,6 +656,138 @@ describe("spaceAccess()", () => {
       expect(reopened.error).toBeUndefined();
       await waitForCellValue(runtime, level, (v) => v === "READ", {
         stuckLabel: "dave's level to follow the grant to `READ`",
+      });
+    });
+
+    describe("when the host retries the space", () => {
+      /**
+       * Returns dave's level cell once it reads `none`, the memory server
+       * having refused dave's runtime the space, and every load that refusal
+       * set off has been refused too.
+       */
+      async function refusedLevel(
+        runtime: Runtime,
+      ): Promise<Cell<string | undefined>> {
+        const level = (await levelCell(runtime, dave)).key("level");
+        await waitForCellValue(runtime, level, (v) => v === "none", {
+          stuckLabel: "dave's level to arrive as `none`",
+        });
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        return level as Cell<string | undefined>;
+      }
+
+      it("stays `none` after a grant until the host retries the space", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const level = await refusedLevel(runtime);
+
+        // Dave's runtime holds no session on the space, so nothing the grant
+        // commits reaches it.
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(level.get()).toBe("none");
+        expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+          "AuthorizationError",
+        );
+      });
+
+      it("runs again with the granted level once the host retries the space", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const level = await refusedLevel(runtime);
+
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        await runtime.idle();
+        expect(level.get()).toBe("none");
+        const opens = sessionOpensBy(dave);
+        await runtime.retrySpaceAccess(space);
+        expect(sessionOpensBy(dave)).toBe(opens + 1);
+        expect(runtime.storageManager.spaceAccessError?.(space))
+          .toBeUndefined();
+        await waitForCellValue(runtime, level, (v) => v === "READ", {
+          stuckLabel: "dave's level to follow the retry to `READ`",
+        });
+      });
+
+      it("runs again with the granted level when a refused open was still in flight at the retry", async () => {
+        // The refusal runs the computation again, and its load opens the
+        // space once more. That open is decided on the access list as it
+        // stood before the grant, so the retry has to make its own.
+
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const level = (await levelCell(runtime, dave)).key("level");
+        await waitForCellValue(runtime, level, (v) => v === "none", {
+          stuckLabel: "dave's level to arrive as `none`",
+        });
+        const refusal = runtime.storageManager.spaceAccessError?.(space);
+
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        // The second open has reached the memory server, and its refusal
+        // has not reached the runtime, which would replace the first.
+        expect(sessionOpensBy(dave)).toBe(2);
+        expect(runtime.storageManager.spaceAccessError?.(space)).toBe(refusal);
+        await runtime.retrySpaceAccess(space);
+        expect(sessionOpensBy(dave)).toBe(3);
+        await waitForCellValue(runtime, level, (v) => v === "READ", {
+          stuckLabel: "dave's level to follow the retry to `READ`",
+        });
+      });
+
+      it("stays `none`, without throwing, when the memory server refuses the space again", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+        const level = await refusedLevel(runtime);
+        const refusal = runtime.storageManager.spaceAccessError?.(space);
+        expect(refusal?.name).toBe("AuthorizationError");
+        const opens = sessionOpensBy(dave);
+
+        await runtime.retrySpaceAccess(space);
+        expect(sessionOpensBy(dave)).toBe(opens + 1);
+        // A refusal of the retry's own session replaces the first one.
+        const again = runtime.storageManager.spaceAccessError?.(space);
+        expect(again?.name).toBe("AuthorizationError");
+        expect(again).not.toBe(refusal);
+        await runtime.idle();
+        expect(level.get()).toBe("none");
+      });
+
+      it("opens nothing for a space the runtime has not opened", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+        const runtime = clientRuntime(dave);
+
+        await runtime.retrySpaceAccess(space);
+        expect(sessionOpensBy(dave)).toBe(0);
+        expect(runtime.storageManager.openedSpaces?.()).not.toContain(space);
+        expect(runtime.storageManager.spaceAccessError?.(space))
+          .toBeUndefined();
+      });
+
+      it("opens no session for a member, whose level stays and keeps following the access list", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+        const runtime = clientRuntime(bob);
+        const level = (await levelCell(runtime, bob)).key("level");
+        await waitForCellValue(runtime, level, (v) => v === "WRITE", {
+          stuckLabel: "bob's level to arrive as `WRITE`",
+        });
+
+        const opens = sessionOpensBy(bob);
+        await runtime.retrySpaceAccess(space);
+        expect(sessionOpensBy(bob)).toBe(opens);
+        expect(level.get()).toBe("WRITE");
+        // The session still delivers the access list's changes.
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "READ" });
+        await waitForCellValue(runtime, level, (v) => v === "READ", {
+          stuckLabel: "bob's level to follow the grant down to `READ`",
+        });
       });
     });
   });

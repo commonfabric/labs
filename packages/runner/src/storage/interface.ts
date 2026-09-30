@@ -615,6 +615,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   noteSpaceAclChanged?(space: MemorySpace): void;
 
   /**
+   * Asks the memory server once more for a space it refused this manager,
+   * for a host that has reason to think the verdict changed, such as word
+   * that the principal was granted access. It opens the session again through
+   * the same `session.open` admission the first attempt went through, so it
+   * can admit only what that admission would. Resolves once the server has
+   * decided: an admission clears `spaceAccessError()` and notifies
+   * `subscribeSpaceAccessChange()` observers, and a refusal leaves the space
+   * refused, as it was. Does nothing for a space this manager has not opened,
+   * or whose session the server has not refused.
+   */
+  retrySpaceAccess?(space: MemorySpace): Promise<void>;
+
+  /**
    * Load cell from storage. Will also subscribe to new changes.
    *
    * @returns Promise that resolves when the cell sync is complete.
