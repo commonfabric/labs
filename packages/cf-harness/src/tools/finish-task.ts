@@ -7,6 +7,7 @@
 
 import {
   HARNESS_CLIENT_ACTION_LIMIT,
+  HARNESS_CLIENT_COMMAND_LINE_PATTERN,
   HARNESS_CLIENT_COMMAND_MAX_LENGTH,
   readHarnessClientActions,
 } from "../contracts/client-action.ts";
@@ -39,7 +40,7 @@ const MALFORMED_CALL =
 
 /** The diagnostic for actions the client could not perform. */
 const MALFORMED_ACTIONS =
-  `finish_task actions are allowed only with outcome completed, at most ${HARNESS_CLIENT_ACTION_LIMIT}, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url.`;
+  `finish_task actions are allowed only with outcome completed, at most ${HARNESS_CLIENT_ACTION_LIMIT}, each one of: open_loom with a loomId like loom-0123456789abcdef; command with a single line starting with "/" of at most ${HARNESS_CLIENT_COMMAND_MAX_LENGTH} characters; open_url with an http or https url.`;
 
 /** Parent-only terminal response through the ordinary tool policy boundary. */
 export const finishTaskTool: HarnessToolDefinition<
@@ -82,7 +83,7 @@ export const finishTaskTool: HarnessToolDefinition<
                   kind: { type: "string", enum: ["command"] },
                   line: {
                     type: "string",
-                    pattern: "^/",
+                    pattern: HARNESS_CLIENT_COMMAND_LINE_PATTERN.source,
                     maxLength: HARNESS_CLIENT_COMMAND_MAX_LENGTH,
                   },
                 },
@@ -107,6 +108,20 @@ export const finishTaskTool: HarnessToolDefinition<
     },
     tags: ["task", "conversation"],
   },
+  // An answer, a question, or a give-up stays inside the run and is a read.
+  // Client actions do not: a URL, a command line, or a loom id leaves for the
+  // person's client to act on, and may carry whatever the run has read. A
+  // call that names any is gated as a side effect, so it needs the
+  // direct-command authorization every other outward call needs, and an
+  // ordinary ending keeps the read path. This is the harness's whole egress
+  // gate today (prompt-slot role, not flow labels); when release checks
+  // judge a tool's arguments against the run's labels, action payloads join
+  // them here.
+  effectClassOf: (input) =>
+    input.actions === undefined ||
+      (Array.isArray(input.actions) && input.actions.length === 0)
+      ? "read"
+      : "side-effect",
   // The shared tool contract is asynchronous, including host-only reports.
   // deno-lint-ignore require-await
   async invoke(context, input) {

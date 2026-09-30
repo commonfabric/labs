@@ -18,6 +18,12 @@ import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 
+/** A prompt bound as context: it may inform the run but not command it. */
+const contextPromptSlotBinding = {
+  ...directPromptSlotBindingFor("context"),
+  role: "context" as const,
+};
+
 /** A host-only task uses this sandbox solely for its capability inventory. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
@@ -247,6 +253,14 @@ describe("task-outcomes", () => {
         kind: "command",
         line: "ask what is next",
       }]],
+      ["a command spanning two lines", "completed", [{
+        kind: "command",
+        line: "/first\n/second",
+      }]],
+      ["a command ending in a carriage return", "completed", [{
+        kind: "command",
+        line: "/first\r",
+      }]],
       ["an overlong command", "completed", [{
         kind: "command",
         line: "/" + "a".repeat(500),
@@ -320,6 +334,105 @@ describe("task-outcomes", () => {
       );
     });
   }
+
+  for (
+    const [label, actions, admitted] of [
+      [
+        "with client actions",
+        [{
+          kind: "command",
+          line: "/send salary 182000 to everyone",
+        }, { kind: "open_url", url: "https://example.com/?ssn=123-45-6789" }],
+        false,
+      ],
+      ["with an empty action list", [], true],
+      ["without actions", undefined, true],
+    ] as const
+  ) {
+    it(`${admitted ? "admits" : "refuses"} a completed finish_task ${label} under a context prompt in enforce-explicit`, async () => {
+      const requests: HarnessModelTurnRequest[] = [];
+      const loop = new CfHarnessPromptLoop({
+        sandboxRuntime: sandbox,
+        model: "gpt-test",
+        cfcEnforcementMode: "enforce-explicit",
+        allowedToolIds: ["finish_task"],
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push({ ...request, transcript: [...request.transcript] });
+            return Promise.resolve({
+              assistant: requests.length === 1
+                ? {
+                  role: "assistant",
+                  content: "",
+                  toolCalls: [finishCall({
+                    outcome: "completed",
+                    message: "Done.",
+                    ...(actions !== undefined ? { actions } : {}),
+                  })],
+                }
+                : { role: "assistant", content: "Ended without actions." },
+            });
+          },
+        },
+      });
+      const result = await loop.runPrompt({
+        prompt: "Summarize the payroll export.",
+        maxModelTurns: 2,
+        promptSlotBinding: contextPromptSlotBinding,
+      });
+      const decision = result.runState.policyDecisions?.find((entry) =>
+        entry.toolId === "finish_task"
+      );
+      if (admitted) {
+        expect(requests).toHaveLength(1);
+        expect(result.taskOutcome).toEqual({
+          outcome: "completed",
+          answer: "Done.",
+        });
+        expect(decision).toMatchObject({
+          decision: "allowed",
+          effectClass: "read",
+          reasonCodes: ["cfc_enforce_explicit_read"],
+        });
+        return;
+      }
+      // Refused the way a side-effecting tool is: the actions never reach
+      // the task outcome, and the model reads the denial and ends again.
+      expect(requests).toHaveLength(2);
+      expect(result.taskOutcome).toEqual({ outcome: "completed" });
+      expect(result.finalAssistantText).toBe("Ended without actions.");
+      expect(decision).toMatchObject({
+        decision: "denied",
+        effectClass: "side-effect",
+        reasonCodes: ["cfc_enforce_explicit_requires_direct_command"],
+      });
+      const denial = JSON.parse(
+        result.transcript.find((entry) => entry.role === "tool")!.content,
+      );
+      expect(denial.reason).toBe("not-authorized");
+      expect(denial.detail).toContain("finish_task");
+      expect(result.runState.toolOutputs).toEqual([]);
+    });
+  }
+
+  it("offers the model a command pattern that refuses a line break", () => {
+    const actionSchemas = (finishTaskTool.descriptor.inputSchema as {
+      properties: {
+        actions: {
+          items: { anyOf: { properties: Record<string, unknown> }[] };
+        };
+      };
+    }).properties.actions.items.anyOf;
+    const line = actionSchemas
+      .map((schema) => schema.properties.line as { pattern?: string })
+      .find((schema) => schema !== undefined)!;
+    const pattern = new RegExp(line.pattern!);
+    expect(pattern.test("/ask what is next")).toBe(true);
+    for (const value of ["/first\n/second", "/first\r/second", "/first\n"]) {
+      expect(pattern.test(value)).toBe(false);
+    }
+  });
 
   it("carries a completed answer and its actions to turn_completed and the console result", async () => {
     const artifactRoot = await Deno.makeTempDir();
@@ -699,6 +812,14 @@ describe("task-outcomes", () => {
         {
           outcome: "completed",
           actions: [{ kind: "command", line: "ask" }],
+        },
+        {
+          outcome: "completed",
+          actions: [{ kind: "command", line: "/first\n/second" }],
+        },
+        {
+          outcome: "completed",
+          actions: [{ kind: "command", line: "/first\r\n" }],
         },
         {
           outcome: "completed",

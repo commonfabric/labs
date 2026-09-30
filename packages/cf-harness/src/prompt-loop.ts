@@ -2851,6 +2851,7 @@ const hasDirectCommandBinding = (
 const evaluateToolPolicy = (
   cfcEnforcementMode: CfcEnforcementMode,
   descriptor: HarnessToolDescriptor,
+  effectClass: HarnessToolEffectClass,
   promptSlotBinding?: PromptSlotBinding,
   input?: Record<string, unknown>,
 ): ToolPolicyDecision => {
@@ -2909,7 +2910,7 @@ const evaluateToolPolicy = (
     case "disabled":
       return { allowed: true, reasonCodes: ["cfc_disabled"] };
     case "observe":
-      if (!directCommand && descriptor.effectClass !== "read") {
+      if (!directCommand && effectClass !== "read") {
         return {
           allowed: true,
           reasonCodes: ["cfc_observe_requires_direct_command"],
@@ -2920,17 +2921,17 @@ const evaluateToolPolicy = (
       return {
         allowed: true,
         reasonCodes: [
-          descriptor.effectClass === "read"
+          effectClass === "read"
             ? "cfc_observe_read"
             : "cfc_observe_direct_command",
         ],
       };
     case "enforce-explicit":
-      if (descriptor.effectClass === "read" || directCommand) {
+      if (effectClass === "read" || directCommand) {
         return {
           allowed: true,
           reasonCodes: [
-            descriptor.effectClass === "read"
+            effectClass === "read"
               ? "cfc_enforce_explicit_read"
               : "cfc_enforce_explicit_direct_command",
           ],
@@ -4587,6 +4588,9 @@ export class CfHarnessPromptLoop {
     const policyEventIndexes: number[] = [];
     const activityStartedAt = this.engine.getRunState().updatedAt;
     const activityEndedAt = (): string => this.engine.getRunState().updatedAt;
+    // The descriptor's class until the call's input is read, then the class
+    // of this call (`effectClassOf`), which policy judged it under.
+    let callEffectClass = tool.descriptor.effectClass;
     const baseActivity = (
       policyDecision: HarnessToolPolicyDecision,
       executionStatus: HarnessToolActivity["executionStatus"],
@@ -4598,7 +4602,7 @@ export class CfHarnessPromptLoop {
       toolCallId: toolCall.id,
       toolId,
       ...(origin !== undefined ? { origin } : {}),
-      effectClass: tool.descriptor.effectClass,
+      effectClass: callEffectClass,
       cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
       policyDecision,
       executionStatus,
@@ -4734,9 +4738,12 @@ export class CfHarnessPromptLoop {
       ? deniedToolInputSummary ??
         await summarizeToolInput(toolId, input)
       : await summarizeToolInput(toolId, input);
+    callEffectClass = tool.effectClassOf?.(input) ??
+      tool.descriptor.effectClass;
     const decision = evaluateToolPolicy(
       this.engine.getRunState().cfcEnforcementMode,
       tool.descriptor,
+      callEffectClass,
       promptSlotBinding,
       input,
     );
@@ -4785,7 +4792,7 @@ export class CfHarnessPromptLoop {
         toolActivitySequence: sequence,
         toolCallId: toolCall.id,
         toolId,
-        effectClass: tool.descriptor.effectClass,
+        effectClass: callEffectClass,
         ...(origin !== undefined ? { origin } : {}),
         cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
         decision: "denied",
@@ -4820,7 +4827,7 @@ export class CfHarnessPromptLoop {
           },
           sequence,
           startedAt: activityStartedAt,
-          effectClass: tool.descriptor.effectClass,
+          effectClass: callEffectClass,
           ...(origin !== undefined ? { origin } : {}),
           ...(promptSlotBinding !== undefined ? { promptSlotBinding } : {}),
           toolInputSummary,
@@ -4855,7 +4862,7 @@ export class CfHarnessPromptLoop {
           toolActivitySequence: sequence,
           toolCallId: toolCall.id,
           toolId,
-          effectClass: tool.descriptor.effectClass,
+          effectClass: callEffectClass,
           ...(origin !== undefined ? { origin } : {}),
           cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
           decision: "denied",
@@ -4909,7 +4916,7 @@ export class CfHarnessPromptLoop {
             },
             sequence,
             startedAt: activityStartedAt,
-            effectClass: tool.descriptor.effectClass,
+            effectClass: callEffectClass,
             ...(origin !== undefined ? { origin } : {}),
             ...(promptSlotBinding !== undefined ? { promptSlotBinding } : {}),
             toolInputSummary,
@@ -4940,7 +4947,7 @@ export class CfHarnessPromptLoop {
             },
             sequence,
             startedAt: activityStartedAt,
-            effectClass: tool.descriptor.effectClass,
+            effectClass: callEffectClass,
             ...(origin !== undefined ? { origin } : {}),
             ...(promptSlotBinding !== undefined ? { promptSlotBinding } : {}),
             toolInputSummary,
@@ -4961,7 +4968,7 @@ export class CfHarnessPromptLoop {
             },
             sequence,
             startedAt: activityStartedAt,
-            effectClass: tool.descriptor.effectClass,
+            effectClass: callEffectClass,
             ...(origin !== undefined ? { origin } : {}),
             ...(promptSlotBinding !== undefined ? { promptSlotBinding } : {}),
             toolInputSummary,
@@ -4993,7 +5000,7 @@ export class CfHarnessPromptLoop {
       toolActivitySequence: sequence,
       toolCallId: toolCall.id,
       toolId,
-      effectClass: tool.descriptor.effectClass,
+      effectClass: callEffectClass,
       ...(origin !== undefined ? { origin } : {}),
       cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
       decision: policyDecision,
@@ -5080,7 +5087,7 @@ export class CfHarnessPromptLoop {
         toolActivitySequence: sequence,
         toolCallId: toolCall.id,
         toolId,
-        effectClass: tool.descriptor.effectClass,
+        effectClass: callEffectClass,
         ...(origin !== undefined ? { origin } : {}),
         cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
         decision: harnessReleaseDecisionOutcome(releaseDecision.reasonCode),

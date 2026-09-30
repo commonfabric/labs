@@ -19,6 +19,12 @@ export const HARNESS_CLIENT_ACTION_LIMIT = 8;
 /** Longest client command line an action may carry. */
 export const HARNESS_CLIENT_COMMAND_MAX_LENGTH = 500;
 
+/**
+ * A client command: one line starting with "/". A carriage return or line
+ * feed would let one action carry several commands, so neither is allowed.
+ */
+export const HARNESS_CLIENT_COMMAND_LINE_PATTERN = /^\/[^\r\n]*$/;
+
 /** A loom identifier as the service mints it. */
 const LOOM_ID = /^loom-[a-f0-9]{16}$/;
 
@@ -68,7 +74,8 @@ export const readHarnessClientAction = (
     case "command": {
       const line = ownString(record, "line");
       return hasExactlyKeys(record, ["kind", "line"]) &&
-          line !== undefined && line.startsWith("/") &&
+          line !== undefined &&
+          HARNESS_CLIENT_COMMAND_LINE_PATTERN.test(line) &&
           line.trim().length > 1 &&
           line.length <= HARNESS_CLIENT_COMMAND_MAX_LENGTH
         ? { kind: "command", line }
