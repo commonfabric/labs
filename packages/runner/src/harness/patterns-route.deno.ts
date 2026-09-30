@@ -4,7 +4,7 @@
  * A piece that records such an origin follows it by fetching a path under
  * {@link PATTERNS_ROUTE_PREFIX} from the host serving its space — the source
  * itself, or, with `?identity`, the content identity of that source's whole
- * authored import closure. This is what answers.
+ * authored import closure and any requested attached source roots.
  *
  * Both halves of that exchange belong to the runner. The route prefix is part
  * of a pattern's content identity, because a compiled module is named by its
@@ -28,7 +28,9 @@ import {
   createCacheHeaders,
   generateETag,
 } from "@commonfabric/static/etag";
+import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { decode } from "@commonfabric/utils/encoding";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
 import { PATTERNS_ROUTE_PREFIX } from "../pattern-source-scheme.ts";
 import { resolveEntryIdentity } from "./entry-identity.ts";
@@ -52,6 +54,9 @@ export interface PatternFileRequest {
   /** Answer with the entry closure's identity rather than the source. */
   identity?: boolean;
 
+  /** Extra authored roots, addressed relative to the patterns route. */
+  sourceRoots?: readonly string[];
+
   /** The request's `If-None-Match`, which a matching ETag answers 304 to. */
   ifNoneMatch?: string | null;
 }
@@ -62,13 +67,14 @@ export class PatternsRoute {
   #extraSources: Array<{ routePrefix: string; baseUrl: URL }>;
 
   /**
-   * Each pattern file's content identity, computed once and cached forever:
+   * Each entry and root set's content identity, cached while retained:
    * pattern files are fixed for the process's lifetime (baked into the binary
    * or static on disk). A rejected computation is evicted so a transient
    * failure (e.g. an incomplete closure during a partial deploy) can be
-   * retried.
+   * retried. Callers choose root sets, so retention is bounded independently
+   * of how many combinations they request.
    */
-  #identityCache = new Map<string, Promise<string>>();
+  #identityCache = new BoundedKeyMap<string, Promise<string>>(256);
 
   /**
    * `root` holds the patterns every route path reaches by default.
@@ -119,27 +125,40 @@ export class PatternsRoute {
 
   /**
    * The content-addressed identity of a pattern entry — the value advertised
-   * to runtimes through `?identity`. Walks the entry's authored import closure
-   * via `getText` and hashes the pristine bytes; no compiler, runtime, or
-   * storage is involved. An updater independently compiles the downloaded
+   * to runtimes through `?identity`. Walks the entry's and attached roots'
+   * import closures via `getText` and hashes the pristine bytes; no compiler,
+   * runtime, or storage is involved. An updater independently compiles the downloaded
    * closure and requires its entry ref to have this identity before replacing
    * a root.
    *
    * `filename` is the same root-relative path `getText` accepts, e.g.
-   * `system/default-app.tsx`. Rejects if the closure is incomplete or reaches
-   * a `cf:` fabric import, which the light path does not model.
+   * `system/default-app.tsx`. `sourceRoots` uses the same route-relative names
+   * and includes each attached root's import closure in the identity.
+   * Rejects if the closure is incomplete or reaches a `cf:` fabric import,
+   * which the light path does not model.
    */
-  identity(filename: string): Promise<string> {
-    let cached = this.#identityCache.get(filename);
+  identity(
+    filename: string,
+    sourceRoots: readonly string[] = [],
+  ): Promise<string> {
+    const roots = [...new Set(sourceRoots)].sort();
+    const key = stringTupleKey([filename, ...roots]);
+    let cached = this.#identityCache.get(key);
     if (!cached) {
       // Name modules by their URL pathname so the identity equals the one the
       // worker computes when it compiles the same source over HTTP.
       cached = resolveEntryIdentity(
         `${PATTERNS_ROUTE_PREFIX}${filename}`,
         (name) => this.getText(name.slice(PATTERNS_ROUTE_PREFIX.length)),
+        { sourceRoots: roots.map((root) => `${PATTERNS_ROUTE_PREFIX}${root}`) },
       );
-      this.#identityCache.set(filename, cached);
-      cached.catch(() => this.#identityCache.delete(filename));
+      this.#identityCache.set(key, cached);
+      const computation = cached;
+      cached.catch(() => {
+        if (this.#identityCache.get(key) === computation) {
+          this.#identityCache.delete(key);
+        }
+      });
     }
     return cached;
   }
@@ -167,6 +186,7 @@ export class PatternsRoute {
     }
     return await this.serveFile(filename, {
       identity: url.searchParams.has("identity"),
+      sourceRoots: url.searchParams.getAll("sourceRoot"),
       ifNoneMatch: request.headers.get("If-None-Match"),
     });
   }
@@ -198,7 +218,18 @@ export class PatternsRoute {
       }
 
       if (options.identity) {
-        const identity = await this.identity(filename);
+        const roots = options.sourceRoots ?? [];
+        for (const root of roots) {
+          // A query parameter is already URL-decoded. Requiring its canonical
+          // route spelling keeps the identity and the later HTTP fetch on the
+          // same file, including across encoded separators and dot segments.
+          if (
+            root.length === 0 || root.includes("..") ||
+            /[%?#:\\]/.test(root) || root.startsWith("/") ||
+            root.split("/").some((part) => part === "." || part === "")
+          ) return invalidPatternPath();
+        }
+        const identity = await this.identity(filename, roots);
         return patternResponse(
           identity,
           "text/plain; charset=utf-8",

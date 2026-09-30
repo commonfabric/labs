@@ -19,6 +19,22 @@ if (env.ENV !== "test") {
 const app = createApp().route("/", router);
 
 describe("Patterns API", () => {
+  it("includes every requested attached root in the advertised identity", async () => {
+    const response = await app.request(
+      "/api/patterns/loom/main.tsx?identity&sourceRoot=loom/main.test.tsx&sourceRoot=loom/url-view.test.tsx",
+    );
+    expect(response.status).toBe(200);
+    const identity = await response.text();
+    const route = createPatternsRoute();
+    expect(identity).toBe(
+      await route.identity("loom/main.tsx", [
+        "loom/main.test.tsx",
+        "loom/url-view.test.tsx",
+      ]),
+    );
+    expect(identity).not.toBe(await route.identity("loom/main.tsx"));
+  });
+
   describe("basic pattern serving", () => {
     it("serves system/default-app.tsx", async () => {
       const response = await app.request(

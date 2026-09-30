@@ -19,6 +19,11 @@ export const getPattern = createRoute({
           "content-addressed identity as text/plain instead of the entry " +
           "file's source.",
       ),
+      sourceRoot: z.union([z.string(), z.array(z.string())]).optional()
+        .describe(
+          "Additional authored source root relative to /api/patterns/. " +
+            "Repeat for multiple roots. Included in the identity when identity is present.",
+        ),
     }),
   },
   responses: {

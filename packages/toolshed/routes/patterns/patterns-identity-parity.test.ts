@@ -58,11 +58,15 @@ describe("?identity parity with a worker HTTP compile", () => {
     await server.finished;
   });
 
-  async function workerCompiledIdentity(filename: string): Promise<string> {
+  async function workerCompiledIdentity(
+    filename: string,
+    sourceRoots: readonly string[] = [],
+  ): Promise<string> {
     const program = await runtime.harness.resolve(
       new HttpProgramResolver(
         new URL(`/api/patterns/${filename}`, host).href,
       ),
+      { sourceRoots: sourceRoots.map((root) => `/api/patterns/${root}`) },
     );
     const { entryIdentity } = await (runtime.harness as Engine)
       .compileToRecordGraph(program);
@@ -80,6 +84,23 @@ describe("?identity parity with a worker HTTP compile", () => {
   it("home.tsx: endpoint identity == worker compile", async () => {
     const worker = await workerCompiledIdentity("system/home.tsx");
     const endpoint = await createPatternsRoute().identity("system/home.tsx");
+    expect(endpoint).toBe(worker);
+  });
+
+  it("identifies the shared loom with all four attached tests as the worker compiles it", async () => {
+    // These are publicationRoot.sourceRoots in commonfabric/loom's
+    // src/services/loom-daemon/shared-loom-runtime.ts.
+    const roots = [
+      "loom/main.test.tsx",
+      "loom/presentation-refusals.test.tsx",
+      "loom/multi-user.test.tsx",
+      "loom/url-view.test.tsx",
+    ];
+    const worker = await workerCompiledIdentity("loom/main.tsx", roots);
+    const endpoint = await createPatternsRoute().identity(
+      "loom/main.tsx",
+      roots,
+    );
     expect(endpoint).toBe(worker);
   });
 

@@ -45,6 +45,11 @@ import { prepareSourceClosureVerification } from "./compilation-cache/cell-cache
 import type { RuntimeProgram } from "./harness/types.ts";
 import type { PreparedSourceUpdate } from "./pattern-manager.ts";
 import {
+  PATTERNS_ROUTE_PREFIX,
+  resolveSystemPatternSource,
+  systemPatternSource,
+} from "./pattern-source-scheme.ts";
+import {
   classifyPieceOriginString,
   type PieceOriginKind,
 } from "./piece-origin-kind.ts";
@@ -659,7 +664,27 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
-    const answer = await this.#advertisedIdentity(target, fetch, signal);
+    const stored = await this.#runtime.patternManager
+      .getPatternSourceProgramByIdentity(state.running.identity, state.space);
+    const sourceRoots = stored?.sourceRoots ?? [];
+    if (
+      sourceRoots.some((root) =>
+        !root.startsWith(PATTERNS_ROUTE_PREFIX) ||
+        resolveSystemPatternSource(
+            systemPatternSource(root.slice(PATTERNS_ROUTE_PREFIX.length)),
+          ) !== root
+      )
+    ) {
+      state.detail =
+        "an attached source root is not a canonical patterns route path";
+      return "unavailable";
+    }
+    const answer = await this.#advertisedIdentity(
+      target,
+      fetch,
+      signal,
+      sourceRoots.map((root) => root.slice(PATTERNS_ROUTE_PREFIX.length)),
+    );
     if ("detail" in answer) {
       state.detail = answer.detail;
       return "unavailable";
@@ -678,6 +703,7 @@ export class SourceReconciler {
 
     const resolved = await this.#runtime.harness.resolve(
       new HttpProgramResolver(target.href, fetch),
+      { sourceRoots },
     );
     return await this.#adopt(
       resultCell,
@@ -713,9 +739,13 @@ export class SourceReconciler {
     target: URL,
     fetch: typeof globalThis.fetch,
     signal: AbortSignal,
+    sourceRoots: readonly string[] = [],
   ): Promise<{ identity: string } | { detail: string }> {
     const identityUrl = new URL(target);
     identityUrl.searchParams.set("identity", "");
+    for (const root of sourceRoots) {
+      identityUrl.searchParams.append("sourceRoot", root);
+    }
     let response: Response;
     try {
       response = await fetch(identityUrl);

@@ -76,6 +76,83 @@ describe("PatternsRoute", () => {
     });
   });
 
+  it("identifies each attached root set independently of its order and duplicates", async () => {
+    await withRoute(
+      {
+        "main.tsx": ENTRY,
+        "first.test.tsx": IMPORTER,
+        "second.test.tsx": ENTRY,
+        "leaf.ts": ENTRY,
+      },
+      async (route) => {
+        const bare = await route.serve(get("/api/patterns/main.tsx?identity"));
+        const first = await route.serve(
+          get("/api/patterns/main.tsx?identity&sourceRoot=first.test.tsx"),
+        );
+        const both = await route.serve(
+          get(
+            "/api/patterns/main.tsx?identity&sourceRoot=first.test.tsx&sourceRoot=second.test.tsx",
+          ),
+        );
+        expect(first?.status).toBe(200);
+        expect(both?.status).toBe(200);
+        const bareIdentity = await bare?.text();
+        const firstIdentity = await first?.text();
+        const bothIdentity = await both?.text();
+        expect(firstIdentity).not.toBe(bareIdentity);
+        expect(bothIdentity).not.toBe(firstIdentity);
+        const equivalent = await route.serve(get(
+          "/api/patterns/main.tsx?identity&sourceRoot=second.test.tsx&sourceRoot=first.test.tsx&sourceRoot=first.test.tsx",
+          { "If-None-Match": both!.headers.get("ETag")! },
+        ));
+        expect(equivalent?.status).toBe(304);
+        expect(await equivalent?.text()).toBe("");
+        const bareAgain = await route.serve(
+          get("/api/patterns/main.tsx?identity"),
+        );
+        expect(await bareAgain?.text()).toBe(bareIdentity);
+      },
+    );
+  });
+
+  it("refuses attached roots that escape or ambiguously name a route file", async () => {
+    await withRoute({ "main.tsx": ENTRY }, async (route) => {
+      for (
+        const sourceRoot of [
+          "",
+          "../main.tsx",
+          "/main.tsx",
+          "file:main.tsx",
+          "%2e%2e/main.tsx",
+          "dir/../main.tsx",
+          "./main.tsx",
+          "dir//main.tsx",
+          "dir\\main.tsx",
+          "main.tsx?identity",
+          "main.tsx#fragment",
+        ]
+      ) {
+        const query = new URLSearchParams({ identity: "", sourceRoot });
+        const response = await route.serve(
+          get(`/api/patterns/main.tsx?${query}`),
+        );
+        expect(response?.status).toBe(400);
+      }
+    });
+  });
+
+  it("refuses an identity whose attached root's import closure is missing", async () => {
+    await withRoute(
+      { "main.tsx": ENTRY, "main.test.tsx": IMPORTER },
+      async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/main.tsx?identity&sourceRoot=main.test.tsx"),
+        );
+        expect(response?.status).toBe(404);
+      },
+    );
+  });
+
   it("answers 404 for a path that names no file", async () => {
     // The three ways a path fails to name one. Each reports itself
     // differently to the read, and the route serves files, never a listing.

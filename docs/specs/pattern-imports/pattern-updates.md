@@ -419,14 +419,22 @@ prior state rather than a schema.
 
 ## System-source patterns — the loop
 
-**Serving side (memoized per file for the process lifetime; patterns are fixed
-for a host's lifetime).** The pattern route answers a `?identity` query param.
+**Serving side (memoized by entry and attached root set in a bounded cache;
+patterns are fixed for a host's lifetime).** The pattern route answers a
+`?identity` query param.
 For a requested file: walk its authored import closure via single-file reads
 (works in a compiled binary — no directory enumeration) → hash the **pristine**
 authored bytes → return the entry identity. **No type-check, no emit** — the
 light computation (`resolveEntryIdentity` in the runner). The worker
 independently checks the result by compiling the downloaded closure and
 comparing its compiler-produced entry identity.
+
+An attached source root is part of that identity even when the entry does not
+import it. The request includes one `sourceRoot` query parameter per attached
+root, naming its canonical path relative to `/api/patterns/`. The route walks
+each root's import closure as well as the entry's. Root order and duplicates do
+not change the identity or its ETag. Missing roots or imports refuse the request;
+paths outside the patterns route and noncanonical path spellings return 400.
 
 Two implementation facts make the light identity equal what the worker stores as
 `patternIdentity`, verified by a parity test against the real `default-app.tsx`
@@ -467,7 +475,11 @@ then start it:
    `mappedHostFor(space) ?? apiUrl`; the ref is host-relative, so the request is
    same-origin by construction.
 2. `currentId` = a revalidating `GET {host}{url}?identity` for this attempt
-   (`fetch` cache mode `no-cache`). A matching `ETag` may reuse the cached body
+   (`fetch` cache mode `no-cache`), with `sourceRoot` parameters taken from the
+   running pattern's verified stored source program. Those roots must be named
+   under `/api/patterns/`. If the stored source is unavailable, the existing
+   recovery path resolves the entry alone and records the displaced identity.
+   A matching `ETag` may reuse the cached body
    after a `304`; the browser may not replay it without validation. An HTTP
    failure, empty response, or exception performs no metadata write; the
    subsequent start retains its normal loud failure.
@@ -475,8 +487,9 @@ then start it:
    exact stored artifact. A successful load is done. A missing or unloadable
    artifact continues to compile from source rather than taking the fast path,
    which is what puts the artifact back.
-4. Revalidate `{host}{url}` and every module in its complete authored import
-   closure with the same `no-cache` fetch policy, then compile with the export
+4. Revalidate `{host}{url}`, its attached roots, and every module in their
+   authored import closures with the same `no-cache` fetch policy. Retain the
+   attached roots in the resolved program, then compile with the export
    symbol the piece already runs. Apply only when the compiler supplies an
    entry ref whose identity exactly equals `currentId`; never synthesize a ref
    or fall back around `?identity`. A fetch, compile, evaluation,
@@ -512,6 +525,12 @@ older worker and a newer toolshed: disagreement prevents the update. No
 `/api/meta` request, git-SHA comparison, pattern response build header, or
 worker-to-shell version-skew signal is part of the authorization path.
 
+A host that ignores `sourceRoot` parameters advertises an entry-only identity.
+A worker preserving attached roots refuses that mismatch and keeps its stored
+program. Retention requires a worker that sends and resolves those roots and a
+host that serves them and includes them in its advertised identity. It does not
+restore attachments that an earlier worker already removed.
+
 Authored identity deliberately does not fingerprint bare runtime imports or the
 runtime's implementation. Local compilation and evaluation are a capability
 check: a closure that needs an unavailable API, cannot be transformed, or does
@@ -544,7 +563,7 @@ binary populates from baked build metadata; the updater does not consult it.
 
 ## Build sketch (seams)
 
-- **Patterns route**: `?identity` handler + per-process `{ name → identity }`
+- **Patterns route**: `?identity` handler + bounded per-process `{ entry and roots → identity }`
   cache, and strong checksum `ETag` + mandatory revalidation for identity and
   source responses. All of it lives in the runner
   (`harness/patterns-route.deno.ts`), beside `computeModuleIdentities` and
