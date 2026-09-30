@@ -33,5 +33,9 @@ export {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "./BaseFabricInstance.ts";
+
+// Note: This intentionally omits `blessFabricPrimitiveClass()`, because it
+// should _only_ be accessible internally to the `data-model`.
 export { BaseFabricPrimitive, VALUE_TAG } from "./BaseFabricPrimitive.ts";
+
 export { BaseFabricSpecialObject } from "./BaseFabricSpecialObject.ts";
