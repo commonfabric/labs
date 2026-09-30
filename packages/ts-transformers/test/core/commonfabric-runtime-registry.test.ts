@@ -14,6 +14,7 @@ const TRACKED_IMPORT_SOURCES = new Set([
   "./built-in.ts",
   "./module.ts",
   "./pattern.ts",
+  "./space-access.ts",
 ]);
 
 function getPropertyNameText(name: ts.PropertyName): string | undefined {
