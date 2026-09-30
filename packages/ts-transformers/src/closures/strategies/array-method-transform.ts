@@ -26,6 +26,7 @@ import {
 } from "../../utils/reactive-keys.ts";
 import { CaptureCollector } from "../capture-collector.ts";
 import { buildCaptureParamsObject } from "../utils/capture-scaffold.ts";
+import { expandCapturedObjectSpreads } from "../utils/captured-object-spread.ts";
 import { PatternBuilder } from "../utils/pattern-builder.ts";
 import { createArrayMethodCallbackSchema } from "../utils/schema-factory.ts";
 import {
@@ -436,7 +437,12 @@ export function transformArrayMethodCallback(
   const body = family === "groupBy" || family === "keyBy"
     ? tagSelectorReturns(callback.body, context)
     : callback.body;
-  const transformedBody = ts.visitNode(body, visitor) as ts.ConciseBody;
+  const transformedBody = expandCapturedObjectSpreads(
+    ts.visitNode(body, visitor) as ts.ConciseBody,
+    callback,
+    new Set(captureTree.keys()),
+    context,
+  );
 
   return createPatternCallWithParams(
     methodCall,

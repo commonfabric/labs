@@ -31,28 +31,28 @@ import { testSelection } from "./tiles/test-selection.ts";
 export const TILES: Tile[] = [
   ciHealth,
   labsCiTrust,
-  labsCiDuration,
-  benchmark,
-
-  weaverCiDuration,
   loomCiTrust,
-  loomCiDuration,
-  keyBenchmarks,
+  weaverCiTrust,
 
   testFlakes,
+  labsCiDuration,
+  loomCiDuration,
+  weaverCiDuration,
+
   testSelection,
   coverageDebt,
-  prodErrors,
+  benchmark,
+  keyBenchmarks,
 
+  prodUptime,
+  prodErrors,
   dau,
   discordOnline,
-  githubMembers,
-  prodUptime,
 
-  weaverCiTrust,
-  githubCiSpend,
   modelSpend,
   gcpSpend,
+  githubCiSpend,
+  githubMembers,
 
   recentRuns,
 ];

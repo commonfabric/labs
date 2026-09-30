@@ -239,7 +239,6 @@ const primitiveTypeIsInstructionInert = (
     types.every((type) =>
       type === "number" ||
       type === "integer" ||
-      type === "bigint" ||
       type === "boolean" ||
       type === "null" ||
       type === "undefined"
@@ -619,8 +618,6 @@ const typeMatches = (
       return true;
     case "string":
       return typeof value === "string";
-    case "bigint":
-      return typeof value === "bigint";
     case "number":
       return typeof value === "number" && Number.isFinite(value);
     case "integer":
@@ -685,7 +682,6 @@ const SUPPORTED_SCHEMA_TYPES = new Set([
   "string",
   "number",
   "integer",
-  "bigint",
   "boolean",
   "null",
   "undefined",

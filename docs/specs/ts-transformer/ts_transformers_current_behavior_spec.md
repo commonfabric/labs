@@ -1384,14 +1384,16 @@ therefore emitted from the type node its author wrote
 (`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
 name counts only where it resolves to the declaration `commonfabric` exports: a
 type of the author's own named `Default` is an ordinary type, and its binding is
-typed by inference. At any of those positions, a reference to a non-generic type
-alias whose type carries a wrapper is replaced by the type the alias names, so
+typed by inference. At any of those positions, and in the argument of a scope
+wrapper, a reference to a non-generic type alias whose type carries a wrapper
+is replaced by the type the alias names, so
 `type Draft = Writable<string | Default<"">>` captures with the schema of the
 wrapper written in place, including when the alias is imported from another
-module. A reference to an alias that carries no wrapper stays a reference, which
-schema generation emits under the alias's name. A reference to a generic alias
-also stays as written, and when nothing else in the declared type carries a
-wrapper the capture is typed by inference.
+module and when it is scoped, as `PerSession<Draft>`. A reference to an alias
+that carries no wrapper stays a reference, which schema generation emits under
+the alias's name. A reference to a generic alias also stays as written, and when
+nothing else in the declared type carries a wrapper the capture is typed by
+inference.
 
 A property of a generic input is declared in terms of the input's type
 parameters. The pattern builder's type argument supplies the caller's arguments,
@@ -1532,6 +1534,19 @@ Result shape:
   `test/array-method-element-schema.test.ts`)
 - computed destructuring keys are stabilized with generated key constants and
   lift-applied wrappers where needed
+- a spread of a capture, in the callback body outside any function nested in
+  it, is written out as the properties it copies when the capture is a `const`
+  declared outside module scope and initialized with an object literal whose
+  properties all have static keys (identifiers or string literals; no spread,
+  method, accessor, or computed key). A `__proto__:` assignment sets the
+  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
+  property and is written back as `["__proto__"]`:
+  `{ ...records, id: item.id }` ->
+  `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
+  callback reads a capture as an opaque reference, which has no keys to spread;
+  those keys are exactly what the spread copies where `records` is declared
+  (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
+  `closures/map-captured-object-spread.expected.jsx`)
 
 ### 9.5 Lift-applied strategy
 
@@ -2337,12 +2352,6 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
-A widened bigint literal and the general `bigint` type emit
-`{ type: "bigint" }`, preserving exact integer values independently of the
-number schema. The `schema-injection/literal-widen-bigint` fixture pins positive,
-zero, and negative constructor arguments. A non-widened bigint literal schema
-is rejected because JSON schema constants cannot carry bigint values.
-
 Cell constructors whose authored type arguments name a `typeof` value binding
 retain those arguments when their result is lowered into a lift
 (`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated
@@ -2735,6 +2744,20 @@ The second argument is always the literal `true` — the runtime's `allowIfSet`
 flag: the synthetic cause is a *suggestion*, silently ignored if the cell
 already has a cause or link, whereas authored one-argument `.for(cause)`
 throws in that case (`packages/runner/src/cell.ts`, `for(cause, allowIfSet?)`).
+
+The access is optional, `?.for(<cause>, true)`, when the tagged expression may
+be nullish when it runs (`mayBeNullish`): an optional chain, or an identifier
+(§13.4) or a call that `detectCallKind` does not classify whose type admits
+`undefined`, `null`, or `void`. The type is read both inside and outside any
+`as`, `satisfies`, or `!` around the expression, and either admitting one is
+enough unless a `!` asserts the value present. There is no cell to name in that
+case, and a plain `.for()` would throw on the absent value. A call the runtime
+provides keeps the plain access, since it returns a cell whatever type the
+value in that cell has (`ast-transform/handler-nullable-cell-const.expected.jsx`:
+`const a = state.profile?.resolveAsCell()?.for("a", true)` in a handler,
+`{ profile: a?.for(["d", "profile"], true) }` re-rooting it, and
+`(maybeCell(state.profile) as unknown)?.for("e", true)`).
+
 Source-map ranges are
 preserved from the original initializer (`preserveNodeSourceMap`).
 
@@ -4048,6 +4071,11 @@ null when it does not apply. Current built-in behavior:
    unsupported — the problem is the unstorable function value, not the call
    syntax — but that classification is not yet surfaced as an authoring-time
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
+7. A spread, inside a reactive collection callback, of a capture that §9.4 does
+   not write out — a `const` initialized by a function call, say — copies
+   nothing, because the callback reads the capture as an opaque reference. No
+   diagnostic reports it unless the capture is a tracked reactive root, whose
+   spread §9.7 reports as not lowerable.
 
 ## 20. Test Coverage Snapshot
 

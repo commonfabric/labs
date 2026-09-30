@@ -277,8 +277,8 @@ by any repo test.
 | `string` / `number` / `boolean` | `{ type: "string"/"number"/"boolean" }` | `primitive-formatter.ts` | many fixtures |
 | String/number literal | `{ type: …, enum: [v] }` (type path); `{ type: …, const: v }` (node path) | `primitive-formatter.ts`; `schema-generator.ts` | divergence pinned by `test/literal-encoding-paths.test.ts` (unions diverge structurally: `enum` list vs `anyOf` of `const`s); runner validation treats both alike but `schemasEqualIgnoringWriterStamp` (deepEqual, `cfc/prepare.ts`) does not — a path flip defeats stored-schema reuse |
 | Boolean literal | `{ type: "boolean", enum: [true/false] }` via `intrinsicName` | `primitive-formatter.ts` | boolean-literals test |
-| `bigint` | `{ type: "bigint" }` | `primitive-formatter.ts` | `schema-generator.test.ts` |
-| bigint literal (`42n`) | Throws unless literals are widened; widening produces `{ type: "bigint" }` | `primitive-formatter.ts` | `schema-generator.test.ts` |
+| `bigint` | `{ type: "integer" }` | `primitive-formatter.ts` | probe only |
+| bigint literal (`42n`) | `{ type: "integer", enum: [Number(v)] }` — converted through `Number`, so precision above 2^53 would be lost | `primitive-formatter.ts` | probe only |
 | Template literal type | `{ type: "string" }` | `primitive-formatter.ts` | probe only |
 | `null` | `{ type: "null" }` | `primitive-formatter.ts` | fixtures |
 | `undefined` | `{ type: "undefined" }` — non-standard, deliberate (`api/index.ts`) | `primitive-formatter.ts`; node `schema-generator.ts` | fixtures |
@@ -295,7 +295,7 @@ by any repo test.
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
-| `FabricPrimitive` class (`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
+| `FabricPrimitive` class (`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
@@ -370,9 +370,10 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; the seven `FabricPrimitive` classes
-(`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`,
-`FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) → `{ type: "<Name>" }`
+and `Uint8Array` → `{ type: "object" }`; the eight `FabricPrimitive` classes
+(`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`,
+`FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) →
+`{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
@@ -1373,7 +1374,7 @@ declaration file is the default library's (the transformer supplies
 `src/typescript/default-library.ts`), and `widenLiterals`.
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
-(`primitive-formatter.ts`; bigint literals widen to `{ type: "bigint" }`);
+(`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
 (2) structurally-identical-modulo-enum union members merge recursively
 (`union-formatter.ts`). It does **not** widen all-literal
 unions (§8) and has no other effects. `test/widen-literals.test.ts` pins the
@@ -1439,7 +1440,7 @@ synthetic node resolution failure → `any` → `true`
    pre-widening) DOES widen literal unions — the two mechanisms disagree.
    Decide the policy (including nested enum-typed properties) before changing
    the in-package behavior.
-4. **Bigint literals** — refused unless widened to the native `bigint` type
+4. **bigint → `integer` via `Number`** — silent precision loss above 2^53
    (§4, probe); untested.
 5. **CFC alias detection is name-keyed**, no source check (§11); untested
    collision case.

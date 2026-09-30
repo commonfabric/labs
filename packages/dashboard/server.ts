@@ -29,7 +29,12 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
 import { makeCtx } from "./ctx.ts";
-import { escapeHtml, friendlyError, githubOperationsInProgress } from "./lib.ts";
+import {
+  escapeHtml,
+  friendlyError,
+  githubOperationsInProgress,
+  STALE_RUNS_ERROR,
+} from "./lib.ts";
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
 import { renderTile, shell } from "./render.ts";
@@ -375,16 +380,35 @@ function snapshotCtx(
   };
 }
 
-// When the newest run in a snapshot started, for comparing one fetch of a source
-// against the last one that was kept. A snapshot with no readable start times
-// counts as having no runs at all.
-function newestRunAt(runs: readonly Run[] | undefined): number {
-  let newest = -Infinity;
+/**
+ * The run in `runs` created last, or `undefined` when none has a readable
+ * creation time.
+ */
+function newestRun(runs: readonly Run[] | undefined): Run | undefined {
+  let newest: Run | undefined;
   for (const run of runs ?? []) {
-    const at = Date.parse(run.created_at);
-    if (Number.isFinite(at) && at > newest) newest = at;
+    if (createdAt(run) > createdAt(newest)) newest = run;
   }
   return newest;
+}
+
+/**
+ * When `run` was created, or `-Infinity` for no run or an unreadable time, so
+ * a snapshot without a dated run is older than any snapshot with one.
+ */
+function createdAt(run: Run | undefined): number {
+  const at = run ? Date.parse(run.created_at) : NaN;
+  return Number.isFinite(at) ? at : -Infinity;
+}
+
+/**
+ * Names the size of `runs` and its newest run, for the log line that says why
+ * a fetch of a source was not kept.
+ */
+function describeRuns(runs: readonly Run[] | undefined): string {
+  const run = newestRun(runs);
+  const count = `${runs?.length ?? 0} run${runs?.length === 1 ? "" : "s"}`;
+  return `${count}, ${run ? `newest run ${run.id} created ${run.created_at}` : "none dated"}`;
 }
 
 function sourceLabel(source: RunSource): string {
@@ -564,9 +588,13 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       // of the workflow, and publishing it would age the whole tile family
       // backwards without saying so. Keep what is held and name the
       // source stale; the next fetch that reaches a current view clears it.
-      if (runs && newestRunAt(runs) < newestRunAt(runSnapshots.get(key))) {
-        error = "newest run older than the one already collected";
-        console.error(`run source ${key} stale:`, error);
+      const held = runSnapshots.get(key);
+      if (runs && createdAt(newestRun(runs)) < createdAt(newestRun(held))) {
+        error = STALE_RUNS_ERROR;
+        console.error(
+          `run source ${key} stale, ${error}. Fetched ${describeRuns(runs)}; ` +
+            `held ${describeRuns(held)}.`,
+        );
         runs = undefined;
       }
       if (runs) {

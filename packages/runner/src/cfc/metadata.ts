@@ -12,6 +12,7 @@
  * cannot differ over the same stored value.
  */
 
+import { isDeepFrozen } from "@commonfabric/data-model";
 import type { URI } from "@commonfabric/memory/interface";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { NormalizedFullLink } from "../link-utils.ts";
@@ -209,6 +210,14 @@ const isCfcMetadata = (value: unknown): value is StoredCfcMetadata => {
 };
 
 /**
+ * The envelopes `interpretStoredEnvelope()` has found interpretable, by
+ * identity, so that reading the labels at one address does not check every
+ * entry of the document's label map again. Only a deep-frozen envelope is
+ * held, since one that cannot change interprets the same every time.
+ */
+const interpretedEnvelopes = new WeakMap<object, StoredCfcMetadata>();
+
+/**
  * The stored envelope `value` holds, or `undefined` when the reserved
  * position of document `id` holds nothing. Throws a
  * {@link StoredCfcMetadataError} for everything else.
@@ -222,6 +231,10 @@ const interpretStoredEnvelope = (
   value: unknown,
 ): StoredCfcMetadata | undefined => {
   if (!cfcMetadataPresent(value)) return undefined;
+  if (isObjectNotArray(value)) {
+    const interpreted = interpretedEnvelopes.get(value);
+    if (interpreted !== undefined) return interpreted;
+  }
   if (
     isObjectNotArray(value) && "version" in value &&
     !isKnownCfcMetadataVersion(value.version)
@@ -229,6 +242,7 @@ const interpretStoredEnvelope = (
     throw new UnknownCfcMetadataVersionError(value.version);
   }
   if (!isCfcMetadata(value)) throw new UnreadableCfcMetadataError(id);
+  if (isDeepFrozen(value)) interpretedEnvelopes.set(value, value);
   return value;
 };
 

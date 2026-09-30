@@ -1440,32 +1440,56 @@ boardTest("a tile still being collected when its source is due stays on the sour
 boardTest("a run source that reads backwards in time keeps its last good snapshot", async () => {
   const source = runSource("test/backwards-source", "ci.yml", "main");
   // sourceRun times a run from its id, so run 5000 is weeks behind run 3. A
-  // fetch answering with the older one read a stale view of the workflow.
-  let stale = false;
+  // fetch answering with the older one, or with none, read a stale view of the
+  // workflow.
+  const current = sourceRun(3, "current run");
+  let fetched = [current];
   const sourceCtx: Ctx = {
     runs: () => sourceCtx.runsFor(source),
-    runsFor: () =>
-      Promise.resolve([sourceRun(stale ? 5000 : 3, stale ? "weeks-old run" : "current run")]),
+    runsFor: () => Promise.resolve(fetched),
     env: () => undefined,
   };
   const tile = sourceTile("ci", [source]);
+  const realError = console.error;
+  const errors: string[] = [];
+  console.error = (...parts: unknown[]) => errors.push(parts.map(String).join(" "));
+  try {
+    await tick([tile], sourceCtx);
+    assertStringIncludes(tileHtml("ci"), "current run");
+    assertEquals(errors, []);
 
-  await tick([tile], sourceCtx);
-  assertStringIncludes(tileHtml("ci"), "current run");
+    const heldRun = `held 1 run, newest run 3 created ${current.created_at}.`;
+    const older = sourceRun(5000, "weeks-old run");
+    fetched = [older];
+    await tick([tile], sourceCtx);
+    const held = tileHtml("ci");
+    assert(held.startsWith(`unknown"`));
+    assertStringIncludes(held, "current run");
+    assert(!held.includes("weeks-old run"), held);
+    assertStringIncludes(held, "backwards-source run list out of date");
+    assertEquals(errors, [
+      "run source test/backwards-source ci.yml main stale, newest run older " +
+      `than the one already collected. Fetched 1 run, newest run 5000 created ${older.created_at}; ` +
+      heldRun,
+    ]);
 
-  stale = true;
-  await tick([tile], sourceCtx);
-  const held = tileHtml("ci");
-  assert(held.startsWith(`unknown"`));
-  assertStringIncludes(held, "current run");
-  assert(!held.includes("weeks-old run"), held);
-  assertStringIncludes(held, "backwards-source");
+    fetched = [];
+    await tick([tile], sourceCtx);
+    const emptied = tileHtml("ci");
+    assertStringIncludes(emptied, "current run");
+    assertStringIncludes(emptied, "backwards-source run list out of date");
+    assertStringIncludes(errors[1], `Fetched 0 runs, none dated; ${heldRun}`);
 
-  stale = false;
-  await tick([tile], sourceCtx);
-  const recovered = tileHtml("ci");
-  assert(recovered.startsWith(`good"`));
-  assertStringIncludes(recovered, "current run");
+    fetched = [current];
+    await tick([tile], sourceCtx);
+    const recovered = tileHtml("ci");
+    assert(recovered.startsWith(`good"`));
+    assertStringIncludes(recovered, "current run");
+    assert(!recovered.includes("out of date"), recovered);
+    assertEquals(errors.length, 2);
+  } finally {
+    console.error = realError;
+  }
 });
 
 boardTest("a tile can publish cached data while its collection is still running", async () => {

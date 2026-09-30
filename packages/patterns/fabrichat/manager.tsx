@@ -25,7 +25,7 @@ import {
   type WritePolicyAnyOf,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
-import { CHAT_POLICY } from "./records.ts";
+import { chatPolicy } from "./records.ts";
 import type {
   ChatIndexEntry,
   ChatManagerOutput,
@@ -131,7 +131,7 @@ function advance(requestId: string, state: ManagerState): void {
   if (!intent.target) {
     const allocation = `fabrichat:${requestId}`;
     const policy = RoomPolicy.inPrivateSpace(allocation)({
-      value: CHAT_POLICY,
+      value: chatPolicy(),
     });
     const target = PrivateRoom.inPrivateSpace(allocation)({
       initialMembers: [actor, ...intent.members],

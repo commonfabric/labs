@@ -1762,7 +1762,6 @@ export type JSONSchemaTypes =
   | "array"
   | "string"
   | "integer"
-  | "bigint" // exact native integers, distinct from JavaScript numbers
   | "number"
   | "boolean"
   | "null"

@@ -1019,13 +1019,13 @@
             "type": "boolean"
           },
           "proposedTimeMaxAgeNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -2110,13 +2110,13 @@
             "type": "boolean"
           },
           "proposedTimeMaxAgeNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [

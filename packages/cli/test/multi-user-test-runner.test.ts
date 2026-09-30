@@ -27,8 +27,10 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import { assertParticipantRung } from "../lib/multi-user-test-runner.ts";
 import type {
@@ -367,6 +369,48 @@ describe(
         expect(result.error).toContain("is a multi-user test");
         expect(result.error).toContain("`storageHost`");
         expect(result.results).toEqual([]);
+      } finally {
+        await storageManager.close();
+      }
+    });
+
+    it("writes nothing into a caller-supplied store it refuses", async () => {
+      // The single-user runner writes a test's compiled closure into its
+      // space, which is the caller's store when one is supplied. A multi-user
+      // test is only recognized once compiled, and refuses that store, so the
+      // write has to wait until the test is known not to be one.
+
+      const identity = await Identity.fromPassphrase("multi-user untouched");
+      const storageManager = StorageManager.emulate({ as: identity });
+      const path = fixture("marker-barrier.test.tsx");
+      try {
+        const result = await runTestPattern(path, {
+          root: FIXTURES,
+          storageHost: { identity, storageManager },
+        });
+        expect(result.error).toContain("is a multi-user test");
+
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        try {
+          const program = await resolveLocalProgram(
+            (r) => runtime.harness.resolve(r),
+            { main: path, root: FIXTURES },
+          );
+          const evaluated = await runtime.patternManager
+            .compileAndRegisterModules(program);
+          const entry = [...evaluated.exportsByIdentity!].find((
+            [, exports],
+          ) => exports === evaluated.main)!;
+          const stored = await runtime.patternManager
+            .getPatternSourceProgramByIdentity(entry[0], identity.did());
+          expect(stored).toBeUndefined();
+          await storageManager.synced();
+        } finally {
+          await runtime.dispose({ closeStorage: false });
+        }
       } finally {
         await storageManager.close();
       }

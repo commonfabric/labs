@@ -126,9 +126,14 @@ that never held that run, and the fetch fails rather than joining the two. This
 reads the same whichever side went stale. The cost is the one run each page
 repeats, which is why the window is up to the configured maximum rather than
 exactly it. The runs that do come back are ordered newest-first by the
-collection, not by the order the pages arrived in. A fetch whose newest run is older than the newest run already held
-read a stale view of the workflow: the scheduler keeps the snapshot it has and
-names the source, and the next fetch that reaches a current view clears that.
+collection, not by the order the pages arrived in. A fetch whose newest run is
+older than the newest run already held read a stale view of the workflow: the
+scheduler keeps the snapshot it has, and each tile reading it turns gray and
+names the source's run list as out of date, apart from the ci tile, which marks
+the affected build unreadable. The server log records how many runs that fetch
+returned and its newest run, beside the same for the snapshot held, which tells
+an empty reply from a lagging one. The next fetch that reaches a current view
+clears the gray.
 Together these keep a stale read from putting a run from weeks back at the head
 of a window, where every CI tile takes the state of the tree from.
 

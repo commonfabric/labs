@@ -218,13 +218,13 @@
             "type": "boolean"
           },
           "proposedTimeMaxAgeNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [
@@ -355,7 +355,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitSend"
                   ]
@@ -374,7 +374,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "sendMessageFromUi"
                   ]
@@ -393,7 +393,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitEdit"
                   ]
@@ -412,7 +412,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "editMessageFromUi"
                   ]
@@ -431,7 +431,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDelete"
                   ]
@@ -450,7 +450,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "deleteMessageFromUi"
                   ]
@@ -469,7 +469,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitObliterate"
                   ]
@@ -488,7 +488,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "obliterateMessageFromUi"
                   ]
@@ -507,7 +507,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -526,7 +526,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "sendReactionFromUi"
                   ]
@@ -545,7 +545,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -564,7 +564,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "deleteReactionFromUi"
                   ]
@@ -576,7 +576,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitShowProfile"
                   ]
@@ -588,7 +588,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitLeave"
                   ]
@@ -607,7 +607,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitAdd"
                   ]
@@ -626,7 +626,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "addMemberFromUi"
                   ]
@@ -645,7 +645,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitRemove"
                   ]
@@ -664,7 +664,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "removeMemberFromUi"
                   ]
@@ -682,7 +682,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitSend"
                   ]
@@ -693,7 +693,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "sendMessageFromUi"
                   ]
@@ -704,7 +704,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitEdit"
                   ]
@@ -715,7 +715,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "editMessageFromUi"
                   ]
@@ -726,7 +726,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDelete"
                   ]
@@ -737,7 +737,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "deleteMessageFromUi"
                   ]
@@ -748,7 +748,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitObliterate"
                   ]
@@ -759,7 +759,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "obliterateMessageFromUi"
                   ]
@@ -770,7 +770,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -781,7 +781,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "sendReactionFromUi"
                   ]
@@ -792,7 +792,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -803,7 +803,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "deleteReactionFromUi"
                   ]
@@ -814,7 +814,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitShowProfile"
                   ]
@@ -825,7 +825,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitLeave"
                   ]
@@ -836,7 +836,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitAdd"
                   ]
@@ -847,7 +847,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "addMemberFromUi"
                   ]
@@ -858,7 +858,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitRemove"
                   ]
@@ -869,7 +869,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "removeMemberFromUi"
                   ]
@@ -880,7 +880,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDelivered"
                   ]
@@ -914,7 +914,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitSend"
                   ]
@@ -933,7 +933,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "sendMessageFromUi"
                   ]
@@ -952,7 +952,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitEdit"
                   ]
@@ -971,7 +971,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "editMessageFromUi"
                   ]
@@ -990,7 +990,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitDelete"
                   ]
@@ -1009,7 +1009,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "deleteMessageFromUi"
                   ]
@@ -1028,7 +1028,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitObliterate"
                   ]
@@ -1047,7 +1047,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "obliterateMessageFromUi"
                   ]
@@ -1064,7 +1064,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitAdd"
                   ]
@@ -1075,7 +1075,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "addMemberFromUi"
                   ]
@@ -1086,7 +1086,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitShowProfile"
                   ]
@@ -1097,7 +1097,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitLeave"
                   ]
@@ -1108,7 +1108,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "commitRemove"
                   ]
@@ -1119,7 +1119,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room.tsx",
-                  "moduleIdentity": "o-ZEXnswLt-Zzqr2E-fGVcA5Eoy5NSnb1FYZezcFnfs",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
                   "path": [
                     "removeMemberFromUi"
                   ]
@@ -1808,13 +1808,13 @@
             "type": "boolean"
           },
           "proposedTimeMaxAgeNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "proposedTimeMaxLeadNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           },
           "recentActivityWindowNsec": {
-            "type": "bigint"
+            "type": "FabricDurationNsec"
           }
         },
         "required": [

@@ -20,13 +20,13 @@ interface ChatRoomPolicy {
   deletionIsObliteration: boolean;
 
   /** How far before the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxAgeNsec: bigint;
+  proposedTimeMaxAgeNsec: FabricDurationNsec;
 
   /** How far after the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxLeadNsec: bigint;
+  proposedTimeMaxLeadNsec: FabricDurationNsec;
 
   /** How long an entry stays in `recentActivity`, in ns. */
-  recentActivityWindowNsec: bigint;
+  recentActivityWindowNsec: FabricDurationNsec;
 
   /** The most messages a message window holds. */
   maxWindowCount: number;
@@ -36,7 +36,9 @@ interface ChatRoomPolicy {
 }
 ```
 
-A plain object, with every key present.
+A plain object, with every key present. The three duration fields hold
+`FabricDurationNsec` values; their `.value` is the exact bigint count of
+nanoseconds.
 
 ## Stated correctly
 

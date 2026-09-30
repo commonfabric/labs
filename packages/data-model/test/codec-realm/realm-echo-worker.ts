@@ -89,6 +89,7 @@ self.onmessage = (ev: MessageEvent) => {
           // happened to be checked first: a class can arrive with the right
           // constructor and the wrong data, and only a value check sees it.
           days: (value.days as { value: bigint } | undefined)?.value,
+          span: (value.span as { value: bigint } | undefined)?.value,
           hashTag: (value.hash as { tag: string } | undefined)?.tag,
           hashBytes: (value.hash as { bytes: Uint8Array } | undefined)
             ? [...(value.hash as { bytes: Uint8Array }).bytes]

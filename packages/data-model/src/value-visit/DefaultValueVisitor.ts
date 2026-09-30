@@ -2,6 +2,7 @@ import { type Primitive } from "@commonfabric/utils/types";
 
 import {
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -34,6 +35,7 @@ import {
   type VisitingEntryResult,
   type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -96,6 +98,19 @@ export abstract class DefaultValueVisitor<
     value: FabricBytes,
   ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricBytes);
+  }
+
+  /**
+   * Visits a value of type `FabricDurationNsec`. If not overridden, this calls
+   * `visitFabricPrimitiveValue()`.
+   */
+  visitFabricDurationNsec(
+    value: FabricDurationNsec,
+  ): VisitResult<PlusType, ResultType> {
+    return this.visitFabricPrimitiveValue(
+      value,
+      VALUE_TAGS.FabricDurationNsec,
+    );
   }
 
   /**
@@ -278,6 +293,12 @@ export abstract class DefaultValueVisitor<
    * `visitUnhandledValue()`, because it is expected that most useful visitors
    * will in fact want to recurse into containers. Subclasses that don't want
    * this can of course just override this implementation.
+   *
+   * An override which wants a container left as it is returns `mapTo` of the
+   * container, not `undefined`. For a container, `undefined` asks the engine
+   * to visit `undefined` in its place (see `VisitResult`), which this class
+   * sends on to `visitUnhandledValue()` unless `visitUndefined()` or one of
+   * the methods it rolls up to is overridden too.
    */
   visitFabricContainerValue(
     _value: FabricContainerValuePlus<PlusType>,
@@ -413,6 +434,10 @@ export abstract class DefaultValueVisitor<
         return this.visitFabricBytes(value as FabricBytes);
       }
 
+      case VALUE_TAGS.FabricDurationNsec: {
+        return this.visitFabricDurationNsec(value as FabricDurationNsec);
+      }
+
       case VALUE_TAGS.FabricEpochDay: {
         return this.visitFabricEpochDay(value as FabricEpochDay);
       }
@@ -504,7 +529,7 @@ export abstract class DefaultValueVisitor<
   override visitingFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
-  ): VisitingResult<PlusType, ResultType> {
+  ): VisitingStateResult<PlusType, ResultType> {
     return undefined;
   }
 

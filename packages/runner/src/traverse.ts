@@ -1565,6 +1565,45 @@ export type PointerCycleTracker = CompoundCycleTracker<
   any
 >;
 
+/**
+ * The route a traversal takes from its root to the position it is at, as the
+ * links it followed on the way. An object creator that derives what it mints
+ * from that route implements this, and the traversal keeps it up to date: a
+ * read carries the stored label of every link slot it passed through (CFC
+ * §8.2.4), and those labels live in the documents holding the links rather
+ * than in the one a position is in.
+ *
+ * A traversal that moves a value to another address without following a
+ * link, as an inline array item moves to a `data:` document of its own,
+ * records that as a copy.
+ */
+export interface LinkCrossingRoute {
+  /**
+   * Records that the traversal followed a link out of the slot at `source`
+   * to `target`.
+   */
+  cross(source: NormalizedFullLink, target: NormalizedFullLink): void;
+
+  /**
+   * Records that the traversal moved the value at `source` into a document
+   * of its own at `target`.
+   */
+  copy(source: NormalizedFullLink, target: NormalizedFullLink): void;
+
+  /** Where the route stands now, for `restore()`. */
+  mark(): number;
+
+  /** Removes the crossings recorded since `mark()` returned `mark`. */
+  restore(mark: number): void;
+
+  /**
+   * The part of a memo key that the route contributes at the current
+   * position. Two arrivals at one position with the same key, under one
+   * schema and one link, traverse to the same result.
+   */
+  memoKey(): string;
+}
+
 export type TraversalContext = {
   /** Probe terminal payload only while constructing a held cell reference. */
   referenceOnly?: boolean;
@@ -1653,7 +1692,69 @@ export type TraversalContext = {
    * selection depended on.
    */
   schemaDocsAvailable: Set<string>;
+
+  /**
+   * The route to the position being traversed, present only when the object
+   * creator derives what it mints from it. Each combinator branch, fixed-point
+   * round, and array item removes the crossings it recorded when it is done,
+   * so the route names the way to the current position and no other.
+   */
+  linkCrossingRoute?: LinkCrossingRoute;
 };
+
+/**
+ * Records on `context`'s route that the traversal followed a link out of
+ * `source` to `target`, when the context keeps a route.
+ */
+function noteLinkCrossing(
+  context: TraversalContext,
+  source: IMemorySpaceValueAddress,
+  target: NormalizedFullLink,
+): void {
+  context.linkCrossingRoute?.cross(getNormalizedLink(source), target);
+}
+
+/**
+ * Like `noteLinkCrossing()`, except that the traversal moved to the document
+ * address `target`.
+ */
+function noteAddressCrossing(
+  context: TraversalContext,
+  source: IMemorySpaceValueAddress,
+  target: IMemorySpaceValueAddress,
+): void {
+  context.linkCrossingRoute?.cross(
+    getNormalizedLink(source),
+    getNormalizedLink(target),
+  );
+}
+
+/**
+ * Marks where `context`'s route stands on entry to a position, for
+ * `restoreLinkCrossings()` to return it to when the position is done.
+ */
+function markLinkCrossings(context: TraversalContext): number | undefined {
+  return context.linkCrossingRoute?.mark();
+}
+
+/**
+ * Removes the link crossings recorded on `context`'s route since `mark`,
+ * which `markLinkCrossings()` returned.
+ */
+function restoreLinkCrossings(
+  context: TraversalContext,
+  mark: number | undefined,
+): void {
+  if (mark !== undefined) context.linkCrossingRoute?.restore(mark);
+}
+
+/**
+ * The part of a memo key that `context`'s route contributes at the current
+ * position, empty when the context keeps no route.
+ */
+function linkCrossingsMemoKey(context: TraversalContext): string {
+  return context.linkCrossingRoute?.memoKey() ?? "";
+}
 
 export function createTraversalContext(
   tracker: PointerCycleTracker,
@@ -2753,6 +2854,7 @@ function followPointer(
   // is resolvable when the predicate walks it; it marks off whatever the
   // schema legibly declares.
   markIfcBearingLinkCrossing(tx, doc.address.space, link.schema, link.id);
+  noteLinkCrossing(context, doc.address, link);
   if (!collected) {
     // Closure documents travel WITH the documents that refer to them, so
     // an unresolvable ref names a corrupt or deliberately malformed
@@ -4262,6 +4364,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // TODO(@ubik2): Need to break this up -- it's too long
     this.traverseWithSchemaCalls++;
     this.#currentDepth++;
+    const crossingsMark = markLinkCrossings(this.context);
     if (this.#currentDepth > this.#maxDepth) {
       this.#maxDepth = this.#currentDepth;
     }
@@ -4274,8 +4377,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
     try {
       // Both paths memoize by doc address + schema. The read path adds the
-      // link, the one input its object creator reads and the query path's
-      // ignores (see schemaMemoLinkKey).
+      // link and what the route of link crossings contributes, the inputs its
+      // object creator reads and the query path's ignores (see
+      // schemaMemoLinkKey and LinkCrossingRoute.memoKey).
       //
       // A hit skips a subtree, and with it the scheduler reads and tracker
       // entries that subtree records. That is sound because a hit means this
@@ -4290,7 +4394,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       const memoKey = this.traverseCells
         ? schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema)
         : schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema) + "|" +
-          schemaMemoLinkKey(link);
+          schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context);
       const cached = memo.get(memoKey);
       if (cached !== undefined) {
         this.schemaMemoHits++;
@@ -4326,7 +4430,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
       try {
         let result = this.#traverseWithSchemaInner(doc, schema, link);
         if (depth === this.#positionDepth && this.#rounds !== undefined) {
-          result = this.#settleRounds(doc, schema, link, memoKey, result);
+          result = this.#settleRounds(
+            doc,
+            schema,
+            link,
+            memoKey,
+            crossingsMark,
+            result,
+          );
           this.#provisional = false;
         }
         if (this.#provisional) {
@@ -4345,6 +4456,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     } finally {
       this.#currentDepth--;
+      restoreLinkCrossings(this.context, crossingsMark);
     }
   }
 
@@ -4387,6 +4499,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     schema: JSONSchema,
     link: NormalizedFullLink | undefined,
     memoKey: string,
+    crossingsMark: number | undefined,
     result: TraverseResult<FabricValue>,
   ): TraverseResult<FabricValue> {
     const rounds = this.#rounds!;
@@ -4415,6 +4528,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       rounds.cameBack.clear();
       before = result;
       this.#provisional = false;
+      restoreLinkCrossings(this.context, crossingsMark);
       result = this.#traverseWithSchemaInner(doc, schema, link);
     }
   }
@@ -4790,10 +4904,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.#isValidType(schemaObj, getJsonNumberType(doc.value))
         ? { ok: this.#traversePrimitive(doc, schemaObj) }
         : fail(TRAVERSE_FAILURES.invalidType);
-    } else if (typeof doc.value === "bigint") {
-      return this.#isValidType(schemaObj, "bigint")
-        ? { ok: this.#traversePrimitive(doc, schemaObj) }
-        : fail(TRAVERSE_FAILURES.invalidType);
     } else if (isBoolean(doc.value)) {
       return isPlainTypeSchema(schemaObj, "boolean") ||
           this.#isValidType(schemaObj, "boolean")
@@ -5128,12 +5238,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
         return undefined;
       }
       this.#reportMissingPlainArrayItemLink(doc, selector, target);
+      noteAddressCrossing(this.context, doc.address, target);
       return [{ address: target, value: undefined }, {
         path: target.path,
         schema: selector.schema,
       }];
     }
     if (ok.value === undefined) return undefined;
+    noteAddressCrossing(this.context, doc.address, target);
     return [{ address: target, value: ok.value }, {
       path: target.path,
       schema: selector.schema,
@@ -5264,7 +5376,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       schema,
       "array",
     );
+    // Each element is a position of its own, reached by whatever link its
+    // slot holds, so the crossings an element records go when it is done.
+    const crossingsMark = markLinkCrossings(this.context);
     docArray.forEach((item, index) => {
+      restoreLinkCrossings(this.context, crossingsMark);
       const itemSchema = directItems ??
         schemaAtPathCanonical(settledSchema, [index.toString()]);
       const batchIndex = preparedPlainLinkIndex++;
@@ -5320,6 +5436,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
           const cellLink = getNextCellLink(
             this.tx,
+            this.context,
             curDoc,
             curSelector.schema!,
           );
@@ -5393,6 +5510,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
                 preparedTarget,
               );
             }
+            noteAddressCrossing(this.context, curDoc.address, preparedTarget);
             linkDoc = {
               address: preparedTarget,
               value: preparedResult?.ok?.value,
@@ -5446,6 +5564,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // Replace doc with a DataCellURI style doc
         // Need to read recursively here
         this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+        const elementAddress = curDoc.address;
         // TODO(@ubik2): ideally, we wouldn't use this path in query traversal.
         // Right now, we aren't passing both the link info and doc info, so we
         // will override the doc here.
@@ -5461,6 +5580,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
         };
         // Our selector's path needs to be updated to match the new doc
         curSelector.path = curDoc.address.path;
+        this.context.linkCrossingRoute?.copy(
+          getNormalizedLink(elementAddress),
+          getNormalizedLink(curDoc.address),
+        );
       }
       // If we've asked for cells in the array and we don't need to traverse cells,
       // add the created cell instead. We check asCellOrStream regardless of
@@ -5486,7 +5609,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         const isLink = isSigilLink(curDoc.value);
         if (isLink) this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
         const cellLink = isLink
-          ? getNextCellLink(this.tx, curDoc, curSelector.schema!)
+          ? getNextCellLink(this.tx, this.context, curDoc, curSelector.schema!)
           : getNormalizedLink(curDoc.address, curSelector.schema);
         arrayObj[index] = this.objectCreator.createObject(cellLink, undefined);
       } else {
@@ -5543,6 +5666,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         }
       }
     });
+    restoreLinkCrossings(this.context, crossingsMark);
     return valid ? arrayObj : undefined;
   }
 
@@ -5776,7 +5900,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
         pointerLink !== undefined)
     ) {
-      const cellLink = getNextCellLink(this.tx, doc, schema);
+      const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
 
@@ -5808,7 +5932,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
         schema,
         redirSelector?.schema,
       )!;
-      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      const cellLink = getNextCellLink(
+        this.tx,
+        this.context,
+        redirDoc,
+        combinedSchema,
+      );
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
     if (redirDoc.value === undefined) {
@@ -5875,7 +6004,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       if (isSigilLink(redirDoc.value)) {
         this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
       }
-      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      const cellLink = getNextCellLink(
+        this.tx,
+        this.context,
+        redirDoc,
+        combinedSchema,
+      );
       logger.debug(
         "traverse",
         () => ["Next cell link:", {
@@ -6125,7 +6259,6 @@ function getPlainJsonType(
   if (value === undefined) return "undefined";
   if (isString(value)) return "string";
   if (typeof value === "number") return "number";
-  if (typeof value === "bigint") return "bigint";
   if (isBoolean(value)) return "boolean";
   if (Array.isArray(value)) return "array";
   // A `FabricPrimitive` reports its specific type name; a schema saying
@@ -6185,6 +6318,7 @@ function withoutSlotValueScope(
  * Get the link for a cell reached by following one link if available.
  * If doc.value does not contain a link, the cell will point to doc.address.
  *
+ * @param context - The traversal's shared state, which records the crossing
  * @param doc - IAttestation for the location of the link
  * @param schema - JSONSchema for the item
  *
@@ -6193,6 +6327,7 @@ function withoutSlotValueScope(
  */
 function getNextCellLink(
   tx: IExtendedStorageTransaction,
+  context: TraversalContext,
   doc: IMemorySpaceValueAttestation,
   schema: JSONSchema,
 ): NormalizedFullLink {
@@ -6226,12 +6361,14 @@ function getNextCellLink(
       readerSchema,
       lastLink.schema ?? true,
     );
-    return {
+    const target = {
       ...lastLink,
       schema: lastLink.space === doc.address.space
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    noteLinkCrossing(context, doc.address, target);
+    return target;
   }
   // It's fine if we don't have a pointer. In that case, just use the doc
   // address. If I have asCell in the schema, but a plain value, we want

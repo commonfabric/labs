@@ -39,6 +39,7 @@ import {
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -1178,6 +1179,7 @@ describe("RealmCodecEngine", () => {
         bytes: new FabricBytes(new Uint8Array([1, 2, 250])),
         nsec: new FabricEpochNsec(1234567890123456789n),
         days: new FabricEpochDay(20_000n),
+        span: new FabricDurationNsec(-31_556_952_000_000_000_001n),
         hash: new FabricHash(new Uint8Array([9, 8, 7]), "fid1"),
         regexp: new FabricRegExp(/ab+c/gi),
         unavailable: new FabricUnavailable("error", "general", "boom"),
@@ -1191,6 +1193,7 @@ describe("RealmCodecEngine", () => {
         bytes: "FabricBytes",
         nsec: "FabricEpochNsec",
         days: "FabricEpochDay",
+        span: "FabricDurationNsec",
         hash: "FabricHash",
         regexp: "FabricRegExp",
         unavailable: "FabricUnavailable",
@@ -1202,6 +1205,7 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.bytes).toEqual([1, 2, 250]);
       expect(report.facts?.nsec).toBe(1234567890123456789n);
       expect(report.facts?.days).toBe(20_000n);
+      expect(report.facts?.span).toBe(-31_556_952_000_000_000_001n);
       expect(report.facts?.hashTag).toBe("fid1");
       expect(report.facts?.hashBytes).toEqual([9, 8, 7]);
       expect(report.facts?.regexpParts).toEqual(["es2025", "ab+c", "gi"]);
@@ -1364,6 +1368,7 @@ describe("RealmCodecEngine", () => {
         ["FabricBytes", FabricBytes],
         ["FabricEpochNsec", FabricEpochNsec],
         ["FabricEpochDay", FabricEpochDay],
+        ["FabricDurationNsec", FabricDurationNsec],
         ["FabricHash", FabricHash],
         ["FabricRegExp", FabricRegExp],
         ["FabricUnavailable", FabricUnavailable],

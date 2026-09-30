@@ -270,6 +270,54 @@ const resolvedMetadataForCell = (
 };
 
 /**
+ * The label stored on the document that holds the value at `cell`'s path,
+ * rebased onto that value, or undefined when `cell` names no document.
+ */
+const resolvedTargetLabelView = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions,
+): CfcLabelViewStatus | undefined => {
+  if (
+    !isObjectOrArray(cell) ||
+    typeof cell.getAsNormalizedFullLink !== "function"
+  ) {
+    return undefined;
+  }
+  let link: NormalizedFullLink;
+  try {
+    link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
+  } catch {
+    return undefined;
+  }
+  const resolved = resolvedMetadataForCell(
+    cell as LabelQueryableCell,
+    link,
+    options,
+  );
+  return {
+    view: cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
+    readFailed: resolved.readFailed,
+  };
+};
+
+/**
+ * The label stored on the document that holds the value at `cell`'s path,
+ * found by the runtime's own link resolution and rebased onto that value.
+ *
+ * It leaves out the labels of the documents the path passes through on the way
+ * there, and any view the cell carries. A label on a document that holds a
+ * link is about the link: what integrity it carries endorses the reference,
+ * not the current contents of its target (spec §3.7.2, §8.2.4). This is
+ * therefore the view that says what vouches for the value itself, which is what
+ * a check requiring integrity of the value reads. It is undefined when no
+ * label is stored and when the read fails.
+ */
+export const cfcLabelViewForResolvedTarget = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelView | undefined => resolvedTargetLabelView(cell, options)?.view;
+
+/**
  * {@link cfcLabelViewForCellWithStatus}, plus the label stored on the doc the
  * selected path RESOLVES to.
  *
@@ -292,31 +340,11 @@ export const cfcLabelViewForResolvedCellWithStatus = (
   options: ResolvedLabelReadOptions = {},
 ): CfcLabelViewStatus => {
   const unresolved = cfcLabelViewForCellWithStatus(cell);
-  if (
-    !isObjectOrArray(cell) ||
-    typeof cell.getAsNormalizedFullLink !== "function"
-  ) {
-    return unresolved;
-  }
-
-  let link: NormalizedFullLink;
-  try {
-    link = (cell as LabelQueryableCell).getAsNormalizedFullLink();
-  } catch {
-    return unresolved;
-  }
-
-  const resolved = resolvedMetadataForCell(
-    cell as LabelQueryableCell,
-    link,
-    options,
-  );
+  const target = resolvedTargetLabelView(cell, options);
+  if (target === undefined) return unresolved;
   return {
-    view: mergeCfcLabelViews([
-      unresolved.view,
-      cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
-    ]),
-    readFailed: unresolved.readFailed || resolved.readFailed,
+    view: mergeCfcLabelViews([unresolved.view, target.view]),
+    readFailed: unresolved.readFailed || target.readFailed,
   };
 };
 

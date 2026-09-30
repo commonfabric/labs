@@ -15,7 +15,7 @@ import {
   Writable,
 } from "commonfabric";
 import { hasText } from "../test/vnode-helpers.ts";
-import { CHAT_POLICY } from "./records.ts";
+import { chatPolicy } from "./records.ts";
 import {
   FabriChatRoom,
   type StoredMemory,
@@ -33,7 +33,7 @@ export default pattern(() => {
     name: "Alice",
   });
   const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
-    CHAT_POLICY,
+    chatPolicy(),
   );
   const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
   const version = new Writable({
@@ -84,6 +84,13 @@ export default pattern(() => {
       { render: room[UI] },
       { action: room.sendMessage, event: sendEvent, trustedUi: sendGesture },
       { assertion: assert(() => room.messages.latest.messages.length === 1) },
+      {
+        assertion: assert(() =>
+          room.recentActivity.length === 1 &&
+          room.recentActivity[0].seq === 1 &&
+          room.recentActivityExpiredThrough === 0
+        ),
+      },
       { render: room[UI] },
       { assertion: assert(() => hasText(room[UI], "Hello")) },
       { render: reader[UI] },

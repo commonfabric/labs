@@ -133,6 +133,7 @@ type FabricValue =
   // (b) Special primitives (FabricPrimitive subclasses — always frozen)
   | FabricEpochNsec
   | FabricEpochDay
+  | FabricDurationNsec
   | FabricHash
   | FabricBytes
   | FabricKeyPair
@@ -392,9 +393,9 @@ content-level identity (see Section 6.3), but it is a `FabricPrimitive`, not a
 `FabricInstance`.
 
 The **special primitive** types (`FabricEpochNsec`, `FabricEpochDay`,
-`FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`,
-`FabricUnavailable`) are **not** `FabricInstance`s — they are `FabricPrimitive`
-subclasses (Section 1.4.6).
+`FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+`FabricRegExp`, `FabricUnavailable`) are **not** `FabricInstance`s — they are
+`FabricPrimitive` subclasses (Section 1.4.6).
 `FabricPrimitive` is an arm of the `FabricValue` union, so all
 `FabricPrimitive` subclasses are implicitly members of `FabricValue`. They are always-frozen value types that
 bypass the `freeze` option in conversion functions. Each hosts its own codec for
@@ -488,16 +489,17 @@ copying in the common case and centralizes the freeze-state logic for all
 wrapper types.
 
 Unlike the wrappers above, the special primitive types (`FabricEpochNsec`,
-`FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
-`FabricRegExp`, `FabricUnavailable`) are **`FabricPrimitive` subclasses** and
-do not extend `FabricInstance`. They are included in `FabricValue` via the
-`FabricPrimitive` arm of the union (Section 1.4.6). See Sections 1.4.5
-through 1.4.12.
+`FabricEpochDay`, `FabricDurationNsec`, `FabricHash`, `FabricBytes`,
+`FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) are **`FabricPrimitive`
+subclasses** and do not extend `FabricInstance`. They are included in
+`FabricValue` via the `FabricPrimitive` arm of the union (Section 1.4.6). See
+Sections 1.4.5 through 1.4.13.
 
 | Special Primitive Type | Extends | Wire Tag | Stored Value | Notes |
 |------------------------|---------|----------|--------------|-------|
 | `FabricEpochNsec` | `FabricPrimitive` | `EpochNsec@1` | `bigint` (signed nanoseconds from POSIX Epoch) | Primary temporal type. JS `Date` has only millisecond precision; conversion from `Date` multiplies by 10^6. When `Temporal` is available, `Temporal.Instant` maps naturally (it uses nanoseconds from epoch internally). |
 | `FabricEpochDay` | `FabricPrimitive` | `EpochDay@1` | `bigint` (signed days from POSIX Epoch) | Day-precision temporal type. Anticipates `Temporal.PlainDate`. Mostly nascent — class and spec entry are defined, but full integration (Temporal types, calendar concerns) is deferred. |
+| `FabricDurationNsec` | `FabricPrimitive` | `DurationNsec@1` | `bigint` (signed nanoseconds) | Span of time, the companion to `FabricEpochNsec`: the difference between two instants. When `Temporal` is available, `Temporal.Duration` covers the same ground, though it counts in calendar and clock fields rather than one count of nanoseconds. See Section 1.4.13. |
 | `FabricHash` | `FabricPrimitive` | `Hash@1` | `Uint8Array` (hash bytes, private) + `string` (algorithm tag) | Content identifier / hash. Stringifies as `<tag>:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5). The first algorithm tag is `fid1` ("fabric ID, v1"). Wire state is `{ tag, hash }` (see Section 1.4.9). |
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
 | `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
@@ -514,16 +516,17 @@ codec's `encode()` includes them in its output, and `decode()` restores them on
 the decoded instance (Section 1.4.2).
 
 **`FabricMap`, `FabricSet`, `FabricRegExp`, `FabricEpochNsec`, `FabricEpochDay`,
-`FabricHash`, `FabricBytes`, `FabricKeyPair`** must NOT carry extra enumerable
-properties. Their stored value contains only the essential JS data (entries,
-items, epoch value, bytes respectively). Extra enumerable properties on the
-source JS object cause **rejection** — the conversion function throws. This
-follows the principle "Death before confusion!" (Mark Miller): it is better to
-fail loudly than to silently lose data. This is in the same spirit as the
-treatment of arrays, where extra non-index properties also cause rejection
-(Section 1.5) — though the array rule is stricter still, rejecting
-non-enumerable and symbol-keyed properties as well. Unlike `Error`, these JS
-types have no established convention for custom properties.
+`FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`** must NOT
+carry extra enumerable properties. Their stored value contains only the
+essential JS data (entries, items, epoch value, bytes respectively). Extra
+enumerable properties on the source JS object cause **rejection** — the
+conversion function throws. This follows the principle "Death before
+confusion!" (Mark Miller): it is better to fail loudly than to silently lose
+data. This is in the same spirit as the treatment of arrays, where extra
+non-index properties also cause rejection (Section 1.5) — though the array rule
+is stricter still, rejecting non-enumerable and symbol-keyed properties as well.
+Unlike `Error`, these JS types have no established convention for custom
+properties.
 
 #### 1.4.2 `FabricError`
 
@@ -974,8 +977,9 @@ that form the `FabricPrimitive` arm of `FabricValue`.
 - `UnknownValue` and `ProblematicValue` are the `FabricInstance` subtypes
   that preserve a type tag alongside their state (Section 3.2).
 - `FabricPrimitive` is the base for types that behave like primitives but
-  need a class wrapper (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`,
-  `FabricBytes`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`).
+  need a class wrapper (`FabricEpochNsec`, `FabricEpochDay`,
+  `FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+  `FabricRegExp`, `FabricUnavailable`).
 
 ```typescript
 // Shown for illustration only.
@@ -1599,7 +1603,39 @@ computation reacts to one arriving as an input, what a renderer shows while a
 value is pending — is the runtime's contract, not the type's, and is
 specified where those consumers are.
 
-#### 1.4.13 `FabricLink`
+#### 1.4.13 `FabricDurationNsec`
+
+```typescript
+// Shown at module scope.
+// file: packages/data-model/src/fabric-primitives/FabricDurationNsec.ts
+
+/**
+ * Temporal type representing a span of time, as a count of nanoseconds.
+ * Extends `FabricPrimitive` (not a `FabricInstance`). The companion to
+ * `FabricEpochNsec`: the difference between two instants is one of these,
+ * and an instant plus one of these is another instant.
+ *
+ * A negative value is a negative span. When `Temporal` is available,
+ * `Temporal.Duration` covers the same ground, though it counts in calendar
+ * and clock fields rather than as one count of nanoseconds.
+ *
+ * The underlying value is a `bigint`, encoded as `EpochNsec@1`'s is.
+ */
+export class FabricDurationNsec extends FabricPrimitive {
+  readonly #value: bigint;
+
+  constructor(value: bigint) {
+    super();
+    this.#value = value;
+  }
+
+  get value(): bigint {
+    return this.#value;
+  }
+}
+```
+
+#### 1.4.14 `FabricLink`
 
 `FabricLink` is a fabric-native `FabricInstance` — like the wrapper classes of
 Sections 1.4.2–1.4.4, but not wrapping any convertible JS type — that represents
@@ -1661,7 +1697,7 @@ export class FabricLink extends BaseFabricInstance {
 }
 ```
 
-#### 1.4.14 `bigint` — Not Wrapped
+#### 1.4.15 `bigint` — Not Wrapped
 
 `bigint` is a JavaScript primitive (`typeof x === 'bigint'`), not an object. It
 rides through the `FabricValue` layer directly, like `undefined`. No
@@ -1669,7 +1705,7 @@ rides through the `FabricValue` layer directly, like `undefined`. No
 standalone codec (`BigIntCodec`, analogous to `UndefinedCodec` — there is no
 owned class to host a `[CODEC]`); see Section 4.5.
 
-#### 1.4.15 Design Notes
+#### 1.4.16 Design Notes
 
 > **Why wrapper classes instead of inline encoder branches?** Each wrapper
 > genuinely implements `FabricInstance` and hosts its own `[CODEC]`, so the
@@ -1691,8 +1727,9 @@ owned class to host a `[CODEC]`); see Section 4.5.
 > `packages/data-model/src/fabric-instances/`, with `UnknownValue` and
 > `ProblematicValue` (Section 3) under `packages/data-model/src/codec-common/`;
 > the `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
-> `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`,
-> `FabricUnavailable`) under `packages/data-model/src/fabric-primitives/`.
+> `FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+> `FabricRegExp`, `FabricUnavailable`) under
+> `packages/data-model/src/fabric-primitives/`.
 
 ### 1.5 Plain Containers
 
@@ -3470,6 +3507,7 @@ registrations. A caller needing classes of its own extends what this returns.
 | 〃 | `FabricHash` | `Hash@1` | 〃 |
 | 〃 | `FabricEpochNsec` | `EpochNsec@1` | 〃 |
 | 〃 | `FabricEpochDay` | `EpochDay@1` | 〃 |
+| 〃 | `FabricDurationNsec` | `DurationNsec@1` | 〃 |
 | 〃 | `FabricRegExp` | `RegExp@1` | 〃 |
 | `register(cls[CODEC])` | `FabricError` | `Error@1` | Via `fabric-instances` `codecClasses()`. |
 | 〃 | `FabricMap` | `Map@1` | 〃 (implementation currently stubbed; see Section 1.4.3). |
@@ -3732,7 +3770,7 @@ The implementation is split across several files for separation of concerns:
 | `convertible-js.ts` | Conversion: `fabricFromConvertibleJsValue`, `shallowFabricFromConvertibleJsValue`, `convertibleJsFromFabricValue`, `isValidFabricConvertibleJsValue` |
 | `fabric-bases/` | The abstract bases a concrete `FabricValue` extends, one per branch of the type hierarchy: `BaseFabricInstance.ts`, `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the implementer's half of the hierarchy; `interface.ts` is the client's, and reaching it does not reach these. |
 | `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes and what derives from it, `codecClasses()` among them, and `index.ts` is the barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and members of that set, but live in `codec-common/`, existing only as products of a decode fault. |
-| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
+| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricDurationNsec.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
 | `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. It also offers internal steps of the package that a test of the public surface cannot reach dependably, each under a name ending `ForTestingOnly`: `float64BytesOfForTestingOnly()` is `value-hash/`'s number-to-bytes step, whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps a `NaN`'s payload, `getFrozenObjectHashCacheHitsForTestingOnly()` counts the hashes `value-hash/`'s deep-frozen-object cache serves, which the public surface cannot tell from hashes computed afresh, and `getContainersHashedForTestingOnly()` counts the arrays and plain objects `value-hash/` feeds a hasher, which is how a test tells a whole-value hash from a small one. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
 | `value-debug-internal.ts` | The debug renderers as the package's own modules reach them, and what the import-map key `@/value-debug` names: one forwarder per renderer, each calling the renderer of the same name which `value-debug/` installs as it loads. It imports nothing at run time, so any module may import it without a circular load-time dependency, the root class in `fabric-bases/` included. A forwarder throws until `value-debug/` has loaded. Every export-map entry which loads a module that renders loads `value-debug/` too, by way of the `fabric-bases/` barrel, so a program which imports the package has the renderers; `index.ts` re-exports them from `value-debug/` itself. |
 
@@ -3807,6 +3845,7 @@ four categories by high nibble:
 | `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
 | `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
 | `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
+| `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
 
 **Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
 payload of a primitive type with a digest, when doing so shortens the byte
@@ -3894,6 +3933,9 @@ export function hashOf(value: FabricValue): FabricHash {
   //                        (same payload format as TAG_BIGINT but distinct tag)
   // - `FabricEpochDay`: hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
   //                        (same payload format as TAG_BIGINT but distinct tag)
+  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
+  //                        twosComplementBytes)
+  //                        (same payload format as TAG_BIGINT but distinct tag)
   // - `FabricHash`: hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
   //                        (algorithm tag as a tagged string, then raw hash bytes)
   // - array:               hash(TAG_ARRAY, ...elements, TAG_END)
@@ -3951,6 +3993,7 @@ export function hashOf(value: FabricValue): FabricHash {
   // - `FabricBytes` uses TAG_BYTES (dedicated primitive tag).
   // - `FabricEpochNsec` uses TAG_EPOCH_NSEC (dedicated primitive tag).
   // - `FabricEpochDay` uses TAG_EPOCH_DAY (dedicated primitive tag).
+  // - `FabricDurationNsec` uses TAG_DURATION_NSEC (dedicated primitive tag).
   // - `FabricHash` uses TAG_HASH (dedicated primitive tag).
   // - `FabricRegExp` uses TAG_REGEXP (dedicated primitive tag).
   // - `FabricKeyPair` uses TAG_KEY_PAIR (dedicated primitive tag), and only
@@ -3967,6 +4010,8 @@ export function hashOf(value: FabricValue): FabricHash {
   //                         where elements are hashed in insertion order
   // - `FabricEpochNsec`:  hash(TAG_EPOCH_NSEC, leb128(byteLen), twosComplementBytes)
   // - `FabricEpochDay`:   hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
+  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
+  //                               twosComplementBytes)
   // - `FabricHash`:  hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
   // - `FabricBytes`:      hash(TAG_BYTES, leb128(byteLen), rawBytes)
   // - `FabricRegExp`:     hash(TAG_REGEXP, hashStr(source), hashStr(flags),
@@ -4327,7 +4372,7 @@ export function fabricFromConvertibleJsValue(
 |------------|--------|
 | `null`, `boolean`, `number`, `string`, `undefined`, `bigint` | Returned as-is (primitives are `FabricValue` directly). All numbers pass through unchanged, including `-0`, `NaN`, and `±Infinity`. See Section 1.3 callout for layer-by-layer details. |
 | `symbol` | Registry-interned symbols (`Symbol.keyFor(s)` returns a string) returned as-is; unique symbols (`Symbol(desc)`) throw with the message ``"Not representable as a `FabricValue`: unique (uninterned) symbol"``. See Section 1.3 callout for layer-by-layer details. |
-| `FabricPrimitive` (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) | Returned as-is. Always-frozen: the `freeze` option has no effect on these types (see Section 1.4.6). |
+| `FabricPrimitive` (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) | Returned as-is. Always-frozen: the `freeze` option has no effect on these types (see Section 1.4.6). |
 | `FabricInstance` (including wrapper classes) | Returned as-is (already `FabricValue`). |
 | `Error` | Wrapped into `FabricError`. Before wrapping, `cause` and custom enumerable properties are recursively converted to `FabricValue` (deep variant) or left as-is (shallow variant). Extra enumerable properties are preserved (see Section 1.4.1). This ensures that by the time the `FabricError` codec's `encode()` runs, all nested values are already valid `FabricValue`. |
 | `Map` | Wrapped into `FabricMap`. Keys and values are recursively converted (deep variant only). Extra enumerable properties on the `Map` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
@@ -4436,8 +4481,9 @@ rather than relying on the input being "safe to freeze."
 **Always-frozen types bypass the `freeze` option.** JS primitives (`null`,
 `boolean`, `number`, `string`, `undefined`, `bigint`) are inherently immutable
 and pass through unchanged regardless of the `freeze` setting. `FabricPrimitive`
-instances (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-`FabricKeyPair`, `FabricRegExp`) are treated the same way — they are always
+instances (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
+`FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) are treated the
+same way — they are always
 returned as-is, never copied or modified by the freeze/thaw logic. Their state
 is immutable by construction (readonly fields, no mutation methods), so
 `Object.freeze()` is unnecessary and thawing is meaningless. See Section 1.4.6.
@@ -4554,11 +4600,11 @@ symbols.
  * - `FabricSet`        -> `FrozenSet` / `Set`
  *
  * `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
- * `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`) pass through
- * unchanged — they are always-frozen (Section 1.4.6). (`FabricRegExp` exposes
- * its convertible JS form via `value`, and `FabricKeyPair` via `cryptoKeyPair`,
- * each returning it on request; neither is unwrapped to that form by this
- * function.)
+ * `FabricDurationNsec`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+ * `FabricRegExp`) pass through unchanged — they are always-frozen (Section
+ * 1.4.6). (`FabricRegExp` exposes its convertible JS form via `value`, and
+ * `FabricKeyPair` via `cryptoKeyPair`, each returning it on request; neither is
+ * unwrapped to that form by this function.)
  *
  * **The `frozen` argument is always honored.** The freeze state of every
  * value in the output matches the `frozen` argument. When `frozen` is
@@ -4581,6 +4627,7 @@ export function convertibleJsFromFabricValue(
 | `FabricSet` | `FrozenSet` (original if already `FrozenSet`; new wrapper otherwise) | `Set` (original if already plain `Set`; mutable copy otherwise) |
 | `FabricEpochNsec` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
 | `FabricEpochDay` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
+| `FabricDurationNsec` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
 | `FabricHash` | Passed through unchanged (always-frozen; Section 1.4.6) | Passed through unchanged (same) |
 | `FabricBytes` | Passed through unchanged (always-frozen; Section 1.4.6) | Passed through unchanged (same) |
 | `FabricKeyPair` | Passed through unchanged (`FabricPrimitive`; always-frozen) | Passed through unchanged (same) |
@@ -4639,8 +4686,9 @@ recursion, an Error's `cause` could still contain `FabricInstance` wrappers
 > `FrozenSet` is an implementation decision.
 
 > **Why `FabricPrimitive` subclasses pass through unchanged.**
-> `FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-> `FabricKeyPair`, and `FabricRegExp` are all `FabricPrimitive` subclasses —
+> `FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`, `FabricHash`,
+> `FabricBytes`, `FabricKeyPair`, and `FabricRegExp` are all `FabricPrimitive`
+> subclasses —
 > always frozen at construction time with no mutable state. Most have no JS
 > equivalent to unwrap to (unlike `FabricError` → `Error` or `FabricMap` →
 > `Map`). Where one does exist it is reached through a member —
@@ -4669,10 +4717,10 @@ the output always matches the `frozen` argument**: when `frozen` is `true` (the
 default), the output tree is fully frozen — arrays and plain objects are frozen
 via `Object.freeze()`, a mutable `Map` becomes a `FrozenMap`, a mutable `Set`
 becomes a `FrozenSet`, every `FabricPrimitive` (`FabricEpochNsec`,
-`FabricEpochDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`, `FabricRegExp`)
-passes through unchanged, and `Error`s are frozen. When `frozen` is `false`, the
-output tree is fully mutable. The data content is preserved; the mutability
-matches the `frozen` argument.
+`FabricEpochDay`, `FabricDurationNsec`, `FabricHash`, `FabricBytes`,
+`FabricKeyPair`, `FabricRegExp`) passes through unchanged, and `Error`s are
+frozen. When `frozen` is `false`, the output tree is fully mutable. The data
+content is preserved; the mutability matches the `frozen` argument.
 
 Similarly, for any `FabricValue` `sv`:
 
@@ -4739,8 +4787,8 @@ order:
    deep-frozen cache. Short-circuits unchanged.
 
 2. **`FabricPrimitive` instance** — `FabricPrimitive` subclasses
-   (`FabricEpochNsec`, `FabricEpochDay`, `FabricHash`, `FabricBytes`,
-   `FabricKeyPair`, `FabricRegExp`; Section 1.4.6) self-freeze at
+   (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`, `FabricHash`,
+   `FabricBytes`, `FabricKeyPair`, `FabricRegExp`; Section 1.4.6) self-freeze at
    construction and expose no `FabricValue` for a walk to descend into.
    Short-circuits unchanged. (A `FabricKeyPair` holding material does hold
    two `FabricBytes`, but privately, and each froze itself in its own

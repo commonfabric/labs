@@ -73,11 +73,12 @@ export class PrimitiveFormatter implements TypeFormatter {
     }
     if (flags & ts.TypeFlags.BigIntLiteral) {
       if (context.widenLiterals) {
-        return { type: "bigint" };
+        return { type: "integer" };
       }
-      throw new Error(
-        "Bigint literal schemas are unsupported; use bigint to preserve exact values.",
-      );
+      return {
+        type: "integer",
+        enum: [Number((type as ts.BigIntLiteralType).value.base10Value)],
+      };
     }
 
     // Template literal types (e.g. `did:${string}:${string}`) are strings
@@ -96,7 +97,7 @@ export class PrimitiveFormatter implements TypeFormatter {
       return { type: "boolean" };
     }
     if (flags & ts.TypeFlags.BigInt) {
-      return { type: "bigint" };
+      return { type: "integer" };
     }
     if (flags & ts.TypeFlags.Null) {
       return { type: "null" };

@@ -8,6 +8,7 @@ import { deepFreeze } from "@/deep-freeze.ts";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
 import {
+  DO_OMIT,
   DO_RECURSE_KEYS_VALUES,
   DO_RECURSE_VALUES,
   type ValueVisitor,
@@ -458,6 +459,30 @@ describe("VisitInProgress", () => {
           rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
           rec.onVisitingFabricPlainObjectEntry = (k) =>
             (k === "a") ? mapToEntry("z", 9) : undefined;
+
+          visit({ a: 1, b: 2 }, rec);
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", "b", "string"],
+            ["primitive", 2, "number"],
+          ]);
+        });
+
+        it("does not visit an element that `visitingFabricArrayElement()` omits", () => {
+          const rec = new Recorder();
+          rec.onVisitingFabricArrayElement = (i) =>
+            (i === 0) ? DO_OMIT : undefined;
+
+          expect(visit([1, 2], rec)).toBeUndefined();
+          expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+            ["primitive", 2, "number"],
+          ]);
+        });
+
+        it("visits neither half of an entry that `visitingFabricPlainObjectEntry()` omits", () => {
+          const rec = new Recorder();
+          rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+          rec.onVisitingFabricPlainObjectEntry = (k) =>
+            (k === "a") ? DO_OMIT : undefined;
 
           visit({ a: 1, b: 2 }, rec);
           expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
@@ -1205,9 +1230,12 @@ describe("VisitInProgress", () => {
           it("counts `-0` mapped to `0` as a change", () => {
             const rec = new Recorder();
             rec.onPrimitive = (v) => Object.is(v, -0) ? mapTo(0) : undefined;
-            const array = [-0];
+            const array = Object.freeze([-0]);
             const result = map(array, rec) as number[];
 
+            // Frozen, so that the original would be returned were the change
+            // not seen; and `toBe()`, which is `Object.is()`, tells `0` from
+            // `-0`.
             expect(result).not.toBe(array);
             expect(result[0]).toBe(0);
           });
@@ -1620,6 +1648,96 @@ describe("VisitInProgress", () => {
             ]);
           });
 
+          it("leaves a hole for an element that `visitingFabricArrayElement()` omits, without visiting it", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 1) ? DO_OMIT : undefined;
+
+            const result = map([1, 2, 3], rec) as unknown[];
+            expect(result.length).toBe(3);
+            expect(Object.hasOwn(result, 1)).toBe(false);
+            expect(result[0]).toBe(1);
+            expect(result[2]).toBe(3);
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", 1, "number"],
+              ["primitive", 3, "number"],
+            ]);
+          });
+
+          it("keeps the length of an array whose last element `visitingFabricArrayElement()` omits", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 1) ? DO_OMIT : undefined;
+
+            const result = map([1, 2], rec) as unknown[];
+            expect(result.length).toBe(2);
+            expect(Object.hasOwn(result, 1)).toBe(false);
+          });
+
+          it("reports an element that `visitingFabricArrayElement()` omits to no `mappedFabricArrayElement()` call", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 0) ? DO_OMIT : undefined;
+            const array = [1, 2];
+
+            map(array, rec);
+            expect(
+              rec.events.filter((e) => e[0] === "mappedFabricArrayElement"),
+            ).toEqual([
+              ["mappedFabricArrayElement", array, 1, 2, 2],
+            ]);
+          });
+
+          it("returns a new array for a frozen original whose only change is an omitted element", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricArrayElement = (i) =>
+              (i === 1) ? DO_OMIT : undefined;
+            const original = Object.freeze([1, 2]);
+
+            const result = map(original, rec) as unknown[];
+            expect(result).not.toBe(original);
+            expect(Object.hasOwn(result, 1)).toBe(false);
+          });
+
+          it("leaves out an entry that `visitingFabricPlainObjectEntry()` omits, without visiting it", () => {
+            const rec = new Recorder();
+            rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "a") ? DO_OMIT : undefined;
+
+            const result = map({ a: 1, b: 2 }, rec);
+            expect(result).toEqual({ b: 2 });
+            expect(Object.hasOwn(result as object, "a")).toBe(false);
+            expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
+              ["primitive", "b", "string"],
+              ["primitive", 2, "number"],
+            ]);
+          });
+
+          it("reports an entry that `visitingFabricPlainObjectEntry()` omits to no `mappedFabricPlainObjectEntry()` call", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "a") ? DO_OMIT : undefined;
+            const object = { a: 1, b: 2 };
+
+            map(object, rec);
+            expect(
+              rec.events.filter((e) => e[0] === "mappedFabricPlainObjectEntry"),
+            ).toEqual([
+              ["mappedFabricPlainObjectEntry", object, "b", 2, "b", 2],
+            ]);
+          });
+
+          it("returns a new object for a frozen original whose only change is an omitted entry", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = () => DO_OMIT;
+            const original = Object.freeze({ a: 1 });
+
+            const result = map(original, rec);
+            expect(result).not.toBe(original);
+            expect(result).toEqual({});
+          });
+
           it("throws for a `visitingFabricPlainObjectEntry()` `mapTo` naming a key already mapped", () => {
             const rec = new Recorder();
             rec.onVisitingFabricPlainObjectEntry = (k) =>
@@ -1628,6 +1746,24 @@ describe("VisitInProgress", () => {
             expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
               "mapped to already-mapped key",
             );
+          });
+
+          it("throws for a `visitingFabricPlainObjectEntry()` `replace` naming a key already mapped, when keys are not visited", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = (k) =>
+              (k === "b") ? replaceEntry("a", 9) : undefined;
+
+            expect(() => map({ a: 1, b: 2 }, rec)).toThrow(
+              "mapped to already-mapped key",
+            );
+          });
+
+          it("throws for a `visitingFabricPlainObjectEntry()` `replace` naming an unsafe key, when keys are not visited", () => {
+            const rec = new Recorder();
+            rec.onVisitingFabricPlainObjectEntry = () =>
+              replaceEntry("__proto__", 9);
+
+            expect(() => map({ a: 1 }, rec)).toThrow("Visit of unsafe key");
           });
 
           it("throws for a `visitingFabricPlainObjectEntry()` `mapTo` naming an unsafe key", () => {

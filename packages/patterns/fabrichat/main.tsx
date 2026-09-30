@@ -15,7 +15,7 @@ import {
   Writable,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
-import { CHAT_POLICY } from "./records.ts";
+import { chatPolicy } from "./records.ts";
 import type { ChatProfile, ChatRoomAbout, ChatRoomPolicy } from "./schemas.ts";
 
 /** Immutable creation records admitted by the space conversation's start control. */
@@ -38,7 +38,7 @@ const initializeRoom = handler<unknown, {
   const acl = spaceMembers();
   const access = actor ? acl?.[actor] ?? acl?.["*"] : undefined;
   if (access !== "WRITE" && access !== "OWNER") return;
-  policy.set(CHAT_POLICY);
+  policy.set(chatPolicy());
   about.set({
     kind: "group",
     title: "Space conversation",

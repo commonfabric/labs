@@ -69,6 +69,42 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
+    label: "loom ci trust",
+    view: {
+      status: "warn",
+      value: "73.8%",
+      sub: "first-try green · last 160 runs",
+      extra: trustStrip("loom-runs", 4),
+      duration: 30 * DAY,
+      alignChartBottom: true,
+    },
+  },
+  {
+    label: "weaver ci trust",
+    view: {
+      status: "good",
+      value: "95.0%",
+      sub: "first-try green · last 160 runs",
+      extra: trustStrip("weaver-runs", 20),
+      duration: 30 * DAY,
+      alignChartBottom: true,
+    },
+  },
+  {
+    label: "flaky tests",
+    view: {
+      status: "warn",
+      value: "25 flaky tests",
+      valueLabel: "25 flaky tests",
+      sub: "60 days of runs · 3h old",
+      extra: history(),
+      duration: 18 * DAY,
+      aside: `<span class="running"><span class="rdot"></span>running</span>`,
+      hint: "flakes ↗",
+      href: "/test-selection#flaky",
+    },
+  },
+  {
     label: "labs ci duration",
     view: {
       status: "good",
@@ -78,40 +114,6 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       duration: 30 * DAY,
       hint: "jobs ↗",
       href: "/bench?repo=labs",
-    },
-  },
-  {
-    label: "all benchmarks",
-    subSelector: ".benchmark-count",
-    view: {
-      status: "warn",
-      value: "▲6%",
-      extra:
-        `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">544 benchmarks · last 10 days</div>${twoLines()}`,
-      duration: 30 * DAY,
-      hint: "details ↗",
-      href: "/bench",
-    },
-  },
-  {
-    label: "weaver ci duration",
-    view: {
-      status: "good",
-      value: "4m",
-      sub: "median · last 20 passing PR runs",
-      extra: history(),
-      duration: 3 * DAY,
-    },
-  },
-  {
-    label: "loom ci trust",
-    view: {
-      status: "warn",
-      value: "73.8%",
-      sub: "first-try green · last 160 runs",
-      extra: trustStrip("loom-runs", 4),
-      duration: 30 * DAY,
-      alignChartBottom: true,
     },
   },
   {
@@ -127,30 +129,13 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "key benchmarks",
-    subSelector: ".benchmark-count",
+    label: "weaver ci duration",
     view: {
-      status: "warn",
-      value: "▲6%",
-      extra:
-        `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">2 benchmarks · last 10 days</div>${twoLines()}`,
-      duration: 30 * DAY,
-      hint: "metrics ↗",
-      href: "/bench?view=runtime&repo=labs",
-    },
-  },
-  {
-    label: "flaky tests",
-    view: {
-      status: "warn",
-      value: "25 flaky tests",
-      valueLabel: "25 flaky tests",
-      sub: "60 days of runs · 3h old",
+      status: "good",
+      value: "4m",
+      sub: "median · last 20 passing PR runs",
       extra: history(),
-      duration: 18 * DAY,
-      aside: `<span class="running"><span class="rdot"></span>running</span>`,
-      hint: "flakes ↗",
-      href: "/test-selection#flaky",
+      duration: 3 * DAY,
     },
   },
   {
@@ -175,6 +160,58 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       sub: "+214 per day (median) · last 21 days",
       extra: history(),
       duration: 56 * DAY,
+    },
+  },
+  {
+    label: "all benchmarks",
+    subSelector: ".benchmark-count",
+    view: {
+      status: "warn",
+      value: "▲6%",
+      extra:
+        `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">544 benchmarks · last 10 days</div>${twoLines()}`,
+      duration: 30 * DAY,
+      hint: "details ↗",
+      href: "/bench",
+    },
+  },
+  {
+    label: "key benchmarks",
+    subSelector: ".benchmark-count",
+    view: {
+      status: "warn",
+      value: "▲6%",
+      extra:
+        `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">2 benchmarks · last 10 days</div>${twoLines()}`,
+      duration: 30 * DAY,
+      hint: "metrics ↗",
+      href: "/bench?view=runtime&repo=labs",
+    },
+  },
+  {
+    label: "production",
+    view: {
+      status: "bad",
+      value: "commonfabric.com down",
+      valueLabel: "commonfabric.com down",
+      extra: detailList(
+        [
+          "commonfabric.com",
+          "estuary",
+          "rapids",
+          "bastion",
+          "prod shell",
+          "stage shell",
+          "LLM",
+          "sandbox",
+        ].map((name) => ({
+          status: "bad" as Status,
+          name,
+          detail: "connection refused",
+          href: `https://example.com/${name}`,
+        })),
+        { subject: "Production target details", focusKey: "targets" },
+      ),
     },
   },
   {
@@ -212,69 +249,6 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "github users",
-    subSelector: ".sub",
-    view: {
-      status: "good",
-      value: "14",
-      extra: spendSub("members · collaborators") + twoLines(),
-      duration: 30 * DAY,
-      hint: "people ↗",
-      href: "https://example.com/people",
-    },
-  },
-  {
-    label: "production",
-    view: {
-      status: "bad",
-      value: "commonfabric.com down",
-      valueLabel: "commonfabric.com down",
-      extra: detailList(
-        [
-          "commonfabric.com",
-          "estuary",
-          "rapids",
-          "bastion",
-          "prod shell",
-          "stage shell",
-          "LLM",
-          "sandbox",
-        ].map((name) => ({
-          status: "bad" as Status,
-          name,
-          detail: "connection refused",
-          href: `https://example.com/${name}`,
-        })),
-        { subject: "Production target details", focusKey: "targets" },
-      ),
-    },
-  },
-  {
-    label: "weaver ci trust",
-    view: {
-      status: "good",
-      value: "95.0%",
-      sub: "first-try green · last 160 runs",
-      extra: trustStrip("weaver-runs", 20),
-      duration: 30 * DAY,
-      alignChartBottom: true,
-    },
-  },
-  {
-    label: "github spend",
-    subSelector: ".sub",
-    view: {
-      status: "good",
-      value: "~$3059/mo",
-      valueLabel: "~$3059/mo",
-      aside: `<span class="hfacet" title="$1644 MTD">$1644 MTD</span>`,
-      extra: spendSub("GitHub · Budget $3100") + history(),
-      duration: 30 * DAY,
-      hint: "billing ↗",
-      href: "https://example.com/billing",
-    },
-  },
-  {
     label: "model spend",
     subSelector: ".sub",
     view: {
@@ -296,6 +270,32 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       sub: "billing account spend",
       extra: history(),
       duration: 30 * DAY,
+    },
+  },
+  {
+    label: "github spend",
+    subSelector: ".sub",
+    view: {
+      status: "good",
+      value: "~$3059/mo",
+      valueLabel: "~$3059/mo",
+      aside: `<span class="hfacet" title="$1644 MTD">$1644 MTD</span>`,
+      extra: spendSub("GitHub · Budget $3100") + history(),
+      duration: 30 * DAY,
+      hint: "billing ↗",
+      href: "https://example.com/billing",
+    },
+  },
+  {
+    label: "github users",
+    subSelector: ".sub",
+    view: {
+      status: "good",
+      value: "14",
+      extra: spendSub("members · collaborators") + twoLines(),
+      duration: 30 * DAY,
+      hint: "people ↗",
+      href: "https://example.com/people",
     },
   },
   {

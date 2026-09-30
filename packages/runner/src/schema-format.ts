@@ -326,7 +326,6 @@ function schemaToTypeStringInner(
 
   if (type === "string") return "string";
   if (type === "number" || type === "integer") return "number";
-  if (type === "bigint") return "bigint";
   if (type === "boolean") return "boolean";
   if (type === "null") return "null";
 

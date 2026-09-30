@@ -196,7 +196,9 @@ describe("FabriChat manager", () => {
       expect(policy.getAsNormalizedFullLink().id).not.toBe(
         about.getAsNormalizedFullLink().id,
       );
-      expect(policy.key("proposedTimeMaxAgeNsec").get()).toBe(600_000_000_000n);
+      const maxAge = policy.key("proposedTimeMaxAgeNsec").get();
+      expect(maxAge.schemaType).toBe("FabricDurationNsec");
+      expect(maxAge.value).toBe(600_000_000_000n);
       for (const record of [about, policy]) {
         const label = cfcLabelViewForCell(record);
         expect(label?.entries.flatMap((entry) => entry.label.integrity ?? []))

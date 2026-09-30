@@ -192,7 +192,6 @@ type SchemaCore<
     ? SchemaAnyOf<U, Root, Depth, WrapCells>
   : T extends { type: "string" } ? string
   : T extends { type: "number" | "integer" } ? number
-  : T extends { type: "bigint" } ? bigint
   : T extends { type: "boolean" } ? boolean
   : T extends { type: "null" } ? null
   : T extends { type: infer Name extends FabricPrimitiveSchemaType }
@@ -284,7 +283,7 @@ type SchemaInner<
  * processes the schema, handling:
  * - $ref resolution (both "#" and "#/path/to/def")
  * - anyOf unions
- * - Primitive types (string, number, bigint, boolean, null)
+ * - Primitive types (string, number, boolean, null)
  * - `FabricPrimitive` types (every `FabricPrimitiveSchemaType`, "FabricBytes"
  *   among them), each inferring the `FabricPrimitive` interface from this
  *   package whose instances report that name as `.schemaType`

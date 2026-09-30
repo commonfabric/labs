@@ -5,6 +5,7 @@
 
 import type {
   Cell,
+  FabricDurationNsec,
   FabricEpochNsec,
   PerSession,
   Stream,
@@ -54,9 +55,9 @@ export interface ChatRoomPolicy {
   ownersMayObliterate: boolean;
   keepsHistory: boolean;
   deletionIsObliteration: boolean;
-  proposedTimeMaxAgeNsec: bigint;
-  proposedTimeMaxLeadNsec: bigint;
-  recentActivityWindowNsec: bigint;
+  proposedTimeMaxAgeNsec: FabricDurationNsec;
+  proposedTimeMaxLeadNsec: FabricDurationNsec;
+  recentActivityWindowNsec: FabricDurationNsec;
   maxWindowCount: number;
   maxOpenWindows: number;
 }

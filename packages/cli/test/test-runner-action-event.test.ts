@@ -4,6 +4,10 @@
  * the classification-only fields as values not to descend into; the payload is
  * not one of those, and reading it that way delivered `undefined` in place of
  * every object.
+ *
+ * Also here: a payload holding a link to a cell whose type carries a write
+ * policy. The steps are the test pattern's own result, so storing them has to
+ * satisfy that policy unless the link is typed as the handler's event declares.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -37,6 +41,30 @@ describe(
         );
         expect(failed).toBe(0);
         expect(passed).toBe(1);
+      });
+    });
+
+    describe("a link in the event to a cell whose type has a write policy", () => {
+      // `docs/common/workflows/pattern-testing.md`, "Putting a cell link in an
+      // event", describes both of these.
+
+      it("reaches the handler when held in a local typed as the event declares", async () => {
+        const { passed, failed } = await runTests(
+          resolve(FIXTURES, "policy-link-typed.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(0);
+        expect(passed).toBe(1);
+      });
+
+      it("fails the test's setup when typed as the cell itself", async () => {
+        const { passed, results } = await runTests(
+          resolve(FIXTURES, "policy-link-inferred.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(passed).toBe(0);
+        expect(results.flatMap((result) => result.consoleWarnings).join())
+          .toContain("write-policy-gate");
       });
     });
   },

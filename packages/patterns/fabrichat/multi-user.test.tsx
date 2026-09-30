@@ -12,7 +12,7 @@ import {
   Writable,
 } from "commonfabric";
 import { FabriChatRoom, type StoredMemory } from "./room.tsx";
-import { CHAT_POLICY } from "./records.ts";
+import { chatPolicy } from "./records.ts";
 import type {
   ChatProfile,
   ChatRoomAbout,
@@ -31,7 +31,7 @@ export const setup = pattern<Record<string, never>, Setup>(() => {
     AddIntegrity<ChatProfile, ["chat-test"]>
   >({ name: "Reader" });
   const policy = new Writable<AddIntegrity<ChatRoomPolicy, ["chat-test"]>>(
-    CHAT_POLICY,
+    chatPolicy(),
   );
   const about = new Writable<AddIntegrity<ChatRoomAbout, ["chat-test"]>>();
   const initialize = action(() =>
