@@ -84,7 +84,10 @@ The runtime's checks guard against pattern code. The memory server in
 access list only from a session principal holding `OWNER` there, and only a
 list that keeps a concrete `OWNER`. On a client the session principal is the
 user, so a modified client can change the list only as its user could through
-any other tool.
+any other tool. A serving runtime's commits reach the store without that
+check, so the serving loop refuses any run that writes an access list, in
+every mode
+([`serving-loop.md` §3d](../specs/server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave)).
 
 Neither call may name the actor, so the actor keeps `OWNER` through any change
 they make, and neither call is a way to leave a space. The last-`OWNER` check

@@ -1431,6 +1431,25 @@ its caller passes explicitly. They are the compile-cache and program
 writeback into a piece's own space, and the `agent` effect's index
 entry in the requester's home space (builtins.md).
 
+**No run writes an access list.** The wave commits engine-direct, past
+the memory server's INV-12 check (`09-invariants.md`), and nothing on
+this plane checks an ACL write's shape or the acting user's level, so
+the seal sink refuses a transaction that writes a space's ACL document
+(`of:<space>`), home or foreign, in every memory ACL mode. The refusal
+is action-scoped like the foreign-write gate's, and deterministic: the
+scheduler seals it as the event's error consequence, and the serving
+loop does not requeue the event for it, so its entry carries the error
+and the stream moves on. Two backstops sit behind the seal for a batch
+that reaches the commit step anyway. The engine's `derived` admission
+refuses a commit carrying such an operation (protocol.md §2), and the
+sink refuses a foreign batch carrying one, each naming the operation.
+The wave attributes a named refusal of its home batch to the one event
+that wrote it, as it does a row-label refusal; a foreign batch's
+refusal takes the ordinary foreign-failure path (home withheld, every
+event requeued). A served `.inSpace()` target's genesis is untouched by
+all of this: `Runtime.createSpace` signs it as the new space's own key
+over an ordinary session of its own, never through a wave.
+
 ## 3e. Pattern updates
 
 The SpaceServer owns the pattern-source watcher and the hot-swap. The

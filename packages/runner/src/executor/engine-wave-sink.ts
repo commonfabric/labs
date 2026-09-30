@@ -34,6 +34,12 @@
 // Stage G also forwards the wave's durable outbound-append rows
 // (serving-loop.md §5, FP1): `batch.outboxAppends` land INSIDE the same
 // engine transaction as the wave commit, via applyWaveCommit.
+//
+// No batch this sink commits writes a space's ACL document, in any memory
+// ACL mode (INV-12 on the served plane, serving-loop.md §3d): the wave's
+// seal refuses the run that writes one, the engine's derived admission
+// refuses one in a home batch, and `commitWave` below refuses one in a
+// foreign batch, each naming the operation.
 
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { Engine } from "@commonfabric/memory/v2/engine";
@@ -279,7 +285,9 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // never lands in a FRESH store ahead of its genesis ACL — the
         // space's commit #1 is the ACL, signed by the space's own keys
         // and naming the acting user OWNER. The session plane enforces
-        // this in `#validateAclCommit`'s precedence clause; of the two
+        // this in `#validateAclCommit`'s precedence clause, in the
+        // `observe` and `enforce` memory ACL modes; this mirror holds in
+        // every mode, `off` included. Of the two
         // other engine-direct committers, this sink is the one that
         // writes provisioning DATA batches (the third,
         // `Server.commitDelegatedAppend`, appends outbox-carried events
