@@ -1251,6 +1251,16 @@ describe("health-probes", () => {
         const probe = consoleVmHealthProbe(store(directory));
         const first = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
         await readRow(probe);
+        // A second name keeps the first socket's inode allocated past the
+        // close, so the replacement cannot be handed the same inode number.
+        // Linux reuses a freed one at once and stamps both sockets from a
+        // coarse clock, so without this the two could share the dev, inode
+        // and mtime the probe tells daemons apart by; macOS, where the row
+        // exists, reuses neither.
+        await Deno.link(
+          join(directory, "daemon.sock"),
+          join(directory, "first.sock"),
+        );
         await first.close();
         const second = fakeVmDaemon(directory, () => "error: busy");
         try {
