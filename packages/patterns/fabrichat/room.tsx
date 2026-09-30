@@ -23,9 +23,11 @@ import {
   AuthoredByCurrentUser,
   type Cell,
   computed,
+  currentPrincipal,
   type Default,
   entityRefToString,
   equals,
+  eventKey,
   type FabricEpochNsec,
   getEntityId,
   handler,
@@ -339,8 +341,8 @@ export type RosterCell = Writable<
   RosterValue | Default<Record<PropertyKey, never>>
 >;
 
-/** The profiles of members who have left. */
-export type LeftCell = Writable<ProfileCell[] | Default<[]>>;
+/** The principals of members who have left. */
+export type LeftCell = Writable<string[] | Default<[]>>;
 
 /** Notices from `add`, waiting for a client to deliver them. */
 export type NoticesCell = Writable<ChatRoomNotice[] | Default<[]>>;
@@ -396,18 +398,12 @@ const entityKeyOf = (cell: unknown): string | undefined => {
   return ref === undefined ? undefined : entityRefToString(ref);
 };
 
-/** A fresh request id, for an event a rendered control sends without one. */
-const freshRequestId = (): string =>
-  `ui-${Math.random().toString(36).slice(2)}${
-    Math.random().toString(36).slice(2)
-  }`;
-
 /** The handler clock's reading, in nanoseconds. */
 const clockNsec = (): bigint => nsecOf(epochNsecFromMsec(Date.now()));
 
-/** A request's key: the sender's profile entity, and the request's id. */
-const requestKeyOf = (senderKey: string, requestId: string): string =>
-  JSON.stringify([senderKey, requestId]);
+/** A request's key: its sender's principal, and its id. */
+const requestKeyOf = (sender: string, requestId: string): string =>
+  JSON.stringify([sender, requestId]);
 
 /** Whether the room has acted on the request `key` and still remembers it. */
 const actedOn = (requests: RequestsCell, key: string): boolean =>
@@ -702,7 +698,7 @@ export interface RoomActState {
   /** The members' profiles, as claims. */
   roster: RosterCell;
 
-  /** The profiles of members who have left. */
+  /** The principals of members who have left. */
   left: LeftCell;
 
   /** Notices from `add`, waiting for a client to deliver them. */
@@ -764,10 +760,10 @@ const performMessageAct = (
   } = state;
   const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
-  const senderKey = entityKeyOf(profile);
-  if (senderKey === undefined) return;
-  const requestId = event?.requestId ?? freshRequestId();
-  const requestKey = requestKeyOf(senderKey, requestId);
+  const sender = currentPrincipal();
+  if (sender === undefined) return;
+  const requestId = event?.requestId ?? eventKey();
+  const requestKey = requestKeyOf(sender, requestId);
   if (actedOn(requests, requestKey)) return;
   const clock = clockNsec();
   const entries = messageEntries(messages);
@@ -933,13 +929,16 @@ const performReactionAct = (
     state;
   const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
-  const senderKey = entityKeyOf(profile);
-  if (senderKey === undefined) return;
+  const sender = currentPrincipal();
+  if (sender === undefined) return;
+  // A reaction's address derives from its reactor's profile.
+  const reactorKey = entityKeyOf(profile);
+  if (reactorKey === undefined) return;
   const typed = event?.target?.value?.trim();
   const emoji = event?.emoji ?? state.emoji ?? typed;
   if (!isSingleEmoji(emoji)) return;
-  const requestId = event?.requestId ?? freshRequestId();
-  const requestKey = requestKeyOf(senderKey, requestId);
+  const requestId = event?.requestId ?? eventKey();
+  const requestKey = requestKeyOf(sender, requestId);
   if (actedOn(requests, requestKey)) return;
   const target = (event?.message ?? state.message)?.resolveAsCell();
   const entry = entryFor(messageEntries(messages), target);
@@ -949,7 +948,7 @@ const performReactionAct = (
   if (list === undefined) return;
   const clock = clockNsec();
   if (state.closesPicker === true) state.pickerOpen?.set(false);
-  const reactionKey = JSON.stringify([senderKey, emoji]);
+  const reactionKey = JSON.stringify([reactorKey, emoji]);
   const mine = list.elementById(reactionKey);
   const present = mine.get() !== undefined;
   if (op === "add" && !present) {
@@ -1000,10 +999,10 @@ const performMembershipAct = (
   } = state;
   const profile = myProfile?.resolveAsCell();
   if (profile?.get() === undefined) return;
-  const senderKey = entityKeyOf(profile);
-  if (senderKey === undefined) return;
-  const requestId = event?.requestId ?? freshRequestId();
-  const requestKey = requestKeyOf(senderKey, requestId);
+  const sender = currentPrincipal();
+  if (sender === undefined) return;
+  const requestId = event?.requestId ?? eventKey();
+  const requestKey = requestKeyOf(sender, requestId);
   if (actedOn(requests, requestKey)) return;
   const clock = clockNsec();
 
@@ -1032,7 +1031,7 @@ const performMembershipAct = (
 
   if (op === "leave") {
     roster.key("items").removeByValue(profile);
-    left.addUnique(profile);
+    if (!(left.get() ?? []).includes(sender)) left.push(sender);
     appendActivity(
       activity,
       counters,
@@ -1064,6 +1063,8 @@ const performMembershipAct = (
   if (op === "remove") return;
   const principal = event?.principal ?? event?.target?.value?.trim();
   if (!isPrincipal(principal)) return;
+  // Someone who left isn't added back without their own say.
+  if ((left.get() ?? []).includes(principal)) return;
   const access = event?.access ?? "WRITE";
   if (access !== "WRITE" && access !== "OWNER") return;
   // The adding client knows the id without reading it back: the person
@@ -1352,7 +1353,7 @@ export interface FabriChatMessageRowInput {
   /** The members' profiles, as claims. */
   roster: RosterCell;
 
-  /** The profiles of members who have left. */
+  /** The principals of members who have left. */
   left: LeftCell;
 
   /** Notices from `add`, waiting for a client to deliver them. */
@@ -2010,7 +2011,7 @@ export interface FabriChatRoomCoreInput {
   /** The members' profiles, as claims. */
   roster: RosterCell;
 
-  /** The profiles of members who have left. */
+  /** The principals of members who have left. */
   left: LeftCell;
 
   /** Notices from `add`, waiting for a client to deliver them. */
@@ -2466,7 +2467,7 @@ export interface FabriChatRoomInput {
   /** The members' profiles, as claims. */
   roster?: RosterCell;
 
-  /** The profiles of members who have left. */
+  /** The principals of members who have left. */
   left?: LeftCell;
 
   /** Notices from `add`, waiting for a client to deliver them. */

@@ -127,7 +127,7 @@ export default pattern(() => {
   const records = {
     about: { kind: "group" as const, title: "Team" },
     roster: Writable.of<RosterValue>({}),
-    left: Writable.of<ProfileCell[]>([]),
+    left: Writable.of<string[]>([]),
     notices: Writable.of<ChatRoomNotice[]>([]),
     ownSpace: true,
     creatorProfile: aliceProfile,

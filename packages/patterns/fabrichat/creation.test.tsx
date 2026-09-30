@@ -5,7 +5,15 @@
  * its own, since `#profile` resolves nothing in this lane and no chat starts
  * without one. `manager.test.tsx` covers its refusals.
  */
-import { action, assert, equals, pattern, TESTS, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  currentPrincipal,
+  equals,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
 import { FabriChatManagerCore } from "./manager.tsx";
 import type {
   ChatIndexEntry,
@@ -57,15 +65,31 @@ export default pattern(() => {
     })
   );
 
-  // A group room, which states its title.
+  // A group room, which states its title, and leaves this user out of its
+  // other members.
   const groupRooms = Writable.of<ChatIndexEntry[]>([]);
   const groupNotices = Writable.of<ChatManagerNotice[]>([]);
+  const groupRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const group = FabriChatManagerCore(
     {
       myProfile: profile,
       rooms: groupRooms,
+      requests: groupRequests,
       outgoingNotices: groupNotices,
     } as ManagerArg,
+  );
+  const action_create_group = action(() =>
+    group.createGroup.send({
+      requestId: "g-1",
+      title: "Team",
+      members: [CAROL, CAROL, "junk", currentPrincipal() ?? ""],
+    })
+  );
+  const action_open_direct_with_self = action(() =>
+    group.openDirect.send({
+      requestId: "d-self",
+      counterpart: currentPrincipal(),
+    })
   );
 
   // Accepting a group room, and a direct room only with its counterpart.
@@ -168,14 +192,7 @@ export default pattern(() => {
       },
 
       // A group room.
-      {
-        action: group.createGroup,
-        event: {
-          requestId: "g-1",
-          title: "Team",
-          members: [CAROL, CAROL, "junk"],
-        },
-      },
+      { action: action_create_group },
       {
         assertion: assert(() =>
           groupRooms.get().length === 1 &&
@@ -191,6 +208,14 @@ export default pattern(() => {
         event: { requestId: "g-1", title: "Team", members: [] },
       },
       { assertion: assert(() => groupRooms.get().length === 1) },
+      // A direct room with this user themself is refused.
+      { action: action_open_direct_with_self },
+      {
+        assertion: assert(() =>
+          statusOf(groupRequests, "d-self") === "refused" &&
+          groupRooms.get().length === 1
+        ),
+      },
 
       // Accepting a group room it was admitted to.
       {

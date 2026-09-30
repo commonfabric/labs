@@ -5,8 +5,10 @@
  * room's record.
  */
 import {
+  action,
   type AddIntegrity,
   assert,
+  currentPrincipal,
   equals,
   pattern,
   TESTS,
@@ -90,7 +92,7 @@ export default pattern(() => {
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const roster = Writable.of<RosterValue>({});
   const activity = Writable.of<SentActivity[]>([]);
-  const left = Writable.of<ProfileCell[]>([]);
+  const left = Writable.of<string[]>([]);
   const notices = Writable.of<ChatRoomNotice[]>([]);
   const records = {
     about: { kind: "group" as const },
@@ -115,6 +117,12 @@ export default pattern(() => {
   // The same room as a space's own chat, which nobody leaves.
   const bobInSpaceChat = FabriChatRoomCore(
     { myProfile: bobProfile, ...records, ownSpace: false } as RoomArg,
+  );
+
+  // Adds the principal who left: the one this test runs as, whom `leave`
+  // records whichever profile it was sent under.
+  const action_add_who_left = action(() =>
+    alice.add.send({ requestId: "add-left", principal: currentPrincipal() })
   );
 
   return {
@@ -264,7 +272,16 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           alice.roster.length === 1 && equals(alice.roster[0], aliceProfile) &&
-          (left.get() ?? []).length === 1
+          (left.get() ?? []).length === 1 &&
+          (left.get() ?? [])[0].startsWith("did:")
+        ),
+      },
+      // Someone who left isn't added back without their own say.
+      { action: action_add_who_left },
+      {
+        assertion: assert(() =>
+          alice.outgoingNotices.length === 0 &&
+          alice.recentActivity.length === 7
         ),
       },
     ],

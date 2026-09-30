@@ -66,7 +66,7 @@ export default pattern(() => {
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
     roster: Writable.of<RosterValue>({}),
-    left: Writable.of<ProfileCell[]>([]),
+    left: Writable.of<string[]>([]),
     notices: Writable.of<ChatRoomNotice[]>([]),
   } as RoomArg);
 

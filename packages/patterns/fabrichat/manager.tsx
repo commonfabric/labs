@@ -12,12 +12,15 @@
 import {
   type Cell,
   computed,
+  currentPrincipal,
   type Default,
   equals,
+  eventKey,
   handler,
   type InSpaceGrants,
   NAME,
   pattern,
+  spaceAccess,
   Stream,
   UI,
   VIEWS,
@@ -140,24 +143,18 @@ export interface ManagerActState {
   id?: string;
 }
 
-/** A fresh request id, for an event a rendered control sends without one. */
-const freshRequestId = (): string =>
-  `ui-${Math.random().toString(36).slice(2)}${
-    Math.random().toString(36).slice(2)
-  }`;
-
 /** The DIDs in `text`, separated by spaces, commas, or lines. */
 const principalsIn = (text: string): string[] =>
   text.split(/[\s,]+/).filter((part) => part !== "");
 
-/**
- * `members`, without duplicates or anything but a DID. The user's own DID
- * can't be told apart, so it stays if given.
- */
-const otherMembers = (members: readonly unknown[]): string[] =>
+/** `members`, without duplicates, `self`, or anything but a DID. */
+const otherMembers = (
+  members: readonly unknown[],
+  self: string,
+): string[] =>
   members.reduce<string[]>(
     (found, member) =>
-      isPrincipal(member) && !found.includes(member)
+      isPrincipal(member) && member !== self && !found.includes(member)
         ? [...found, member]
         : found,
     [],
@@ -247,7 +244,7 @@ const createRoom = (
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => {
     const { act, rooms, direct, requests, outgoingNotices } = state;
-    const requestId = event?.requestId ?? freshRequestId();
+    const requestId = event?.requestId ?? eventKey();
     const earlier = requests.key(requestId).get();
     if (earlier !== undefined && earlier.status !== "pending") return;
     const typed = event?.target?.value?.trim();
@@ -276,12 +273,30 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       return;
     }
 
+    // A start needs to know who this user is, to leave them out of the
+    // room's other members.
+    const self = currentPrincipal();
+    if ((act === "openDirect" || act === "createGroup") && self === undefined) {
+      recordOutcome(requests, requestId, {
+        status: "refused",
+        reason: "Starting a chat needs a signed-in user.",
+      });
+      return;
+    }
+
     if (act === "openDirect") {
       const counterpart = event?.counterpart ?? typed;
       if (!isPrincipal(counterpart)) {
         recordOutcome(requests, requestId, {
           status: "refused",
           reason: "The counterpart is not a principal.",
+        });
+        return;
+      }
+      if (counterpart === self) {
+        recordOutcome(requests, requestId, {
+          status: "refused",
+          reason: "The counterpart is this user.",
         });
         return;
       }
@@ -318,6 +333,7 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
       }
       const members = otherMembers(
         event?.members ?? principalsIn(draft?.members ?? ""),
+        self ?? "",
       );
       const entry = createRoom(state, requestId, "group", members, title);
       if (state.fromDraft === true) state.draft.set(EMPTY_DRAFT);
@@ -340,7 +356,9 @@ export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
 
     // `accept`.
     const kind = room.key("about").get()?.kind;
-    if (kind !== "direct" && kind !== "group") {
+    if (
+      spaceAccess(room) === "none" || (kind !== "direct" && kind !== "group")
+    ) {
       recordOutcome(requests, requestId, {
         status: "refused",
         reason: "The room can't be read.",

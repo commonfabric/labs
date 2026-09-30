@@ -61,7 +61,7 @@ interface Records {
   activity: Writable<SentActivity[]>;
   counters: Writable<ActivityCounters>;
   roster: Writable<RosterValue>;
-  left: Writable<ProfileCell[]>;
+  left: Writable<string[]>;
   notices: Writable<ChatRoomNotice[]>;
 }
 
@@ -101,7 +101,7 @@ export const setup = pattern(() => ({
     activity: Writable.of<SentActivity[]>([]),
     counters: Writable.of<ActivityCounters>({ nextSeq: 1, expiredThrough: 0 }),
     roster: Writable.of<RosterValue>({}),
-    left: Writable.of<ProfileCell[]>([]),
+    left: Writable.of<string[]>([]),
     notices: Writable.of<ChatRoomNotice[]>([]),
   },
 }));
