@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+
 import type { Identity } from "@commonfabric/identity";
 
 import type {

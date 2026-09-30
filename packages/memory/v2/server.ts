@@ -1032,15 +1032,14 @@ class Connection {
 
   /**
    * Holds a `connection.auth` to this connection's state and returns what its
-   * signature is verified against. Throws an `AuthorizationError`: permanent
-   * for a malformed invocation, another audience, or a connection already
-   * holding its limit of principals, and retriable for a challenge this
-   * connection did not issue, one that has expired, and one the issuer has
-   * already signed.
+   * signature is verified against, with the issuer it names. Throws an
+   * `AuthorizationError`: permanent for a malformed invocation or another
+   * audience, and retriable for a challenge this connection did not issue,
+   * one that has expired, and one the issuer has already signed.
    */
   connectionAuthContext(
     message: ConnectionAuthRequest,
-  ): SessionOpenAuthContext {
+  ): SessionOpenAuthContext & { issuer: string } {
     const audience = this.#server.sessionOpenAudience();
     const invocation = isFabricPlainObject(message.invocation)
       ? message.invocation
@@ -1074,16 +1073,8 @@ class Connection {
         { retriable: true },
       );
     }
-    if (
-      !this.#principals.has(invocation.iss) &&
-      this.#principals.size >= MAX_CONNECTION_PRINCIPALS
-    ) {
-      throw authorizationError(
-        `memory connection holds its limit of ${MAX_CONNECTION_PRINCIPALS} ` +
-          "authenticated principals; release one with `connection.release`",
-      );
-    }
     return {
+      issuer: invocation.iss,
       audience,
       challenge: {
         value: invocation.challenge,
@@ -1094,13 +1085,24 @@ class Connection {
 
   /**
    * Records that `issuer`'s `connection.auth` over `challenge` verified as
-   * `principal`, which the connection's later requests may name.
+   * `principal`, which the connection's later requests may name. Throws an
+   * `AuthorizationError` when the connection already holds its limit of
+   * principals and `principal` is not among them.
    */
   admitPrincipal(
     principal: string,
     issuer: string,
     challenge: SessionOpenChallenge,
   ): void {
+    if (
+      !this.#principals.has(principal) &&
+      this.#principals.size >= MAX_CONNECTION_PRINCIPALS
+    ) {
+      throw authorizationError(
+        `memory connection holds its limit of ${MAX_CONNECTION_PRINCIPALS} ` +
+          "authenticated principals; release one with `connection.release`",
+      );
+    }
     this.#challenges.get(challenge.value)?.acceptedFor.add(issuer);
     this.#principals.add(principal);
   }
@@ -1207,6 +1209,35 @@ class Connection {
     }
   }
 
+  hasPendingReceives(): boolean {
+    return this.#pendingReceives > 0;
+  }
+
+  async waitForReceiveQueueToDrain(deadlineMs: number): Promise<boolean> {
+    while (this.#pendingReceives > 0) {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        return false;
+      }
+      if (this.#receiveIdle === null) {
+        this.#receiveIdle = Promise.withResolvers<void>();
+      }
+      const idle = this.#receiveIdle.promise.then(() => true);
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<boolean>((resolve) => {
+        timeoutId = setTimeout(() => resolve(false), remainingMs);
+      });
+      const drained = await Promise.race([idle, timeout]);
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+      if (!drained) {
+        return this.#pendingReceives === 0;
+      }
+    }
+    return true;
+  }
+
   /**
    * Helper for `receive()`, which runs `handle` in the frame's turn. A frame
    * naming a space takes its turn after the frames handed over before it for
@@ -1240,35 +1271,6 @@ class Connection {
       }
     });
     return current;
-  }
-
-  hasPendingReceives(): boolean {
-    return this.#pendingReceives > 0;
-  }
-
-  async waitForReceiveQueueToDrain(deadlineMs: number): Promise<boolean> {
-    while (this.#pendingReceives > 0) {
-      const remainingMs = deadlineMs - Date.now();
-      if (remainingMs <= 0) {
-        return false;
-      }
-      if (this.#receiveIdle === null) {
-        this.#receiveIdle = Promise.withResolvers<void>();
-      }
-      const idle = this.#receiveIdle.promise.then(() => true);
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<boolean>((resolve) => {
-        timeoutId = setTimeout(() => resolve(false), remainingMs);
-      });
-      const drained = await Promise.race([idle, timeout]);
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-      if (!drained) {
-        return this.#pendingReceives === 0;
-      }
-    }
-    return true;
   }
 
   #requireSession(
@@ -1804,13 +1806,20 @@ class Connection {
 
 /**
  * The space whose turn order a frame is handled in, or `undefined` for a
- * frame that names none: a `hello`, a `connection.*` request, and a frame
- * that could not be read.
+ * frame handled in the connection's own: a `hello`, a `connection.*`
+ * request, a frame that could not be read, and a signed `session.open`,
+ * which uses the connection's one current challenge and so is handled one
+ * at a time however many spaces the opens name.
  */
 const spaceOfFrame = (
   message: ClientMessage | OversizedClientMessage | null,
-): string | undefined =>
-  message !== null && "space" in message ? message.space : undefined;
+): string | undefined => {
+  if (message === null || !("space" in message)) return undefined;
+  if (message.type === "session.open" && message.principal === undefined) {
+    return undefined;
+  }
+  return message.space;
+};
 
 const isPresenceClientMessage = (
   message: ClientMessage | OversizedClientMessage,
@@ -3785,18 +3794,14 @@ export class Server {
           "memory connection.auth is not verified by this server",
         );
       }
-      const context = connection.connectionAuthContext(message);
+      const { issuer, ...context } = connection.connectionAuthContext(message);
       const principal = await authorize(message, context);
       if (principal === undefined) {
         throw authorizationError(
           "memory connection.auth names no principal",
         );
       }
-      connection.admitPrincipal(
-        principal,
-        message.invocation!.iss as string,
-        context.challenge,
-      );
+      connection.admitPrincipal(principal, issuer, context.challenge);
       return {
         type: "response",
         requestId: message.requestId,

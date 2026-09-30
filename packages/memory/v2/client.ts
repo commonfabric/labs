@@ -572,24 +572,6 @@ export class Client {
   }
 
   /**
-   * Helper for `mount()`, which ends a session the server holds on this
-   * connection and no `SpaceSession` stands for. A server that does not
-   * advertise `sessionClose` keeps it until the connection closes.
-   */
-  async #closeUnheldSession(space: string, sessionId: string): Promise<void> {
-    if (
-      this.#closed || !this.#connected ||
-      this.serverFlags?.sessionClose !== true
-    ) return;
-    await this.request({
-      type: "session.close",
-      requestId: this.#nextRequestId(),
-      space,
-      sessionId,
-    });
-  }
-
-  /**
    * Ends the authentication of the key `did` on the current connection.
    * Sessions mounted as it stay open, and a later mount as it authenticates
    * again. Sends nothing for a key this connection has not authenticated.
@@ -618,6 +600,14 @@ export class Client {
     options: { restoring?: boolean } = {},
   ): Promise<SessionOpenResult> {
     const whileConnected = options.restoring === true;
+    // A mount made while the connection is down waits for the reconnect to
+    // finish, restores included, before it joins the key's authentication
+    // or the signed-open chain: joined earlier, the restores would wait for
+    // it while it waited for them. A reopen is part of that reconnect and
+    // fails instead when the connection drops under it.
+    if (!whileConnected) {
+      await this.#ensureConnected();
+    }
     // Every open passes through here — a first mount and each reopen after
     // a dropped connection alike — so this is where a declared ceiling is
     // held to the server it is declared to. A server that does not
@@ -753,6 +743,24 @@ export class Client {
   #updateSessionOpenAuthContext(sessionOpen: unknown): void {
     this.#sessionOpenAuthContext = requireSessionOpenAuthMetadata(sessionOpen);
     this.#challengeSigners.clear();
+  }
+
+  /**
+   * Helper for `mount()`, which ends a session the server holds on this
+   * connection and no `SpaceSession` stands for. A server that does not
+   * advertise `sessionClose` keeps it until the connection closes.
+   */
+  async #closeUnheldSession(space: string, sessionId: string): Promise<void> {
+    if (
+      this.#closed || !this.#connected ||
+      this.serverFlags?.sessionClose !== true
+    ) return;
+    await this.request({
+      type: "session.close",
+      requestId: this.#nextRequestId(),
+      space,
+      sessionId,
+    });
   }
 
   /**

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
@@ -157,8 +157,9 @@ describe("RemoteSessionFactory connection sharing", () => {
       const closing = await factory.create(SPACES[0]);
       const staying = await factory.create(SPACES[1]);
       await closing.client.close();
-      // A request on the session that stayed is handled after the close,
-      // since both travel the one socket in order.
+      // The close's frame reached the server before the query's, and the
+      // server ends a session in the turn that frame is handled in, so the
+      // query's response finds the session gone.
       expect((await staying.session.queryGraph({ roots: [] })).serverSeq).toBe(
         0,
       );

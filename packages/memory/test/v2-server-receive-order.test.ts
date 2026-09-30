@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+
 import { defer } from "@commonfabric/utils/defer";
 
 import {
@@ -134,6 +135,43 @@ describe("Connection receive order", () => {
       expect(responseIds(peer.messages)).toEqual(["fast", "first", "second"]);
     } finally {
       gate.resolve();
+      await server.close();
+    }
+  });
+
+  it("handles signed `session.open`s for two spaces one at a time", async () => {
+    // Both name the connection's one current challenge. The second is
+    // handled once the first has used it and been issued the next, so what
+    // it names is no longer the current one.
+    const server = createServer("signed-opens");
+    try {
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      await connection.receive(encodeMemoryBoundary(HELLO));
+      const { sessionOpen } = messages.shift() as {
+        sessionOpen: SessionOpenAuthMetadata;
+      };
+      const open = (space: string) =>
+        connection.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: `open-${space}`,
+          space,
+          session: {},
+          invocation: {
+            aud: sessionOpen.audience,
+            challenge: sessionOpen.challenge.value,
+          },
+        }));
+      await Promise.all([open(SLOW_SPACE), open(FAST_SPACE)]);
+      const [first, second] = messages as ResponseMessage<unknown>[];
+      expect(first.requestId).toBe(`open-${SLOW_SPACE}`);
+      expect(first.ok).toBeDefined();
+      expect(second.error).toEqual({
+        name: "AuthorizationError",
+        message: "memory session.open challenge mismatch",
+        retriable: true,
+      });
+    } finally {
       await server.close();
     }
   });

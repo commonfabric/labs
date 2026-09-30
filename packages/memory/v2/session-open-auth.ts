@@ -199,8 +199,8 @@ export const verifySignedInvocation = async (
 };
 
 /**
- * Verify a `session.open` authorization. Returns the verified issuer DID or
- * throws an AuthorizationError.
+ * Verifies a `session.open` authorization. Returns the verified issuer DID,
+ * or throws an `AuthorizationError`.
  */
 export const verifySessionOpenAuthorization = (
   message: SessionOpenMessage,

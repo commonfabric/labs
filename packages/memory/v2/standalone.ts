@@ -32,6 +32,7 @@
 import { Identity } from "@commonfabric/identity";
 
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
+import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import {
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
@@ -39,7 +40,6 @@ import {
   parseMemoryCompressionControlMessage,
 } from "./message-compression.ts";
 import * as MemoryServer from "./server.ts";
-import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import { verifySessionOpenAuthorization } from "./session-open-auth.ts";
 
 const standaloneMemoryAudience = (await Identity.fromPassphrase(

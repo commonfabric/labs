@@ -1454,10 +1454,13 @@ serializable isolation.
 A connection handles the frames it is handed in turns, and a turn is per space.
 A frame naming a space is handled after the frames handed over before it for
 that space, and after every frame naming no space that was handed over before
-it. A frame naming no space — `hello`, a `connection.*` request, or a message
-the server cannot read — is handled after every frame handed over before it,
-so a `session.open` handed over behind the `connection.auth` it depends on
-finds its principal authenticated. Frames for different spaces on
+it. A frame handled in the connection's own turn — `hello`, a `connection.*`
+request, a message the server cannot read, and a signed `session.open`, which
+uses the connection's one current challenge — is handled after every frame
+handed over before it, so a `session.open` handed over behind the
+`connection.auth` it depends on finds its principal authenticated, and two
+signed opens handed over together are handled one at a time whatever spaces
+they name. Frames for different spaces on
 one connection do not wait for each other, so a `transact` waiting for its
 space's publication lock delays nothing addressed to another space. Presence
 messages stay outside these turns (section 4.13.4).

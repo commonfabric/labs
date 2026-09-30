@@ -1,8 +1,9 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+
 import { defer } from "@commonfabric/utils/defer";
 
-import { connect } from "../v2/client.ts";
+import { connect, type Transport } from "../v2/client.ts";
 import { verifyConnectionAuthorization } from "../v2/connection-auth.ts";
 import { Server } from "../v2/server.ts";
 import { verifySessionOpenAuthorization } from "../v2/session-open-auth.ts";
@@ -266,6 +267,52 @@ describe("Client connection authentication", () => {
         await slow.whenRestored();
       } finally {
         gate.resolve();
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("mounts a session that was started while the reconnect's `hello` was pending", async () => {
+      // The mount waits for the reconnect, restores included, and then
+      // authenticates over a challenge of the new connection.
+      const server = createServer("mount-during-reconnect");
+      const inner = new ServerTransport(server);
+      const helloGate = defer<void>();
+      const helloHeld = defer<void>();
+      let holdHello = false;
+      const transport: Transport = {
+        async send(payload) {
+          if (holdHello && payload.includes('"hello"')) {
+            holdHello = false;
+            helloHeld.resolve();
+            await helloGate.promise;
+          }
+          await inner.send(payload);
+        },
+        close: () => inner.close(),
+        setReceiver: (receiver) => inner.setReceiver(receiver),
+        setCloseReceiver: (receiver) => inner.setCloseReceiver(receiver),
+      };
+      const client = await connect({ transport });
+      try {
+        const first = await client.mount(SPACES[0], {}, principalOf(alice));
+        holdHello = true;
+        inner.drop();
+        const mounting = client.mount(SPACES[1], {}, principalOf(alice));
+        await helloHeld.promise;
+        inner.clearSent();
+        helloGate.resolve();
+        const second = await mounting;
+        await first.whenRestored();
+        expect(inner.sentTypes).toEqual([
+          "hello",
+          "connection.auth",
+          "session.open",
+          "session.open",
+        ]);
+        expect((await second.queryGraph({ roots: [] })).serverSeq).toBe(0);
+      } finally {
+        helloGate.resolve();
         await client.close();
         await server.close();
       }
