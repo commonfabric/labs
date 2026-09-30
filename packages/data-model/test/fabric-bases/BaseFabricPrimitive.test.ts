@@ -152,5 +152,27 @@ describe("BaseFabricPrimitive", () => {
     it("leaves a blessed class's prototype frozen", () => {
       expect(Object.isFrozen(FabricEpochDay.prototype)).toBe(true);
     });
+
+    it("cannot be bypassed by calling the hook it uses without its key", () => {
+      // The hook is keyed by a symbol the module keeps to itself, but a
+      // symbol-keyed static is an own property of the class, so any caller can
+      // find it. What refuses that caller is the key, which is never exposed.
+      // The class is local to this test, so that a hook which failed to refuse
+      // could not bless a class any other test relies on being unblessed.
+
+      class Hopeful extends UnblessedPrimitive {}
+      const hook = Object.getOwnPropertySymbols(BaseFabricPrimitive)
+        .find((symbol) => symbol.description === "data-model.bless");
+
+      expect(hook).not.toBe(undefined);
+      expect(() =>
+        Reflect.apply(
+          Reflect.get(BaseFabricPrimitive, hook!),
+          BaseFabricPrimitive,
+          [Hopeful, Symbol("data-model.FabricPrimitiveBlessing")],
+        )
+      ).toThrow("Invalid attempt to bless");
+      expect(() => new Hopeful()).toThrow("unblessed");
+    });
   });
 });

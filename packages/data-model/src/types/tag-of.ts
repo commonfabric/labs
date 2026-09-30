@@ -52,10 +52,10 @@ export function tagOfFabricPrimitive(
  * Maps an arbitrary value to a `FabricValueTag`, based on a shallow evaluation
  * of its type as a possibly-valid `FabricValue`, `FabricValueLayer`, or `*Plus`
  * version of same. This returns `null` if it determines that the given value
- * cannot possibly be valid. To get a `PlusType` return value, a corresponding
- * type predicate must be passed as the second argument, and that function is
- * used to make a determination if the value would otherwise be considered
- * invalid.
+ * cannot possibly be valid, except for a counterfeit `FabricPrimitive`, for
+ * which it `throw`s. To get a `PlusType` return value, a corresponding type
+ * predicate must be passed as the second argument, and that function is used
+ * to make a determination if the value would otherwise be considered invalid.
  *
  * This function is intentionally not `export`ed, as the two cases it covers are
  * better handled by the `export`ed ones. The point of this function is to help
@@ -165,9 +165,10 @@ export function tagOfFabricValue<PlusType = never>(
  * Maps a presumed valid `FabricValue`, `FabricValueLayer`, or corresponding
  * `*Plus` value to its tag, based on a shallow evaluation of its type. This
  * returns `null` if it determines that the given value cannot possibly be
- * valid. For `*Plus` values, a corresponding type predicate must be passed as
- * the second argument, and that function is used to make a determination if the
- * value would otherwise be considered invalid.
+ * valid, except for a counterfeit `FabricPrimitive`, for which it `throw`s. For
+ * `*Plus` values, a corresponding type predicate must be passed as the second
+ * argument, and that function is used to make a determination if the value
+ * would otherwise be considered invalid.
  *
  * @throws If `value` is a counterfeit `FabricPrimitive`, per
  *   `BaseFabricPrimitive.isInstance()`.
@@ -193,7 +194,8 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * Maps a possible `FabricConvertibleJsValue` to its tag, based on a shallow
  * evaluation of its type. This returns `null` if it determines that the given
  * value isn't possibly either a valid `FabricValue` or an instance of one of
- * the members of `FabricConvertibleJsObject`.
+ * the members of `FabricConvertibleJsObject`, except for a counterfeit
+ * `FabricPrimitive`, for which it `throw`s.
  *
  * Note: Instances of `Error` are _only_ detected in this function using
  * `Error.isError()` and _not_ by looking at the prototype chain.
