@@ -3900,7 +3900,8 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * The acting principal, the event's actor, must hold `OWNER` in the space, and
  * the event must be a trusted gesture: a person's action on a rendered UI.
  * `principal` must be a DID other than the actor's own, the space's own, and
- * `"*"`. Lowering the space's last concrete `OWNER` is refused. A runtime
+ * `"*"`. The space may not be the actor's own Home space. Lowering the space's
+ * last concrete `OWNER` is refused. A runtime
  * cannot know the deployment's service DIDs, or the identities its serving
  * runtimes act through, so it does not refuse one of those as `principal`.
  *
@@ -3925,8 +3926,9 @@ export declare function grantSpaceAccess(
  *
  * The acting principal, the event's actor, must hold `OWNER` in the space, and
  * the event must be a trusted gesture. `principal` must be a DID other than
- * the actor's own, the space's own, and `"*"`. Revoking the space's last
- * concrete `OWNER` is refused.
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Revoking the space's last concrete `OWNER` is
+ * refused.
  *
  * The change commits as a commit of its own, before the handler's other
  * writes commit. If the handler's writes then fail, the change stands.

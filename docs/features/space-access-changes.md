@@ -36,10 +36,20 @@ body, and either way drops the handler's whole transaction.
 | A call on a serving runtime | the call |
 | An event that is not a trusted gesture | the call |
 | A `target` that is not a cell | the call |
+| A `target` in the actor's own Home space | the call |
 | A `principal` that is not a DID in DID Core syntax, `"*"` among them | the call |
 | The space's own DID, or the actor, as `principal` | the call |
 | An actor without `OWNER` in the space | the call when the runtime holds the list, and always the commit |
 | A change leaving the list with no concrete `OWNER` | the call when the runtime holds the list, and always the commit |
+
+A `target` in the actor's own Home space is refused. A Home space's DID is its
+user's own, so the check is that the space is not the actor's DID. Home holds
+everything a user keeps, and a pattern running there could otherwise expose
+all of it to a stranger with one click. The refusal closes that case and no
+other: every other space the actor holds `OWNER` in stays reachable, including
+spaces they created from the shell or that another pattern created, and there
+the trusted gesture is the only bar between a pattern and the space's list.
+Limiting the calls to spaces the calling pattern itself created is not built.
 
 A service DID or a delegating DID is not refused as `principal`. The memory
 server's configuration names both (`acl.serviceDids` and `acl.delegatingDids`,

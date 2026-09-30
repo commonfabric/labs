@@ -688,6 +688,18 @@ describe("space-access-change", () => {
       ).toThrow("the entry of the principal it acts for");
     });
 
+    it("throws for a target in the actor's own Home space", async () => {
+      const { runtime } = await owned();
+      const target = runtime.getCell(alice.did() as MemorySpace, "target");
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => grantSpaceAccess(target, bob.did(), "READ"),
+        )
+      ).toThrow("cannot change the access list of the Home space");
+    });
+
     it("throws for a level that is not a grant level", async () => {
       const { runtime, space } = await owned();
       const target = runtime.getCell(space, "target");
@@ -842,6 +854,18 @@ describe("space-access-change", () => {
           () => revokeSpaceAccess(target, alice.did()),
         )
       ).toThrow("the entry of the principal it acts for");
+    });
+
+    it("throws for a target in the actor's own Home space", async () => {
+      const { runtime } = clientRuntime(alice);
+      const target = runtime.getCell(alice.did() as MemorySpace, "target");
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => revokeSpaceAccess(target, bob.did()),
+        )
+      ).toThrow("cannot change the access list of the Home space");
     });
 
     it("throws for revoking the last concrete `OWNER`", async () => {

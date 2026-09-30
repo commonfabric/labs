@@ -132,12 +132,18 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
  *
  * Checked here, whatever the access list holds: that the call runs in a
  * handler on a client runtime, for an event that is a trusted gesture, that
- * `target` is a cell, and that `principal` is a DID other than `"*"`, the
+ * `target` is a cell in a space other than the actor's Home space, whose DID
+ * is the actor's own, and that `principal` is a DID other than `"*"`, the
  * space's own and the actor's. When this runtime already holds the list, the
  * actor's `OWNER` and the survival of a concrete `OWNER` are checked here as
  * well, so a refusal throws from the call; {@link commitSpaceAccessChanges}
  * checks both again against the list it replaces. A change that would leave
  * the list as it is stages nothing.
+ *
+ * Refusing the actor's Home space keeps one click from exposing everything a
+ * user keeps there. Every other space the actor holds `OWNER` in stays
+ * reachable, with the trusted gesture as the only bar between a pattern and
+ * its list.
  *
  * A service DID or a delegating DID as `principal` is not refused: the memory
  * server's configuration names those, and nothing hands them to a runtime.
@@ -174,6 +180,12 @@ function stageChange(
   const actor = runtime.actingPrincipalFor(tx);
   if (actor === undefined) {
     throw new Error(`\`${call}\` requires an event with an actor.`);
+  }
+  if (space === actor) {
+    throw new Error(
+      `\`${call}\` cannot change the access list of the Home space of the ` +
+        "principal it acts for.",
+    );
   }
   if (!isWellFormedDID(principal)) {
     throw new Error(
