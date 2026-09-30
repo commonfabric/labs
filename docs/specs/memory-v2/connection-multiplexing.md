@@ -5,9 +5,11 @@ Status: proposed design. Nothing in this document is implemented yet.
 This document describes how a client reaches every space it uses over one
 memory connection per toolshed instead of one per space, and how routers that
 terminate client connections in front of several toolsheds fit on top of that.
-It also covers how a client acts as a second identity for a few requests —
-the case that matters is initializing a space's ACL as the space identity —
-without opening a separate connection for it.
+Authentication moves from each `session.open` to the start of the connection:
+a client authenticates each key it uses once per connection, and every later
+request names the authenticated principal it acts as. That is also how a client
+acts as a second identity for a few requests — the case that matters is
+initializing a space's ACL as the space identity.
 
 ## 1. Where the protocol stands
 
@@ -52,13 +54,20 @@ Goals:
 
 1. One memory connection per client per toolshed in the direct setup (a client
    talking to one toolshed, as in local development).
-2. A client can open sessions as more than one identity over that connection,
-   and can perform a one-shot signed operation as another identity (space ACL
-   genesis) without a session for it.
+2. A client authenticates once per connection and key. It can authenticate
+   more than one key on a connection, open sessions as any of them, and
+   perform a one-shot operation as another identity (space ACL genesis) without
+   a session for it.
 3. Startup and reconnect latency for N spaces stays close to what N parallel
    sockets give today.
-4. A router can sit between clients and toolsheds, with signed session opens
-   still verified end to end by the toolshed that owns the space.
+4. A router can sit between clients and toolsheds. The toolshed that owns a
+   space verifies the client's signature itself and trusts the router for the
+   freshness of it.
+5. Everything about establishing trust happens in one exchange at the start of
+   a connection, and nothing later in the connection carries authentication
+   material. That exchange is where remote attestation will be added
+   (section 6), so the steps it has today are placed where those steps will
+   go.
 
 Non-goals:
 
@@ -105,12 +114,68 @@ problems.
 
 ### 3.2 Protocol changes
 
-#### Nonce-based session-open signatures
+#### Connection authentication
 
-The server-issued connection challenge is replaced by a nonce the client
-chooses. The server advertises the change with a new capability flag,
-`sessionOpenNonce`. When both peers advertise it, the signed invocation carries
-a `nonce` in place of `challenge`:
+A connection is established in two steps: the `hello` exchange, and then one
+`connection.auth` request for each key the client will act as. The server
+advertises the second step with a new capability flag, `connectionAuth`.
+
+The challenge is created by the peer the client is connected to, never by the
+client. `hello.ok` carries the audience and the first challenge, in the
+`sessionOpen` field it has today. The client signs an invocation over them:
+
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionAuthInvocation {
+  iss: DID;
+  cmd: "connection.auth";
+  aud: DID;
+  args: { protocol: "memory" };
+  challenge: string;
+  iat: number;
+  exp: number;
+}
+
+interface ConnectionAuthRequest {
+  type: "connection.auth";
+  requestId: string;
+  invocation: ConnectionAuthInvocation;
+  authorization: { signature: Uint8Array };
+}
+
+interface ConnectionAuthResult {
+  principal: DID;
+}
+
+interface ConnectionChallengeRequest {
+  type: "connection.challenge";
+  requestId: string;
+}
+
+interface ConnectionChallengeResult {
+  challenge: { value: string; expiresAt: number };
+}
+```
+
+The server accepts a `connection.auth` when:
+
+- the signature verifies against `iss`
+- `aud` is the audience the server advertised
+- `challenge` is one the server issued on this connection, has not expired, and
+  has not already been accepted for this `iss`
+- `exp` is not earlier than the server clock minus the clock-skew grace
+
+From then on `iss` is an authenticated principal of the connection, until the
+connection closes or the client releases it (section 4). A challenge may be
+signed by several keys, once each, so authenticating two keys needs no
+ordering between them. A client that needs a challenge after the one in
+`hello.ok` has expired — to authenticate another key on a connection that has
+been open for a while — requests one with `connection.challenge`.
+
+Requests that are signed today stop carrying a signature and name a principal
+instead:
 
 ```typescript
 // Shown at module scope.
@@ -118,75 +183,60 @@ type SpaceId = string;
 type SessionId = string;
 type DID = string;
 
-interface NonceSessionOpenInvocation {
-  iss: DID;
-  cmd: "session.open";
-  sub: SpaceId;
-  aud: DID;
-  args: {
-    protocol: "memory";
-    session: {
-      sessionId?: SessionId;
-      seenSeq?: number;
-      sessionToken?: string;
-    };
+interface SessionOpenRequest {
+  type: "session.open";
+  requestId: string;
+  space: SpaceId;
+  /** An authenticated principal of this connection. */
+  principal: DID;
+  session: {
+    sessionId?: SessionId;
+    seenSeq?: number;
+    sessionToken?: string;
   };
-  /** 32 random bytes as 64 hexadecimal characters, chosen by the client. */
-  nonce: string;
-  iat: number;
-  exp: number;
 }
 ```
 
-The server accepts the invocation when:
+The server refuses a `session.open` whose `principal` is not authenticated on
+the connection with an `AuthorizationError`, and otherwise treats the principal
+exactly as it treats the verified issuer of a signed open today: the ACL of the
+space decides what the session may do, the session records the principal, and a
+resume by a different principal is refused. The session descriptor —
+`readCeiling` and `actingAs` included — is no longer inside a signature. It
+does not need to be: only the authenticated client can send on the connection.
 
-- the signature verifies against `iss`, and `aud`, `sub`, and the session
-  descriptor match as they do today
-- `iat` is not later than the server clock plus the clock-skew grace
-- `exp` is not earlier than the server clock minus the clock-skew grace
-- `exp - iat` is at most the server's session-open window, 300 seconds by
-  default, which is the validity clients already stamp on a signed open
-- the server has not already accepted an open carrying the same
-  `(iss, sub, nonce)`
+Session opens no longer consume a challenge, so opens on one connection run
+concurrently, and restoring N spaces after a reconnect costs one signature per
+key instead of one per space.
 
-It then records `(iss, sub, nonce)` until `exp` plus the grace has passed and
-refuses a repeat with a retriable `AuthorizationError`. The record's size is
-bounded by the number of opens accepted inside one window.
+What a signature authorizes becomes wider. A signed `session.open` is good for
+one space; a signed `connection.auth` is good for everything its key can reach
+through the peer that issued the challenge. The challenge binds the signature
+to one connection, so a captured one cannot be used on another.
 
-A nonce belongs to one signed open, not to a space or a connection. The client
-draws a fresh nonce for every `session.open` it signs — each first mount and
-each reopen after a reconnect — so a client with sessions in five spaces signs
-five opens with five nonces, and signs new ones when it reconnects. The space
-is part of the record's key because the signature already binds the open to
-its space: a nonce cannot be moved to another space, and each space's record
-lives on the server that owns the space.
+Why the peer creates the challenge rather than the client creating a nonce:
 
-Nothing about a signed open depends on the connection it arrives on, so opens
-on one connection run concurrently, and a client signs each open without first
-waiting for a server round trip. `hello.ok` still carries `sessionOpen.audience`
-and no longer needs `sessionOpen.challenge`; a `session.open` response no
-longer carries a new challenge.
+- A value the client chooses proves nothing about freshness by itself. The
+  server would have to remember every value it accepted and compare clocks
+  with the client. A challenge the server issued is fresh by construction, and
+  the server keeps nothing beyond the connection's own state.
+- A signature over a client-chosen value can be made ahead of time by anything
+  that can ask the key to sign, and used later. A signature over a challenge
+  cannot be made before the challenge exists.
 
-What the change gives up is the binding of a signature to one connection. A
-signed open captured in transit could be presented on another connection before
-the original arrives, within its window. Reading an open in transit already
-requires breaking TLS or holding the client, and either of those exposes the
-session's traffic anyway; the window bounds the exposure in time and the replay
-record makes each open usable once.
+A challenge has a risk of its own, which the audience covers: a peer can hand
+the client a challenge it obtained elsewhere and present the signature there.
+The signature names the audience, so it is accepted only by servers of the
+deployment the client meant to reach, and within a deployment that relay is
+what a router does (section 5).
 
-The replay record is kept only in the memory of the server that owns the
-space, and is not persisted. A server that restarts inside a window forgets the
-opens it accepted in that window, which lets a captured open from that window
-be used once more before it expires. The window bounds that exposure, and it is
-accepted.
+Compatibility follows the flag:
 
-Compatibility follows the flags:
-
-- a server advertising `sessionOpenNonce` keeps accepting challenge-signed
-  opens from clients that do not advertise it, until that path is retired
-- a client talking to a server without the flag signs challenges as today and
-  serializes its opens on the connection: sign, send, receive the response and
-  its new challenge, and only then sign the next
+- a server advertising `connectionAuth` keeps accepting signed `session.open`
+  requests from clients that do not advertise it, until that path is retired
+- a client talking to a server without the flag signs each `session.open` as
+  today and serializes its opens on the connection: sign, send, receive the
+  response and its new challenge, and only then sign the next
 
 #### Per-space receive order
 
@@ -241,12 +291,13 @@ of one room. Membership moves to `(connection, space, sessionId)`. The
 
 ### 3.3 Client library changes
 
-- `mount()` signs a nonce-based open and runs concurrently with other mounts
-  when the server advertises `sessionOpenNonce`, and otherwise signs the
-  current challenge and waits for the previous open on the connection.
-- The reconnect loop runs `hello` once and then restores every session in
-  parallel. A permanent authorization failure still terminates only the session
-  it belongs to.
+- The client keeps the signer for each key it has authenticated. `mount()`
+  authenticates its signer's key if the connection has not yet, and then sends
+  an unsigned `session.open` naming it. Mounts run concurrently.
+- The reconnect loop runs `hello`, authenticates every key that has a session,
+  and then restores every session in parallel. A permanent authorization
+  failure of a `session.open` still terminates only the session it belongs to;
+  one of a `connection.auth` terminates the sessions of that key.
 - `SpaceSession.close()` sends `session.close` when the server supports it.
 
 ### 3.4 Runner changes
@@ -270,42 +321,46 @@ of one room. Membership moves to `(connection, space, sessionId)`. The
 
 ## 4. Acting as a second identity
 
-Sessions already carry their own principal, so after section 3 a client can
-hold sessions for several identities on one connection. That is the right tool
-for sustained work as another identity. It is heavy for the case that exists
-today: writing one genesis ACL as the space identity, which needs a session,
-a point read, a single commit, and a close, and which the runner keeps apart
-from the replica session because both allocate `localSeq` from 1.
+A second identity is a second `connection.auth` on the same connection. The
+client can then open sessions as either principal. A principal the client no
+longer needs is released:
 
-A one-shot signed request covers that case:
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionReleaseRequest {
+  type: "connection.release";
+  requestId: string;
+  principal: DID;
+}
+```
+
+After a release the server refuses new requests naming that principal.
+Sessions already open keep the principal they recorded when they opened. The
+server bounds the number of principals a connection holds, so a client that
+creates many spaces releases each space identity once it has used it.
+
+Opening a session is heavy for the case that exists today: writing one genesis
+ACL as the space identity, which needs a session, a point read, a single
+commit, and a close, and which the runner keeps apart from the replica session
+because both allocate `localSeq` from 1. A one-shot request covers that case:
 
 ```typescript
 // Shown at module scope.
 type SpaceId = string;
 type DID = string;
 
-interface SpaceGenesisInvocation {
-  iss: DID;
-  cmd: "space.genesis";
-  sub: SpaceId;
-  aud: DID;
-  args: {
-    /** The whole ACL document to install. */
-    acl: Record<string, "READ" | "WRITE" | "OWNER">;
-    /** The custom root intent, when the space reserves one. */
-    genesisRoot?: unknown;
-  };
-  nonce: string;
-  iat: number;
-  exp: number;
-}
-
 interface SpaceGenesisRequest {
   type: "space.genesis";
   requestId: string;
   space: SpaceId;
-  invocation: SpaceGenesisInvocation;
-  authorization: { signature: Uint8Array };
+  /** An authenticated principal of this connection. */
+  principal: DID;
+  /** The whole ACL document to install. */
+  acl: Record<string, "READ" | "WRITE" | "OWNER">;
+  /** The custom root intent, when the space reserves one. */
+  genesisRoot?: unknown;
 }
 
 interface SpaceGenesisResult {
@@ -315,17 +370,17 @@ interface SpaceGenesisResult {
 }
 ```
 
-The server verifies the signature, the audience, the time window, and the nonce
-under the same rules as a nonce-based `session.open` (section 3.2), requires `iss` to be the space DID or a
-configured service DID, and applies the genesis commit under the admission
-rules of INV-12 and INV-13 in [09-invariants.md](./09-invariants.md). It needs
-no open session for the space: the request is its own authorization. When an
-ACL already stands the result says so and nothing is written; the caller reads
-the standing ACL through its own session, which has READ on a space whose ACL
-was never created and on any space whose ACL grants it.
+The server requires `principal` to be authenticated on the connection and to
+be the space DID or a configured service DID, and applies the genesis commit
+under the admission rules of INV-12 and INV-13 in
+[09-invariants.md](./09-invariants.md). It needs no open session for the
+space. When an ACL already stands the result says so and nothing is written;
+the caller reads the standing ACL through its own session, which has READ on a
+space whose ACL was never created and on any space whose ACL grants it.
 
-The bootstrap then becomes: open the user session, read the ACL, send
-`space.genesis` if it was never created, and continue on the same session. The
+The bootstrap then becomes: open the user session, read the ACL, and if it was
+never created, authenticate the space identity, send `space.genesis`, and
+release the space identity. The replica continues on the user session. The
 server advertises the request with a `spaceGenesis` flag.
 
 A general "act as another principal" field on `transact` is not proposed.
@@ -347,18 +402,52 @@ toolshed that owns its space. Two shapes are possible:
 
 ### 5.1 Requirements common to both modes
 
-**Signatures that survive a hop.** Nonce-based session opens (section 3.2)
-depend on nothing about the connection they arrive on, so the router forwards
-them unchanged and the toolshed that owns the space verifies them. Signatures
-stay end to end, and the router is not trusted with authorization. A space
-lives on one toolshed at a time, so the replay record for a space lives in one
-place. A router forwards only clients that advertise `sessionOpenNonce`: a
-challenge-signed open cannot pass it, since the challenge belongs to a
-connection the client never sees.
+**The router link.** A router and a toolshed establish trust once per pair,
+on a long-lived connection called the router link. The router authenticates on
+it with `connection.auth` as its own identity, and the toolshed's configuration
+lists the router identities it accepts. Being a router grants one thing: the
+toolshed accepts client authentication statements the router forwards. It
+grants no capability on any space. Everything expensive about trust between a
+router and a toolshed is paid on the link, once, and not per client or per
+session; today that is one signature, and later it is attestation (section 6).
 
-The alternative — the router authenticates the client and asserts the
-principal to the toolshed as a delegating service identity — makes the router
-part of the trusted base for every space it routes. It is not proposed.
+**Client authentication through a router.** The client runs the same exchange
+it runs against a toolshed. The router issues the challenge in its `hello.ok`,
+advertises the audience of the deployment, and verifies each `connection.auth`
+itself. When the client first names a space on some toolshed, the router
+forwards the client's signed statement to that toolshed, marked as forwarded.
+The toolshed verifies the signature, the audience, and `exp`, and accepts the
+router's word for the challenge, which it did not issue. The toolshed therefore
+checks for itself that the key signed, and trusts the router that the
+signature was made for a connection that is open now.
+
+A statement is valid for 300 seconds, the validity clients stamp on a signed
+open today. When the router needs to forward a statement that has expired —
+the client reaches a new toolshed after the connection has been open for a
+while, or a router link was re-established — it asks the client to sign again:
+
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionChallengePush {
+  type: "connection/challenge";
+  principal: DID;
+  challenge: { value: string; expiresAt: number };
+}
+```
+
+The client answers with a `connection.auth` for that principal over the new
+challenge. A toolshed never sends this push to a client connected to it
+directly.
+
+**What the router is trusted with.** Requests after authentication carry no
+signature, so a router can send any request as any principal whose statement
+it holds and can keep current. A compromised router can therefore act as every
+client connected to it, in every space those clients' keys can reach, for as
+long as they stay connected. It cannot act as a key whose client is not
+connected, because it cannot obtain a fresh statement for it. This exposure is
+accepted.
 
 **A space directory.** Today the client decides which host serves a space, from
 `spaceHostMap` seeds, hints registered at runtime, and the home-space site
@@ -398,6 +487,12 @@ client names a space that toolshed owns.
 
 - `hello`: the router answers the client itself, advertising the flags that
   every toolshed it routes to supports, and sends its own `hello` upstream.
+- An upstream connection does not authenticate the router again. The toolshed
+  issues short-lived tickets over the router link, and the router presents one
+  in the `hello` of each upstream connection, which makes that connection part
+  of the link's trust.
+- The principals authenticated on an upstream connection are the ones its
+  client authenticated, forwarded as section 5.1 describes.
 - Request ids are unique within one client connection, so they pass through
   unchanged, and every server push names its session.
 - Compression is negotiated separately on each hop.
@@ -415,6 +510,11 @@ following.
 - **Receive order per session.** The per-space chains of section 3.2 would
   still make clients in one space wait for each other; the chains become per
   session.
+- **The router link carries the traffic.** The shared upstream connection is
+  the router link itself, so no tickets are needed.
+- **Principals per client.** Authenticated principals belong to a client, not
+  to the connection. The router assigns each client an id, stamps it on every
+  frame it forwards, and the toolshed keeps principals and sessions under it.
 - **Request id namespaces.** The client's request ids (`req:1`, `req:2`, …)
   collide across clients. The router rewrites each id on the way up and
   restores it on the way down.
@@ -436,39 +536,87 @@ following.
   holdings makes that drop cheap for the client.
 - **Rate limiting** keys on the session principal rather than the TCP peer.
 - **Upstream loss affects every client at once.** Every session on the
-  connection detaches together, and each client must sign a new open. The
+  connection detaches together, and the router must forward every client's
+  statement again, asking for a new signature where one has expired. The
   router spreads the `session/detached` pushes over time to avoid every client
   reopening in the same instant.
 
 ### 5.4 Choosing a mode
 
-Mode A needs the common requirements and little else, keeps the toolshed's
-view of a connection as one client, and leaves ordering, back pressure, and
-failure isolation as they are. Mode B saves toolshed sockets at the cost of
-putting every client on the router behind the same connection for ordering,
-large frames, and failures. Mode A is the proposed first router. Mode B is
-worth building only when the number of sockets a toolshed holds is the measured
-limit.
+Mode A keeps the toolshed's view of a connection as one client, and leaves
+ordering, back pressure, and failure isolation as they are. What it adds is
+the router link and its tickets. Mode B saves toolshed sockets and needs no
+tickets, at the cost of putting every client on the router behind the same
+connection for ordering, large frames, and failures.
 
-## 6. Phases
+Both modes pay for router-to-toolshed trust once per pair, on the router link,
+so amortizing that cost does not decide between them. Mode A is the proposed
+first router. Mode B is worth building when the number of sockets a toolshed
+holds is the measured limit.
+
+## 6. Remote attestation
+
+Remote attestation is not designed here. This section records what is known
+about it and how the design above leaves room for it.
+
+What is known:
+
+- Attestation will run between client and router, and between router and
+  toolshed. A client that has attested a router which has attested its
+  toolsheds has attested those toolsheds transitively.
+- Attestation is expensive, and its cost between a router and a toolshed must
+  be amortized across the clients the router serves.
+- The exchange at the start of a client connection will have more steps than
+  it has today.
+
+Where it goes:
+
+- **Connection establishment is the one place trust is established.** After
+  section 3.2, `hello` and `connection.auth` are the only messages that carry
+  authentication material, and establishment is already a sequence of requests
+  and responses rather than one message. Attestation adds steps to that
+  sequence, under capability flags, and changes nothing after it:
+  `session.open` and every request that follows carry no material that
+  attestation would have to extend.
+- **The router link is where router-to-toolshed attestation is paid.** It is
+  long-lived and established once per pair, and Mode A's upstream connections
+  inherit its trust through tickets. Attesting the link once covers every
+  client and every session that crosses it.
+- **Freshness in both directions.** The challenge in `hello.ok` is the value
+  the peer contributes and the client signs. Attestation evidence from the
+  peer needs a value the client contributes, which `hello` can carry.
+
+Two things follow for work done now. Authentication is not added to any
+message outside connection establishment. And the state authentication
+produces, the set of authenticated principals, is kept by the connection, or
+by the client id on a router link, and never by a session.
+
+## 7. Phases
 
 | Phase | Change | Depends on |
 | --- | --- | --- |
-| 1 | Server: `sessionOpenNonce`, per-space receive chains, `session.close`, presence membership per session | — |
-| 2 | Client: nonce-signed concurrent mounts, parallel restore, `session.close` on release | 1 |
+| 1 | Server: `connection.auth`, `connection.challenge`, `connection.release`, unsigned `session.open` naming a principal, per-space receive chains, `session.close`, presence membership per session | — |
+| 2 | Client: authentication per key, concurrent mounts, parallel restore, `session.close` on release | 1 |
 | 3 | Runner: one pooled client per host, session release in place of client close | 2 |
 | 4 | `space.genesis` and its use in the ACL bootstrap | 1 |
-| 5 | The space field in the binary envelope, `session/detached` | 2 |
-| 6 | Mode A router and space directory | 5 |
+| 5 | The router link, forwarded statements, `connection/challenge`, the space field in the binary envelope, `session/detached` | 2 |
+| 6 | Mode A router, link tickets, and space directory | 5 |
 
 Phases 1 to 3 give the direct setup a single connection per host and do not
 depend on anything after them.
 
-## 7. Open questions
+## 8. Open questions
 
-- **Retiring challenge-signed opens.** A server keeps accepting them for
-  clients without `sessionOpenNonce`. When that path, and the challenge in
-  `hello.ok`, can be removed depends on how long older clients stay deployed.
+- **Retiring signed session opens.** A server keeps accepting them for clients
+  without `connectionAuth`. When that path can be removed depends on how long
+  older clients stay deployed.
+- **The limit on principals per connection.** Its value, and whether the
+  server releases the least recently used principal or refuses the next
+  `connection.auth`, is not settled.
+- **Toolsheds a router reaches later.** A client attests transitively the
+  toolsheds its router has attested when the connection starts. What the
+  client learns when the router starts routing it to a toolshed it attested
+  afterwards belongs to the attestation design.
 - **Detach grace after `session.close`.** Keeping a closed session resumable
   helps a client that remounts a space soon after releasing it. Whether the
   grace period should differ from the one after a dropped connection is not
