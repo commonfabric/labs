@@ -289,15 +289,64 @@ export default pattern(() => {
     });
 
     for (const nullish of ["null", "undefined"]) {
-      it(`refuses a scoped cell beside \`${nullish}\`, whose scope would not cap its handle`, async () => {
-        await expect(transformed(
-          `import { toSchema, type Cell, type PerSpace } from "commonfabric";
+      it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
+        const [schema] = emittedSchemas(
+          await transformed(
+            `import { toSchema, type Cell, type PerSpace } from "commonfabric";
 export const schema = toSchema<{
   handle: PerSpace<Cell<{ field: string }>> | ${nullish};
 }>();`,
-        )).rejects.toThrow(
-          "A scope wrapper around a cell cannot hold another alternative",
+          ),
         );
+
+        expect((schema!.properties as Record<string, unknown>).handle).toEqual({
+          anyOf: [
+            { type: nullish },
+            {
+              type: "object",
+              properties: { field: { type: "string" } },
+              required: ["field"],
+              asCell: [{ kind: "cell", scope: "space" }],
+            },
+          ],
+          scope: "space",
+        });
+      });
+
+      it(`keeps the scope, the cap, and \`${nullish}\` of a nullable scoped cell's capture`, async () => {
+        const module = await transformed(
+          `import { computed, pattern, UI, Writable, type PerSession } from "commonfabric";
+export default pattern<{ enabled: boolean }>(({ enabled }) => {
+  const confirming: PerSession<Writable<boolean>> | ${nullish} = enabled
+    ? Writable.perSession.of<boolean>(false)
+    : ${nullish};
+  const isConfirming = computed(() => confirming?.get());
+  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
+});`,
+        );
+        const capture = callsNamed(module, "lift")
+          .flatMap((lift) =>
+            (lift.typeArguments![0]! as ts.TypeLiteralNode).members
+          )
+          .find((member) =>
+            member.name?.getText(module) === "confirming"
+          ) as ts.PropertySignature;
+        const [input] = callSchemas(module, "lift");
+
+        expect(capture.type!.getText(module)).toBe(
+          `__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean> | ${nullish}>`,
+        );
+        expect((input!.properties as Record<string, unknown>).confirming)
+          .toEqual({
+            anyOf: [
+              {
+                type: "boolean",
+                asCell: [{ kind: "readonly", scope: "session" }],
+              },
+              { type: nullish },
+            ],
+            scope: "session",
+          });
       });
     }
   });

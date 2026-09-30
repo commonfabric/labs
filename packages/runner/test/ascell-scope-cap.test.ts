@@ -741,3 +741,106 @@ describe("asCell scope cap, through definitions", () => {
     expect(capped.resolveAsCell().get()).toBeUndefined();
   });
 });
+
+describe("asCell scope cap, on a compiled handle beside `null` or `undefined`", () => {
+  // A scoped cell beside `null` or `undefined` compiles to an `anyOf` holding
+  // the handle, with the slot's scope at the top and the cap in the handle's
+  // `asCell` entry. The cap has to hold however the handle is reached, as it
+  // does for the handle alone.
+
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let tx: IExtendedStorageTransaction;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  /** The argument schema the compiler writes for a `handle` of `declaration`. */
+  const compiledSchema = async (declaration: string): Promise<JSONSchema> =>
+    (await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { pattern, type Cell, type PerSpace } from 'commonfabric';",
+          "interface Inner { field: string }",
+          `export default pattern<{ handle: ${declaration} }>(`,
+          "  ({ handle }) => ({ handle }),",
+          ");",
+        ].join("\n"),
+      }],
+    }, { space })).argumentSchema;
+
+  /**
+   * The handle, stored as a link to a cell in `targetScope`, read as a value
+   * projection, by a key() chain past it, and as a property of a whole-object
+   * read.
+   */
+  const routes = (
+    schema: JSONSchema,
+    label: string,
+    targetScope: "space" | "session",
+  ) => {
+    const inner = runtime.getCell(
+      space,
+      `compiled-inner-${label}`,
+      innerSchema,
+      tx,
+      targetScope,
+    );
+    inner.set({ field: "secret" });
+    const outer = runtime.getCell(space, `compiled-outer-${label}`, schema, tx);
+    outer.set({ handle: inner } as never);
+    const read = (value: unknown) =>
+      isCell(value) ? (value as { get(): unknown }).get() : value;
+    return {
+      projection: read(outer.key("handle").get()),
+      through: outer.key("handle", "field").get(),
+      whole: read(((outer.get() ?? {}) as { handle?: unknown }).handle),
+    };
+  };
+
+  for (
+    const [label, declaration] of [
+      ["alone", "PerSpace<Cell<Inner>>"],
+      ["beside null", "PerSpace<Cell<Inner>> | null"],
+      ["beside undefined", "PerSpace<Cell<Inner>> | undefined"],
+    ] as const
+  ) {
+    it(`blocks every route to a narrower link through a space-capped handle ${label}`, async () => {
+      const r = routes(
+        await compiledSchema(declaration),
+        `blocked-${label}`,
+        "session",
+      );
+
+      expect(r.projection).toBeUndefined();
+      expect(r.through).toBeUndefined();
+      expect(r.whole).toBeUndefined();
+    });
+
+    it(`allows every route to a link the cap admits through a space-capped handle ${label}`, async () => {
+      const r = routes(
+        await compiledSchema(declaration),
+        `allowed-${label}`,
+        "space",
+      );
+
+      expect(r.projection).toEqual({ field: "secret" });
+      expect(r.through).toBe("secret");
+      expect(r.whole).toEqual({ field: "secret" });
+    });
+  }
+});

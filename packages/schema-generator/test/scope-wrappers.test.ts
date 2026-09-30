@@ -72,27 +72,15 @@ interface SchemaRoot {
       .toThrow("A scope wrapper cannot be a member of a union.");
   });
 
-  it("throws for a scope wrapper around a cell beside another alternative", async () => {
-    // The cell's `asCell` entry would sit in an `anyOf` branch, where the
-    // scope could scope the slot but not cap the handle.
-    for (
-      const declaration of [
-        "PerSpace<Cell<string>> | null",
-        "PerSpace<Cell<string>> | undefined",
-        "PerSpace<Cell<string> | null>",
-      ]
-    ) {
-      const { type, checker, typeNode } = await getTypeFromCode(
-        `interface SchemaRoot { handle: ${declaration}; }`,
-        "SchemaRoot",
-      );
+  it("throws for a scope wrapper around a cell beside a value", async () => {
+    // One scope cannot be both the value's slot scope and the cell's cap.
+    const { type, checker, typeNode } = await getTypeFromCode(
+      "interface SchemaRoot { handle: PerSpace<Cell<string> | number>; }",
+      "SchemaRoot",
+    );
 
-      expect(() =>
-        new SchemaGenerator().generateSchema(type, checker, typeNode)
-      ).toThrow(
-        "A scope wrapper around a cell cannot hold another alternative",
-      );
-    }
+    expect(() => new SchemaGenerator().generateSchema(type, checker, typeNode))
+      .toThrow("A scope wrapper around a cell cannot hold a value beside");
   });
 
   it("caps the handle of an optional property's scoped cell", async () => {
@@ -160,6 +148,50 @@ interface SchemaRoot {
       expect(await draftSchema("PerUser<boolean> | null")).toEqual(
         await draftSchema("PerUser<boolean | null>"),
       );
+    });
+
+    for (const nullish of ["null", "undefined"]) {
+      it(`declares a scoped cell's scope for the slot and as its handle's cap beside \`${nullish}\``, async () => {
+        // The cell is an `anyOf` branch: the slot's scope is read at the top,
+        // and the cap wherever the handle is reached.
+        const expected = {
+          anyOf: [
+            { type: nullish },
+            { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+          ],
+          scope: "user",
+        };
+
+        expect(await draftSchema(`PerUser<Cell<string>> | ${nullish}`))
+          .toEqual(expected);
+        expect(await draftSchema(`PerUser<Cell<string> | ${nullish}>`))
+          .toEqual(expected);
+      });
+    }
+
+    it("keeps the scope of a value inside a scoped cell beside `null`", async () => {
+      // With a cell boundary between them, both scopes survive, as they do
+      // for the cell alone.
+      expect(await draftSchema("PerUser<Cell<PerSession<string>>> | null"))
+        .toEqual({
+          anyOf: [
+            { type: "null" },
+            {
+              type: "string",
+              asCell: [{ kind: "cell", scope: "user" }],
+              scope: "session",
+            },
+          ],
+          scope: "user",
+        });
+    });
+
+    it("throws for a handle's cap in a branch that is not the slot's scope", async () => {
+      // `PerUser<Cell<string>> | PerSession<Cell<string>>` puts two caps in
+      // branches under no scope of the slot's own.
+      await expect(
+        draftSchema("PerUser<Cell<string>> | PerSession<Cell<string>>"),
+      ).rejects.toThrow("A scope wrapper cannot be a member of a union.");
     });
   });
 

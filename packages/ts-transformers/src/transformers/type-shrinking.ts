@@ -1365,16 +1365,23 @@ function getScopeWrapper(
 
 /**
  * Returns the name of the `commonfabric` scope wrapper `type` puts a cell in,
- * as `Writable.perSession.of()` returns, with the cell it scopes, or
- * `undefined` for any other type. Only the wrapper names the scope, so a node
- * built from the cell's structure would drop it. The wrapper is read by its
- * alias where the type has one, and otherwise by the brand the cell is
- * intersected with.
+ * as `Writable.perSession.of()` returns, with the cell it scopes and the
+ * `null` or `undefined` beside it, or `undefined` for any other type. Only the
+ * wrapper names the scope, so a node built from the cell's structure would
+ * drop it. The wrapper is read by its alias where the type has one, and
+ * otherwise by the brand the cell is intersected with, which `Scoped` keeps
+ * off the nullish alternatives.
  */
 function getScopedCell(
   type: ts.Type,
   checker: ts.TypeChecker,
-): { readonly name: string; readonly cell: ts.Type } | undefined {
+):
+  | {
+    readonly name: string;
+    readonly cell: ts.Type;
+    readonly nullish: readonly ts.Type[];
+  }
+  | undefined {
   const symbol = type.aliasSymbol;
   const argument = type.aliasTypeArguments?.[0];
   if (
@@ -1382,23 +1389,37 @@ function getScopedCell(
     resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
   ) {
     return isCellLikeType(argument, checker)
-      ? { name: symbol.name, cell: argument }
+      ? { name: symbol.name, cell: argument, nullish: [] }
       : undefined;
   }
   const brand = getScopeBrand(type, checker);
-  const [alternative, ...others] = brand?.payload ?? [];
+  const alternatives = brand?.payload ?? [];
+  const isNullish = (members: readonly ts.Type[]) =>
+    members.length === 1 &&
+    (members[0]!.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
+  const [alternative, ...others] = alternatives.filter((members) =>
+    !isNullish(members)
+  );
   const cell = alternative?.length === 1 && others.length === 0
     ? alternative[0]!
     : undefined;
   return brand && cell && isCellLikeType(cell, checker)
-    ? { name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope], cell }
+    ? {
+      name: SCOPE_WRAPPER_FOR_SCOPE[brand.scope],
+      cell,
+      nullish: alternatives.filter(isNullish).map((members) => members[0]!),
+    }
     : undefined;
 }
 
-/** A scope wrapper around a cell, taken apart: its name, cell, and type. */
+/**
+ * A scope wrapper around a cell, taken apart: its name, its cell, the `null`
+ * or `undefined` beside the cell inside it, and its type.
+ */
 interface ScopedCellParts {
   readonly name: string;
   readonly cell: ts.TypeNode;
+  readonly nullish: readonly ts.TypeNode[];
   readonly type: ts.Type | undefined;
 }
 
@@ -1428,6 +1449,7 @@ function scopedCellNode(
     name: (type && getScopedCell(type, checker)?.name) ??
       getTypeReferenceNodeName(node as ts.TypeReferenceNode)!,
     cell,
+    nullish: [],
     type,
   };
 }
@@ -1449,32 +1471,41 @@ function scopedCellParts(
   if (!printedType) return scopedCellNode(node, checker, typeRegistry);
   const scoped = getScopedCell(printedType, checker);
   if (!scoped) return undefined;
-  return {
-    name: scoped.name,
-    cell: typeToTypeNodeWithRegistry(
-      scoped.cell,
+  const print = (type: ts.Type) =>
+    typeToTypeNodeWithRegistry(
+      type,
       { checker, factory, sourceFile, state },
       typeRegistry,
-    ),
+    );
+  return {
+    name: scoped.name,
+    cell: print(scoped.cell),
+    nullish: scoped.nullish.map(print),
     type: printedType,
   };
 }
 
 /**
- * Wraps `node`, a cell a pass rebuilt, in the scope wrapper `name`, and
- * registers the wrapper with `type`, the scoped cell's own type: schema
- * generation dispatches on that type, reads the scope from the wrapper's name,
- * and reads the cell from `node`, keeping any narrowing it carries.
+ * Wraps `node`, a cell a pass rebuilt, in the scope wrapper `scoped` names,
+ * beside the `null` or `undefined` it holds, and registers the wrapper with
+ * the scoped cell's own type: schema generation dispatches on that type, reads
+ * the scope from the wrapper's name, and reads the cell from `node`, keeping
+ * any narrowing it carries.
  */
 function wrapScopedCell(
   node: ts.TypeNode,
-  name: string,
-  type: ts.Type | undefined,
+  scoped: ScopedCellParts,
   factory: ts.NodeFactory,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
 ): ts.TypeNode {
-  const wrapper = createHelperWrapperTypeNode(node, name, factory);
-  if (type) typeRegistry?.set(wrapper, type);
+  const wrapper = createHelperWrapperTypeNode(
+    scoped.nullish.length === 0
+      ? node
+      : factory.createUnionTypeNode([node, ...scoped.nullish]),
+    scoped.name,
+    factory,
+  );
+  if (scoped.type) typeRegistry?.set(wrapper, scoped.type);
   return wrapper;
 }
 
@@ -1696,8 +1727,7 @@ function shrinkTypeNode(
     if (!shrunk) return undefined;
     return shrunk === scopedCell.cell ? node : wrapScopedCell(
       shrunk,
-      scopedCell.name,
-      scopedCell.type,
+      scopedCell,
       factory,
       typeRegistry,
     );
@@ -3594,8 +3624,7 @@ function applyCellCapabilityPathsToTypeNode(
         if (scopedCell) {
           updated = wrapScopedCell(
             updated,
-            scopedCell.name,
-            scopedCell.type,
+            scopedCell,
             factory,
             typeRegistry,
           );
@@ -4060,8 +4089,7 @@ function applyIdentityOnlyPathsToTypeNode(
     );
     return updated === scopedCell.cell ? node : wrapScopedCell(
       updated,
-      scopedCell.name,
-      scopedCell.type,
+      scopedCell,
       factory,
       typeRegistry,
     );

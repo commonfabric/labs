@@ -259,6 +259,13 @@ const isHandleSchema = (schema: unknown): boolean =>
   Array.isArray((schema as MutableJSONSchemaObj).asCell) &&
   ((schema as MutableJSONSchemaObj).asCell as unknown[]).length > 0;
 
+/** Whether `schema` is `{ type: "null" }` or `{ type: "undefined" }` alone. */
+const isNullishSchema = (schema: unknown): boolean =>
+  isObjectOrArray(schema) && !Array.isArray(schema) &&
+  Object.keys(schema).length === 1 &&
+  ((schema as { type?: unknown }).type === "null" ||
+    (schema as { type?: unknown }).type === "undefined");
+
 /** The error for a scope wrapper nested in another with no cell between. */
 const nestedScopeError = (): Error =>
   new Error("Nested scope wrappers require a cell boundary between scopes.");
@@ -1535,10 +1542,25 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    // Beside another alternative, a cell's `asCell` entry is in a branch, where
-    // the scope could scope the slot but not cap the cell's handle.
-    if (Array.isArray(schema.anyOf) && schema.anyOf.some(isHandleSchema)) {
-      throw scopeAroundCellUnionError(scope);
+    // Beside `null` or `undefined`, a cell is an `anyOf` branch, and the scope
+    // is declared twice: at the top, the slot's own scope, which the write
+    // path reads, and in the cell's `asCell` entry, the cap on following its
+    // handle, which a read applies however it reaches the handle.
+    const branches = schema.anyOf;
+    if (Array.isArray(branches) && branches.some(isHandleSchema)) {
+      if (!branches.every((b) => isHandleSchema(b) || isNullishSchema(b))) {
+        throw scopeAroundCellUnionError(scope);
+      }
+      if (schema.scope !== undefined) throw nestedScopeError();
+      return {
+        ...schema,
+        anyOf: branches.map((branch) =>
+          isHandleSchema(branch)
+            ? this.#applyScopeWrapperSemantics(branch, scope)
+            : branch
+        ),
+        scope,
+      };
     }
 
     if (schema.scope !== undefined) throw nestedScopeError();

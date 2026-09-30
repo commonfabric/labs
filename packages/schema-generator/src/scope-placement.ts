@@ -11,6 +11,12 @@
  * principal reads one instance. Refusing the schema at generation time is what keeps
  * that from being a silent outcome.
  *
+ * One declaration in a branch is not hidden: a cell's `asCell` entry naming the
+ * scope the slot declares at its own top level, as a scoped cell beside `null`
+ * or `undefined` carries. The slot's scope is read at the top, and the entry's,
+ * the cap on following the handle, wherever the handle is reached
+ * (`ContextualFlowControl.getAsCellFollowScopeCap`).
+ *
  * The subject here is PLACEMENT. Which scope a slot should carry, and which
  * instance the runtime addresses once it has one, are the write path's
  * questions.
@@ -57,14 +63,20 @@ const SAME_SLOT_COMPOUND_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
  */
 const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
-  const entry = Array.isArray(schema.asCell) ? schema.asCell[0] : undefined;
   // A string entry (`asCell: ["cell"]`) carries no scope of its own and does
   // not stand in for one: `Cell<PerSession<T>>` puts the scope on the sibling
   // key, so the fallback below is the only thing that finds it.
-  if (isObjectOrArray(entry) && typeof entry.scope === "string") {
-    return entry.scope;
-  }
-  return typeof schema.scope === "string" ? schema.scope : undefined;
+  return asCellEntryScope(schema) ??
+    (typeof schema.scope === "string" ? schema.scope : undefined);
+};
+
+/** The scope the outermost `asCell` entry of `schema` declares, if any. */
+const asCellEntryScope = (schema: MutableJSONSchema): string | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const entry = Array.isArray(schema.asCell) ? schema.asCell[0] : undefined;
+  return isObjectOrArray(entry) && typeof entry.scope === "string"
+    ? entry.scope
+    : undefined;
 };
 
 /**
@@ -83,47 +95,62 @@ export const scopeInsideUnionError = (scope: string): Error =>
   );
 
 /**
- * The error raised when a scope wrapper holds a cell beside another
- * alternative. The cell's `asCell` entry is then in an `anyOf` branch, where
- * the scope can scope the slot but not cap the handle, so a read through the
- * handle could reach a narrower scope's value.
+ * The error raised when a scope wrapper holds a cell beside a value other than
+ * `null` or `undefined`. The one scope would then have to be the slot's own
+ * for the value and the cell's cap on its handle both.
  */
 export const scopeAroundCellUnionError = (scope: string): Error =>
   new Error(
-    `A scope wrapper around a cell cannot hold another alternative beside ` +
-      `the cell. \`PerUser<Cell<T>> | null\` would give the slot ` +
-      `\`scope: "${scope}"\` but leave the cell's handle uncapped. Put the ` +
-      `alternative inside the cell (\`PerUser<Cell<T | null>>\`), or make ` +
-      `the property optional (\`prop?: PerUser<Cell<T>>\`).`,
+    `A scope wrapper around a cell cannot hold a value beside the cell ` +
+      `other than \`null\` or \`undefined\`: \`PerUser<Cell<T> | string>\` ` +
+      `would need \`scope: "${scope}"\` to scope the slot and cap the ` +
+      `cell's handle both. Put the value inside the cell ` +
+      `(\`PerUser<Cell<T | string>>\`).`,
   );
 
 const walkSlot = (schema: MutableJSONSchema): void => {
   if (!isObjectOrArray(schema)) return;
 
+  const slotScope = typeof schema.scope === "string" ? schema.scope : undefined;
   for (const keyword of SAME_SLOT_COMPOUND_KEYWORDS) {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
-    for (const branch of branches) checkBranch(branch as MutableJSONSchema);
+    for (const branch of branches) {
+      checkBranch(branch as MutableJSONSchema, slotScope);
+    }
   }
 
   descendIntoChildSlots(schema);
 };
 
 /**
- * A branch of the slot currently being walked. Its top-level scope belongs to
- * the containing slot, so declaring one here is the defect.
+ * A branch of the slot currently being walked, which declares `slotScope` at
+ * its own top level, if any. A scope at the branch's top level belongs to the
+ * containing slot, so declaring one here is the defect, except the cap a
+ * cell's `asCell` entry declares where it names `slotScope`. Beside that cap,
+ * a `scope` is the scope of the value inside the cell.
  */
-const checkBranch = (schema: MutableJSONSchema): void => {
+const checkBranch = (
+  schema: MutableJSONSchema,
+  slotScope: string | undefined,
+): void => {
   if (!isObjectOrArray(schema)) return;
 
   const scope = topLevelScope(schema);
-  if (scope !== undefined) throw scopeInsideUnionError(scope);
+  if (
+    scope !== undefined &&
+    (asCellEntryScope(schema) !== scope || scope !== slotScope)
+  ) {
+    throw scopeInsideUnionError(scope);
+  }
 
   // A nested compound is still the same slot's alternatives.
   for (const keyword of SAME_SLOT_COMPOUND_KEYWORDS) {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
-    for (const branch of branches) checkBranch(branch as MutableJSONSchema);
+    for (const branch of branches) {
+      checkBranch(branch as MutableJSONSchema, slotScope);
+    }
   }
 
   descendIntoChildSlots(schema);
