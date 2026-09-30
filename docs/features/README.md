@@ -90,9 +90,10 @@ a line for each new document to the index below.
   and how it stays current
 - [`space-access-changes.md`](space-access-changes.md) — how a handler grants
   and revokes access to a space with `grantSpaceAccess()` and
-  `revokeSpaceAccess()`: what a grant exposes, who may change the list and
-  where each refusal happens, how the change commits ahead of the handler's own
-  writes, and why a serving runtime refuses both
+  `revokeSpaceAccess()`, and leaves one with `leaveSpace()`: what a grant
+  exposes, who may change the list and where each refusal happens, how a grant
+  commits ahead of the handler's own writes and a leave after them, and why a
+  serving runtime refuses all three
 
 ## Talking to the outside world
 

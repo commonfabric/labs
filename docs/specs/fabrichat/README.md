@@ -254,9 +254,10 @@ names the ones it needs, and they are gathered here:
   as well ([random space identities](../random-space-identities.md)).
 - **Granting access from a pattern.** A handler on a client runtime can grant
   and revoke a space's members by principal with `grantSpaceAccess()` and
-  `revokeSpaceAccess()`, gated on a trusted gesture from an OWNER
+  `revokeSpaceAccess()`, gated on a trusted gesture from an OWNER, and a member
+  can leave with `leaveSpace()`, gated on nothing
   ([changing a space's access list](../../features/space-access-changes.md)).
-  A serving runtime refuses both. Space invitations don't serve: they are
+  A serving runtime refuses all three. Space invitations don't serve: they are
   bearer credentials, not bound to the person they are meant for (see
   [`ChatManagerOutput`](ChatManagerOutput.md#admission-to-a-room)).
 - **Delivering a notice.** Nothing in this repository lets a pattern deliver a

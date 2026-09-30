@@ -41,6 +41,7 @@
     "handler",
     "ifElse",
     "isWellFormedDID",
+    "leaveSpace",
     "lift",
     "navigateTo",
     "pattern",
