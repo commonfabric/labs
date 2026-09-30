@@ -15,7 +15,11 @@ import {
   isReactiveValueExpression,
 } from "../ast/mod.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
-import { isTransparentWrapper, unwrapExpression } from "../utils/expression.ts";
+import {
+  isTransparentWrapper,
+  unwrapExpression,
+  unwrapParentheses,
+} from "../utils/expression.ts";
 import { isBrandedCellType } from "./cell-type.ts";
 import {
   isPatternFactoryCalleeExpression,
@@ -816,18 +820,70 @@ function createForCall(
   const stableCause: ForCause = shouldUseStreamCause(initializer, context)
     ? { stream: cause }
     : cause;
-  const call = context.factory.createCallExpression(
-    context.factory.createPropertyAccessExpression(initializer, "for"),
-    undefined,
-    [
-      createCauseExpression(stableCause, context),
-      context.factory.createTrue(),
-    ],
-  );
+  const args = [
+    createCauseExpression(stableCause, context),
+    context.factory.createTrue(),
+  ];
+  // A value that may be nullish has no cell to name, so it gets `?.for()`.
+  const call = mayBeNullish(initializer, context)
+    ? context.factory.createCallChain(
+      context.factory.createPropertyAccessChain(
+        initializer,
+        context.factory.createToken(ts.SyntaxKind.QuestionDotToken),
+        "for",
+      ),
+      undefined,
+      undefined,
+      args,
+    )
+    : context.factory.createCallExpression(
+      context.factory.createPropertyAccessExpression(initializer, "for"),
+      undefined,
+      args,
+    );
   return context.cfHelpers.preserveNodeSourceMap(
     call,
     initializer,
     initializer,
+  );
+}
+
+/**
+ * Helper for `createForCall()`, which reports whether `expression` may
+ * evaluate to `null` or `undefined` when it runs. That is so of an optional
+ * chain, and of a call to a plain function whose type admits either one. A
+ * call the runtime provides is left out: it returns a cell whatever type the
+ * value in that cell has.
+ */
+function mayBeNullish(
+  expression: ts.Expression,
+  context: TransformationContext,
+): boolean {
+  const target = unwrapParentheses(expression);
+  if (ts.isOptionalChain(target)) {
+    return true;
+  }
+
+  if (
+    !ts.isCallExpression(target) ||
+    detectCallKind(target, context.checker) !== undefined
+  ) {
+    return false;
+  }
+
+  const type = getTypeAtLocationWithFallback(
+    target,
+    context.checker,
+    context.state.typeRegistry,
+  );
+  if (!type) {
+    return false;
+  }
+
+  const parts = type.isUnion() ? type.types : [type];
+  return parts.some((part) =>
+    (part.flags &
+      (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
   );
 }
 
