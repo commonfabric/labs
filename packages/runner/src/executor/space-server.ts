@@ -127,6 +127,7 @@ import {
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
 import {
+  isAclDocumentWriteRefusal,
   stampWaveRunContext,
   WaveAccumulator,
   type WaveCommitOutcome,
@@ -2114,8 +2115,13 @@ export class SpaceServer implements TransactionSealDestination {
           // with the intent lost. Noted INSIDE the seal chain, so the
           // flush's pre-commit `await #sealChain` barrier guarantees
           // the mark precedes commitWave. Non-event contexts note
-          // nothing (noteSealFailure filters).
-          wave.noteSealFailure(waveRunContextOf(tx));
+          // nothing (noteSealFailure filters). An access-list write's
+          // refusal is deterministic, and its event's consequence is the
+          // error the scheduler seals for it, so it requeues nothing: a
+          // replay would reach the identical refusal.
+          if (!isAclDocumentWriteRefusal(result.error)) {
+            wave.noteSealFailure(waveRunContextOf(tx));
+          }
         } else {
           // The drain's in-flight guard: an ACCEPTED event-handler seal
           // for a drained copy means its consequence mark now rides an
