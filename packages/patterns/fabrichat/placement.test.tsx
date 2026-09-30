@@ -33,10 +33,10 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomNotice,
   type ProfileCell,
@@ -53,9 +53,9 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
 };
 const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
 
@@ -118,7 +118,7 @@ export default pattern(() => {
       {
         action: room.sendMessage,
         event: { type: "click", target: { value: "Hello" } },
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: aliceOnFirst.sendReaction,

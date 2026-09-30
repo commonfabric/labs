@@ -25,10 +25,10 @@ import FabriChatRoom, {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatReaction,
   type ChatRoomNotice,
@@ -44,9 +44,9 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
 };
 const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
 
@@ -128,7 +128,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         action: room.composerSend,
         event: typed("Hello from Alice"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       // A window Alice's session opens is hers alone.
       {
@@ -210,7 +210,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         action: room.composerSend,
         event: typed("Hi Alice, Bob here"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: onFirst.sendReaction,

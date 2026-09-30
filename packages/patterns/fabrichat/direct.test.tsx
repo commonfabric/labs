@@ -24,8 +24,10 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_OBLITERATE_ACTION,
+  CHAT_OBLITERATE_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomNotice,
   type ProfileCell,
@@ -40,9 +42,13 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
+};
+const obliterateGesture = {
+  surface: CHAT_OBLITERATE_SURFACE,
+  action: CHAT_OBLITERATE_ACTION,
 };
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
@@ -109,24 +115,24 @@ export default pattern(() => {
       {
         action: alice.sendMessage,
         event: typed("From Alice"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: bob.sendMessage,
         event: typed("From Bob"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       // Neither may obliterate the other's message, Alice's OWNER access
       // notwithstanding.
       {
         action: bobOnHers.obliterateMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: obliterateGesture,
       },
       {
         action: aliceOnHis.obliterateMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: obliterateGesture,
       },
       {
         assertion: assert(() => bodies(messages) === "From Alice | From Bob"),
@@ -135,7 +141,7 @@ export default pattern(() => {
       {
         action: aliceOnHers.obliterateMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: obliterateGesture,
       },
       {
         assertion: assert(() =>

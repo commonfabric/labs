@@ -26,10 +26,13 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_DELETE_ACTION,
+  CHAT_DELETE_SURFACE,
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
+  CHAT_UNREACT_ACTION,
   type ChatProfile,
   type ChatReaction,
   type ChatRoomNotice,
@@ -45,9 +48,17 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
+};
+const deleteGesture = {
+  surface: CHAT_DELETE_SURFACE,
+  action: CHAT_DELETE_ACTION,
+};
+const unreactGesture = {
+  surface: CHAT_REACT_SURFACE,
+  action: CHAT_UNREACT_ACTION,
 };
 const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
 
@@ -115,12 +126,12 @@ export default pattern(() => {
       {
         action: alice.sendMessage,
         event: typed("First"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.sendMessage,
         event: typed("Second"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       // Any single emoji is a reaction; text, and two emoji together, are not.
       {
@@ -169,12 +180,12 @@ export default pattern(() => {
       {
         action: bobOnFirst.deleteReaction,
         event: { requestId: "b4", emoji: "🎉" },
-        trustedUi: reactGesture,
+        trustedUi: unreactGesture,
       },
       {
         action: bobOnFirst.deleteReaction,
         event: { requestId: "b5", emoji: "🎉" },
-        trustedUi: reactGesture,
+        trustedUi: unreactGesture,
       },
       {
         assertion: assert(() => talliesText(bobOnFirst.tallies) === "👍🏽 2*"),
@@ -196,7 +207,7 @@ export default pattern(() => {
       {
         action: aliceOnFirst.deleteMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: deleteGesture,
       },
       {
         action: bobOnFirst.sendReaction,

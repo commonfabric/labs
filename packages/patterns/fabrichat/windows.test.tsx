@@ -27,8 +27,8 @@ import {
 import {
   CHAT_MEMBERS_ACTION,
   CHAT_MEMBERS_SURFACE,
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomActivity,
   type ChatRoomNotice,
@@ -43,9 +43,9 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
 };
 const membersGesture = {
   surface: CHAT_MEMBERS_SURFACE,
@@ -122,17 +122,17 @@ export default pattern(() => {
       {
         action: alice.sendMessage,
         event: typed("One"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.sendMessage,
         event: typed("Two"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.sendMessage,
         event: typed("Three"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.messages.openWindow,

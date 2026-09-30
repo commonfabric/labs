@@ -19,21 +19,41 @@ import {
 // Reviewed surfaces
 //
 
-/**
- * The reviewed surface every message write is made from: sending, editing,
- * deleting, and obliterating. The runtime admits one writer, one action, and
- * one surface for a stored record, so the four message acts share them.
- */
-export const CHAT_MESSAGE_SURFACE = "ChatMessageSurface";
+/** The reviewed surface a message is sent from. */
+export const CHAT_SEND_SURFACE = "ChatSendSurface";
 
-/** The reviewed action a message write is, on `CHAT_MESSAGE_SURFACE`. */
-export const CHAT_MESSAGE_ACTION = "ChatMessageWrite";
+/** The reviewed action sending a message is, on `CHAT_SEND_SURFACE`. */
+export const CHAT_SEND_ACTION = "ChatSend";
+
+/** The reviewed surface a message is edited from. */
+export const CHAT_EDIT_SURFACE = "ChatEditSurface";
+
+/** The reviewed action editing a message is, on `CHAT_EDIT_SURFACE`. */
+export const CHAT_EDIT_ACTION = "ChatEdit";
+
+/** The reviewed surface a message is deleted from. */
+export const CHAT_DELETE_SURFACE = "ChatDeleteSurface";
+
+/** The reviewed action deleting a message is, on `CHAT_DELETE_SURFACE`. */
+export const CHAT_DELETE_ACTION = "ChatDelete";
+
+/** The reviewed surface a message is obliterated from. */
+export const CHAT_OBLITERATE_SURFACE = "ChatObliterateSurface";
+
+/**
+ * The reviewed action obliterating a message is, on
+ * `CHAT_OBLITERATE_SURFACE`.
+ */
+export const CHAT_OBLITERATE_ACTION = "ChatObliterate";
 
 /** The reviewed surface a reaction is added or removed from. */
 export const CHAT_REACT_SURFACE = "ChatReactSurface";
 
-/** The reviewed action a reaction is, on `CHAT_REACT_SURFACE`. */
+/** The reviewed action adding a reaction is, on `CHAT_REACT_SURFACE`. */
 export const CHAT_REACT_ACTION = "ChatReact";
+
+/** The reviewed action removing a reaction is, on `CHAT_REACT_SURFACE`. */
+export const CHAT_UNREACT_ACTION = "ChatUnreact";
 
 /** The reviewed surface members are added and removed from. */
 export const CHAT_MEMBERS_SURFACE = "ChatMembersSurface";

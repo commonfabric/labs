@@ -2,19 +2,17 @@
  * `FabriChatRoom`: one conversation, an implementation of `ChatRoomOutput`
  * (`docs/specs/fabrichat/FabriChatRoom.md`).
  *
- * Every write goes through one of two handlers. `commitRoom` writes the room's
- * record: its messages, their reactions, its roster, its notices, and its
- * recent activity. `commitWindow` writes the sending session's windows. The
- * runtime admits one writer for a stored record, and the activity log records
- * every kind of act, so each stream that changes the room is a binding of
- * `commitRoom`, bound with the act it performs.
+ * Every stream that changes the room's record has a handler of its own, as
+ * `FabriChatRoom.md` names them, and each stored record's write policy lists
+ * the handlers that may write it. `commitWindow` writes the sending session's
+ * windows.
  *
  * A message is a record of its own in the room's messages, labeled
  * `authored-by` whoever last wrote it, and admitted only from the reviewed
- * message surface. Its reactions are a list of their own, which the message
- * links and only the reaction writer writes, so reacting never rewrites the
- * message. Deleting a message drops that link, which takes its reactions out
- * of the room's record.
+ * surface of the act that wrote it. Its reactions are a list of their own,
+ * which the message links and only the reaction handlers write, so reacting
+ * never rewrites the message. Deleting a message drops that link, which takes
+ * its reactions out of the room's record.
  *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real
@@ -42,6 +40,7 @@ import {
   wish,
   Writable,
   type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
 } from "commonfabric";
 import {
   chooseRecordedTime,
@@ -57,12 +56,19 @@ import {
   windowSlice,
 } from "./logic.ts";
 import {
+  CHAT_DELETE_ACTION,
+  CHAT_DELETE_SURFACE,
+  CHAT_EDIT_ACTION,
+  CHAT_EDIT_SURFACE,
   CHAT_MEMBERS_ACTION,
   CHAT_MEMBERS_SURFACE,
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_OBLITERATE_ACTION,
+  CHAT_OBLITERATE_SURFACE,
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
+  CHAT_UNREACT_ACTION,
   type ChatDeletedBody,
   type ChatMessageVersion,
   type ChatProfile,
@@ -135,16 +141,24 @@ export const FABRICHAT_QUICK_REACTIONS = [
 //
 
 /**
- * A stored reaction: written only by `commitRoom`, from the reviewed
- * reaction surface, and labeled with its reactor.
+ * A stored reaction: written only by the reaction handlers, each from the
+ * reviewed reaction surface with its own action, and labeled with its reactor.
  */
 export type SentReaction = AuthoredByCurrentUser<
-  TrustedActionWrite<
-    ChatReaction,
-    typeof commitRoom,
-    typeof CHAT_REACT_ACTION,
-    typeof CHAT_REACT_SURFACE
-  >
+  WritePolicyAnyOf<ChatReaction, [
+    TrustedActionWrite<
+      unknown,
+      typeof commitSendReaction,
+      typeof CHAT_REACT_ACTION,
+      typeof CHAT_REACT_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitDeleteReaction,
+      typeof CHAT_UNREACT_ACTION,
+      typeof CHAT_REACT_SURFACE
+    >,
+  ]>
 >;
 
 /** One message's reactions, in no particular order. */
@@ -190,16 +204,36 @@ export interface MessageRecord {
 }
 
 /**
- * A stored message: written only by `commitRoom`, from the reviewed message
- * surface, and labeled with whoever wrote its current version.
+ * A stored message: written only by the four message handlers, each from its
+ * own reviewed surface, and labeled with whoever wrote its current version.
  */
 export type SentMessage = AuthoredByCurrentUser<
-  TrustedActionWrite<
-    MessageRecord,
-    typeof commitRoom,
-    typeof CHAT_MESSAGE_ACTION,
-    typeof CHAT_MESSAGE_SURFACE
-  >
+  WritePolicyAnyOf<MessageRecord, [
+    TrustedActionWrite<
+      unknown,
+      typeof commitSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitEdit,
+      typeof CHAT_EDIT_ACTION,
+      typeof CHAT_EDIT_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitDelete,
+      typeof CHAT_DELETE_ACTION,
+      typeof CHAT_DELETE_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitObliterate,
+      typeof CHAT_OBLITERATE_ACTION,
+      typeof CHAT_OBLITERATE_SURFACE
+    >,
+  ]>
 >;
 
 /** The room's messages, in the order they were recorded. */
@@ -233,15 +267,22 @@ export interface UsedTime {
 export type UsedTimesCell = Writable<UsedTime[] | Default<[]>>;
 
 /**
- * A stored activity entry: a document of its own, written once by
- * `commitRoom`. The runtime labels a value `authored-by` its writer only when
- * a trusted gesture on one named surface made the write, and entries record
- * acts from every surface and from none, so an entry carries no such label.
+ * A stored activity entry: a document of its own, written once by the handler
+ * whose act it records. Entries record acts from every surface and from none,
+ * so an entry carries no `authored-by` label, which needs a reviewed gesture
+ * from every writer.
  */
-export type SentActivity = WriteAuthorizedBy<
-  ChatRoomActivity,
-  typeof commitRoom
->;
+export type SentActivity = WritePolicyAnyOf<ChatRoomActivity, [
+  WriteAuthorizedBy<unknown, typeof commitSend>,
+  WriteAuthorizedBy<unknown, typeof commitEdit>,
+  WriteAuthorizedBy<unknown, typeof commitDelete>,
+  WriteAuthorizedBy<unknown, typeof commitObliterate>,
+  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
+  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+  WriteAuthorizedBy<unknown, typeof commitShowProfile>,
+  WriteAuthorizedBy<unknown, typeof commitLeave>,
+  WriteAuthorizedBy<unknown, typeof commitAdd>,
+]>;
 
 /** The room's recent activity, in `seq` order. */
 export type ActivityCell = Writable<SentActivity[] | Default<[]>>;
@@ -268,11 +309,16 @@ export type ActivityCountersCell = Writable<
 
 /**
  * The room's roster: members' profiles, as claims. It changes only through
- * `commitRoom`, and `items` is absent until the first profile is shown.
+ * the membership handlers, and `items` is absent until the first of them
+ * writes it.
  */
 export interface RosterValue {
   /** The profiles, in the order they were shown. */
-  items?: WriteAuthorizedBy<ProfileCell[], typeof commitRoom>;
+  items?: WritePolicyAnyOf<ProfileCell[], [
+    WriteAuthorizedBy<unknown, typeof commitShowProfile>,
+    WriteAuthorizedBy<unknown, typeof commitLeave>,
+    WriteAuthorizedBy<unknown, typeof commitAdd>,
+  ]>;
 }
 
 /** The cell holding the roster; a room nobody has joined yet holds `{}`. */
@@ -609,28 +655,17 @@ export type ComposerCell = Writable<
   ComposerState | Default<Record<PropertyKey, never>>
 >;
 
-/** Every act `commitRoom` performs, each bound to one of the room's streams. */
-export type RoomAct =
-  | "send"
-  | "edit"
-  | "delete"
-  | "obliterate"
-  | "react"
-  | "unreact"
-  | "showProfile"
-  | "leave"
-  | "add"
-  | "remove"
-  | "delivered";
+/** The acts on a message, each performed by a handler of its own. */
+type MessageAct = "send" | "edit" | "delete" | "obliterate";
+
+/** The acts on the room's membership, each performed by a handler of its own. */
+type MembershipAct = "showProfile" | "leave" | "add" | "remove" | "delivered";
 
 /**
- * The room's records, and a rendered control's bindings, as `commitRoom` is
- * bound to them.
+ * The room's records, and a rendered control's bindings, as every handler
+ * that changes the room is bound to them.
  */
 export interface RoomActState {
-  /** The act this binding performs. */
-  act: RoomAct;
-
   /** The viewer's profile, which holds no value until it resolves. */
   myProfile: ProfileCell | undefined;
 
@@ -708,10 +743,10 @@ export interface RoomActState {
  * request, all in one transaction.
  */
 const performMessageAct = (
+  op: MessageAct,
   event: RoomStreamEvent,
   state: RoomActState,
 ): void => {
-  const op = state.act;
   const {
     myProfile,
     kind,
@@ -886,10 +921,10 @@ const performMessageAct = (
  * so one person's one reaction has a single address in every session.
  */
 const performReactionAct = (
+  op: "add" | "remove",
   event: RoomStreamEvent,
   state: RoomActState,
 ): void => {
-  const op = state.act === "react" ? "add" : "remove";
   const { myProfile, messages, requests, usedTimes, activity, counters } =
     state;
   const { cell: profile } = resolvedCell(myProfile);
@@ -942,10 +977,10 @@ const performReactionAct = (
  * notice, and the activity entry.
  */
 const performMembershipAct = (
+  op: MembershipAct,
   event: RoomStreamEvent,
   state: RoomActState,
 ): void => {
-  const op = state.act;
   const {
     myProfile,
     kind,
@@ -1048,26 +1083,59 @@ const performMembershipAct = (
   rememberRequest(requests, requestKey, clock);
 };
 
-/**
- * The room's one writer: every stream that changes the room's record is a
- * binding of it, with the act it performs. The runtime admits one writer for a
- * stored record, and the activity log records every kind of act, so the writer
- * is one handler; each record still names its own reviewed surface.
- */
-export const commitRoom = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => {
-    const act = state.act;
-    if (
-      act === "send" || act === "edit" || act === "delete" ||
-      act === "obliterate"
-    ) {
-      performMessageAct(event, state);
-    } else if (act === "react" || act === "unreact") {
-      performReactionAct(event, state);
-    } else {
-      performMembershipAct(event, state);
-    }
-  },
+/** Sends a message, from `ChatSendSurface`. */
+export const commitSend = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMessageAct("send", event, state),
+);
+
+/** Edits the sender's message, from `ChatEditSurface`. */
+export const commitEdit = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMessageAct("edit", event, state),
+);
+
+/** Deletes the sender's message, from `ChatDeleteSurface`. */
+export const commitDelete = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMessageAct("delete", event, state),
+);
+
+/** Obliterates a message, from `ChatObliterateSurface`. */
+export const commitObliterate = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMessageAct("obliterate", event, state),
+);
+
+/** Adds the sender's reaction, from `ChatReactSurface`. */
+export const commitSendReaction = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performReactionAct("add", event, state),
+);
+
+/** Removes the sender's reaction, from `ChatReactSurface`. */
+export const commitDeleteReaction = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performReactionAct("remove", event, state),
+);
+
+/** Adds the sender's profile to the roster. */
+export const commitShowProfile = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMembershipAct("showProfile", event, state),
+);
+
+/** Records the sender as having left. */
+export const commitLeave = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMembershipAct("leave", event, state),
+);
+
+/** Adds a member, from `ChatMembersSurface`. */
+export const commitAdd = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMembershipAct("add", event, state),
+);
+
+/** Removes a member, from `ChatMembersSurface`. */
+export const commitRemove = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMembershipAct("remove", event, state),
+);
+
+/** Reports a notice from `add` delivered. */
+export const commitDelivered = handler<RoomStreamEvent, RoomActState>(
+  (event, state) => performMembershipAct("delivered", event, state),
 );
 
 /** A window request, whose thread root is one of the room's messages. */
@@ -1455,54 +1523,46 @@ export const FabriChatMessageRow = pattern<
   const startEdit = action(() => composer.key("editing").set(message));
   const stopEdit = action(() => composer.key("editing").set(undefined));
 
-  const sendReaction = commitRoom({
-    act: "react",
+  const sendReaction = commitSendReaction({
     myProfile,
     ...records,
     message,
     pickerOpen,
     closesPicker: true,
   });
-  const deleteReaction = commitRoom({
-    act: "unreact",
+  const deleteReaction = commitDeleteReaction({
     myProfile,
     ...records,
     message,
   });
-  const editMessage = commitRoom({
-    act: "edit",
+  const editMessage = commitEdit({
     myProfile,
     ...records,
     message,
   });
-  const deleteMessage = commitRoom({
-    act: "delete",
+  const deleteMessage = commitDelete({
     myProfile,
     ...records,
     message,
   });
-  const obliterateMessage = commitRoom({
-    act: "obliterate",
+  const obliterateMessage = commitObliterate({
     myProfile,
     ...records,
     message,
   });
-  const replyInThread = commitRoom({
-    act: "send",
+  const replyInThread = commitSend({
     myProfile,
     ...records,
     message,
     shownIn: "thread",
   });
-  const replyInBoth = commitRoom({
-    act: "send",
+  const replyInBoth = commitSend({
     myProfile,
     ...records,
     message,
     shownIn: "both",
   });
-  const replyInMain = commitRoom({
-    act: "send",
+  const replyInMain = commitSend({
     myProfile,
     ...records,
     message,
@@ -1561,13 +1621,13 @@ export const FabriChatMessageRow = pattern<
                 )}
               {isEdited ? <cf-text variant="caption">(edited)</cf-text> : null}
               <div
-                data-ui-pattern={CHAT_MESSAGE_SURFACE}
-                data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
+                data-ui-pattern={CHAT_EDIT_SURFACE}
+                data-ui-event-integrity={CHAT_EDIT_SURFACE}
                 style={{ display: editorDisplay }}
               >
                 <cf-hstack gap="1" align="center">
                   <cf-submit-input
-                    data-ui-action={CHAT_MESSAGE_ACTION}
+                    data-ui-action={CHAT_EDIT_ACTION}
                     placeholder="Edit message"
                     buttonText="Save"
                     disabled={cannotWrite}
@@ -1592,8 +1652,7 @@ export const FabriChatMessageRow = pattern<
                       color="primary"
                       variant={tally.mine ? "outline" : "ghost"}
                       disabled={cannotWrite}
-                      onClick={commitRoom({
-                        act: "react",
+                      onClick={commitSendReaction({
                         myProfile,
                         kind,
                         ownSpace,
@@ -1618,15 +1677,14 @@ export const FabriChatMessageRow = pattern<
                       </span>
                     </cf-button>
                     <cf-button
-                      data-ui-action={CHAT_REACT_ACTION}
+                      data-ui-action={CHAT_UNREACT_ACTION}
                       size="sm"
                       variant="ghost"
                       aria-label="Remove my reaction"
                       title="Remove my reaction"
                       disabled={cannotWrite}
                       style={{ display: tally.mine ? "inline-flex" : "none" }}
-                      onClick={commitRoom({
-                        act: "unreact",
+                      onClick={commitDeleteReaction({
                         myProfile,
                         kind,
                         ownSpace,
@@ -1685,8 +1743,7 @@ export const FabriChatMessageRow = pattern<
                   size="sm"
                   variant="ghost"
                   disabled={cannotWrite}
-                  onClick={commitRoom({
-                    act: "react",
+                  onClick={commitSendReaction({
                     myProfile,
                     kind,
                     ownSpace,
@@ -1753,12 +1810,12 @@ export const FabriChatMessageRow = pattern<
               Edit
             </cf-button>
             <div
-              data-ui-pattern={CHAT_MESSAGE_SURFACE}
-              data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
-              style={{ display: "flex", gap: "0.25rem" }}
+              data-ui-pattern={CHAT_DELETE_SURFACE}
+              data-ui-event-integrity={CHAT_DELETE_SURFACE}
+              style={{ display: "flex" }}
             >
               <cf-button
-                data-ui-action={CHAT_MESSAGE_ACTION}
+                data-ui-action={CHAT_DELETE_ACTION}
                 size="sm"
                 variant="ghost"
                 style={{ display: ownDisplay }}
@@ -1766,8 +1823,14 @@ export const FabriChatMessageRow = pattern<
               >
                 Delete
               </cf-button>
+            </div>
+            <div
+              data-ui-pattern={CHAT_OBLITERATE_SURFACE}
+              data-ui-event-integrity={CHAT_OBLITERATE_SURFACE}
+              style={{ display: "flex" }}
+            >
               <cf-button
-                data-ui-action={CHAT_MESSAGE_ACTION}
+                data-ui-action={CHAT_OBLITERATE_ACTION}
                 size="sm"
                 variant="ghost"
                 style={{ display: obliterateDisplay }}
@@ -2065,15 +2128,13 @@ export const FabriChatRoomCore = pattern<
     () => [...((notices.get() ?? []) as ChatRoomNotice[])],
   );
 
-  const sendMessage = commitRoom({ act: "send", myProfile, ...records });
-  const composeSend = commitRoom({
-    act: "send",
+  const sendMessage = commitSend({ myProfile, ...records });
+  const composeSend = commitSend({
     myProfile,
     ...records,
     replyFrom: "replyTo",
   });
-  const sendThreadReply = commitRoom({
-    act: "send",
+  const sendThreadReply = commitSend({
     myProfile,
     ...records,
     replyFrom: "thread",
@@ -2081,53 +2142,43 @@ export const FabriChatRoomCore = pattern<
   });
   const streams = {
     sendMessage,
-    editMessage: commitRoom({
-      act: "edit",
+    editMessage: commitEdit({
       myProfile,
       ...records,
     }),
-    deleteMessage: commitRoom({
-      act: "delete",
+    deleteMessage: commitDelete({
       myProfile,
       ...records,
     }),
-    obliterateMessage: commitRoom({
-      act: "obliterate",
+    obliterateMessage: commitObliterate({
       myProfile,
       ...records,
     }),
-    sendReaction: commitRoom({
-      act: "react",
+    sendReaction: commitSendReaction({
       myProfile,
       ...records,
     }),
-    deleteReaction: commitRoom({
-      act: "unreact",
+    deleteReaction: commitDeleteReaction({
       myProfile,
       ...records,
     }),
-    showProfile: commitRoom({
-      act: "showProfile",
+    showProfile: commitShowProfile({
       myProfile,
       ...records,
     }),
-    leave: commitRoom({
-      act: "leave",
+    leave: commitLeave({
       myProfile,
       ...records,
     }),
-    add: commitRoom({
-      act: "add",
+    add: commitAdd({
       myProfile,
       ...records,
     }),
-    remove: commitRoom({
-      act: "remove",
+    remove: commitRemove({
       myProfile,
       ...records,
     }),
-    delivered: commitRoom({
-      act: "delivered",
+    delivered: commitDelivered({
       myProfile,
       ...records,
     }),
@@ -2226,11 +2277,11 @@ export const FabriChatRoomCore = pattern<
           </cf-button>
         </cf-hstack>
         <div
-          data-ui-pattern={CHAT_MESSAGE_SURFACE}
-          data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
+          data-ui-pattern={CHAT_SEND_SURFACE}
+          data-ui-event-integrity={CHAT_SEND_SURFACE}
         >
           <cf-submit-input
-            data-ui-action={CHAT_MESSAGE_ACTION}
+            data-ui-action={CHAT_SEND_ACTION}
             inputId="fabrichat-message"
             placeholder="Message"
             buttonText="Send"
@@ -2278,11 +2329,11 @@ export const FabriChatRoomCore = pattern<
             Also send to the conversation
           </cf-checkbox>
           <div
-            data-ui-pattern={CHAT_MESSAGE_SURFACE}
-            data-ui-event-integrity={CHAT_MESSAGE_SURFACE}
+            data-ui-pattern={CHAT_SEND_SURFACE}
+            data-ui-event-integrity={CHAT_SEND_SURFACE}
           >
             <cf-submit-input
-              data-ui-action={CHAT_MESSAGE_ACTION}
+              data-ui-action={CHAT_SEND_ACTION}
               inputId="fabrichat-thread-message"
               placeholder="Reply in thread"
               buttonText="Reply"
@@ -2331,8 +2382,7 @@ export const FabriChatRoomCore = pattern<
                   <cf-button
                     size="sm"
                     variant="ghost"
-                    onClick={commitRoom({
-                      act: "delivered",
+                    onClick={commitDelivered({
                       myProfile,
                       kind,
                       ownSpace,

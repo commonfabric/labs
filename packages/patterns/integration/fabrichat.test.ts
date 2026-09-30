@@ -28,7 +28,7 @@ const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 // Trusted action names: the runtime's profile create form, and FabriChat's
 // message write and reaction (`fabrichat/schemas.tsx`).
 const PROFILE_CREATE_ACTION = "CreateProfile";
-const SEND_ACTION = "ChatMessageWrite";
+const SEND_ACTION = "ChatSend";
 const REACT_ACTION = "ChatReact";
 
 // The control on each message that opens its reaction picker. The first one

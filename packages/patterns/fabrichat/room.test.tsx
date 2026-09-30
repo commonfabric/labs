@@ -28,8 +28,14 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_DELETE_ACTION,
+  CHAT_DELETE_SURFACE,
+  CHAT_EDIT_ACTION,
+  CHAT_EDIT_SURFACE,
+  CHAT_OBLITERATE_ACTION,
+  CHAT_OBLITERATE_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomNotice,
   epochNsecFromMsec,
@@ -50,9 +56,21 @@ type TestProfile = AddIntegrity<
 
 // Every message write is a protected write, so each step carries the trusted
 // gesture of the message surface: the headless equivalent of a click there.
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
+};
+const editGesture = {
+  surface: CHAT_EDIT_SURFACE,
+  action: CHAT_EDIT_ACTION,
+};
+const deleteGesture = {
+  surface: CHAT_DELETE_SURFACE,
+  action: CHAT_DELETE_ACTION,
+};
+const obliterateGesture = {
+  surface: CHAT_OBLITERATE_SURFACE,
+  action: CHAT_OBLITERATE_ACTION,
 };
 
 // A composer delivers its field's text on the trusted click.
@@ -193,12 +211,12 @@ export default pattern(() => {
       {
         action: alice.sendMessage,
         event: typed("Hello, team", "alice-1"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.sendMessage,
         event: typed("   "),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: alice.sendMessage,
@@ -206,12 +224,12 @@ export default pattern(() => {
           requestId: "alice-stale",
           version: { body: "Very late", sentAt: epochNsecFromMsec(1000) },
         },
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: pending.sendMessage,
         event: typed("From nobody"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       { assertion: assert(() => bodies(messages) === "Hello, team") },
       {
@@ -225,17 +243,17 @@ export default pattern(() => {
       {
         action: alice.sendMessage,
         event: typed("Hello, team", "alice-1"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: bob.sendMessage,
         event: typed("Hi, Alice"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: bob.sendMessage,
         event: typed("Hi, Alice"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         assertion: assert(() =>
@@ -257,12 +275,12 @@ export default pattern(() => {
       {
         action: bobOnFirst.editMessage,
         event: typed("Hijacked"),
-        trustedUi: messageGesture,
+        trustedUi: editGesture,
       },
       {
         action: aliceOnFirst.editMessage,
         event: typed("Hello, everyone"),
-        trustedUi: messageGesture,
+        trustedUi: editGesture,
       },
       {
         assertion: assert(() => {
@@ -279,12 +297,12 @@ export default pattern(() => {
       {
         action: aliceOnSecond.deleteMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: deleteGesture,
       },
       {
         action: bobOnSecond.deleteMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: deleteGesture,
       },
       {
         assertion: assert(() => {
@@ -299,7 +317,7 @@ export default pattern(() => {
       {
         action: bobOnSecond.editMessage,
         event: typed("Back again"),
-        trustedUi: messageGesture,
+        trustedUi: editGesture,
       },
       {
         assertion: assert(() => typeof stored(messages)[1]?.body === "object"),
@@ -309,7 +327,7 @@ export default pattern(() => {
       {
         action: bobOnFirst.obliterateMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: obliterateGesture,
       },
       {
         assertion: assert(() =>
@@ -319,7 +337,7 @@ export default pattern(() => {
       {
         action: aliceOnThird.obliterateMessage,
         event: {},
-        trustedUi: messageGesture,
+        trustedUi: obliterateGesture,
       },
       {
         assertion: assert(() => {
@@ -335,17 +353,17 @@ export default pattern(() => {
       {
         action: aliceOnFirst.replyInThread,
         event: typed("In the thread"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: aliceOnFirst.replyInBoth,
         event: typed("In both"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: bobOnFirst.replyInMain,
         event: typed("Quoting you"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         assertion: assert(() =>
@@ -372,12 +390,12 @@ export default pattern(() => {
       {
         action: bobOnSecond.replyInThread,
         event: typed("To the deleted one"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: bobOnThreadReply.replyInMain,
         event: typed("Quoting a thread reply"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         action: aliceOnFirst.editMessage,
@@ -385,7 +403,7 @@ export default pattern(() => {
           requestId: "alice-stale-edit",
           version: { body: "Very late edit", sentAt: epochNsecFromMsec(1000) },
         },
-        trustedUi: messageGesture,
+        trustedUi: editGesture,
       },
       {
         assertion: assert(() =>

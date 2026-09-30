@@ -24,8 +24,8 @@ import {
   type UsedTime,
 } from "./room.tsx";
 import {
-  CHAT_MESSAGE_ACTION,
-  CHAT_MESSAGE_SURFACE,
+  CHAT_SEND_ACTION,
+  CHAT_SEND_SURFACE,
   type ChatProfile,
   type ChatRoomNotice,
   type ProfileCell,
@@ -39,9 +39,9 @@ type TestProfile = AddIntegrity<
   readonly ["fabrichat-test-profile"]
 >;
 
-const messageGesture = {
-  surface: CHAT_MESSAGE_SURFACE,
-  action: CHAT_MESSAGE_ACTION,
+const sendGesture = {
+  surface: CHAT_SEND_SURFACE,
+  action: CHAT_SEND_ACTION,
 };
 
 const typed = (text: string) => ({ type: "click", target: { value: text } });
@@ -75,7 +75,7 @@ export default pattern(() => {
       {
         action: alice.composerSend,
         event: typed("Hello"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       { assertion: assert(() => summary(messages) === "Hello@-") },
       // "Reply" on the message composes a reply to it in the conversation.
@@ -84,7 +84,7 @@ export default pattern(() => {
       {
         action: alice.composerSend,
         event: typed("Quoting"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       // "Thread" opens the message's thread, where the thread composer
       // replies.
@@ -92,13 +92,13 @@ export default pattern(() => {
       {
         action: alice.threadComposerSend,
         event: typed("In the thread"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       // The reply once sent, the main composer composes none.
       {
         action: alice.composerSend,
         event: typed("Plain"),
-        trustedUi: messageGesture,
+        trustedUi: sendGesture,
       },
       {
         assertion: assert(() =>
