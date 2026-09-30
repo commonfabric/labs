@@ -1,4 +1,4 @@
-import type { DID, JSONSchemaObj } from "@commonfabric/api";
+import type { DID, JSONSchemaObj, SpaceMember } from "@commonfabric/api";
 import {
   debugStr,
   hashStringOf,
@@ -7,7 +7,6 @@ import {
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isInertPlainObject } from "@commonfabric/utils/objects";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   RECORD_SUBSCHEMA_KEYS,
@@ -26,6 +25,7 @@ import {
 } from "../cell.ts";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
+import { creatorSpaceGrants } from "../creator-space-grants.ts";
 import { defineAuthoredDebugAccessors } from "../harness/authored-debug-source.ts";
 import {
   declareStreamSchema,
@@ -1102,7 +1102,7 @@ type CreatorSpaceTarget = {
   readonly name: string;
 
   /** The principals the genesis admits beside the creator. */
-  readonly members: Readonly<Record<DID, "WRITE" | "OWNER">>;
+  readonly members: readonly SpaceMember[];
 };
 
 /** Creator-only targets, by the object `inSpace()` minted to stand for one. */
@@ -1114,8 +1114,8 @@ const creatorSpaceTargets = new WeakMap<object, CreatorSpaceTarget>();
  * describe.
  *
  * @throws Error when the options are not `{ access: "creator", members? }`,
- *   when `space` names a space that already exists, or when a member is not a
- *   DID at `WRITE` or `OWNER`, or is listed twice.
+ *   when `space` names a space that already exists, or when
+ *   `creatorSpaceGrants()` refuses the members.
  */
 function creatorSpaceTarget(space: unknown, options: unknown): object {
   if (!isObjectNotArray(options) || options.access !== "creator") {
@@ -1130,39 +1130,15 @@ function creatorSpaceTarget(space: unknown, options: unknown): object {
         "name or no argument, not a DID or a cell naming a space that exists.",
     );
   }
-  const members: Record<DID, "WRITE" | "OWNER"> = {};
-  const given = options.members ?? [];
-  if (!Array.isArray(given)) {
-    throw new Error(
-      debugStr`\`inSpace()\` \`members\` must be an array; got $quote${given}.`,
-    );
-  }
-  for (const entry of given) {
-    const principal = isObjectNotArray(entry) ? entry.principal : undefined;
-    const level = isObjectNotArray(entry) ? entry.level : undefined;
-    if (typeof principal !== "string" || !isDID(principal)) {
-      throw new Error(
-        "A creator-only space's member must be a principal's DID, never " +
-          debugStr`the wildcard; got $quote${principal}.`,
-      );
-    }
-    if (level !== "WRITE" && level !== "OWNER") {
-      throw new Error(
-        "A creator-only space's member is admitted at `WRITE` or `OWNER`; " +
-          debugStr`got $quote${level} for ${principal}.`,
-      );
-    }
-    if (Object.hasOwn(members, principal)) {
-      throw new Error(
-        `A creator-only space lists ${principal} as a member twice.`,
-      );
-    }
-    members[principal] = level;
-  }
+  const grants = creatorSpaceGrants(options.members ?? []);
   const target = {};
   creatorSpaceTargets.set(target, {
     name: typeof space === "string" ? space : "",
-    members: Object.freeze(members),
+    members: Object.freeze(
+      Object.entries(grants).map(([principal, level]) =>
+        Object.freeze({ principal: principal as DID, level })
+      ),
+    ),
   });
   return target;
 }
@@ -1236,9 +1212,10 @@ function resolveInSpaceTargetSpace(
  * commit is prepared, so a check at commit preparation could refuse the
  * commit but not the space.
  *
- * @throws Error outside a handler, in a run acting for no principal, when a
- *   member is the creator, or when `members` is not empty and the handler's
- *   event is not a trusted gesture.
+ * @throws Error outside a handler, in a run acting for no principal, when
+ *   `creatorSpaceGrants()` refuses the members (the creator among them), or
+ *   when `members` is not empty and the handler's event is not a trusted
+ *   gesture.
  */
 function resolveCreatorSpaceTarget(
   target: CreatorSpaceTarget,
@@ -1263,14 +1240,8 @@ function resolveCreatorSpaceTarget(
         "acts for, and this run acts for none.",
     );
   }
-  if (Object.hasOwn(target.members, creator)) {
-    throw new Error(
-      `A creator-only space lists its creator, ${creator}, as a member.`,
-    );
-  }
-  if (
-    Object.keys(target.members).length > 0 && frame.trustedGesture !== true
-  ) {
+  const grants = creatorSpaceGrants(target.members, creator);
+  if (Object.keys(grants).length > 0 && frame.trustedGesture !== true) {
     throw new Error(
       "A creator-only space with `members` grants each of them what it will " +
         "hold, so it needs a trusted gesture on the handler's event.",
@@ -1284,15 +1255,11 @@ function resolveCreatorSpaceTarget(
     tx,
   );
   const allocationLink = allocation.getAsNormalizedFullLink();
-  const key = JSON.stringify([
-    allocationLink.space,
-    allocationLink.id,
+  const key = hashStringOf({
+    allocation: { space: allocationLink.space, id: allocationLink.id },
     creator,
-    utf8SortedKeysOf(target.members).map((member) => [
-      member,
-      target.members[member as DID],
-    ]),
-  ]);
+    grants,
+  });
   const recorded = allocation.get();
   if (recorded !== undefined) {
     if (!isDID(recorded)) {

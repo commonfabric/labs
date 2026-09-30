@@ -161,11 +161,10 @@ describe("creator-only-space", () => {
     return result;
   };
 
-  /** Settles `runtime` and its storage. */
-  const settle = async (runtime: Runtime): Promise<void> => {
-    await runtime.idle();
-    await runtime.storageManager.synced();
-  };
+  /**
+   * Settles `runtime`, its storage, and what its commits' callbacks queue.
+   */
+  const settle = (runtime: Runtime): Promise<void> => runtime.settled();
 
   /** The errors `runtime`'s scheduler reports from now on. */
   const errorsOf = (runtime: Runtime): string[] => {
@@ -549,6 +548,65 @@ describe("creator-only-space", () => {
     });
   });
 
+  describe("Runtime.createCreatorSpace()", () => {
+    const refusals: Array<[string, unknown, string]> = [
+      [
+        "a wildcard member",
+        [{ principal: "*", level: "WRITE" }],
+        "never the wildcard",
+      ],
+      [
+        "a member that is not a DID",
+        [{ principal: "bob", level: "WRITE" }],
+        "must be a principal's DID",
+      ],
+      [
+        "a member at `READ`",
+        [{ principal: bob.did(), level: "READ" }],
+        "admitted at `WRITE` or `OWNER`",
+      ],
+      ["a member listed twice", [
+        { principal: bob.did(), level: "WRITE" },
+        { principal: bob.did(), level: "OWNER" },
+      ], "as a member twice"],
+      [
+        "the creator as a member",
+        [{ principal: alice.did(), level: "WRITE" }],
+        "lists its creator",
+      ],
+      [
+        "members that are not an array",
+        { [bob.did()]: "WRITE" },
+        "must be an array",
+      ],
+    ];
+    for (const [what, members, message] of refusals) {
+      it(`throws given ${what}, creating no space`, async () => {
+        const { runtime, registered } = newRuntime(alice);
+        await expect(runtime.createCreatorSpace({
+          key: "direct",
+          creator: alice.did(),
+          members: members as [],
+        })).rejects.toThrow(message);
+        expect(registered).toEqual([]);
+      });
+    }
+
+    it("creates the space a valid request names", async () => {
+      const { runtime, registered } = newRuntime(alice);
+      const space = await runtime.createCreatorSpace({
+        key: "direct",
+        creator: alice.did(),
+        members: [{ principal: bob.did(), level: "WRITE" }],
+      });
+      expect(registered).toEqual([space]);
+      expect(await aclOf(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+    });
+  });
+
   describe("over storage that writes no genesis", () => {
     it("throws rather than create a space with no access list", async () => {
       const manager = EmulatedStorageManager.connectTo(server, { as: alice });
@@ -563,7 +621,7 @@ describe("creator-only-space", () => {
       await expect(runtime.createCreatorSpace({
         key: "no-genesis",
         creator: alice.did(),
-        members: {},
+        members: [],
       })).rejects.toThrow("cannot bootstrap an ACL");
     });
   });

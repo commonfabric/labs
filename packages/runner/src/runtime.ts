@@ -1,3 +1,4 @@
+import type { SpaceMember } from "@commonfabric/api";
 import {
   cloneIfNecessary,
   deepFreeze,
@@ -87,6 +88,7 @@ import {
 } from "./cfc/mod.ts";
 import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
 import { meetCfcObservationCeilings } from "./cfc/observation.ts";
+import { creatorSpaceGrants } from "./creator-space-grants.ts";
 import {
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
@@ -453,8 +455,11 @@ export type CreatorSpaceRequest = {
   /** The principal the genesis names OWNER. */
   readonly creator: DID;
 
-  /** The principals the genesis admits beside the creator, at their levels. */
-  readonly members: Readonly<Record<DID, "WRITE" | "OWNER">>;
+  /**
+   * The principals the genesis admits beside the creator, at their levels, as
+   * `creatorSpaceGrants()` checks them.
+   */
+  readonly members: readonly SpaceMember[];
 };
 
 /**
@@ -4404,18 +4409,20 @@ export class Runtime {
    * DID, the creator and the members. A different creator or member list is a
    * different key, so no run reaches a space made for another principal.
    *
-   * @throws Error on a serving runtime when `request.members` is not empty, or
-   *   when this runtime's storage cannot write a genesis document.
+   * @throws Error when `creatorSpaceGrants()` refuses `request.members`, on a
+   *   serving runtime when `request.members` is not empty, or when this
+   *   runtime's storage cannot write a genesis document.
    */
   async createCreatorSpace(
     request: CreatorSpaceRequest,
   ): Promise<MemorySpace> {
-    const { key, creator, members } = request;
+    const { key, creator } = request;
+    const grants = creatorSpaceGrants(request.members, creator);
     const prepared = this.#preparedCreatorSpaces.get(key);
     if (prepared !== undefined) return prepared;
     const inFlight = this.#creatorSpaceCreations.get(key);
     if (inFlight !== undefined) return await inFlight;
-    if (this.servingPosture && Object.keys(members).length > 0) {
+    if (this.servingPosture && Object.keys(grants).length > 0) {
       throw new Error(
         "A serving runtime does not create a space with `members`: nothing " +
           "there checks the grant against the person who asked for it.",
@@ -4436,12 +4443,12 @@ export class Runtime {
       let identity = this.#creatorSpaceIdentities.get(key);
       if (identity === undefined) {
         identity = await Identity.generate();
-        if (Object.hasOwn(members, identity.did())) {
+        if (Object.hasOwn(grants, identity.did())) {
           throw new Error("A space cannot be its own member.");
         }
         storage.registerSpaceIdentity!(identity, {
           owner: creator,
-          grants: { ...members },
+          grants: { ...grants },
         });
         this.#creatorSpaceIdentities.set(key, identity);
       }
