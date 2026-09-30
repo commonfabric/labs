@@ -298,7 +298,7 @@ payload, "which is what makes the mark honest: the mint derives only from this
 metadata, touching zero attacker bytes". The trigger is a module-private
 `WeakMap` keyed by transaction, deliberately not a field on `CfcTxState` and
 not a method on the public transaction surface, because exposing it would be a
-forge oracle — any pattern reaching `cell.tx` could stamp a trusted "arrived
+forge oracle — any code holding the transaction could stamp a trusted "arrived
 via channel X" mark on its own writes. It is documented in
 [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 

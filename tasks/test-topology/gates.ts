@@ -100,11 +100,10 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-topology",
     kind: "gate",
     run: ["task", "check-test-topology"],
-    // Walks every tree this repository keeps source in for anything
-    // that looks like a test, and holds the topology to what it finds.
-    // The topology enumerates from those same trees, so a set stated
-    // here names every directory holding code and comes to all but a
-    // change that touches none of it.
+    // Reads every file the repository holds for anything that looks
+    // like a test, and holds the topology to what it finds. A set stated
+    // here would name every directory holding code and come to all but
+    // a change that touches none of it.
     reachedBy: [],
   },
   {

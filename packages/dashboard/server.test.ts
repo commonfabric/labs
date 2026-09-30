@@ -34,7 +34,7 @@ import {
   PORT,
 } from "./config.ts";
 import { TILES } from "./registry.ts";
-import { github } from "./lib.ts";
+import { github, STALE_RUNS_ERROR } from "./lib.ts";
 import {
   type Ctx,
   type Run,
@@ -1437,16 +1437,12 @@ boardTest("a tile still being collected when its source is due stays on the sour
   assertEquals(labsFetches, 3);
 });
 
-boardTest("a run source that reads backwards in time keeps its last good snapshot", async () => {
-  const source = runSource("test/backwards-source", "ci.yml", "main");
-  // sourceRun times a run from its id, so run 5000 is weeks behind run 3. A
-  // fetch answering with the older one, or with none, read a stale view of the
-  // workflow.
-  const current = sourceRun(3, "current run");
-  let fetched = [current];
+boardTest("a run source whose run list is out of date keeps its last good snapshot", async () => {
+  const source = runSource("test/lagging-source", "ci.yml", "main");
+  let fetched = () => Promise.resolve([sourceRun(3, "current run")]);
   const sourceCtx: Ctx = {
     runs: () => sourceCtx.runsFor(source),
-    runsFor: () => Promise.resolve(fetched),
+    runsFor: () => fetched(),
     env: () => undefined,
   };
   const tile = sourceTile("ci", [source]);
@@ -1456,37 +1452,23 @@ boardTest("a run source that reads backwards in time keeps its last good snapsho
   try {
     await tick([tile], sourceCtx);
     assertStringIncludes(tileHtml("ci"), "current run");
-    assertEquals(errors, []);
 
-    const heldRun = `held 1 run, newest run 3 created ${current.created_at}.`;
-    const older = sourceRun(5000, "weeks-old run");
-    fetched = [older];
+    fetched = () => Promise.reject(new Error(STALE_RUNS_ERROR));
     await tick([tile], sourceCtx);
     const held = tileHtml("ci");
     assert(held.startsWith(`unknown"`));
     assertStringIncludes(held, "current run");
-    assert(!held.includes("weeks-old run"), held);
-    assertStringIncludes(held, "backwards-source run list out of date");
+    assertStringIncludes(held, "lagging-source run list out of date");
     assertEquals(errors, [
-      "run source test/backwards-source ci.yml main stale, newest run older " +
-      `than the one already collected. Fetched 1 run, newest run 5000 created ${older.created_at}; ` +
-      heldRun,
+      `run source test/lagging-source ci.yml main failed: ${STALE_RUNS_ERROR}`,
     ]);
 
-    fetched = [];
-    await tick([tile], sourceCtx);
-    const emptied = tileHtml("ci");
-    assertStringIncludes(emptied, "current run");
-    assertStringIncludes(emptied, "backwards-source run list out of date");
-    assertStringIncludes(errors[1], `Fetched 0 runs, none dated; ${heldRun}`);
-
-    fetched = [current];
+    fetched = () => Promise.resolve([sourceRun(2, "newer run")]);
     await tick([tile], sourceCtx);
     const recovered = tileHtml("ci");
     assert(recovered.startsWith(`good"`));
-    assertStringIncludes(recovered, "current run");
+    assertStringIncludes(recovered, "newer run");
     assert(!recovered.includes("out of date"), recovered);
-    assertEquals(errors.length, 2);
   } finally {
     console.error = realError;
   }

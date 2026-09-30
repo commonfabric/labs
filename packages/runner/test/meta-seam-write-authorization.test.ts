@@ -376,16 +376,13 @@ describe("meta-seam-write-authorization", () => {
     });
 
     // The guard covers writes to the seam, not the runtime's own entry points
-    // that write it as part of their work. A cell carries `runtime` and `tx`,
-    // so a handler can ask the runtime to instantiate a pattern of its
-    // choosing onto a cell it holds, and the runtime wires that cell to the
-    // chosen program on its behalf — the result the victim's own pattern
-    // computed is replaced by the attacker's. What that costs is a question
-    // about the object graph a cell hands pattern code, not about this seam;
-    // this test records the reach so that closing it is visible. It reads
-    // the result rather than the identity meta, which a pattern evaluated
-    // without a content-addressed entry does not carry.
-    it("can still ask the runtime to run its own pattern on that piece", async () => {
+    // that write it as part of their work, such as instantiating a pattern
+    // onto a cell. Those take the runtime, which a cell does not hand pattern
+    // code, so a handler holding the victim's cell cannot ask the runtime to
+    // run a pattern of its choosing there. It reads the result rather than the
+    // identity meta, which a pattern evaluated without a content-addressed
+    // entry does not carry.
+    it("cannot ask the runtime to run its own pattern on that piece", async () => {
       await withVictimAndAttacker(
         (commonfabric) => {
           const Evil = commonfabric.pattern(() => ({ note: "evil" }));
@@ -398,12 +395,18 @@ describe("meta-seam-write-authorization", () => {
           };
         },
         async ({ runtime, victimCell, attacker }) => {
-          expect(victimCell.get()).toEqual({ note: "victim" });
+          const errors: string[] = [];
+          runtime.scheduler.onError((error) =>
+            errors.push(String(error?.message ?? error))
+          );
 
           attacker.key("onAttack").send({});
           await runtime.scheduler.idleWithPendingCommits();
 
-          expect(victimCell.get()).toEqual({ note: "evil" });
+          expect(victimCell.get()).toEqual({ note: "victim" });
+          expect(errors).toContainEqual(
+            expect.stringContaining("reading 'run'"),
+          );
         },
       );
     });

@@ -128,8 +128,15 @@ class WishError extends Error {
   }
 }
 
+/** The error a wish reports when the profile roster is confirmed empty. */
+const NO_PROFILE_ERROR = "No profile exists yet";
+
 /** A confirmed empty profile roster, for which Wish offers creation. */
-class NoProfileError extends WishError {}
+class NoProfileError extends WishError {
+  constructor() {
+    super(NO_PROFILE_ERROR);
+  }
+}
 
 //
 // Interval #now constants and helpers
@@ -572,7 +579,7 @@ function getProfileCandidateCells(
 function getDefaultProfileCell(ctx: WishContext): Cell<unknown> {
   const { ordered } = getProfileCandidateCells(ctx);
   if (ordered.length === 0) {
-    throw new NoProfileError("No profile exists yet");
+    throw new NoProfileError();
   }
   return ordered[0];
 }
@@ -987,7 +994,7 @@ function resolveHomeSpaceTarget(
       if (ordered.length === 0) {
         // No profile yet — throw so the #profile error path falls back to the
         // create surface (see profileCreateUI).
-        throw new NoProfileError("No profile exists yet");
+        throw new NoProfileError();
       }
       // Always expose the full, ordered roster as `candidates`. The wish action
       // below still makes `ordered[0]` the current profile and only renders the

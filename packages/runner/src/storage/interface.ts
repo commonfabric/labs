@@ -2214,9 +2214,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. Pattern code reaches the transaction its
-   * cells are bound to, so the mark takes the runtime's authorization and a
-   * call without it does nothing.
+   * and a start deferred from one. The mark takes the runtime's authorization,
+   * and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
@@ -2248,9 +2247,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Whether `input` was recorded by the runtime, under
    * `runtimeWritePolicyAuthorization`.
    *
-   * `recordCfcWritePolicyInput` is on this interface, and pattern-authored
-   * code reaches the transaction its cells are bound to, so an input's own
-   * fields say only what its recorder wrote. A gate that ACTS on an input
+   * `recordCfcWritePolicyInput` is on this interface, so any code holding
+   * the transaction can record an input, and an input's own fields say only
+   * what its recorder wrote. A gate that ACTS on an input
    * asks this; a gate that measures one does not need to.
    */
   isRuntimeWritePolicyInput(input: WritePolicyInput): boolean;

@@ -67,6 +67,8 @@ import {
 } from "./cancel.ts";
 import {
   type Cell,
+  cellRuntime,
+  cellTx,
   createCell,
   isCell,
   schemaCellScope,
@@ -1046,7 +1048,7 @@ const markPieceOwnedStores = (
   // The modules of the program this setup installs, whose writer stamps the
   // pattern's schemas carry: a release adopts an unstamped stored claim only
   // for one of them.
-  const patternManager = resultCell.runtime.patternManager;
+  const patternManager = cellRuntime(resultCell).patternManager;
   const entry = patternManager.getArtifactEntryRef(pattern);
   const modules = entry === undefined
     ? undefined
@@ -1088,7 +1090,7 @@ const enrollPieceOwnedStores = (
   pattern: Pattern,
 ): void => {
   const owner = resultCell.getAsNormalizedFullLink();
-  const identity = resultCell.runtime.scopeKeyIdentity;
+  const identity = cellRuntime(resultCell).scopeKeyIdentity;
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
     recordRuntimeOwnedStore(tx, resultCell, store);
     // Same space by construction: every store here is minted in the result
@@ -2399,8 +2401,8 @@ export class Runner {
     resultCell: Cell<unknown>,
   ): { identity: string; symbol: string } | undefined {
     const key = this.#getSetupKey(resultCell);
-    const staged = resultCell.tx &&
-      this.#stagedSessionPatternPointers.get(resultCell.tx.tx);
+    const tx = cellTx(resultCell);
+    const staged = tx && this.#stagedSessionPatternPointers.get(tx.tx);
     if (staged?.has(key)) return staged.get(key)!.pointer;
     return this.#sessionPatternPointers.get(key);
   }
@@ -6085,7 +6087,7 @@ export class Runner {
   /** Key a named execution family by its complete resolution identity. */
   #getFamilyKey(
     cell: Cell<any>,
-    identity = cell.tx?.tx.scopeKeyIdentity,
+    identity = cellTx(cell)?.tx.scopeKeyIdentity,
   ): string {
     const key = this.#getDocKey(cell);
     if (identity === undefined) return key;
@@ -6217,7 +6219,7 @@ export class Runner {
     argumentLink: NormalizedFullLink,
     resultCell: Cell<any>,
   ): boolean {
-    const readTx = this.#familyReadTx(resultCell.tx?.tx.scopeKeyIdentity);
+    const readTx = this.#familyReadTx(cellTx(resultCell)?.tx.scopeKeyIdentity);
     const present = (link: NormalizedFullLink): boolean =>
       this.#documentPresent(readTx, link);
     if (!present(argumentLink)) return true;
@@ -6398,7 +6400,7 @@ export class Runner {
     argument: unknown,
   ): Promise<void> {
     const sourceIdentity = toName.identity ??
-      resultCell.tx?.tx.scopeKeyIdentity;
+      cellTx(resultCell)?.tx.scopeKeyIdentity;
     const identity = sourceIdentity === undefined
       ? undefined
       : { ...sourceIdentity };
@@ -7354,7 +7356,7 @@ export class Runner {
     inputs: any,
     options: RunSyncedWithCommitOptions,
   ): Promise<RunSyncedCommitResult<any>> {
-    if (resultCell.tx?.status().status === "ready") {
+    if (cellTx(resultCell)?.status().status === "ready") {
       throw new Error(
         "a committed pattern setup receipt requires an unbound result cell",
       );
@@ -7453,7 +7455,8 @@ export class Runner {
     // TODO(seefeld): There is currently likely a race condition with the
     // scheduler if the transaction isn't committed before the first functions
     // run. Though most likely the worst case is just extra invocations.
-    const givenTx = resultCell.tx?.status().status === "ready" && resultCell.tx;
+    const givenTx = cellTx(resultCell)?.status().status === "ready" &&
+      cellTx(resultCell);
     let setupRes: SetupResult<any> | undefined;
     let commit: PatternSetupCommitReceipt | undefined;
     let committedTx: IExtendedStorageTransaction | undefined;
@@ -7713,7 +7716,7 @@ export class Runner {
       return this.#getDocKey(cell);
     }
     const { space, id, scope } = cell.getAsNormalizedFullLink();
-    const identity = cell.tx?.tx.scopeKeyIdentity ??
+    const identity = cellTx(cell)?.tx.scopeKeyIdentity ??
       this.#runtime.scopeKeyIdentity;
     return `${space}/${resolveScopeKey(scope, identity)}/${id}`;
   }
@@ -7920,7 +7923,7 @@ export class Runner {
       const candidateArgument = this.#runtime.getCellFromLink(
         candidateLink,
         undefined,
-        candidate.tx,
+        cellTx(candidate),
       );
       return valueEqual(candidateArgument.getRawUntyped(), argumentValue);
     };
@@ -8011,7 +8014,7 @@ export class Runner {
     resultCell: Cell<any>,
     pattern: Pattern,
     inputs?: any,
-    identity = resultCell.tx?.tx.scopeKeyIdentity,
+    identity = cellTx(resultCell)?.tx.scopeKeyIdentity,
   ): Promise<boolean> {
     const capturedIdentity = identity === undefined
       ? undefined
@@ -8049,7 +8052,7 @@ export class Runner {
   ): Promise<boolean> {
     const resultSyncStart = performance.now();
     await this.#syncFamilyCell(resultCell, identity);
-    if (resultCell.tx?.status().status !== "ready") {
+    if (cellTx(resultCell)?.status().status !== "ready") {
       resultCell = resultCell.withTx(this.#familyReadTx(identity));
     }
     logger.time(resultSyncStart, "start", "resumeResultSync");
@@ -9316,7 +9319,7 @@ export class Runner {
       inputs,
       outputs,
       writes: findAllWriteRedirectCells(outputs, resultCell, {
-        followRedirectChains: !usesLocalReads(resultCell.tx),
+        followRedirectChains: !usesLocalReads(cellTx(resultCell)),
       }),
       inputsCell: this.#runtime.getImmutableCell(
         resultCell.space,
@@ -9557,7 +9560,7 @@ export class Runner {
         if (shouldCollectPath(path)) {
           links.push(
             ...findAllWriteRedirectCells(currentValue, resultCell, {
-              followRedirectChains: !usesLocalReads(resultCell.tx),
+              followRedirectChains: !usesLocalReads(cellTx(resultCell)),
             }),
           );
         }
@@ -10864,7 +10867,7 @@ export class Runner {
     // dispatching the event. Steady-state this is ~free: covered selectors
     // resolve without a server round trip.
     const presyncInputs =
-      !usesLocalReads(resultCell.tx) && module.argumentSchema !== undefined
+      !usesLocalReads(cellTx(resultCell)) && module.argumentSchema !== undefined
         ? async (
           event: any,
           identity: ScopeKeyIdentity | undefined,
@@ -11374,7 +11377,7 @@ export class Runner {
       machineryRead,
       () =>
         findAllWriteRedirectCells(inputs, resultCell, {
-          followRedirectChains: !usesLocalReads(resultCell.tx),
+          followRedirectChains: !usesLocalReads(cellTx(resultCell)),
         }),
     );
     const { fn, name } = this.#resolveJavaScriptFunction(module);

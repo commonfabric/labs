@@ -13,7 +13,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-import type { Cell } from "../cell.ts";
+import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
@@ -109,7 +109,7 @@ function appendTarget(
   if (!link?.id || !link.space) {
     throw new Error("Snapshot recommendation binding is not a cell link");
   }
-  return cell.runtime.getCellFromLink(link);
+  return cellRuntime(cell).getCellFromLink(link);
 }
 
 /** Resolves an audience from persisted identity evidence, never authored schema. */
@@ -151,7 +151,7 @@ function resolveAudience(
 
 /** Reads the exact snapshot and verifies ownership of every released clause. */
 function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
-  const runtime = source.runtime;
+  const runtime = cellRuntime(source);
   const tx = runtime.edit();
   try {
     const actor = tx.getCfcState().trustSnapshot?.actingPrincipal;
@@ -159,7 +159,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
       throw new Error("Snapshot sharing requires an authenticated actor");
     }
     const target = "user" in requested ? requested.user : requested.space;
-    if (target.runtime !== runtime) {
+    if (cellRuntime(target) !== runtime) {
       throw new Error("Snapshot handles must belong to the same runtime");
     }
     const sourceLink = source.withTx(tx).resolveAsCell()
@@ -236,10 +236,10 @@ export function prepareSnapshotShare(
   let boundAppendTargets: ConsentState["appendBooksTo"];
   if (appendBooksTo) {
     if (
-      appendBooksTo.recommended.runtime !== source.runtime ||
-      appendBooksTo.received.runtime !== source.runtime
+      cellRuntime(appendBooksTo.recommended) !== cellRuntime(source) ||
+      cellRuntime(appendBooksTo.received) !== cellRuntime(source)
     ) throw new Error("Snapshot append targets must use the source runtime");
-    const tx = source.runtime.edit();
+    const tx = cellRuntime(source).edit();
     let recommendedLink: NormalizedFullLink;
     let receivedLink: NormalizedFullLink;
     try {
@@ -314,7 +314,7 @@ export async function commitSnapshotShare(
       "Snapshot review is stale; review the value and audience again",
     );
   }
-  const runtime = state.source.runtime;
+  const runtime = cellRuntime(state.source);
   const tx = runtime.edit();
   try {
     if (tx.getCfcState().trustSnapshot?.actingPrincipal !== state.actor) {

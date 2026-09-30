@@ -28,6 +28,7 @@ import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { type CellScope, type JSONSchema } from "./builder/types.ts";
 import {
   CellImpl,
+  getCarriedCfcLabelView,
   isCell,
   recordRelevantSchemaWritePolicyInput,
 } from "./cell.ts";
@@ -37,7 +38,6 @@ import type { CfcConfClause } from "./cfc/clause.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,
-  getCarriedCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import {
   type CfcCellLinkRefPayload,
@@ -1463,8 +1463,7 @@ export function normalizeAndDiff(
         // write commits, the next check finds the doc present and settles.
       }
     }
-    const streamHandle = newValue instanceof CellImpl &&
-      newValue.kind === "stream";
+    const streamHandle = newValue.kind === "stream";
     // A rerun can return the same protected cell with a different, unused
     // default. Record the unchanged root reference for CFC to verify alongside
     // its final protection. Materialization runs first so an existing reference

@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import { getCarriedCfcLabelView } from "../src/cfc/label-view-state.ts";
+import { getCarriedCfcLabelView } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { validateAndTransform } from "../src/schema.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";

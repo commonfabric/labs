@@ -90,6 +90,8 @@ import {
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
+import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 
@@ -888,7 +890,9 @@ describe("runtime-processor", () => {
         storageManager,
       });
       const space = cfcSigner.did();
-      const cell = runtime.getCell(space, "source-refresh-failure");
+      const cell = patchableCell(
+        runtime.getCell(space, "source-refresh-failure"),
+      );
       await cell.sync();
       const sync = cell.sync.bind(cell);
       cell.sync = () => Promise.reject(new Error("refresh unavailable"));
@@ -2857,6 +2861,38 @@ describe("runtime-processor", () => {
 
   describe("`RuntimeProcessor` CFC label IPC", () => {
     /**
+     * Runs `body` with a cell naming `ref`, whose stored label metadata reads
+     * as `metadata` and whose members a case can replace.
+     */
+    async function withStoredLabel(
+      ref: CellRef,
+      metadata: unknown,
+      body: (cell: Cell<unknown>) => void | Promise<void>,
+    ): Promise<void> {
+      const storageManager = StorageManager.emulate({ as: cfcSigner });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const reads = interceptTransaction(
+          runtime.edit(),
+          (method, args, proceed) =>
+            method === "readOrThrow" &&
+              (args[0] as { path: readonly string[] }).path[0] === "cfc"
+              ? metadata
+              : proceed(),
+        );
+        await body(
+          patchableCell(runtime.getCellFromLink(ref, undefined, reads)),
+        );
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    }
+
+    /**
      * Mints a cell carrying a label view whose one caveat names a source, the
      * shape the display redaction exists to rewrite. A read hands the response
      * path live cells like this one, and the conversion attaches each cell's
@@ -2945,52 +2981,42 @@ describe("runtime-processor", () => {
       ).toThrow(/cfc/);
     });
 
-    it("returns a label view for a cell ref", () => {
+    it("returns a label view for a cell ref", async () => {
       const ref: CellRef = {
         id: "of:cfc-label-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
         scope: "space",
         path: [],
       };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({
-            runtime: {
-              readTx: () => ({
-                // The read is at the reserved `["cfc"]` position, so it
-                // returns the envelope rather than the whole document.
-                readOrThrow: () => ({
-                  version: 1,
-                  schemaHash: "test-schema",
-                  labelMap: {
-                    version: 1,
-                    entries: [{
-                      path: [],
-                      label: { confidentiality: ["prompt-risk"] },
-                    }],
-                  },
-                }),
-              }),
-            },
-            getAsNormalizedFullLink: () => ref,
-            getMetaRaw: () => undefined,
-          }),
-        },
-      });
-
-      expect(
-        processor.handleCellGetCfcLabel({
-          type: RequestType.CellGetCfcLabel,
-          cell: ref,
-        }),
-      ).toEqual({
-        cfcLabel: {
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
           version: 1,
           entries: [{
             path: [],
             label: { confidentiality: ["prompt-risk"] },
           }],
         },
+      }, (cell) => {
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
+
+        expect(
+          processor.handleCellGetCfcLabel({
+            type: RequestType.CellGetCfcLabel,
+            cell: ref,
+          }),
+        ).toEqual({
+          cfcLabel: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: ["prompt-risk"] },
+            }],
+          },
+        });
       });
     });
 
@@ -3001,47 +3027,39 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({
-            runtime: {
-              readTx: () => ({
-                readOrThrow: () => ({
-                  version: 1,
-                  schemaHash: "test-schema",
-                  labelMap: {
-                    version: 1,
-                    entries: [{
-                      path: [],
-                      label: {
-                        confidentiality: [{
-                          type: CFC_ATOM_TYPE.Caveat,
-                          kind: "derived-from",
-                          source: "did:key:alice",
-                        }],
-                      },
-                    }],
-                  },
-                }),
-              }),
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
             },
-            getAsNormalizedFullLink: () => ref,
-            getMetaRaw: () => undefined,
-            sync: () => Promise.resolve(),
-          }),
+          }],
         },
-      });
+      }, async (cell) => {
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
 
-      const response = await processor.handleCellGetCfcLabel({
-        type: RequestType.CellGetCfcLabel,
-        cell: ref,
+        const response = await processor.handleCellGetCfcLabel({
+          type: RequestType.CellGetCfcLabel,
+          cell: ref,
+        });
+        const atom = response.cfcLabel?.entries[0].label.confidentiality
+          ?.[0] as Record<string, unknown>;
+        // The caveat survives with its kind/type, but the source identity is
+        // gone.
+        expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
+        expect(atom.kind).toBe("derived-from");
+        expect("source" in atom).toBe(false);
       });
-      const atom = response.cfcLabel?.entries[0].label.confidentiality
-        ?.[0] as Record<string, unknown>;
-      // The caveat survives with its kind/type, but the source identity is gone.
-      expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
-      expect(atom.kind).toBe("derived-from");
-      expect("source" in atom).toBe(false);
     });
 
     it("redacts `Caveat.source` in the label views carried by cells inside `handleCellGet()` values", async () => {
@@ -3288,7 +3306,7 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("redacts `Caveat.source` in label views on response cell refs", () => {
+    it("redacts `Caveat.source` in label views on response cell refs", async () => {
       const sourceRef: CellRef = {
         id: "of:cfc-ref-view-source" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -3301,52 +3319,41 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const resolvedCell = {
-        getAsLink: () => ({
-          "/": {
-            "link@1": resolvedRef,
+      await withStoredLabel(resolvedRef, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: CFC_ATOM_TYPE.Caveat,
+                kind: "derived-from",
+                source: "did:key:alice",
+              }],
+            },
+          }],
+        },
+      }, (resolvedCell) => {
+        const processor = buildProcessor({
+          runtime: {
+            getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
-        }),
-        getAsNormalizedFullLink: () => resolvedRef,
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              version: 1,
-              schemaHash: "test-schema",
-              labelMap: {
-                version: 1,
-                entries: [{
-                  path: [],
-                  label: {
-                    confidentiality: [{
-                      type: CFC_ATOM_TYPE.Caveat,
-                      kind: "derived-from",
-                      source: "did:key:alice",
-                    }],
-                  },
-                }],
-              },
-            }),
-          }),
-        },
-      };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
-        },
-      });
+        });
 
-      const response = processor.handleCellResolveAsCell({
-        type: RequestType.CellResolveAsCell,
-        cell: sourceRef,
+        const response = processor.handleCellResolveAsCell({
+          type: RequestType.CellResolveAsCell,
+          cell: sourceRef,
+        });
+        const atom = response.cell.cfcLabelView?.entries[0].label
+          .confidentiality?.[0] as Record<string, unknown>;
+        expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
+        expect("source" in atom).toBe(false);
       });
-      const atom = response.cell.cfcLabelView?.entries[0].label
-        .confidentiality?.[0] as Record<string, unknown>;
-      expect(atom.type).toBe(CFC_ATOM_TYPE.Caveat);
-      expect("source" in atom).toBe(false);
     });
 
-    it("returns label views on resolved cell refs", () => {
+    it("returns label views on resolved cell refs", async () => {
       const sourceRef: CellRef = {
         id: "of:cfc-label-source" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -3359,54 +3366,40 @@ describe("runtime-processor", () => {
         scope: "space",
         path: [],
       };
-      const resolvedCell = {
-        getAsLink: () => ({
-          "/": {
-            "link@1": resolvedRef,
+      await withStoredLabel(resolvedRef, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: ["authored-by-bob"] },
+          }],
+        },
+      }, (resolvedCell) => {
+        const processor = buildProcessor({
+          runtime: {
+            getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
-        }),
-        getAsNormalizedFullLink: () => resolvedRef,
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              version: 1,
-              schemaHash: "test-schema",
-              labelMap: {
-                version: 1,
-                entries: [{
-                  path: [],
-                  label: { integrity: ["authored-by-bob"] },
-                }],
-              },
-            }),
-          }),
-        },
-      };
-      const sourceCell = {
-        resolveAsCell: () => resolvedCell,
-      };
-      const processor = buildProcessor({
-        runtime: {
-          getCellFromLink: () => sourceCell,
-        },
-      });
+        });
 
-      expect(
-        processor.handleCellResolveAsCell({
-          type: RequestType.CellResolveAsCell,
-          cell: sourceRef,
-        }),
-      ).toEqual({
-        cell: {
-          ...resolvedRef,
-          cfcLabelView: {
-            version: 1,
-            entries: [{
-              path: [],
-              label: { integrity: ["authored-by-bob"] },
-            }],
+        expect(
+          processor.handleCellResolveAsCell({
+            type: RequestType.CellResolveAsCell,
+            cell: sourceRef,
+          }),
+        ).toEqual({
+          cell: {
+            ...resolvedRef,
+            cfcLabelView: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { integrity: ["authored-by-bob"] },
+              }],
+            },
           },
-        },
+        });
       });
     });
 
@@ -3534,60 +3527,53 @@ describe("runtime-processor", () => {
       expect(sourceSynced).toBe(false);
     });
 
-    it("reads the cell's own stored label without syncing", () => {
+    it("reads the cell's own stored label without syncing", async () => {
       const ref: CellRef = {
         id: "of:cfc-label-pure-read" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
         scope: "space",
         path: [],
       };
-      let synced = false;
-      const cell = {
-        runtime: {
-          readTx: () => ({
-            readOrThrow: () => ({
-              version: 1,
-              schemaHash: "test-schema",
-              labelMap: {
-                version: 1,
-                entries: [{
-                  path: [],
-                  label: { confidentiality: ["result-label"] },
-                }],
-              },
-            }),
-          }),
-        },
-        getAsNormalizedFullLink: () => ref,
-        getMetaRaw: () => undefined,
-        sync: () => {
-          synced = true;
-          return Promise.resolve();
-        },
-      };
-      const processor = buildProcessor({
-        runtime: { getCellFromLink: () => cell },
-      });
-
-      expect(
-        processor.handleCellGetCfcLabel({
-          type: RequestType.CellGetCfcLabel,
-          cell: ref,
-        }),
-      ).toEqual({
-        cfcLabel: {
+      await withStoredLabel(ref, {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
           version: 1,
           entries: [{
             path: [],
             label: { confidentiality: ["result-label"] },
           }],
         },
+      }, (cell) => {
+        let synced = false;
+        cell.sync = () => {
+          synced = true;
+          return Promise.resolve(cell);
+        };
+        const processor = buildProcessor({
+          runtime: { getCellFromLink: () => cell },
+        });
+
+        expect(
+          processor.handleCellGetCfcLabel({
+            type: RequestType.CellGetCfcLabel,
+            cell: ref,
+          }),
+        ).toEqual({
+          cfcLabel: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: ["result-label"] },
+            }],
+          },
+        });
+        // No sync: keeping the cell live is the caller's job, and the label
+        // is read from the current store. A not-yet-loaded doc would yield an
+        // empty label that self-heals when the reactive caller's subscription
+        // delivers it.
+        expect(synced).toBe(false);
       });
-      // No sync: keeping the cell live is the caller's job, and the label is
-      // read from the current store. A not-yet-loaded doc would yield an empty
-      // label that self-heals when the reactive caller's subscription delivers
-      // it.
-      expect(synced).toBe(false);
     });
 
     it("ignores schema-bearing `anyOf` refs when reading nested stored labels", async () => {

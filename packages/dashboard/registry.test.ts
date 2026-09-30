@@ -22,7 +22,7 @@ describe("registry", () => {
       "loom ci duration",
       "weaver ci duration",
       "test selection",
-      "coverage debt",
+      "labs coverage debt",
       "all benchmarks",
       "key benchmarks",
       "production",

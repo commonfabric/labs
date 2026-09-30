@@ -140,6 +140,7 @@ import {
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
 } from "./runner.ts";
+import { brandRuntime } from "./runtime-brand.ts";
 import { Action, Scheduler } from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
@@ -1684,6 +1685,8 @@ export class Runtime {
   }
 
   constructor(options: RuntimeOptions) {
+    brandRuntime(this);
+
     // Validate-then-apply: option combinations are refused BEFORE any
     // process-global write (the ambient experimental-flag propagation
     // below, the server-execution enabler), so a refused construction
@@ -2631,8 +2634,8 @@ export class Runtime {
    * second scope instance of this one, say — still holds stays.
    *
    * Takes the runtime's write-policy authorization, like the enrollment it
-   * undoes: pattern-authored code reaches this object through a cell, and a
-   * release it made would refuse another piece's writes.
+   * undoes: a release made by any other caller would refuse another piece's
+   * writes.
    */
   releaseRuntimeOwnedStores(
     owner: NormalizedFullLink,

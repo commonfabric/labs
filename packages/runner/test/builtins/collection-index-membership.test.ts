@@ -15,7 +15,7 @@ import {
   type MaintainedCollectionIndex,
 } from "../../src/builtins/collection-index-membership.ts";
 import { createNodeFactory, lift } from "../../src/builder/module.ts";
-import type { Cell } from "../../src/cell.ts";
+import { type Cell, cellTx } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { getDirectTransactionReactivityLog } from "../../src/storage/transaction-inspection.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
@@ -250,7 +250,7 @@ describe("collection-index-membership", () => {
         output: Cell<MaintainedCollectionIndex>;
         element: Cell<unknown>;
       }) => {
-        const tx = runtime.readTx(output.tx);
+        const tx = runtime.readTx(cellTx(output));
         maintainCollectionIndexMembership(
           tx,
           stored,

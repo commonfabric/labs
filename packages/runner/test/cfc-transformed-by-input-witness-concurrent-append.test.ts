@@ -8,7 +8,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, cellTx } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -321,7 +321,7 @@ describe("input witnesses over appends made concurrently", () => {
       expect(stored).toHaveLength(3);
       const submitted = parseLink(stored[2], briefs)!;
       briefs.removeByValue(
-        later.getCellFromLink(submitted, undefined, briefs.tx) as never,
+        later.getCellFromLink(submitted, undefined, cellTx(briefs)) as never,
       );
     });
     expect(await commitWitnessesSubmit(server, ["reject", "reject"])).toBe(

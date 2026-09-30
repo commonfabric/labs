@@ -1,10 +1,11 @@
 /**
- * A handler receives runtime cells, and a cell carries the transaction it is
- * bound to. Every case here compiles an attacker pattern handed a victim
- * piece's cell, dispatches its handler, and has it try to set the
- * transaction's trust state: the implementation identity its writes are
- * authored by, or the acting principal. The victim's `name` may be written
- * only by the victim's own `setName` handler.
+ * A handler receives runtime cells, and must not be able to set the trust state
+ * of the transaction its writes go through: the implementation identity they
+ * are authored by, or the acting principal. Every case here compiles an
+ * attacker pattern handed a victim piece's cell, dispatches its handler, and
+ * has it look for that transaction on the cell and try to set its trust state.
+ * The victim's `name` may be written only by the victim's own `setName`
+ * handler.
  */
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -72,8 +73,8 @@ const victimHandlerIdentity = {
 };
 
 // The attacker is handed the victim's `name` cell and a `note` of its own. Its
-// handler runs `claim`, a function body that sees `tx`, the transaction the
-// victim's cell is bound to. For an event whose `step` is `"probe"` it records
+// handler runs `claim`, a function body that sees `tx`, what the victim's cell
+// has under that name. For an event whose `step` is `"probe"` it records
 // in `note` what `claim` returned, or the name and message of what it threw,
 // and writes nothing else, so that record commits whatever the claim did. For
 // any other step it swallows what `claim` threw and writes the event's `value`
@@ -205,7 +206,7 @@ describe("cfc-implementation-identity-authorization", () => {
       );
 
       expect(await attack.probe()).toBe(
-        "threw TypeError: tx.setCfcImplementationIdentity is not a function",
+        "threw TypeError: Cannot read properties of undefined (reading 'setCfcImplementationIdentity')",
       );
       await attack.write("overwritten");
       expect(await attack.victim.key("name").pull()).toBe("initial");
@@ -219,7 +220,7 @@ describe("cfc-implementation-identity-authorization", () => {
       );
 
       expect(await attack.probe()).toBe(
-        "threw TypeError: tx.setCfcImplementationIdentity is not a function",
+        "threw TypeError: Cannot read properties of undefined (reading 'setCfcImplementationIdentity')",
       );
     });
 
@@ -231,7 +232,7 @@ describe("cfc-implementation-identity-authorization", () => {
       );
 
       expect(await attack.probe()).toBe(
-        "threw TypeError: tx.setCfcTrustSnapshot is not a function",
+        "threw TypeError: Cannot read properties of undefined (reading 'setCfcTrustSnapshot')",
       );
     });
   });

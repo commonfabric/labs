@@ -18,7 +18,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
@@ -35,6 +35,7 @@ import {
   benchmarkTrend,
   benchmarkTrendRuns,
   benchPage,
+  forgetBenchmarkRunsForTest,
   formatNs,
   keyBenchmarks,
   pointsForWindow,
@@ -74,6 +75,11 @@ if (Deno.env.get("DASHBOARD_CACHE_DIR") === undefined) {
 Deno.env.delete("GH_TOKEN");
 Deno.env.delete("GITHUB_TOKEN");
 
+// The tiles refuse a run list whose newest run is older than one they already
+// hold, and the fixtures of different tests are dated independently. So every
+// test starts from a tile holding no runs.
+Deno.test.beforeEach(forgetBenchmarkRunsForTest);
+
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 // One full hour before the current hour keeps each common newest successful
@@ -105,6 +111,7 @@ const benchZip = (json: string) => artifactZip("results.json", json);
 
 interface GhRun {
   id: number;
+  head_branch: string | null;
   run_attempt: number;
   status: string;
   created_at: string;
@@ -126,6 +133,7 @@ const ghRun = (
   durationMs = RUN_MS,
 ): GhRun => ({
   id,
+  head_branch: "main",
   run_attempt: runAttempt,
   status: "completed",
   created_at: new Date(at).toISOString(),
@@ -3135,6 +3143,90 @@ Deno.test("benchmark: a failed fetch keeps a stale cached trend grayed", async (
   }
 });
 
+Deno.test("benchmark: a run list older than the runs collected keeps the trend gray", async () => {
+  // A list ending a day back stands in for GitHub serving an out-of-date view
+  // of the workflow. The tile refuses it while the process holds the current
+  // list, and again after a restart that holds only the history on disk.
+  const directory = await Deno.makeTempDir({ prefix: "benchmark-stale-list-" });
+  const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
+  const originalFetch = globalThis.fetch;
+  const token = `benchmark-stale-list-${crypto.randomUUID()}`;
+  Deno.env.set("DASHBOARD_CACHE_DIR", directory);
+  const key = "packages/a/x.bench.ts";
+  const older = ghRun(9_101, BASE - DAY);
+  const newest = ghRun(9_102, BASE);
+  const artifacts = {
+    9_101: [{ id: 91_010, name: "bench-results", expired: false }],
+    9_102: [{ id: 91_020, name: "bench-results", expired: false }],
+  };
+  const zips = {
+    91_010: await benchZip(report([bench(key, null, "b", timings(1_000))])),
+    91_020: await benchZip(report([bench(key, null, "b", timings(1_000))])),
+  };
+  const serving = (runs: GhRun[]) => {
+    const handler = serve({ pages: { 1: runs }, artifacts, zips });
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      Promise.resolve(
+        handler(new URL(input instanceof Request ? input.url : String(input))),
+      )) as typeof fetch;
+  };
+  try {
+    const running = await import(
+      `./benchmark.ts?stale-list=${crypto.randomUUID()}`
+    );
+    serving([newest, older]);
+    const current = await running.benchmark.collect(ctx({ GH_TOKEN: token }));
+    expect(current).toMatchObject({ status: "good", sub: undefined });
+
+    serving([older]);
+    const stale = await running.benchmark.collect(ctx({ GH_TOKEN: token }));
+    expect(stale).toMatchObject({
+      status: "unknown",
+      sub: "run list out of date",
+    });
+    expect(stale.value).toBe(current.value);
+    expect(stale.extra).toContain("<svg");
+
+    const restarted = await import(
+      `./benchmark.ts?stale-list-restarted=${crypto.randomUUID()}`
+    );
+    const staleAfterRestart = await restarted.benchmark.collect(
+      ctx({ GH_TOKEN: token }),
+    );
+    expect(staleAfterRestart).toMatchObject({
+      status: "unknown",
+      sub: "run list out of date",
+      value: current.value,
+    });
+
+    serving([]);
+    expect(await restarted.benchmark.collect(ctx({ GH_TOKEN: token })))
+      .toMatchObject({
+        status: "unknown",
+        sub: "run list out of date",
+        value: current.value,
+      });
+    const saved = new BenchmarkHistoryStore(
+      `${directory}/fabric-wall-benchmark-history.json`,
+    );
+    await saved.load();
+    expect(saved.refresh?.runs.map((run) => run.runId)).toEqual([
+      9_101,
+      9_102,
+    ]);
+
+    serving([newest, older]);
+    expect(await restarted.benchmark.collect(ctx({ GH_TOKEN: token })))
+      .toMatchObject({ status: "good", sub: undefined, value: current.value });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousCacheDirectory === undefined) {
+      Deno.env.delete("DASHBOARD_CACHE_DIR");
+    } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("benchmark: a failed fetch with no cached history grays to a dash", async () => {
   // Nothing cached yet and the source is unreachable: there is no trend to keep, so
   // the tile shows a bare gray dash with the reason.
@@ -3419,6 +3511,7 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
   const runId = 80_001;
   const run = {
     id: runId,
+    head_branch: "main",
     created_at: new Date(BASE).toISOString(),
     conclusion: "success",
   } as GhRun;
@@ -3430,6 +3523,24 @@ Deno.test("benchmark defaults a missing workflow run attempt to one", async () =
     const store = new BenchmarkHistoryStore();
     await store.load();
     assertEquals(store.get(runId, 1)?.runAttempt, 1);
+  });
+});
+
+Deno.test("benchmark reads the unfiltered run list and keeps only main's runs", async () => {
+  const main = ghRun(80_011, BASE);
+  const branch = { ...ghRun(80_012, BASE + HOUR), head_branch: "feature" };
+  await withApi({
+    pages: { 1: [branch, main] },
+    artifacts: { [main.id]: [], [branch.id]: [] },
+  }, async (calls) => {
+    await benchmark.collect(ctx({ GH_TOKEN: "token" }));
+    const store = new BenchmarkHistoryStore();
+    await store.load();
+    assert(store.get(main.id, 1) !== undefined);
+    assertEquals(store.get(branch.id, 1), undefined);
+    const listed = runListCalls(calls);
+    assert(listed.length > 0);
+    assert(listed.every((call) => !call.includes("branch=")), listed.join(" "));
   });
 });
 
@@ -3936,6 +4047,8 @@ Deno.test("runtime history reports a recent failed collection without starting a
 });
 
 describe("keyBenchmarks", () => {
+  beforeEach(forgetBenchmarkRunsForTest);
+
   /** Builds ten daily benchmark artifacts ending inside the headline window. */
   async function history(
     idBase: number,

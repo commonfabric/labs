@@ -4,6 +4,7 @@
   "frameworkValues": [
     "Cell",
     "FS",
+    "FabricDurationDay",
     "FabricDurationNsec",
     "FabricEpochDay",
     "FabricEpochNsec",

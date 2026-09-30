@@ -63,6 +63,7 @@ import {
 } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { interceptTransaction } from "./support/intercept-transaction.ts";
 
 const signer = await Identity.fromPassphrase("replication sibling race test");
 const spaceA = signer.did() as MemorySpace; // where the compile lands
@@ -823,29 +824,20 @@ describe("closure replication: the in-flight sibling supplier race", () => {
         editSpy.edit = () => {
           const tx = realEdit();
           if (!armed) return tx;
-          return new Proxy(tx as object, {
-            get(target, prop, receiver) {
-              const value = Reflect.get(target, prop, receiver);
-              if (typeof value !== "function") return value;
-              return (...args: unknown[]) => {
-                let mentionsG = false;
-                try {
-                  mentionsG = JSON.stringify(args)?.includes(spaceG) ?? false;
-                } catch {
-                  // Unstringifiable args cannot address a space by DID.
-                }
-                if (armed && mentionsG) {
-                  throw new Error(
-                    "injected store failure for the armed fallback space",
-                  );
-                }
-                return (value as (...a: unknown[]) => unknown).apply(
-                  target,
-                  args,
-                );
-              };
-            },
-          }) as ReturnType<Runtime["edit"]>;
+          return interceptTransaction(tx, (_method, args, proceed) => {
+            let mentionsG = false;
+            try {
+              mentionsG = JSON.stringify(args)?.includes(spaceG) ?? false;
+            } catch {
+              // Unstringifiable args cannot address a space by DID.
+            }
+            if (armed && mentionsG) {
+              throw new Error(
+                "injected store failure for the armed fallback space",
+              );
+            }
+            return proceed();
+          });
         };
 
         const lines = await captureManagerLines(
@@ -1160,29 +1152,20 @@ describe("closure replication: the in-flight sibling supplier race", () => {
         editSpy.edit = () => {
           const tx = realEdit();
           if (!armed) return tx;
-          return new Proxy(tx as object, {
-            get(target, prop, receiver) {
-              const value = Reflect.get(target, prop, receiver);
-              if (typeof value !== "function") return value;
-              return (...args: unknown[]) => {
-                let mentionsG = false;
-                try {
-                  mentionsG = JSON.stringify(args)?.includes(spaceG) ?? false;
-                } catch {
-                  // Unstringifiable args cannot address a space by DID.
-                }
-                if (armed && mentionsG) {
-                  throw new Error(
-                    "injected store failure for the armed fallback space",
-                  );
-                }
-                return (value as (...a: unknown[]) => unknown).apply(
-                  target,
-                  args,
-                );
-              };
-            },
-          }) as ReturnType<Runtime["edit"]>;
+          return interceptTransaction(tx, (_method, args, proceed) => {
+            let mentionsG = false;
+            try {
+              mentionsG = JSON.stringify(args)?.includes(spaceG) ?? false;
+            } catch {
+              // Unstringifiable args cannot address a space by DID.
+            }
+            if (armed && mentionsG) {
+              throw new Error(
+                "injected store failure for the armed fallback space",
+              );
+            }
+            return proceed();
+          });
         };
 
         const lines = await captureManagerLines(

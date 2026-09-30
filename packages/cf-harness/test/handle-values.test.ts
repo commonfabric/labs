@@ -14,6 +14,7 @@ import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -330,7 +331,7 @@ describe("handle-values", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { get: () => unknown }).get = () => {
           readFailures += 1;
           throw new Error("required value did not materialize");
@@ -365,7 +366,7 @@ describe("handle-values", () => {
       pieces.runtime.getCellFromLink = ((
         ...args: Parameters<Runtime["getCellFromLink"]>
       ) => {
-        const cell = originalGetCellFromLink(...args);
+        const cell = patchableCell(originalGetCellFromLink(...args));
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () => {
           syncFailures += 1;
           return Promise.reject(new Error("storage unavailable"));

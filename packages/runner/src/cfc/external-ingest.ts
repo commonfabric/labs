@@ -68,9 +68,9 @@ type CfcExternalIngestStamp =
  * `WeakMap` keyed by the transaction — NOT a field on `CfcTxState` and NOT a
  * method on `IExtendedStorageTransaction`. The mint it drives is
  * builtin-authored and bypasses `gateRuntimeMintedIntegrity`, so exposing the
- * trigger on the public transaction surface would be a forge oracle: any
- * pattern/handler reaching `cell.tx` could stamp a trusted "arrived via channel
- * X" mark on its own writes. Keeping the channel module-private means only
+ * trigger on the public transaction surface would be a forge oracle: any code
+ * holding the transaction could stamp a trusted "arrived via channel X" mark on
+ * its own writes. Keeping the channel module-private means only
  * trusted host code that can import this module (the operator-side
  * `custodyIngest` helper) can set it; sandboxed pattern code cannot.
  */

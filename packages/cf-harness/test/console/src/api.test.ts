@@ -7,10 +7,13 @@ const realFetch = globalThis.fetch;
 /** Answers every request with one response, and remembers what was asked. */
 const answerWith = (
   response: Response,
-): { calls: number; paths: string[] } => {
-  const record = { calls: 0, paths: [] as string[] };
-  globalThis.fetch = (input) => {
+): { calls: number; paths: string[]; bodies: unknown[] } => {
+  const record = { calls: 0, paths: [] as string[], bodies: [] as unknown[] };
+  globalThis.fetch = (input, init) => {
     record.calls += 1;
+    record.bodies.push(
+      typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    );
     if (typeof input === "string") {
       record.paths.push(input);
     } else if (input instanceof Request) {
@@ -45,6 +48,18 @@ describe("console/src/api", () => {
       await cancelTurn("session-a", "turn-a");
 
       expect(asked.paths).toEqual(["/api/cancel"]);
+    });
+
+    it("tells the server the console page asked for the cancel", async () => {
+      const asked = answerWith(Response.json({ sessionId: "session-a" }));
+
+      await cancelTurn("session-a", "turn-a");
+
+      expect(asked.bodies).toEqual([{
+        sessionId: "session-a",
+        turnId: "turn-a",
+        reason: "canceled from the console page",
+      }]);
     });
 
     it("rejects with the reason a refused cancel reported", async () => {

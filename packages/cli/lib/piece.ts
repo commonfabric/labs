@@ -46,6 +46,8 @@ import {
 } from "@commonfabric/piece/ops";
 import {
   Cell,
+  cellRuntime,
+  cellTx,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -1011,10 +1013,10 @@ async function resolveRegisteredDocumentOwner(
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
 
-    current = current.runtime.getCellFromLink(
+    current = cellRuntime(current).getCellFromLink(
       { ...resultLink, path: [], schema: undefined },
       undefined,
-      current.tx,
+      cellTx(current),
       getCarriedCfcLabelView(current),
     );
   }
@@ -2638,10 +2640,10 @@ async function isDocumentOf(
   const sameDocument = (link: NormalizedFullLink) =>
     sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
   const link = cell.getAsNormalizedFullLink();
-  const document = cell.runtime.getCellFromLink(
+  const document = cellRuntime(cell).getCellFromLink(
     { ...link, path: [], schema: undefined },
     undefined,
-    cell.tx,
+    cellTx(cell),
   );
   await document.sync();
   const backLink = getMetaLink(document, "result");
@@ -4906,7 +4908,7 @@ export function cachedResultFields(
   result: Readonly<unknown>,
 ): CachedResultField[] {
   if (!isObjectNotArray(result)) return [];
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const tx = runtime.readTx();
   const cached: CachedResultField[] = [];
   for (const name of Object.keys(result)) {
@@ -5012,7 +5014,7 @@ export async function inspectPiece(
   }));
   const resultCell = await piece.result.getCell();
   const inputCell = await piece.input.getCell();
-  const runtime = resultCell.runtime;
+  const runtime = cellRuntime(resultCell);
   const sourceLink = resolveLink(
     runtime,
     runtime.readTx(),
@@ -5658,8 +5660,9 @@ export async function setCellValue(
 
 /**
  * What a {@link callPieceHandler} call supplies: the connection its
- * resolution runs over, and the three execution deps a handling can observe
- * through a call that returns nothing.
+ * resolution runs over, the three execution deps a handling can observe
+ * through a call that returns nothing, and the `sendEvent` a test stands in
+ * for the dispatch.
  *
  * Narrower than {@link PieceCallableDependencies} by the fields this path
  * cannot keep. The input readers and the help prefix have no bearing on it —
@@ -5672,7 +5675,10 @@ export async function setCellValue(
  * {@link executePieceCallable}, which returns one.
  */
 export type PieceHandlerCallDeps =
-  & Pick<CallableExecutionDeps, "invocation" | "onPhase" | "skipReadback">
+  & Pick<
+    CallableExecutionDeps,
+    "invocation" | "onPhase" | "skipReadback" | "sendEvent"
+  >
   & Pick<PieceCallableDependencies, "loadPieces" | "loadPiece">;
 
 /**

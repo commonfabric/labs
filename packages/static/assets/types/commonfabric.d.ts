@@ -382,6 +382,24 @@ export interface FabricBytesConstructor {
 export declare const FabricBytes: FabricBytesConstructor;
 
 /**
+ * Temporal type representing a span of time, as a count of days. Wraps a
+ * `bigint` value.
+ */
+export interface FabricDurationDay extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationDay";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationDayConstructor {
+  new (value: bigint): FabricDurationDay;
+  prototype: FabricDurationDay;
+}
+
+export declare const FabricDurationDay: FabricDurationDayConstructor;
+
+/**
  * Temporal type representing a span of time, as a count of nanoseconds. Wraps
  * a `bigint` value.
  */
@@ -634,6 +652,7 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  */
 export type ConcreteFabricPrimitive =
   | FabricBytes
+  | FabricDurationDay
   | FabricDurationNsec
   | FabricEpochDay
   | FabricEpochNsec

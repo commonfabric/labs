@@ -44,7 +44,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
-import { type Cell, isCell } from "../cell.ts";
+import { type Cell, cellRuntime, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
 import {
   isPrimitiveCellLink,
@@ -1065,7 +1065,7 @@ const linkRoomToBox = (
 
 /** The instance's box, in the room space. */
 const boxCell = (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   policy: CfcModulePolicyRefAtom,
   instance: string,
   tx?: IExtendedStorageTransaction,
@@ -1099,7 +1099,7 @@ const boxCell = (
  * declared policy does not already bound.
  */
 const anchorCell = (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   policy: CfcModulePolicyRefAtom,
   instance: string,
   tx?: IExtendedStorageTransaction,
@@ -1135,7 +1135,7 @@ const anchorCell = (
  *   same message two ways.
  */
 const blindedEntryKey = async (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   actor: string,
   policy: CfcModulePolicyRefAtom,
   instance: string,
@@ -1247,7 +1247,7 @@ export async function readCustodySourcePolicy(
   settings: Cell<unknown>,
 ): Promise<CfcAtom[]> {
   await settings.sync();
-  const tx = settings.runtime.edit();
+  const tx = cellRuntime(settings).edit();
   try {
     return sourcePolicyIn(settings, tx);
   } finally {
@@ -1363,7 +1363,7 @@ const clauseWithheldFromRoom = (
  *   carries an attestation in any form but the one a runtime mints.
  */
 const resolveSeats = async (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   terms: Record<string, JSONValue>,
   seatLinks: ReadonlyMap<number, NormalizedFullLink>,
   { room, policy }: { room: string; policy: CfcModulePolicyRefAtom },
@@ -1438,7 +1438,7 @@ const STALE_REVIEW = "Custody seal review is stale; review the value again";
  * transaction verifies it.
  */
 const allowedSourcesOf = async (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   options: CustodySealOptions,
   evidence: ReadEvidence[],
 ): Promise<readonly CfcAtom[]> => {
@@ -1447,7 +1447,7 @@ const allowedSourcesOf = async (
   if (!isCell(allowed)) {
     throw new Error("Custody seal requires the room's allowed sources");
   }
-  if (allowed.runtime !== runtime) {
+  if (cellRuntime(allowed) !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
   await allowed.sync();
@@ -1524,12 +1524,12 @@ const declaredPolicyOf = (
  * @throws If a cell's label declares more than one module policy.
  */
 const requestedPolicyOf = async (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   policy: CustodyRoom["policy"],
   evidence: ReadEvidence[],
 ): Promise<unknown> => {
   if (!isCell(policy)) return policy;
-  if (policy.runtime !== runtime) {
+  if (cellRuntime(policy) !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
   await syncResolved(policy);
@@ -1592,7 +1592,7 @@ const inspectRoom = async (
     }
     policy = checkPolicy(requestedPolicy, room);
     if (requestedRoom.box !== undefined) {
-      if (requestedRoom.box.runtime !== runtime) {
+      if (cellRuntime(requestedRoom.box) !== runtime) {
         throw new Error("Custody seal handles must belong to the same runtime");
       }
       if (requestedRoom.box.getAsNormalizedFullLink().space !== room) {
@@ -1679,8 +1679,8 @@ const inspect = async (
   options: CustodySealOptions,
   reviewed?: Inspection,
 ): Promise<Inspection> => {
-  const runtime = draft.runtime;
-  if (requestedRoom.terms.runtime !== runtime) {
+  const runtime = cellRuntime(draft);
+  if (cellRuntime(requestedRoom.terms) !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
   await Promise.all([
@@ -1905,7 +1905,7 @@ export async function commitCustodySeal(
   ) {
     throw new Error(STALE_REVIEW);
   }
-  const runtime = state.draft.runtime;
+  const runtime = cellRuntime(state.draft);
   const { actor, policy, instance, entryKey, room } = state;
   signal?.throwIfAborted();
 
@@ -2095,7 +2095,7 @@ const MAX_ANSWER_LENGTH = 1024;
 
 /** The instance's answer slot, in the room space. */
 const answerCell = (
-  runtime: Cell<unknown>["runtime"],
+  runtime: Runtime,
   policy: CfcModulePolicyRefAtom,
   instance: string,
   tx?: IExtendedStorageTransaction,
@@ -2259,7 +2259,7 @@ const sealedAnswer = (
 export async function readCustodyAnswer(
   room: CustodyRoom,
 ): Promise<JSONValue | undefined> {
-  const runtime = room.terms.runtime;
+  const runtime = cellRuntime(room.terms);
   await syncResolved(room.terms);
   const { policy, terms } = await inspectRoom(runtime, room, []);
   const instance = hashStringOf(terms);
@@ -2296,8 +2296,8 @@ export async function publishCustodyAnswer(
   room: CustodyRoom,
   output: Cell<unknown>,
 ): Promise<CustodyAnswerResult> {
-  const runtime = output.runtime;
-  if (room.terms.runtime !== runtime) {
+  const runtime = cellRuntime(output);
+  if (cellRuntime(room.terms) !== runtime) {
     throw new Error("Custody seal handles must belong to the same runtime");
   }
   await Promise.all([syncResolved(room.terms), syncResolved(output)]);

@@ -117,23 +117,40 @@ It then shares the source's next fetch with the other tiles, rather than
 falling due on its own and fetching the source for itself, which would leave it
 describing different runs from its neighbours from then on.
 
-A workflow snapshot is read a page at a time, and the pages have to describe
+A workflow snapshot is joined from three reads of the workflow's runs. The
+newest page of the unfiltered listing, whatever branch or event its runs were
+for, is current; GitHub serves that listing from the moment of the request, and
+fetches of a workflow's two snapshots within twenty seconds of each other share
+one read of it. The filtered listing, narrowed to the snapshot's branch or
+event, carries the rest of the window, but GitHub serves it from an index that
+is often hours or days behind. The third read is the window the snapshot held
+before. When the snapshot has runs on the newest page, either the filtered
+listing or the held window has to reach the oldest of them, so that no run
+falls between them. Each run is taken from whichever read last saw it updated,
+so a lagging read never turns a finished run back into a running one, and a run
+a lagging read missed joins the window once a current listing carries it. A
+filtered listing that fails is logged.
+
+The filtered listing is read a page at a time, and the pages have to describe
 one moment. A page after the first asks GitHub for the runs created at or
 before the run the page before it ended on, rather than for an offset into a
 list that shifts as runs land. That run is one the window already holds, so the
 page has to carry it; a page that comes back without it was cut from a moment
-that never held that run, and the fetch fails rather than joining the two. This
-reads the same whichever side went stale. The cost is the one run each page
-repeats, which is why the window is up to the configured maximum rather than
-exactly it. The runs that do come back are ordered newest-first by the
-collection, not by the order the pages arrived in. A fetch whose newest run is
-older than the newest run already held read a stale view of the workflow: the
-scheduler keeps the snapshot it has, and each tile reading it turns gray and
-names the source's run list as out of date, apart from the ci tile, which marks
-the affected build unreadable. The server log records how many runs that fetch
-returned and its newest run, beside the same for the snapshot held, which tells
-an empty reply from a lagging one. The next fetch that reaches a current view
-clears the gray.
+that never held that run, and the listing is refused rather than joining the
+two. This reads the same whichever side went stale. The cost is the one run
+each page repeats, which is why the window is up to the configured maximum
+rather than exactly it. The runs that do come back are ordered newest-first by
+the collection, not by the order the pages arrived in.
+
+A fetch fails when neither the filtered listing nor the held window reaches the
+run it has to, which happens when the dashboard starts while the filtered
+listing is behind. When the listing failed outright, the fetch then fails with
+the listing's own error; when it came back without the run, the server log
+names that run and the listing's newest run. The scheduler keeps the snapshot
+it has, and each
+tile reading it turns gray and names the source's run list as out of date,
+apart from the ci tile, which marks the affected build unreadable. The next
+fetch that reaches the newest runs clears the gray.
 Together these keep a stale read from putting a run from weeks back at the head
 of a window, where every CI tile takes the state of the tree from.
 
@@ -416,7 +433,7 @@ to the next; a view supplies everything under it.
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
 | test selection | what share of the corpus the newest selection manifest would have a pull request run, read from the same manifest. The manifest's packing is built with nothing mandatory, so the share is the one a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to, and red when the publisher found the cost model that manifest was packed by broken, in which case the tile links to the page's cost model section. Those three take the sub line off the corpus count, the broken model first and the overrun lane second. The sparkline plots the selected percentage across every available manifest, using each manifest's own corpus size. Gray on the same conditions as the flaky tests tile, including an empty latest corpus | optional `GH_TOKEN` for publisher activity |
 | test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: every lane against its budget and how many tests it holds, the cost model the lanes were packed by against what they spent (what the publisher found broken in it, how many lanes ran past their bound, and each suite's charges against the manifest before and against what its batches spent), every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
-| coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | none |
+| labs coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it (`docs/development/COVERAGE.md`). The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | none |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
 | cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
@@ -620,7 +637,11 @@ latest manifest is readable, before historical collection finishes.
 Both tiles refresh their measurements and activity independently every 30 seconds.
 With `GH_TOKEN` or `GITHUB_TOKEN` set, a
 **running** badge lights while the Test Selection workflow on main is queued or
-running, including reruns of older workflow runs. The tiles share the workflow
+running, including reruns of older workflow runs. Runs on the workflow's
+newest page are read from its unfiltered run list, which GitHub serves current.
+Reruns of older runs are found by status, which GitHub answers from an index
+that can be days behind, so each one counts only once a read of the run itself
+says it has not finished. The tiles share the workflow
 lookup and keep the last known badge while that lookup is pending. A failed
 lookup shows **activity unknown** alongside the available measurements. Public
 manifest reads work without GitHub credentials. Each refresh checks for newly
@@ -1104,7 +1125,19 @@ Notes:
   artifact refresh have both settled. A collection that takes more than a
   minute says **refresh still pending** without changing that color. A newly
   loaded dashboard keeps its neutral placeholder until its first collection
-  settles. An empty completed fetch shows **benchmark data unavailable**.
+  settles. A completed fetch whose runs carry no readable data shows
+  **benchmark data unavailable**, and one with no runs at all shows **no
+  benchmark runs**.
+  The tile reads the workflow's unfiltered run list and keeps the runs on main
+  itself, since GitHub answers a list filtered by branch from an index that is
+  often days behind; nearly every run of this workflow is on main, so this
+  reads no more pages.
+  A run list whose newest run is older than the newest run already collected,
+  an empty list included, comes from a stale view of the workflow. The tile
+  refuses it, keeps its last trends gray, and reads **run list out of date**
+  until a current list arrives. Until the server has kept a list since it started, the
+  runs recorded in the benchmark history cache on disk count as collected, so
+  a stale list is refused after a restart as well.
   Adding or removing a benchmark does not move an index. The benchmark is
   absent from one side of that adjacent comparison, so it drops out of the
   geometric mean. When two runs share no selected positive measurements, the
@@ -1249,6 +1282,17 @@ Notes:
     checks wait through the same window after GitHub rejects a collection.
     Moving the window slider starts or joins the matching collection without
     cancelling wider-window work already in progress.
+    CI history finds its builds by searching the workflow's successful pushes
+    to main over the window, and then reads the newest page of the workflow's
+    unfiltered run list. GitHub serves that list current, and answers a search
+    from an index that is often hours or days behind it. The search has to
+    reach the oldest successful first attempt of a main push in the window on
+    that page, so that no build falls between the search and the page; a
+    collection whose search does not is refused and reads **run list out of
+    date**. The builds on the newest page
+    are taken from it. A Gantt of every run, or of every main push whatever it
+    concluded, walks the unfiltered list and picks the runs out itself,
+    stopping at 150 runs or at the start of the 45-day window.
   - Every GitHub API request made by the three performance views reserves rate
     capacity before it starts. Each guarded request batch reads GitHub's current
     rate-limit status before reserving. Collection stops before projected

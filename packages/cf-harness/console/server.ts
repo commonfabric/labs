@@ -1885,8 +1885,15 @@ export class ConsoleServer {
     return Response.json({ sessionId, turnId: turn.result.turnId });
   }
 
+  /**
+   * Cancels a session's active turn, or only the named turn when the request
+   * names one. The caller says what stopped the turn in `reason`, which becomes
+   * the reason on the turn's `turn_canceled` event and is quoted in its run's
+   * outcome. A request without one records only that the cancel came through
+   * this route, since nothing in the request says who sent it.
+   */
   async #cancel(request: Request): Promise<Response> {
-    let body: { sessionId?: unknown; turnId?: unknown };
+    let body: { sessionId?: unknown; turnId?: unknown; reason?: unknown };
     try {
       body = await request.json();
     } catch {
@@ -1897,11 +1904,24 @@ export class ConsoleServer {
     if (typeof body.sessionId !== "string") {
       return Response.json({ error: "sessionId is required" }, { status: 400 });
     }
+    if (body.turnId !== undefined && typeof body.turnId !== "string") {
+      return Response.json({ error: "turnId, when given, must be a string" }, {
+        status: 400,
+      });
+    }
+    if (
+      body.reason !== undefined &&
+      (typeof body.reason !== "string" || body.reason.trim() === "")
+    ) {
+      return Response.json({
+        error: "reason, when given, must be a non-empty string",
+      }, { status: 400 });
+    }
     const response = await this.#service.cancelTurn(
       crypto.randomUUID(),
       body.sessionId,
-      typeof body.turnId === "string" ? body.turnId : undefined,
-      "canceled from the console page",
+      body.turnId,
+      body.reason ?? "canceled by a request to the console",
     );
     return response.ok
       ? Response.json(response.result)
