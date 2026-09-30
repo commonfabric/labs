@@ -1097,13 +1097,13 @@ Mechanics:
   the same policy again does not change the recursion key. An alias's arguments,
   including defaults read under earlier arguments, contribute at their uses in
   its body, under that position's union or intersection operator. Two
-  instantiations of one
-  declaration keep apart. A recursion whose instantiation the checker settles
-  to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to its definition
-  when its query origins also settle. Conditional and indexed aliases can retain
-  query syntax the checker drops, or repeat a parameter under an operator other
-  than union or intersection, so their keys may keep growing even when their
-  types settle. Such chains reach the nesting limit and report an error.
+  instantiations of one declaration keep apart. A recursion whose instantiation
+  the checker settles to the same type (`Sec<T | undefined>` inside `Sec<T>`)
+  refers to its definition when its query origins also settle. Conditional and
+  indexed aliases can retain query syntax the checker drops, or repeat a
+  parameter under an operator other than union or intersection, so their keys
+  may keep growing even when their types settle. Such chains reach the nesting
+  limit and report an error.
 - A chain is also tracked from the written reference it is entered from
   (`SchemaGenerator.readAliasChain`), so a chain entered again from that
   reference inside itself is found as a recursion through it. One whose
