@@ -124,12 +124,23 @@ fetches of a workflow's two snapshots within twenty seconds of each other share
 one read of it. The filtered listing, narrowed to the snapshot's branch or
 event, carries the rest of the window, but GitHub serves it from an index that
 is often hours or days behind. The third read is the window the snapshot held
-before. When the snapshot has runs on the newest page, either the filtered
-listing or the held window has to reach the oldest of them, so that no run
-falls between them. Each run is taken from whichever read last saw it updated,
-so a lagging read never turns a finished run back into a running one, and a run
-a lagging read missed joins the window once a current listing carries it. A
-filtered listing that fails is logged.
+before. Either the held window or the filtered listing has to join the newest
+page, so that no run falls between them. The held window joins it when the page
+still carries the newest run, of any branch or event, of the page the held
+window was joined to, which it does unless a hundred runs start between two
+refreshes.
+The filtered listing joins it when it carries the oldest of the snapshot's runs
+on the page. When neither joins, which is what a dashboard that has just
+started sees while the filtered listing is behind, the unfiltered listing is
+read on, page by page, until it reaches a run the filtered listing carries,
+holds the most runs a window holds, or reaches the age cutoff; for labs' main
+runs that is at most about eight pages. A workflow's two snapshots share the
+pages they both read within twenty seconds. The server log names the run
+nothing reached, the filtered listing's newest run, and how many runs the
+unfiltered listing gave. Each run is taken from whichever read last saw it
+updated, so a lagging read never turns a finished run back into a running one,
+and a run a lagging read missed joins the window once a current listing carries
+it. A filtered listing that fails is logged.
 
 The filtered listing is read a page at a time, and the pages have to describe
 one moment. A page after the first asks GitHub for the runs created at or
@@ -142,17 +153,12 @@ each page repeats, which is why the window is up to the configured maximum
 rather than exactly it. The runs that do come back are ordered newest-first by
 the collection, not by the order the pages arrived in.
 
-A fetch fails when neither the filtered listing nor the held window reaches the
-run it has to, which happens when the dashboard starts while the filtered
-listing is behind. When the listing failed outright, the fetch then fails with
-the listing's own error; when it came back without the run, the server log
-names that run and the listing's newest run. The scheduler keeps the snapshot
-it has, and each
-tile reading it turns gray and names the source's run list as out of date,
-apart from the ci tile, which marks the affected build unreadable. The next
-fetch that reaches the newest runs clears the gray.
-Together these keep a stale read from putting a run from weeks back at the head
-of a window, where every CI tile takes the state of the tree from.
+A fetch fails only when a read of the unfiltered listing fails. The scheduler
+then keeps the snapshot it has, and each tile reading it turns gray and names
+the problem, apart from the ci tile, which marks the affected build
+unreadable. The next fetch that succeeds clears the gray. Together these keep a
+stale read from putting a run from weeks back at the head of a window, where
+every CI tile takes the state of the tree from.
 
 The recent-main-runs tile reads both the Labs and Loom snapshots. It rebuilds
 and sorts the combined list whenever either snapshot arrives. If one snapshot

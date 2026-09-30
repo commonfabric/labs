@@ -561,8 +561,8 @@ export function clampInt(v: string | null, def: number, lo: number, hi: number):
 
 /**
  * The error a run list is refused with when it is behind the workflow's newest
- * runs: its newest run is older than one already collected, or none of a run
- * source's reads reaches the runs on the workflow's newest page.
+ * runs: its newest run is older than one already collected, or a search does
+ * not reach the runs on the workflow's newest page.
  */
 export const STALE_RUNS_ERROR = "run list behind the workflow's newest runs";
 

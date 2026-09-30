@@ -1233,6 +1233,7 @@ export function pushFrameFromCause(
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
     eventTime?: number;
+    eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
     runtime?: Runtime;
     tx?: IExtendedStorageTransaction;
@@ -1245,6 +1246,7 @@ export function pushFrameFromCause(
     inHandler,
     frameKind,
     eventTime,
+    eventKey,
     runtime,
     tx,
     space,
@@ -1273,6 +1275,7 @@ export function pushFrameFromCause(
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
     ...(eventTime !== undefined && { eventTime }),
+    ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),
   };
   pushOntoFrameStack(frame);

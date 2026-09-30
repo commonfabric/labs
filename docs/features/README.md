@@ -50,6 +50,10 @@ a line for each new document to the index below.
 - [`committed-write-backpressure.md`](committed-write-backpressure.md) — how the
   scheduler keeps a committed write from being silently dropped when the server
   rejects it under contention
+- [`event-key.md`](event-key.md) — the key `eventKey()` returns to a handler:
+  what it is derived from, why it is the same on every run of one event and
+  different for another actor or stream, how far it can be trusted, and why it
+  is available only in a handler
 - [`authorization-failure-surfacing.md`](authorization-failure-surfacing.md) —
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait

@@ -85,6 +85,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the key of the event the running handler handles, and returns a
+  // plain string rather than a reactive value.
+  {
+    exportName: "eventKey",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // `assertCapture` records one operand of an `assert` body and returns it
   // unchanged. AssertDiagnosticsTransformer emits the calls; authored code
   // does not call it. It takes a resolved value and hands the same value back,

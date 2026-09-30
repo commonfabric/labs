@@ -4156,6 +4156,25 @@ export type DID = `did:${string}`;
  */
 export declare function currentPrincipal(): DID | undefined;
 
+/**
+ * Returns the event key of the event the running handler handles: a string
+ * naming that one event, as its actor sent it to its stream. Every run of the
+ * same event returns the same key, including a retry and the serving runtime's
+ * run of a client's event, so a handler can use it as an idempotence key or as
+ * the id of what the event creates. A new gesture, a new stream or another
+ * actor gets a new key, and nothing in the event's payload can choose it.
+ *
+ * The key is distinct per durable event id, actor and stream. A stream that
+ * has handled an event can admit the same id again, which gets the same key
+ * from the same actor, so a record addressed by the key may already exist.
+ *
+ * The key is unlabeled and carries no trust: it says that one event is one
+ * event, not who sent it or that a person asked for it.
+ *
+ * Available only in a handler, and throws anywhere else.
+ */
+export declare function eventKey(): string;
+
 export type WishParams = {
   query: WishTag | string;
   path?: string[];

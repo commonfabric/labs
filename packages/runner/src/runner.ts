@@ -157,6 +157,7 @@ import {
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
+import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
 import { RetryImmediately } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
@@ -9921,6 +9922,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     inHandler: boolean,
     implementationIdentity?: ImplementationIdentity,
+    eventKey?: string,
   ): Frame {
     return pushFrameFromCause(cause, {
       unsafe_binding: {
@@ -9937,6 +9939,7 @@ export class Runner {
       // than through event dispatch (a test, an internal call) has no dispatched
       // time, so capture the clock once here; it stays frozen for that run.
       ...(inHandler ? { eventTime: tx.dispatchedEventTime ?? Date.now() } : {}),
+      ...(eventKey !== undefined ? { eventKey } : {}),
       runtime: this.#runtime,
       space: resultCell.space,
       tx,
@@ -10694,11 +10697,10 @@ export class Runner {
       // every id minted in this frame — derives from the durable event id, so
       // retries of the same event reuse the same ids and duplicate handlings
       // collide on the receipt. The fallback covers non-dispatch invocations
-      // (tests calling the handler directly).
-      const cause = {
-        ...causalInputs,
-        $event: tx.dispatchedEventId ?? crypto.randomUUID(),
-      };
+      // (tests calling the handler directly). The frame's event key derives
+      // from this same id, so it is as stable across retries as the cause is.
+      const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
+      const cause = { ...causalInputs, $event: eventId };
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
         module,
         { implementation: fn },
@@ -10710,6 +10712,11 @@ export class Runner {
         tx,
         true,
         policyFacingIdentity,
+        deriveEventKey(
+          eventId,
+          this.#runtime.actingPrincipalFor(tx),
+          streamLink,
+        ),
       );
       if (policyFacingIdentity) {
         setCfcImplementationIdentity(tx, policyFacingIdentity);

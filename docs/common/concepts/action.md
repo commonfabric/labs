@@ -83,6 +83,11 @@ one-off IDs.
   a frozen first-load capture, not a clock).
 - Prefer capturing time/random snapshots in the action itself rather than
   inside a `computed()` that may re-run many times.
+- For an ID that has to be the same every time the event is handled — a key
+  for acting on a request at most once, or the ID of a record the action
+  creates — call `eventKey()` rather than `Math.random()`.
+  [The key of the event a handler handles](../../features/event-key.md) says
+  why.
 
 ## Who the Action Acts For
 

@@ -18,6 +18,7 @@ const FACTORY_URL = new URL(
 const TRACKED_IMPORT_SOURCES = new Set([
   "./built-in.ts",
   "./current-principal.ts",
+  "./event-key.ts",
   "./module.ts",
   "./pattern.ts",
   "./space-access.ts",
