@@ -390,6 +390,57 @@ Plain `new Writable(...)` inherits the containing pattern or factory scope. Use
 the scoped constructors when the local cell must have a specific sharing
 boundary.
 
+## A Space Only Its Members Can Open
+
+Scopes divide what one space holds. When the data must not reach anyone outside
+a group at all — a direct conversation, a private room — give the group a space
+of its own. A plain `inSpace()` space admits everyone. Ask for one that admits
+exactly the people you name:
+
+```ts
+// Shown at module scope.
+import { handler, pattern, type SpaceMember, Writable } from "commonfabric";
+
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+
+const createRoom = handler<
+  { title: string; members: SpaceMember[] },
+  { rooms: Writable<unknown[]> }
+>((event, { rooms }) => {
+  rooms.push(
+    Room.inSpace(undefined, { access: "creator", members: event.members })({
+      title: event.title,
+    }),
+  );
+});
+```
+
+- The new space's access list names the user the handler acts for, the same
+  principal `currentPrincipal()` returns, as `OWNER`, and each member at the
+  `WRITE` or `OWNER` it lists. Nobody else can open it. Nothing the pattern
+  passes chooses the owner.
+- Call it with a name, or with `undefined` to get a space for this call site,
+  as the anonymous `inSpace()` does. The space that calls it records which space
+  the name reached, so a later run, or a retry of the same event, reaches the
+  same space. The name belongs to the calling space: another space using the
+  same name reaches another space, and a plain `inSpace()` of the same name
+  never reaches this one.
+- It works only in a handler. It throws in a pattern body, a `computed()` and a
+  `lift()`, and in a run that acts for no one.
+- A non-empty `members` lets each member read everything the space will hold,
+  so it needs a trusted gesture on the handler's event: bind the handler to a
+  control on a reviewed surface, and in a pattern test give the step a
+  `trustedUi`. Without one the handler throws and no space is created. On a
+  server-side run, `members` is refused for now.
+- A member is named by its DID, once. The creator cannot also be a member, and
+  the wildcard `"*"` is not a DID.
+- Pass a DID or a cell instead of a name and it throws: those name a space that
+  already exists, and there is nothing to create.
+
+[Creator-only spaces](../../features/creator-only-spaces.md) has the details.
+
 ## Authorization And Admin Roles
 
 Scopes decide which data instance a user sees. They do not decide who may write

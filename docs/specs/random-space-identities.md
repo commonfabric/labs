@@ -6,6 +6,14 @@ Proposed target behavior and the active deployment direction. The
 [implementation plan](../plans/random-space-identities.md) describes the code
 and data change.
 
+A pattern can already create a space this way by asking for it:
+`PatternFactory.inSpace(name, { access: "creator" })` generates the key, runs a
+genesis naming the creator, forgets the key, and records the DID in an
+allocation record in the calling space, as described below. It differs in one
+respect: its genesis also names, as `WRITE` or `OWNER`, the members the handler
+lists, which requires a trusted gesture.
+[Creator-only spaces](../features/creator-only-spaces.md) describes it.
+
 The [Common Fabric URL](fabric-urls.md) and
 [space name registry](../plans/space-name-registry.md) designs are separate
 concepts. Neither is planned for deployment, and neither is a dependency of

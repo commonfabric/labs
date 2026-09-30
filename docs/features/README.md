@@ -80,6 +80,10 @@ a line for each new document to the index below.
   for: where `currentPrincipal()` gets it on a client and on a serving runtime,
   what cannot steer it, why it is authority rather than intent, and why it is
   available only in a handler
+- [`creator-only-spaces.md`](creator-only-spaces.md) — the space
+  `inSpace(name, { access: "creator" })` creates: its forgotten random key, the
+  allocation record that keeps a name reaching it, the checks made before it is
+  created, and what they leave open
 
 ## Talking to the outside world
 

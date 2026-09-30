@@ -167,7 +167,8 @@ temporary pre-launch compatibility rule; public access never includes OWNER.
 Retracted, malformed, and ownerless ACLs fail closed.
 Normal fresh named-space bootstrap writes the genesis document the caller
 registered beside the space key (`registerSpaceIdentity(identity,
-{ genesisAcl })`), else the fallback `{ [activeUser]: "OWNER", "*": "WRITE" }`,
+{ genesisAcl })`, or `{ owner, grants }` for exactly that owner and those
+grants), else the fallback `{ [activeUser]: "OWNER", "*": "WRITE" }`,
 so new non-home spaces that asked for nothing are public read/write until ACL
 management has a UI. Home bootstrap remains owner-only. The wildcard is a
 default, not a fixture: a caller can supply its own document at genesis, and

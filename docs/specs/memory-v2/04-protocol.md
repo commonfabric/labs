@@ -1053,7 +1053,9 @@ caller registered beside the space key
 with exactly that ACL, this admission check is the only validation it
 receives, and an open of a space that already exists proceeds only if it is
 owned exactly as that document says — grants below OWNER are the owner's to
-evolve — else is refused), else the fallback
+evolve — else is refused), or an owner and the grants beside it
+(`registerSpaceIdentity(identity, { owner, grants })` — exactly
+`{ [owner]: "OWNER", ...grants }`), else the fallback
 `{ [activeUser]: "OWNER", "*": "WRITE" }`. The wildcard grant is the rollout
 default until ACL management has a UI, spelled once as the runner's
 `DEFAULT_GENESIS_GRANTS`; the active user remains the concrete owner who can
