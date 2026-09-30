@@ -257,6 +257,11 @@ export default pattern<{ initialName: string }>(({ initialName }) => {
       expect(diagnostics.filter(isError)).toMatchObject([{
         type: "cfc-write-authorized-by",
         message: expect.stringContaining("direct typeof binding"),
+      }, {
+        type: "cfc-write-authorized-by:unread",
+        message: expect.stringContaining(
+          "schema would carry no write restriction",
+        ),
       }]);
     });
   }
@@ -603,6 +608,11 @@ export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ 
     expect(diagnostics.filter(isError)).toMatchObject([{
       type: "cfc-write-authorized-by",
       message: expect.stringContaining("direct typeof binding"),
+    }, {
+      type: "cfc-write-authorized-by:unread",
+      message: expect.stringContaining(
+        "schema would carry no write restriction",
+      ),
     }]);
   });
 

@@ -953,7 +953,12 @@ Mechanics:
   alias is read from its type alone. A `WriteAuthorizedBy` written through
   another alias, whose binding neither way reads, is the
   `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
-  since its schema would carry no write restriction. A payload that is itself a
+  since its schema would carry no write restriction. A binding node that is
+  not a direct `typeof` of an identifier reports the same error, including an
+  alias for `typeof writer` passed through another alias's parameter: its type
+  does not stand in for the written binding. A parameter bound only to a type,
+  with no argument node, remains a type-only read rather than an authored
+  indirect binding and is not reported by this check. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
@@ -1088,10 +1093,11 @@ Mechanics:
   alias bodies, identified by the writer declaration they resolve to (or by
   the query node where no writer resolves): two writers with the same function
   type still name distinct write policies in recursive definitions. Repeated
-  union and intersection members contribute their query origins once, so adding the same policy again
-  does not change the recursion key. An alias's arguments, including defaults
-  read under earlier arguments, contribute at their uses in its body, under
-  that position's union or intersection operator. Two instantiations of one
+  union and intersection members contribute their query origins once, so adding
+  the same policy again does not change the recursion key. An alias's arguments,
+  including defaults read under earlier arguments, contribute at their uses in
+  its body, under that position's union or intersection operator. Two
+  instantiations of one
   declaration keep apart. A recursion whose instantiation the checker settles
   to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to its definition
   when its query origins also settle. Conditional and indexed aliases can retain
@@ -1149,7 +1155,8 @@ Mechanics:
   one whose writer-query key cannot settle. Its unread remainder would discard
   confidentiality or write policies, so the schema must not be used. A chain
   reached by its alias is located at its type node where available. The separate
-  bound on a type read under bindings continues to report an unread-type warning.
+  bound on a type read under bindings and a scope-wrapper chain reaching its
+  nesting bound continue to report an unread-type warning.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a

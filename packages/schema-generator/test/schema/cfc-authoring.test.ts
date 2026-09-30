@@ -385,6 +385,28 @@ describe("Schema: CFC authoring aliases", () => {
     expect(diagnostics[0]!.message).toContain("`WriteAuthorizedBy`");
   });
 
+  it("does not treat a type-only argument as an authored indirect writer binding", async () => {
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type Protected<T, Binding> = Cfc<
+        WriteAuthorizedBy<T, Binding>,
+        { confidentiality: readonly ["private"] }
+      >;
+      function save() {}
+      type SchemaRoot = Protected<string, typeof save>;
+    `,
+      "SchemaRoot",
+    );
+    const diagnostics: SchemaGenerationDiagnostic[] = [];
+    new SchemaGenerator().generateSchema(type, checker, undefined, {
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   it("reports nothing for a policy read from a type alone, which has no reference to spell a binding in", async () => {
     const { type, checker } = await getTypeFromCode(
       `

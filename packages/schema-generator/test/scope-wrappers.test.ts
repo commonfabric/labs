@@ -450,11 +450,10 @@ interface SchemaRoot { head: Node<{ a: string }>; }
 
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0]).toMatchObject({
-          type: "cfc-schema:recursion-limit",
-          severity: "error",
+          type: "schema-type:unread",
+          severity: "warning",
         });
-        // The partial schema preserves the handles read before the error;
-        // its unread remainder makes the schema unusable.
+        // The partial schema preserves the handles read before the bound.
         const handle = [{ kind: "cell", scope: "user" }];
         const handles: unknown[] = [];
         JSON.stringify(schema, (key, value) => {

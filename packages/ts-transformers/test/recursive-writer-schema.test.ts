@@ -22,6 +22,68 @@ interface Schema {
 }
 
 describe("recursive writer schema", () => {
+  it("warns without rejecting a generic recursion through a scope around a cell", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformSource(
+      `import { Cell, PerUser, pattern } from "commonfabric";
+type Node<T> = PerUser<Cell<{ label: T; next?: Node<T> }>>;
+export default pattern<{ head: Node<string> }>(() => ({}));`,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+
+    expect(diagnostics.filter(({ severity }) => severity === "error")).toEqual(
+      [],
+    );
+    expect(diagnostics.filter(({ type }) => type === "schema-type:unread"))
+      .toHaveLength(1);
+  });
+
+  for (const position of ["argument", "result"]) {
+    for (const storedSource of [false, true]) {
+      it(`rejects an indirect writer in a recursive ${position} from ${storedSource ? "stored" : "authored"} source`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformSource(
+          `import { Confidential, WriteAuthorizedBy, handler, pattern } from "commonfabric";
+const f = handler<void, {}>(() => {});
+type Indirect = typeof f;
+type Pair<A, B> = Confidential<{
+  left: WriteAuthorizedBy<string, A>;
+  right: WriteAuthorizedBy<string, B>;
+}, readonly ["pair"]>;
+type Sec<W> = Confidential<{ value: W; next?: Sec<W> }, readonly ["a"]>;
+interface Holder {
+  x: Sec<Pair<typeof f, Indirect>>;
+  y: Sec<Pair<Indirect, typeof f>>;
+}
+export default ${
+            position === "argument"
+              ? "pattern<Holder>(() => ({}))"
+              : "pattern<{}, Holder>(() => ({} as Holder))"
+          };`,
+          {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+            storedSource,
+          },
+        );
+
+        const unread = diagnostics.filter(({ type }) =>
+          type === "cfc-write-authorized-by:unread"
+        );
+        expect(unread.length).toBeGreaterThan(0);
+        for (const diagnostic of unread) {
+          expect(diagnostic.severity).toBe("error");
+          expect(diagnostic.fileName).toBe("/test.tsx");
+        }
+      });
+    }
+  }
+
   it("emits each handler's write policy throughout its recursive input", async () => {
     const transformed = await transformSource(
       `import { Confidential, WriteAuthorizedBy, handler, pattern } from "commonfabric";
@@ -117,11 +179,11 @@ export default pattern<{ a: Sec<WriteAuthorizedBy<string, typeof f>> }>(({ a }) 
           pipelineDiagnostics: diagnostics,
         },
       );
-      const unread = diagnostics.filter(({ type }) =>
+      const recursionLimits = diagnostics.filter(({ type }) =>
         type === "cfc-schema:recursion-limit"
       );
-      expect(unread.length).toBeGreaterThan(0);
-      for (const diagnostic of unread) {
+      expect(recursionLimits.length).toBeGreaterThan(0);
+      for (const diagnostic of recursionLimits) {
         expect(diagnostic.severity).toBe("error");
         expect(diagnostic.fileName).toBe("/test.tsx");
       }

@@ -58,6 +58,39 @@ function* recursiveValues(
 }
 
 describe("recursive binding identity", () => {
+  for (const order of [["x", "y"], ["y", "x"]]) {
+    it(`rejects indirect writer bindings in recursive policies, reading ${order.join(" then ")}`, async () => {
+      const { diagnostics } = await generate(`
+        type Indirect = typeof f;
+        type Pair<A, B> = Confidential<{
+          left: WriteAuthorizedBy<string, A>;
+          right: WriteAuthorizedBy<string, B>;
+        }, readonly ["pair"]>;
+        type Sec<W> = Confidential<{
+          value: W;
+          next?: Sec<Identity<W>>;
+        }, readonly ["a"]>;
+        interface Holder {
+          ${
+        order.map((field) =>
+          `${field}: Sec<Pair<${
+            field === "x" ? "typeof f, Indirect" : "Indirect, typeof f"
+          }>>;`
+        ).join("\n")
+      }
+        }
+      `);
+
+      expect(diagnostics.length).toBeGreaterThan(0);
+      for (const diagnostic of diagnostics) {
+        expect(diagnostic).toMatchObject({
+          type: "cfc-write-authorized-by:unread",
+          severity: "error",
+        });
+      }
+    });
+  }
+
   for (const order of [["f", "g"], ["g", "f"]]) {
     for (
       const [spelling, declarations, argument] of [

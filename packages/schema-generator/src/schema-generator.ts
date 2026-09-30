@@ -1540,8 +1540,8 @@ export class SchemaGenerator {
   }
 
   /**
-   * Formats `type` with `read`, the reading of a CFC alias chain entered from
-   * `entry`, where the checker instantiates `instantiated`: a written reference
+   * Formats `type` with `read`, the reading of an alias chain of `kind` entered
+   * from `entry`, where the checker instantiates `instantiated`: a written reference
    * to the chain, or, for a chain reached with none, as through an index
    * signature or a tuple element read by type, the alias it is reached by. A
    * reading entered again from the same reference inside itself is a recursion
@@ -1557,14 +1557,16 @@ export class SchemaGenerator {
    * reading for labels alone, which names no definition
    * (`GenerationContext.labelsOnly`). An entry nested in itself
    * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
-   * end, as `Nest<T[]>` inside `Nest<T>` does. Reaching that bound is an error:
-   * the unread remainder could hold confidentiality or write policies.
+   * end, as `Nest<T[]>` inside `Nest<T>` does. Reaching that bound in a CFC
+   * chain is an error: the unread remainder could hold confidentiality or
+   * write policies. A scope chain reports an unread-type warning.
    */
   public readAliasChain(
     type: ts.Type,
     context: GenerationContext,
     entry: ts.TypeNode | ts.Symbol,
     instantiated: ts.Type | undefined,
+    kind: "cfc" | "scope",
     read: () => MutableJSONSchema,
   ): MutableJSONSchema {
     const readings = this.#chainReadings.get(context.definitionStack) ?? [];
@@ -1578,11 +1580,16 @@ export class SchemaGenerator {
       : undefined;
     if (settled) return this.#referToReading(settled.type, settled.context);
     if (again.length >= MAX_BOUND_NESTING) {
-      // Locate the error at the reference, or at the type being read where
-      // the chain was reached without a written reference.
+      // Locate the diagnostic at the reference, or at the type being read
+      // where the chain was reached without a written reference.
       const node = written ? entry : context.typeNode ??
         checker.typeToTypeNode(type, undefined, undefined);
-      reportUnreadCfcRecursion(context, node);
+      if (kind === "cfc") {
+        reportUnreadCfcRecursion(context, node);
+      } else {
+        const unread = context.uninterpretedTypeNodes;
+        if (unread && node && !unread.includes(node)) unread.push(node);
+      }
       return {};
     }
     readings.push({ entry, instantiated, type, context });
