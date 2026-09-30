@@ -613,15 +613,22 @@ export const CFC_VM_STATUS_BOUND_MS = 15_000;
  * unreadable. An answer is a status where it is one JSON object, and other
  * where it is anything else but nothing; once connected, any other failure, a
  * hang-up with nothing said among them, and no answer within `boundMs`, is no
- * answer.
+ * answer. `boundMs` replaces {@link CFC_VM_STATUS_BOUND_MS}, and `connect`
+ * replaces connecting to the socket with `Deno.connect`.
  */
 export const askCfcVmStatus = async (
   socket: string,
-  boundMs = CFC_VM_STATUS_BOUND_MS,
+  options: {
+    boundMs?: number;
+    connect?: (socket: string) => Promise<Deno.UnixConn>;
+  } = {},
 ): Promise<ConsoleVmReading> => {
+  const boundMs = options.boundMs ?? CFC_VM_STATUS_BOUND_MS;
+  const connect = options.connect ??
+    ((path: string) => Deno.connect({ transport: "unix", path }));
   let connection: Deno.UnixConn;
   try {
-    connection = await Deno.connect({ transport: "unix", path: socket });
+    connection = await connect(socket);
   } catch (error) {
     return noDaemon(error) ? { found: "no-daemon" } : {
       found: "unreadable",

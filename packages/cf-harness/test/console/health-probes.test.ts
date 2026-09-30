@@ -1070,6 +1070,59 @@ describe("health-probes", () => {
       });
     });
 
+    it("returns no daemon only for a connection refused or not found, and unreadable for any other failure to connect", async () => {
+      const failing = (error: Error) => () => Promise.reject(error);
+      const denied = new Deno.errors.PermissionDenied("denied");
+
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(new Deno.errors.ConnectionRefused("refused")),
+        }),
+      ).toEqual({ found: "no-daemon" });
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(new Deno.errors.NotFound("gone")),
+        }),
+      ).toEqual({ found: "no-daemon" });
+      expect(
+        await askCfcVmStatus("/store/daemon.sock", {
+          connect: failing(denied),
+        }),
+      ).toEqual({
+        found: "unreadable",
+        reason: `The daemon socket could not be connected to: ${denied}`,
+      });
+    });
+
+    it("returns no answer, carrying the error, where the exchange with the daemon fails within the bound", async () => {
+      await withStore(async (directory) => {
+        const daemon = fakeVmDaemon(directory, () => JSON.stringify(STATUS));
+        try {
+          const reading = await askCfcVmStatus(join(directory, "daemon.sock"), {
+            // A connection closed under the question, so that writing it
+            // fails.
+            connect: async (path) => {
+              const connection = await Deno.connect({
+                transport: "unix",
+                path,
+              });
+              connection.close();
+              return connection;
+            },
+          });
+
+          expect(reading).toEqual({
+            found: "no-answer",
+            reason: expect.stringContaining(
+              "The exchange with the daemon failed: ",
+            ),
+          });
+        } finally {
+          await daemon.close();
+        }
+      });
+    });
+
     it("returns failed when the daemon answers with something other than its status", async () => {
       await withStore(async (directory) => {
         const daemon = fakeVmDaemon(directory, () => "error: busy");
@@ -1403,6 +1456,30 @@ describe("health-probes", () => {
         });
       });
     }
+
+    it("returns the row unknown when the observation itself throws", async () => {
+      // `ConsoleHealth` reports a probe whose read rejects through the
+      // probe's own unavailable rows: a failure to look is not a failure of
+      // the VM.
+      const unchanged = Deno.lstatSync(Deno.cwd());
+      const health = new ConsoleHealth([], [
+        consoleVmHealthProbe(store("/store"), {
+          lstat: () => unchanged,
+          ask: () => Promise.reject(new Error("asking failed")),
+        }),
+      ]);
+
+      await health.refresh();
+
+      const [row] = health.snapshot().rows;
+      expect(row).toMatchObject({
+        id: "sandbox.vm",
+        state: "unknown",
+        value: "not verified",
+        reason: "The VM daemon could not be looked for.",
+      });
+      expect(row.checkedAt).not.toBeNull();
+    });
 
     it("returns unknown when the socket could not be looked at", async () => {
       const row = await readRow(
