@@ -4120,6 +4120,23 @@ export type WishTag = `/${string}` | `#${string}`;
  */
 export type DID = `did:${string}`;
 
+/**
+ * Returns the principal the running handler acts for: the authenticated actor
+ * of the event it handles, or `undefined` for an event no principal sent.
+ * Nothing in the event's payload can choose the value.
+ *
+ * The value is _authority_, not _intent_: a handler that another pattern
+ * invokes sees the user that pattern runs as, so it does not show that the
+ * person asked for the action. A trusted gesture, or a value labeled
+ * `AuthoredByCurrentUser`, is what shows that.
+ *
+ * Available only in a handler for now, and throws anywhere else. A pattern body
+ * builds one graph for every viewer, and reading the viewer in a `computed()`
+ * or a `lift()` needs every runtime to scope the value to that user, and a
+ * label saying who may see the viewer's DID.
+ */
+export declare function currentPrincipal(): DID | undefined;
+
 export type WishParams = {
   query: WishTag | string;
   path?: string[];
