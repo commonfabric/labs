@@ -5,6 +5,7 @@
  * its reactions with it.
  */
 import {
+  action,
   type AddIntegrity,
   assert,
   pattern,
@@ -79,11 +80,24 @@ const reactionsOn = (
   return (message?.reactions?.get() ?? []) as ChatReaction[];
 };
 
+// How many reactions a held reaction list holds.
+const heldCount = (
+  holder: Writable<{ list?: Writable<ReactionList> }>,
+): number => ((holder.get()?.list?.get() ?? []) as unknown[]).length;
+
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const reactionLists = Writable.of<ReactionList[]>([] as ReactionList[]);
+  // The first message's reaction list, held apart from the message, whose link
+  // to it a deletion drops.
+  const firstReactions = Writable.of<{ list?: Writable<ReactionList> }>({});
+  const action_hold_first_reactions = action(() =>
+    firstReactions.key("list").set(
+      messages.key(0).key("reactions").resolveAsCell(),
+    )
+  );
   const records = {
     about: { kind: "group" as const },
     ownSpace: false,
@@ -205,6 +219,10 @@ export default pattern(() => {
       },
       // Deleting a message clears its reactions and takes them out of the
       // room's record, and the deleted message takes no new ones.
+      { action: action_hold_first_reactions },
+      {
+        assertion: assert(() => heldCount(firstReactions) === 2),
+      },
       {
         action: aliceOnFirst.deleteMessage,
         event: {},
@@ -218,7 +236,8 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           reactionsOn(messages, 0).length === 0 &&
-          ((reactionLists.get()[0] ?? []) as unknown[]).length === 0 &&
+          heldCount(firstReactions) ===
+            0 &&
           aliceOnFirst.tallies.length === 0
         ),
       },
