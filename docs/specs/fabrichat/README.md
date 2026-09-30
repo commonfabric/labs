@@ -314,6 +314,13 @@ runtime lacks a prerequisite, the patterns depart from this design, as below.
 
 ### Writers and labels
 
+- **Every record names its writers.** Beyond what the design requires of
+  messages and reactions, each of the room's records (its request memory,
+  used times, activity and its numbering, roster, departures, notices, and
+  each session's windows) has a write policy listing the handlers that write
+  it (`WritePolicyAnyOf`), so no other code can write it, even code a member
+  runs in the room's space. `remove` is on the lists it will write once it can
+  revoke access.
 - **Membership and starts are not gesture-checked.** `add` and `remove` are
   sent from controls marked `ChatMembersSurface`, and `openDirect` and
   `createGroup` from controls marked `ChatStartSurface`, but no write policy
