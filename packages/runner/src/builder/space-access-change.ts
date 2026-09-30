@@ -83,17 +83,20 @@ export function revokeSpaceAccess(target: unknown, principal: unknown): void {
 /**
  * Removes the acting principal's own entry from the access list of the space
  * `target`'s value lives in, making the first of `options.successors` holding
- * an entry `OWNER` when the actor is the last concrete `OWNER`. Unlike the
- * other two calls it needs no trusted gesture, since it acts on the actor
- * alone and exposes nothing.
+ * an entry `OWNER` when the actor is the last concrete `OWNER`. A leave that
+ * makes someone `OWNER` so is a grant of `OWNER`, and needs the handler's
+ * event to be a trusted gesture, as a grant does. Any other leave needs none,
+ * since it acts on the actor alone and exposes nothing.
  *
  * Checked here, whatever the access list holds: that the call runs in a
  * handler on a client runtime, that `target` is a cell in a space other than
  * the actor's Home space, and that each successor is a DID other than the
  * space's own and the actor's. When this runtime already holds the list, the
- * list's `"*"` entry and the survival of a concrete `OWNER` are checked here as
- * well; {@link commitSpaceLeave} checks both again against the list it
- * replaces. Whether the actor holds an entry to remove is decided there.
+ * list's `"*"` entry, the survival of a concrete `OWNER`, and the gesture a
+ * promotion needs are checked here as well; {@link commitSpaceLeave} checks
+ * them again against the list it replaces. Whether the actor holds an entry to
+ * remove is decided there. Whether the event is a trusted gesture is recorded
+ * here, when the handler runs.
  *
  * The leave commits from a post-commit effect of the handler's transaction,
  * so it is sent only once the handler's own writes commit, and not at all
@@ -108,6 +111,7 @@ export function leaveSpace(target: unknown, options?: unknown): void {
   const leave: SpaceLeave = {
     actor,
     successors: successorsOf(call, options, space, actor),
+    trustedGesture: frame.trustedGesture === true,
   };
   const current = knownAcl(runtime, space);
   if (current !== undefined) applyLeave(space, current, leave);
@@ -198,7 +202,8 @@ export async function commitSpaceAccessChanges(frame: Frame): Promise<void> {
  * committed, and the event is spent. Leaving again repairs it.
  *
  * @throws Error when the list has a `"*"` entry, when the leave would leave the
- *   list with no concrete `OWNER`, or when the commit fails.
+ *   list with no concrete `OWNER`, when it would promote a successor for an
+ *   event that was not a trusted gesture, or when the commit fails.
  */
 export async function commitSpaceLeave(
   runtime: Runtime,
@@ -432,18 +437,20 @@ function applyChanges(
  * Helper for {@link leaveSpace} and {@link commitSpaceLeave}, which returns
  * `current`, the access list of `space`, less the entry of `leave`'s actor,
  * with the first of its successors holding an entry made `OWNER` when that
- * actor was the last concrete `OWNER`. Returns `undefined` when there is
- * nothing to leave: `current` is `null`, which is how a space with no list
- * reads, or holds no entry for the actor.
+ * actor was the last concrete `OWNER`. Returns `undefined` when the list does
+ * not change: `current` is `null`, which is how a space with no list reads,
+ * holds no entry for the actor, or holds the actor's entry alone, which stays
+ * because a list cannot be empty.
  *
  * @throws Error when `current` has a `"*"` entry, which would go on granting
- *   the actor access, or when the actor is the last concrete `OWNER` and no
- *   successor holds an entry.
+ *   the actor access, when the actor is the last concrete `OWNER` and no
+ *   successor holds an entry, or when a successor would be made `OWNER` for an
+ *   event that was not a trusted gesture.
  */
 function applyLeave(
   space: MemorySpace,
   current: ACL | null,
-  { actor, successors }: SpaceLeave,
+  { actor, successors, trustedGesture }: SpaceLeave,
 ): ACL | undefined {
   if (current === null) return undefined;
   if (current[ANYONE_USER] !== undefined) {
@@ -454,6 +461,7 @@ function applyLeave(
   }
   if (current[actor] === undefined) return undefined;
   const { [actor]: _removed, ...rest } = current;
+  if (Object.keys(rest).length === 0) return undefined;
   if (hasConcreteOwner(rest)) return rest;
   const successor = successors.find((principal) =>
     rest[principal] !== undefined
@@ -462,6 +470,12 @@ function applyLeave(
     throw new Error(
       `Leaving ${space} would leave its access list with no concrete ` +
         "`OWNER`, and no successor named holds an entry there.",
+    );
+  }
+  if (!trustedGesture) {
+    throw new Error(
+      `Leaving ${space} would make ${successor} \`OWNER\`, which requires ` +
+        "the handler's event to be a trusted gesture.",
     );
   }
   return { ...rest, [successor]: "OWNER" };

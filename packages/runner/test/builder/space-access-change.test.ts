@@ -795,9 +795,12 @@ describe("space-access-change", () => {
       });
       const before = aclCommitCount(factory, space);
 
-      await send(runtime, result, "leave", {
-        successors: [dave.did(), carol.did(), bob.did()],
-      });
+      await send(
+        runtime,
+        result,
+        "leave",
+        gesture({ successors: [dave.did(), carol.did(), bob.did()] }),
+      );
 
       expect(aclCommitCount(factory, space)).toBe(before + 1);
       expect(await storedAcl(space)).toEqual({
@@ -822,10 +825,10 @@ describe("space-access-change", () => {
           "no successor named holds an entry there",
         ],
         [
-          "the last member is the last concrete `OWNER`",
-          { [alice.did()]: "OWNER" },
+          "the last concrete `OWNER` would promote a successor for an event that is not a trusted gesture",
+          { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
           [bob.did()],
-          "no successor named holds an entry there",
+          "requires the handler's event to be a trusted gesture",
         ],
         [
           'the list has a `"*"` entry',
@@ -845,6 +848,48 @@ describe("space-access-change", () => {
         expect(result.key("notes").get()).toEqual([]);
       });
     }
+
+    it("changes nothing in the list, and commits the handler's writes, when the list's only entry leaves", async () => {
+      // The spec's "leaving is really abandoning": the entry stays, because a
+      // list cannot be empty.
+
+      const { runtime, factory, errors, space, result } = await asMember(
+        alice,
+        { [alice.did()]: "OWNER" },
+      );
+      const before = aclCommitCount(factory, space);
+
+      await send(runtime, result, "leave", {});
+
+      expect(errors).toEqual([]);
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+      expect(result.key("notes").get()).toEqual(["left"]);
+    });
+
+    it("reports the failure, keeping the entry and the handler's writes, when the memory server refuses the leave's commit", async () => {
+      const { runtime, factory, errors, space, result } = await asMember(bob, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      factory.beforeNextAclCommit = () =>
+        Promise.reject(
+          Object.assign(new Error("refused for the test"), {
+            name: "AuthorizationError",
+          }),
+        );
+
+      await send(runtime, result, "leave", {});
+
+      expect(errors.join("\n")).toContain(
+        `Leaving ${space} did not commit: refused for the test`,
+      );
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      expect(result.key("notes").get()).toEqual(["left"]);
+    });
 
     it("sends no leave, and keeps the entry, when the memory server refuses the handler's own writes", async () => {
       // Alice lowers bob to `READ` before his leave's handler writes its note.
@@ -1310,6 +1355,7 @@ describe("space-access-change", () => {
       expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
         actor: alice.did(),
         successors: [],
+        trustedGesture: false,
       });
     });
 
@@ -1327,6 +1373,7 @@ describe("space-access-change", () => {
       expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
         actor: alice.did(),
         successors: [bob.did()],
+        trustedGesture: true,
       });
     });
 
@@ -1346,6 +1393,7 @@ describe("space-access-change", () => {
       expect(frame.pendingSpaceLeaves?.get(space)).toEqual({
         actor: bob.did(),
         successors: [],
+        trustedGesture: true,
       });
     });
 
@@ -1475,8 +1523,27 @@ describe("space-access-change", () => {
       ).toThrow("no successor named holds an entry there");
     });
 
+    it("throws for a leave the list this runtime holds shows would promote a successor, for an event that is not a trusted gesture", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const target = runtime.getCell(space, "target");
+      expect(() =>
+        inHandler(
+          runtime,
+          runtime.edit(),
+          () => leaveSpace(target, { successors: [bob.did()] }),
+          false,
+        )
+      ).toThrow("requires the handler's event to be a trusted gesture");
+    });
+
     it("stages nothing for a refusal the handler catches", async () => {
-      const { runtime, space } = await owned();
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
       const target = runtime.getCell(space, "target");
       let caught: unknown;
       const frame = inHandler(runtime, runtime.edit(), () => {
@@ -1505,6 +1572,7 @@ describe("space-access-change", () => {
         commitSpaceLeave(runtime, space, {
           actor: alice.did(),
           successors: [],
+          trustedGesture: true,
         }),
       ).rejects.toThrow('has a `"*"` entry');
       expect(aclCommitCount(factory, space)).toBe(before);
@@ -1538,6 +1606,50 @@ describe("space-access-change", () => {
       });
     });
 
+    it("throws, committing nothing, for a promotion staged for an event that was not a trusted gesture, though staging could not tell", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+      });
+      const target = runtime.getCell(space, "target");
+      const frame = inHandler(
+        runtime,
+        runtime.edit(),
+        () => leaveSpace(target, { successors: [bob.did()] }),
+        false,
+      );
+      await writeAclAs(alice, space, {
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const before = aclCommitCount(factory, space);
+
+      await expect(
+        commitSpaceLeave(runtime, space, frame.pendingSpaceLeaves!.get(space)!),
+      ).rejects.toThrow("requires the handler's event to be a trusted gesture");
+      expect(aclCommitCount(factory, space)).toBe(before);
+      expect(await storedAcl(space)).toEqual({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+    });
+
+    it("commits nothing for the list's only entry, which stays because a list cannot be empty", async () => {
+      const { runtime, factory } = clientRuntime(alice);
+      const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
+      const before = factory.commits.length;
+
+      await commitSpaceLeave(runtime, space, {
+        actor: alice.did(),
+        successors: [],
+        trustedGesture: false,
+      });
+
+      expect(factory.commits.length).toBe(before);
+      expect(await storedAcl(space)).toEqual({ [alice.did()]: "OWNER" });
+    });
+
     it("commits nothing for an actor the list holds no entry for", async () => {
       const { runtime, factory } = clientRuntime(alice);
       const space = await createSpace(runtime, { [alice.did()]: "OWNER" });
@@ -1546,6 +1658,7 @@ describe("space-access-change", () => {
       await commitSpaceLeave(runtime, space, {
         actor: bob.did(),
         successors: [],
+        trustedGesture: true,
       });
 
       expect(factory.commits.length).toBe(before);

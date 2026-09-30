@@ -410,7 +410,8 @@ export type SpaceAccessChange = {
 /**
  * A leave a handler staged: `actor`, the principal the handler acted for,
  * removes its own entry, and when it is the last concrete `OWNER`, the first
- * of `successors` holding an entry becomes `OWNER`.
+ * of `successors` holding an entry becomes `OWNER`, provided the event was a
+ * trusted gesture.
  */
 export type SpaceLeave = {
   /** The principal the handler acted for, whose entry is removed. */
@@ -418,6 +419,9 @@ export type SpaceLeave = {
 
   /** Whom to make `OWNER`, in order of preference, if the actor is the last. */
   readonly successors: readonly DID[];
+
+  /** Whether the handler's event was a trusted gesture. */
+  readonly trustedGesture: boolean;
 };
 
 /**
