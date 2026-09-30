@@ -47,3 +47,10 @@ Deno.test("validateBashCurlCommand denies dynamic curl targets", () => {
   assertDenied("env curl https://example.com");
   assertDenied("bash -lc 'curl https://example.com'");
 });
+
+Deno.test("validateBashCurlCommand returns a reason for a remote host that states the loopback rule and names no host to try instead", () => {
+  assertEquals(
+    validateBashCurlCommand("curl -fsS https://example.com/status").reason,
+    "curl host example.com is not allowed from cf-harness bash: curl may name only localhost, a 127.x or ::1 address, or host.docker.internal, and a service that does not answer at one of those is out of this sandbox's reach",
+  );
+});

@@ -215,10 +215,15 @@ const validateLocalhostCurlTarget = (target: string): BashCurlPolicyResult => {
     };
   }
   if (!isLoopbackHost(url.hostname)) {
+    // Which host services answer on these names is the sandbox's business:
+    // under Docker, `host.docker.internal` reaches any port of the host, and
+    // under the direct driver on macOS only the ports the launch forwards
+    // into the VM. So the reason states the rule and sends the model to no
+    // host that may not answer.
     return {
       allowed: false,
       reason:
-        `curl host ${url.hostname} is not allowed from cf-harness bash; use localhost or host.docker.internal`,
+        `curl host ${url.hostname} is not allowed from cf-harness bash: curl may name only localhost, a 127.x or ::1 address, or host.docker.internal, and a service that does not answer at one of those is out of this sandbox's reach`,
     };
   }
   return { allowed: true };
