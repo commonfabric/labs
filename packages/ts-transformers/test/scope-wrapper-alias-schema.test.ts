@@ -1,9 +1,25 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
-import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
+import {
+  callSchemas,
+  callsNamed,
+  emittedSchemas,
+  parseModule,
+  patternSchemas,
+} from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
+
+/** The transformed module of `source`, type-checked. */
+const transformed = async (source: string): Promise<ts.SourceFile> =>
+  parseModule(
+    (await transformFiles({ "/main.tsx": source }, {
+      types: COMMONFABRIC_TYPES,
+      typeCheck: true,
+    }))["/main.tsx"]!,
+  );
 
 describe("scope-wrapper-alias-schema", () => {
   for (const form of ["local", "exported", "imported"]) {
@@ -56,4 +72,183 @@ export default pattern<{ run: Writable<Rec> }>(({ run }) => ({
       ).toMatchObject({ $ref: "#/$defs/Inner", scope: "user" });
     });
   }
+
+  describe("a scope wrapper read as the conditional `Scoped` it is", () => {
+    // The type `Scoped` resolves to carries its brand and no alias. One whose
+    // payload holds a type parameter is deferred, with `Scoped` for its alias.
+
+    it("keeps the scope on the root reference of a recursive wrapper's schema", async () => {
+      const [schema] = emittedSchemas(
+        await transformed(
+          `import { toSchema, type Cell, type PerUser } from "commonfabric";
+type Rec = PerUser<{ value: string; next?: Cell<Rec> }>;
+export const schema = toSchema<Rec>();`,
+        ),
+      );
+      const [name] = Object.keys(schema!.$defs as object);
+      const reference = { $ref: `#/$defs/${name}`, scope: "user" };
+
+      expect(schema).toEqual({
+        ...reference,
+        $defs: {
+          [name!]: {
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              next: { ...reference, asCell: ["cell"] },
+            },
+            required: ["value"],
+          },
+        },
+      });
+    });
+
+    it("reads a wrapper around an intersection as the intersection in its scope", async () => {
+      const { output } = patternSchemas(
+        await transformed(
+          `import { computed, pattern, type PerUser } from "commonfabric";
+interface A { a: string }
+interface B { b: number }
+export default pattern(() => {
+  const result = computed((): PerUser<A & B> => ({ a: "x", b: 1 }));
+  return { result };
+});`,
+        ),
+      );
+
+      expect((output.properties as Record<string, unknown>).result).toEqual({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "number" } },
+        required: ["a", "b"],
+        scope: "user",
+      });
+    });
+
+    it("reads a wrapper around a labeled value with its labels in its scope", async () => {
+      // `Confidential<Secret, …>` is itself an intersection, which the checker
+      // cannot intersect again without the brand.
+      const { output } = patternSchemas(
+        await transformed(
+          `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+interface Secret { a: string }
+export default pattern(() => {
+  const secret = computed(
+    (): PerUser<Confidential<Secret, readonly ["owner"]>> => ({ a: "x" }),
+  );
+  return { secret };
+});`,
+        ),
+      );
+
+      expect((output.properties as Record<string, unknown>).secret).toEqual({
+        $ref: "#/$defs/Secret",
+        ifc: { confidentiality: ["owner"] },
+        scope: "user",
+      });
+    });
+
+    for (
+      const [payload, labels] of [
+        ["T", {}],
+        [
+          'Confidential<T, readonly ["owner"]>',
+          { ifc: { confidentiality: ["owner"] } },
+        ],
+      ] as const
+    ) {
+      it(`reads a wrapper the checker defers around \`${payload}\` by its arguments`, async () => {
+        // Where the payload holds a type parameter, the checker defers the
+        // conditional `Scoped`, which is then a type of its own.
+        const { input } = patternSchemas(
+          await transformed(
+            `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+interface Secret { a: string }
+function make<T extends { a: string }>() {
+  return pattern<{ secret: PerUser<${payload}> }>(({ secret }) => ({
+    out: computed(() => secret.a),
+  }));
+}
+export default make<Secret>();`,
+          ),
+        );
+
+        expect((input.properties as Record<string, unknown>).secret).toEqual({
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+          ...labels,
+          scope: "user",
+        });
+      });
+    }
+
+    it("keeps the scope of a capture whose type is a wrapper the checker defers with `Scoped` for its alias", async () => {
+      // A property of a generic interface, read through its expression, is
+      // `Scoped<T, "user">` to the checker, which no wrapper's name names.
+      const module = await transformed(
+        `import { computed, pattern, type PerUser } from "commonfabric";
+interface Secret { a: string }
+interface Holder<T extends { a: string }> { secret: PerUser<T> }
+function make<T extends { a: string }>() {
+  return pattern<{ holder: Holder<T> }>(({ holder }) => ({
+    out: computed(() => holder.secret),
+  }));
+}
+export default make<Secret>();`,
+      );
+      const [input] = callSchemas(module, "lift");
+      const captures = callsNamed(module, "lift").at(-1)!.typeArguments![0]!;
+
+      expect(captures.getText(module).replace(/\s+/g, " ")).toBe(
+        "{ holder: { secret: __cfHelpers.PerUser<T>; }; }",
+      );
+      expect((input!.properties as Record<string, unknown>).holder).toEqual({
+        type: "object",
+        properties: {
+          secret: {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+            scope: "user",
+          },
+        },
+        required: ["secret"],
+      });
+    });
+
+    for (const nullish of ["null", "undefined"]) {
+      it(`keeps the scope and \`${nullish}\` of a nullable scoped cell's capture`, async () => {
+        const module = await transformed(
+          `import { computed, pattern, UI, Writable, type PerSession } from "commonfabric";
+export default pattern<{ enabled: boolean }>(({ enabled }) => {
+  const confirming: PerSession<Writable<boolean>> | ${nullish} = enabled
+    ? Writable.perSession.of<boolean>(false)
+    : ${nullish};
+  const isConfirming = computed(() => confirming?.get());
+  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
+});`,
+        );
+        const capture = callsNamed(module, "lift")
+          .flatMap((lift) =>
+            (lift.typeArguments![0]! as ts.TypeLiteralNode).members
+          )
+          .find((member) =>
+            member.name?.getText(module) === "confirming"
+          ) as ts.PropertySignature;
+        const [input] = callSchemas(module, "lift");
+
+        expect(capture.type!.getText(module)).toBe(
+          `__cfHelpers.PerSession<__cfHelpers.ReadonlyCell<boolean> | ${nullish}>`,
+        );
+        expect((input!.properties as Record<string, unknown>).confirming)
+          .toEqual({
+            anyOf: [
+              { type: "boolean", asCell: ["readonly"] },
+              { type: nullish },
+            ],
+            scope: "session",
+          });
+      });
+    }
+  });
 });

@@ -348,14 +348,15 @@ these holds:
 - the type is a **generic interface/class instantiation** without an alias name
   (`typeParameters` + `typeArguments` on the reference target).
 
-Apart from `getNamedTypeKey`, the generator gives no name to a type whose
-alias is, or leads through a chain of aliases to, a scope wrapper
-(`scopeOfAliasChain`, §10): `type Rec = PerUser<Inner>` formats inline, as
-`PerUser<Inner>` does, so the scope stays at the top level of the slot's own
-schema. A recursive one around a value still needs a definition; it is
-written under the cycle's synthetic name without its scope, and every
-reference to it carries the scope beside the `$ref` (`{ $ref:
-"#/$defs/AnonymousType_1", scope: "user" }`). One around a cell is a wrapper,
+Apart from `getNamedTypeKey`, the generator gives no name to a type that is a
+scope wrapper, by its alias chain or by its brand (`scopeOfScopeWrapper`,
+§10): `type Rec = PerUser<Inner>` formats inline, as `PerUser<Inner>` does, so
+the scope stays at the top level of the slot's own schema. A recursive one
+around a value still needs a definition; it is written under the cycle's
+synthetic name without its scope, and every reference to it carries the scope
+beside the `$ref` (`{ $ref: "#/$defs/AnonymousType_1", scope: "user" }`), the
+schema's root among them where the root is promoted to a reference to its
+definition. One around a cell is a wrapper,
 and a wrapper is never a cycle's entry: the cycle is found at the cell's
 value, as for `Cell<T>`, and each reference is the capped handle inline
 (`{ $ref: "#/$defs/AnonymousType_1", asCell: [{ kind: "cell", scope: "user"
@@ -865,12 +866,20 @@ in the module's scope), and otherwise by the brand the type carries
 (`getScopeBrand`, `src/typescript/scope-brand.ts`). `Scoped` is a conditional
 type, and the checker reports no aliasSymbol for the type it resolves to, so a
 type with no node or alias to name its wrapper is read by its brand, as is
-`Scoped<T, S>` written directly. The payload of a wrapper read by its brand is
-its branded members with the brand taken off, each alternative a member
-intersected with the brand read as that member, and one the checker cannot
-intersect again without the brand read as the branded member itself, whose
-brand the read passes over (`scopePayloadType`,
-`GenerationContext.scopeBrandRead`). The payload of a wrapper found by name is
+`Scoped<T, S>` written directly. Where the payload holds a type parameter the
+checker defers the conditional, and the type is read by its alias's arguments,
+the payload and the scope, whatever that alias names (`Scoped<T, "user">`
+reached through a generic interface's property, say). The payload of a wrapper
+read by its brand is its branded members with the brand taken off, each
+alternative a member intersected with the brand read as that member
+(`scopePayloadType`, `GenerationContext.scopeBrandRead`). A payload the
+checker cannot intersect again without the brand, as `A & B` in
+`PerUser<A & B>`, is the wrapper's own type, and is read in place rather than
+as a type met again inside itself: by `CommonFabricFormatter` where it claims
+the type for more than the brand, as for the labels of
+`PerUser<Confidential<T, […]>>`, whose CFC parts pass over the brand
+(`cfcCarriedParts`), and otherwise by the formatters after it
+(`formatStructure`). The payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
 with each generic alias's parameters bound to the arguments written for them,
 the same walk that lowers a CFC alias reached through aliases (§11):
@@ -889,7 +898,11 @@ non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
 `PerUser<Cell<string>>` → `{ asCell: [{ kind: "cell", scope: "user" }], type:
 "string" }`; otherwise a bare sibling key — `PerUser<string>` →
-`{ type: "string", scope: "user" }`. A nested scope **without an intervening
+`{ type: "string", scope: "user" }`. A wrapper around a cell beside `null` or
+`undefined` is one around the cell and those alternatives, and scopes the whole
+slot as any wrapper beside them does: `PerSession<Writable<boolean>> | null` →
+`{ anyOf: [{ type: "null" }, { type: "boolean", asCell: ["cell"] }], scope:
+"session" }`. A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
 scopes.`; tested, scope-wrappers.test.ts). With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:

@@ -2163,8 +2163,12 @@ export class SchemaGenerator {
     // When a generic type like OpaqueCell<T | undefined> is used where T is a
     // type parameter, TypeScript represents this as a conditional type for
     // deferred evaluation. We treat these as "any" schema since the concrete
-    // type isn't known at compile time.
-    if ((type.flags & ts.TypeFlags.Conditional) !== 0 && !wrapsBound) {
+    // type isn't known at compile time. A deferred `Scoped<T, S>` is a scope
+    // wrapper all the same, read by its arguments (`getScopeBrand()`).
+    if (
+      (type.flags & ts.TypeFlags.Conditional) !== 0 && !wrapsBound &&
+      scopeOfScopeWrapper(type, context.typeChecker) === undefined
+    ) {
       return {};
     }
 
@@ -2379,7 +2383,15 @@ export class SchemaGenerator {
       if (!definitions[namedKey]) {
         definitions[namedKey] = schema;
       }
-      base = { $ref: `#/$defs/${namedKey}` };
+      // A recursive scope wrapper's definition is stored without its scope,
+      // which each reference to it carries instead (`#formatType()`), the
+      // root's among them.
+      const scope = isObjectOrArray(schema) ? schema.scope : undefined;
+      const definition = definitions[namedKey];
+      base = scope !== undefined && isObjectOrArray(definition) &&
+          definition.scope === undefined
+        ? { $ref: `#/$defs/${namedKey}`, scope }
+        : { $ref: `#/$defs/${namedKey}` };
     } else {
       base = schema;
     }

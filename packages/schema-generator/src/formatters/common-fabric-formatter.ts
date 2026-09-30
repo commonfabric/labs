@@ -59,6 +59,7 @@ import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
 import {
   getScopeBrand,
+  isScopeBrandMember,
   SCOPE_WRAPPER_FOR_SCOPE,
   type ScopeBrand,
   scopeForWrapperName,
@@ -464,7 +465,9 @@ const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
  * payload, and each carrier's metadata. The checker drops a CFC alias's name
  * where it reduces the alias's type, as `Confidential<T | null, …>` at
  * `T = string` reduces to `string & carrier` once `null & carrier` is
- * nothing. Then the carrier is all that says the value is labelled.
+ * nothing. Then the carrier is all that says the value is labelled. A scope
+ * wrapper's brand, which a labelled value in a scope carries too, is no part
+ * of the value, and is passed over.
  */
 const cfcCarriedParts = (
   type: ts.Type,
@@ -479,7 +482,7 @@ const cfcCarriedParts = (
       metadata.push(
         memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
       );
-    } else rest.push(member);
+    } else if (!isScopeBrandMember(member, checker)) rest.push(member);
   }
   return metadata.length > 0 && rest.length === 1
     ? { payload: rest[0]!, metadata }
@@ -1430,21 +1433,33 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   /**
    * The schema of the payload the scope wrapper `type` holds, with its `brand`
-   * taken off.
+   * taken off. A payload the checker cannot intersect again without the brand,
+   * as `A & B` in `PerUser<A & B>`, is `type` itself, whose own `#formatType()`
+   * is in progress. It is read in place rather than as a type met again inside
+   * itself: by this formatter where it claims `type` for anything besides the
+   * brand, such as the labels of a CFC alias, and otherwise by the formatters
+   * after it (`SchemaGenerator.formatStructure()`).
    */
   #formatScopePayload(
     type: ts.Type,
     brand: ScopeBrand,
     context: GenerationContext,
   ): MutableJSONSchema {
-    return this.#schemaGenerator.formatChildType(
-      scopePayloadType(type, brand, context.typeChecker),
-      {
-        ...context,
-        scopeBrandRead: new Set([type, ...(type.isUnion() ? type.types : [])]),
-      },
-      undefined,
-    );
+    const payload = scopePayloadType(type, brand, context.typeChecker);
+    const payloadContext: GenerationContext = {
+      ...context,
+      scopeBrandRead: new Set([type, ...(type.isUnion() ? type.types : [])]),
+    };
+    if (payload !== type) {
+      return this.#schemaGenerator.formatChildType(
+        payload,
+        payloadContext,
+        undefined,
+      );
+    }
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
   }
 
   #applyScopeWrapperSemantics(

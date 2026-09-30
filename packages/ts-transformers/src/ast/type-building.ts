@@ -1,9 +1,9 @@
 import ts from "typescript";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
-import { scopeForWrapperName } from "@commonfabric/schema-generator/scope-brand";
 import {
   getScopeBrand,
   SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
   scopePayloadType,
 } from "@commonfabric/schema-generator/scope-brand";
 import {
