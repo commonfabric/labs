@@ -46,10 +46,11 @@ export function postThrough(
     return true;
   } catch (error) {
     // Defense in depth, and the mirror of the two decodes. Both steps above
-    // can refuse: a value can pass every `FabricValue` check and still have
-    // no encoding -- an object forged onto a `FabricPrimitive`'s prototype is
-    // one -- and the post can fail for reasons no encoding anticipates. One
-    // guard covers both because the answer is the same either way.
+    // can refuse: a value can arrive with no encoding -- an object forged onto
+    // a `FabricPrimitive`'s prototype is one, which the membership check
+    // refuses by throwing and which the encode fails on by itself -- and the
+    // post can fail for reasons no encoding anticipates. One guard covers both
+    // because the answer is the same either way.
     //
     // This is the only place a worker speaks, and the notification paths
     // reach it from a `queueMicrotask` callback, outside any caller's `try`,

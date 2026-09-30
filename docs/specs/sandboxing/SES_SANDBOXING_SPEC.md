@@ -363,7 +363,7 @@ the built-ins directly, the runtime coarsens the clock to one-second resolution
 inside a handler, and it forbids any ambient clock/entropy read in a
 lift/computed or at pattern body.
 
-Version 1 of the allowed domain is a deliberate subset of
+Version 2 of the allowed domain is a deliberate subset of
 `@commonfabric/api`'s `FabricValue`:
 
 - `null`
@@ -379,10 +379,14 @@ Version 1 of the allowed domain is a deliberate subset of
   `sticky === false`)
 - exact intrinsic `Map` instances whose keys and values are allowed values
 - exact intrinsic `Set` instances whose elements are allowed values
+- `FabricPrimitive` instances (such as `FabricEpochNsec` and
+  `FabricDurationNsec`), kept as they are: every one is frozen when it is
+  constructed and holds its state privately, so it is already inert, as a
+  JavaScript primitive is
 
-Future widening of this set beyond the above, including temporal primitives or
+Future widening of this set beyond the above, including `FabricInstance`s or
 other richer `FabricValue` members, requires an explicit spec revision and
-validator version bump. The v1 verifier MUST NOT silently widen with upstream
+validator version bump. The v2 verifier MUST NOT silently widen with upstream
 `FabricValue` changes.
 
 This boundary is about executable behavior and authority, not about forcing
@@ -398,7 +402,7 @@ The default rejected domain includes:
 - `Promise`
 - `Error`
 - `Date`
-- class instances
+- class instances, other than `FabricPrimitive`s
 - `Map` / `Set` subclasses
 - platform capability objects
 

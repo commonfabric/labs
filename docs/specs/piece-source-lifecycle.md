@@ -1481,27 +1481,29 @@ installed, and the pattern identity an origin update displaced. It lists the
 retained authored source files.
 
 The menu's **Clone fresh piece into new space** action creates a copy with
-default input data in a unique named space owned by the current user. **Clone
-piece and copy data into new space** instead seeds the copy with detached
-snapshots of the selected piece's current input and stateful internal data.
-Computed values are recomputed in the new space. Data linked from another space
-is rejected because storage cannot capture a cross-space atomic snapshot. Clone
-progress and failures appear in a dialog. A detached selected piece becomes the
-copy's mutable fabric origin. A selected piece with an active origin passes that
-origin to the copy, so parallel copies follow one upstream source instead of
-forming a longer chain. A followed piece also has a **Stop following source**
-context-menu action. The history panel lists every recorded revision. An
-earlier revision offers **Use this version**, which restores its retained source
-and detaches. A revision that records an origin also offers **Follow this source
-again**, which resolves that origin now and keeps it active. A known structural
-incompatibility leaves the piece unchanged until the user explicitly confirms
-the warning. The confirmation token is bound to the exact compiled candidate
-and guarded piece source snapshot. It is also bound to the retained argument
-and the durable producer contracts that were checked. It cannot approve
-different code fetched later from a changed mutable origin or a different
-retained link. The warning collects pattern-contract and durable-link
-incompatibilities before asking for confirmation. A candidate that cannot use
-the actual retained argument is rejected without offering confirmation.
+default input data in a new space owned by the current user. The space has a
+random DID, is listed in the user's Home space list, and is taken back out of
+that list if the clone fails. **Clone piece and copy data into new space**
+instead seeds the copy with detached snapshots of the selected piece's current
+input and stateful internal data. Computed values are recomputed in the new
+space. Data linked from another space is rejected because storage cannot capture
+a cross-space atomic snapshot. Clone progress and failures appear in a dialog. A
+detached selected piece becomes the copy's mutable fabric origin. A selected
+piece with an active origin passes that origin to the copy, so parallel copies
+follow one upstream source instead of forming a longer chain. A followed piece
+also has a **Stop following source** context-menu action. The history panel
+lists every recorded revision. An earlier revision offers **Use this version**,
+which restores its retained source and detaches. A revision that records an
+origin also offers **Follow this source again**, which resolves that origin now
+and keeps it active. A known structural incompatibility leaves the piece
+unchanged until the user explicitly confirms the warning. The confirmation token
+is bound to the exact compiled candidate and guarded piece source snapshot. It
+is also bound to the retained argument and the durable producer contracts that
+were checked. It cannot approve different code fetched later from a changed
+mutable origin or a different retained link. The warning collects
+pattern-contract and durable-link incompatibilities before asking for
+confirmation. A candidate that cannot use the actual retained argument is
+rejected without offering confirmation.
 
 ## Current implementation
 
@@ -1522,7 +1524,7 @@ the actual retained argument is rejected without offering confirmation.
 | Publish explicit source subpaths | **Exports-map support required** | The `cf:` grammar parses a subpath. Compile resolution and the shared pin/update chase reject it before entry resolution, so current tooling cannot create a misleading subpath pin. There is no immutable authored-program manifest or exact public exports map. Entry imports continue to pin the entry identity. |
 | Record and propagate a runtime rebuild | **Provider and lifecycle required** | `computeModuleHashes` accepts `runtimeFingerprint`, and its unit test proves that changing the fingerprint changes a module with an external dependency. Production pattern compilation and source verification use the empty default. There is no authoritative executable-fingerprint provider. Source documents do not retain a non-empty identity fingerprint. The partial revision log has no runtime-neutral program digest, runtime-rebuild cause, owner-published propagation contract, or cross-runtime revert handling. |
 | Manage a space root through the ordinary piece lifecycle | **Partial** | A root is a piece, and it follows its origin through the same reconciliation as every other piece, on the same trigger. The shared menu actions work on it and the same guarded history records are appended. A first lifecycle transition freezes a legacy relative source path against the space's accepted host and retains the recorded path. What is left particular to a root is repair rather than update: a root that cannot start, and that records no origin or the same official system source, rolls forward to that source so its space stays openable, and one whose document was staged by another pattern version is re-staged once its origin confirms the pinned identity. Creation still stamps a raw `patternSource`, update authority is not a complete durable origin record, the creation template still lives on the mutable home root, and root linking does not validate a root interface. |
-| Clone an existing piece into a new space and follow its upstream source | **Partial** | `cf-piece-menu` offers a default-data clone and a clone seeded with detached snapshots of the selected piece's input and stateful internal data. Computed values are recomputed in the new space. The menu creates a unique named space through the current user's runtime, reports progress and failures in a dialog, and navigates to the clone. `PieceController.cloneTo` copies one guarded snapshot of the selected piece's verified current program. It records the selected piece as a mutable fabric origin when the piece is detached, or passes through the piece's active origin. Relative fabric origins are qualified with their source space. Reconciliation observes a mutable upstream piece while the clone runs, applies compatible source changes, and restores that observation when the clone starts. Under this design a clone is opened rather than merely started, so the reconciliation an open performs is what installs that subscription. Cross-space source copies reject confidentiality and integrity labels that the copy cannot preserve. The clone receives an ordinary creation revision. Origin-chain cycle checks, same-identity origin-revision observation, and cross-host guarded observation remain required. |
+| Clone an existing piece into a new space and follow its upstream source | **Partial** | `cf-piece-menu` offers a default-data clone and a clone seeded with detached snapshots of the selected piece's input and stateful internal data. Computed values are recomputed in the new space. The menu creates a space through the current user's runtime with `RuntimeClient.createSpace(label)`, which lists it in the user's Home space list, reports progress and failures in a dialog, takes the space back out of that list with `RuntimeClient.unlistSpace()` when the clone fails, and navigates to the clone by the space's DID. `PieceController.cloneTo` copies one guarded snapshot of the selected piece's verified current program. It records the selected piece as a mutable fabric origin when the piece is detached, or passes through the piece's active origin. Relative fabric origins are qualified with their source space. Reconciliation observes a mutable upstream piece while the clone runs, applies compatible source changes, and restores that observation when the clone starts. Under this design a clone is opened rather than merely started, so the reconciliation an open performs is what installs that subscription. Cross-space source copies reject confidentiality and integrity labels that the copy cannot preserve. The clone receives an ordinary creation revision. Origin-chain cycle checks, same-identity origin-revision observation, and cross-host guarded observation remain required. |
 | Fork an existing piece and detach it | **Fork operation required** | Tooling can recover a piece's verified source closure, and the runtime can create another piece from a program. The clone action follows an upstream source and is not a fork. There is no detached fork operation or UI, no `forkedFrom` history, and no atomic detach contract. |
 | Stop following an active origin without changing the current source | **Partial** | `cf-piece-menu` exposes **Stop following source** for a piece with an active origin. `PieceController.changeSource` verifies the retained current source, atomically clears the origin without rerunning setup, and appends a detach revision. A later reconciliation reads that revision as the intentional detachment it is. It works through `RuntimeClient` in every `cf-render` host. The complete authored-program manifest and runtime-rebuild distinction remain required. |
 | Follow another piece and receive its source updates | **Partial** | A history repoint can resolve an unpinned fabric entity URL to the source piece's current pattern, copy its verified authored program into the destination space, apply it, and retain that URL as the active origin. A running piece observes a mutable fabric origin and accepts compatible pattern changes. Starting the piece restores the observation and performs an immediate check. Cross-space copies fail closed when source labels cannot be preserved. The menu exposes clone, detach, and refollow controls. Fabric URL creation outside the clone flow, same-identity origin-revision observation, origin-chain cycle checks, and durable cross-host routing remain required. |

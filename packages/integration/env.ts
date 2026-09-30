@@ -16,10 +16,12 @@ export const HEADLESS = envToBool(Deno.env.get("HEADLESS"));
 // Pipe browser console output to the test runner's console.
 export const PIPE_CONSOLE = envToBool(Deno.env.get("PIPE_CONSOLE"));
 
-// Some tests take a SPACE_NAME, targeting a specific space.
-// If not defined, uses a random UUID.
-export const SPACE_NAME = Deno.env.get("SPACE_NAME") ??
-  globalThis.crypto.randomUUID();
+// A legacy space name, for a test meant to target a space that already exists
+// rather than one it creates. A legacy name resolves to the DID the old
+// name-based derivation produced, and opening it creates nothing, so the space
+// must already exist. Unset by default: a test that wants a space of its own
+// creates one with `createTestSpace`, and addresses it by DID.
+export const SPACE_NAME: string | undefined = Deno.env.get("SPACE_NAME");
 
 // Number of concurrent browser profiles for multi-browser CFC tests.
 // Defaults to 2 (the minimum that exercises per-user isolation + shared-state

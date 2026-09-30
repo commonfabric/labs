@@ -15,7 +15,7 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { debugStr } from "@commonfabric/data-model";
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Identity } from "@commonfabric/identity";
 import { join } from "@std/path";
@@ -29,7 +29,7 @@ import {
 import { demandTopicBoard, topicAt } from "./topic-board-fixture.ts";
 import { serverExecutionOnStepSkip } from "../../../tasks/server-execution-on-skips.ts";
 
-const { API_URL, SPACE_NAME } = env;
+const { API_URL } = env;
 
 // The RAW env posture, read only to key the skip guard below (testing.md
 // §2): the `opposite` lane sets EXPERIMENTAL_SERVER_EXECUTION explicitly
@@ -76,8 +76,8 @@ describe("topic-board-child-contract", () => {
   beforeAll(async () => {
     const identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
+      space: await createTestSpace(identity),
       cfcFlowLabels: "persist",
-      space: SPACE_NAME,
       apiUrl: new URL(API_URL),
       identity,
     });
@@ -187,8 +187,8 @@ describe("topic-board-pivot-contract", () => {
   beforeAll(async () => {
     const identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
+      space: await createTestSpace(identity),
       cfcFlowLabels: "persist",
-      space: SPACE_NAME,
       apiUrl: new URL(API_URL),
       identity,
     });

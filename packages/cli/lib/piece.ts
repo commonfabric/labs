@@ -12,7 +12,12 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import { createSession, type Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  type Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -48,6 +53,7 @@ import {
   Cell,
   cellRuntime,
   cellTx,
+  cellWriteSchema,
   type ConsoleHandler,
   decomposeSchema,
   deepEqual,
@@ -74,13 +80,14 @@ import {
   Runtime,
   runtimePresets,
   RuntimeProgram,
+  SpaceNotFoundError,
   UI,
   VNode,
 } from "@commonfabric/runner";
 import {
+  cfcDeclaredLabelViewForWriteTargetWithStatus,
   type CfcLabelView,
   cfcLabelViewForResolvedCellWithStatus,
-  cfcLabelViewForWriteTargetWithStatus,
   cfcLabelViewFromSchema,
   cfcSchemaResolvedRoot,
   cfcSchemaWithInheritedDefs,
@@ -311,20 +318,22 @@ export function parseCellCfcLabelUpdate(
   } as CellCfcLabelUpdate;
 }
 
-/** Display labels, or the destination's own labels when validating an update. */
+/** Display labels, or the destination's declared labels for an update. */
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
   writeTarget = false,
 ): CfcLabelView | null {
   const { view, readFailed } = writeTarget
-    ? cfcLabelViewForWriteTargetWithStatus(cell)
+    ? cfcDeclaredLabelViewForWriteTargetWithStatus(cell)
     : cfcLabelViewForResolvedCellWithStatus(cell);
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
   }
-  const schema = isObjectOrArray(cell)
+  const schema = writeTarget && isCell(cell)
+    ? cellWriteSchema(cell)
+    : isObjectOrArray(cell)
     ? cell.schema as JSONSchema | undefined
     : undefined;
   const effectiveView = mergeCfcLabelViews([
@@ -561,11 +570,12 @@ export async function withRuntimeCleanupOnFailure<T>(
 
 async function makeSession(config: SpaceConfig): Promise<Session> {
   const identity = await loadIdentity(config.identity);
-  if (isDID(config.space)) {
-    return createSession({ identity, spaceDid: config.space });
-  } else {
-    return createSession({ identity, spaceName: config.space });
-  }
+  return createSession({
+    identity,
+    spaceDid: isDID(config.space)
+      ? config.space
+      : await legacySpaceDid(config.space),
+  });
 }
 
 /**
@@ -665,7 +675,6 @@ export async function loadPieces(
           storageManager: StorageManager.open({
             as: session.as,
             memoryHost: new URL(config.apiUrl),
-            spaceIdentity: session.spaceIdentity,
           }),
           experimental,
           // CLI writes are consumed by the shell's precise reference reader.
@@ -728,6 +737,7 @@ export async function loadPieces(
       () =>
         new PiecesController(session, runtime, {
           deferSpaceCellSync,
+          ...(isDID(config.space) ? {} : { spaceName: config.space }),
         }),
     );
     if (deferSpaceCellSync) {
@@ -1802,6 +1812,13 @@ export async function newPiece(
       );
     }
   } catch (error) {
+    if (error instanceof SpaceNotFoundError) {
+      throw new Error(
+        `${error.message}. Opening a space never creates one; create one ` +
+          `with: ${cliCommand(["space", "create"])}`,
+        { cause: error },
+      );
+    }
     throw new Error(
       `Could not initialize the space's default pattern: ${
         error instanceof Error ? error.message : String(error)
@@ -5323,9 +5340,10 @@ export async function setCellCfcLabel(
   }
 
   const { observes: requestedObserves, ...label } = update;
-  const schemaIfc = isObjectOrArray(targetCell.schema) &&
-      isObjectOrArray(targetCell.schema.ifc)
-    ? targetCell.schema.ifc
+  const writeSchema = cellWriteSchema(targetCell);
+  const schemaIfc = isObjectOrArray(writeSchema) &&
+      isObjectOrArray(writeSchema.ifc)
+    ? writeSchema.ifc
     : undefined;
   const existingObservationClasses = new Set<
     LabelObservationClass | undefined
@@ -6042,6 +6060,23 @@ export async function setHomePattern(
     repository: entry.repository,
   });
   noteWroteTo(homeConfig.space);
+}
+
+/**
+ * Creates a space owned by the configured identity and returns its DID. The
+ * space gets a random DID and is born granting its creator alone; it is
+ * recorded in the identity's Home space list under `label`.
+ */
+export async function createSpace(
+  config: Omit<SpaceConfig, "space">,
+  label?: string,
+): Promise<string> {
+  const identity = await loadIdentity(config.identity);
+  const homeConfig: SpaceConfig = { ...config, space: identity.did() };
+  const pieces = await loadPieces(homeConfig);
+  const space = await pieces.createSpace(label);
+  noteWroteTo(homeConfig.space);
+  return space;
 }
 
 /**

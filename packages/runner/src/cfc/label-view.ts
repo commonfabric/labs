@@ -305,6 +305,7 @@ const resolvedTargetLabelView = (
   cell: unknown,
   options: ResolvedLabelReadOptions,
   lastNode: "value" | "writeRedirect" = "value",
+  declaredOnly = false,
 ): (CfcLabelViewStatus & { referenceView?: CfcLabelView }) | undefined => {
   if (
     !isObjectOrArray(cell) ||
@@ -324,22 +325,35 @@ const resolvedTargetLabelView = (
     options,
     lastNode,
   );
+  const metadata = declaredOnly && resolved.metadata !== undefined
+    ? {
+      ...resolved.metadata,
+      labelMap: {
+        ...resolved.metadata.labelMap,
+        // Unmarked legacy entries may be declarations. Retain their constraints.
+        entries: resolved.metadata.labelMap.entries.filter((entry) =>
+          entry.origin === "declared" || entry.origin === undefined
+        ),
+      },
+    }
+    : resolved.metadata;
   return {
-    view: cfcLabelViewFromMetadata(resolved.metadata, resolved.path),
+    view: cfcLabelViewFromMetadata(metadata, resolved.path),
     referenceView: resolved.referenceView,
     readFailed: resolved.readFailed,
   };
 };
 
 /**
- * Labels at the destination of a schema update. Ordinary links at the selected
- * slot remain in that slot; write redirects and intermediate links are followed.
- * Reference labels accumulated while reaching the destination are excluded.
+ * Declared labels at the destination of a schema update. Ordinary links at the
+ * selected slot remain in that slot; write redirects and intermediate links are
+ * followed. Unmarked legacy entries retain their constraints. Runtime acquisition
+ * and flow measurements do not choose the declaration's observation class.
  */
-export const cfcLabelViewForWriteTargetWithStatus = (
+export const cfcDeclaredLabelViewForWriteTargetWithStatus = (
   cell: unknown,
 ): CfcLabelViewStatus => {
-  const target = resolvedTargetLabelView(cell, {}, "writeRedirect");
+  const target = resolvedTargetLabelView(cell, {}, "writeRedirect", true);
   return { view: target?.view, readFailed: target?.readFailed ?? false };
 };
 

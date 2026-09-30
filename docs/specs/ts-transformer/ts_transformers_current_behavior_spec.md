@@ -3211,7 +3211,8 @@ verifier side (`packages/runner/src/sandbox/compiled-bundle-verifier.ts`):
 The verifier checks the wrapper boundary and call shape only — it does not
 interpret the payload; load-time enforcement is the runtime freezer, which
 admits the module-safe subset (plain objects, arrays, `Map`→`FrozenMap`,
-`Set`→`FrozenSet`, non-global/non-sticky RegExp, primitives/bigint) and throws
+`Set`→`FrozenSet`, non-global/non-sticky RegExp, primitives/bigint,
+`FabricPrimitive`s kept as they are) and throws
 `PlainDataValidationError` on everything else
 (`SES_SANDBOXING_SPEC.md` §4.2.3; `packages/runner/src/sandbox/plain-data.ts`).
 That classification runs on each per-module record body, through

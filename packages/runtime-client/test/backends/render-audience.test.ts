@@ -44,7 +44,6 @@ function createWorkerRuntime(
       ...options,
       apiUrl: options.apiUrl.toString(),
       identity: options.identity.keyPair,
-      spaceIdentity: options.spaceIdentity?.keyPair,
     },
     storageManager,
     new RuntimeTelemetry(),
@@ -98,7 +97,7 @@ describe("render-audience", () => {
     for (const trustSnapshot of [undefined, null]) {
       it(`uses session-principal transaction trust for \`${trustSnapshot}\` host trust`, async () => {
         const identity = await Identity.generate({ implementation: "noble" });
-        const session = await createSession({
+        const session = createSession({
           identity,
           spaceDid: identity.did(),
         });
@@ -124,7 +123,7 @@ describe("render-audience", () => {
 
     it("keeps a supplied snapshot unnamed for transactions while rendering as the session identity", async () => {
       const identity = await Identity.generate({ implementation: "noble" });
-      const session = await createSession({
+      const session = createSession({
         identity,
         spaceDid: identity.did(),
       });
@@ -143,6 +142,16 @@ describe("render-audience", () => {
       } finally {
         tx.abort();
       }
+      // The Home space's ACL, as its genesis leaves it.
+      const acl = runtime.edit();
+      acl.writeOrThrow({
+        space: session.space,
+        id: `of:${session.space}`,
+        type: "application/json",
+        path: [],
+      }, { value: { [identity.did()]: "OWNER" } });
+      expect((await acl.commit()).error).toBeUndefined();
+      await runtime.storageManager.synced();
       const membership = renderMembershipProviderFor(
         runtime,
         identity,
@@ -156,15 +165,15 @@ describe("render-audience", () => {
   });
 
   describe("delegated rendering", () => {
-    for (const namedSpace of [false, true]) {
-      it(`renders the session's ${namedSpace ? "derived" : "identity"} workspace only while the delegate has an ACL grant`, async () => {
+    for (const createdSpace of [false, true]) {
+      it(`renders the session's ${createdSpace ? "created" : "identity"} workspace only while the delegate has an ACL grant`, async () => {
         const identity = await Identity.generate({ implementation: "noble" });
         const delegate = await Identity.generate({ implementation: "noble" });
-        const session = await createSession({
+        const session = createSession({
           identity,
-          ...(namedSpace ? { spaceName: "private-workspace" } : {
-            spaceDid: identity.did(),
-          }),
+          spaceDid: createdSpace
+            ? (await Identity.generate({ implementation: "noble" })).did()
+            : identity.did(),
         });
         const options = createRuntimeClientOptions({
           session,
@@ -315,7 +324,7 @@ describe("render-audience", () => {
      */
     async function renderPolicyNote(acting?: Identity) {
       const identity = await Identity.generate({ implementation: "noble" });
-      const session = await createSession({
+      const session = createSession({
         identity,
         spaceDid: identity.did(),
       });
@@ -471,7 +480,7 @@ describe("render-audience", () => {
       const identity = await Identity.generate({ implementation: "noble" });
       const other = (await Identity.generate({ implementation: "noble" }))
         .did();
-      const session = await createSession({
+      const session = createSession({
         identity,
         spaceDid: identity.did(),
       });
@@ -639,7 +648,7 @@ describe("render-audience", () => {
       const identity = await Identity.generate({ implementation: "noble" });
       const valueSpace = (await Identity.generate({ implementation: "noble" }))
         .did();
-      const session = await createSession({
+      const session = createSession({
         identity,
         spaceDid: identity.did(),
       });

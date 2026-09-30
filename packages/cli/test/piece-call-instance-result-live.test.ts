@@ -84,7 +84,12 @@ describe("piece-call-instance-result-live", () => {
         runtime,
         space,
         "instance-receipt",
-        new FabricError({ type: "Error", message: "stored instance" }),
+        new FabricError({
+          type: "Error",
+          message: "stored instance",
+          stack: undefined,
+          cause: undefined,
+        }),
       );
       expect(executed.invocation?.status).toBe("settled");
       expect(executed.invocation?.result).not.toBe(undefined);

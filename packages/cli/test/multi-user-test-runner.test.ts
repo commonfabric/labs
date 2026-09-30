@@ -175,7 +175,9 @@ describe(
       // goes out a round trip later — and alice's other marker wakes the wait
       // onto a document that still lacks the one it wants.
       const server = StandaloneMemoryServer.start();
-      const spaceName = crypto.randomUUID();
+      // This server enforces no ACL, so a DID nothing has written to is a space
+      // both participants may use.
+      const spaceDid = (await Identity.generate()).did();
       const names = ["alice", "bob"];
       const workers = new Map<string, ParticipantWorkerClient>();
       try {
@@ -188,7 +190,7 @@ describe(
           );
           await client.call("init", {
             identity: realmValueFromKeyPair(identity.keyPair),
-            spaceName,
+            spaceDid,
             apiUrl: server.url.href,
             // Any two-participant descriptor will do: the markers this test
             // announces and awaits are its own, not the fixture's steps.
@@ -248,7 +250,7 @@ describe(
         });
         return await client.call("init", {
           identity: realmValueFromKeyPair(identity.keyPair),
-          spaceName: crypto.randomUUID(),
+          spaceDid: (await Identity.generate()).did(),
           apiUrl: server.url.href,
           testPath: fixture("marker-barrier.test.tsx"),
           root: FIXTURES,

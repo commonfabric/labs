@@ -24,7 +24,8 @@
  * browser stack (DOM input binding, event provenance, login flow).
  */
 
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
+import type { Capability } from "@commonfabric/memory/acl";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -56,7 +57,7 @@ import {
   waitForText,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME, CFC_BROWSER_PROFILE_COUNT } = env;
+const { API_URL, FRONTEND_URL, CFC_BROWSER_PROFILE_COUNT } = env;
 // The opt-in propagation-benchmark leg (see the series step below).
 const CHAT_SERIES = Math.max(
   0,
@@ -122,8 +123,17 @@ describe(
           () => Identity.generate({ implementation: "noble" }),
         ),
       );
+      // The first profile creates the space and every other profile writes
+      // to it.
       cc = await initializePiecesController({
-        space: SPACE_NAME,
+        space: await createTestSpace(identities[0], {
+          grants: Object.fromEntries(
+            identities.slice(1).map((other): [string, Capability] => [
+              other.did(),
+              "WRITE",
+            ]),
+          ),
+        }),
         apiUrl: new URL(API_URL),
         identity: identities[0],
         cfcFlowLabels: "persist",
@@ -168,7 +178,7 @@ describe(
 
     it("keeps per-user state isolated and shared state live across browsers", async () => {
       const timer = new StepTimer();
-      const view = { spaceName: SPACE_NAME, pieceId };
+      const view = { spaceDid: cc.getSpace(), pieceId };
       const pages = shells.map((shell) => shell.page());
       const others = (index: number) =>
         pages.filter((_, other) => other !== index);

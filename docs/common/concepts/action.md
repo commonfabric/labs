@@ -83,6 +83,44 @@ one-off IDs.
   a frozen first-load capture, not a clock).
 - Prefer capturing time/random snapshots in the action itself rather than
   inside a `computed()` that may re-run many times.
+- For an ID that has to be the same every time the event is handled — a key
+  for acting on a request at most once, or the ID of a record the action
+  creates — call `eventKey()` rather than `Math.random()`.
+  [The key of the event a handler handles](../../features/event-key.md) says
+  why.
+
+## Who the Action Acts For
+
+`currentPrincipal()` returns the DID of the user an action or handler acts for:
+the authenticated sender of the event it is handling. It returns `undefined`
+when no one sent the event, so treat that as "no one" and refuse whatever needs
+someone.
+
+```tsx
+// Shown inside a pattern body.
+const claimedBy = new Writable<string>("");
+
+const claimDonut = action(() => {
+  const principal = currentPrincipal();
+  if (principal === undefined) return;
+  claimedBy.set(principal);
+});
+```
+
+- The runtime supplies the value, and nothing in the event's data can change
+  it. Never take a user's identity from a field of the event.
+- It is _authority_, not _intent_. A handler that another pattern calls with
+  `.send()` sees the user that pattern runs as, so the value says on whose
+  behalf the action runs, not that the person asked for it. Where the person's
+  own request matters, rely on a trusted UI gesture or an
+  `AuthoredByCurrentUser` value instead.
+- It is available only in an action or a handler for now. It throws in a
+  pattern body, a `computed()` and a `lift()`. To show who is viewing, resolve
+  their profile as [multi-user patterns](../patterns/multi-user-patterns.md)
+  describes.
+
+[The principal a handler acts for](../../features/current-principal.md) has the
+details.
 
 ## When to Use `handler()` Instead
 

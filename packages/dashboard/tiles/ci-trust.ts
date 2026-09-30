@@ -11,6 +11,7 @@
  * their own repository and workflow.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   runSource,
   type Run,
@@ -92,7 +93,7 @@ function makeCiTrust(opts: { label: string; repo: string; workflow: string }): T
         return Number.isFinite(createdAt) ? [createdAt] : [];
       });
       const spanMs = times.length === scored.length && times.length >= 2
-        ? Math.max(...times) - Math.min(...times)
+        ? maxOf(times) - minOf(times)
         : 0;
       return {
         status: s,

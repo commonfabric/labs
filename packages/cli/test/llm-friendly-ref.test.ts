@@ -7,7 +7,11 @@ import {
   splitArgumentSuffix,
   validateEmbeddedSpaces,
 } from "../lib/llm-friendly-ref.ts";
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 
 // The 43-character id length matches the entity ids the runtime mints, and
@@ -20,15 +24,11 @@ const OTHER_DID = "did:key:z6MkrZ1r5XBFZjBU34qyD8fueMbMRkKw17BZaq2ivKFjnz2z";
 const signer = await Identity.fromPassphrase("cf-llm-friendly-ref");
 
 /** A session on `space`, the way `loadPieces` opens one. */
-const sessionOn = (space: string) =>
-  createSession(
-    isDID(space)
-      ? { identity: signer, spaceDid: space }
-      : { identity: signer, spaceName: space },
-  );
-
-/** The DID a space name derives to, which is what the check holds it to. */
-const didFor = async (name: string) => (await sessionOn(name)).space;
+const sessionOn = async (space: string) =>
+  createSession({
+    identity: signer,
+    spaceDid: isDID(space) ? space : await legacySpaceDid(space),
+  });
 
 describe("llm-friendly-ref", () => {
   it("reports malformed target members and qualifiers as usage errors", () => {
@@ -251,15 +251,15 @@ describe("llm-friendly-ref", () => {
   });
 
   it("holds a deferred space name to the DID it derives to", async () => {
-    // Both sides reach a DID through the session's own derivation, so a name
-    // and the DID it stands for compare equal.
+    // Both sides reach a DID through the legacy derivation, so a name and the
+    // DID it stands for compare equal.
     const session = await sessionOn("my-space");
     await validateEmbeddedSpaces(["my-space"], session);
-    await validateEmbeddedSpaces([await didFor("my-space")], session);
+    await validateEmbeddedSpaces([await legacySpaceDid("my-space")], session);
     await expect(validateEmbeddedSpaces(["their-space"], session))
       .rejects.toThrow(
         `Reference names space "their-space" but the command targets ` +
-          `space "${await didFor("my-space")}".`,
+          `space "${await legacySpaceDid("my-space")}".`,
       );
   });
 

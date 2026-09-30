@@ -39,6 +39,7 @@ import {
   Identity,
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity/did";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   type Cell,
@@ -351,9 +352,9 @@ const handlers: Record<
         "Initialization `identity`",
       ),
     );
-    const session = await createSession({
+    const session = createSession({
       identity,
-      spaceName: args.spaceName as string,
+      spaceDid: args.spaceDid as DID,
     });
     const space = session.space;
     // The Deno storage cache opens SQLite as it loads, so it waits for the
@@ -364,7 +365,6 @@ const handlers: Record<
     );
     storageManager = StorageManager.open({
       as: session.as,
-      spaceIdentity: session.spaceIdentity,
       // Host only — the storage path (/api/storage/memory) is joined
       // internally (see createStorageAddressResolver).
       memoryHost: new URL(args.apiUrl as string),

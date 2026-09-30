@@ -6,10 +6,11 @@
 
 The mount root lists only discoverable spaces (`home` always, plus whatever
 the home space's space list provides in the future). Other spaces are
-accessible by name or DID on demand through `lookup`. After the
-[random space identity cutover](../../plans/random-space-identities.md) a name
-still resolves, by the derivation that survives as a resolver, but resolving one
-creates nothing: a name whose space has no history opens nothing. The dormant
+accessible by name or DID on demand through `lookup`. A name resolves by the
+legacy derivation that survives as a resolver
+([random space identities](../random-space-identities.md)), but resolving one
+creates nothing: a name whose space has no history opens nothing. The home
+space's list now holds a DID and a label per entry. The dormant
 [Common Fabric URL](../fabric-urls.md) concept could supply another mapping, but
 no such resolver is planned for deployment.
 

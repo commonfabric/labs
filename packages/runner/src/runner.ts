@@ -159,6 +159,7 @@ import {
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
+import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
 import { RetryImmediately } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
@@ -173,7 +174,6 @@ import {
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
-  type DID,
   type IExtendedStorageTransaction,
   type IStorageSubscription,
   type MemorySpace,
@@ -9969,6 +9969,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     inHandler: boolean,
     implementationIdentity?: ImplementationIdentity,
+    eventKey?: string,
   ): Frame {
     return pushFrameFromCause(cause, {
       unsafe_binding: {
@@ -9985,6 +9986,7 @@ export class Runner {
       // than through event dispatch (a test, an internal call) has no dispatched
       // time, so capture the clock once here; it stays frozen for that run.
       ...(inHandler ? { eventTime: tx.dispatchedEventTime ?? Date.now() } : {}),
+      ...(eventKey !== undefined ? { eventKey } : {}),
       runtime: this.#runtime,
       space: resultCell.space,
       tx,
@@ -10414,48 +10416,47 @@ export class Runner {
   }
 
   /**
-   * Resolves any `PatternFactory.inSpace("name")` targets that the just-finished
-   * handler/action referenced but whose space DID was not yet cached, then
-   * throws {@link RetryImmediately} so the scheduler re-runs the handler/action.
-   * On the re-run the names resolve synchronously from the runtime cache (see
-   * the pattern builder's resolveInSpaceTargetSpace), so the child results are
-   * routed into the correct spaces from the start — no link rewriting required.
+   * Resolves any `PatternFactory.inSpace(...)` targets that the just-finished
+   * handler or action referenced and that its space had not resolved yet, then
+   * throws {@link RetryImmediately} so the scheduler re-runs the handler or
+   * action. On the re-run each name resolves synchronously (see the pattern
+   * builder's resolveInSpaceTargetSpace), and the run records the allocation
+   * in the same commit as the writes that refer to it.
    *
-   * On a SERVING runtime the fresh space's genesis ACL must name the run's
-   * ACTING user as OWNER, so the acting principal is read from the run
-   * transaction's wave run context and threaded to
-   * {@link Runtime.resolveSpaceName} as the genesis owner. Read WITHOUT
-   * `homeSpacePrincipalFor`'s read-scope-ratchet side effect: resolving a
-   * provisioning target is not a scoped READ of the run. The ACTING user is the
-   * ONLY source: the genesis owner must be the same principal the provisioning
-   * crossing's grant probe and carriage carry, or replay's acl arm would probe
-   * a stranger — a demand-supplied `scopeKeyIdentity` is resolution scaffolding
-   * whose acting settles (possibly to NONE) at the seal, so a context carrying
-   * only it REFUSES here exactly like a bare one: its crossing would be refused
-   * carriage-less anyway, and registering the scaffolding principal would mint
-   * an orphaned genesis under an owner the wave never grants. On a client
-   * (`!servingPosture`) no owner is supplied and the genesis names the active
-   * user.
+   * Each space created for a name is owned by the owner
+   * {@link Runtime.actingPrincipalFor} gives the run's transaction, the one the
+   * re-run's synchronous resolution asks for too.
+   *
+   * @throws If a serving runtime's run has no acting user to own a space.
    */
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
     tx?: IExtendedStorageTransaction,
   ): Promise<never> {
-    const names = [...(frame.pendingSpaceNames ?? [])];
-    let owner: DID | undefined;
-    if (this.#runtime.servingPosture && tx !== undefined) {
-      owner = waveRunContextOf(tx)?.acting?.user as DID | undefined;
+    const pending = [...(frame.pendingSpaceNames ?? [])];
+    const space = frame.space;
+    if (space === undefined) {
+      throw new Error("An inSpace target was named outside any space");
+    }
+    const owner = this.#runtime.actingPrincipalFor(tx);
+    if (owner === undefined) {
+      throw new Error(
+        "A served run resolves an inSpace() target only on behalf of an " +
+          "acting user, and this run has none",
+      );
     }
     await Promise.all(
-      names.map((name) =>
-        this.#runtime.resolveSpaceName(
-          name,
-          owner !== undefined ? { owner } : undefined,
-        )
+      pending.map(([name, grants]) =>
+        this.#runtime.resolveInSpaceName(space, name, {
+          owner,
+          ...(grants !== undefined ? { grants } : {}),
+        })
       ),
     );
     throw new RetryImmediately(
-      `Resolving in-space target spaces: ${names.join(", ")}`,
+      `Resolving in-space target spaces: ${
+        pending.map(([name]) => name).join(", ")
+      }`,
     );
   }
 
@@ -10755,11 +10756,10 @@ export class Runner {
       // every id minted in this frame — derives from the durable event id, so
       // retries of the same event reuse the same ids and duplicate handlings
       // collide on the receipt. The fallback covers non-dispatch invocations
-      // (tests calling the handler directly).
-      const cause = {
-        ...causalInputs,
-        $event: tx.dispatchedEventId ?? crypto.randomUUID(),
-      };
+      // (tests calling the handler directly). The frame's event key derives
+      // from this same id, so it is as stable across retries as the cause is.
+      const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
+      const cause = { ...causalInputs, $event: eventId };
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
         module,
         { implementation: fn },
@@ -10771,6 +10771,11 @@ export class Runner {
         tx,
         true,
         policyFacingIdentity,
+        deriveEventKey(
+          eventId,
+          this.#runtime.actingPrincipalFor(tx),
+          streamLink,
+        ),
       );
       if (policyFacingIdentity) {
         setCfcImplementationIdentity(tx, policyFacingIdentity);

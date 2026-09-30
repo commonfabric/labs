@@ -211,9 +211,9 @@ export const createLabeledFabric = async (
     cfcFlowLabels: "persist",
   });
   const pieces = new PiecesController(
-    await createSession({
+    createSession({
       identity: signer,
-      spaceName: `cfc-property-${cfcEnforcementMode}-${crypto.randomUUID()}`,
+      spaceDid: (await Identity.generate()).did(),
     }),
     runtime,
   );

@@ -1,5 +1,10 @@
 import { debugStr } from "@commonfabric/data-model";
-import { env, Page, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -21,7 +26,7 @@ import {
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 // Trusted action names from cfc-group-chat-demo/trusted.tsx (inlined, as the
 // multi-runtime demo test does).
@@ -51,7 +56,9 @@ describe("cfc group chat demo integration test", () => {
     identity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity, {
+        grants: { [secondIdentity.did()]: "WRITE" },
+      }),
       apiUrl: new URL(API_URL),
       identity,
       cfcFlowLabels: "persist",
@@ -84,7 +91,7 @@ describe("cfc group chat demo integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId,
       },
       identity,
@@ -176,7 +183,7 @@ describe("cfc group chat demo integration test", () => {
     await shell.waitForState({
       identity: secondIdentity,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId,
       },
     });

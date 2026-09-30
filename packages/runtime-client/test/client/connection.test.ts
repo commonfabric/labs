@@ -706,6 +706,32 @@ describe("connection", () => {
       await connection.dispose();
     });
 
+    it("rejects a request that finds no space with its code, and emits no lifecycle error", async () => {
+      const transport = new FakeTransport([RequestType.Idle]);
+      const connection = await initializedConnection(transport);
+      const errors: unknown[] = [];
+      connection.on("error", (error) => errors.push(error));
+
+      const request = connection.request<RequestType.Idle>({
+        type: RequestType.Idle,
+      });
+      const settled = request.then(() => undefined, (error) => error);
+      const sent = transport.sent.find(
+        (message): message is IPCClientMessage =>
+          "msgId" in message && message.data.type === RequestType.Idle,
+      );
+      transport.emit("message", {
+        msgId: sent!.msgId,
+        error: "No space answers to did:key:z6MkMissing",
+        code: RuntimeErrorCode.SpaceNotFound,
+      });
+
+      const error = await settled as Error & { code?: RuntimeErrorCode };
+      expect(error.code).toBe(RuntimeErrorCode.SpaceNotFound);
+      expect(errors).toEqual([]);
+      await connection.dispose();
+    });
+
     it("returns a copy that does not expose the internal ledger", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);

@@ -2451,11 +2451,11 @@ delta):
   is minted for every acting run, so an admitted-iff-carriage gate
   authorized nothing): → COVERED. The gate admits iff carriage AND
   the acting identity holds a structural write grant for the TARGET
-  space (`Server.foreignWriteAuthorityFor`: owner-by-identity /
-  fresh-store creation, DID-shape-checked and probed WITHOUT
-  materializing a store (F1c) / the target's own ACL grant,
-  mode-independent — no service-DID blanket, no populated-legacy
-  compat; fail-closed otherwise), and `foreignWrites: "accept"`
+  space (`Server.foreignWriteAuthorityFor`: the target's own ACL
+  grant, mode-independent — no service-DID blanket, no
+  populated-legacy compat; fail-closed otherwise, a malformed DID or
+  a space with no store included, both probed WITHOUT materializing
+  a store (F1c)), and `foreignWrites: "accept"`
   REFUSES construction without the probe — the vacuous configuration
   is unrepresentable. `executor-wave.test.ts`: full carriage admitted
   with the foreign scoped row keyed from the CARRIED identity (the
@@ -2465,9 +2465,10 @@ delta):
   admitted beside it (red under the grant-check-neutralized
   mutation — the pre-fix shape); partial carriage refused at
   ACCUMULATION with the wave surviving vacuous (red under the
-  carriage-arm mutation); the probe's own arms (owner / creation /
+  carriage-arm mutation); the probe's own arms (no store /
   non-creating second probe / garbage name / no-ACL fail-closed /
-  ACL WRITE grant / no-row refusal) pinned in
+  ACL WRITE grant / no-row refusal / nothing for the space's own DID)
+  pinned in
   `executor-cross-space.test.ts`; the sink's
   scoped-op-without-carriage refusal re-pinned DIRECTLY as the
   backstop ("Phase 5 backstop" test). The serving loop passes
@@ -3015,19 +3016,19 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   scoping report's RECOMMENDATION on file — SUPERSEDED by the READ
   ruling below (RULED 2026-08-19: ACL-only service reads); (iv)
   flagged residual for the
-  owner's eye: the genesis ACL's `"*": WRITE` wildcard (the client's
-  own rollout default) leaves the service — and every authenticated
-  principal — with WRITE on the new space via the wildcard; "the user
-  is OWNER, the service is not" holds, "the service cannot write P"
-  does not follow, and narrowing the wildcard is a separate policy
-  question. Pins for the build: "a served `.inSpace()` genesis: actor
+  owner's eye: a genesis ACL carrying a `"*": WRITE` wildcard leaves
+  the service — and every authenticated principal — with WRITE on the
+  new space via the wildcard; "the user is OWNER, the service is not"
+  holds, "the service cannot write P" does not follow. CLOSED: the
+  fallback genesis document is `{ [actor]: "OWNER" }`, which grants
+  nobody else anything. Pins for the build: "a served `.inSpace()` genesis: actor
   = the space DID, ACL owner = the acting user, the service principal
   appears nowhere in the ACL, and the space's commit #1 IS the ACL
   commit"; "the service principal cannot write into a user home space"
   (session plane refused under `enforce`; a carriage-less wave write
   refused at accumulation; a carriage-bearing write acting as another
-  user refused on the `acl` arm); a creation-granted foreign batch
-  never lands before the genesis; kill/replay between genesis, data
+  user refused by the target's ACL); a foreign batch never lands
+  before the genesis; kill/replay between genesis, data
   and home commits converges on ONE user-owned ACL; and the served-wish
   + lunch gates as acceptance (no `lacks READ` in the toolshed log,
   `foreignWriteRefusals` 0, a store dump with no `of:<P>` owned by the
@@ -3061,29 +3062,22 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   after merging to main (the merge happening if the confidence
   criteria succeed) rather than blocking on it.
 
-  **BUILT 2026-08-21 (the optimize-on-main train; build report:
-  `docs/history/plans/server-execution-v2/optimize/ow31-build-report.md`).**
-  What landed, per the recorded work order:
-  (a) **genesis owner = the acting user** —
-  `registerSpaceIdentity(identity, { owner })` threaded from the
-  serving-side `resolveSpaceName` (the acting principal read from the
-  frame tx's wave run context WITHOUT the read-scope-ratchet side
-  effect, F8); a serving runtime with no actor REFUSES to resolve;
-  the bootstrap ACL's non-home arm names the registered owner
-  (`{ [actor]: "OWNER", "*": "WRITE" }`), the home arm and every
-  client byte-identical. Pins: `memory-v2-acl-bootstrap.test.ts`
-  (red-first: the pre-fix run minted `{ [service]: "OWNER" }`),
-  `executor-cross-space.test.ts` (the serving no-actor refusal).
-  (b) **genesis before data** — the wave retains the grant probe's
-  `via` per (space, acting) and the commit step forces
-  `ensureSpaceInitialized` for every `creation`-granted foreign
-  target before the sink applies; the sink refuses a foreign batch
-  into a seq-0/no-ACL engine (INV-13 mirrored on the engine-direct
-  plane; red-first: the pre-fix sink landed the batch in a fresh
-  store). Kill/replay converges on ONE user-owned ACL (the replay
-  grant resolves `acl` through the owner; `executor-wave.test.ts`'s
-  OW31 pins, including the actor-=-space / owner-=-acting-user /
-  service-nowhere / commit-#1-is-the-ACL shape).
+  **Foreign-space creation and read authority.**
+  (a) **genesis owner = the acting user** — a served `.inSpace()`
+  resolution calls `Runtime.createSpace({ owner: actingUser, grants })`.
+  The actor comes from the frame transaction's wave context without changing
+  its read-scope attribution; a serving runtime without an actor refuses.
+  Creation generates a random space key, commits an ACL naming the actor as
+  OWNER, and drops the key. Pins: `memory-v2-acl-bootstrap.test.ts` and
+  `executor-cross-space.test.ts`.
+  (b) **genesis before data** — `createSpace` returns the DID only after
+  the genesis commit confirms. The handler's next run records the allocation
+  in its calling space. Foreign admission then reads the target's current ACL:
+  successful creation supplies no lasting grant, and an intervening revocation
+  refuses the write. Opening a target never creates its ACL. An unknown,
+  ACL-less, malformed, or retracted target fails closed at accumulation; the
+  sink also refuses a foreign batch into a seq-0/no-ACL engine. Pins:
+  `executor/foreign-space-initialization.test.ts`, `executor-wave.test.ts`.
   (c) **the READ posture** — the OWNER blanket is RETIRED:
   `memoryServiceDidsFor` became `memoryAclPrincipalsFor`
   (`serviceDids` = the operator list verbatim on BOTH arms — the
@@ -3114,11 +3108,13 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carriage in scope, and the client precedent is exact (the program
   commit is the user's own session client-side) — so the system-class
   alternative was not needed for this class.
+  [`docs/specs/random-space-identities.md`](../random-space-identities.md)
+  specifies the creation and allocation contract.
   RESIDUALS, flagged (see the build report's running list): (i) the
-  `"*": WRITE` wildcard residual (finding iv) STANDS — pinned live in
-  the executor mutation test: a mis-threaded genesis owner is visible
-  in the ACL content while the wildcard still grants the write;
-  narrowing it is the separate policy question. (ii) the
+  `"*": WRITE` wildcard residual (finding iv) is CLOSED — pinned live
+  in the executor mutation test: a mis-threaded genesis owner is
+  visible in the ACL content, and the ACL refuses the acting user's
+  write. (ii) the
   `loadPatternByIdentity` repair path and `compilePattern`'s own
   persist do not carry the carriage (no run context is reachable at
   those triggers today) — their foreign-write case stays fail-closed
@@ -3134,14 +3130,16 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   (nothing needs one — smaller surface, permissive clause). (v) SHARED
   NAMED spaces (equal `inSpace("name")` across users deliberately map
   to ONE space) now transfer OWNER power — ACL-rewrite included — to
-  whichever user's flow wins the genesis race; peers hold `"*": WRITE`.
+  whichever user's flow wins the genesis race; peers hold only what
+  the owner grants them.
   Inherent in the ruling composed with the pre-existing shared-name
   behavior; convergence clean; SURFACED TO OWNER 2026-08-21 (the
   independent review's F2 — the wildcard residual's sharper sibling;
   build report FLAG-8). RATIFIED by the CFC owner 2026-08-21
   ("ratify", relayed by the coordinator with the RULING-5 batch):
   first-creator-owns IS the shared-named-space contract — the genesis
-  race's winner holds owner power, peers hold `"*": WRITE` — a settled
+  race's winner holds owner power, peers hold only what the owner
+  grants them — a settled
   behavior now, not a residual awaiting a fix. (vi) a via-"owner" crossing into a
   never-materialized home store is granted without genesis forcing and
   then refused forever by the sink's INV-13 mirror — a fail-closed

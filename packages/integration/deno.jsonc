@@ -12,6 +12,7 @@
     "./shell-utils": "./shell-utils.ts",
     "./pattern-coverage": "./pattern-coverage.ts",
     "./temp-identity": "./temp-identity.ts",
+    "./test-space": "./test-space.ts",
     "./wait-for-cell-value": "./wait-for-cell-value.ts"
   }
 }

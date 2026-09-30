@@ -6,6 +6,7 @@ import type {
   FabricExecValue,
   FactoryInput,
   HFunction,
+  InSpaceGrants,
   JSONSchema,
   JSONValue,
   Module,
@@ -337,6 +338,14 @@ export type Frame = {
    */
   eventTime?: number;
 
+  /**
+   * The event key of the event that opened this handler frame, which
+   * `eventKey()` returns. Derived once per run from the durable event id, the
+   * acting principal and the stream (see `deriveEventKey()`). Only present on
+   * handler frames.
+   */
+  eventKey?: string;
+
   unsafe_binding?: UnsafeBinding;
 
   /**
@@ -348,10 +357,12 @@ export type Frame = {
 
   /**
    * Named/anonymous `PatternFactory.inSpace(...)` targets encountered during
-   * this frame whose space DID was not yet cached. The runner resolves these
-   * after the run and re-runs (see RetryImmediately).
+   * this frame that the calling space has not resolved yet, each with the
+   * grants of the first call naming it, which a space created for it
+   * carries. The runner resolves these after the run and re-runs (see
+   * RetryImmediately).
    */
-  pendingSpaceNames?: Set<string>;
+  pendingSpaceNames?: Map<string, InSpaceGrants | undefined>;
 
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;

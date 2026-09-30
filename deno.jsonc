@@ -80,7 +80,6 @@
     // opens spaces with, which is why this needs --allow-ffi.
     "check-completion-slots": "deno run --allow-read --allow-env --allow-sys --allow-ffi ./tasks/check-completion-slots.ts",
     "check-command-docs": "deno run --allow-read --allow-env --allow-sys --allow-ffi ./tasks/check-command-docs.ts",
-    "check-tripwires": "deno run --allow-read ./tasks/check-tripwires.ts",
     // Reports the docs/ link graph; --allow-write serves its --out flag.
     "docs-links": "deno run --allow-read --allow-write ./scripts/docs-links.ts",
     "cf": "deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts",

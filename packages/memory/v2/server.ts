@@ -1819,18 +1819,19 @@ export class Server {
        * Space access control. `off` (default) preserves the historical
        * any-authenticated-session-may-do-anything behavior. `observe`
        * evaluates ordinary capability decisions, counts and logs
-       * would-denies, but allows those decisions. Invalid ACL state and
-       * fresh-space genesis violations remain hard failures. `enforce` denies
-       * all capability shortfalls as well.
+       * would-denies, but allows those decisions. Invalid ACL state,
+       * fresh-space genesis violations, and OWNER shortfalls remain hard
+       * failures. `enforce` denies all capability shortfalls as well.
        *
-       * Policy: a session principal has implicit OWNER on a space when it
-       * IS the space DID or is listed in `serviceDids`; otherwise the
-       * space's ACL document (entity id == the space DID, as managed by the
-       * runner's `ACLManager` / `cf acl`) grants per-DID or `"*"`
-       * capabilities. A missing ACL on a populated legacy space grants every
-       * authenticated principal READ and WRITE (never OWNER). A fresh space
-       * grants authenticated READ only: its first write must be a valid ACL
-       * initialized by the space identity or a service DID.
+       * Policy: a session principal has implicit OWNER on every space when
+       * it is listed in `serviceDids`; otherwise the space's ACL document
+       * (entity id == the space DID, as managed by the runner's
+       * `ACLManager` / `cf acl`) grants per-DID or `"*"` capabilities. A
+       * missing ACL on a populated legacy space grants every authenticated
+       * principal READ and WRITE (never OWNER). A fresh space grants
+       * authenticated READ only, and the space DID OWNER: its first write
+       * must be a valid ACL initialized by the space identity or a service
+       * DID. Past that genesis the space DID holds what the ACL grants it.
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
@@ -2106,10 +2107,7 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
-    if (
-      principal !== undefined &&
-      (principal === space || this.#isServicePrincipal(principal))
-    ) {
+    if (principal !== undefined && this.#isServicePrincipal(principal)) {
       return "OWNER";
     }
     const state = this.#aclState(engine, space);
@@ -2118,13 +2116,19 @@ export class Server {
         state.acl[ANYONE_USER] ?? null;
     }
     if (state.kind === "missing" && principal !== undefined) {
+      if (Engine.serverSeq(engine) === 0) {
+        // A space with no history: its own identity may write the genesis
+        // ACL, which is all it may do as the space. Past genesis the space
+        // DID holds only what that ACL grants it, like any other principal.
+        // Everyone else reads nothing into it until then.
+        return principal === space ? "OWNER" : "READ";
+      }
       // Temporary pre-launch compatibility: populated spaces without an ACL
-      // are public to authenticated principals. Empty spaces remain read-only
-      // until their identity (or a service DID) writes a valid genesis ACL.
-      return Engine.serverSeq(engine) === 0 ? "READ" : "WRITE";
+      // are public to authenticated principals.
+      return "WRITE";
     }
-    // Malformed and ownerless ACLs fail closed. Implicit owners above may
-    // still repair them explicitly.
+    // Malformed and ownerless ACLs fail closed. A service DID may still
+    // repair them explicitly.
     return null;
   }
 
@@ -2171,7 +2175,11 @@ export class Server {
         { permanentEvidence: true, aclRevision: Engine.serverSeq(engine) },
       );
     }
-    if (this.#aclMode() === "observe") {
+    // Observe mode relaxes ordinary shortfalls only. An OWNER requirement —
+    // writing a space's ACL, or registering a disk source — is enforced in
+    // every mode but `off`, so staging never lets a principal take a space
+    // over.
+    if (this.#aclMode() === "observe" && requirement !== "OWNER") {
       this.aclStats.wouldDeny += 1;
       console.warn(
         `[memory-acl] would deny ${requirement} on ${space} for ` +
@@ -2642,8 +2650,7 @@ export class Server {
       const engine = await this.#openEngine(request.space);
       const { result, commit } = executeInvite(engine, {
         ...request,
-        implicitOwner: request.principal === request.space ||
-          this.#isServicePrincipal(request.principal),
+        implicitOwner: this.#isServicePrincipal(request.principal),
       });
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
@@ -8080,31 +8087,25 @@ export class Server {
    * iff carriage" becomes a real authorization predicate instead of a
    * vacuous shape check (carriage is minted for every acting run).
    *
-   * The grants, in check order — each a structural fact this process
-   * holds, never a trust widening:
+   * The one grant is a structural fact this process holds, never a trust
+   * widening: the target's OWN ACL document grants the principal (or
+   * `ANYONE`) WRITE/OWNER — the same per-space grant structure the client
+   * session path enforces. Checked mode-independently: this gate is the
+   * serving plane's normative fail-closed interim (protocol.md §2's
+   * posture), not the client ACL rollout, so `acl.mode: "off"` does not
+   * disable it, the service-DID blanket (`#isServicePrincipal`) does NOT
+   * apply (resolving ambient service authority is the lunch-wall class),
+   * and the missing-ACL-populated-legacy compat arm does not apply either
+   * (fail closed; the per-DOC grant resolution stays OW13's owed
+   * hardening). A principal's own home space is granted here, by the
+   * OWNER entry its genesis ACL names; equality with the space DID grants
+   * nothing by itself.
    *
-   * - **owner-by-identity**: the target space IS the principal's own
-   *   DID (a user's home space — the demanded wish bootstrap's
-   *   sanctioned target, builtins.md §5).
-   * - **creation**: the target store does not exist — §2b's sanctioned
-   *   provisioning ("provision a foreign/NEW space"), where the
-   *   creating commit is what makes it the actor's (CT-1650's
-   *   deterministic per-user-per-event DIDs; quota attribution stays
-   *   the recorded residual, README §3.8). Probed WITHOUT creating:
-   *   the open-engine map first, then the store path — `#openEngine()`
-   *   materializes a store as a side effect, which is exactly what an
-   *   ungranted probe must not do.
-   * - **acl**: the target's OWN ACL document grants the principal (or
-   *   `ANYONE`) WRITE/OWNER — the same per-space grant structure the
-   *   client session path enforces. Checked mode-independently: this
-   *   gate is the serving plane's normative fail-closed interim
-   *   (protocol.md §2's posture), not the client ACL rollout, so
-   *   `acl.mode: "off"` does not disable it, the service-DID blanket
-   *   (`#isServicePrincipal`) does NOT apply (resolving ambient
-   *   service authority is the lunch-wall class), and the
-   *   missing-ACL-populated-legacy compat arm does not apply either
-   *   (fail closed; the per-DOC grant resolution stays OW13's owed
-   *   hardening).
+   * A space whose store does not exist grants nothing: a space is created
+   * by its genesis ACL commit before anything writes into it, so a write
+   * aimed at a DID no store holds names a space nobody created. The probe
+   * asks without creating — the open-engine map first, then the store
+   * path — because `#openEngine()` materializes a store as a side effect.
    *
    * Anything else refuses — including a malformed space name, so a
    * carriage-bearing write to a garbage space string can never
@@ -8113,10 +8114,7 @@ export class Server {
   async foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
-  ): Promise<
-    | { granted: true; via: "owner" | "creation" | "acl" }
-    | { granted: false; reason: string }
-  > {
+  ): Promise<{ granted: true } | { granted: false; reason: string }> {
     if (!WELL_FORMED_SPACE_DID.test(space)) {
       return {
         granted: false,
@@ -8131,11 +8129,12 @@ export class Server {
           "admitted only under a carried actor's grant (protocol.md §2b)",
       };
     }
-    if (principal === space) {
-      return { granted: true, via: "owner" };
-    }
     if (!(await this.#spaceStoreExists(space))) {
-      return { granted: true, via: "creation" };
+      return {
+        granted: false,
+        reason: `no space has the DID ${space} — a space exists once its ` +
+          "genesis ACL commit lands (protocol.md §2b)",
+      };
     }
     const engine = await this.#openEngine(space);
     const state = this.#aclState(engine, space);
@@ -8143,7 +8142,7 @@ export class Server {
       const capability = state.acl[principal] ?? state.acl[ANYONE_USER] ??
         null;
       if (capability !== null && isCapable(capability, "WRITE")) {
-        return { granted: true, via: "acl" };
+        return { granted: true };
       }
       return {
         granted: false,
@@ -8162,8 +8161,7 @@ export class Server {
   }
 
   /** Whether a store for `space` already exists, WITHOUT creating one
-   * (the foreignWriteAuthorityFor probe's creation arm — `#openEngine()`
-   * materializes stores as a side effect). An open (or opening) engine
+   * (`#openEngine()` materializes stores as a side effect). An open (or opening) engine
    * exists by definition; a file-backed store exists iff its file
    * does; a memory-backed store exists only while an engine holds it. */
   async #spaceStoreExists(space: string): Promise<boolean> {

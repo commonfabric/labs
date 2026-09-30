@@ -313,9 +313,9 @@ describe("opening a space root", () => {
       storageManager,
       experimental,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "update-space-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     controller = new PiecesController(session, runtime);
     await controller.synced();
@@ -333,7 +333,7 @@ describe("opening a space root", () => {
       storageManager,
       ...extraRuntimeOptions,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
       spaceDid: signer.did(),
     });

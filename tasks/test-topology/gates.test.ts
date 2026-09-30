@@ -2,7 +2,6 @@ import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
-import { TRIPWIRES } from "../check-tripwires.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
 import { matchesPatternFilter } from "../pattern-files.ts";
 import {
@@ -152,8 +151,6 @@ describe("the repository's gate suites", () => {
       "check-commonfabric-types",
       "check-withheld-globals",
     ]);
-    expect(reached("packages/toolshed/routes/ingest-channels/route.ts"))
-      .toEqual(["check-tripwires"]);
     // The historical tree is taken back out of the two gates reading
     // `docs/`, since neither compiles nor reads a document in it.
     expect(reached("docs/history/INDEX.md")).toEqual([
@@ -292,10 +289,6 @@ describe("the repository's gate suites", () => {
         found.push(reachedBy("check-verb-session-sync", at));
         declared.push(`check-verb-session-sync runs for ${at}`);
       }
-    }
-    for (const tripwire of TRIPWIRES) {
-      found.push(reachedBy("check-tripwires", tripwire.testFile));
-      declared.push(`check-tripwires runs for ${tripwire.testFile}`);
     }
     for (const file of namedBenchmarkFiles()) {
       found.push(reachedBy("check-bench-workflow", file));

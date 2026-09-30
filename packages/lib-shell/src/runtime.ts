@@ -1,5 +1,11 @@
 import type { CellScope } from "@commonfabric/api";
-import { createSession, DID, Identity, Session } from "@commonfabric/identity";
+import {
+  createSession,
+  DID,
+  Identity,
+  legacySpaceDid,
+  Session,
+} from "@commonfabric/identity";
 import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
@@ -382,9 +388,7 @@ export function createRuntimeClientOptions({
     apiUrl,
     spaceHostMap,
     identity: session.as,
-    spaceIdentity: session.spaceIdentity,
     spaceDid: session.space,
-    spaceName: session.spaceName,
     experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
@@ -603,9 +607,14 @@ export class RuntimeInternals extends EventTarget {
     return pattern;
   }
 
-  resolveSpaceName(name: string): Promise<DID> {
+  /**
+   * Creates a space owned by this runtime's identity, records it in the
+   * identity's Home space list under `label`, and returns its DID. See
+   * `RuntimeClient.createSpace`.
+   */
+  createSpace(label?: string): Promise<DID> {
     this.#check();
-    return this.#client.resolveSpaceName(name);
+    return this.#client.createSpace(label);
   }
 
   async recreateSpaceRootPattern(space: DID): Promise<PieceHandle<NameSchema>> {
@@ -983,9 +992,9 @@ export class RuntimeInternals extends EventTarget {
     }
 
     // One runtime per identity: the worker session is always the
-    // identity's home session. Spaces — including derived named spaces —
-    // are addressed per call; nothing is bound at creation.
-    const session: Session = await createSession({
+    // identity's home session. Spaces are addressed per call; nothing is
+    // bound at creation.
+    const session: Session = createSession({
       identity,
       spaceDid: identity.did(),
     });
@@ -1047,15 +1056,15 @@ export class RuntimeInternals extends EventTarget {
 }
 
 /**
- * Resolve a named space to its DID (the derived space key) without
- * touching any runtime. "Current space" is embedder view state; this is
- * the one piece of derivation embedders need to translate a
- * human-readable space name into an address.
+ * Resolve a legacy space name to its DID without touching any runtime or the
+ * network. "Current space" is embedder view state; this is the one piece of
+ * derivation embedders need to translate a name a person typed or followed in
+ * a URL into an address. Resolving creates nothing: the DID may name no
+ * space.
  */
 export async function resolveSpaceDid(
-  identity: Identity,
+  _identity: Identity,
   spaceName: string,
 ): Promise<DID> {
-  const session = await createSession({ identity, spaceName });
-  return session.space;
+  return await legacySpaceDid(spaceName);
 }

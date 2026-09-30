@@ -245,9 +245,9 @@ describe("loom-root", () => {
       apiUrl: new URL("http://localhost:9999"),
       storageManager: manager,
     });
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "loom-root-test",
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.ready;

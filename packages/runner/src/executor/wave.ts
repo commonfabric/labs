@@ -213,16 +213,6 @@ export interface WaveRunContext {
   emissionAttributionScope?: CellScope;
 }
 
-/** The accept gate's authority probe result (protocol.md §2b): a bare
- * boolean (test/mechanics waves), or the memory server's full verdict —
- * whose `via` arm the wave RETAINS per (space, acting user) so the
- * commit step can force a `creation`-granted target's genesis ahead of
- * the sink (OW31 B4; INV-13's precedence on the engine-direct plane). */
-export type ForeignWriteGrantResult =
-  | boolean
-  | { granted: true; via: "owner" | "creation" | "acl" }
-  | { granted: false; reason?: string };
-
 const waveRunContexts = new WeakMap<object, WaveRunContext>();
 
 /** The scope name a run's stamped instance key stands at (`space`,
@@ -905,7 +895,7 @@ export class WaveAccumulator
     | ((
       space: MemorySpace,
       acting: { user: string; session?: string },
-    ) => ForeignWriteGrantResult | Promise<ForeignWriteGrantResult>)
+    ) => boolean | Promise<boolean>)
     | undefined;
 
   /** Grant verdicts per (space, acting user) for THIS wave — one probe
@@ -913,19 +903,6 @@ export class WaveAccumulator
    * can change between waves; a transient probe failure must not stick
    * beyond the wave that observed it). */
   readonly #foreignGrantVerdicts = new Map<string, Promise<boolean>>();
-
-  /** The grant ARM each admitted crossing resolved through, per
-   * (space, acting user) — retained for the commit step (OW31 B4,
-   * protocol.md §2b): a `creation`-granted foreign target's genesis
-   * ACL is forced BEFORE the sink's data batch, so INV-13's precedence
-   * holds on the engine-direct plane too. Only verdicts that carry a
-   * `via` are recorded (a bare-boolean probe records none — such waves
-   * never force a genesis; the sink's seq-0/no-ACL refusal stays the
-   * backstop). */
-  readonly #foreignGrantVia = new Map<
-    string,
-    "owner" | "creation" | "acl"
-  >();
 
   readonly #onForeignWriteRefusal:
     | ((info: { space: MemorySpace; actionId?: string }) => void)
@@ -1044,14 +1021,14 @@ export class WaveAccumulator
      * acting run into any co-hosted space (the F1 vacuous-gate class),
      * so the constructor refuses the combination. The serving loop
      * wires the co-hosted memory server's
-     * `foreignWriteAuthorityFor` (owner-by-identity / fresh-store
-     * creation / the target's own ACL grant — fail-closed otherwise);
+     * `foreignWriteAuthorityFor` (the target's own ACL grant —
+     * fail-closed otherwise, a space no store holds included);
      * a probe that THROWS refuses the crossing (fail closed), scoped
      * to this wave. Probed once per (space, acting user) per wave. */
     foreignWriteGrant?: (
       space: MemorySpace,
       acting: { user: string; session?: string },
-    ) => ForeignWriteGrantResult | Promise<ForeignWriteGrantResult>;
+    ) => boolean | Promise<boolean>;
 
     /** Fired once per refused foreign-space write (above): the serving
      * loop counts it into §7's `foreignWriteRefusals`. */
@@ -1623,9 +1600,8 @@ export class WaveAccumulator
           "authored row)";
       } else if (!(await this.#foreignGrantFor(space, acting))) {
         why = `the acting identity ${acting.user} holds no structural ` +
-          `write grant for ${space} (protocol.md §2b: owner-by-identity, ` +
-          "fresh-store creation, or the target's own ACL grant; " +
-          "fail-closed otherwise)";
+          `write grant for ${space} (protocol.md §2b: the target's own ` +
+          "ACL grant; fail-closed otherwise)";
       }
       if (why !== undefined) {
         const actionId = assembly.context?.actionId;
@@ -3058,17 +3034,7 @@ export class WaveAccumulator
     let verdict = this.#foreignGrantVerdicts.get(key);
     if (verdict === undefined) {
       verdict = (async () => await this.#foreignWriteGrant!(space, acting))()
-        .then(
-          (result) => {
-            if (typeof result === "boolean") return result;
-            if (result.granted) {
-              // Retain the grant arm for the commit step (OW31 B4): a
-              // `creation`-granted target's genesis is forced before
-              // the sink applies its data batch.
-              this.#foreignGrantVia.set(key, result.via);
-            }
-            return result.granted;
-          },
+        .catch(
           (error) => {
             logger.warn("foreign-write-grant-probe-failed", () => [
               `the foreign-write authority probe for ${space} (acting ` +
@@ -3082,22 +3048,6 @@ export class WaveAccumulator
       this.#foreignGrantVerdicts.set(key, verdict);
     }
     return verdict;
-  }
-
-  /** The foreign spaces some admitted crossing of this wave was granted
-   * via the `creation` arm (protocol.md §2b's sanctioned provisioning) —
-   * the targets whose genesis ACL the commit step must force BEFORE the
-   * sink's data batch (OW31 B4; the session-plane precedence clause,
-   * INV-13, mirrored onto the engine-direct plane). Resolved by the time
-   * the wave closes: every admitted crossing awaited its probe at
-   * accumulation. */
-  creationGrantedForeignSpaces(): MemorySpace[] {
-    const spaces = new Set<MemorySpace>();
-    for (const [key, via] of this.#foreignGrantVia) {
-      if (via !== "creation") continue;
-      spaces.add(key.slice(0, key.indexOf("\0")) as MemorySpace);
-    }
-    return [...spaces];
   }
 
   /** The delegated-identity carriage a contribution's foreign batch

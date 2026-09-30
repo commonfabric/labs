@@ -1569,3 +1569,37 @@ carries the member's payload label. A member can carry a label at its root
 and further labels on its fields. The runner's existence observation of such
 a member consumes the root label. Proposed edit: say whether the payload
 label here is the root's or the join over the member's fields.
+
+## From random space identities (2026-09-29)
+
+**SC-52 [reconcile] A space's own DID is not a member of the space — §4.9.3,
+§18.4.5, `Cfc/Membership.lean`.** `open`. §4.9.3's `resolveCapability` returns
+implicit OWNER when `principal === space`, and the Lean model's `readerRoleB`
+carries the same `p = space` disjunct. The memory server no longer agrees:
+under [random space identities](./random-space-identities.md), a space's key
+signs its genesis commit and nothing else, and the server grants the space's
+own DID OWNER only while the space has no ACL document at sequence 0. Past
+genesis, the space DID holds what the ACL grants it, which for a space created
+by anyone other than its own key is nothing. A Home space's user keeps
+membership, because the Home space's genesis ACL names the user OWNER. The
+runtime already follows the server: `spaceReaderRole`, the render membership
+provider, the render ceiling's member spaces, and the custody seal's room
+readers consult the ACL alone.
+
+§18.4.5 names "the acting user's own identity space" beside the session
+workspace as a space a render resolves without a lookup. That exception
+depended on the implicit OWNER; the render ceiling's member spaces are now the
+session workspace alone. SC-44's "the viewer's own or session space" reads the
+same way.
+
+Proposed edit: in §4.9.3, drop `principal === space` from the implicit-OWNER
+line, keeping service principals, and say that a space identity is authorized
+to sign its genesis commit and no more. In §18.4.5, name only the session
+workspace, whose reader authority the session's admission already
+established. In `Cfc/Membership.lean`, drop the `p = space` disjunct from
+`readerRoleB` and its description. The soundness, completeness, and
+conjunctive cross-space theorems reason about `readerOf` generically and should
+not depend on the disjunct; building the model confirms it. Implemented in
+`packages/memory/v2/server.ts` (`#resolveCapability`),
+`packages/runner/src/cfc/space-membership.ts` (`spaceReaderRole`), and
+`packages/runner/src/cfc/custody-seal.ts` (`roomReaders`).

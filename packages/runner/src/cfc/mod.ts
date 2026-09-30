@@ -39,6 +39,7 @@ export {
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
+  cfcDeclaredLabelViewForWriteTargetWithStatus,
   cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
@@ -49,7 +50,6 @@ export {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
-  cfcLabelViewForWriteTargetWithStatus,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,

@@ -9,6 +9,7 @@ import {
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import type { RealmCodecValue } from "@/codec-realm";
@@ -37,7 +38,7 @@ export class FabricEpochDay extends BaseFabricPrimitive
 
   /** Constructs an instance representing the day `value` days from the Epoch. */
   constructor(value: bigint) {
-    super();
+    super(BLESSING_TOKEN, FabricEpochDay);
     this.#value = value;
   }
 
@@ -63,6 +64,10 @@ export class FabricEpochDay extends BaseFabricPrimitive
   //
   // Static members
   //
+
+  static {
+    Object.freeze(this.prototype);
+  }
 
   static #jsonCodec = Object.freeze(
     new (class EpochDayCodec extends BaseTerminalCodec<JsonCodecValue, string> {

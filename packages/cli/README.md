@@ -877,6 +877,23 @@ what `cf inspect value-at --seq` and `diff --from` take, so the piece can be
 read at exactly the commit that applied the update, or diffed against what has
 landed since.
 
+## Creating a space
+
+`cf space create [--label <label>]` creates a space and prints its DID. The DID
+comes from a freshly generated key, not from the label or anything else a caller
+could recompute, and the space is born granting the identity the command
+connects as, and nobody else, OWNER. The command records the new space in that
+identity's Home space list, under `--label` when one is given, and in its Home
+site table as served by the `--api-url` deployment. Creating twice creates two
+spaces, whatever their labels.
+
+Opening a space never creates one, with the exception of the identity's Home
+space, which comes into being the first time its user opens it. `--space` takes
+a DID or a legacy space name, and a legacy name resolves, without the network,
+to the DID it has always reached. A name or DID that reaches no space opens
+nothing: `cf piece new` there reports that no space answers to it, and names
+`cf space create` as the way to make one.
+
 ## Where a piece is created
 
 `cf piece new <main> --input-file <path>` reads a JSON object and uses it as the

@@ -60,7 +60,6 @@ const resultSchema = {
 
 describe("handlePieceGet()", () => {
   let server: MemoryV2Server.Server;
-  let spaceName: string;
   let space: MemorySpace;
   let writerStorage: EmulatedStorageManager;
   let writerRuntime: Runtime;
@@ -113,18 +112,17 @@ describe("handlePieceGet()", () => {
 
   beforeEach(async () => {
     server = newLoopbackServer();
-    spaceName = "piece-get-" + crypto.randomUUID();
+    space = (await Identity.generate()).did();
     writerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
     writerRuntime = new Runtime({
       apiUrl: new URL("http://localhost:9999"),
       storageManager: writerStorage,
     });
     writerPieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid: space }),
       writerRuntime,
     );
     await writerPieces.synced();
-    space = writerPieces.getSpace();
 
     // The list holds links to its items, so reading the list's value reaches
     // the items' documents.
@@ -192,7 +190,7 @@ describe("handlePieceGet()", () => {
       storageManager: readerStorage,
     });
     readerPieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid: space }),
       readerRuntime,
     );
     await readerPieces.synced();

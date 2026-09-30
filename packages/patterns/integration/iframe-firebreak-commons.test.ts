@@ -7,11 +7,14 @@
  * No command listener or test-only state surface is shipped in the pattern.
  */
 
-import { env, type Page, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { Identity } from "@commonfabric/identity";
-import { ANYONE_USER } from "@commonfabric/memory/acl";
-import { ACLManager } from "@commonfabric/runner";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -22,7 +25,7 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 const GUEST_WAIT_BACKSTOP_MS = 5 * 60 * 1_000;
 
 type CdpResult = Record<string, unknown>;
@@ -381,6 +384,7 @@ describe("iframe Firebreak Commons", () => {
 
   let aliceIdentity: Identity;
   let bobIdentity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let pieceId: string;
   let resultSinkCancel: (() => void) | undefined;
@@ -390,13 +394,15 @@ describe("iframe Firebreak Commons", () => {
       Identity.generate({ implementation: "noble" }),
       Identity.generate({ implementation: "noble" }),
     ]);
+    spaceDid = await createTestSpace(aliceIdentity, {
+      grants: { [bobIdentity.did()]: "WRITE" },
+    });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: aliceIdentity,
       cfcFlowLabels: "persist",
     });
-    await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     await cc.ensureDefaultPattern();
 
     const sourcePath = join(
@@ -421,10 +427,7 @@ describe("iframe Firebreak Commons", () => {
   });
 
   it("merges crew actions while isolating user preferences and local dispatch selections", async () => {
-    const view = {
-      spaceDid: cc.getSpace() as `did:${string}:${string}`,
-      pieceId,
-    };
+    const view = { spaceDid, pieceId };
     await Promise.all([
       aliceShell.goto({
         frontendUrl: FRONTEND_URL,

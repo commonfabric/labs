@@ -7,7 +7,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { createSession, Identity } from "@commonfabric/identity";
+import {
+  createSession,
+  Identity,
+  legacySpaceDid,
+} from "@commonfabric/identity";
 import { pieceId } from "@commonfabric/piece";
 import {
   PiecesController,
@@ -106,7 +110,10 @@ describe("newPiece()", () => {
       experimental: { serverExecution: false },
     });
     pieces = new PiecesController(
-      await createSession({ identity: signer, spaceName: CONFIG.space }),
+      createSession({
+        identity: signer,
+        spaceDid: await legacySpaceDid(CONFIG.space),
+      }),
       runtime,
     );
     await pieces.synced();

@@ -41,7 +41,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
@@ -54,7 +54,12 @@ import {
   patternCoverageDir,
   PATTERNS_ROOT,
 } from "@commonfabric/integration/pattern-coverage";
-import type { CfcWriteFloorMode } from "@commonfabric/runner/cfc";
+import { createTestSpace } from "@commonfabric/integration/test-space";
+import type { ACL } from "@commonfabric/memory/acl";
+import type {
+  CfcConfClause,
+  CfcWriteFloorMode,
+} from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
@@ -86,7 +91,14 @@ export type { CommitRejection, RuntimeDiagnosticsSnapshot };
 
 export interface MultiRuntimeSessionSpec {
   /** Explicit host policy for this session and, for the first session, creation. */
-  cfc?: MultiRuntimeCfcOptions;
+  cfc?: Omit<MultiRuntimeCfcOptions, "cfcReadMaxConfidentiality">;
+
+  /**
+   * The read ceiling (`cfcReadMaxConfidentiality`) of this session's runtime,
+   * given the DID of the harness's space. It is a function because the harness
+   * may create that space, whose DID a caller then cannot know in advance.
+   */
+  readCeiling?: (spaceDid: DID) => readonly CfcConfClause[];
   /** Label used in error messages and as the identity passphrase seed. */
   label: string;
 
@@ -154,7 +166,16 @@ export interface MultiRuntimeHarnessOptions {
    */
   recordRejections?: boolean;
   sessions: (string | MultiRuntimeSessionSpec)[];
-  spaceName?: string;
+
+  /**
+   * The space every session opens the piece in. Opening a space never creates
+   * it, so one passed here must already exist on the server and grant every
+   * session's identity what that session needs; this is for a space made on the
+   * toolshed `apiUrl` names. When absent, the harness creates a space owned by
+   * the first session's identity, which authors the piece, and writable by
+   * every other session's.
+   */
+  spaceDid?: DID;
 
   /**
    * When set, sessions talk to a running toolshed at this URL instead of the
@@ -606,17 +627,20 @@ type HostedServer = {
 
 export class MultiRuntimeHarness {
   readonly sessions: MultiRuntimeSession[];
+  readonly spaceDid: DID;
   readonly pieceId: string;
   #server?: HostedServer;
   #awaitsServedConsequences: boolean;
 
   private constructor(
     sessions: MultiRuntimeSession[],
+    spaceDid: DID,
     pieceId: string,
     server: HostedServer | undefined,
     awaitsServedConsequences: boolean,
   ) {
     this.sessions = sessions;
+    this.spaceDid = spaceDid;
     this.pieceId = pieceId;
     this.#server = server;
     this.#awaitsServedConsequences = awaitsServedConsequences;
@@ -628,7 +652,6 @@ export class MultiRuntimeHarness {
     if (options.sessions.length === 0) {
       throw new Error("MultiRuntimeHarness needs at least one session");
     }
-    const spaceName = options.spaceName ?? crypto.randomUUID();
     // Resolve the posture exactly like a deployed entry point (canonical env
     // mapping, else the first-party default), and host a server matching it —
     // see the header's POSTURE block.
@@ -651,33 +674,53 @@ export class MultiRuntimeHarness {
     const sessions: MultiRuntimeSession[] = [];
     let bootstrap: WorkerClient | undefined;
     try {
-      for (const spec of options.sessions) {
-        const normalized: MultiRuntimeSessionSpec = typeof spec === "string"
-          ? { label: spec }
-          : spec;
-        const identity = normalized.identity ??
-          await Identity.fromPassphrase(
-            `multi-runtime-harness ${normalized.label}`,
-            { implementation: "noble" },
-          );
-        const cfcWriteFloor = normalized.cfcWriteFloor ?? options.cfcWriteFloor;
-        const client = new WorkerClient(normalized.label);
+      const specs = await Promise.all(
+        options.sessions.map(async (spec) => {
+          const normalized: MultiRuntimeSessionSpec = typeof spec === "string"
+            ? { label: spec }
+            : spec;
+          const identity = normalized.identity ??
+            await Identity.fromPassphrase(
+              `multi-runtime-harness ${normalized.label}`,
+              { implementation: "noble" },
+            );
+          return { ...normalized, identity };
+        }),
+      );
+      const owner = specs[0].identity;
+      const grants: ACL = {};
+      for (const { identity } of specs.slice(1)) {
+        if (identity.did() !== owner.did()) grants[identity.did()] = "WRITE";
+      }
+      const spaceDid = options.spaceDid ??
+        await createTestSpace(owner, { apiUrl: targetUrl, grants });
+      const cfcFor = (spec: MultiRuntimeSessionSpec): FabricValue =>
+        ({
+          ...spec.cfc,
+          ...(spec.readCeiling
+            ? { cfcReadMaxConfidentiality: spec.readCeiling(spaceDid) }
+            : {}),
+        }) as FabricValue;
+
+      for (const spec of specs) {
+        const cfcWriteFloor = spec.cfcWriteFloor ?? options.cfcWriteFloor;
+        const client = new WorkerClient(spec.label);
         await client.call("init", {
-          identity: identity.keyPair,
-          spaceName,
-          apiUrl: normalized.apiUrl?.href ?? apiUrl,
+          identity: spec.identity.keyPair,
+          spaceDid,
+          apiUrl: spec.apiUrl?.href ?? apiUrl,
           diagnostics: options.diagnostics === true,
           recordRejections: options.recordRejections === true,
-          cfc: normalized.cfc as FabricValue,
+          cfc: cfcFor(spec),
           watchPaths: options.watchPaths as FabricValue,
-          ...(normalized.wsDelayMs !== undefined
-            ? { wsDelayMs: normalized.wsDelayMs }
+          ...(spec.wsDelayMs !== undefined
+            ? { wsDelayMs: spec.wsDelayMs }
             : {}),
-          ...(normalized.inboundHold === true ? { inboundHold: true } : {}),
+          ...(spec.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
         });
         sessions.push(
-          new MultiRuntimeSession(normalized.label, identity, client),
+          new MultiRuntimeSession(spec.label, spec.identity, client),
         );
       }
 
@@ -688,14 +731,12 @@ export class MultiRuntimeHarness {
       // compile state.
       bootstrap = new WorkerClient("bootstrap");
       await bootstrap.call("init", {
-        identity: sessions[0].identity.keyPair,
-        spaceName,
+        identity: owner.keyPair,
+        spaceDid,
         apiUrl,
         diagnostics: options.diagnostics === true,
         watchPaths: options.watchPaths as FabricValue,
-        cfc: typeof options.sessions[0] === "string"
-          ? undefined
-          : options.sessions[0].cfc as FabricValue,
+        cfc: cfcFor(specs[0]),
         ...(options.cfcWriteFloor !== undefined
           ? { cfcWriteFloor: options.cfcWriteFloor }
           : {}),
@@ -718,6 +759,7 @@ export class MultiRuntimeHarness {
       // behind its storage, has consequences still to arrive once it is idle.
       return new MultiRuntimeHarness(
         sessions,
+        spaceDid,
         pieceId,
         server,
         server === undefined || serverExecutionOn,

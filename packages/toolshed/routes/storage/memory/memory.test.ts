@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { createSession, Identity } from "@commonfabric/identity";
+import { Identity } from "@commonfabric/identity";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -149,49 +149,71 @@ const serialTest = (
   });
 
 serialTest(
-  "memory websocket authorizes session opens with a workspace spaceIdentity",
+  "memory websocket admits the creator of a created space and refuses another identity",
   async () => {
-    const identity = await Identity.generate({ implementation: "noble" });
-    const session = await createSession({
-      identity,
-      spaceName: `memory-space-identity-${Date.now()}`,
-    });
+    const creator = await Identity.generate({ implementation: "noble" });
+    const stranger = await Identity.generate({ implementation: "noble" });
     const server = Deno.serve({ port: 0 }, app.fetch);
     const base = new URL(`http://${server.addr.hostname}:${server.addr.port}`);
-    const storageManager = StorageManager.open({
-      as: session.as,
-      memoryHost: new URL(base),
-      spaceIdentity: session.spaceIdentity,
-    });
-    const runtime = new Runtime({
-      apiUrl: base,
-      storageManager,
-    });
+    const runtime = createRuntime(creator, base);
+    let socket: WebSocket | undefined;
 
     try {
+      const space = await runtime.createSpace();
       const tx = runtime.edit();
       const cell = runtime.getCell(
-        session.space,
-        `memory-space-identity-cell-${Date.now()}`,
+        space,
+        `memory-created-space-cell-${Date.now()}`,
         undefined,
         tx,
       );
-      cell.set({ hello: "workspace" });
+      cell.set({ hello: "created" });
 
       const result = await tx.commit();
       assert("ok" in result);
 
       await runtime.storageManager.synced();
-      const provider = runtime.storageManager.open(session.space);
+      const provider = runtime.storageManager.open(space);
       assertEquals(
         provider.replica.get({
           id: cell.getAsNormalizedFullLink().id,
           type: "application/json",
         })?.is,
-        { value: { hello: "workspace" } },
+        { value: { hello: "created" } },
       );
+
+      // The space's genesis grants its creator alone, so a signed session
+      // open from anyone else is refused.
+      socket = await openSocket(
+        new URL(
+          `ws://${server.addr.hostname}:${server.addr.port}/api/storage/memory`,
+        ),
+      );
+      socket.send(encodeMemoryBoundary(HELLO));
+      const hello = await readJsonMessage<HelloOkWithSessionOpen>(socket);
+      socket.send(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "open-1",
+        space,
+        session: {},
+        ...(await createSessionOpenAuth(
+          stranger,
+          space,
+          {},
+          hello.sessionOpen,
+        )),
+      }));
+      const refusal = await readJsonMessage<{
+        type: "response";
+        requestId: string;
+        error: { name: string; message: string };
+      }>(socket);
+      assertEquals(refusal.requestId, "open-1");
+      assertEquals(refusal.error?.name, "AuthorizationError");
     } finally {
+      socket?.close();
       await runtime.dispose();
+      await runtime.storageManager.close();
       await server.shutdown();
     }
   },

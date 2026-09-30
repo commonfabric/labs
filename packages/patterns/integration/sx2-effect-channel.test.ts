@@ -30,7 +30,7 @@
 
 import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { env } from "@commonfabric/integration";
+import { createTestSpace, env } from "@commonfabric/integration";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
@@ -53,7 +53,7 @@ import {
   type PiecesController,
 } from "./pieces-controller.ts";
 
-const { API_URL, SPACE_NAME } = env;
+const { API_URL } = env;
 
 // The arm this process runs in: the explicit env value, else the
 // first-party default (ON since the server-execution v2 Phase 7 flip —
@@ -91,7 +91,7 @@ describe("sx2 effect channel (Phase 4 gates)", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: `${SPACE_NAME}-sx2-effects`,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
       cfcFlowLabels: "persist",

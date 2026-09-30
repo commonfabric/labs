@@ -1,5 +1,6 @@
 import {
   awaitViewSettled,
+  createLegacyTestSpace,
   env,
   Page,
   type ProbeApi,
@@ -21,7 +22,6 @@ import {
   clickButtonWithText,
   clickButtonWithTitle,
 } from "../note-button-helpers.ts";
-import { resolveSpaceDid } from "@commonfabric/lib-shell";
 
 const { FRONTEND_URL } = env;
 describe("default-app notebook reload integration test", () => {
@@ -36,7 +36,7 @@ describe("default-app notebook reload integration test", () => {
   it("reloads every rapidly created notebook note in a separate shard", async () => {
     const identity = await Identity.generate({ implementation: "noble" });
     const notebookSpaceName = globalThis.crypto.randomUUID();
-    const notebookSpaceDid = await resolveSpaceDid(
+    const notebookSpaceDid = await createLegacyTestSpace(
       identity,
       notebookSpaceName,
     );

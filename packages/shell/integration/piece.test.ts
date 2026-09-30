@@ -1,7 +1,12 @@
 import { join, resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { env, waitFor, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  waitFor,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -14,13 +19,14 @@ import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 
 import { clickPierce } from "./shadow-dom.ts";
 
-const { API_URL, SPACE_NAME, FRONTEND_URL } = env;
+const { API_URL, FRONTEND_URL } = env;
 const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
 const decoder = new TextDecoder();
 
 async function runCfPieceNewWithSlug(options: {
   sourcePath: string;
   identityPath: string;
+  space: string;
   slug: string;
   /** Take a name that already points somewhere, which `cf` refuses without. */
   force?: boolean;
@@ -39,7 +45,7 @@ async function runCfPieceNewWithSlug(options: {
       "--api-url",
       API_URL,
       "--space",
-      SPACE_NAME,
+      options.space,
       "--slug",
       options.slug,
       ...(options.force ? ["--force"] : []),
@@ -118,6 +124,7 @@ describe("shell piece tests", () => {
       implementation: "noble",
     });
     const { identity, path: identityPath } = tempIdentity;
+    const spaceDid = await createTestSpace(identity);
     // Initialized as the first step inside the try below, so a failure there
     // still runs the finally that tears the runtimes down.
     let cc: PiecesController | undefined;
@@ -199,7 +206,7 @@ describe("shell piece tests", () => {
 
     try {
       const controller = await PiecesController.initialize({
-        space: SPACE_NAME,
+        space: spaceDid,
         apiUrl: new URL(API_URL),
         identity: identity,
         cfcFlowLabels: "persist",
@@ -217,6 +224,7 @@ describe("shell piece tests", () => {
       const pieceId = await runCfPieceNewWithSlug({
         sourcePath,
         identityPath,
+        space: spaceDid,
         slug,
       });
       const currentPiece = await controller.get(pieceId, false);
@@ -244,7 +252,7 @@ describe("shell piece tests", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
         },
         identity,
       });
@@ -256,12 +264,12 @@ describe("shell piece tests", () => {
       // piece just to label its menu), so this navigation performs the cold
       // in-client compile and seeds the compilation cache. The cache contract
       // is asserted below against a fresh worker.
-      await page.evaluate(async (spaceName, pieceId) => {
-        await globalThis.app.setView({ spaceName, pieceId });
-      }, { args: [SPACE_NAME, pieceId] });
+      await page.evaluate(async (spaceDid, pieceId) => {
+        await globalThis.app.setView({ spaceDid, pieceId });
+      }, { args: [spaceDid, pieceId] });
       await shell.waitForState({
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceSlug: slug,
         },
         identity,
@@ -315,7 +323,7 @@ describe("shell piece tests", () => {
       await shell.goto({
         frontendUrl: FRONTEND_URL,
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
         },
         identity,
       });
@@ -332,12 +340,12 @@ describe("shell piece tests", () => {
       const compileCountBeforePieceLoad = await getClientEngineCompileCount(
         page,
       );
-      await page.evaluate(async (spaceName, pieceId) => {
-        await globalThis.app.setView({ spaceName, pieceId });
-      }, { args: [SPACE_NAME, pieceId] });
+      await page.evaluate(async (spaceDid, pieceId) => {
+        await globalThis.app.setView({ spaceDid, pieceId });
+      }, { args: [spaceDid, pieceId] });
       await shell.waitForState({
         view: {
-          spaceName: SPACE_NAME,
+          spaceDid,
           pieceSlug: slug,
         },
         identity,
@@ -378,6 +386,7 @@ describe("shell piece tests", () => {
       implementation: "noble",
     });
     const { identity, path: identityPath } = tempIdentity;
+    const spaceDid = await createTestSpace(identity);
     const firstSource = join(
       import.meta.dirname!,
       "fixtures",
@@ -392,13 +401,14 @@ describe("shell piece tests", () => {
     const firstPieceId = await runCfPieceNewWithSlug({
       sourcePath: firstSource,
       identityPath,
+      space: spaceDid,
       slug,
     });
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceSlug: slug,
       },
       identity,
@@ -406,7 +416,7 @@ describe("shell piece tests", () => {
     await waitForSlugPieceMarker(shell, "slug piece v1");
     await shell.waitForState({
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceSlug: slug,
       },
       identity,
@@ -417,6 +427,7 @@ describe("shell piece tests", () => {
     const secondPieceId = await runCfPieceNewWithSlug({
       sourcePath: secondSource,
       identityPath,
+      space: spaceDid,
       slug,
       force: true,
     });
@@ -424,7 +435,7 @@ describe("shell piece tests", () => {
 
     await waitForSlugPieceMarker(shell, "slug piece v2");
     const href = await shell.page().evaluate(() => globalThis.location.href);
-    expect(href).toContain(`/${SPACE_NAME}/${slug}`);
+    expect(href).toContain(`/${spaceDid}/${slug}`);
   });
 
   it("tears the runtime down cleanly on logout while a piece is rendered", async () => {
@@ -433,17 +444,23 @@ describe("shell piece tests", () => {
       implementation: "noble",
     });
     const { identity, path: identityPath } = tempIdentity;
+    const spaceDid = await createTestSpace(identity);
     const source = join(
       import.meta.dirname!,
       "fixtures",
       "slug-piece-v1.tsx",
     );
 
-    await runCfPieceNewWithSlug({ sourcePath: source, identityPath, slug });
+    await runCfPieceNewWithSlug({
+      sourcePath: source,
+      identityPath,
+      space: spaceDid,
+      slug,
+    });
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceSlug: slug },
+      view: { spaceDid, pieceSlug: slug },
       identity,
     });
     // The piece is rendered: the renderer, the favorites subscription, and

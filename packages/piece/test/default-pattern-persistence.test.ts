@@ -113,9 +113,9 @@ describe("PiecesController default pattern persistence", () => {
       storageManager,
     });
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: "default-pattern-persistence-" + crypto.randomUUID(),
+      spaceDid: await runtime.createSpace(),
     });
     pieces = new PiecesController(session, runtime);
     await pieces.synced();
@@ -224,9 +224,9 @@ describe("PiecesController default pattern persistence", () => {
     await pieces.runtime.idle();
     await pieces.synced();
 
-    const session = await createSession({
+    const session = createSession({
       identity: signer,
-      spaceName: pieces.getSpaceName()!,
+      spaceDid: pieces.getSpace(),
     });
     const freshRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),

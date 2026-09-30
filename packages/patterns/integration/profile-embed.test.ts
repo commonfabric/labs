@@ -1,5 +1,5 @@
-import { env, Page } from "@commonfabric/integration";
-import { Identity } from "@commonfabric/identity";
+import { createTestSpace, env, Page } from "@commonfabric/integration";
+import { type DID, Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -18,7 +18,7 @@ import {
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 // The `#profile` wish fallback surface (rendered by the embed when no profile
 // resolves) is the shared trusted create surface: it forwards `inputId:
 // "wish-profile-name-input"` to its inner input and exposes the trusted
@@ -56,19 +56,19 @@ describe("profile-embed integration test", () => {
 
   let identity: Identity;
   let cc: PiecesController;
-  let spaceDid: string;
+  let spaceDid: DID;
   let pieceId: string;
   let pieceSinkCancel: (() => void) | undefined;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity,
       cfcFlowLabels: "persist",
     });
-    spaceDid = cc.getSpace();
 
     // Pre-create the space-root (default) pattern so the browser's
     // `pattern:getSpaceRoot` storage-RESUMEs it instead of taking the create
@@ -109,7 +109,7 @@ describe("profile-embed integration test", () => {
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceDid: spaceDid as `did:${string}:${string}`, pieceId },
+      view: { spaceDid, pieceId },
       identity,
     });
 

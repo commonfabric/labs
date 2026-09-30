@@ -1,4 +1,9 @@
-import { env, Page, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import {
   clickNthCfButton,
@@ -9,7 +14,7 @@ import {
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   initializePiecesController,
@@ -18,13 +23,14 @@ import {
 } from "./pieces-controller.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("nested counter integration test", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
   let identity: Identity;
+  let spaceDid: DID;
   let cc: PiecesController;
   let piece: PieceController;
   let pieceSinkCancel: (() => void) | undefined;
@@ -54,7 +60,7 @@ describe("nested counter integration test", () => {
     shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid,
         pieceId: piece.id,
       },
       identity,
@@ -62,8 +68,9 @@ describe("nested counter integration test", () => {
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    spaceDid = await createTestSpace(identity);
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: spaceDid,
       apiUrl: new URL(API_URL),
       identity: identity,
       cfcFlowLabels: "persist",

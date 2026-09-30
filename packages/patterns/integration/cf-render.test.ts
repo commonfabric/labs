@@ -1,4 +1,5 @@
 import {
+  createTestSpace,
   env,
   type ProbeApi,
   waitForCondition,
@@ -7,7 +8,7 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   initializePiecesController,
   PieceController,
@@ -23,10 +24,11 @@ import {
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 import { debugStr } from "@commonfabric/data-model";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 /**
- * Opens `piece`'s view in `shell`'s page as `identity`.
+ * Opens the view of `piece`, which lives in the space `spaceDid`, in
+ * `shell`'s page as `identity`.
  *
  * Every test that drives the view calls this, and calls it inside its own
  * body. A run can be given one test of this file and none of its neighbors,
@@ -36,13 +38,14 @@ const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
  */
 function gotoPiece(
   shell: ShellIntegration,
+  spaceDid: DID,
   piece: PieceController,
   identity: Identity,
 ): Promise<void> {
   return shell.goto({
     frontendUrl: FRONTEND_URL,
     view: {
-      spaceName: SPACE_NAME,
+      spaceDid,
       pieceId: piece.id,
     },
     identity,
@@ -76,7 +79,7 @@ describe("cf-render integration test", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
       cfcFlowLabels: "persist",
@@ -115,7 +118,7 @@ describe("cf-render integration test", () => {
 
   it("should load the nested counter piece and verify initial state", async () => {
     const page = shell.page();
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
 
     await waitForText(page, "#counter-result", "Counter is the 0th number");
 
@@ -125,7 +128,7 @@ describe("cf-render integration test", () => {
 
   it("should click the increment button and update the counter", async () => {
     const page = shell.page();
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
 
     // Click increment button (second button - first is decrement)
     await clickNthCfButton(page, "[data-cf-button]", 1);
@@ -137,7 +140,7 @@ describe("cf-render integration test", () => {
 
   it("should update counter value via direct operations and verify UI", async () => {
     const page = shell.page();
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
     // `gotoPiece` returns once the view matches and the login lands, which is
     // before the view is drawn. Settling is what puts the write after a drawn
     // view rather than racing it.
@@ -173,7 +176,7 @@ describe("cf-render integration test", () => {
     // when it is installed, so a write that landed first would leave nothing
     // for the wait below to observe. 7 is this test's own value, which no
     // other test in the file writes.
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
     await settleView(page);
     await piece.result.set(7, ["value"]);
 
@@ -225,7 +228,7 @@ describe("cf-render subpath handling", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity: identity,
       cfcFlowLabels: "persist",
@@ -252,7 +255,7 @@ describe("cf-render subpath handling", () => {
     // Before the fix, cf-render would wait forever for undefined subpath cells
     // like .key("sidebarUI") to become defined, blocking the main UI.
     const page = shell.page();
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
 
     // The main UI should render despite sidebarUI being undefined
     await waitForText(page, "#main-ui", "This is the main UI");
@@ -276,7 +279,7 @@ describe("cf-render subpath handling", () => {
     // is not defined (or defined as undefined). The cf-render fix ensures
     // that subpath cells like .key("sidebarUI") don't block the main render.
     const page = shell.page();
-    await gotoPiece(shell, piece, identity);
+    await gotoPiece(shell, cc.getSpace(), piece, identity);
 
     // The main UI should be visible - this proves rendering wasn't blocked
     await waitForText(page, "#main-ui", "This is the main UI");

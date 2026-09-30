@@ -22,7 +22,6 @@ import {
   LOOM_REPO,
   REPO,
 } from "./config.ts";
-import { STALE_RUNS_ERROR } from "./lib.ts";
 import { type Ctx, type Run, runSource } from "./types.ts";
 
 // GitHub hands back a workflow's runs newest first, so the canned runs are timed
@@ -336,7 +335,7 @@ const aged = (id: number, msAgo: number) => {
   return run({ id, created_at: at, run_started_at: at });
 };
 
-Deno.test("runs(): an anchored page that does not carry its anchor is refused", async () => {
+Deno.test("runs(): an anchored page that does not carry its anchor refuses the listing", async () => {
   // Page one is current; the anchored page answers from a month back and has
   // never heard of the run it was anchored to. Joined, they would read as one
   // window with a month-wide hole, and the streak the build tile walks would run
@@ -347,13 +346,15 @@ Deno.test("runs(): an anchored page that does not carry its anchor is refused", 
         ? Array.from({ length: 100 }, (_, i) => aged(1 + i, 3 * DAY_MS + i * 60_000))
         : Array.from({ length: 100 }, (_, i) => aged(1000 + i, 35 * DAY_MS + i * 60_000)),
     async (ctx) => {
-      const error = await assertRejects(() => ctx.runs(), Error);
-      assertStringIncludes(error.message, "came back without run 100");
+      const errors = await loggedErrors(async () => {
+        assertEquals(await ctx.runs(), []);
+      });
+      assertStringIncludes(errors[0], "came back without run 100");
     },
   );
 });
 
-Deno.test("runs(): a page anchored to a run the source no longer knows is refused", async () => {
+Deno.test("runs(): a page anchored to a run the source no longer knows refuses the listing", async () => {
   // The other way round: page one answers from a month back, so the anchor is a
   // run from then. A page that comes back without it is refused just the same,
   // whichever side of the join went stale.
@@ -363,8 +364,10 @@ Deno.test("runs(): a page anchored to a run the source no longer knows is refuse
         ? Array.from({ length: 100 }, (_, i) => aged(1000 + i, 35 * DAY_MS + i * 60_000))
         : Array.from({ length: 100 }, (_, i) => aged(1 + i, 3 * DAY_MS + i * 60_000)),
     async (ctx) => {
-      const error = await assertRejects(() => ctx.runs(), Error);
-      assertStringIncludes(error.message, "came back without run 1099");
+      const errors = await loggedErrors(async () => {
+        assertEquals(await ctx.runs(), []);
+      });
+      assertStringIncludes(errors[0], "came back without run 1099");
     },
   );
 });
@@ -479,20 +482,166 @@ Deno.test("runs(): a failed read of the newest page fails the fetch", async () =
   );
 });
 
-Deno.test("runs(): a listing that does not reach the newest page is refused when nothing is held", async () => {
-  // The listing stopped days back, so nothing joins it to the newest page's
-  // run 1, and the runs in between are missing from both.
+Deno.test("runs(): with nothing held, a listing that does not reach the newest page gives way to the unfiltered listing", async () => {
+  // The listing stopped days back, so nothing joins it to run 99, the oldest
+  // main run on the newest page. The window is read from the unfiltered
+  // listing instead, page by
+  // page, until it holds the most runs a window holds; half of each page is
+  // pull request runs, so that takes four pages.
   await withGithub(
-    (url) => (first(url) ? [aged(900, 5 * DAY_MS), aged(901, 5 * DAY_MS + 60_000)] : []),
-    async (ctx) => {
-      const errors = await loggedErrors(() =>
-        assertRejects(() => ctx.runs(), Error, STALE_RUNS_ERROR)
-      );
+    (url) => (first(url) ? [aged(900, 5 * DAY_MS)] : []),
+    async (ctx, _urls, heads) => {
+      const errors = await loggedErrors(async () => {
+        const out = await ctx.runs();
+        assertEquals(out.length, CI_RUNS_MAX);
+        assertEquals(out[0].id, 1);
+        assert(out.every((r) => r.event === "push"));
+      });
       assertEquals(errors.length, 1);
-      assertStringIncludes(errors[0], "listing does not reach run 1 of");
-      assertStringIncludes(errors[0], "its newest run is 900 of");
+      assertStringIncludes(errors[0], "nothing held or listed reaches the newest page (run 99 of");
+      assertStringIncludes(errors[0], "newest run is 900 of");
+      assertEquals(heads.map((url) => new URL(url).searchParams.get("page")), [null, "2", "3", "4"]);
     },
-    () => [listedOn("main", run({ id: 1 }))],
+    (url) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? 1);
+      return Array.from({ length: 100 }, (_, i) => {
+        const id = (page - 1) * 100 + i + 1;
+        return listedOn(
+          "main",
+          aged(id, id * 60_000),
+        );
+      }).map((r) =>
+        r.id % 2 ? r : { ...r, event: "pull_request", head_branch: "feature" }
+      );
+    },
+  );
+});
+
+Deno.test("runs(): the unfiltered window stops at the age cutoff", async () => {
+  await withGithub(
+    () => [],
+    async (ctx, _urls, heads) => {
+      await loggedErrors(async () => {
+        assertEquals((await ctx.runs()).map((r) => r.id), [1]);
+      });
+      assertEquals(heads.length, 1);
+    },
+    // A walk that ignored the cutoff would read on to the empty second page.
+    (url) =>
+      new URL(url).searchParams.has("page") ? [] : [
+        listedOn("main", aged(1, 60_000)),
+        ...Array.from(
+          { length: 99 },
+          (_, i) => listedOn("main", aged(2 + i, (CI_RUNS_MAX_AGE_DAYS + 1) * DAY_MS)),
+        ),
+      ],
+  );
+});
+
+// A full page of the unfiltered listing: runs `from` onwards, one a minute
+// older than the last, each on main.
+const unfilteredPage = (from: number) =>
+  Array.from({ length: 100 }, (_, i) => listedOn("main", aged(from + i, (from + i) * 60_000)));
+
+const pageOf = (url: string) => Number(new URL(url).searchParams.get("page") ?? 1);
+
+Deno.test("runs(): the unfiltered walk stops at a run the lagging listing carries", async () => {
+  // Every other run is a pull request run, so a page holds fifty main runs,
+  // and the window would take four pages to fill. The listing is a day
+  // behind: it starts at main run 151, on the second page, where the walk
+  // joins it.
+  const mixed = (url: string) =>
+    unfilteredPage((pageOf(url) - 1) * 100 + 1).map((r) =>
+      r.id % 2 ? r : { ...r, event: "pull_request", head_branch: "feature" }
+    );
+  await withGithub(
+    (url) =>
+      first(url)
+        ? Array.from({ length: 100 }, (_, i) => aged(151 + 2 * i, (151 + 2 * i) * 60_000))
+        : [],
+    async (ctx, _urls, heads) => {
+      await loggedErrors(async () => {
+        // Every main run from 1 to the listing's last, 349, with no gap.
+        assertEquals(
+          (await ctx.runs()).map((r) => r.id),
+          Array.from({ length: 175 }, (_, i) => 1 + 2 * i),
+        );
+      });
+      assertEquals(heads.map(pageOf), [1, 2]);
+    },
+    mixed,
+  );
+});
+
+Deno.test("runs(): a failed read of a later unfiltered page fails the fetch", async () => {
+  await withGithub(
+    (url) => (first(url) ? [aged(900, 50 * DAY_MS)] : []),
+    async (ctx) => {
+      await loggedErrors(() => assertRejects(() => ctx.runs(), Error, "503"));
+    },
+    (url) =>
+      pageOf(url) === 3
+        ? new Response("unavailable", { status: 503 })
+        : unfilteredPage((pageOf(url) - 1) * 100 + 1).map((r) =>
+          r.id % 3 ? { ...r, event: "pull_request", head_branch: "feature" } : r
+        ),
+  );
+});
+
+Deno.test("runs(): with nothing held, a failed listing gives way to the unfiltered listing", async () => {
+  await withGithub(
+    (url) => {
+      if (first(url)) return unfilteredPage(1);
+      throw new Error("the anchored page is not reachable");
+    },
+    async (ctx) => {
+      const errors = await loggedErrors(async () => {
+        assertEquals((await ctx.runs()).map((r) => r.id), [1, 2, 3]);
+      });
+      assertStringIncludes(errors.join("\n"), "the listing failed");
+    },
+    () => [1, 2, 3].map((id) => listedOn("main", aged(id, id * 60_000))),
+  );
+});
+
+Deno.test("runsFor: a workflow's sources share the unfiltered pages they walk", async () => {
+  await withGithub(
+    () => [],
+    async (ctx, _urls, heads) => {
+      await loggedErrors(async () => {
+        await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
+        await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "pull requests"));
+      });
+      assertEquals(heads.map(pageOf), [1, 2, 3]);
+    },
+    (url) => pageOf(url) > 2 ? [] : unfilteredPage((pageOf(url) - 1) * 100 + 1),
+  );
+});
+
+Deno.test("runs(): a held window joins a newest page that no longer carries the source's runs", async () => {
+  // Main runs are rare in this workflow. Between the two fetches main run 11
+  // drops off the newest page and main run 13 lands, so the page's oldest main
+  // run is one nothing held has seen; the page still carries pull request run
+  // 12, the newest run of the page the held window was joined to.
+  using time = new FakeTime(Date.now());
+  const pr = (id: number) =>
+    listedOn("feature", { ...aged(id, id * 60_000), event: "pull_request" });
+  let newest = [pr(12), listedOn("main", aged(11, 11 * 60_000))];
+  let listing: Run[] = [aged(11, 11 * 60_000)];
+  await withGithub(
+    (url) => (first(url) ? listing : []),
+    async (ctx, _urls, heads) => {
+      assertEquals((await ctx.runs()).map((r) => r.id), [11]);
+      time.tick(30_000);
+      newest = [listedOn("main", aged(13, 60_000)), pr(12)];
+      listing = [aged(900, 5 * DAY_MS)];
+      const errors = await loggedErrors(async () => {
+        assertEquals((await ctx.runs()).map((r) => r.id), [13, 11, 900]);
+      });
+      assertEquals(errors, []);
+      assertEquals(heads.map(pageOf), [1, 1]);
+    },
+    () => newest,
   );
 });
 

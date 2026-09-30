@@ -506,8 +506,8 @@ Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce
 the accepted shape has no route to change the ACL at all, which is what
 happened while `ACLManager` wrote through the value surface — every
-post-genesis grant and revoke failed, and the wildcard a named space is born
-with could not be removed. Over-acceptance lets the ACL document reach a state
+post-genesis grant and revoke failed, and the wildcard a legacy named space
+carries could not be removed. Over-acceptance lets the ACL document reach a state
 no admission check ever validated.
 
 Checked by: example-based server tests only — no oracle, TLA+, or differential
@@ -537,6 +537,15 @@ is derived rather than granted. Both clauses reject with an
 ordinary writes` for the precedence clause, and `Only the space identity or a
 service DID may initialize <space>` for the authority clause. Like INV-12 this
 is enforced in `observe` as well as `enforce`, for the reason quoted there.
+
+The space DID's authority is exactly this one commit. Genesis also passes the
+ordinary capability check, which requires OWNER for a commit that touches the
+ACL document, and the server grants the space DID OWNER only while the space has
+no ACL document and is at server sequence 0. Once genesis lands, the space DID
+holds what the ACL grants it and nothing more, so it cannot repair a malformed
+ACL or claim a populated space afterwards. A space created under
+[random space identities](../random-space-identities.md) signs its genesis with
+a key generated for that one commit, which no one holds afterwards.
 
 The precedence clause binds only at server sequence 0. A *populated* space that
 never had an ACL is not forced through genesis; it falls under the temporary

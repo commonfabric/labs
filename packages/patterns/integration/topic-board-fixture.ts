@@ -15,7 +15,8 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
+import { createTestSpace } from "@commonfabric/integration/test-space";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { join } from "@std/path";
@@ -35,10 +36,10 @@ export interface TopicBoardFixture {
   /** The authoring subscription used while creating the board. */
   seedDemand: TopicBoardDemand;
 
-  /** The space the board lives in. */
-  spaceName: string;
+  /** The space the board lives in, created for it. */
+  spaceDid: DID;
 
-  /** The board piece, for the shell's `/spaceName/pieceId` route. */
+  /** The board piece, for the shell's `/<space DID>/<pieceId>` route. */
   boardId: string;
 
   /** Seeded topics in creation order. */
@@ -47,7 +48,8 @@ export interface TopicBoardFixture {
 
 export interface SeedTopicBoardOptions {
   apiUrl: URL;
-  spaceName: string;
+
+  /** Owner of the space the board is created in. */
   identity: Identity;
 
   /** How many topics the board carries. */
@@ -248,10 +250,10 @@ export async function topicAt(
 }
 
 /**
- * Create a board in `spaceName` and fill it with `topicCount` topics. The
- * controller that authors the board is disposed before this returns, so the
- * seeded space is left to whatever reads it next with no connection of ours
- * still open.
+ * Create a space owned by `identity`, create a board in it, and fill the board
+ * with `topicCount` topics. The controller that authors the board is disposed
+ * before this returns, so the seeded space is left to whatever reads it next
+ * with no connection of ours still open.
  */
 export async function seedTopicBoard(
   options: SeedTopicBoardOptions,
@@ -263,9 +265,12 @@ export async function seedTopicBoard(
     bodyWords: options.bodyWords ?? DEFAULT_BODY_WORDS,
   };
 
+  const spaceDid = await createTestSpace(options.identity, {
+    apiUrl: options.apiUrl,
+  });
   const cc = await initializePiecesController({
+    space: spaceDid,
     cfcFlowLabels: "persist",
-    space: options.spaceName,
     apiUrl: options.apiUrl,
     identity: options.identity,
   });
@@ -312,7 +317,7 @@ export async function seedTopicBoard(
     }
 
     return {
-      spaceName: options.spaceName,
+      spaceDid,
       boardId: board.id,
       seedDemand: demand,
       topics,
@@ -325,7 +330,6 @@ export async function seedTopicBoard(
 
 export interface SeedTopicBoardOutOfProcessOptions {
   apiUrl: URL;
-  spaceName: string;
 
   /** Passphrase the child derives the seeding identity from. */
   passphrase: string;
@@ -374,7 +378,6 @@ export async function seedTopicBoardOutOfProcess(
         "-A",
         script,
         `--api-url=${options.apiUrl.href}`,
-        `--space=${options.spaceName}`,
         `--passphrase=${options.passphrase}`,
         `--topics=${options.topicCount}`,
         `--demand=${options.demand ?? "index"}`,

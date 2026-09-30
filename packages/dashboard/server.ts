@@ -25,6 +25,7 @@
  *                                     organization-users tile
  */
 
+import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { TILES } from "./registry.ts";
@@ -652,7 +653,7 @@ const pages = livePages(routes);
 // interval elapses (and collection latency pushes that to the tick after that), so
 // the real cadence for the fastest tile is its interval plus a tick, not the bare
 // interval.
-const REFRESH_MS = Math.min(...TILES.map((t) => t.intervalMs)) + TICK_MS;
+const REFRESH_MS = minOf(TILES.map((t) => t.intervalMs)) + TICK_MS;
 
 export function page(currentViews: ReadonlyMap<string, TileView> = views): string {
   const update = dashboardUpdate(currentViews);

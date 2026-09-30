@@ -1,5 +1,10 @@
 import { debugStr } from "@commonfabric/data-model";
-import { env, Page, waitForCondition } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -15,7 +20,7 @@ import {
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("cfc spec gallery integration test", () => {
   const shell = new ShellIntegration();
@@ -29,7 +34,7 @@ describe("cfc spec gallery integration test", () => {
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
     cc = await initializePiecesController({
-      space: SPACE_NAME,
+      space: await createTestSpace(identity),
       apiUrl: new URL(API_URL),
       identity,
       cfcFlowLabels: "persist",
@@ -68,7 +73,7 @@ describe("cfc spec gallery integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,
@@ -144,7 +149,7 @@ describe("cfc spec gallery integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,
@@ -170,7 +175,7 @@ describe("cfc spec gallery integration test", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: {
-        spaceName: SPACE_NAME,
+        spaceDid: cc.getSpace(),
         pieceId: piece.id,
       },
       identity,

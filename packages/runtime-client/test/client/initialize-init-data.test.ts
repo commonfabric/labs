@@ -102,17 +102,12 @@ describe("initialize-init-data", () => {
       // behind: the client keeps them and the worker is sent none.
 
       const identity = await Identity.fromPassphrase("init-data forwarding");
-      const spaceIdentity = await Identity.fromPassphrase(
-        "init-data forwarding space",
-      );
       const transport = new CapturingTransport();
       const options = {
         apiUrl: new URL("http://toolshed.test"),
         spaceHostMap: { "did:key:zSpace": "https://shard.test" },
         identity,
-        spaceIdentity,
         spaceDid: identity.did(),
-        spaceName: "forwarding-space",
         experimental: { modernCellRep: true, agentBuiltin: false },
         cfcEnforcementMode: "enforce-strict",
         cfcFlowLabels: "persist",
@@ -143,12 +138,11 @@ describe("initialize-init-data", () => {
       );
       expect(init).toBeDefined();
       const data = (init as { data: { data: InitializationData } }).data.data;
-      // The three fields initialization transforms are compared against what
-      // it makes of them; the rest against the option they came from.
-      const { identity: sent, spaceIdentity: sentSpace, ...carried } = data;
+      // The two fields initialization transforms are compared against what it
+      // makes of them; the rest against the option they came from.
+      const { identity: sent, ...carried } = data;
       const {
         identity: _identity,
-        spaceIdentity: _spaceIdentity,
         apiUrl: _apiUrl,
         iframeOuterFrameUrl: pageSetting,
         ...expected
@@ -158,7 +152,6 @@ describe("initialize-init-data", () => {
         apiUrl: options.apiUrl.toString(),
       });
       expect(sent).toEqual(identity.keyPair);
-      expect(sentSpace).toEqual(spaceIdentity.keyPair);
       expect("iframeOuterFrameUrl" in data).toBe(false);
       expect(client.iframeOuterFrameUrl()).toBe(pageSetting);
     });

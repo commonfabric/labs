@@ -133,7 +133,7 @@ async function readsOfColdDiscovery<T>(
     const signer = await Identity.fromPassphrase("cli piece discovery reads");
     const server = newLoopbackServer();
     closers.push(() => server.close());
-    const spaceName = "discovery-reads-" + crypto.randomUUID();
+    const spaceDid = (await Identity.generate()).did();
 
     const writerStorage = EmulatedStorageManager.connectTo(server, {
       as: signer,
@@ -145,7 +145,7 @@ async function readsOfColdDiscovery<T>(
     });
     closers.push(() => writerRuntime.dispose());
     const writerPieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid }),
       writerRuntime,
     );
 
@@ -159,7 +159,7 @@ async function readsOfColdDiscovery<T>(
     });
     closers.push(() => readerRuntime.dispose());
     const readerPieces = new PiecesController(
-      await createSession({ identity: signer, spaceName }),
+      createSession({ identity: signer, spaceDid }),
       readerRuntime,
     );
 

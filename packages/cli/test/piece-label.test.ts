@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { valueEqual } from "@commonfabric/data-model";
+import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 import { type Cell, Runtime } from "@commonfabric/runner";
-import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
+import {
+  cfcDeclaredLabelViewForWriteTargetWithStatus,
+  cfcLabelViewForCell,
+  readStoredCfcMetadata,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   getCellCfcLabel,
@@ -290,6 +294,135 @@ describe("cf piece CFC labels", () => {
       }).applyCfcSchemaToExistingValue()
     ).toThrow("absent value");
     tx.abort();
+  });
+
+  it("labels an acquired link slot without inheriting its observation class", async () => {
+    const linked = runtime.getCell<string>(
+      signer.did(),
+      "cf-piece-label-acquired-target",
+      { type: "string" },
+    );
+    const carrier = runtime.getCell<{ ref: FabricValue }>(
+      signer.did(),
+      "cf-piece-label-acquired-carrier",
+    );
+    const seed = runtime.edit();
+    linked.withTx(seed).set("linked value");
+    carrier.withTx(seed).set({ ref: linked.getAsLink() });
+    runtime.prepareTxForCommit(seed);
+    expect((await seed.commit()).error).toBeUndefined();
+    await carrier.pull();
+
+    const acquired = carrier.key("ref").getRaw();
+    const forward = runtime.edit();
+    root.withTx(forward).key("body").setRawUntyped(acquired);
+    runtime.prepareTxForCommit(forward);
+    expect((await forward.commit()).error).toBeUndefined();
+    const stored = () =>
+      readStoredCfcMetadata(
+        runtime.readTx(),
+        root.getAsNormalizedFullLink(),
+      );
+    const acquisition = stored()?.labelMap.entries.find((entry) =>
+      entry.origin === "link" && entry.path.join("/") === "body"
+    );
+    expect(acquisition?.referenceAcquisition).toBe("complete");
+    expect(acquisition?.observes).toBe("followRef");
+    expect(acquisition?.label.integrity?.length).toBeGreaterThan(0);
+    expect(cfcDeclaredLabelViewForWriteTargetWithStatus(root.key("body")))
+      .toEqual({ view: undefined, readFailed: false });
+
+    await setCellCfcLabel(
+      pieceConfig,
+      ["body"],
+      { confidentiality: ["team"], observes: "value" },
+      {},
+      deps as never,
+    );
+    expect(
+      stored()?.labelMap.entries.find((entry) =>
+        entry.origin === "declared" && entry.path.join("/") === "body"
+      ),
+    ).toMatchObject({
+      observes: "value",
+      label: { confidentiality: ["team"] },
+    });
+    expect(
+      stored()?.labelMap.entries.find((entry) =>
+        entry.origin === "link" && entry.path.join("/") === "body"
+      ),
+    ).toEqual(acquisition);
+    expect(root.key("body").getRaw()).toEqual(acquired);
+    expect(linked.getRaw()).toBe("linked value");
+  });
+
+  it("preserves a declared followRef class when rejecting a conflicting update", async () => {
+    await setCellCfcLabel(
+      pieceConfig,
+      ["body"],
+      { confidentiality: ["team"], observes: "followRef" },
+      {},
+      deps as never,
+    );
+    await expect(setCellCfcLabel(
+      pieceConfig,
+      ["body"],
+      { confidentiality: ["team", "legal"], observes: "value" },
+      {},
+      deps as never,
+    )).rejects.toThrow('Cannot set observes to "value"');
+    expect(cfcDeclaredLabelViewForWriteTargetWithStatus(root.key("body")))
+      .toEqual({
+        readFailed: false,
+        view: {
+          version: 1,
+          entries: [{
+            path: [],
+            observes: "followRef",
+            label: { confidentiality: ["team"] },
+          }],
+        },
+      });
+  });
+
+  it("retains observation-class constraints from unmarked legacy labels", async () => {
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, signer.did());
+    seedStoredEnvelope(seed, root.getAsNormalizedFullLink(), {
+      value: { body: "hello" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["body"],
+            observes: "followRef",
+            label: { confidentiality: ["team"] },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit()).error).toBeUndefined();
+    await expect(setCellCfcLabel(
+      pieceConfig,
+      ["body"],
+      { confidentiality: ["team", "legal"], observes: "value" },
+      {},
+      deps as never,
+    )).rejects.toThrow('Cannot set observes to "value"');
+    expect(cfcDeclaredLabelViewForWriteTargetWithStatus(root.key("body")))
+      .toEqual({
+        readFailed: false,
+        view: {
+          version: 1,
+          entries: [{
+            path: [],
+            observes: "followRef",
+            label: { confidentiality: ["team"] },
+          }],
+        },
+      });
   });
 
   it("labels a link slot without moving the label to its target", async () => {
@@ -592,7 +725,7 @@ describe("cf piece CFC labels", () => {
             },
             {
               path: ["body"],
-              origin: "structure",
+              origin: "declared",
               observes: "shape",
               label: { confidentiality: ["team"] },
             },

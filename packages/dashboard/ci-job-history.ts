@@ -5,6 +5,7 @@
  * scripts/ci-gantt.ts.
  */
 
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import {
   type CachedCiGanttJob,
   type CachedCiRun,
@@ -608,7 +609,7 @@ async function fetchWorkflowRuns(
       }
       const response = await requestPage(page);
       const batch = (response.workflow_runs ?? []).map(projectWorkflowRun);
-      runs.push(...batch);
+      for (const run of batch) runs.push(run);
       if (batch.length < 100) break;
     }
     return runs;
@@ -731,7 +732,7 @@ async function fetchJobPage(
       token,
     );
     const batch = response.jobs ?? [];
-    jobs.push(...batch);
+    for (const job of batch) jobs.push(job);
     if (batch.length < JOBS_PER_PAGE) break;
   }
   return jobs;
@@ -781,8 +782,8 @@ async function fetchRunJobs(
     const value = timedJob(job);
     return value ? [value] : [];
   });
-  const start = timed.length ? Math.min(...timed.map((job) => job.start)) : 0;
-  const end = timed.length ? Math.max(...timed.map((job) => job.end)) : 0;
+  const start = timed.length ? minOf(timed.map((job) => job.start)) : 0;
+  const end = timed.length ? maxOf(timed.map((job) => job.end)) : 0;
   return {
     jobs: timed.map((job) => job.timing),
     overallSeconds: start && end > start ? (end - start) / 1_000 : 0,
@@ -891,8 +892,8 @@ export function buildCiJobHistory(
     failedRunCount,
     failedRunTimes,
     stale: samples.length === 0 && failedRunCount > 0,
-    axisStart: axis?.start ?? (times.length ? Math.min(...times) : 0),
-    axisEnd: axis?.end ?? (times.length ? Math.max(...times) : 0),
+    axisStart: axis?.start ?? (times.length ? minOf(times) : 0),
+    axisEnd: axis?.end ?? (times.length ? maxOf(times) : 0),
     overall: overallPoints.length
       ? {
         kind: "overall",

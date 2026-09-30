@@ -64,6 +64,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { openLegacySpace } from "./support/legacy-space.ts";
 
 const signer = await Identity.fromPassphrase("cf-harness assign-slug tool");
 
@@ -145,12 +146,10 @@ describe("assign-slug", () => {
       storageManager,
       fetch: patternFetch,
     });
-    pieces = new PiecesController(
-      await createSession({
-        identity: signer,
-        spaceName: `assign-slug-${crypto.randomUUID()}`,
-      }),
+    pieces = await openLegacySpace(
+      signer,
       runtime,
+      `assign-slug-${crypto.randomUUID()}`,
     );
     await pieces.synced();
   });
@@ -194,9 +193,9 @@ describe("assign-slug", () => {
       storageManager,
     });
     pieces = new PiecesController(
-      await createSession({
+      createSession({
         identity: signer,
-        spaceName: "pending-served-page",
+        spaceDid: await runtime.createSpace(),
       }),
       runtime,
     );
@@ -1302,7 +1301,7 @@ describe("assign-slug", () => {
         `assign-slug-did-${crypto.randomUUID()}`,
       );
       const didPieces = new PiecesController(
-        await createSession({
+        createSession({
           identity: signer,
           spaceDid: spaceIdentity.did(),
         }),
