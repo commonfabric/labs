@@ -33,7 +33,11 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
-import { assertParticipantRung } from "../lib/multi-user-test-runner.ts";
+import {
+  assertParticipantRung,
+  multiUserDescriptorMeta,
+  participantAccess,
+} from "../lib/multi-user-test-runner.ts";
 import type {
   ParticipantInitResult,
   WorkerLifetimeNotice,
@@ -435,6 +439,75 @@ describe(
       expect(failed).toBeGreaterThan(0);
       expect(results[0].error).toContain("Deadlock");
       expect(results[0].error).toContain(`bob awaits "never-announced"`);
+    });
+
+    describe("the shared space's access list", () => {
+      const pattern = () => {};
+
+      it("returns `OWNER` for the first participant's user and `WRITE` for an undeclared one", () => {
+        expect(participantAccess([
+          { name: "alice", user: "alice" },
+          { name: "bob", user: "bob" },
+        ])).toEqual(new Map([["alice", "OWNER"], ["bob", "WRITE"]]));
+      });
+
+      it("returns each level a user's participants declare, `none` included", () => {
+        expect(participantAccess([
+          { name: "alice", user: "alice" },
+          { name: "bob", user: "bob", access: "READ" },
+          { name: "bobAgain", user: "bob" },
+          { name: "carol", user: "carol", access: "none" },
+          { name: "dave", user: "dave", access: "OWNER" },
+        ])).toEqual(
+          new Map([
+            ["alice", "OWNER"],
+            ["bob", "READ"],
+            ["carol", "none"],
+            ["dave", "OWNER"],
+          ]),
+        );
+      });
+
+      it("throws when the first participant's user declares a level other than `OWNER`", () => {
+        expect(() =>
+          participantAccess([
+            { name: "alice", user: "alice" },
+            { name: "aliceAgain", user: "alice", access: "WRITE" },
+          ])
+        ).toThrow("so it cannot declare access `WRITE`");
+      });
+
+      it("throws when two participants of one user declare different levels", () => {
+        expect(() =>
+          participantAccess([
+            { name: "alice", user: "alice" },
+            { name: "bob", user: "bob", access: "READ" },
+            { name: "bobAgain", user: "bob", access: "WRITE" },
+          ])
+        ).toThrow("declare access both `READ` and `WRITE`");
+      });
+
+      it("reads a participant's declared `access` from the descriptor", () => {
+        expect(multiUserDescriptorMeta({
+          participants: {
+            alice: pattern,
+            bob: { pattern, access: "none" },
+          },
+        })).toEqual({
+          participants: [
+            { name: "alice", user: "alice" },
+            { name: "bob", user: "bob", access: "none" },
+          ],
+        });
+      });
+
+      it("throws on a declared `access` that is not a level", () => {
+        expect(() =>
+          multiUserDescriptorMeta({
+            participants: { bob: { pattern, access: "ADMIN" } },
+          })
+        ).toThrow('Participant `bob` declares access `"ADMIN"`');
+      });
     });
   },
 );

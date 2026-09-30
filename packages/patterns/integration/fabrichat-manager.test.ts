@@ -129,11 +129,15 @@ describe("FabriChat manager", () => {
       await result.pull();
       const member = (await Identity.fromPassphrase("chat-manager-member"))
         .did();
-      const send = async (status: string, requestId = "create-1") => {
+      const send = async (
+        status: string,
+        requestId = "create-1",
+        members: string[] = [member, member],
+      ) => {
         const event = {
           requestId,
           title: "A private group",
-          members: [member, member],
+          members,
           provenance: {
             origin: "dom",
             trusted: true,
@@ -179,6 +183,9 @@ describe("FabriChat manager", () => {
       await runtime.idle();
       await result.pull();
       await send("refused", "without-profile");
+      await send("refused", "invalid-member", ["did:"]);
+      expect(result.key("rooms").get()).toHaveLength(0);
+      expect(result.key("outgoingNotices").get()).toHaveLength(0);
       await send("done");
       expect(result.key("requests").key("create-1").key("status").get()).toBe(
         "done",

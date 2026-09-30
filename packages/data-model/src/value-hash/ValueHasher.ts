@@ -519,6 +519,11 @@ export class ValueHasher {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Computes the hash of a value without consulting or populating any cache.
    */

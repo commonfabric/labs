@@ -1789,13 +1789,17 @@ export async function dispatchQueuedEvent(state: {
     }
     const actionId = state.getActionId(action);
 
-    // Re-queue this event for an immediate re-run. This is the inSpace-name
-    // resolution path (RetryImmediately): the run referenced a pattern space by
-    // name that has now been resolved, so re-running resolves it synchronously from
-    // the cache. No count guards this loop — name resolution is monotonic (each
+    // Re-queue this event for an immediate re-run (RetryImmediately). On the
+    // inSpace-name resolution path the run referenced a pattern space by name
+    // that has now been resolved, so re-running resolves it synchronously from
+    // the cache. On the access-list path the run's access-list commit
+    // conflicted, and the re-run stages its change against the list as it now
+    // stands. No count guards this loop. Name resolution is monotonic (each
     // re-run resolves at least one previously-unresolved name, and a resolved name
     // never becomes pending again), so a handler with finitely many distinct
-    // inSpace names terminates. Dispatch released the lineage registration above,
+    // inSpace names terminates; an access-list re-run repeats only when another
+    // writer changed the same list in between, and a change it makes itself is
+    // a no-op on the re-run. Dispatch released the lineage registration above,
     // so the fresh QueuedEvent must be re-recorded: otherwise an origin that fails
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
@@ -1974,9 +1978,9 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
       // A RetryImmediately signal means the handler referenced an inSpace("name")
-      // target that has now been resolved into the runtime cache. Abort this run's
-      // transaction and re-queue the event so the handler re-runs and resolves the
-      // name synchronously.
+      // target that has now been resolved into the runtime cache, or that its
+      // access-list commit conflicted. Abort this run's transaction and re-queue
+      // the event so the handler re-runs.
       if (error instanceof RetryImmediately) {
         if (tx.status().status === "ready") {
           tx.abort(error);
@@ -1985,12 +1989,13 @@ export async function dispatchQueuedEvent(state: {
           requeueForNameResolution();
         } else {
           // An unserved retries:false event is a one-shot; it does not re-run to
-          // resolve names. Served events take the same-wave arm above because
-          // the server, not a later client speculation, owns their result.
+          // resolve names or after an access-list conflict. Served events take
+          // the same-wave arm above because the server, not a later client
+          // speculation, owns their result.
           logger.warn(
             "scheduler",
-            "Event handler needed inSpace-name resolution but opted out of " +
-              "retry (retries: false); dropping",
+            "Event handler needed a re-run but opted out of retry " +
+              "(retries: false); dropping",
             { handlerId },
           );
           runFinalCommitCallback();

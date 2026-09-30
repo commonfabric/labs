@@ -159,7 +159,8 @@
       "./tasks/lint-debug-str.ts",
       "./tasks/lint-import-list.ts",
       "./tasks/lint-inline-imports.ts",
-      "./tasks/lint-self-import.ts"
+      "./tasks/lint-self-import.ts",
+      "./tasks/lint-spread-arguments.ts"
     ]
   },
   "fmt": {

@@ -3319,6 +3319,25 @@ export type WishTag = `/${string}` | `#${string}`;
 export type DID = `did:${string}`;
 
 /**
+ * Returns whether `value` is a DID in the syntax of the W3C DID Core
+ * specification, at most 256 characters long: `did:`, a lowercase method name,
+ * a colon, and a method-specific identifier of letters, digits, `.`, `-`, `_`,
+ * percent-escapes and inner `:` separators. Whitespace, other punctuation, a
+ * capitalized prefix and a trailing `:` all fail it.
+ *
+ * Ask it of a DID read from data before showing that DID to a person or
+ * treating it as the principal a record names, so that no other spelling of
+ * a DID passes for it. It checks syntax alone: a DID that passes names no one
+ * in particular, and says nothing about who wrote it.
+ *
+ * The runtime decides DID syntax with this same predicate. It reads nothing but
+ * its argument, so it can be called anywhere: in a handler, a `computed()` or a
+ * `lift()`, and in a pattern body, where a call on a reactive value is lifted
+ * like a call to any other function.
+ */
+export declare function isWellFormedDID(value: unknown): value is DID;
+
+/**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
  * Nothing in the event's payload can choose the value.
@@ -3763,13 +3782,28 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
+ *
+ * The shared space is born with an access list. The first participant's user
+ * is its OWNER, and every other user holds the level its participants declare
+ * with `{ pattern, access }`, or `"WRITE"` when none declares one; `"none"`
+ * leaves the user out of the list. It is what `spaceAccess()` reads. The
+ * storage server does not enforce it: a participant reads and writes the space
+ * whatever its level.
+ *
+ * The run fails before any participant starts when a participant of the first
+ * participant's user declares a level other than `"OWNER"`, or when two
+ * participants of one user declare different levels.
  */
 export interface MultiUserTestDescriptor {
   setup?: (...args: never[]) => unknown;
   participants: Record<
     string,
     | ((...args: never[]) => unknown)
-    | { pattern: (...args: never[]) => unknown; user?: string }
+    | {
+      pattern: (...args: never[]) => unknown;
+      user?: string;
+      access?: SpaceAccessLevel;
+    }
   >;
 }
 
@@ -3904,6 +3938,67 @@ export type SpaceAccessFunction = (
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;
+
+/** The level `grantSpaceAccess()` sets an access-list entry to. */
+export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
+
+/**
+ * Sets `principal`'s entry in the access list of the space `target`'s value
+ * lives in to exactly `level`, raising or lowering it. Granting a level the
+ * principal already holds changes nothing, so a handler run again for the same
+ * event converges.
+ *
+ * A grant exposes to `principal` everything the space already holds, not only
+ * what is written after it, since adding a member changes no value's label.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture: a person's action on a rendered UI.
+ * `principal` must be a DID other than the actor's own, the space's own, and
+ * `"*"`. The space may not be the actor's own Home space. Lowering the space's
+ * last concrete `OWNER` is refused. A runtime
+ * cannot know the deployment's service DIDs, or the identities its serving
+ * runtimes act through, so it does not refuse one of those as `principal`.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * these helpers' ordinary ACL commits do not carry served actor authorization.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function grantSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+  level: SpaceGrantLevel,
+): void;
+
+/**
+ * Removes `principal`'s entry from the access list of the space `target`'s
+ * value lives in. Revoking an entry that is not there changes nothing, so a
+ * handler run again for the same event converges. A principal the list's
+ * `"*"` entry covers keeps what that entry grants.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Revoking the space's last concrete `OWNER` is
+ * refused.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * these helpers' ordinary ACL commits do not carry served actor authorization.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function revokeSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+): void;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

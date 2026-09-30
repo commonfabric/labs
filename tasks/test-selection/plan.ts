@@ -10,6 +10,7 @@
  */
 
 import { testIdentityKey } from "@commonfabric/test-support/records";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   FILL_DENSITY_SHARE,
   FILL_EXPLORATION_SHARE,
@@ -535,7 +536,9 @@ export function foldWholeUnits(
       entries.push(entry);
       continue;
     }
-    grouped.set(unit, [...grouped.get(unit) ?? [], entry]);
+    const group = grouped.get(unit);
+    if (group === undefined) grouped.set(unit, [entry]);
+    else group.push(entry);
   }
   const members = new Map<string, ManifestEntry[]>();
   const standsFor = new Map<string, string>();
@@ -551,8 +554,8 @@ export function foldWholeUnits(
     const caught = latest(group.map((entry) => entry.inputs.lastCatch));
     const inputs: ScoreInputs = {
       catches: group.reduce((total, entry) => total + entry.inputs.catches, 0),
-      sources: Math.max(...group.map((entry) => entry.inputs.sources)),
-      churn: Math.max(...group.map((entry) => entry.inputs.churn)),
+      sources: maxOf(group.map((entry) => entry.inputs.sources)),
+      churn: maxOf(group.map((entry) => entry.inputs.churn)),
       ...(caught === undefined ? {} : { lastCatch: caught }),
     };
     // The unit last ran when its stalest test did, and never where one of
@@ -572,8 +575,8 @@ export function foldWholeUnits(
       cost: group.reduce((total, member) => total + member.cost, 0),
       score: value(inputs, today),
       inputs,
-      flakeRate: Math.max(...group.map((member) => member.flakeRate)),
-      repeats: Math.max(...group.map((member) => member.repeats)),
+      flakeRate: maxOf(group.map((member) => member.flakeRate)),
+      repeats: maxOf(group.map((member) => member.repeats)),
       ...(ran === undefined ? {} : { lastRun: ran }),
     };
     const key = testIdentityKey(entry.test);
@@ -1788,12 +1791,11 @@ function cheaperOf(
   const found = [...costliestFirst(bySuite.get(suite) ?? [], cheaper.outside)];
   for (const [unit, run] of opened.lane.unitTime.get(suite) ?? []) {
     if (unit === entry.unit) continue;
-    found.push(
-      ...costliestFirst(
-        byUnit.get(openedUnit({ suite, unit })) ?? [],
-        cheaper.within(run),
-      ),
+    const inUnit = costliestFirst(
+      byUnit.get(openedUnit({ suite, unit })) ?? [],
+      cheaper.within(run),
     );
+    for (const candidate of inUnit) found.push(candidate);
   }
   return found;
 }

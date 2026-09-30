@@ -46,6 +46,12 @@ find the same room.
 
 ## Atomic membership changes
 
+[`grantSpaceAccess()` and `revokeSpaceAccess()`](space-access-changes.md)
+provide client-side OWNER administration with separate ACL and data commits.
+FabriChat uses `setSpaceMembers()` because departure can remove the actor and
+because room membership records must commit together with the ACL. Its durable
+creation continuation also runs without forwarding the initial trusted gesture.
+
 `setSpaceMembers(after, target?)` is a handler-only operation. It stages the
 complete replacement access list together with the handler's ordinary writes.
 The host validates the actor, the previous ACL, and the replacement. An OWNER

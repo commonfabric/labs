@@ -47,6 +47,7 @@ import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
+  ACLManager,
   ConsoleMethod,
   experimentalOptionsFromEnv,
   parseLink,
@@ -453,6 +454,10 @@ export interface TestRunnerOptions {
    * The caller OWNS the lifecycle: the runner will not close this storage
    * manager, because a callee must not tear down a resource its caller is
    * still using — the snapshot happens after the run returns.
+   *
+   * The run writes into the store as it would into its own: the program's
+   * closure, the space's access list when the store holds none, and whatever
+   * the test pattern writes.
    *
    * The RUNTIME is still torn down (`dispose({ closeStorage: false })`), which
    * is what makes reading the store afterwards a statement about the state the
@@ -1432,6 +1437,15 @@ export async function runTestPattern(
         `Test pattern must export a pattern function as default, got ${typeof testPatternFactory}`,
       );
     }
+
+    // The test's space is its identity's home space, and gets the access
+    // list a home space is born with: that identity as its only OWNER. It is
+    // the list `spaceAccess()` reads. A caller-supplied store that already
+    // holds a list keeps it.
+    await withPhase(["runTestPattern", "accessList"], async () => {
+      const acl = new ACLManager(runtime, space);
+      if (await acl.get() === null) await acl.set(space, "OWNER");
+    });
 
     // 3. Set up defaultPattern so wish({ query: "#default" }) resolves.
     // In production, default-app.tsx provides this. The test harness must

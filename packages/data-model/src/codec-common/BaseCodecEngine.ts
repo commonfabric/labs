@@ -238,4 +238,9 @@ export abstract class BaseCodecEngine<
       return act.settleThrown(e);
     }
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

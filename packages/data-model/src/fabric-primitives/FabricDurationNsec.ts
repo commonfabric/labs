@@ -66,6 +66,7 @@ export class FabricDurationNsec extends BaseFabricPrimitive
   //
 
   static {
+    Object.freeze(this);
     Object.freeze(this.prototype);
   }
 

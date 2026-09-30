@@ -503,10 +503,12 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`); client emission (`ACLManager` in
-`packages/runner/src/acl-manager.ts`, which satisfies the rule by addressing
-the whole document at path `[]` — a write through the ordinary value surface
-decomposes into per-key `op: "patch"` details and is refused).
+`packages/memory/v2/server.ts`); client emission (`writeAcl()` in
+`packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
+`grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
+satisfies the rule by addressing the whole document at path `[]` — a write
+through the ordinary value surface decomposes into per-key `op: "patch"`
+details and is refused).
 
 Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce

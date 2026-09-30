@@ -267,4 +267,9 @@ export class RealmDecodeAct
   get marker(): RealmFormatMarker | undefined {
     return this.#marker;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

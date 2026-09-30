@@ -5,7 +5,8 @@ import { type ACL, aclDocId, isACL } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { topFrame } from "./frame-context.ts";
 import { stageAclChange } from "../storage/acl-change.ts";
-import { isCell } from "../cell.ts";
+import { validateStoredAcl } from "../acl-manager.ts";
+import { spaceOfTarget } from "./space-access.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
 
@@ -39,12 +40,9 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
   if (!frame?.runtime || !frame.tx || !frame.space) {
     throw new Error("`spaceMembers()` requires an active execution.");
   }
-  if (target !== undefined && !isCell(target)) {
-    throw new Error("Membership target must be a cell");
-  }
-  const space = target && isCell(target)
-    ? target.resolveAsCell().getAsNormalizedFullLink().space
-    : frame.space;
+  const space = target === undefined
+    ? frame.space
+    : spaceOfTarget(target, "spaceMembers(target)");
   if (!frame.runtime.servingPosture && frame.frameKind === "lift") {
     if (scopeRank(frame.tx.getNarrowestReadScope()) < scopeRank("user")) {
       frame.tx.resetNarrowestReadScope("user");
@@ -75,9 +73,7 @@ export function spaceMembers(target?: Cell<unknown>): ACL | undefined {
       return undefined;
     }
   }
-  if (value === undefined) return undefined;
-  if (!isACL(value)) throw new Error("The space has an invalid access list.");
-  return value;
+  return validateStoredAcl(value) ?? undefined;
 }
 
 /** Atomically replaces the current space's ACL with the handler's metadata writes. */
@@ -90,9 +86,9 @@ export function setSpaceMembers(after: ACL, target?: Cell<unknown>): void {
   if (!before || !isACL(after)) {
     throw new Error("A membership change requires valid access lists.");
   }
-  const space = target && isCell(target)
-    ? target.resolveAsCell().getAsNormalizedFullLink().space
-    : frame.space;
+  const space = target === undefined
+    ? frame.space
+    : spaceOfTarget(target, "setSpaceMembers(after, target)");
   if (space !== frame.space) {
     frame.tx.enableMultiSpaceWrites?.([space, frame.space]);
   }

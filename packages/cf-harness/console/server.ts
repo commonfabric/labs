@@ -162,6 +162,7 @@ import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
+  type ConsoleHealthProbe,
   type ConsoleHealthRow,
   consoleHealthUrl,
   type ConsoleObservedLaunchHealth,
@@ -171,6 +172,8 @@ import {
   consolePatternIndexHealthProbes,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  consoleVmStore,
 } from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
@@ -1346,17 +1349,41 @@ export const runscWithoutPolicyRefusesTurns = (
 };
 
 /**
+ * The VM row's probe for a console on the direct runsc driver whose runsc
+ * keeps a macOS cfc-vm store, named by `env` as runsc names it, and otherwise
+ * none. None too where the runsc configuration does not resolve, which the
+ * runsc probe reports. `platform` replaces `Deno.build.os`.
+ */
+export const consoleVmHealthProbes = (
+  config: ConsoleConfig,
+  env: Record<string, string | undefined>,
+  options: { platform?: string } = {},
+): ConsoleHealthProbe[] => {
+  if (config.sandboxRuntimeKind !== "runsc") return [];
+  let rootfs: string;
+  try {
+    rootfs = resolveConsoleRunscConfig(config).rootfs;
+  } catch {
+    return [];
+  }
+  const store = consoleVmStore(rootfs, env, options);
+  return store === undefined ? [] : [consoleVmHealthProbe(store)];
+};
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. `readDockerRuntimes`
- * replaces the Docker driver's `docker info` reading.
+ * its turns resolve from the options each is built with. On macOS it also
+ * asks the VM that driver runs in, from the store `env` names. `env` is the
+ * process's environment unless given, since that is the one runsc runs with.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
   modelOptions?: CreateHarnessPromptLoopOptions,
-  env?: Record<string, string | undefined>,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
 ): ConsoleHealth =>
@@ -1367,6 +1394,7 @@ export const createConsoleHealth = (
         consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
+    ...consoleVmHealthProbes(config, env),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,

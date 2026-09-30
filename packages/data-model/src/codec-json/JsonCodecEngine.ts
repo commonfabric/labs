@@ -109,6 +109,11 @@ export class JsonCodecEngine extends BaseCodecEngine<JsonCodecValue, string> {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Registry for the throwaway checks in the testing helpers below: this
    * format's primitive determination, plus the two classes the format uses to

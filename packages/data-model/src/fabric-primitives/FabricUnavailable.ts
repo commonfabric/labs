@@ -282,6 +282,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
   //
 
   static {
+    Object.freeze(this);
     Object.freeze(this.prototype);
   }
 

@@ -17,6 +17,7 @@ import {
   FabricEpochNsec,
   getEntityId,
   handler,
+  isWellFormedDID,
   lift,
   NAME,
   pattern,
@@ -887,7 +888,7 @@ function writeAdd(
   if (
     !key || !hasMembership(state) ||
     acl?.[currentPrincipal() ?? ""] !== "OWNER" ||
-    !event.principal.startsWith("did:") ||
+    !isWellFormedDID(event.principal) ||
     !["WRITE", "OWNER"].includes(event.access) ||
     state.memory.key("left").key(event.principal).get()
   ) return;

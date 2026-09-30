@@ -3,6 +3,7 @@ import type {
   AssertRenderPartsFunction,
   Cell,
   CellScope,
+  DID,
   FabricExecValue,
   FactoryInput,
   HFunction,
@@ -14,6 +15,7 @@ import type {
   Reactive,
   schema as schemaFunction,
   SELF as SELFSymbol,
+  SpaceGrantLevel,
 } from "@commonfabric/api";
 // The declared surface this file checks against is `typeof` this whole
 // module, which only a namespace import can name, and a namespace import
@@ -346,6 +348,12 @@ export type Frame = {
    */
   eventKey?: string;
 
+  /**
+   * Whether the event that opened this handler frame is a trusted gesture, as
+   * `isTrustedGesture()` decides. Only present on handler frames.
+   */
+  trustedGesture?: boolean;
+
   unsafe_binding?: UnsafeBinding;
 
   /**
@@ -369,6 +377,30 @@ export type Frame = {
 
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;
+
+  /**
+   * The access-list changes `grantSpaceAccess()` and `revokeSpaceAccess()`
+   * staged during this handler frame, by space, each space's in call order.
+   * The runner commits each space's changes as a commit of its own before the
+   * handler's transaction commits (see `commitSpaceAccessChanges()`).
+   */
+  pendingSpaceAccessChanges?: Map<MemorySpace, SpaceAccessChange[]>;
+};
+
+/**
+ * One access-list change a handler staged: `principal`'s entry set to
+ * `level`, or removed when `level` is `undefined`. `actor` is the principal
+ * the handler acted for, who must hold `OWNER` in the space.
+ */
+export type SpaceAccessChange = {
+  /** The principal whose entry changes. */
+  readonly principal: DID;
+
+  /** The level the entry is set to, or `undefined` to remove it. */
+  readonly level: SpaceGrantLevel | undefined;
+
+  /** The principal the handler acted for. */
+  readonly actor: DID;
 };
 
 /**

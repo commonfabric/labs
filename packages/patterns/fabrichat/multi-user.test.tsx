@@ -24,6 +24,7 @@ import { clickButton, hasText } from "../test/vnode-helpers.ts";
 interface Setup {
   room: ChatRoomOutput;
   initialize: Stream<void>;
+  initializeProfile: Stream<void>;
 }
 
 export const setup = pattern<Record<string, never>, Setup>(() => {
@@ -45,6 +46,7 @@ export const setup = pattern<Record<string, never>, Setup>(() => {
   const memory = new Writable<StoredMemory>();
   return {
     initialize,
+    initializeProfile: action(() => profile.set({ name: "Reader" })),
     room: FabriChatRoom({ about, memory, myProfile: profile }),
   };
 });
@@ -72,8 +74,10 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { render: setup.room[UI] },
       { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
       { assertion: assert(() => hasText(setup.room[UI], "Edit")) },
+      { assertion: assert(() => setup.room.canSend) },
       { label: "alice-sent" },
       { await: "bob-read" },
+      { await: "reader-read" },
       { render: setup.room[UI] },
       {
         assertion: assert(() =>
@@ -86,11 +90,13 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
   [TESTS]: [
+    { action: setup.initializeProfile },
     { await: "alice-sent" },
     { assertion: assert(() => setup.room.messages.count === 1) },
     { render: setup.room[UI] },
     { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
     { assertion: assert(() => !hasText(setup.room[UI], "Edit")) },
+    { assertion: assert(() => setup.room.canSend) },
     { action: action(() => clickButton(setup.room[UI], "Reply")) },
     { render: setup.room[UI] },
     {
@@ -100,4 +106,26 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
   ],
 }));
 
-export default multiUserTest({ setup, participants: { alice, bob } });
+export const reader = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { action: setup.initializeProfile },
+    { await: "alice-sent" },
+    { render: setup.room[UI] },
+    { assertion: assert(() => hasText(setup.room[UI], "Hello from Alice")) },
+    { assertion: assert(() => !setup.room.canSend) },
+    {
+      assertion: assert(() =>
+        hasText(
+          setup.room[UI],
+          "A profile and write access are required to send.",
+        )
+      ),
+    },
+    { label: "reader-read" },
+  ],
+}));
+
+export default multiUserTest({
+  setup,
+  participants: { alice, bob, reader: { pattern: reader, access: "READ" } },
+});

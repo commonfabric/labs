@@ -10,6 +10,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
+  isTrustedGesture,
   markRendererTrustedEvent,
   recordTrustedEventPolicyInputs,
   trustedEventMatchesUiContract,
@@ -62,6 +63,16 @@ const rendererEvent = <T extends Record<string, unknown>>(event: T): T => {
 };
 
 describe("CFC UI contract matching", () => {
+  it("requires marked DOM provenance for an access-list gesture", () => {
+    const dom = { provenance: { origin: "dom", trusted: true, ui: {} } };
+    const native = { provenance: { origin: "native", trusted: true, ui: {} } };
+    expect(isTrustedGesture(dom)).toBe(false);
+    markRendererTrustedEvent(dom);
+    markRendererTrustedEvent(native);
+    expect(isTrustedGesture(dom)).toBe(true);
+    expect(isTrustedGesture(native)).toBe(false);
+  });
+
   it("terminates across interned recursive schema views", () => {
     const schema = {
       type: "object",

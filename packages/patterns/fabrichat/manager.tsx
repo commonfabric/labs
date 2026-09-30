@@ -9,6 +9,7 @@ import {
   eventKey,
   FabricEpochNsec,
   handler,
+  isWellFormedDID,
   NAME,
   type OpaqueCell,
   pattern,
@@ -208,7 +209,7 @@ function writeOpenDirect(
   }
   const actor = currentPrincipal();
   if (
-    !actor || !event.counterpart?.startsWith("did:") ||
+    !actor || !isWellFormedDID(event.counterpart) ||
     event.counterpart === actor
   ) {
     refuse(event.requestId, "Choose another person's principal.", state);
@@ -284,9 +285,7 @@ function writeCreateGroup(
   if (
     !actor || typeof event.title !== "string" || !event.title.trim() ||
     !Array.isArray(event.members) ||
-    event.members.some((member) =>
-      typeof member !== "string" || !member.startsWith("did:")
-    )
+    event.members.some((member) => !isWellFormedDID(member))
   ) {
     refuse(
       event.requestId,

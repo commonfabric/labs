@@ -145,6 +145,11 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     return result as JsonCodecValue;
   }
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Returns true if the already-encoded codec value `v` can be embedded
    * inside a /quote wrap without inner decoding: primitives, plain
