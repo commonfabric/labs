@@ -2374,7 +2374,10 @@ export const FabriChatRoomCore = pattern<
   };
 });
 
-/** What a room stores. Every field has a default, for a space's own chat. */
+/**
+ * What a room stores. A space's own chat starts with none of these: each has a
+ * default except `creatorProfile`, which such a chat does without.
+ */
 export interface FabriChatRoomInput {
   /**
    * What the room says about itself, written once by whoever creates it. A
