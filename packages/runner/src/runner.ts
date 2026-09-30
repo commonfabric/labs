@@ -10697,7 +10697,8 @@ export class Runner {
       // every id minted in this frame — derives from the durable event id, so
       // retries of the same event reuse the same ids and duplicate handlings
       // collide on the receipt. The fallback covers non-dispatch invocations
-      // (tests calling the handler directly).
+      // (tests calling the handler directly). The frame's event key derives
+      // from this same id, so it is as stable across retries as the cause is.
       const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
       const cause = { ...causalInputs, $event: eventId };
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
