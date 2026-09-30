@@ -20,12 +20,13 @@ function maybeCell(cell: Writable<string> | undefined): Writable<string> | undef
 }
 __cfHardenFn(maybeCell);
 // FIXTURE: handler-nullable-cell-const
-// Verifies: a `const` whose initializer may be nullish gets an optional `.for()`
+// Verifies: a cause for a value that may be nullish goes on an optional `.for()`
 //   const a = state.profile?.resolveAsCell() → state.profile?.resolveAsCell()?.for("a", true)
 //   const b = maybeCell(state.profile)       → maybeCell(state.profile)?.for("b", true)
 //   const c = state.out.resolveAsCell()      → state.out.resolveAsCell().for("c", true)
-// Context: An absent optional cell leaves the initializer `undefined`, and a
-//   plain `.for()` on it throws.
+//   { profile: a }                           → { profile: a?.for(["d", "profile"], true) }
+// Context: An absent optional cell leaves the value `undefined`, and a plain
+//   `.for()` on it throws.
 const record = handler({
     asCell: ["opaque"]
 } as const satisfies __cfHelpers.JSONSchema, {
@@ -45,7 +46,8 @@ const record = handler({
     const a = state.profile?.resolveAsCell()?.for("a", true);
     const b = maybeCell(state.profile)?.for("b", true);
     const c = state.out.resolveAsCell().for("c", true);
-    c.set([a, b]);
+    const d = { profile: a?.for(["d", "profile"], true) };
+    c.set([a, b, d]);
 });
 export default pattern((__cf_pattern_input) => {
     const profile = __cf_pattern_input.key("profile");

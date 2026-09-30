@@ -851,9 +851,9 @@ function createForCall(
 /**
  * Helper for `createForCall()`, which reports whether `expression` may
  * evaluate to `null` or `undefined` when it runs. That is so of an optional
- * chain, and of a call to a plain function whose type admits either one. A
- * call the runtime provides is left out: it returns a cell whatever type the
- * value in that cell has.
+ * chain, and of a variable or a call to a plain function whose type admits
+ * either one. A call the runtime provides is left out: it returns a cell
+ * whatever type the value in that cell has.
  */
 function mayBeNullish(
   expression: ts.Expression,
@@ -864,10 +864,9 @@ function mayBeNullish(
     return true;
   }
 
-  if (
-    !ts.isCallExpression(target) ||
-    detectCallKind(target, context.checker) !== undefined
-  ) {
+  const isPlainCall = ts.isCallExpression(target) &&
+    detectCallKind(target, context.checker) === undefined;
+  if (!isPlainCall && !ts.isIdentifier(target)) {
     return false;
   }
 
