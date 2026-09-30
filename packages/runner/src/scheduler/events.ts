@@ -2288,10 +2288,9 @@ export async function dispatchQueuedEvent(state: {
             message: error.message,
           });
         };
-        // The seal's refusal of a write to the space's access-list document
-        // is deterministic in the same way, so it is sealed as the served
-        // event's error consequence too; the serving loop requeues nothing
-        // for it.
+        // The seal's refusal of a write to the space's ACL document is
+        // deterministic in the same way, so it is sealed as the served event's
+        // error consequence too; the serving loop requeues nothing for it.
         const sealAclDocumentRefusalConsequence = (): void => {
           if (served === undefined || !isAclDocumentWriteRefusal(error)) {
             return;

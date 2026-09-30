@@ -3767,7 +3767,7 @@ export class WavePreconditionError extends Error {
 }
 
 /**
- * A derived commit carries an operation on its space's access-list document.
+ * A derived commit carries an operation on its space's ACL document.
  * No derived producer may write that document, in any memory ACL mode: the
  * derived admission checks the lease and nothing of INV-12's shape or of any
  * user's level (`docs/specs/memory-v2/09-invariants.md`). `operationIndex`
@@ -3777,8 +3777,10 @@ export class WavePreconditionError extends Error {
 export class DerivedAclDocumentWriteError extends ProtocolError {
   readonly #operationIndex: number;
 
-  /** Constructs an instance naming operation `operationIndex` of a commit to
-   * `space`. */
+  /**
+   * Constructs an instance naming operation `operationIndex` of a commit to
+   * `space`.
+   */
   constructor(space: string, operationIndex: number) {
     super(
       `derived-class commit rejected: operation ${operationIndex} writes ` +
@@ -3789,8 +3791,7 @@ export class DerivedAclDocumentWriteError extends ProtocolError {
     this.#operationIndex = operationIndex;
   }
 
-  /** Index into the commit's operations of the first write to the ACL
-   * document. */
+  /** Index into the commit's operations of the first write to the document. */
   get operationIndex(): number {
     return this.#operationIndex;
   }
@@ -5091,9 +5092,9 @@ const applyCommitTransaction = (
           "commit's identity rides its per-write annotations",
       );
     }
-    // No derived commit writes the space's access-list document, in any
-    // memory ACL mode (INV-12). The lease check above has refused a commit
-    // naming no space.
+    // No derived commit writes the space's ACL document, in any memory ACL
+    // mode (INV-12). The lease check above has refused a commit naming no
+    // space.
     const aclSpace = space!;
     const aclOperationIndex = commit.operations.findIndex((operation) =>
       operation.op !== "sqlite" && operation.id === aclDocId(aclSpace)

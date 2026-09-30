@@ -252,12 +252,13 @@ export type TriggerTraceEntry = {
  * durable entry is the truth and the drain delivers it. */
 export const LT1_LATE_SEAL_REFUSED = "lt1-late-seal-refused";
 
-/** The `reason.message` of the seal-destination refusal a served run
- * receives when its transaction writes a space's access-list document
- * (INV-12, `docs/specs/memory-v2/09-invariants.md`). The refusal is
- * deterministic, so the scheduler's event dispatch seals it as the event's
- * error consequence, and the serving loop does not requeue the event for
- * it. */
+/**
+ * The `reason.message` of the seal-destination refusal a served run receives
+ * when its transaction writes a space's ACL document (INV-12,
+ * `docs/specs/memory-v2/09-invariants.md`). The refusal is deterministic, so
+ * the scheduler's event dispatch seals it as the event's error consequence,
+ * and the serving loop does not requeue the event for it.
+ */
 export const ACL_DOCUMENT_WRITE_REFUSED = "acl-document-write-refused";
 
 export type ServedEventFailureOutcome =

@@ -320,11 +320,11 @@ export class EngineWaveCommitSink implements WaveCommitSink {
             },
           });
         }
-        // No foreign batch writes the target space's access-list
-        // document: the delegated admission checks carriage and nothing of
-        // INV-12's shape or of the carried actor's level, so it is refused
-        // here, naming the operation, in every memory ACL mode. The engine
-        // refuses the same write in a derived (home) batch.
+        // No foreign batch writes the target space's ACL document: the
+        // delegated admission checks carriage and nothing of INV-12's shape
+        // or of the carried actor's level, so it is refused here, naming the
+        // operation, in every memory ACL mode. The engine refuses the same
+        // write in a derived (home) batch.
         const aclId = aclDocId(batch.space);
         const aclOperation = batch.operations.findIndex((op) =>
           op.op !== "sqlite" && op.id === aclId

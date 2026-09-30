@@ -540,7 +540,7 @@ export interface WaveSpaceCommit {
 
 /**
  * Whether `error` is the seal's refusal of a transaction that writes a space's
- * access-list document, carried as the `reason` Error's message, the sentinel
+ * ACL document, carried as the `reason` Error's message, the sentinel
  * `ACL_DOCUMENT_WRITE_REFUSED`.
  */
 export function isAclDocumentWriteRefusal(
@@ -568,8 +568,10 @@ export interface WaveCommitRejection {
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
 
-  /** Operation index for a deterministic `RowLabelCommitError` or
-   * `AclDocumentWriteRefused`. */
+  /**
+   * Operation index for a deterministic `RowLabelCommitError` or
+   * `AclDocumentWriteRefused`.
+   */
   failedOperation?: number;
 }
 
@@ -1562,11 +1564,11 @@ export class WaveAccumulator
         },
       };
     }
-    // No run on the served plane writes a space's access-list document,
-    // home or foreign, in any memory ACL mode: nothing here checks INV-12's
-    // shape or the acting user's level, and the engine-direct commit skips
-    // the memory server's check (09-invariants.md, INV-12). Refusing at the
-    // seal fails only this run, whose entry then carries the error.
+    // No run on the served plane writes a space's ACL document, home or
+    // foreign, in any memory ACL mode: nothing here checks INV-12's shape or
+    // the acting user's level, and the engine-direct commit skips the memory
+    // server's check (09-invariants.md, INV-12). Refusing at the seal fails
+    // only this run, whose entry then carries the error.
     const aclId = aclDocId(space);
     if (native.operations.some((operation) => operation.id === aclId)) {
       const actionId = assembly.context?.actionId;
