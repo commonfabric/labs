@@ -255,6 +255,7 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const served = [
       join(patterns, "counter", "counter.tsx"),
       join(patterns, "counter", "counter.test.tsx"),
+      // These four tests are attached by Loom's shared-loom-runtime.ts publicationRoot().
       join(patterns, "loom", "main.test.tsx"),
       join(patterns, "loom", "presentation-refusals.test.tsx"),
       join(patterns, "loom", "multi-user.test.tsx"),

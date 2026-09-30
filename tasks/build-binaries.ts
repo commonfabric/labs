@@ -285,8 +285,8 @@ export class BuildConfig {
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
    * compatibility baselines, Deno unit tests, and iframe guest sources.
-   * Authored `.test.tsx` patterns remain available to resolve a program's
-   * attached tests. Excluding development-only files also keeps their npm
+   * Authored `.test.tsx` pattern tests are served because a program can attach
+   * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
    */
   excludePaths(binary: BinaryName): string[] {
