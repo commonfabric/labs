@@ -433,8 +433,12 @@ An attached source root is part of that identity even when the entry does not
 import it. The request includes one `sourceRoot` query parameter per attached
 root, naming its canonical path relative to `/api/patterns/`. The route walks
 each root's import closure as well as the entry's. Root order and duplicates do
-not change the identity or its ETag. Missing roots or imports refuse the request;
-paths outside the patterns route and noncanonical path spellings return 400.
+not change the identity or its ETag. Requests accept at most sixteen `sourceRoot`
+parameters, counting duplicates, and return 400 above that limit before reading
+files. Missing root or imported files return 404; an incomplete closure detected
+by identity validation returns 400. Paths outside the patterns route and
+noncanonical path spellings return 400. Closure validation builds one import
+graph shared by the entry and attached roots.
 
 Two implementation facts make the light identity equal what the worker stores as
 `patternIdentity`, verified by a parity test against the real `default-app.tsx`
@@ -475,10 +479,13 @@ then start it:
    `mappedHostFor(space) ?? apiUrl`; the ref is host-relative, so the request is
    same-origin by construction.
 2. `currentId` = a revalidating `GET {host}{url}?identity` for this attempt
-   (`fetch` cache mode `no-cache`), with `sourceRoot` parameters taken from the
-   running pattern's verified stored source program. Those roots must be named
-   under `/api/patterns/`. If the stored source is unavailable, the existing
-   recovery path resolves the entry alone and records the displaced identity.
+   (`fetch` cache mode `no-cache`), initially without attached roots. If it
+   matches the running identity, skip loading the stored source program: attached
+   roots would give that program a different identity. On a mismatch, load the
+   running pattern's verified stored source program. If it carries roots, repeat
+   the identity request with their `sourceRoot` parameters. Those roots must use
+   canonical names under `/api/patterns/`. If the stored source is unavailable,
+   the recovery path resolves the entry alone and records the displaced identity.
    A matching `ETag` may reuse the cached body
    after a `304`; the browser may not replay it without validation. An HTTP
    failure, empty response, or exception performs no metadata write; the

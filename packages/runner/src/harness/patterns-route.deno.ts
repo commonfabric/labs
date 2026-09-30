@@ -32,7 +32,10 @@ import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { decode } from "@commonfabric/utils/encoding";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
-import { PATTERNS_ROUTE_PREFIX } from "../pattern-source-scheme.ts";
+import {
+  isCanonicalPatternRoutePath,
+  PATTERNS_ROUTE_PREFIX,
+} from "../pattern-source-scheme.ts";
 import { resolveEntryIdentity } from "./entry-identity.ts";
 
 /**
@@ -219,15 +222,15 @@ export class PatternsRoute {
 
       if (options.identity) {
         const roots = options.sourceRoots ?? [];
-        for (const root of roots) {
-          // A query parameter is already URL-decoded. Requiring its canonical
-          // route spelling keeps the identity and the later HTTP fetch on the
-          // same file, including across encoded separators and dot segments.
-          if (
-            root.length === 0 || root.includes("..") ||
-            /[%?#:\\]/.test(root) || root.startsWith("/") ||
-            root.split("/").some((part) => part === "." || part === "")
-          ) return invalidPatternPath();
+        // Each caller-selected root set requires a closure walk on a cache
+        // miss. Bound the public request before any file reads or parsing.
+        if (roots.length > 16) {
+          return Response.json({
+            error: "At most 16 source roots may be requested",
+          }, { status: 400 });
+        }
+        if (roots.some((root) => !isCanonicalPatternRoutePath(root))) {
+          return invalidPatternPath();
         }
         const identity = await this.identity(filename, roots);
         return patternResponse(

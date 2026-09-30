@@ -38,6 +38,21 @@ export const PATTERNS_ROUTE_PREFIX = "/api/patterns/";
 // path against the host that actually serves the space.
 const RESOLUTION_BASE = "https://pattern-source.invalid/";
 
+/**
+ * Returns whether a route-relative source root keeps its exact spelling as a
+ * URL pathname and passes the patterns route's file-path checks. The identity
+ * route and worker share this check so the same name reaches both hashers.
+ */
+export function isCanonicalPatternRoutePath(path: string): boolean {
+  if (
+    path.length === 0 || path.includes("..") || /[%?#:\\]/.test(path) ||
+    path.startsWith("/") ||
+    path.split("/").some((part) => part === "." || part === "")
+  ) return false;
+  const pathname = PATTERNS_ROUTE_PREFIX + path;
+  return new URL(pathname, RESOLUTION_BASE).pathname === pathname;
+}
+
 /** The `system:` ref addressing `path` under the patterns route. */
 export function systemPatternSource(path: string): string {
   return SYSTEM_PATTERN_SOURCE_SCHEME + path;

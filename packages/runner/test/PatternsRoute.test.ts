@@ -115,6 +115,37 @@ describe("PatternsRoute", () => {
     );
   });
 
+  it("returns `400` for more than sixteen root parameters before reading files", async () => {
+    const roots = Array.from({ length: 16 }, (_, i) => `root-${i}.ts`);
+    await withRoute(
+      Object.fromEntries([
+        ["main.tsx", ENTRY],
+        ...roots.map((root) => [root, ENTRY]),
+      ]),
+      async (route) => {
+        const query = new URLSearchParams({ identity: "" });
+        for (const root of roots) query.append("sourceRoot", root);
+        expect(
+          (await route.serve(get(`/api/patterns/main.tsx?${query}`)))?.status,
+        ).toBe(200);
+        query.append("sourceRoot", roots[0]);
+        const response = await route.serve(
+          get(`/api/patterns/absent.tsx?${query}`),
+        );
+        expect(response?.status).toBe(400);
+        expect(await response?.json()).toEqual({
+          error: "At most 16 source roots may be requested",
+        });
+        expect(
+          (await route.serveFile("absent.tsx", {
+            identity: true,
+            sourceRoots: [...roots, roots[0]],
+          })).status,
+        ).toBe(400);
+      },
+    );
+  });
+
   it("refuses attached roots that escape or ambiguously name a route file", async () => {
     await withRoute({ "main.tsx": ENTRY }, async (route) => {
       for (
@@ -130,6 +161,10 @@ describe("PatternsRoute", () => {
           "dir\\main.tsx",
           "main.tsx?identity",
           "main.tsx#fragment",
+          "name with spaces.ts",
+          "café.ts",
+          "name..part.ts",
+          "name%20with%20spaces.ts",
         ]
       ) {
         const query = new URLSearchParams({ identity: "", sourceRoot });

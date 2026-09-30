@@ -1,9 +1,13 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
+
 import { Identity } from "@commonfabric/identity";
+
 import {
   getPatternIdentityRef,
+  getPieceReconciliation,
   getPieceSourceRevisions,
   Runtime,
   type RuntimeFetch,
@@ -110,6 +114,55 @@ describe("system source reconciliation with attached roots", () => {
     );
   }
 
+  it("checks an unchanged entry without reading its stored source program", async () => {
+    const source = program("v1");
+    const piece = await preparePiece({ main: MAIN, files: [source.files[0]] });
+    using sourceReads = spy(
+      runtime.patternManager,
+      "getPatternSourceProgramByIdentity",
+    );
+
+    expect(await runtime.sourceReconciler.reconcile(piece)).toBe("current");
+    expect(sourceReads.calls).toHaveLength(0);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.getAll("sourceRoot")).toEqual([]);
+  });
+
+  it("identifies noncanonical attached roots before requesting their identities", async () => {
+    for (
+      const name of [
+        "name%20with%20spaces.ts",
+        "caf%C3%A9.ts",
+        "name:part.ts",
+        "name..part.ts",
+      ]
+    ) {
+      const root = `/api/patterns/${name}`;
+      const source = program("v1");
+      const piece = await preparePiece({
+        main: MAIN,
+        sourceRoots: [root],
+        files: [source.files[0], {
+          name: root,
+          contents: "export const test = true;\n",
+        }],
+      });
+      const original = getPatternIdentityRef(piece)!;
+      requests.length = 0;
+
+      expect(await runtime.sourceReconciler.reconcile(piece)).toBe(
+        "unavailable",
+      );
+      expect(getPatternIdentityRef(piece)).toEqual(original);
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        "not a canonical patterns route path",
+      );
+      expect(
+        requests.every((request) => !request.searchParams.has("sourceRoot")),
+      ).toBe(true);
+    }
+  });
+
   it("keeps the complete source unchanged on first open against the same host version", async () => {
     const piece = await preparePiece();
     const original = getPatternIdentityRef(piece)!;
@@ -120,8 +173,9 @@ describe("system source reconciliation with attached roots", () => {
       TEST,
     ]);
     expect(getPieceSourceRevisions(piece)).toEqual([]);
-    expect(requests).toHaveLength(1);
-    expect(requests[0].searchParams.getAll("sourceRoot")).toEqual([
+    expect(requests).toHaveLength(2);
+    expect(requests[0].searchParams.getAll("sourceRoot")).toEqual([]);
+    expect(requests[1].searchParams.getAll("sourceRoot")).toEqual([
       "example/main.test.tsx",
     ]);
   });
@@ -195,7 +249,7 @@ describe("system source reconciliation with attached roots", () => {
     hostFetch = async (input, init) => {
       const request = new Request(input, init);
       const response = await serving(request);
-      if (new URL(request.url).searchParams.has("identity")) {
+      if (new URL(request.url).searchParams.has("sourceRoot")) {
         await serve(program("v2", "v3"));
       }
       return response;
@@ -221,6 +275,7 @@ describe("system source reconciliation with attached roots", () => {
 
     expect(await runtime.sourceReconciler.reconcile(piece)).toBe("unavailable");
     expect(getPatternIdentityRef(piece)).toEqual(original);
-    expect(requests).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.getAll("sourceRoot")).toEqual([]);
   });
 });
