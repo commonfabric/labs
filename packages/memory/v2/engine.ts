@@ -7069,6 +7069,8 @@ const findConflictSeq = (
   // `using` retains both errors in a `SuppressedError` if the scan and its
   // cleanup fail, rather than replacing the scan error with the cleanup error.
   using cleanup = new DisposableStack();
+  // This guard is needed until the pinned driver resets iterators on early exit:
+  // https://github.com/denodrivers/sqlite3/issues/163
   cleanup.defer(() => {
     if (!exhausted) {
       // `@db/sqlite` 0.13.0 resets an `iter()` statement only on exhaustion,
