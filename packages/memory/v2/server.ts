@@ -867,7 +867,19 @@ class Connection {
   #stableExpressionResultIds = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
+
+  /**
+   * Settles once every frame that names no space, and every frame handed
+   * over before the last of those, has been handled.
+   */
   #receiving: Promise<void> = Promise.resolve();
+
+  /**
+   * Per space, settles once every frame handed over for it so far has been
+   * handled. A space with no frame in flight has no entry.
+   */
+  #receivingBySpace = new Map<string, Promise<void>>();
+
   #pendingReceives = 0;
   #receiveIdle: PromiseWithResolvers<void> | null = null;
 
@@ -1046,17 +1058,17 @@ class Connection {
       return;
     }
     this.#pendingReceives += 1;
-    // A connection handles its frames one at a time, so a frame's cost has
-    // two halves that are fixed at opposite ends of the stack: how long it
-    // WAITED behind the frames already in flight (`memory/frame/queue`), and
-    // how long it took once it started (`memory/frame/handle`). Only the
-    // second is the frame's own work — a queue time that tracks the handle
-    // time of whatever precedes it is head-of-line blocking, and the fix is
-    // to make that other frame cheaper rather than this one.
+    // A connection handles the frames for one space one at a time, so a
+    // frame's cost has two halves that are fixed at opposite ends of the
+    // stack: how long it WAITED behind the frames already in flight
+    // (`memory/frame/queue`), and how long it took once it started
+    // (`memory/frame/handle`). Only the second is the frame's own work — a
+    // queue time that tracks the handle time of whatever precedes it is
+    // head-of-line blocking, and the fix is to make that other frame cheaper
+    // rather than this one.
     const arrivedAt = performance.now();
     try {
-      const previous = this.#receiving;
-      const current = previous.catch(() => undefined).then(async () => {
+      return await this.#enqueueReceive(spaceOfFrame(parsed), async () => {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
@@ -1065,8 +1077,6 @@ class Connection {
           timing.time(startedAt, "memory", "frame", "handle");
         }
       });
-      this.#receiving = current.then(() => undefined, () => undefined);
-      return await current;
     } finally {
       this.#pendingReceives = Math.max(0, this.#pendingReceives - 1);
       if (this.#pendingReceives === 0) {
@@ -1074,6 +1084,41 @@ class Connection {
         this.#receiveIdle = null;
       }
     }
+  }
+
+  /**
+   * Helper for `receive()`, which runs `handle` in the frame's turn. A frame
+   * naming a space takes its turn after the frames handed over before it for
+   * that space, and after every frame naming no space. A frame naming no
+   * space takes its turn after every frame handed over before it. Frames for
+   * different spaces do not wait for each other.
+   */
+  #enqueueReceive(
+    space: string | undefined,
+    handle: () => Promise<void>,
+  ): Promise<void> {
+    if (space === undefined) {
+      const previous = Promise.all([
+        this.#receiving,
+        ...this.#receivingBySpace.values(),
+      ]);
+      // Every frame in flight is behind this one's turn, which the frames
+      // that follow wait for.
+      this.#receivingBySpace.clear();
+      const current = previous.then(handle);
+      this.#receiving = current.then(() => undefined, () => undefined);
+      return current;
+    }
+    const previous = this.#receivingBySpace.get(space) ?? this.#receiving;
+    const current = previous.then(handle);
+    const settled = current.then(() => undefined, () => undefined);
+    this.#receivingBySpace.set(space, settled);
+    void settled.then(() => {
+      if (this.#receivingBySpace.get(space) === settled) {
+        this.#receivingBySpace.delete(space);
+      }
+    });
+    return current;
   }
 
   hasPendingReceives(): boolean {
@@ -1575,6 +1620,15 @@ class Connection {
     this.#server.disconnect(this);
   }
 }
+
+/**
+ * The space whose turn order a frame is handled in, or `undefined` for a
+ * frame that names none: a `hello`, and a frame that could not be read.
+ */
+const spaceOfFrame = (
+  message: ClientMessage | OversizedClientMessage | null,
+): string | undefined =>
+  message !== null && "space" in message ? message.space : undefined;
 
 const isPresenceClientMessage = (
   message: ClientMessage | OversizedClientMessage,
