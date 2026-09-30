@@ -18,13 +18,13 @@ interface ChatRoomPolicy {
   deletionIsObliteration: boolean;
 
   /** How far before the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxAgeNsec: bigint;
+  proposedTimeMaxAgeNsec: FabricDurationNsec;
 
   /** How far after the room's clock a proposed time is accepted, in ns. */
-  proposedTimeMaxLeadNsec: bigint;
+  proposedTimeMaxLeadNsec: FabricDurationNsec;
 
   /** How long an entry stays in `recentActivity`, in ns. */
-  recentActivityWindowNsec: bigint;
+  recentActivityWindowNsec: FabricDurationNsec;
 
   /** The most messages a message window holds. */
   maxWindowCount: number;
@@ -34,7 +34,9 @@ interface ChatRoomPolicy {
 }
 ```
 
-A plain object, with every key present.
+A plain object, with every key present. Each duration is a
+[`FabricDurationNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
+count of nanoseconds, held as a `bigint`.
 
 ## Stated correctly
 

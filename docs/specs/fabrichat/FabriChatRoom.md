@@ -4,10 +4,11 @@
 which states everything a room does: where it lives, its membership, its facts,
 and its streams. This document says how this implementation does it.
 
-`FabriChatRoom` is `packages/patterns/fabrichat/room.tsx`. Its records and
-surfaces are named for the contract rather than for the implementation, because
-they are part of the contract: `ChatMessage`, `ChatReaction`, and the surfaces
-the table under [writers](#writers) names. The sections through
+Its records and surfaces are named for the contract rather than for the
+implementation, because they are part of the contract: `ChatMessage`,
+`ChatReaction`, and the surfaces the table under [writers](#writers) names.
+
+`FabriChatRoom` is `packages/patterns/fabrichat/room.tsx`. The sections through
 [prerequisites](#prerequisites) state the design; [as built](#as-built) states
 where the pattern departs from it, and why.
 
