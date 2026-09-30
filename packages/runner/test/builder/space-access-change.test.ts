@@ -1539,6 +1539,36 @@ describe("space-access-change", () => {
       ).toThrow("requires the handler's event to be a trusted gesture");
     });
 
+    it("throws for a leave the grants and revokes staged before it would leave with no concrete `OWNER`, since those commit first", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+        [carol.did()]: "WRITE",
+      });
+      const target = runtime.getCell(space, "target");
+      expect(() =>
+        inHandler(runtime, runtime.edit(), () => {
+          revokeSpaceAccess(target, bob.did());
+          leaveSpace(target);
+        })
+      ).toThrow("no successor named holds an entry there");
+    });
+
+    it("throws for a revoke that would leave a leave staged before it with no concrete `OWNER`, since the leave commits last", async () => {
+      const { runtime, space } = await owned({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "OWNER",
+        [carol.did()]: "WRITE",
+      });
+      const target = runtime.getCell(space, "target");
+      expect(() =>
+        inHandler(runtime, runtime.edit(), () => {
+          leaveSpace(target);
+          revokeSpaceAccess(target, bob.did());
+        })
+      ).toThrow("no successor named holds an entry there");
+    });
+
     it("stages nothing for a refusal the handler catches", async () => {
       const { runtime, space } = await owned({
         [alice.did()]: "OWNER",

@@ -93,7 +93,8 @@ export function revokeSpaceAccess(target: unknown, principal: unknown): void {
  * the actor's Home space, and that each successor is a DID other than the
  * space's own and the actor's. When this runtime already holds the list, the
  * list's `"*"` entry, the survival of a concrete `OWNER`, and the gesture a
- * promotion needs are checked here as well; {@link commitSpaceLeave} checks
+ * promotion needs are checked here as well, against the list as the grants and
+ * revokes staged for the space leave it, since those commit first; {@link commitSpaceLeave} checks
  * them again against the list it replaces. Whether the actor holds an entry to
  * remove is decided there. Whether the event is a trusted gesture is recorded
  * here, when the handler runs.
@@ -113,8 +114,12 @@ export function leaveSpace(target: unknown, options?: unknown): void {
     successors: successorsOf(call, options, space, actor),
     trustedGesture: frame.trustedGesture === true,
   };
-  const current = knownAcl(runtime, space);
-  if (current !== undefined) applyLeave(space, current, leave);
+  checkStaged(
+    runtime,
+    space,
+    frame.pendingSpaceAccessChanges?.get(space) ?? [],
+    leave,
+  );
   const leaves = frame.pendingSpaceLeaves ??= new Map();
   if (!leaves.has(space)) {
     // The scheduler sets this to the handler's action before a dispatched
@@ -244,7 +249,8 @@ export async function commitSpaceLeave(
  * checks, that the event is a trusted gesture, and that `principal` is a DID
  * other than `"*"`, the space's own and the actor's. When this runtime already
  * holds the list, the actor's `OWNER` and the survival of a concrete `OWNER`
- * are checked here as well, so a refusal throws from the call;
+ * are checked here as well, together with any leave staged for the space,
+ * which commits after the change, so a refusal throws from the call;
  * {@link commitSpaceAccessChanges} checks both again against the list it
  * replaces. A refusal throws before anything is staged, so a handler that
  * catches it has staged nothing for that call. Whether a change leaves the
@@ -279,13 +285,33 @@ function stageChange(
   }
 
   const change: SpaceAccessChange = { principal, level, actor };
-  const staged = frame.pendingSpaceAccessChanges?.get(space) ?? [];
-  const current = knownAcl(runtime, space);
-  if (current !== undefined) applyChanges(space, current, [...staged, change]);
-  (frame.pendingSpaceAccessChanges ??= new Map()).set(space, [
-    ...staged,
+  const changes = [
+    ...(frame.pendingSpaceAccessChanges?.get(space) ?? []),
     change,
-  ]);
+  ];
+  checkStaged(runtime, space, changes, frame.pendingSpaceLeaves?.get(space));
+  (frame.pendingSpaceAccessChanges ??= new Map()).set(space, changes);
+}
+
+/**
+ * Helper for {@link stageChange} and {@link leaveSpace}, which checks what a
+ * handler run has staged for `space` against the list as this runtime holds
+ * it, in the order it commits: `changes`, the grants and revokes, in call
+ * order, and then `leave`, whichever order the calls came in. Checks nothing
+ * when this runtime holds no list.
+ *
+ * @throws Error when {@link applyChanges} or {@link applyLeave} would.
+ */
+function checkStaged(
+  runtime: Runtime,
+  space: MemorySpace,
+  changes: readonly SpaceAccessChange[],
+  leave: SpaceLeave | undefined,
+): void {
+  const current = knownAcl(runtime, space);
+  if (current === undefined) return;
+  const changed = applyChanges(space, current, changes);
+  if (leave !== undefined) applyLeave(space, changed, leave);
 }
 
 /**
@@ -398,7 +424,7 @@ function successorsOf(
 }
 
 /**
- * Helper for {@link stageChange} and {@link commitSpaceAccessChanges}, which
+ * Helper for {@link checkStaged} and {@link commitSpaceAccessChanges}, which
  * returns `current`, the access list of `space`, with `changes` applied in
  * order. `current` is `null` when the space has no list.
  *
@@ -434,7 +460,7 @@ function applyChanges(
 }
 
 /**
- * Helper for {@link leaveSpace} and {@link commitSpaceLeave}, which returns
+ * Helper for {@link checkStaged} and {@link commitSpaceLeave}, which returns
  * `current`, the access list of `space`, less the entry of `leave`'s actor,
  * with the first of its successors holding an entry made `OWNER` when that
  * actor was the last concrete `OWNER`. Returns `undefined` when the list does
@@ -482,11 +508,10 @@ function applyLeave(
 }
 
 /**
- * Helper for {@link stageChange} and {@link leaveSpace}, which returns the
- * access list of `space` as this runtime holds it, or `undefined` when it
- * holds none. The read is outside the handler's transaction, so that
- * committing the change does not make the handler's own commit conflict with
- * it.
+ * Helper for {@link checkStaged}, which returns the access list of `space` as
+ * this runtime holds it, or `undefined` when it holds none. The read is
+ * outside the handler's transaction, so that committing the change does not
+ * make the handler's own commit conflict with it.
  */
 function knownAcl(runtime: Runtime, space: MemorySpace): ACL | undefined {
   const tx = runtime.edit();
