@@ -86,6 +86,7 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
+import { spaceAccess } from "./space-access.ts";
 import type {
   BuilderFunctionsAndConstants,
   ToSchemaFunction,
@@ -298,6 +299,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
 
     // Environment
     getPatternEnvironment,
+
+    // Access
+    spaceAccess,
 
     // Entity utilities
     getEntityId,

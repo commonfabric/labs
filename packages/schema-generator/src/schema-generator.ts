@@ -28,7 +28,10 @@ import {
   scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
-import { UnionFormatter } from "./formatters/union-formatter.ts";
+import {
+  pairUnionMemberNodes,
+  UnionFormatter,
+} from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
@@ -1139,7 +1142,10 @@ export class SchemaGenerator {
   #formatters: TypeFormatter[] = [
     this.#commonFabricFormatter,
     new NativeTypeFormatter(),
-    new UnionFormatter(this),
+    new UnionFormatter(
+      this,
+      (type, node, context) => this.#readsWhole(type, node, context),
+    ),
     new IntersectionFormatter(this),
     // Prefer array detection before primitives to avoid Any-flag misrouting
     new ArrayFormatter(this),
@@ -2289,15 +2295,39 @@ export class SchemaGenerator {
   }
 
   /**
+   * Whether `node`, a union member that stands for the several members of
+   * `type`, is read whole, for all of them (`pairUnionMemberNodes()`): where
+   * it is a CFC alias the CFC formatter reads, whose labels the node alone
+   * can spell. A wrapper, such as `Default<T, V>` or a cell, is not, nor is a
+   * scope wrapper, since each has rules of its own for its place in a union:
+   * §7's for `Default`, and `scope-placement.ts`'s for a scope.
+   */
+  #readsWhole(
+    type: ts.UnionType,
+    node: ts.TypeNode,
+    context: GenerationContext,
+  ): boolean {
+    return this.#commonFabricFormatter.supportsType(type, {
+      ...context,
+      typeNode: node,
+    }) &&
+      detectWrapperViaNode(node, context.typeChecker) === undefined &&
+      resolveScopeWrapperNode(node) === undefined &&
+      scopeOfAliasChain(type, context.typeChecker) === undefined;
+  }
+
+  /**
    * Helper for {@link #narrowedFromLabels}, which returns the labels `type`,
    * spelled by `typeNode` where given, attaches at its top in `context`. A
    * value that may be missing, `T | undefined` or `T | null`, has the labels
    * of `T`, which formatting attaches to that member. A node narrowed from
    * any other union stands for any of its members, so it has the labels
    * formatting attaches to the union joined with those of its members
-   * (`joinMemberIfcLabels()`). A member is spelled by the member of the union
+   * (`joinMemberIfcLabels()`). A member is spelled by the node of the union
    * `typeNode` writes, read through parentheses and aliases
-   * (`readAuthoredTypeNode()`), whose type it is.
+   * (`readAuthoredTypeNode()`), that it is read at
+   * (`pairUnionMemberNodes()`). A member that nodes standing for several
+   * members stand for may be under the labels of any of those nodes.
    */
   #labelsOf(
     type: ts.Type,
@@ -2306,12 +2336,16 @@ export class SchemaGenerator {
   ): Record<string, unknown> | undefined {
     const checker = context.typeChecker;
     const written = typeNode && readAuthoredTypeNode(typeNode, checker);
+    const paired = written && ts.isUnionTypeNode(written) && type.isUnion()
+      ? pairUnionMemberNodes(
+        type.types,
+        written,
+        checker,
+        (union, node) => this.#readsWhole(union, node, context),
+      )
+      : undefined;
     const memberNode = (member: ts.Type) =>
-      written && ts.isUnionTypeNode(written)
-        ? written.types.find((node) =>
-          checker.getTypeFromTypeNode(node) === member
-        )
-        : undefined;
+      type.isUnion() ? paired?.ordered[type.types.indexOf(member)] : undefined;
     const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Null |
       ts.TypeFlags.Void;
     const values = type.isUnion()
@@ -2331,9 +2365,14 @@ export class SchemaGenerator {
     if (values.length < 2) return labels;
     return joinMemberIfcLabels(
       labels ?? {},
-      values.map((member) =>
-        this.#labelsOf(member, memberNode(member), context) ?? {}
-      ),
+      values.flatMap((member) => {
+        const covers = paired?.covering.get(member);
+        return covers
+          ? covers.map(({ node, type }) =>
+            this.#labelsOf(type, node, context) ?? {}
+          )
+          : [this.#labelsOf(member, memberNode(member), context) ?? {}];
+      }),
     );
   }
 

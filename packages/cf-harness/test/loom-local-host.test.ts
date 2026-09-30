@@ -1494,6 +1494,36 @@ Deno.test("local Loom host classifies malformed binding options before configura
   }
 });
 
+Deno.test("local Loom host refuses a dotted flag in a batch as an invalid request, without the value it would have quoted", async () => {
+  const home = await Deno.makeTempDir();
+  try {
+    const io = ioBuffers();
+    const host = await createLoomLocalCfHarnessHost({
+      harnessHome: home,
+      env: { CF_HARNESS_GATEWAY_AUTH_MODE: "none" },
+      providerSettingsStore: providerStore({
+        state: "configured",
+        settings: { version: 1, modelProvider: "openai-compatible-gateway" },
+      }),
+      fetchFn: () => Promise.reject(new Error("must not request")),
+      cliDependencies: { cwd: home, io: io.io },
+    });
+
+    assertEquals(
+      await host.runBatch(["--prompt", "hunter2", "--prompt.x", "y"]),
+      1,
+    );
+    const failure = JSON.parse(io.stderr.join(""));
+    assertEquals(failure.error, {
+      code: "invalid-request",
+      message:
+        "`--prompt.x` is not a flag of the batch CLI. Did you mean `--prompt`?",
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
 Deno.test("local Loom host validates gateway environment and credential-store availability", async () => {
   const home = await Deno.makeTempDir();
   const invalidGatewayIo = ioBuffers();

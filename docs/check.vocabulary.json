@@ -43,6 +43,7 @@
     "navigateTo",
     "pattern",
     "schema",
+    "spaceAccess",
     "sqliteDatabase",
     "str",
     "table",

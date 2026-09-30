@@ -46,6 +46,11 @@ import { debugStr } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
+import {
+  recordUndeclaredFlags,
+  refuseFlagsWithoutValue,
+  refuseUndeclaredFlags,
+} from "../src/cli-flags.ts";
 import type {
   HarnessChatEventEnvelope,
   HarnessChatSessionStatus,
@@ -2008,15 +2013,17 @@ export const main = async (
   log: (line: string) => void = console.log,
   postureReader: typeof preflightPosture = preflightPosture,
 ): Promise<number> => {
+  const valued = [
+    "console",
+    "out",
+    "fabric-api-url",
+    "base",
+    "expect-git-sha",
+    "cell-spec",
+  ] as const;
+  const undeclared: string[] = [];
   const flags = parseArgs([...args], {
-    string: [
-      "console",
-      "out",
-      "fabric-api-url",
-      "base",
-      "expect-git-sha",
-      "cell-spec",
-    ],
+    string: [...valued],
     boolean: ["allow-diverged"],
     default: {
       console: DEFAULT_CONSOLE_URL,
@@ -2024,12 +2031,27 @@ export const main = async (
         DEFAULT_FABRIC_API_URL,
       base: "origin/main",
     },
+    unknown: recordUndeclaredFlags(undeclared),
   });
+  const usage =
+    "usage: measure-batch <suite.json> [--console=URL] [--out=DIR] [--cell-spec=FILE] [--allow-diverged]";
+  // Before the suite is read or anything is asked: a misspelled flag, such as
+  // `--expect-git-sha`, would otherwise go unapplied.
+  try {
+    refuseFlagsWithoutValue(args, valued);
+    refuseUndeclaredFlags(
+      undeclared,
+      [...valued, "allow-diverged"],
+      "`measure-batch`",
+    );
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+    log(usage);
+    return 2;
+  }
   const suitePath = flags._.map(String)[0];
   if (suitePath === undefined) {
-    log(
-      "usage: measure-batch <suite.json> [--console=URL] [--out=DIR] [--cell-spec=FILE] [--allow-diverged]",
-    );
+    log(usage);
     return 2;
   }
   const suite = parseMeasurementSuite(

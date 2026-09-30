@@ -1839,6 +1839,20 @@ export default pattern<{ ${declaration} }>(
           ),
         ).toMatchObject({ ifc: { confidentiality: [policy] } });
       });
+
+      it("reads the policy of the members a CFC alias over a union distributes into", async () => {
+        // `Confidential<Secret | Other, …>` is one node for two members.
+        expect(
+          await optionalCapture(
+            "secret?: Confidential<Secret | Other, [PolicyOf<typeof rules>]>",
+          ),
+        ).toMatchObject({
+          anyOf: [
+            { type: "undefined" },
+            { ifc: { confidentiality: [policy] } },
+          ],
+        });
+      });
     });
 
     it("reads the policy of another pattern's result member", async () => {
