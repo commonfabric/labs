@@ -7,14 +7,16 @@
 import type { Tile } from "./types.ts";
 
 import { benchmark, keyBenchmarks } from "./tiles/benchmark.ts";
-import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
-import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
+import {
+  labsCiDuration,
+  loomCiDuration,
+  weaverCiDuration,
+} from "./tiles/ci-duration.ts";
+import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
 import { ciHealth } from "./tiles/ci-health.ts";
 import { coverageDebt } from "./tiles/coverage-debt.ts";
-import { cubicSpend } from "./tiles/cubic-spend.ts";
 import { dau } from "./tiles/dau.ts";
 import { discordOnline } from "./tiles/discord-online.ts";
-import { emptyTile } from "./tiles/empty.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
 import { githubCiSpend } from "./tiles/github-ci-spend.ts";
 import { githubMembers } from "./tiles/github-members.ts";
@@ -29,28 +31,28 @@ import { testSelection } from "./tiles/test-selection.ts";
 export const TILES: Tile[] = [
   ciHealth,
   labsCiTrust,
-  labsCiDuration,
-  benchmark,
-
-  emptyTile,
   loomCiTrust,
-  loomCiDuration,
-  keyBenchmarks,
+  weaverCiTrust,
 
   testFlakes,
+  labsCiDuration,
+  loomCiDuration,
+  weaverCiDuration,
+
   testSelection,
   coverageDebt,
-  prodErrors,
+  benchmark,
+  keyBenchmarks,
 
+  prodUptime,
+  prodErrors,
   dau,
   discordOnline,
-  githubMembers,
-  prodUptime,
 
-  cubicSpend,
-  githubCiSpend,
   modelSpend,
   gcpSpend,
+  githubCiSpend,
+  githubMembers,
 
   recentRuns,
 ];

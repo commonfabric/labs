@@ -24,6 +24,7 @@ import {
 } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -349,6 +350,7 @@ describe("narrowing", () => {
           .toBe(false);
         expect(isKeyableObjectOrArray(new FabricEpochNsec(1n))).toBe(false);
         expect(isKeyableObjectOrArray(new FabricEpochDay(1n))).toBe(false);
+        expect(isKeyableObjectOrArray(new FabricDurationNsec(1n))).toBe(false);
         expect(isKeyableObjectOrArray(new FabricUnavailable("pending")))
           .toBe(false);
         expect(isKeyableObjectOrArray(new FabricRegExp("es2025", "a+", "g")))
@@ -479,6 +481,7 @@ describe("narrowing", () => {
           .toBe(false);
         expect(isWalkableObjectOrArray(new FabricEpochNsec(1n))).toBe(false);
         expect(isWalkableObjectOrArray(new FabricEpochDay(1n))).toBe(false);
+        expect(isWalkableObjectOrArray(new FabricDurationNsec(1n))).toBe(false);
         expect(isWalkableObjectOrArray(new FabricUnavailable("pending")))
           .toBe(false);
         expect(isWalkableObjectOrArray(new FabricRegExp("es2025", "a+", "g")))

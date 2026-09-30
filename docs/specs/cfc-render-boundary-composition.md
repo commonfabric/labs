@@ -77,6 +77,11 @@ Composes the same way — the meet of the parent and inner policies (CT-1796):
   (more enclosing requirements ⇒ stricter).
 - `allowLiteralText` = parent `&&` inner (an absent parent is unconstrained); an
   inner boundary can never re-enable literal text an enclosing boundary forbade.
+- A boundary that requires no atoms, as an authorship boundary whose author
+  names no principal does, admits no cell text, and that holds for the text
+  inside it whatever an enclosing boundary requires. Regression guard: "hides
+  text inside or around an author that represents no one" in
+  `test/worker-reconciler-cfc-text-integrity.test.ts`.
 - A block is attributed to **every** enclosing boundary — the policy carries the
   full set of enclosing boundary node ids (`boundaryNodeIds`), and
   `markTextIntegrityBlocked` stamps all of them — so no enclosing boundary can
@@ -92,6 +97,21 @@ the replace-not-compose policy dated to #3321 (text integrity enforced by
 default). Regression guards: the four "nested text integrity …" steps in
 `test/worker-reconciler-cfc-render-policy.test.ts` (two mount-time, two reactive
 block/unblock).
+
+Text is checked against the label stored on the document that holds it, at the
+text's path, counting only the entries a read of the text consumes, so an entry
+recording where a link came from counts for nothing. A text child and a declared
+text property (`TEXT_INTEGRITY_PROP_SINKS`) are checked the same way. The
+documents a read passes through on the way do not count. Integrity on a document
+that holds a link endorses the link, not the current contents of the document it
+links to (spec §3.7.2, §8.2.4). So a text child `table.key("row").key("name")`,
+where `row` links to a document of its own, is shown only when that document
+carries the required atoms. The integrity `table` carries is not counted, and
+neither is an endorsement scoped to the link, since both describe the link
+rather than the text. A requirement derived from an `author` cell is read the
+same way: the `represents-principal` atoms counted are those on the document
+that holds the author's value.
+Regression guards: `test/worker-reconciler-cfc-text-integrity.test.ts`.
 
 ## Nested pattern outputs
 

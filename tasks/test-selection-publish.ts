@@ -55,6 +55,7 @@ import {
 } from "./test-records-config.ts";
 import { rollupShards } from "./test-records-compact.ts";
 import { calibrate, laneObservations } from "./test-selection/calibrate.ts";
+import { calibrationHealth, healthLines } from "./test-selection/health.ts";
 import {
   type AggregateState,
   buildManifest,
@@ -91,6 +92,7 @@ import {
 import {
   type CoverageBaseline,
   declaredSchema,
+  type Manifest,
   MANIFEST_SCHEMA_VERSION,
   serializeManifest,
   writtenAhead,
@@ -543,23 +545,24 @@ function refusal(
 }
 
 /**
- * The coverage baselines the newest manifest holds, which the next one
- * brings forward. The objects a run folds are the ones no earlier run
- * folded, so the baselines they hold are added to these rather than
- * standing in for them.
+ * The newest manifest, which the one this run creates follows. Its
+ * coverage baselines are brought forward, and its charges are what this
+ * run's are compared with. The objects a run folds are the ones no
+ * earlier run folded, so the baselines they hold are added to its
+ * baselines rather than standing in for them.
  *
  * Throws where the store could not be asked. The objects those baselines
  * came from are ones no later run folds again, so a manifest published
  * without them would hold none of them, and neither would any manifest
  * after it. Where the store answers that it holds no manifest this
- * publisher can read, the baselines start empty, and the ones in objects
- * earlier runs folded come back only from a `--bootstrap`, which folds the
- * window again.
+ * publisher can read, there is nothing to follow: the baselines start
+ * empty, and the ones in objects earlier runs folded come back only from
+ * a `--bootstrap`, which folds the window again.
  */
-export async function liveBaselines(
+export async function livePrevious(
   now: Date,
   fetch?: typeof globalThis.fetch,
-): Promise<CoverageBaseline[]> {
+): Promise<Manifest | undefined> {
   const previous = await fetchManifest({
     at: now.toISOString(),
     ...(fetch === undefined ? {} : { fetch }),
@@ -567,7 +570,7 @@ export async function liveBaselines(
   if (previous.unreachable) {
     throw new Error(`reading the previous manifest failed: ${previous.absent}`);
   }
-  return previous.manifest?.coverageBaselines ?? [];
+  return previous.manifest;
 }
 
 /**
@@ -591,7 +594,7 @@ export async function publish(
   store: StoreAccess = liveStore(storeBucket()),
   now: Date = new Date(),
   topology: () => Promise<readonly Suite[]> = () => loadTopology(),
-  baselines: (now: Date) => Promise<CoverageBaseline[]> = liveBaselines,
+  previousManifest: (now: Date) => Promise<Manifest | undefined> = livePrevious,
 ): Promise<number> {
   const options = parseArgs(args);
   if (options === undefined) {
@@ -605,9 +608,9 @@ export async function publish(
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
   const partitions = dayPartitions(startedAt, options.days);
-  let carried: CoverageBaseline[];
+  let previous: Manifest | undefined;
   try {
-    carried = await baselines(startedAt);
+    previous = await previousManifest(startedAt);
   } catch (error) {
     console.warn(`test selection: ${error}`);
     console.warn(
@@ -819,6 +822,7 @@ export async function publish(
   const states = new Map(
     [...folded.states].filter(([key]) => placed.has(key)),
   );
+  const observed = laneObservations(folded.aggregate.lanes ?? []);
 
   const manifest = buildManifest({
     states,
@@ -833,9 +837,7 @@ export async function publish(
     // capability, starting a runner, or loading a module, and a lane
     // packed to its budget runs past the bound it is packed to finish
     // inside.
-    calibration: calibrate(
-      laneObservations(folded.aggregate.lanes ?? []),
-    ),
+    calibration: calibrate(observed),
   });
   // What the coverage gate compares a pull request against. The full run on
   // `main` writes the counts as measurements, which the fold passes over,
@@ -843,7 +845,7 @@ export async function publish(
   // Ordered by attempt, stably, so that of two attempts stamped with one
   // start the later is the one kept.
   manifest.coverageBaselines = mergeBaselines(
-    carried,
+    previous?.coverageBaselines ?? [],
     found.sort((a, b) => a.attempt - b.attempt).map(({ baseline }) => baseline),
     startedAt,
   );
@@ -857,12 +859,14 @@ export async function publish(
       reason: entry.reason,
     }))
   );
+  const capabilities = capabilitiesBySuite(suites);
+  const processes = unitProcesses(suites);
   const reference = plan({
     manifest,
     mandatory: new Map(),
-    capabilities: capabilitiesBySuite(suites),
+    capabilities,
     wholeUnits: wholeUnits(suites),
-    processes: unitProcesses(suites),
+    processes,
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every
@@ -879,7 +883,20 @@ export async function publish(
           .map((s) => JSON.stringify(s.entry.test)),
       })),
   }));
+  // Whether the model this manifest carries still describes the lanes.
+  // Nothing obeys it, so the manifest is published whatever it says, and
+  // the dashboard's test selection tile is what shows it.
+  manifest.health = calibrationHealth({
+    manifest,
+    previous,
+    capabilities,
+    processes,
+    observations: observed,
+  });
 
+  for (const line of healthLines(manifest.health)) {
+    console.log(`test selection: ${line}`);
+  }
   summarize(
     manifest,
     suites,

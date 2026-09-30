@@ -2,6 +2,7 @@ import { type Primitive } from "@commonfabric/utils/types";
 
 import {
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -31,7 +32,10 @@ import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
   type MappedResult,
+  type VisitingEntryResult,
+  type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -94,6 +98,19 @@ export abstract class DefaultValueVisitor<
     value: FabricBytes,
   ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricBytes);
+  }
+
+  /**
+   * Visits a value of type `FabricDurationNsec`. If not overridden, this calls
+   * `visitFabricPrimitiveValue()`.
+   */
+  visitFabricDurationNsec(
+    value: FabricDurationNsec,
+  ): VisitResult<PlusType, ResultType> {
+    return this.visitFabricPrimitiveValue(
+      value,
+      VALUE_TAGS.FabricDurationNsec,
+    );
   }
 
   /**
@@ -276,6 +293,12 @@ export abstract class DefaultValueVisitor<
    * `visitUnhandledValue()`, because it is expected that most useful visitors
    * will in fact want to recurse into containers. Subclasses that don't want
    * this can of course just override this implementation.
+   *
+   * An override which wants a container left as it is returns `mapTo` of the
+   * container, not `undefined`. For a container, `undefined` asks the engine
+   * to visit `undefined` in its place (see `VisitResult`), which this class
+   * sends on to `visitUnhandledValue()` unless `visitUndefined()` or one of
+   * the methods it rolls up to is overridden too.
    */
   visitFabricContainerValue(
     _value: FabricContainerValuePlus<PlusType>,
@@ -329,7 +352,8 @@ export abstract class DefaultValueVisitor<
   override mappedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -341,7 +365,8 @@ export abstract class DefaultValueVisitor<
    */
   override mappedFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<ResultType>,
+    _state: FabricValuePlus<PlusType>,
+    _resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -354,7 +379,9 @@ export abstract class DefaultValueVisitor<
   override mappedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
-    _value: FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType>,
+    _resultKey: string,
+    _resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType> {
     return undefined;
   }
@@ -405,6 +432,10 @@ export abstract class DefaultValueVisitor<
 
       case VALUE_TAGS.FabricBytes: {
         return this.visitFabricBytes(value as FabricBytes);
+      }
+
+      case VALUE_TAGS.FabricDurationNsec: {
+        return this.visitFabricDurationNsec(value as FabricDurationNsec);
       }
 
       case VALUE_TAGS.FabricEpochDay: {
@@ -473,7 +504,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _index: number,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -486,7 +517,7 @@ export abstract class DefaultValueVisitor<
     _array: FabricArrayPlus<PlusType>,
     _start: number,
     _count: number,
-  ): VisitingResult<ResultType> {
+  ): VisitingGapResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -498,7 +529,7 @@ export abstract class DefaultValueVisitor<
   override visitingFabricInstanceState(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingStateResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -511,7 +542,7 @@ export abstract class DefaultValueVisitor<
     _container: FabricPlainObjectPlus<PlusType>,
     _key: string,
     _value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType> {
+  ): VisitingEntryResult<PlusType, ResultType> {
     return undefined;
   }
 }

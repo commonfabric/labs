@@ -29,7 +29,10 @@
  * processes it started. None of the batch's seven can be recovered from
  * the records the batch produced, because a reader cannot tell which of a
  * report's records came from which batch, and a unit whose tests all
- * recorded nothing leaves no trace of having been opened.
+ * recorded nothing leaves no trace of having been opened. A lane also
+ * writes what the packer charged it for each batch, and three figures
+ * about its work as a whole; nothing is fitted from those, and they are
+ * read here only to be kept.
  *
  * Two of the charges are measured, and read off what lanes saw: how long
  * a capability took to open, and how long a process spent before its
@@ -114,6 +117,7 @@ import type { Calibration, SuiteFit } from "./manifest.ts";
 import {
   batchMeasurement,
   isLaneMeasurement,
+  laneMeasurement,
   setupMeasurement,
 } from "../lane-measurement.ts";
 import {
@@ -124,7 +128,10 @@ import {
 import { percentile90 } from "./score.ts";
 
 /**
- * One thing a lane measured about itself, and the day it measured it.
+ * One thing a lane measured about itself, and the day it measured it:
+ * one capability's setup, one batch, or the lane's work as a whole. A
+ * batch carries what the packer charged for it, as `projected`, where
+ * the lane recorded that.
  *
  * A batch carries each figure `BatchObservation` marks optional only
  * where whatever wrote it recorded that figure, and it may carry figures
@@ -133,7 +140,8 @@ import { percentile90 } from "./score.ts";
  */
 export type LaneObservation =
   | { day: string; capability: string; seconds: number }
-  | ({ day: string } & BatchObservation);
+  | ({ day: string; projected?: number } & BatchObservation)
+  | ({ day: string } & LaneRun);
 
 /** Whether a stored figure is one the fit can use. */
 function finite(value: unknown): boolean {
@@ -151,7 +159,11 @@ export function isLaneObservation(value: unknown): value is LaneObservation {
   const one = value as Record<string, unknown>;
   if (typeof one.day !== "string") return false;
   if (typeof one.capability === "string") return finite(one.seconds);
+  if (one.suite === undefined) {
+    return finite(one.spent) && finite(one.projected) && finite(one.bound);
+  }
   return typeof one.suite === "string" && finite(one.ran) &&
+    (one.projected === undefined || finite(one.projected)) &&
     finite(one.spent) && finite(one.units) &&
     (one.measured === undefined || typeof one.measured === "boolean") &&
     (one.longest === undefined || finite(one.longest)) &&
@@ -253,6 +265,28 @@ type Narrowed = [
   ...(readonly BatchObservation[])[],
 ];
 
+/** What one batch spent, against what the packer charged the lane for it. */
+export interface BatchCharge {
+  suite: string;
+  spent: number;
+  projected: number;
+}
+
+/** One lane's work as a whole, as the lane measured it. */
+export interface LaneRun {
+  /** Seconds from opening its first capability to the end of its work. */
+  spent: number;
+
+  /** Seconds the packer projected that work to take. */
+  projected: number;
+
+  /**
+   * The most seconds that work could take with the lane's job still
+   * inside the bound the lane was packed to finish inside.
+   */
+  bound: number;
+}
+
 /** Every lane measurement a set of records holds, sorted into its kind. */
 export interface Observations {
   /** Seconds each capability's setup took, every time one was opened. */
@@ -260,30 +294,73 @@ export interface Observations {
 
   /** Each batch a lane both charged for and ran. */
   batches: BatchObservation[];
+
+  /**
+   * Each of those batches whose lane recorded what it was charged. Nothing
+   * is fitted from these; they say how far the fit a lane was packed by
+   * was out.
+   */
+  charges: BatchCharge[];
+
+  /** Each lane that recorded its work as a whole. */
+  lanes: LaneRun[];
+}
+
+/** One batch, with what it was charged where its lane recorded that. */
+interface ChargedBatch {
+  batch: BatchObservation;
+  projected?: number;
+}
+
+/**
+ * Sorts batches with their charges into the fields of `Observations`
+ * holding them.
+ */
+function sortCharged(
+  charged: readonly ChargedBatch[],
+): Pick<Observations, "batches" | "charges"> {
+  return {
+    batches: charged.map(({ batch }) => batch),
+    charges: charged.flatMap(({ batch, projected }) =>
+      projected === undefined
+        ? []
+        : [{ suite: batch.suite, spent: batch.spent, projected }]
+    ),
+  };
 }
 
 /**
  * What the aggregate has kept, in the shape the fit reads. The fold
- * pairs a batch's seven measurements as it reads them, so what is stored
+ * pairs a batch's measurements as it reads them, so what is stored
  * is already paired and this only sorts it.
  */
 export function laneObservations(
   kept: Iterable<LaneObservation>,
 ): Observations {
   const setup = new Map<string, number[]>();
-  const batches: BatchObservation[] = [];
+  const charged: ChargedBatch[] = [];
+  const lanes: LaneRun[] = [];
   for (const one of kept) {
     if ("capability" in one) {
       setup.set(one.capability, [
         ...setup.get(one.capability) ?? [],
         one.seconds,
       ]);
+    } else if ("suite" in one) {
+      const { day: _, projected, ...batch } = one;
+      charged.push({
+        batch,
+        ...(projected === undefined ? {} : { projected }),
+      });
     } else {
-      const { day: _, ...batch } = one;
-      batches.push(batch);
+      lanes.push({
+        spent: one.spent,
+        projected: one.projected,
+        bound: one.bound,
+      });
     }
   }
-  return { setup, batches };
+  return { setup, ...sortCharged(charged), lanes };
 }
 
 /**
@@ -295,18 +372,34 @@ export function laneObservations(
  * nothing a fit can use, and a lane stopped part way through a batch
  * leaves exactly that — a lane writes a batch's measurements together, so
  * a batch that never finished contributes none of them. What its longest
- * units took, and how many passes it made, are read where they are present,
- * and so is its processes' setup, where both of its figures are.
+ * units took, how many passes it made, and what it was charged, are read
+ * where they are present, and so is its processes' setup, where both of its
+ * figures are.
+ *
+ * A lane's measurements of its work as a whole are read where all three
+ * are present, which is where the lane finished every batch it held and
+ * every one of them passed.
  *
  * They are keyed by the run, the suite, and whether coverage was on,
  * because five lanes of one run may each run the same suite and adding
  * two lanes' figures would describe a batch neither of them ran. Not by
- * the measurement's name, which is what tells the seven apart and would
+ * the measurement's name, which is what tells the eight apart and would
  * therefore keep them apart.
  */
 export function observationsOf(
   runs: Iterable<{ run: string; records: Iterable<TestRecord> }>,
 ): Observations {
+  const { setup, charged, lanes } = measuredIn(runs);
+  return { setup, ...sortCharged(charged), lanes };
+}
+
+/**
+ * Helper for `observationsOf()` and `laneObservationsOf()`, which returns
+ * what `observationsOf()` describes with each batch beside its charge.
+ */
+function measuredIn(
+  runs: Iterable<{ run: string; records: Iterable<TestRecord> }>,
+): { setup: Map<string, number[]>; charged: ChargedBatch[]; lanes: LaneRun[] } {
   const setup = new Map<string, number[]>();
   const ran = new Map<string, number>();
   const spent = new Map<string, number>();
@@ -315,8 +408,11 @@ export function observationsOf(
   const passes = new Map<string, number>();
   const start = new Map<string, number>();
   const processes = new Map<string, number>();
+  const projected = new Map<string, number>();
   const batchOf = new Map<string, { suite: string; measured: boolean }>();
+  const lanes: LaneRun[] = [];
   for (const { run, records } of runs) {
+    const lane: Partial<LaneRun> = {};
     for (const record of records) {
       if (!isLaneMeasurement(record.test)) continue;
       // Only a passing measurement says what the work costs. A batch
@@ -331,9 +427,14 @@ export function observationsOf(
         setup.set(capability, [...setup.get(capability) ?? [], seconds]);
         continue;
       }
+      const whole = laneMeasurement(record.test.n);
+      if (whole !== undefined) {
+        lane[whole] = seconds;
+        continue;
+      }
       const batch = batchMeasurement(record.test.n);
       if (batch === undefined) continue;
-      // The suite and the coverage marker, not the name: a batch's seven
+      // The suite and the coverage marker, not the name: a batch's eight
       // measurements are named differently, and that is what tells them
       // apart. The marker is in the key so that a batch run with
       // coverage on pairs with the time its own tests took rather than
@@ -342,7 +443,7 @@ export function observationsOf(
       batchOf.set(key, { suite: batch.suite, measured: batch.measured });
       // A count is not a duration. The record format carries one number
       // and calls it a duration, and the name is what says which of the
-      // seven this is, so a count is read back as it was written.
+      // eight this is, so a count is read back as it was written.
       if (batch.kind === "units") units.set(key, record.durationMs);
       else if (batch.kind === "processes") {
         processes.set(key, record.durationMs);
@@ -355,27 +456,36 @@ export function observationsOf(
       } else if (batch.kind === "ran") ran.set(key, seconds);
       else if (batch.kind === "longest") longest.set(key, seconds);
       else if (batch.kind === "start") start.set(key, seconds);
+      else if (batch.kind === "projected") projected.set(key, seconds);
       else spent.set(key, seconds);
     }
+    const { spent: took, projected: expected, bound } = lane;
+    if (took !== undefined && expected !== undefined && bound !== undefined) {
+      lanes.push({ spent: took, projected: expected, bound });
+    }
   }
-  const batches: BatchObservation[] = [];
+  const charged: ChargedBatch[] = [];
   for (const [key, took] of spent) {
     const tests = ran.get(key);
     const opened = units.get(key);
     if (tests === undefined || opened === undefined) continue;
     const bound = longest.get(key);
     const made = passes.get(key);
-    batches.push({
-      ...batchOf.get(key)!,
-      ran: tests,
-      spent: took,
-      units: opened,
-      ...(bound === undefined ? {} : { longest: bound }),
-      ...(made === undefined ? {} : { passes: made }),
-      ...setupOf(start.get(key), processes.get(key)),
+    const charge = projected.get(key);
+    charged.push({
+      batch: {
+        ...batchOf.get(key)!,
+        ran: tests,
+        spent: took,
+        units: opened,
+        ...(bound === undefined ? {} : { longest: bound }),
+        ...(made === undefined ? {} : { passes: made }),
+        ...setupOf(start.get(key), processes.get(key)),
+      },
+      ...(charge === undefined ? {} : { projected: charge }),
     });
   }
-  return { setup, batches };
+  return { setup, charged, lanes };
 }
 
 /**
@@ -388,12 +498,17 @@ export function laneObservationsOf(
   records: Iterable<TestRecord>,
   day: string,
 ): LaneObservation[] {
-  const seen = observationsOf([{ run, records }]);
+  const seen = measuredIn([{ run, records }]);
   return [
     ...[...seen.setup].flatMap(([capability, samples]) =>
       samples.map((seconds) => ({ day, capability, seconds }))
     ),
-    ...seen.batches.map((batch) => ({ day, ...batch })),
+    ...seen.charged.map(({ batch, projected }) => ({
+      day,
+      ...batch,
+      ...(projected === undefined ? {} : { projected }),
+    })),
+    ...seen.lanes.map((lane) => ({ day, ...lane })),
   ];
 }
 
@@ -738,7 +853,9 @@ function fitOver(
 }
 
 /** What a lane pays beyond its tests, read from what lanes have measured. */
-export function calibrate(observations: Observations): Calibration {
+export function calibrate(
+  observations: Pick<Observations, "setup" | "batches">,
+): Calibration {
   const setupCost: Record<string, number> = {};
   // The ninetieth percentile of the openings lanes have seen, which is the
   // reading a process's setup takes, for the same reason: the slowest

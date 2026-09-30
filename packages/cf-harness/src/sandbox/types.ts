@@ -1,4 +1,9 @@
-import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
+import {
+  CFC_ENFORCING_STRICTNESS,
+  type CfcEnforcementMode,
+  cfcEnforcementStrictness,
+  type CfcSandboxResult,
+} from "@commonfabric/runner/cfc";
 import type { HarnessCfcInvocationContext } from "../contracts/cfc-invocation-context.ts";
 
 export type DockerNetworkMode = "none" | "bridge" | "host";
@@ -158,6 +163,17 @@ export type CfcTransportReadiness = {
 export type SandboxSessionName = string;
 
 export const SANDBOX_SESSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+
+/**
+ * Whether a run in `mode` can use a sandbox session. No enforcing mode can: a
+ * session's CFC result cannot vouch for everything that reaches a call's
+ * output. One rule for the runtime that refuses a session and the tool that
+ * offers the model one, so a run is never offered a session it will be
+ * refused.
+ */
+export const sandboxSessionsAllowedUnder = (
+  mode: CfcEnforcementMode,
+): boolean => cfcEnforcementStrictness(mode) < CFC_ENFORCING_STRICTNESS;
 
 export interface SandboxCommandRequest {
   argv: string[];

@@ -18,7 +18,11 @@ tree of its types, functions, initializers, and type-level properties, and its
 package manifests select it through their `.swift` extension. Kotlin, which
 covers Gradle's Kotlin build scripts, has syntax highlighting and a structure
 tree of its types, objects, functions, constructors, and type-level
-properties. TOML, which covers Gradle version catalogs and Cargo manifests and
+properties. Shell, which covers Bash and POSIX shell, has syntax highlighting
+and a structure tree of its functions; `sh`, `bash`, `dash`, and `ash`
+shebangs select it for Git hooks and other extensionless programs viewed
+directly, and a heredoc's body is a string with the expansions its delimiter
+allows. TOML, which covers Gradle version catalogs and Cargo manifests and
 lock files, has syntax highlighting and a structure tree of tables and keys.
 Java properties files, ProGuard and R8 keep rules, and XML, which covers
 Android manifests and resources, SVG, and Apple property lists, have syntax
@@ -37,15 +41,15 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Swift, Kotlin, and TOML run on Tree-sitter through a shared,
-language-neutral adapter, which Go, shell, and HTML will use as well. Java
+Python, Swift, Kotlin, TOML, and shell run on Tree-sitter through a shared,
+language-neutral adapter, which Go and HTML will use as well. Java
 properties, ProGuard rules, and XML use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, Java properties,
-ProGuard, XML, and diff support to honest
+JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, shell, Java
+properties, ProGuard, XML, and diff support to honest
 handling of every textual syntax in the active
 `commonfabric` repositories.
 
@@ -153,16 +157,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -187,6 +191,22 @@ made the same way in two rounds on a shared machine, each beside a Swift run
 that stayed close to Swift's recorded figures. Each timing is the higher of the
 two rounds' 95th percentiles. Kotlin is over two maximums, for the reason under
 "Kotlin over its re-color maximum".
+
+The shell column is the
+[September 2026 shell measurement](../history/packages/cli/cf-view-shell-2026-09.md).
+It ran on a machine so loaded that a TOML control run beside each round was 1.2
+to 2.2 times TOML's recorded figures, so its timings are estimates: TOML's
+recorded 95th percentiles multiplied by the largest ratio of shell to TOML seen
+in any round. The report gives the figures measured directly, which exceed the
+document-parse and re-color maximums in some rounds. Shell is over the unpacked
+dependency maximum, for the reason under "Shell over its unpacked-dependency
+maximum".
+
+The binary build leaves out every directory of a grammar package except the
+one holding its WebAssembly grammar, such as generated C source and native
+builds, which the pager never reads. Shell's compiled figure is measured with
+that in place. The Python and TOML figures above were measured before it, and
+it removes 7.37 MiB of their packages from the binary.
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -330,6 +350,26 @@ are. Kotlin's overrun is on a source denser than the code it serves, and a
 change that lowers either the grammar's incremental parse or the adapter's
 per-capture cost is the way to bring it inside.
 
+#### Shell over its unpacked-dependency maximum
+
+The official Bash grammar's package is 19.34 MiB unpacked, against a 10 MiB
+maximum for a later grammar. 1.30 MiB of it is the WebAssembly grammar the
+pager loads; the rest is generated C source and native builds. The binary
+build leaves those out, so the figure is what a developer's dependency cache
+holds, and shell adds 1.32 MiB to the binary.
+
+The overrun starts the comparison under "Reconsidering the dependency". No
+focused shell implementation exists, and this plan rules out writing one: the
+parser spike found that the one alternative grammar, Lezer's Bash, marked its
+Bash fixture as containing an error, and a scanner needs a second
+implementation for structure. The comparison therefore keeps the dependency. A package holding only the
+WebAssembly build, as Swift and Kotlin use, would bring shell inside the
+maximum.
+
+Python and shell take 31.29 MiB of the 40 MiB that the runtime and the four
+host grammars may occupy unpacked, and 675 of their 1,000 owned source lines.
+The official Go and HTML packages unpack to 3.66 and 0.70 MiB.
+
 #### Reconsidering the dependency
 
 Reopen the parser decision for a language when any of these conditions becomes
@@ -437,15 +477,47 @@ direct and diff views.
 
 ## Stage 4: shell
 
-- [ ] Cover Bash and POSIX shell with dialect selection from the shebang.
-- [ ] Recognize `.sh`, `.command`, Git hooks, entrypoint scripts, and
+Shell is implemented ahead of Stage 3, and Go remains the next stage. A
+September 29, 2026 read of the local checkouts of the organization's
+repositories found 391 files that select shell, in 20 repositories, and 1,839
+path-change events on them in the six months before the read. The July survey
+found Go in 2,568 files in 6 repositories, with 2,129 path-change events. Go
+leads on files and activity; shell leads on repositories.
+
+- [x] Cover Bash and POSIX shell with dialect selection from the shebang.
+- [x] Recognize `.sh`, `.command`, Git hooks, entrypoint scripts, and
   extensionless executables with shell shebangs.
-- [ ] Highlight heredocs without guessing an embedded language unless the
+- [x] Highlight heredocs without guessing an embedded language unless the
   delimiter names it reliably.
-- [ ] Add Infra and Loom fixtures that exercise operational scripts.
+- [x] Add Infra and Loom fixtures that exercise operational scripts.
+- [ ] Select an extensionless file's language from its shebang in a diff.
+
+Shell runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash)
+grammar, whose npm package ships its WebAssembly build. POSIX shell's syntax is
+a subset of what that grammar parses, so one language covers both, and `sh`,
+`bash`, `dash`, and `ash` shebangs select it. zsh and ksh are not claimed. `.sh`,
+`.bash`, `.command`, and Bash's startup files select it by name. Structure lists
+function definitions in both forms. A heredoc's body is a string, with the
+expansions an unquoted delimiter allows colored inside it, and no delimiter is
+taken to name an embedded language. The grammar does not read a second heredoc
+on the same command line, so that heredoc's body is colored as commands.
+
+A coverage check over the 391 files found every file reconstructed exactly and
+4.58 percent of characters other than white space without a token class, almost
+all of them command arguments. The grammar could not parse part of 20 files,
+covering 12.69 percent of lines, almost all in two files where a `]` in an
+expansion's removal pattern, as in `${h%]}`, derails it; coloring continues
+inside those regions, and the structure tree loses 12 of one file's 161
+functions and 4 of the other's 44.
+
+A diff selects each file's language from its path, so an extensionless script
+in a diff is plain text. The fixtures' survey paths name `.sh` files for that
+reason.
 
 Completion gate: every surveyed shell selection form works in direct files,
-diffs, and incomplete edits.
+diffs, and incomplete edits. It does not pass yet: extensionless scripts in
+diffs are plain text.
 
 ## Stage 5: web markup, styling, and XML
 

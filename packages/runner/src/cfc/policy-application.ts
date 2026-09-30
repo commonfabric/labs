@@ -8,12 +8,12 @@ import { runtimeWritePolicyAuthorization } from "./types.ts";
  * hands to the document's owner.
  *
  * A policy application writes nothing, so the document's writer and click
- * claims (`writeAuthorizedBy`, `uiContract`) have no write to govern, and
- * preparation leaves them to the writers they name. It still refuses a
- * schema that would drop a stored claim, and every other requirement, the
- * integrity floor among them, still applies. The waiver holds only while the
- * transaction writes nothing to the document and a builtin identity authored
- * the application.
+ * claims (`writeAuthorizedBy`, `writePolicyAnyOf`, `uiContract`) have no write
+ * to govern, and preparation leaves them to the writers they name. It still
+ * refuses a schema that would drop a stored claim, and every other
+ * requirement, the integrity floor among them, still applies. The waiver holds
+ * only while the transaction writes nothing to the document and a builtin
+ * identity authored the application.
  *
  * Host-only: the runtime's authorization marks the application, and pattern
  * code, which reaches cells and their transactions but not this module,

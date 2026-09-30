@@ -4,6 +4,7 @@ import { testIdentityKey } from "@commonfabric/test-support/records";
 
 import {
   crowdingLine,
+  fixedCharges,
   foldWholeUnits,
   fullLaneCount,
   plan,
@@ -11,6 +12,7 @@ import {
   seededOrder,
   type Selection,
   type SelectionReason,
+  suiteCharge,
   suiteLoad,
   testsOf,
 } from "./plan.ts";
@@ -496,6 +498,21 @@ describe("plan", () => {
       expect(reasons.has("exploration")).toBe(true);
     });
 
+    it("breaks a tie in value by the identity key, not by position", () => {
+      // Two tests of one score, and room in the value pass's share for
+      // one of them: the same one is taken for value however the
+      // manifest lists the two, and no later pass has room for the other.
+      const tied = entries(2, () => ({ cost: 15, score: 0.5 }));
+      const reasons = (listed: ManifestEntry[]) =>
+        selected(run(sampleManifest({ entries: listed }), {
+          budgetSeconds: 26,
+          lanes: 1,
+        })).map((s) => [s.entry.test.n, s.reason]);
+      const inOrder = reasons(tied);
+      expect(inOrder).toEqual([["case 0", "value"]]);
+      expect(reasons([...tied].reverse())).toEqual(inOrder);
+    });
+
     it("draws the longest-unrun first", () => {
       // What makes the draw a sweep of the corpus rather than a sample
       // of it: everything ran yesterday except one that has not run for
@@ -842,8 +859,11 @@ describe("plan", () => {
       // Three lanes of 100 seconds, the proven test filling the value
       // pass's share in a lane to itself. Sixty tests in fifteen files,
       // at two values and two costs, tie with each other in many places,
-      // which the identity key decides. What follows the density pass is
-      // a draw seeded by position, so it is left out.
+      // which the identity key decides. The exploration draw is seeded by
+      // the manifest, and permutes what is left in an order that is the
+      // same however the manifest lists it. A unit run whole, of three
+      // tests, adds up the same costs in the same order and lists its
+      // tests the same way.
       const corpus = [
         opener,
         test("proven", "proven.test.ts", { cost: 163, score: 0.9 }),
@@ -855,21 +875,39 @@ describe("plan", () => {
               cost: [1, 2][(i >> 1) % 2]!,
             }),
         ),
+        ...[0.1, 0.2, 0.3].map((cost, i) =>
+          test(`part ${i}`, "whole.test.ts", {
+            cost,
+            inputs: {
+              catches: 2,
+              sources: 2,
+              churn: 1,
+              lastCatch: "2026-08-19",
+            },
+          })
+        ),
       ];
       const chosen = (entries: ManifestEntry[]) =>
         run(sampleManifest({ entries, calibration: perFile }), {
           lanes: 3,
           budgetSeconds: 100,
           mandatory: opened,
-        }).lanes.map((lane) =>
-          lane.selections
-            .filter((s) => s.reason !== "exploration")
-            .map((s) => [s.entry.test.n, s.reason])
-        );
+          wholeUnits: new Set(["workspace-unit\twhole.test.ts"]),
+        }).lanes.map((lane) => ({
+          seconds: lane.projectedSeconds,
+          selections: lane.selections.map((s) => [s.entry.test.n, s.reason]),
+        }));
       const inOrder = chosen(corpus);
+      const selections = inOrder.flatMap((lane) => lane.selections);
+      const taken = (reason: string) =>
+        selections.filter(([, why]) => why === reason).length;
+      expect(taken("density")).toBeGreaterThan(10);
+      expect(taken("exploration")).toBeGreaterThan(0);
       expect(
-        inOrder.flat().filter(([, reason]) => reason === "density").length,
-      ).toBeGreaterThan(10);
+        selections.map(([name]) => name).filter((name) =>
+          name!.startsWith("part ")
+        ),
+      ).toEqual(["part 0", "part 1", "part 2"]);
       expect(chosen([...corpus].reverse())).toEqual(inOrder);
       expect(
         chosen(seededOrder("shuffle", corpus.length).map((i) => corpus[i]!)),
@@ -1216,6 +1254,112 @@ describe("plan", () => {
       });
       const result = run(manifest, { lanes: 1 });
       expect(result.lanes[0]!.projectedSeconds).toBeCloseTo(18, 6);
+    });
+
+    it("projects a lane as its suites' charges and its capabilities' setup", () => {
+      // A lane records each batch's charge beside what the batch spent,
+      // so the charges have to add up to the lane's projection, or the
+      // two records would describe different packings.
+      const suites = ["workspace-unit", "runner-unit", "cli-core"];
+      const manifest = sampleManifest({
+        entries: suites.flatMap((suite, s) =>
+          entries(40, (i) => ({
+            suite,
+            cost: 1 + ((i * 7 + s) % 11),
+            unit: `packages/${suite}/${i % 9}.test.ts`,
+            repeats: i % 13 === 0 ? 2 : 1,
+          })).map((entry) => ({
+            ...entry,
+            test: { ...entry.test, s: suite },
+          }))
+        ),
+        calibration: {
+          setupCost: { fuse: 14, toolshed: 3 },
+          suites: {
+            "workspace-unit": {
+              overhead: 9,
+              correction: 0.8,
+              unitOverhead: 2,
+              process: {
+                setup: 5,
+                overhead: 1,
+                correction: 0.7,
+                unitOverhead: 1,
+              },
+            },
+            "runner-unit": { overhead: 4, correction: 0.4, unitOverhead: 1 },
+            "cli-core": { overhead: 21, correction: 1.2, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const capabilities = new Map([
+        ["workspace-unit", ["fuse"]],
+        ["runner-unit", ["fuse", "toolshed"]],
+      ]);
+      // Three files of the workspace suite to a process.
+      const processes = new Map(
+        Array.from({ length: 9 }, (_, i) => [
+          `workspace-unit\tpackages/workspace-unit/${i}.test.ts`,
+          `process ${Math.floor(i / 3)}`,
+        ]),
+      );
+      const result = run(manifest, { capabilities, processes });
+      for (const lane of result.lanes) {
+        const bySuite = Map.groupBy(
+          lane.selections,
+          ({ entry }) => entry.suite,
+        );
+        const setup = lane.capabilities.reduce(
+          (total, capability) =>
+            total + manifest.calibration.setupCost[capability]!,
+          0,
+        );
+        const charges = [...bySuite].reduce(
+          (total, [suite, held]) =>
+            total + suiteCharge({ manifest, processes }, suite, held),
+          0,
+        );
+        expect(charges + setup).toBeCloseTo(lane.projectedSeconds, 6);
+      }
+      expect(result.lanes.some((lane) => lane.selections.length > 0))
+        .toBe(true);
+    });
+
+    it("charges nothing for a suite a lane holds nothing of", () => {
+      expect(
+        suiteCharge(
+          { manifest: sampleManifest(), processes: NO_PROCESSES },
+          "workspace-unit",
+          [],
+        ),
+      ).toBe(0);
+    });
+
+    it("gives every suite's fixed charge, inside the budget or past it", () => {
+      const manifest = sampleManifest({
+        entries: [
+          ...entries(2, () => ({ suite: "workspace-unit" })),
+          ...entries(2, () => ({ suite: "cli-core" })).map((entry, i) => ({
+            ...entry,
+            test: { ...entry.test, n: `cli ${i}` },
+          })),
+        ],
+        calibration: {
+          setupCost: { fuse: 14 },
+          suites: {
+            "workspace-unit": { overhead: 9, correction: 1, unitOverhead: 2 },
+            "cli-core": { overhead: 400, correction: 1, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const capabilities = new Map([["workspace-unit", ["fuse"]]]);
+      expect(fixedCharges({ manifest, capabilities, processes: NO_PROCESSES }))
+        .toEqual({ "workspace-unit": 25, "cli-core": 400 });
+      // The same figure the crowding report compares against the budget.
+      expect(run(manifest, { capabilities }).crowding.map((c) => c.fixed))
+        .toEqual([400]);
     });
 
     describe("a suite whose processes each pay a setup", () => {
@@ -1868,15 +2012,6 @@ describe("a unit its runner runs whole", () => {
     expect(reasons).toEqual(["full", "full", "full"]);
   });
 
-  it("runs a test the manifest carries twice once", () => {
-    const manifest = corpus();
-    manifest.entries.push({ ...manifest.entries[0]! });
-    const result = run(manifest, { wholeUnits: WHOLE, policy: "everything" });
-    expect(
-      selected(result).filter((s) => s.entry.test.n === "half 0").length,
-    ).toBe(1);
-  });
-
   it("keeps two suites' units of one name apart", () => {
     // Both units are whole, and their tests share a kind and a scope. Each
     // merged entry has to be named for its suite as well as its unit, so that
@@ -1915,35 +2050,20 @@ describe("a unit its runner runs whole", () => {
 });
 
 describe("an identity a manifest carries twice", () => {
-  it("runs it once, rather than placing it in two lanes", () => {
-    // A duplicated entry is one identity however many rows describe it,
-    // and running it twice would charge a lane for work it did not do.
-    const twice = sampleEntry({ k: "unit", s: "memory", n: "case 0" }, {
-      unit: "packages/memory/test/case-0.test.ts",
-    });
-    const manifest = sampleManifest({
-      entries: [...entries(3), twice],
-    });
-    const key = testIdentityKey(twice.test);
-    const placed = keysOf(run(manifest)).filter((k) => k === key);
-    expect(placed.length).toBe(1);
-  });
-
-  it("places it as the last of its rows, whatever the first one scores", () => {
-    // The value pass orders by score, so a first row scoring far above
-    // the last would be the one it reached, where the density pass would
-    // reach the last.
-
+  it("refuses to plan, rather than choosing between its rows", () => {
+    // Two rows of one identity can disagree about what it costs or
+    // scores, and which of them a plan followed would depend on where the
+    // manifest listed them.
     const first = sampleEntry({ k: "unit", s: "memory", n: "case 0" }, {
       unit: "packages/memory/test/case-0.test.ts",
       score: 0.9,
     });
-    const last = { ...first, score: 0.01 };
-    const placed = selected(
-      run(sampleManifest({ entries: [first, ...entries(3).slice(1), last] })),
-    ).filter((s) => s.entry.test.n === "case 0");
-    expect(placed.length).toBe(1);
-    expect(placed[0]!.entry).toBe(last);
+    const rest = entries(3).slice(1);
+    expect(() =>
+      run(sampleManifest({ entries: [first, ...rest, { ...first }] }))
+    ).toThrow(`${testIdentityKey(first.test)} is listed more than once`);
+    expect(() => run(sampleManifest({ entries: [first, ...rest] })))
+      .not.toThrow();
   });
 });
 

@@ -63,9 +63,9 @@ The `ifc` extension attaches Information Flow Control metadata to schema
 nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
 `packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
-The compile-time side (CFC authoring aliases and UI helpers
-lowering to these keys) is specified in
+`writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
+`observes`, and `uiContract`. The compile-time side (CFC authoring aliases and
+UI helpers lowering to these keys) is specified in
 `docs/specs/ts-transformer/cfc_authoring_contract.md` and
 `docs/specs/ts-transformer/cfc_ui_helper_contract.md`; the label semantics live
 in the CFC spec (specs repo, `cfc/`).
@@ -260,9 +260,9 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   gets it.
 - `{ "type": "undefined" }` — preserved as an explicit union member (e.g.
   `string | undefined`) so optionality survives schema round-trips.
-- `FabricPrimitive` types — `"FabricBytes"`, `"FabricEpochDay"`,
-  `"FabricEpochNsec"`, `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`,
-  `"FabricUnavailable"` — each naming a
+- `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationNsec"`,
+  `"FabricEpochDay"`, `"FabricEpochNsec"`, `"FabricHash"`, `"FabricKeyPair"`,
+  `"FabricRegExp"`, `"FabricUnavailable"` — each naming a
   concrete `FabricPrimitive` class from the data-model. A value matches by
   prototype (`instanceof`), not by structure: these values are opaque leaves
   with no enumerable properties, and they are never property-walked.

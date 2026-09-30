@@ -11,7 +11,10 @@ import { debugStr } from "@/value-debug";
 import {
   type MappedResult,
   ValueVisitor,
+  type VisitingEntryResult,
+  type VisitingGapResult,
   type VisitingResult,
+  type VisitingStateResult,
   type VisitResult,
 } from "./interface.ts";
 
@@ -32,20 +35,24 @@ export abstract class BaseValueVisitor<
   abstract mappedFabricArrayElement(
     array: FabricArrayPlus<PlusType>,
     index: number,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */
   abstract mappedFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
-    state: FabricValuePlus<ResultType>,
+    state: FabricValuePlus<PlusType>,
+    resultState: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */
   abstract mappedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
-    value: FabricValuePlus<ResultType>,
+    value: FabricValuePlus<PlusType>,
+    resultKey: string,
+    resultValue: FabricValuePlus<ResultType>,
   ): MappedResult<ResultType>;
 
   /** @inheritDoc */
@@ -59,27 +66,27 @@ export abstract class BaseValueVisitor<
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): VisitingResult<ResultType>;
+  ): VisitingGapResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricInstanceState(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingStateResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitingFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: string,
     value: FabricValuePlus<PlusType>,
-  ): VisitingResult<ResultType>;
+  ): VisitingEntryResult<PlusType, ResultType>;
 
   //
   // Instance methods

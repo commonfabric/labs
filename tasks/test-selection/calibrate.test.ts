@@ -16,6 +16,7 @@ import {
   excusedMeasurementName,
   LANE_MEASUREMENT_PREFIX,
   LANE_MEASUREMENT_SURFACE,
+  laneMeasurementName,
 } from "../lane-measurement.ts";
 import {
   MIN_CORRECTION_SAMPLES,
@@ -53,6 +54,15 @@ function batch(
     measured(batchMeasurementName(suite, coverage), spent),
     measured(batchMeasurementName(suite, coverage, "ran"), ran),
     figure(batchMeasurementName(suite, coverage, "units"), units),
+  ];
+}
+
+/** What a lane writes about its work as a whole: the three figures. */
+function lane(spent: number, projected: number, bound: number): TestRecord[] {
+  return [
+    measured(laneMeasurementName("spent"), spent),
+    measured(laneMeasurementName("projected"), projected),
+    measured(laneMeasurementName("bound"), bound),
   ];
 }
 
@@ -301,6 +311,67 @@ describe("calibrate", () => {
       }
     });
 
+    it("takes what the packer charged for a batch beside the batch, where the lane wrote that", () => {
+      const seen = observationsOf([
+        {
+          run: "a",
+          records: [
+            ...batch("workspace-unit", 40, 92, 17),
+            measured(
+              batchMeasurementName("workspace-unit", false, "projected"),
+              88,
+            ),
+            ...batch("runner-unit", 5, 9, 2),
+          ],
+        },
+      ]);
+      expect(seen.charges).toEqual([
+        { suite: "workspace-unit", spent: 92, projected: 88 },
+      ]);
+      // The charge is no figure the fit reads, so the batch carries none.
+      expect(seen.batches).toEqual([
+        {
+          suite: "workspace-unit",
+          measured: false,
+          ran: 40,
+          spent: 92,
+          units: 17,
+        },
+        { suite: "runner-unit", measured: false, ran: 5, spent: 9, units: 2 },
+      ]);
+    });
+
+    it("takes a lane's work, projection and bound, one lane per run", () => {
+      const seen = observationsOf([
+        { run: "a", records: lane(250, 225, 260) },
+        { run: "b", records: lane(280, 229, 260) },
+      ]);
+      expect(seen.lanes).toEqual([
+        { spent: 250, projected: 225, bound: 260 },
+        { spent: 280, projected: 229, bound: 260 },
+      ]);
+      // A lane's own figures are not a batch, and fit nothing.
+      expect(seen.batches).toEqual([]);
+    });
+
+    it("takes nothing from a lane missing one of its three figures", () => {
+      const seen = observationsOf([
+        { run: "a", records: lane(250, 225, 260).slice(0, 2) },
+      ]);
+      expect(seen.lanes).toEqual([]);
+    });
+
+    it("takes nothing from a lane that went red", () => {
+      const seen = observationsOf([{
+        run: "a",
+        records: lane(250, 225, 260).map((record) => ({
+          ...record,
+          outcome: "fail" as const,
+        })),
+      }]);
+      expect(seen.lanes).toEqual([]);
+    });
+
     it("takes nothing from a longest unit whose batch wrote nothing else", () => {
       const seen = observationsOf([
         { run: "a", records: [longest("pattern-unit", 680)] },
@@ -494,6 +565,30 @@ describe("calibrate", () => {
         units: 3,
         setup: { seconds: 120, processes: 1 },
       }]);
+    });
+
+    it("carries what a batch was charged and what its lane came to", () => {
+      const kept = laneObservationsOf(
+        "object-1",
+        [
+          ...batch("runner-unit", 10, 30, 4),
+          measured(batchMeasurementName("runner-unit", false, "projected"), 24),
+          ...lane(31, 26, 260),
+        ],
+        "2026-09-12",
+      );
+      expect(kept).toEqual([
+        {
+          day: "2026-09-12",
+          suite: "runner-unit",
+          measured: false,
+          ran: 10,
+          spent: 30,
+          units: 4,
+          projected: 24,
+        },
+        { day: "2026-09-12", spent: 31, projected: 26, bound: 260 },
+      ]);
     });
 
     it("carries the day, so a stored observation can be aged", () => {
@@ -1538,9 +1633,12 @@ describe("calibrate", () => {
   });
 
   describe("isLaneObservation()", () => {
-    it("returns `true` for either kind of observation", () => {
+    it("returns `true` for every kind of observation", () => {
       expect(isLaneObservation({ day: "d", capability: "fuse", seconds: 14.8 }))
         .toBe(true);
+      expect(
+        isLaneObservation({ day: "d", spent: 31, projected: 26, bound: 260 }),
+      ).toBe(true);
       expect(
         isLaneObservation({
           day: "d",
@@ -1705,9 +1803,34 @@ describe("calibrate", () => {
       }
     });
 
+    it("returns `false` for a charge that is not a finite number", () => {
+      for (const figure of [null, "24", Infinity]) {
+        expect(
+          isLaneObservation({
+            day: "d",
+            suite: "s",
+            ran: 10,
+            spent: 30,
+            units: 4,
+            projected: figure,
+          }),
+        ).toBe(false);
+        expect(
+          isLaneObservation({
+            day: "d",
+            spent: 31,
+            projected: figure,
+            bound: 1,
+          }),
+        ).toBe(false);
+      }
+    });
+
     it("returns `false` for anything that is not one", () => {
       expect(isLaneObservation({ capability: "fuse", seconds: 1 })).toBe(false);
       expect(isLaneObservation({ day: "d", seconds: 1 })).toBe(false);
+      expect(isLaneObservation({ day: "d", spent: 31, projected: 26 }))
+        .toBe(false);
       expect(isLaneObservation({ day: "d", suite: "s", ran: 10 }))
         .toBe(false);
       expect(
@@ -1719,7 +1842,7 @@ describe("calibrate", () => {
   });
 
   describe("what the aggregate kept", () => {
-    it("sorts stored observations back into the two kinds", () => {
+    it("sorts stored observations back into their kinds", () => {
       const seen = laneObservations([
         { day: "2026-09-12", capability: "fuse", seconds: 14.8 },
         {
@@ -1731,10 +1854,29 @@ describe("calibrate", () => {
           units: 4,
         },
         { day: "2026-09-13", capability: "fuse", seconds: 2.1 },
+        { day: "2026-09-13", spent: 31, projected: 26, bound: 260 },
       ]);
       expect(seen.setup.get("fuse")).toEqual([14.8, 2.1]);
       expect(seen.batches).toEqual([
         { suite: "runner-unit", measured: true, ran: 10, spent: 30, units: 4 },
+      ]);
+      expect(seen.lanes).toEqual([{ spent: 31, projected: 26, bound: 260 }]);
+    });
+
+    it("reads what a stored batch was charged beside the batch", () => {
+      const seen = laneObservations([{
+        day: "2026-09-12",
+        suite: "runner-unit",
+        ran: 10,
+        spent: 30,
+        units: 4,
+        projected: 24,
+      }]);
+      expect(seen.charges).toEqual([
+        { suite: "runner-unit", spent: 30, projected: 24 },
+      ]);
+      expect(seen.batches).toEqual([
+        { suite: "runner-unit", ran: 10, spent: 30, units: 4 },
       ]);
     });
 

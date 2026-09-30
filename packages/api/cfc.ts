@@ -866,6 +866,7 @@ export const CFC_CANONICAL_ALIAS_NAMES = [
   "AnyOf",
   "PolicyOf",
   "WriteAuthorizedBy",
+  "WritePolicyAnyOf",
   "TrustedActionWriteWithIntegrity",
   "TrustedActionWrite",
   "TrustedActionUiContract",
@@ -1011,6 +1012,20 @@ export type TrustedActionWrite<
   Action extends string,
   Pattern extends string,
 > = TrustedActionWriteWithIntegrity<T, Binding, Action, Pattern, [Pattern]>;
+
+/**
+ * `T`, writable through any one of `Policies`, each a complete writer policy:
+ * a `WriteAuthorizedBy`, `TrustedActionWrite`, or
+ * `TrustedActionWriteWithIntegrity` over `unknown`. A write is admitted when
+ * one policy admits it whole — its writer, and the reviewed gesture that
+ * policy names if it names one — so one writer's gesture never admits
+ * another writer. The set is fixed once stored: a later schema can neither add
+ * nor drop a policy, nor change one.
+ */
+export type WritePolicyAnyOf<
+  T,
+  Policies extends readonly [unknown, ...unknown[]],
+> = Cfc<T, { readonly writePolicyAnyOf: Policies }>;
 
 export type TrustedActionUiContract<
   T,

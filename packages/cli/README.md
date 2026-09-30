@@ -111,6 +111,16 @@ posture, including each multi-user participant. Programmatic callers use
 `TestRunnerOptions.cfcFlowLabels` with the runtime names `off`, `observe`, or
 `persist`.
 
+The `cfc` logger warns once per kind of denial in each test file, naming the
+kind but not the reasons. `--cfc-denials` prints every denial as it happens,
+repeats included: a heading naming the kind, each reason the gate gave, the
+structured detail paired with a reason where the gate recorded one (what it
+refused, and the reads that carried the offending clauses), and the remaining
+inputs behind the decision. That covers a denial of the pattern's own setup,
+which otherwise leaves a run with no steps and no reason, as well as one the
+runtime retries. A multi-user participant's lines carry its name. A run that
+fails on a `cfc` warning without the flag says to run again with it.
+
 A pattern test can create its own labeled store without a connector. Declare a
 column's `ifc` alongside its SQLite type and seed rows in an action:
 
@@ -178,8 +188,11 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, Java properties, ProGuard, and XML files use their own
-syntax highlighting. A Swift package manifest is Swift source under its `.swift`
+Swift, Kotlin, TOML, shell, Java properties, ProGuard, and XML files use their
+own syntax highlighting. Shell covers Bash and POSIX shell scripts named `.sh`,
+`.bash`, or `.command`, and Bash's startup files, such as `.bashrc` and
+`.profile`. A heredoc's body is colored as a string, with the expansions its
+delimiter allows. A Swift package manifest is Swift source under its `.swift`
 extension, and a module's `.swiftinterface` is Swift as well. Gradle build and
 settings scripts are Kotlin scripts under the `.kts` extension. Gradle version
 catalogs and Cargo manifests are TOML, as are Cargo lock files. The ProGuard
@@ -196,14 +209,16 @@ its name alone leaves it as plain text. Transformed compiler output piped
 without a filename keeps TypeScript highlighting when its module header
 identifies it. Python interpreter shebangs select Python for otherwise
 unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
-`kotlin` shebangs select Kotlin. Node, Deno, and Bun shebangs select the
-TypeScript and JavaScript language family. Other filename-free source and named
-files with unrecognized syntax are shown as plain text. For piped source,
-`--filename` selects syntax as though the input had that name. `--language`
-selects a language by its stable identifier or alias. Both options keep the pipe
-read-only and suppress unified-diff auto-detection. An explicit language takes
-priority when both options are present. Use `--diff` instead when the pipe is a
-unified diff.
+`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
+shell, which covers Git hooks and other extensionless programs. Node, Deno, and
+Bun shebangs select the TypeScript and JavaScript language family. A diff
+selects each file's language from its path alone, so a shebang selects nothing
+there. Other filename-free source and named files with unrecognized syntax are
+shown as plain text. For piped source, `--filename` selects syntax as though the
+input had that name. `--language` selects a language by its stable identifier or
+alias. Both options keep the pipe read-only and suppress unified-diff
+auto-detection. An explicit language takes priority when both options are
+present. Use `--diff` instead when the pipe is a unified diff.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with

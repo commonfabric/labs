@@ -2,7 +2,8 @@
  * The page behind the ci tile. The tile carries one headline and the handful
  * of rows that fit under it; this is every job the tile read, at full width:
  * which repository and workflow it is, what its deciding run concluded, how
- * long that run took, and when it ran.
+ * long that run took, when it ran, and whether a run of it was going when the
+ * tile last collected.
  *
  * It renders the tile's own last collection rather than asking GitHub again,
  * so opening it costs nothing and shows exactly what the tile is showing.
@@ -50,6 +51,8 @@ export interface Job {
   startedAt?: number; // when the deciding run started
   ranMs?: number; // how long it ran
   href: string; // the deciding run, or the workflow's own runs page
+  // The newest of the job's runs that is in progress, when one is.
+  runningHref?: string;
 }
 
 /** What one collection of the ci tile saw. */
@@ -85,6 +88,8 @@ const STYLES = `
      tell the colors apart reads the shapes here too. */
   ${statusDotRules(9)}
   .dot{margin-right:7px;vertical-align:baseline}
+  /* The running dot follows the workflow's name rather than leading the row. */
+  td.job .dot{margin:0 0 0 7px}
   th button{font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;background:none;border:0;padding:0;cursor:pointer;display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap}
   th button:hover{color:var(--text)}
   th button::after{content:"↕";opacity:.35;font-size:9px}
@@ -109,6 +114,23 @@ function cell(className: string, text: string, sortKey?: string): string {
   return `<td class="${className}"${key}>${escapeHtml(text)}</td>`;
 }
 
+/**
+ * The workflow's name, linked to where `job` points, and after it a blue dot
+ * linked to the run in progress, when one is.
+ */
+function workflowLink(job: Job): string {
+  const running = job.runningHref === undefined
+    ? ""
+    : `<a class="dot run" href="${
+      escapeHtml(job.runningHref)
+    }" target="_blank" rel="noopener" title="running" aria-label="${
+      escapeHtml(job.workflow)
+    } running"></a>`;
+  return `<a href="${escapeHtml(job.href)}" target="_blank" rel="noopener">${
+    escapeHtml(job.workflow)
+  }</a>${running}`;
+}
+
 function jobRow(job: Job, now: number): string {
   const when = job.startedAt === undefined
     ? { at: "—", ago: "—" }
@@ -127,11 +149,9 @@ function jobRow(job: Job, now: number): string {
     escapeHtml(job.repo)
   }"><span class="dot ${STATUS_DOT[job.status]}"></span>${
     escapeHtml(job.repo)
-  }</td><td class="job" data-sort="${
-    escapeHtml(job.workflow)
-  }"><a href="${escapeHtml(job.href)}" target="_blank" rel="noopener">${
-    escapeHtml(job.workflow)
-  }</a></td>${cell("measure", job.event ?? "—", job.event ?? "")}${
+  }</td><td class="job" data-sort="${escapeHtml(job.workflow)}">${
+    workflowLink(job)
+  }</td>${cell("measure", job.event ?? "—", job.event ?? "")}${
     cell("measure", job.result, severity)
   }${
     cell(
@@ -349,6 +369,12 @@ function summary(collected: CiJobs): string {
     ["failing", String(failing)],
     ["unreadable", String(unreadable)],
     ["no verdict", String(count("unknown"))],
+    [
+      "running",
+      String(
+        collected.jobs.filter((job) => job.runningHref !== undefined).length,
+      ),
+    ],
   ];
   return `<dl class="summary">${
     facts.map(([term, value]) =>
@@ -379,11 +405,12 @@ export function ciJobsPage(
     );
   }
 
-  // A workflow with no run on the default branch has nothing to report in any
-  // of the table's columns, and a workflow only a pull request triggers is
+  // A workflow with no verdict has nothing to report in the table's trigger,
+  // result, and timing columns, and a workflow only a pull request triggers is
   // one of these. They go under the table rather than through it, where
   // thirteen rows of dashes would sit between the failures and everything
-  // that passed.
+  // that passed. One with a run in progress carries the running dot there as
+  // it would in the table.
   const judged = collected.jobs.filter((job) => job.status !== "unknown");
   const silent = ordered(collected.jobs.filter((job) => job.status === "unknown"));
   const rows = ordered(judged).map((job) => jobRow(job, now)).join("");
@@ -394,11 +421,9 @@ export function ciJobsPage(
       silent.map((job) =>
         `<tr><td class="repo"><span class="dot ${
           STATUS_DOT[job.status]
-        }"></span>${escapeHtml(job.repo)}</td><td class="job"><a href="${
-          escapeHtml(job.href)
-        }" target="_blank" rel="noopener">${
-          escapeHtml(job.workflow)
-        }</a></td><td class="measure">${escapeHtml(job.result)}</td></tr>`
+        }"></span>${escapeHtml(job.repo)}</td><td class="job">${
+          workflowLink(job)
+        }</td><td class="measure">${escapeHtml(job.result)}</td></tr>`
       ).join("")
     }</tbody></table></div>`;
   const unreadable = collected.unreadableRepos.length === 0

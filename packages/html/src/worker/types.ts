@@ -131,6 +131,13 @@ export interface RenderPolicy {
     allowLiteralText: boolean;
 
     /**
+     * Whether cell text may render at all. A boundary that requires no atoms
+     * admits no cell text, and an enclosing boundary's requirement does not
+     * change that for the text inside it.
+     */
+    admitsCellText: boolean;
+
+    /**
      * The enclosing text-integrity boundaries this policy applies to, innermost
      * included. A block under this policy is attributed to every id in the set
      * so each enclosing boundary can observe it. Composed (not replaced) as

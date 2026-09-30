@@ -1,0 +1,64 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "ids": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "log": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "prefix": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ids",
+      "log",
+      "prefix"
+    ],
+    "type": "object"
+  },
+  "pattern": "map-captured-object-spread/main.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "log": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "record": {
+        "items": {
+          "asCell": [
+            "stream",
+            "opaque"
+          ]
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "log",
+      "record",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}

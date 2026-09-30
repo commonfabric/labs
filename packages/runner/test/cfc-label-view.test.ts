@@ -15,6 +15,7 @@ import {
 import { toCell } from "../src/back-to-cell.ts";
 import { type FactoryInput, UI } from "../src/builder/types.ts";
 import {
+  cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
@@ -35,6 +36,7 @@ import { stripSigilCfcLabelViews } from "../src/cfc/link-label-view.ts";
 import { cfcLabelViewFromSchema } from "../src/cfc/schema-label-view.ts";
 import type { CfcMetadata } from "../src/cfc/types.ts";
 import { parseLink } from "../src/link-utils.ts";
+import { startReadStats } from "../src/read-stats.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -614,6 +616,881 @@ describe("CFC label view helpers", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  it("returns from `cfcLabelViewForAddress()` the stored labels rebased onto the address", async () => {
+    // The view at an address is read from an index of the document's
+    // entries by path. It has to match a rebase of every entry, wildcards,
+    // observation classes, and repeated paths included.
+
+    const signer = await Identity.fromPassphrase("cfc label view index");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const space = signer.did();
+      const tx = runtime.edit();
+      const cell = runtime.getCell(space, "label-view-index", undefined, tx);
+      const id = parseLink(cell.getAsLink()).id!;
+      const metadata: CfcMetadata = {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [
+            { path: [], label: { confidentiality: ["root"] } },
+            { path: ["*"], label: { integrity: ["any-item"] } },
+            {
+              path: ["list", "*", "title"],
+              label: { confidentiality: ["title"] },
+            },
+            {
+              path: ["list"],
+              label: { confidentiality: ["list-shape"] },
+              observes: "shape",
+            },
+            {
+              path: ["list", "0"],
+              label: { confidentiality: ["first-link"] },
+              origin: "link",
+            },
+            {
+              path: ["list", "0"],
+              label: { confidentiality: ["first-again"] },
+            },
+            {
+              path: ["other", "deep"],
+              label: { confidentiality: ["deep"] },
+            },
+          ],
+        },
+      };
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, {
+        space,
+        id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { list: [{ title: "a" }, { title: "b" }], other: { deep: 1 } },
+        cfc: metadata,
+      } as never);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).ok).toBeDefined();
+
+      const readTx = runtime.edit();
+      const queries = [
+        [],
+        ["list"],
+        ["list", "0"],
+        ["list", "0", "title"],
+        ["list", "1"],
+        ["list", "1", "title", "more"],
+        ["other"],
+        ["other", "deep"],
+        ["missing"],
+        ["*"],
+        ["list", "*"],
+      ];
+      let labeled = 0;
+      for (const path of queries) {
+        const address = { space, id, scope: "space" as const, path };
+        const expected = withCfcLabelViewOrigins(
+          cfcLabelViewFromMetadata(metadata, path),
+          [space],
+        );
+        const actual = cfcLabelViewForAddress(readTx, address);
+        expect(actual).toEqual(expected);
+        expect(cfcLabelViewOriginSpaces(actual)).toEqual(
+          cfcLabelViewOriginSpaces(expected),
+        );
+        if (actual !== undefined) labeled++;
+      }
+      expect(labeled).toBe(queries.length);
+      readTx.abort();
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  describe("handles minted by a schema read", () => {
+    // A schema read that crosses a link held in a labeled slot consumes that
+    // slot's label, so every handle it mints below the link carries it, as
+    // `Cell.resolveAsCell()` does for the same hop. `resolveAsCell()` on the
+    // same slot is the reference each case compares against where it can.
+
+    type Space = ReturnType<Identity["did"]>;
+
+    const withRuntime = async (
+      passphrase: string,
+      body: (fixture: {
+        /** Writes `value` and its label map as a document, and returns it. */
+        seed: (
+          space: Space,
+          id: string,
+          value: unknown,
+          entries: unknown[],
+        ) => Promise<ReturnType<Runtime["getCell"]>>;
+        home: Space;
+        elsewhere: Space;
+        runtime: Runtime;
+      }) => Promise<void>,
+    ) => {
+      const signer = await Identity.fromPassphrase(passphrase);
+      const elsewhere = (await Identity.fromPassphrase(`${passphrase} other`))
+        .did();
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        await body({
+          seed: async (space, id, value, entries) => {
+            const tx = runtime.edit();
+            const cell = runtime.getCell(space, id, undefined, tx);
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              space,
+              id: parseLink(cell.getAsLink()).id!,
+              type: "application/json",
+              path: [],
+            }, {
+              value,
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: { version: 1, entries },
+              },
+            } as never);
+            runtime.prepareTxForCommit(tx);
+            expect((await tx.commit()).ok).toBeDefined();
+            return runtime.getCell(space, id);
+          },
+          home: signer.did(),
+          elsewhere,
+          runtime,
+        });
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const confidentialityOf = (value: unknown) =>
+      getCarriedCfcLabelView(value)?.entries.map((entry) => ({
+        path: entry.path,
+        confidentiality: entry.label.confidentiality,
+      }));
+
+    it("carries the slot's label on a handle for a link in a property, a nested property, and an array item", async () => {
+      await withRuntime(
+        "cfc handle slot label",
+        async ({ seed, home, elsewhere }) => {
+          const note = await seed(
+            elsewhere,
+            "slot-note",
+            { text: "hello" },
+            [],
+          );
+          const holder = await seed(home, "slot-holder", {
+            note: note.getAsLink(),
+            wrap: { note: note.getAsLink() },
+            list: [note.getAsLink()],
+          }, [
+            { path: ["note"], label: { confidentiality: ["note-slot"] } },
+            {
+              path: ["wrap", "note"],
+              label: { confidentiality: ["wrap-slot"] },
+            },
+            { path: ["list", "0"], label: { confidentiality: ["list-slot"] } },
+          ]);
+
+          const read = holder.asSchema({
+            type: "object",
+            properties: {
+              note: { asCell: ["cell"] },
+              wrap: {
+                type: "object",
+                properties: { note: { asCell: ["cell"] } },
+              },
+              list: { type: "array", items: { asCell: ["cell"] } },
+            },
+          }).get() as any;
+
+          expect(confidentialityOf(read.note)).toEqual(
+            confidentialityOf(holder.key("note").resolveAsCell()),
+          );
+          expect(confidentialityOf(read.note)).toEqual([
+            { path: [], confidentiality: ["note-slot"] },
+          ]);
+          expect(confidentialityOf(read.wrap.note)).toEqual([
+            { path: [], confidentiality: ["wrap-slot"] },
+          ]);
+          expect(confidentialityOf(read.list[0])).toEqual([
+            { path: [], confidentiality: ["list-slot"] },
+          ]);
+          // Below the link, a handle carries the slot's label too, since it was
+          // reached through the slot.
+          const text = holder.asSchema({
+            type: "object",
+            properties: {
+              note: {
+                type: "object",
+                properties: { text: { type: "string", asCell: ["cell"] } },
+              },
+            },
+          }).get() as any;
+          expect(confidentialityOf(text.note.text)).toEqual([
+            { path: [], confidentiality: ["note-slot"] },
+          ]);
+        },
+      );
+    });
+
+    it("carries the label of every slot on a chain of links", async () => {
+      await withRuntime("cfc handle chain label", async ({ seed, home }) => {
+        const note = await seed(home, "chain-note", "hello", []);
+        const middle = await seed(home, "chain-middle", {
+          next: note.getAsLink(),
+        }, [{ path: ["next"], label: { confidentiality: ["middle-slot"] } }]);
+        const holder = await seed(home, "chain-holder", {
+          first: middle.getAsLink(),
+        }, [{ path: ["first"], label: { confidentiality: ["holder-slot"] } }]);
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: {
+            first: {
+              type: "object",
+              properties: { next: { asCell: ["cell"] } },
+            },
+          },
+        }).get() as any;
+
+        const [entry, ...rest] = confidentialityOf(read.first.next) ?? [];
+        expect(rest).toEqual([]);
+        expect(entry.path).toEqual([]);
+        expect([...entry.confidentiality ?? []].sort()).toEqual([
+          "holder-slot",
+          "middle-slot",
+        ]);
+      });
+    });
+
+    it("carries only the label of the slot a handle was reached through", async () => {
+      // Three slots hold links to one document, and only the middle one is
+      // labeled. The handles below the target are minted at one address
+      // under one schema each time, so a read that reused one arrival's
+      // handles for another would show the middle slot's label on a
+      // neighbor, or lose it from the middle.
+
+      await withRuntime("cfc handle route label", async ({ seed, home }) => {
+        const note = await seed(home, "route-note", {
+          inner: { deep: { text: "hello" } },
+        }, []);
+        const holder = await seed(home, "route-holder", {
+          before: note.getAsLink(),
+          labeled: note.getAsLink(),
+          after: note.getAsLink(),
+        }, [{ path: ["labeled"], label: { confidentiality: ["route-slot"] } }]);
+        const noteSchema = {
+          type: "object",
+          properties: {
+            inner: {
+              type: "object",
+              properties: { deep: { asCell: ["cell"] } },
+            },
+          },
+        } as const;
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: {
+            before: noteSchema,
+            labeled: noteSchema,
+            after: noteSchema,
+          },
+        }).get() as any;
+
+        expect(confidentialityOf(read.before.inner.deep)).toBeUndefined();
+        expect(confidentialityOf(read.labeled.inner.deep)).toEqual([
+          { path: [], confidentiality: ["route-slot"] },
+        ]);
+        expect(confidentialityOf(read.after.inner.deep)).toBeUndefined();
+      });
+    });
+
+    it("carries a slot's label only on handles reached through its link when the link stays in its own document", async () => {
+      // The read passes through `alias` into `target` first, then reaches
+      // `target` again as a property of its own, crossing no link.
+
+      await withRuntime(
+        "cfc handle same document",
+        async ({ seed, home, runtime }) => {
+          const id = "same-doc-holder";
+          const target = runtime.getCell(home, id).key("target").getAsLink();
+          const holder = await seed(home, id, {
+            alias: target,
+            target: { deep: { text: "hello" } },
+          }, [{ path: ["alias"], label: { confidentiality: ["alias-slot"] } }]);
+          const targetSchema = {
+            type: "object",
+            properties: { deep: { asCell: ["cell"] } },
+          } as const;
+
+          const read = holder.asSchema({
+            type: "object",
+            properties: { alias: targetSchema, target: targetSchema },
+          }).get() as any;
+
+          expect(confidentialityOf(read.alias.deep)).toEqual([
+            { path: [], confidentiality: ["alias-slot"] },
+          ]);
+          expect(confidentialityOf(read.target.deep)).toBeUndefined();
+        },
+      );
+    });
+
+    it("labels a value at a link's own slot by the route that reached the slot", async () => {
+      // `plain` and `labeled` both link to `middle`, whose `ref` slot links
+      // to `note`. Both slots carry `slot`, so the view below `note` is the
+      // same either way. The value read at `middle.ref` is annotated with a
+      // handle to the slot itself, whose view differs: only `labeled` passed
+      // through a labeled slot to reach it.
+
+      await withRuntime("cfc handle own slot route", async ({ seed, home }) => {
+        const note = await seed(home, "own-slot-note", { text: "a" }, []);
+        const middle = await seed(home, "own-slot-middle", {
+          ref: note.getAsLink(),
+        }, [{ path: ["ref"], label: { confidentiality: ["slot"] } }]);
+        const holder = await seed(home, "own-slot-holder", {
+          plain: middle.getAsLink(),
+          labeled: middle.getAsLink(),
+        }, [{ path: ["labeled"], label: { confidentiality: ["slot"] } }]);
+        const middleSchema = {
+          type: "object",
+          properties: {
+            ref: { type: "object", properties: { text: { type: "string" } } },
+          },
+        } as const;
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: { plain: middleSchema, labeled: middleSchema },
+        }).get() as any;
+
+        expect(confidentialityOf(read.plain.ref[toCell]())).toBeUndefined();
+        expect(confidentialityOf(read.labeled.ref[toCell]())).toEqual([
+          { path: [], confidentiality: ["slot"] },
+        ]);
+      });
+    });
+
+    it("carries no label from one list item's link onto the next item", async () => {
+      // The first item links back to the whole document through a labeled
+      // slot, and the second is an inline object beside it.
+
+      await withRuntime(
+        "cfc handle list item routes",
+        async ({ seed, home, runtime }) => {
+          const id = "item-route-holder";
+          const self = runtime.getCell(home, id).getAsLink();
+          const holder = await seed(home, id, {
+            list: [self, { text: "a" }],
+          }, [{ path: ["list", "0"], label: { confidentiality: ["self"] } }]);
+
+          const read = holder.asSchema({
+            type: "object",
+            properties: {
+              list: {
+                type: "array",
+                items: { asCell: ["cell"] },
+              },
+            },
+          }).get() as any;
+
+          expect(confidentialityOf(read.list[0])).toEqual([
+            { path: [], confidentiality: ["self"] },
+          ]);
+          expect(confidentialityOf(read.list[1])).toBeUndefined();
+        },
+      );
+    });
+
+    it("keeps what the read's own handle carries under a link that stays in its document", async () => {
+      // The handle the read starts from carries a label for `target`, and
+      // `alias` links to `target` in the same document. Reached through
+      // `alias`, `target` is still under the handle, so it carries both.
+
+      await withRuntime(
+        "cfc handle carried same document",
+        async ({ seed, home, runtime }) => {
+          const id = "carried-doc-holder";
+          const target = runtime.getCell(home, id).key("target").getAsLink();
+          await seed(home, id, {
+            alias: target,
+            target: { deep: { text: "hello" } },
+          }, [{ path: ["alias"], label: { confidentiality: ["alias-slot"] } }]);
+          const link = runtime.getCell(home, id).getAsLink() as any;
+          link["/"][LINK_V1_TAG].cfcLabelView = {
+            version: 1,
+            entries: [{
+              path: ["target"],
+              label: { confidentiality: ["carried"] },
+            }],
+          };
+          const targetSchema = {
+            type: "object",
+            properties: { deep: { asCell: ["cell"] } },
+          } as const;
+
+          const read = runtime.getCellFromLink(link).asSchema({
+            type: "object",
+            properties: { alias: targetSchema, target: targetSchema },
+          }).get() as any;
+
+          expect(confidentialityOf(read.target.deep)).toEqual([
+            { path: [], confidentiality: ["carried"] },
+          ]);
+          const [entry, ...rest] = confidentialityOf(read.alias.deep) ?? [];
+          expect(rest).toEqual([]);
+          expect(entry.path).toEqual([]);
+          expect([...entry.confidentiality ?? []].sort()).toEqual([
+            "alias-slot",
+            "carried",
+          ]);
+        },
+      );
+    });
+
+    it("carries a link-origin slot label on every handle reached through the link", async () => {
+      // A label a link write stores at its slot is of the `followRef` class,
+      // and a dereference retains it for everything it reaches, however deep
+      // (CFC §4.6.3, §8.2.4). So does a template at the slot's container.
+
+      await withRuntime("cfc handle link origin", async ({
+        seed,
+        home,
+        runtime,
+      }) => {
+        const note = await seed(home, "origin-note", { text: "a" }, []);
+        const holder = await seed(home, "origin-holder", {
+          note: note.getAsLink(),
+          list: [note.getAsLink()],
+        }, [
+          {
+            path: ["note"],
+            label: { confidentiality: ["pointer"] },
+            origin: "link",
+          },
+          {
+            path: ["list", "*"],
+            label: { confidentiality: ["item-pointer"] },
+            origin: "link",
+          },
+        ]);
+        const noteSchema = {
+          type: "object",
+          properties: { text: { type: "string", asCell: ["cell"] } },
+        } as const;
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: {
+            note: noteSchema,
+            list: { type: "array", items: noteSchema },
+          },
+        }).get() as any;
+
+        expect(confidentialityOf(read.note.text)).toEqual([
+          { path: [], confidentiality: ["pointer"] },
+        ]);
+        expect(confidentialityOf(read.list[0].text)).toEqual([
+          { path: [], confidentiality: ["item-pointer"] },
+        ]);
+
+        // A lazy read, and a cell below a resolved handle, carry it too.
+        const tx = runtime.edit();
+        tx.markLazyMaterialize();
+        const lazy = holder.withTx(tx).asSchema({
+          type: "object",
+          properties: { note: noteSchema },
+        }).get() as any;
+        const lazyText = confidentialityOf(lazy.note.text) ?? [];
+        tx.abort();
+        expect(lazyText.flatMap((entry) => entry.confidentiality ?? []))
+          .toContain("pointer");
+        const resolvedText = confidentialityOf(
+          holder.key("note").resolveAsCell().key("text"),
+        ) ?? [];
+        expect(resolvedText.flatMap((entry) => entry.confidentiality ?? []))
+          .toContain("pointer");
+      });
+    });
+
+    it("accumulates link-origin slot labels along a chain of links", async () => {
+      await withRuntime("cfc handle origin chain", async ({ seed, home }) => {
+        const note = await seed(home, "origin-chain-note", { text: "a" }, []);
+        const middle = await seed(home, "origin-chain-middle", {
+          next: note.getAsLink(),
+        }, [{
+          path: ["next"],
+          label: { confidentiality: ["second"] },
+          origin: "link",
+        }]);
+        const holder = await seed(home, "origin-chain-holder", {
+          first: middle.getAsLink(),
+        }, [{
+          path: ["first"],
+          label: { confidentiality: ["first"] },
+          origin: "link",
+        }]);
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: {
+            first: {
+              type: "object",
+              properties: {
+                next: {
+                  type: "object",
+                  properties: { text: { type: "string", asCell: ["cell"] } },
+                },
+              },
+            },
+          },
+        }).get() as any;
+
+        const [entry, ...rest] = confidentialityOf(read.first.next.text) ?? [];
+        expect(rest).toEqual([]);
+        expect(entry.path).toEqual([]);
+        expect([...entry.confidentiality ?? []].sort()).toEqual([
+          "first",
+          "second",
+        ]);
+      });
+    });
+
+    it("carries neither the entries below a link's slot nor any integrity onto what the link reaches", async () => {
+      // The reference restrictions are what resolves at the slot, the
+      // container's content label included. What the holder stores below the
+      // slot names positions of the target, which the target's own labels
+      // label, and observing a reference endorses nothing it reaches.
+
+      await withRuntime("cfc handle restrictions only", async ({
+        seed,
+        home,
+      }) => {
+        const note = await seed(home, "only-note", { text: "a" }, []);
+        const holder = await seed(home, "only-holder", {
+          note: note.getAsLink(),
+        }, [
+          {
+            path: [],
+            label: {
+              confidentiality: ["holder-root"],
+              integrity: ["holder-integrity"],
+            },
+          },
+          {
+            path: ["note"],
+            label: {
+              confidentiality: ["slot"],
+              integrity: ["slot-integrity"],
+            },
+          },
+          {
+            path: ["note", "text"],
+            label: { confidentiality: ["below-slot"] },
+          },
+        ]);
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: {
+            note: {
+              type: "object",
+              properties: { text: { type: "string", asCell: ["cell"] } },
+            },
+          },
+        }).get() as any;
+
+        const view = getCarriedCfcLabelView(read.note.text);
+        expect(view?.entries.map((entry) => entry.path)).toEqual([[]]);
+        expect([...view!.entries[0].label.confidentiality ?? []].sort())
+          .toEqual(["holder-root", "slot"]);
+        expect(view!.entries[0].label.integrity).toBeUndefined();
+      });
+    });
+
+    it("labels a value at a slot inside a chain of links by the route that reached it, in either order", async () => {
+      // `plain` and `labeled` both link to `middle`, whose `ref` slot links
+      // through `relay.x` to `note`, both hops resolved in one step. Only
+      // `labeled` is labeled, with the label `middle.ref` also stores, so the
+      // views below `middle.ref` are the same either way while the value at
+      // `middle.ref` differs. Each order of the two properties is read.
+
+      await withRuntime("cfc handle chain route", async ({ seed, home }) => {
+        const note = await seed(home, "chain-route-note", { text: "a" }, []);
+        const relay = await seed(home, "chain-route-relay", {
+          x: note.getAsLink(),
+        }, []);
+        const middle = await seed(home, "chain-route-middle", {
+          ref: relay.key("x").getAsLink(),
+        }, [{ path: ["ref"], label: { confidentiality: ["slot"] } }]);
+        const middleSchema = {
+          type: "object",
+          properties: {
+            ref: { type: "object", properties: { text: { type: "string" } } },
+          },
+        } as const;
+        for (
+          const [id, first, second] of [
+            ["chain-route-plain-first", "plain", "labeled"],
+            ["chain-route-labeled-first", "labeled", "plain"],
+          ] as const
+        ) {
+          const holder = await seed(home, id, {
+            [first]: middle.getAsLink(),
+            [second]: middle.getAsLink(),
+          }, [{ path: ["labeled"], label: { confidentiality: ["slot"] } }]);
+
+          const read = holder.asSchema({
+            type: "object",
+            properties: { plain: middleSchema, labeled: middleSchema },
+          }).get() as any;
+
+          expect(confidentialityOf(read.plain.ref[toCell]())).toBeUndefined();
+          expect(confidentialityOf(read.labeled.ref[toCell]())).toEqual([
+            { path: [], confidentiality: ["slot"] },
+          ]);
+        }
+      });
+    });
+
+    it("depends on the labels stored at a crossed slot, so a change to them runs the reader again", async () => {
+      // The slot is in `middle`, which the read reaches through a link, so
+      // only the crossing reads its labels.
+
+      await withRuntime("cfc handle label dependency", async ({
+        seed,
+        home,
+        runtime,
+      }) => {
+        const note = await seed(home, "dependency-note", { text: "a" }, []);
+        const middle = await seed(home, "dependency-middle", {
+          note: note.getAsLink(),
+        }, [{ path: ["note"], label: { confidentiality: ["slot"] } }]);
+        const holder = await seed(home, "dependency-holder", {
+          middle: middle.getAsLink(),
+        }, []);
+        const middleId = parseLink(middle.getAsLink()).id;
+
+        const tx = runtime.edit();
+        holder.withTx(tx).asSchema({
+          type: "object",
+          properties: {
+            middle: {
+              type: "object",
+              properties: {
+                note: {
+                  type: "object",
+                  properties: { text: { type: "string", asCell: ["cell"] } },
+                },
+              },
+            },
+          },
+        }).get();
+        const reads = tx.getReactivityLog!().reads;
+        tx.abort();
+
+        expect(
+          reads.some((read) => read.id === middleId && read.path[0] === "cfc"),
+        ).toBe(true);
+      });
+    });
+
+    it("carries each slot's label on the items of a list of plain links", async () => {
+      // A list of two or more plain links, and a list of one, take different
+      // routes to the linked rows. Each row's back-to-cell handle carries the
+      // label of its own slot.
+
+      await withRuntime("cfc handle plain links", async ({ seed, home }) => {
+        const first = await seed(home, "plain-first", { title: "a" }, []);
+        const second = await seed(home, "plain-second", { title: "b" }, []);
+        const holder = await seed(home, "plain-holder", {
+          pair: [first.getAsLink(), second.getAsLink()],
+          single: [first.getAsLink()],
+        }, [
+          { path: ["pair", "0"], label: { confidentiality: ["pair-0"] } },
+          { path: ["pair", "1"], label: { confidentiality: ["pair-1"] } },
+          { path: ["single", "0"], label: { confidentiality: ["single-0"] } },
+        ]);
+        const rows = {
+          type: "array",
+          items: { type: "object", properties: { title: { type: "string" } } },
+        } as const;
+
+        const read = holder.asSchema({
+          type: "object",
+          properties: { pair: rows, single: rows },
+        }).get() as any;
+
+        expect(confidentialityOf(read.pair[0][toCell]())).toEqual([
+          { path: [], confidentiality: ["pair-0"] },
+        ]);
+        expect(confidentialityOf(read.pair[1][toCell]())).toEqual([
+          { path: [], confidentiality: ["pair-1"] },
+        ]);
+        expect(confidentialityOf(read.single[0][toCell]())).toEqual([
+          { path: [], confidentiality: ["single-0"] },
+        ]);
+      });
+    });
+
+    it("carries the labels stored at an inline array item on the handles inside it", async () => {
+      // An inline object in a list is read as a document of its own. The
+      // labels at the item's position, and at the slot of a link the list
+      // was reached through, still apply to what is inside it.
+
+      await withRuntime("cfc handle inline items", async ({ seed, home }) => {
+        const note = await seed(home, "inline-note", {
+          items: [{ text: "a" }],
+        }, [{
+          path: ["items", "0", "text"],
+          label: { confidentiality: ["item"] },
+        }]);
+        const holder = await seed(home, "inline-holder", {
+          labeled: note.getAsLink(),
+        }, [{ path: ["labeled"], label: { confidentiality: ["slot"] } }]);
+        const items = {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { text: { asCell: ["cell"] } },
+              },
+            },
+          },
+        } as const;
+
+        const direct = note.asSchema(items).get() as any;
+        expect(confidentialityOf(direct.items[0].text)).toEqual([
+          { path: [], confidentiality: ["item"] },
+        ]);
+
+        const linked = holder.asSchema({
+          type: "object",
+          properties: { labeled: items },
+        }).get() as any;
+        const [entry, ...rest] =
+          confidentialityOf(linked.labeled.items[0].text) ?? [];
+        expect(rest).toEqual([]);
+        expect(entry.path).toEqual([]);
+        expect([...entry.confidentiality ?? []].sort()).toEqual([
+          "item",
+          "slot",
+        ]);
+      });
+    });
+
+    it("reads a recursive union at a property holding a link", async () => {
+      // `R` is `A` or `R` together with `B`. Each branch evaluated at the
+      // linked position follows the link again, and each must still find the
+      // traversal of `R` it comes back to.
+
+      await withRuntime(
+        "cfc handle recursive union",
+        async ({ seed, home }) => {
+          const target = await seed(home, "union-target", { a: 1, b: 2 }, []);
+          const holder = await seed(home, "union-holder", {
+            node: target.getAsLink(),
+          }, [{ path: ["node"], label: { confidentiality: ["union-slot"] } }]);
+          const A = {
+            type: "object",
+            properties: { a: { type: "number" } },
+            additionalProperties: false,
+          } as const;
+          const B = {
+            type: "object",
+            properties: { b: { type: "number" } },
+            additionalProperties: false,
+          } as const;
+
+          const read = holder.asSchema({
+            type: "object",
+            properties: { node: { $ref: "#/$defs/R" } },
+            $defs: {
+              R: { anyOf: [A, { allOf: [{ $ref: "#/$defs/R" }, B] }] },
+            },
+          }).get() as any;
+
+          expect(read.node).toEqual({ a: 1, b: 2 });
+          // The value's handle addresses the slot itself, where the label is
+          // stored, rather than carrying it.
+          expect(cfcLabelViewForCell(read.node[toCell]())?.entries).toEqual([
+            { path: [], label: { confidentiality: ["union-slot"] } },
+          ]);
+        },
+      );
+    });
+
+    it("follows each link once where several slots link to one document", async () => {
+      // Each level of the chain links to the next through two slots, so the
+      // number of routes to the last document doubles with every level while
+      // the documents on them grow by one. Only the first level's slots are
+      // labeled, differently, so two views reach every document below.
+
+      await withRuntime("cfc handle shared documents", async ({
+        seed,
+        home,
+        runtime,
+      }) => {
+        const levels = 12;
+        let next = await seed(home, `shared-${levels}`, {}, []);
+        for (let level = levels - 1; level >= 0; level--) {
+          next = await seed(
+            home,
+            `shared-${level}`,
+            {
+              left: next.getAsLink(),
+              right: next.getAsLink(),
+            },
+            level === 0
+              ? [
+                { path: ["left"], label: { confidentiality: ["left"] } },
+                { path: ["right"], label: { confidentiality: ["right"] } },
+              ]
+              : [],
+          );
+        }
+        const tx = runtime.edit();
+        const finish = startReadStats(tx);
+        next.withTx(tx).asSchema({
+          $ref: "#/$defs/Node",
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                left: { $ref: "#/$defs/Node" },
+                right: { $ref: "#/$defs/Node" },
+              },
+            },
+          },
+        }).get();
+        const { linkResolutions } = finish(0);
+        tx.abort();
+
+        // Two views, two slots per level, and at most a few hops per slot.
+        expect(linkResolutions).toBeLessThanOrEqual(2 * 2 * 4 * levels);
+      });
+    });
   });
 
   it("preserves ref-carried label views when creating cells from sigil links", async () => {

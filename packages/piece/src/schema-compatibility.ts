@@ -361,9 +361,15 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * authorization evidence, which `comparableIfc` keeps.
  *
  * `writerIdentity` is the write authorization, compared except for the parts of
- * its claim that move without the authorization moving.
+ * its claim that move without the authorization moving. `writerAlternatives`
+ * is a list of such authorizations, each with the contract beside it, and each
+ * claim in it is compared the same way.
  */
-type IfcKeyRole = "declared" | "derived" | "writerIdentity";
+type IfcKeyRole =
+  | "declared"
+  | "derived"
+  | "writerIdentity"
+  | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -384,6 +390,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "writerIdentity",
+  writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
   // `AuthoredByCurrentUser` spellings that expand to it. It names atoms the
@@ -496,7 +503,10 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (role === "derived" || role === "writerIdentity") {
+    if (
+      role === "derived" || role === "writerIdentity" ||
+      role === "writerAlternatives"
+    ) {
       handled = true;
       break;
     }
@@ -524,6 +534,22 @@ const comparableIfc = (ifc: unknown): unknown => {
     if (role === "writerIdentity") {
       const normalized = writerClaimWithoutVolatileIdentity(value);
       if (normalized !== value) changed = true;
+      keep(kept, key, normalized);
+      continue;
+    }
+    if (role === "writerAlternatives" && Array.isArray(value)) {
+      const normalized = value.map((policy) => {
+        if (!isObjectNotArray(policy)) return policy;
+        const writer = writerClaimWithoutVolatileIdentity(
+          policy.writeAuthorizedBy,
+        );
+        return writer === policy.writeAuthorizedBy
+          ? policy
+          : { ...policy, writeAuthorizedBy: writer };
+      });
+      if (normalized.some((policy, index) => policy !== value[index])) {
+        changed = true;
+      }
       keep(kept, key, normalized);
       continue;
     }
@@ -580,12 +606,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a
- * `writeAuthorizedBy` writer claim's volatile identity is normalized out before
- * the `ifc` comparison. That identity is the content-addressed module hash
- * (`moduleIdentity`, and the legacy `bundleId`), which rehashes on any edit to
- * the authoring module, together with the source-file spelling (`file`), which
- * changes with the resolver that compiled the module. The runtime authorizes a
+ * `writeOnly`) are compared for exact equality, with one exception: a writer
+ * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
+ * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * identity is the content-addressed module hash (`moduleIdentity`, and the
+ * legacy `bundleId`), which rehashes on any edit to the authoring module,
+ * together with the source-file spelling (`file`), which changes with the
+ * resolver that compiled the module. The runtime authorizes a
  * write on `moduleIdentity` plus the binding `path` and never on `file`, and it
  * re-verifies the live writer's `moduleIdentity` against the claim at write
  * time, so holding those fields fixed here would reject a recompile or a

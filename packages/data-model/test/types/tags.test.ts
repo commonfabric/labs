@@ -68,6 +68,7 @@ import { FabricError, FabricMap } from "@/fabric-instances";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   FabricBytes,
+  FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
@@ -1264,6 +1265,7 @@ describe("tags", () => {
 
     const fabricClasses = [
       FabricBytes,
+      FabricDurationNsec,
       FabricEpochDay,
       FabricEpochNsec,
       FabricHash,

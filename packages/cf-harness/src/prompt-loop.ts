@@ -3890,9 +3890,13 @@ export class CfHarnessPromptLoop {
           });
         }
         let response;
-        // What the run's sandbox can do decides which inputs a tool offers
-        // (bash takes `session` only where there are sessions).
+        // What the run's sandbox can do in this run's mode decides which
+        // inputs a tool offers (bash takes `session` only where a session
+        // can be used).
         const sandboxDescription = this.engine.sandbox.describe();
+        const toolRun = {
+          cfcEnforcementMode: this.engine.getRunState().cfcEnforcementMode,
+        };
         try {
           response = await this.modelClient.complete({
             model,
@@ -3902,7 +3906,11 @@ export class CfHarnessPromptLoop {
               : BUILTIN_TOOLS.filter((tool) =>
                 this.#allowedToolIds.has(tool.descriptor.toolId)
               ).map((tool) =>
-                builtinToolDescriptorForRuntime(tool, sandboxDescription)
+                builtinToolDescriptorForRuntime(
+                  tool,
+                  sandboxDescription,
+                  toolRun,
+                )
               ),
             nativeModelToolIds: finalizing ? [] : this.#nativeModelToolIds,
             runId: this.engine.getRunState().runId,

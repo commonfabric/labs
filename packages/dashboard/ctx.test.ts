@@ -20,7 +20,7 @@ import {
   LOOM_REPO,
   REPO,
 } from "./config.ts";
-import type { Ctx, Run } from "./types.ts";
+import { type Ctx, type Run, runSource } from "./types.ts";
 
 // GitHub hands back a workflow's runs newest first, so the canned runs are timed
 // from their id: a larger id is an older run, and a page of ascending ids reads
@@ -110,7 +110,7 @@ Deno.test("runs(): a second read within the TTL is served from the cache, not re
       assertEquals(urls.length, 2);
       assertEquals(second, first);
       // runsFor with the same repo and workflow is the same source, so it shares it.
-      assertEquals(await ctx.runsFor(REPO, CI_WORKFLOW), first);
+      assertEquals(await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main")), first);
       assertEquals(urls.length, 2);
     },
   );
@@ -121,8 +121,8 @@ Deno.test("runsFor: each repo and workflow is cached separately", async () => {
     if (!first(url)) return [];
     return url.includes(LOOM_REPO) ? [run({ id: 77 })] : [run({ id: 11 })];
   }, async (ctx, urls) => {
-    const labs = await ctx.runsFor(REPO, CI_WORKFLOW);
-    const loom = await ctx.runsFor(LOOM_REPO, LOOM_CI_WORKFLOW);
+    const labs = await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
+    const loom = await ctx.runsFor(runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"));
     // A second repo must not be handed the first repo's cached runs.
     assertEquals(labs.map((r) => r.id), [11]);
     assertEquals(loom.map((r) => r.id), [77]);
@@ -137,7 +137,33 @@ Deno.test("runsFor: each repo and workflow is cached separately", async () => {
     );
     // Four requests: two pages each. Loom re-read is then cached under its own key.
     assertEquals(urls.length, 4);
-    await ctx.runsFor(LOOM_REPO, LOOM_CI_WORKFLOW);
+    await ctx.runsFor(runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"));
+    assertEquals(urls.length, 4);
+  });
+});
+
+Deno.test("runsFor: a workflow's main and pull request runs are separate sources", async () => {
+  await withGithub((url) => {
+    if (!first(url)) return [];
+    const query = new URL(url).searchParams;
+    if (query.get("branch") === "main" && !query.has("event")) {
+      return [run({ id: 11 })];
+    }
+    if (query.get("event") === "pull_request" && !query.has("branch")) {
+      return [run({ id: 22, event: "pull_request" })];
+    }
+    return [];
+  }, async (ctx, urls) => {
+    const main = await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
+    const pulls = await ctx.runsFor(
+      runSource(REPO, CI_WORKFLOW, "pull requests"),
+    );
+    assertEquals(main.map((r) => r.id), [11]);
+    assertEquals(pulls.map((r) => r.id), [22]);
+    // Two pages each, and each source is then cached under its own key.
+    assertEquals(urls.length, 4);
+    await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "pull requests"));
+    await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
     assertEquals(urls.length, 4);
   });
 });

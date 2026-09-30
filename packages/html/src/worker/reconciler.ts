@@ -45,12 +45,14 @@ import {
   CFC_LABEL_READ_FAILED_ATOM,
   type CfcLabelView,
   cfcLabelViewForCell,
+  cfcLabelViewForResolvedTarget,
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
   markRendererTrustedEvent,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
+  readConsumesEntry,
   type RenderConfidentialityResolver,
   reportCfcDenial,
   type SpaceMembershipProvider,
@@ -779,8 +781,9 @@ export class WorkerReconciler {
     // Compose (do not replace) the enclosing text-integrity policy so nesting
     // can only TIGHTEN it: required integrity is the union of every enclosing
     // boundary's atoms, literal text is allowed only if every enclosing
-    // boundary allows it, and the block-attribution set carries every enclosing
-    // boundary id. An inner boundary can never relax an outer one.
+    // boundary allows it, cell text is admitted only if every enclosing
+    // boundary requires some atom, and the block-attribution set carries every
+    // enclosing boundary id. An inner boundary can never relax an outer one.
     const parentTextIntegrity = policy.textIntegrity;
     const boundaryNodeIds = new Set(parentTextIntegrity?.boundaryNodeIds ?? []);
     boundaryNodeIds.add(nodeId);
@@ -793,6 +796,8 @@ export class WorkerReconciler {
         ],
         allowLiteralText: (parentTextIntegrity?.allowLiteralText ?? true) &&
           allowLiteralText,
+        admitsCellText: (parentTextIntegrity?.admitsCellText ?? true) &&
+          requiredIntegrity.length > 0,
         boundaryNodeIds,
       },
     };
@@ -1196,9 +1201,9 @@ export class WorkerReconciler {
    * own view, or — when it has none — the resolved (followed) target's view,
    * whose label may carry the `Space(...)` atoms. May throw (each caller
    * decides its own fail-closed handling). The SINGLE source of label
-   * resolution shared by the gate (`#canRenderCellUnderPolicy`), the
-   * represents-principal read, and the Stage-2 membership watcher
-   * (`watchCellMembership`), so they can never drift out of lockstep.
+   * resolution shared by the gate (`#canRenderCellUnderPolicy`) and the
+   * Stage-2 membership watcher (`watchCellMembership`), so they can never
+   * drift out of lockstep.
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
     return this.#resolveCellLabelSource(cell).view;
@@ -1217,16 +1222,12 @@ export class WorkerReconciler {
   }
 
   /**
-   * The principals `cell`'s label says it represents, as
-   * `authorPrincipalCandidates()` reads them; none when its label cannot be
-   * read.
+   * The principals the label of `cell`'s value says it represents, as
+   * `authorPrincipalCandidates()` reads them from the document that holds the
+   * value; none when that label cannot be read.
    */
   #representedPrincipalsForCell(cell: Cell<unknown>): string[] {
-    try {
-      return authorPrincipalCandidates(this.#resolveCellLabelView(cell));
-    } catch {
-      return [];
-    }
+    return authorPrincipalCandidates(cfcLabelViewForResolvedTarget(cell));
   }
 
   #staticCellProp(
@@ -1421,6 +1422,7 @@ export class WorkerReconciler {
       rightPolicy.requiredIntegrity,
     ) &&
       leftPolicy.allowLiteralText === rightPolicy.allowLiteralText &&
+      leftPolicy.admitsCellText === rightPolicy.admitsCellText &&
       this.#boundaryNodeIdsEqual(
         leftPolicy.boundaryNodeIds,
         rightPolicy.boundaryNodeIds,
@@ -1990,19 +1992,15 @@ export class WorkerReconciler {
     if (textIntegrity === undefined) {
       return true;
     }
-    if (textIntegrity.requiredIntegrity.length === 0) {
+    if (!textIntegrity.admitsCellText) {
       return false;
     }
 
-    let labelView: CfcLabelView | undefined;
-    try {
-      labelView = cfcLabelViewForCell(cell);
-      if (labelView === undefined) {
-        labelView = cfcLabelViewForCell(cell.resolveAsCell());
-      }
-    } catch {
-      return false;
-    }
+    // The value's own document vouches for the text. The documents the read
+    // passed through on the way vouch only for the links they hold.
+    const labelView = cfcLabelViewForResolvedTarget(cell, {
+      kickCrossSpaceTargets: false,
+    });
     if (labelView === undefined) {
       return false;
     }
@@ -2013,10 +2011,17 @@ export class WorkerReconciler {
     );
   }
 
+  /**
+   * The integrity a read of the value at the root of `labelView` consumes. An
+   * entry describing a link the value was once reached through, rather than
+   * the value, contributes none.
+   */
   #integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
     return ContextualFlowControl.uniqueAtoms(
       labelView.entries.flatMap((entry) =>
-        entry.path.length === 0 ? [...(entry.label.integrity ?? [])] : []
+        entry.path.length === 0 && readConsumesEntry("value", entry)
+          ? [...(entry.label.integrity ?? [])]
+          : []
       ),
     );
   }

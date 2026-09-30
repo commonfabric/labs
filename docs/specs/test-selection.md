@@ -669,19 +669,24 @@ withheld set with its reason, the
 tests a configuration deliberately does not run, a reference packing into
 lanes, the unschedulable list, a count and digest of known identities, and
 the coverage baselines, one per measured set per default-branch run
-inside `LOCAL_COVERAGE_BASELINE_DAYS`.
+inside `LOCAL_COVERAGE_BASELINE_DAYS`. It may carry the cost model's
+health as well: per suite, its fixed charge and its tests too long for
+any lane beside those of the manifest before, and what its batches spent
+over what they were charged; how many lanes ran past their bound; and
+what the publisher found broken in those figures.
 
-A manifest is **untrusted input**. It is validated whole, and one bad
-field rejects the object rather than leaving a consumer obeying half of
-it. A manifest declaring a shape from further ahead than the reader is
-treated as absent, because a reader that does not know a field cannot
-know what obeying the rest would mean. A reader whose answer decides
-what runs takes the newest one behind it instead, since a figure hours
-old is what it costs and the whole corpus is what refusing costs. It
-looks back over a bounded number of them, since every candidate is a
-whole corpus to fetch. A reader that reaches the end of that bound says
-so rather than reporting the store as holding none: it holds several,
-and this reader can read none of the ones it looked at.
+A manifest is **untrusted input**. It is validated whole, and one bad field
+rejects the object rather than leaving a consumer obeying half of it. The health
+is the one exception, because nothing obeys it: a health a reader cannot read is
+dropped and the rest of the manifest is read. A manifest declaring a shape from
+further ahead than the reader is treated as absent, because a reader that does
+not know a field cannot know what obeying the rest would mean. A reader whose
+answer decides what runs takes the newest one behind it instead, since a figure
+hours old is what it costs and the whole corpus is what refusing costs. It looks
+back over a bounded number of them, since every candidate is a whole corpus to
+fetch. A reader that reaches the end of that bound says so rather than reporting
+the store as holding none: it holds several, and this reader can read none of
+the ones it looked at.
 
 A manifest declaring an earlier shape is read forward field by field. So
 is the publisher's own rolling aggregate, and for a stronger reason: the

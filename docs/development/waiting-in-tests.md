@@ -387,6 +387,12 @@ A set of edges carries them, and
   the single observer slot the ExecutorHost owns, so any number of watchers
   attach. `awaitAdmitted(server, predicate)` sleeps on it and reads the engine
   on each commit.
+  `MultiRuntimeHarness.settleUntil` in
+  `packages/patterns/integration/multi-runtime-harness.ts` sleeps on it too,
+  and settles the harness's worker runtimes before each attempt. Under server
+  execution the serving loop writes the surface a `#profile` wish opens, and
+  no session's event waits for that write, so
+  `profile-create-surface-multi-runtime.test.ts` waits for it this way.
 - `SpaceServerOptions.onWaveCycle`, forwarded by `ExecutorHostOptions`, reports
   each wave cycle as it ends — committed or not, thrown or not. The loop's
   counters move inside a cycle and are visible only as numbers afterwards, so

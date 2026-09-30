@@ -382,6 +382,24 @@ export interface FabricBytesConstructor {
 export declare const FabricBytes: FabricBytesConstructor;
 
 /**
+ * Temporal type representing a span of time, as a count of nanoseconds. Wraps
+ * a `bigint` value.
+ */
+export interface FabricDurationNsec extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "FabricDurationNsec";
+
+  readonly value: bigint;
+}
+
+export interface FabricDurationNsecConstructor {
+  new (value: bigint): FabricDurationNsec;
+  prototype: FabricDurationNsec;
+}
+
+export declare const FabricDurationNsec: FabricDurationNsecConstructor;
+
+/**
  * Temporal type representing a particular day, as a count of days from the
  * POSIX Epoch. Wraps a `bigint` value.
  */
@@ -616,6 +634,7 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  */
 export type ConcreteFabricPrimitive =
   | FabricBytes
+  | FabricDurationNsec
   | FabricEpochDay
   | FabricEpochNsec
   | FabricHash
@@ -2694,6 +2713,15 @@ export type JSONSchemaObj = {
           readonly moduleIdentity?: string;
         };
       };
+    // The lowered form of `WritePolicyAnyOf`: alternative complete writer
+    // policies, any one of which admits a write whole. A position declaring
+    // it declares no `writeAuthorizedBy` or `uiContract` of its own.
+    readonly writePolicyAnyOf?: readonly {
+      readonly writeAuthorizedBy: NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writeAuthorizedBy"]
+      >;
+      readonly uiContract?: NonNullable<JSONSchemaObj["ifc"]>["uiContract"];
+    }[];
     readonly exactCopyOf?: readonly string[];
     // §8.3 projection claim (the lowered form of `Projection` /
     // `ProjectionOf` / `ProjectionPath`): this value is the field at JSON

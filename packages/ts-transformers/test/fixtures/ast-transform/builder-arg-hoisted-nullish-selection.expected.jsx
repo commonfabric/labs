@@ -141,7 +141,8 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
 //        .for("activeProfile", true)   (authored-name cause)
 //   join({ myName, profile: activeProfile })
 //     -> binds the named derived node, with builder-layer cause layering
-//        .for(["boundJoin", "profile"], true)
+//        ?.for(["boundJoin", "profile"], true)   (optional, since the type of
+//        `activeProfile` admits `undefined`)
 // Context: the INLINE form of this `??` in the builder args is rejected with
 //   the hoist diagnostic (see fixtures/bug-repro/ and
 //   test/builder-argument-computation-diagnostic.test.ts); this golden pins
@@ -166,7 +167,7 @@ export default pattern((__cf_pattern_input) => {
     }).for("activeProfile", true);
     const boundJoin = join({
         myName,
-        profile: activeProfile.for(["boundJoin", "profile"], true)
+        profile: activeProfile?.for(["boundJoin", "profile"], true)
     }).for({ stream: "boundJoin" }, true);
     return {
         [UI]: (<div>

@@ -295,7 +295,7 @@ by any repo test.
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties` (checker-driven property enumeration) | via `ObjectFormatter`; fixture `record-union-keys` | record-mapped-types.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property | skip: `type-utils.ts`, `object-formatter.ts`; exception: `object-formatter.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
-| `FabricPrimitive` class (`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
+| `FabricPrimitive` class (`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
@@ -370,9 +370,10 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; the seven `FabricPrimitive` classes
-(`FabricBytes`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`,
-`FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) → `{ type: "<Name>" }`
+and `Uint8Array` → `{ type: "object" }`; the eight `FabricPrimitive` classes
+(`FabricBytes`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`,
+`FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) →
+`{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
@@ -910,6 +911,7 @@ inside those payloads.
 | `WriteAuthorizedBy<T, typeof b>` | `{ writeAuthorizedBy: { __ctWriterIdentityOf: { file, path: [binding], moduleIdentity? } } }` |
 | `TrustedActionWriteWithIntegrity<…>` | writeAuthorizedBy metadata + `uiContract { helper: "UiAction", action, trustedPattern, requiredEventIntegrity }` |
 | `TrustedActionWrite<…>` | same, with `requiredEventIntegrity` defaulting to `[trustedPattern]` |
+| `WritePolicyAnyOf<T, [P, …]>` | `{ writePolicyAnyOf: [p, …] }`, each `p` the lowering of one member `P` — a `WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` over `unknown`, directly or through a user alias. The tuple must be written in place and nonempty, with no optional or rest member, and each member must lower to a writer; otherwise generation throws |
 | `TrustedActionUiContract<…>` | `{ uiContract: { helper: "UiAction", action, trustedPattern, requiredEventIntegrity? } }` |
 | `ExactCopy<T, S>` | `{ exactCopyOf: S }` |
 | `ProjectionPath<T, F, P>` | `{ projection: { from: F, path: P } }` |
@@ -1237,9 +1239,9 @@ helpers part of the supported authoring surface.
 The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
 (`packages/api/index.ts`): `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
-`writeAuthorizedBy`, `exactCopyOf`, `projection`, `observes`, and `uiContract`.
-`ownerPrincipal` and `observes` have no direct producing alias in this package
-as of this writing.
+`writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
+`observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
+producing alias in this package as of this writing.
 
 ## 12. Doc Comments → `description` / `tags` / `$comment`
 

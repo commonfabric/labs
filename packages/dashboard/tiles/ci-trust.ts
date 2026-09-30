@@ -7,8 +7,8 @@
  * it succeeded. A try that did not succeed, a cancelled attempt that ran jobs
  * among them, makes the run a failure, and so does a second try whatever its
  * result, since the run needed a rerun. A run with no try left is left out of
- * the share. One factory builds both the labs and loom instances against their
- * own repository and workflow.
+ * the share. One factory builds the labs, loom, and weaver instances against
+ * their own repository and workflow.
  */
 
 import {
@@ -20,7 +20,17 @@ import {
 } from "../types.ts";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { strip } from "../lib.ts";
-import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO, TRUST_GOOD, TRUST_RUNS_MAX, TRUST_WARN } from "../config.ts";
+import {
+  CI_WORKFLOW,
+  LOOM_CI_WORKFLOW,
+  LOOM_REPO,
+  REPO,
+  TRUST_GOOD,
+  TRUST_RUNS_MAX,
+  TRUST_WARN,
+  WEAVER_CI_WORKFLOW,
+  WEAVER_REPO,
+} from "../config.ts";
 
 type TrustOutcome = "green" | "red" | "run" | "gray";
 
@@ -51,12 +61,13 @@ async function trustOutcome(
 
 function makeCiTrust(opts: { label: string; repo: string; workflow: string }): Tile {
   const attempts = new CompletedAttempts(opts.repo);
+  const source = runSource(opts.repo, opts.workflow, "main");
   return {
     label: opts.label,
     intervalMs: 30_000,
-    runSources: [runSource(opts.repo, opts.workflow)],
+    runSources: [source],
     async collect(ctx): Promise<TileView> {
-      const runs = await ctx.runsFor(opts.repo, opts.workflow);
+      const runs = await ctx.runsFor(source);
       const recent = runs.slice(0, TRUST_RUNS_MAX);
       attempts.observe(recent);
       const scored = await Promise.all(recent.map(async (run) => ({
@@ -97,3 +108,4 @@ function makeCiTrust(opts: { label: string; repo: string; workflow: string }): T
 
 export const labsCiTrust = makeCiTrust({ label: "labs ci trust", repo: REPO, workflow: CI_WORKFLOW });
 export const loomCiTrust = makeCiTrust({ label: "loom ci trust", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
+export const weaverCiTrust = makeCiTrust({ label: "weaver ci trust", repo: WEAVER_REPO, workflow: WEAVER_CI_WORKFLOW });

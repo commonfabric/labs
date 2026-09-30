@@ -40,6 +40,7 @@ import {
   type SandboxRuntime,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
+  sandboxSessionsAllowedUnder,
   SandboxSessionUnavailableError,
   type SandboxShellRequest,
 } from "./types.ts";
@@ -1387,10 +1388,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     session: string,
   ): Promise<SandboxCommandResult> {
     const mode = request.cfcInvocationContext?.cfcEnforcementMode;
-    if (
-      mode !== undefined &&
-      cfcEnforcementStrictness(mode) >= CFC_ENFORCING_STRICTNESS
-    ) {
+    if (mode !== undefined && !sandboxSessionsAllowedUnder(mode)) {
       // See the header: a session's result cannot vouch for what reaches
       // the call's output, so an enforcing run gets no session at all.
       throw new SandboxSessionUnavailableError(

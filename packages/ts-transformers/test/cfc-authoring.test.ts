@@ -222,6 +222,7 @@ Deno.test("ts-transformers re-exports the canonical CFC alias set", () => {
     "AnyOf",
     "PolicyOf",
     "WriteAuthorizedBy",
+    "WritePolicyAnyOf",
     "TrustedActionWriteWithIntegrity",
     "TrustedActionWrite",
     "TrustedActionUiContract",

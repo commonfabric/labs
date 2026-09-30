@@ -1782,24 +1782,45 @@ export class PatternManager {
    * `#patternFromEvaluation` load path does. Reach for the bare
    * `Engine.compileAndEvaluateModules` only to inspect serialized/verified output
    * *without running* (engine unit tests), where stamping entry refs is unwanted.
+   *
+   * With `persistence`, the program's module closure is also written into
+   * `persistence.space`, as an ordinary compile into that space writes it,
+   * unless CFC enforcement is `disabled`. A pattern the program instantiates
+   * in a space of its own, with `inSpace()`, is replicated there from that
+   * closure, so a caller that runs the program in `persistence.space` passes
+   * it. The write comes after evaluation, and `persistence.when`, given the
+   * evaluated result, can decline it. A failed write fails the call, and
+   * leaves the program's modules unregistered.
    */
   async compileAndRegisterModules(
     program: RuntimeProgram,
     options?: TypeScriptHarnessProcessOptions,
+    persistence?: {
+      space: MemorySpace;
+      when?: (result: EvaluateResult) => boolean;
+    },
   ): Promise<EvaluateResult> {
     const patternCoverage = this.#patternCoverageFor(options);
     const effectiveOptions: TypeScriptHarnessProcessOptions = {
       ...options,
       patternCoverage,
     };
-    const byteCache = this.#runtime.moduleByteCache;
-    const runtimeVersion = byteCache === undefined
+    // The same condition `compileOrGetPattern()` persists under.
+    const persistenceSpace = this.#runtime.cfcEnforcementMode === "disabled"
       ? undefined
-      : moduleByteCacheRuntimeVersion(
-        await getCompileCacheRuntimeVersion(),
-        { patternCoverage: patternCoverage !== undefined },
-      );
-    if (byteCache === undefined || runtimeVersion === undefined) {
+      : persistence?.space;
+    const byteCache = this.#runtime.moduleByteCache;
+    const runtimeVersion =
+      byteCache === undefined && persistenceSpace === undefined
+        ? undefined
+        : moduleByteCacheRuntimeVersion(
+          await getCompileCacheRuntimeVersion(),
+          { patternCoverage: patternCoverage !== undefined },
+        );
+    if (
+      persistenceSpace === undefined &&
+      (byteCache === undefined || runtimeVersion === undefined)
+    ) {
       const result = await this.#runtime.harness.compileAndEvaluateModules(
         program,
         effectiveOptions,
@@ -1808,13 +1829,19 @@ export class PatternManager {
       return result;
     }
 
-    const { id, graph, mainSpecifier, modules } = await this.#runtime.harness
-      .compileToRecordGraph(program, {
+    const { id, graph, mainSpecifier, entryIdentity, modules } = await this
+      .#runtime.harness.compileToRecordGraph(program, {
         ...effectiveOptions,
-        precompiledModulesFor: ({ identities }) =>
-          Promise.resolve(byteCache.getCompleteSet(runtimeVersion, identities)),
+        ...(byteCache === undefined || runtimeVersion === undefined ? {} : {
+          precompiledModulesFor: ({ identities }) =>
+            Promise.resolve(
+              byteCache.getCompleteSet(runtimeVersion, identities),
+            ),
+        }),
       });
-    byteCache.putAll(runtimeVersion, modules);
+    if (byteCache !== undefined && runtimeVersion !== undefined) {
+      byteCache.putAll(runtimeVersion, modules);
+    }
     // Yield ahead of the synchronous SES evaluation (see compilePattern).
     await interleaveCompileYield();
     const result = this.#runtime.harness.evaluateRecordGraph(
@@ -1823,6 +1850,27 @@ export class PatternManager {
       mainSpecifier,
       program,
     );
+    // Registered only once any write has succeeded: a registered module is
+    // served by identity without reading the space, which would hide a
+    // closure that never landed there.
+    if (
+      persistenceSpace !== undefined && persistence?.when?.(result) !== false
+    ) {
+      if (runtimeVersion === undefined) {
+        await this.#persistSourceCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+        );
+      } else {
+        await this.#persistCompileCacheTracked(
+          persistenceSpace,
+          modules,
+          entryIdentity,
+          { runtimeVersion },
+        );
+      }
+    }
     this.registerEvaluatedModules(result);
     return result;
   }
