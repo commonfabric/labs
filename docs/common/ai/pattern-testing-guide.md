@@ -308,6 +308,12 @@ Key points:
 - Each participant gets its own identity. Use
   `{ pattern: aliceTab2, user: "alice" }` for a second session of an
   existing user (PerUser state shared, PerSession state isolated).
+- The shared space has an access list, which is what `spaceAccess()` reads.
+  The first participant's user is OWNER; declare another user's level with
+  `{ pattern: viewer, access: "READ" }` (`"OWNER"`, `"WRITE"`, `"READ"`, or
+  `"none"` for not listed). An undeclared user is `"WRITE"`. The list is not
+  enforced: a `"READ"` or `"none"` participant still writes the space. See
+  [The test's space and its access list](../workflows/pattern-testing.md#the-tests-space-and-its-access-list).
 - A marker is a durable write in the shared space, so crossing
   `{ await: "name" }` means everything the announcing participant committed
   before `{ label: "name" }` has reached this runtime. An assertion is read

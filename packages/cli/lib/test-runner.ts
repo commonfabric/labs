@@ -455,6 +455,10 @@ export interface TestRunnerOptions {
    * manager, because a callee must not tear down a resource its caller is
    * still using — the snapshot happens after the run returns.
    *
+   * The run writes into the store as it would into its own: the program's
+   * closure, the space's access list when the store holds none, and whatever
+   * the test pattern writes.
+   *
    * The RUNTIME is still torn down (`dispose({ closeStorage: false })`), which
    * is what makes reading the store afterwards a statement about the state the
    * run reached: the runtime that wrote it can no longer commit into it. A

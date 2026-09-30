@@ -119,3 +119,12 @@ granted access sees a level only from then on.
 The answer names no principal. It tells a member only what a member can
 already read, since the memory server serves the whole access list to anyone
 holding `READ`, and it tells a non-member only that they are one.
+
+## In a pattern test
+
+`cf test` gives the test's space an access list, the test's identity as OWNER
+in a single-user test and a level per user in a multi-user one, so
+`spaceAccess(target)` returns a level there rather than `undefined`. The test
+lane's storage does not enforce that list.
+[The test's space and its access list](../common/workflows/pattern-testing.md#the-tests-space-and-its-access-list)
+says how a participant declares its level.
