@@ -80,10 +80,12 @@ for (const name of TRACED_METHODS) {
     return original.apply(this, args);
   };
 
-  // Defined rather than assigned: `Tracing.prototype` has no own member of
-  // this name, so an assignment would reach the frozen
-  // `DefaultValueVisitor.prototype` and be refused. The override belongs on the
-  // subclass's own prototype, with the attributes a method declared there has.
+  // Defined rather than assigned. An assignment would only ever create a
+  // property on `Tracing.prototype`, but it is refused all the same, because
+  // the member it would shadow is read-only on the frozen
+  // `DefaultValueVisitor.prototype`. Defining the override puts it on the
+  // subclass's own prototype directly, with the attributes a method declared
+  // there has.
   Object.defineProperty(Tracing.prototype, name, {
     value: traced,
     writable: true,
