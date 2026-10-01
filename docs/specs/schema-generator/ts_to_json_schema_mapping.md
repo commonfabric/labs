@@ -1221,9 +1221,13 @@ Mechanics:
   any of whose elements a spread leaves unread, or a parameter an alias leaves
   to its default, is read from the paired type instead, and so is a label
   with no syntax at all. Read from nodes, the extraction recognizes
-  `AnyOf<X>` as
-  `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  `AnyOf<X>` as `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom
+  containing `__ctPolicyIdentityOf: { file, path }`, each where the alias the
+  reference names is that operator's brand:
+  `{ readonly __ct_cfc_any_of__?: X }` or
+  `{ readonly __ct_cfc_policy_of__?: Rules }`. An alias an author declares
+  under either name, and not as its brand, is read as the type it is, from
+  its syntax as from its type. Read from a type, an object type's
   member is read at its declared annotation, paired with its type, wherever
   that annotation denotes the member's type apart from the `undefined` an
   optional member's `?` adds (`readMemberAnnotation`,

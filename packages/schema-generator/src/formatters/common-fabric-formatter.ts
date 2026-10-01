@@ -83,6 +83,9 @@ const WRITER_POLICY_ALIAS_NAMES: ReadonlySet<string> = new Set([
 ]);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
+
+/** The property `PolicyOf<Rules>` is as a type (`@commonfabric/api/cfc`). */
+const CFC_POLICY_OF_BRAND = "__ct_cfc_policy_of__";
 /**
  * What the literal reader returns for syntax it does not evaluate, so that the
  * type paired with that syntax is read in its place. `undefined` is a value it
@@ -3403,7 +3406,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         typeNode.typeName,
         context,
       );
-      if (referencedName === "AnyOf") {
+      if (
+        referencedName === "AnyOf" &&
+        this.#namesBrand(typeNode.typeName, CFC_ANY_OF_BRAND, context)
+      ) {
         const alternatives = this.#extractLiteralLikeValue(
           type && this.#anyOfBrandPayload(type, context),
           typeNode.typeArguments?.[0],
@@ -3412,7 +3418,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         );
         return Array.isArray(alternatives) ? { anyOf: alternatives } : UNREAD;
       }
-      if (referencedName === "PolicyOf") {
+      if (
+        referencedName === "PolicyOf" &&
+        this.#namesBrand(typeNode.typeName, CFC_POLICY_OF_BRAND, context)
+      ) {
         const bindingNode = typeNode.typeArguments?.[0];
         if (
           bindingNode && ts.isTypeQueryNode(bindingNode) &&
@@ -3588,6 +3597,28 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return undefined;
+  }
+
+  /**
+   * Whether `typeName` refers to an alias whose type is the brand `brand`
+   * names, an object holding that member alone, as `AnyOf` and `PolicyOf` are
+   * (`@commonfabric/api/cfc`). An authored alias that shares their name and
+   * not their brand is read as the type it is, as it is from its type.
+   */
+  #namesBrand(
+    typeName: ts.EntityName,
+    brand: string,
+    context: GenerationContext,
+  ): boolean {
+    const checker = context.typeChecker;
+    const symbol = checker.getSymbolAtLocation(typeName);
+    const declared = symbol &&
+      checker.getDeclaredTypeOfSymbol(resolveAliasedSymbol(symbol, checker));
+    if (!declared || (declared.flags & ts.TypeFlags.Object) === 0) {
+      return false;
+    }
+    const properties = checker.getPropertiesOfType(declared);
+    return properties.length === 1 && properties[0]!.getName() === brand;
   }
 
   /**

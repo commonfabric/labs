@@ -1581,6 +1581,64 @@ describe("Schema: CFC authoring aliases", () => {
     }
   });
 
+  describe("an authored alias that shares a label operator's name", () => {
+    // `AnyOf` and `PolicyOf` are read as label operators only where the alias
+    // a label names is their brand. One an author declares under the same
+    // name is read as the type it is, from its syntax as from its type.
+
+    for (
+      const [declarations, value, confidentiality] of [
+        [
+          'type AnyOf<T> = "original";',
+          'Confidential<string, readonly [...CD, AnyOf<readonly ["reader"]>]>',
+          ["c", "d", "original"],
+        ],
+        [
+          'type AnyOf<T> = "original";',
+          'Confidential<string, readonly [AnyOf<readonly ["reader"]>]>',
+          ["original"],
+        ],
+        [
+          'type PolicyOf<T> = "plain";',
+          "Confidential<string, readonly [PolicyOf<typeof rules>]>",
+          ["plain"],
+        ],
+        [
+          `type AnyOf<T> = "original";
+            type Tail<L extends readonly unknown[]> =
+              Confidential<string, readonly [...L, AnyOf<readonly ["reader"]>]>;`,
+          'Tail<readonly ["c"]>',
+          ["c", "original"],
+        ],
+      ] as const
+    ) {
+      it(`reads \`${value}\` with the alias its author declared`, async () => {
+        const { type, checker } = await getTypeFromCode(
+          `
+            type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+            type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+            type CD = readonly ["c", "d"];
+            const rules = { name: "r" } as const;
+            ${declarations}
+            interface Holder { value: ${value} }
+          `,
+          "Holder",
+        );
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        const schema = asObjectSchema(
+          new SchemaGenerator().generateSchema(type, checker, undefined, {
+            onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+          }),
+        );
+        expect(schema.properties?.value).toEqual({
+          type: "string",
+          ifc: { confidentiality },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+  });
+
   describe("a label the lowering cannot read", () => {
     // A label list the lowering reads only in part lowers as no label, or with
     // a `null` atom; the generator reports it instead of saying nothing.

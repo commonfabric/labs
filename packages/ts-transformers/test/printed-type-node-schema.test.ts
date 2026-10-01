@@ -1815,6 +1815,67 @@ export default pattern<{ a: Outer<string> }>(({ a }) => ({ a }));`,
       });
     });
 
+    describe("an authored alias that shares a label operator's name", () => {
+      // Both sides read such an alias as the type its author declared, not as
+      // the library's `AnyOf` or `PolicyOf`, with or without a spread beside
+      // it.
+
+      for (
+        const [declarations, a, confidentiality] of [
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [...CD, AnyOf<readonly ["reader"]>]>',
+            ["c", "d", "original"],
+          ],
+          [
+            'type AnyOf<T> = "original";',
+            'Confidential<{ x: string }, readonly [AnyOf<readonly ["reader"]>]>',
+            ["original"],
+          ],
+          [
+            'type PolicyOf<T> = "plain";',
+            "Confidential<{ x: string }, readonly [PolicyOf<typeof rules>]>",
+            ["plain"],
+          ],
+          [
+            `type AnyOf<T> = "original";
+type Tail<L extends readonly unknown[]> =
+  Confidential<{ x: string }, readonly [...L, AnyOf<readonly ["reader"]>]>;`,
+            'Tail<readonly ["c"]>',
+            ["c", "original"],
+          ],
+        ] as const
+      ) {
+        it(`reads \`${a}\` with the alias its author declared, on both sides`, async () => {
+          const pipelineDiagnostics: TransformationDiagnostic[] = [];
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type CD = readonly ["c", "d"];
+const rules = { name: "r" } as const;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics,
+          });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: "string" } },
+            required: ["x"],
+            ifc: { confidentiality },
+          };
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+          expect(pipelineDiagnostics).toEqual([]);
+        });
+      }
+    });
+
     describe("an annotation whose syntax the label reader does not evaluate", () => {
       for (
         const [spelling, declarations, expected] of [
