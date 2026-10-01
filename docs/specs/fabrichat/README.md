@@ -342,7 +342,11 @@ from this design, as below.
   through their DID inbox, with `noticeSpaceAccess()`, where the runtime can,
   and queues the notice in `outgoingNotices` either way. A serving runtime
   refuses the send, so under server execution the queue is the only notice,
-  and nothing reads an inbox yet.
+  and nothing reads an inbox yet. So a person can join without one, the
+  manager's rendering shows each queued notice with a link to its room, for
+  the room's creator to send on. And a room shows a viewer whose manager
+  doesn't list it a control that asks the manager to `accept` it, so
+  whoever opens the room's link can add it to their chats.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

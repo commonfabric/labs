@@ -24,6 +24,7 @@ import {
   pattern,
   type PerSession,
   principalOf,
+  SELF,
   Stream,
   UI,
   VIEWS,
@@ -70,10 +71,12 @@ import {
   CHAT_SEND_SURFACE,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
+  type ChatIndexEntry,
   type ChatProfile,
   type ChatRoomAbout,
   type ChatRoomActivity,
   type ChatRoomKind,
+  type ChatRoomLink,
   type ChatRoomPolicy,
   type ProfileCell,
 } from "./schemas.tsx";
@@ -189,6 +192,80 @@ export const ParticipantChip = pattern<
     chat,
   };
 });
+
+/** What adding a room to a manager's list asks of it: the room. */
+export interface AcceptRoomEvent {
+  /** The room to list. */
+  room: Cell<ChatRoomLink>;
+}
+
+/** Asks the viewer's manager to list `room`. */
+const askToList = handler<unknown, {
+  room: Cell<ChatRoomLink>;
+  accept?: Stream<AcceptRoomEvent>;
+}>((_event, { room, accept }) => {
+  accept?.send({ room });
+});
+
+/** What the control adding a room to the viewer's chats needs. */
+export interface AddToChatsInput {
+  /** The room. */
+  room: Cell<ChatRoomLink>;
+
+  /**
+   * The rooms the viewer's manager lists; absent when the viewer has no
+   * manager.
+   */
+  listed?: ChatIndexEntry[];
+
+  /** The viewer's manager's `accept`, when `listed` is present. */
+  accept?: Stream<AcceptRoomEvent>;
+}
+
+/** What the control adding a room to the viewer's chats provides. */
+export interface AddToChatsOutput {
+  /** The control, shown only where it can add the room. */
+  [UI]: VNode;
+
+  /** Adds the room to the viewer's chats. */
+  add: Stream<unknown>;
+}
+
+/**
+ * Offers to add a room to the viewer's chats, for a viewer with a manager that
+ * doesn't list it: someone who reached the room by its link, rather than by a
+ * notice their client delivered.
+ */
+export const AddToChats = pattern<AddToChatsInput, AddToChatsOutput>(
+  ({ room, listed, accept }) => {
+    const add = askToList({ room, accept });
+    // Whether the viewer's manager lists the room differs by viewer, so the
+    // control is hidden by a prop rather than built as a different tree (see
+    // `FabriChatMessageRow`).
+    const addDisplay = computed(() =>
+      listed !== undefined && !listed.some((entry) => equals(entry.room, room))
+        ? "flex"
+        : "none"
+    );
+
+    return {
+      [UI]: (
+        <cf-hstack
+          id="fabrichat-add-to-chats"
+          gap="2"
+          align="center"
+          style={{ display: addDisplay, padding: "1rem 1rem 0" }}
+        >
+          <cf-text variant="caption">
+            This chat isn't in your chats yet.
+          </cf-text>
+          <cf-button size="sm" onClick={add}>Add to my chats</cf-button>
+        </cf-hstack>
+      ),
+      add,
+    };
+  },
+);
 
 /** A room's messages: facts, the newest, and this session's windows. */
 export interface ChatMessageList {
@@ -645,10 +722,13 @@ export interface FabriChatRoomInput {
 const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
   (input) => {
     const profileWish = wish<ChatProfile>({ query: "#profile" });
-    // The viewer's manager, which starts a direct chat with a participant.
-    const managerWish = wish<{ openDirect: Stream<StartDirectEvent> }>({
-      query: "#chatManager",
-    });
+    // The viewer's manager, which starts a direct chat with a participant,
+    // and lists this room when asked to.
+    const managerWish = wish<{
+      openDirect: Stream<StartDirectEvent>;
+      accept: Stream<AcceptRoomEvent>;
+      rooms: ChatIndexEntry[];
+    }>({ query: "#chatManager" });
     const startsDirect = computed(() => managerWish.result !== undefined);
     // Hidden by a prop rather than a branch, as `FabriChatMessageRow` says.
     const setupDisplay = computed(() =>
@@ -686,6 +766,11 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       deleteReaction: room.deleteReaction,
       [UI]: (
         <cf-screen>
+          <AddToChats
+            room={input[SELF]}
+            listed={managerWish.result?.rooms}
+            accept={managerWish.result?.accept}
+          />
           {room[UI]}
           <div
             id="fabrichat-profile-setup"

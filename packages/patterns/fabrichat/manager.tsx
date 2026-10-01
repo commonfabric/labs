@@ -734,8 +734,11 @@ export const FabriChatManagerCore = pattern<
           {noticeList.map((notice) => (
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
-                Tell {notice.recipient} about their new chat
+                {notice.recipient}{" "}
+                may not know of this chat yet. Open it, and send them its
+                address:
               </cf-text>
+              <cf-cell-link $cell={notice.room} />
               <cf-button
                 size="sm"
                 variant="ghost"

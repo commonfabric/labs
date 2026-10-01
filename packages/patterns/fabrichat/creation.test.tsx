@@ -20,9 +20,11 @@ import {
 import {
   cfRenderHasUI,
   clickButton,
+  findElement,
   findNodeById,
   findNodeByProp,
   fireEvent,
+  propsOf,
   propValue,
   readValue,
   textContent,
@@ -70,6 +72,10 @@ const shownPart = (root: unknown): string =>
 const shownRefusal = (root: unknown): string =>
   `${displayOf(root, "fabrichat-start-refusal")}:` +
   textContent(findNodeById(root, "fabrichat-start-refusal"));
+
+// The cell a manager's first notice links.
+const noticeLink = (root: unknown): object | undefined =>
+  propsOf(findElement(root, "cf-cell-link"))?.$cell as object | undefined;
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
@@ -227,6 +233,12 @@ export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>((
           directRooms.get().length === 1 &&
           directRooms.get()[0]?.counterpart === BOB &&
           recipientsOf(directNotices) === BOB
+        ),
+      },
+      // The notice offers the room's link, for its creator to send on.
+      {
+        assertion: assert(() =>
+          equals(noticeLink(direct[UI]), directRooms.key(0).key("room"))
         ),
       },
       // Choosing the room shows it in place of the prompt to choose one.

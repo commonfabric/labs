@@ -3,7 +3,8 @@
  * links the record its creator's manager wrote, labeled `authored-by` the
  * creator, and the accepting manager takes the counterpart from that label: it
  * refuses an event naming someone else, and with no counterpart named, records
- * the creator.
+ * the creator. The room offers its other member the control that asks their
+ * manager to list it, until the manager does.
  */
 import {
   action,
@@ -16,9 +17,17 @@ import {
   pattern,
   principalOf,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import {
+  clickButton,
+  findNodeById,
+  propValue,
+  readValue,
+} from "../test/vnode-helpers.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
+import { AddToChats } from "./room.tsx";
 import {
   type ChatIndexEntry,
   type ChatManagerNotice,
@@ -28,6 +37,7 @@ import {
 } from "./schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
+type AddArg = Parameters<typeof AddToChats>[0];
 
 const CAROL = "did:key:z6MkiT3dKXX5dqUcbnpf1Ejp8hFVuMM9MN9eftydT9T4uurE";
 
@@ -62,6 +72,14 @@ interface IntroduceState {
 const introduce = handler<unknown, IntroduceState>((_event, { me }) => {
   me.set(currentPrincipal() ?? "");
 });
+
+// How a room's control adding it to the viewer's chats is displayed.
+const addDisplay = (root: unknown): unknown =>
+  readValue(
+    (propValue(findNodeById(root, "fabrichat-add-to-chats"), "style") as {
+      display?: unknown;
+    })?.display,
+  );
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
@@ -125,12 +143,13 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       counterpart: CAROL,
     })
   );
-  const action_accept = action(() =>
-    manager.accept.send({
-      requestId: "a-2",
-      room: setup.held.key("room").resolveAsCell(),
-    })
-  );
+  // The room's own control, which sends `accept` with the room alone.
+  const adder = AddToChats({
+    room: setup.held.key("room"),
+    listed: manager.rooms,
+    accept: manager.accept,
+  } as AddArg);
+  const action_add = action(() => clickButton(adder[UI], "Add to my chats"));
 
   return {
     [TESTS]: [
@@ -148,14 +167,21 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       { action: action_accept_naming_carol },
-      { action: action_accept },
+      // The room isn't listed, so the room offers to add it.
       {
         assertion: assert(() =>
           reasonOf(requests, "a-1") ===
             "The counterpart is not the room's creator." &&
-          reasonOf(requests, "a-2") === "done" &&
+          rooms.get().length === 0 &&
+          addDisplay(adder[UI]) === "flex"
+        ),
+      },
+      { action: action_add },
+      {
+        assertion: assert(() =>
           rooms.get().length === 1 &&
-          rooms.get()[0]?.counterpart === setup.aliceDid.get()
+          rooms.get()[0]?.counterpart === setup.aliceDid.get() &&
+          addDisplay(adder[UI]) === "none"
         ),
       },
       { label: "bob-done" },
