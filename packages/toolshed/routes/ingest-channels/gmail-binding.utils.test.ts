@@ -11,7 +11,8 @@ import {
   LoopbackSessionFactory,
   TestStorageManager,
 } from "@/lib/test-support/memory-acl.ts";
-import { getRegistration } from "@/routes/ingest/ingest.utils.ts";
+import { durableSet } from "@/lib/custody-ingest.ts";
+import { getRegistration, requestClaim } from "@/routes/ingest/ingest.utils.ts";
 import {
   getMailboxChannels,
   type MailboxLookup,
@@ -104,16 +105,55 @@ describe("gmail-binding.utils", () => {
       }),
     ).id;
 
-  const bound = () => getMailboxChannels(runtime, operator.did(), MAILBOX);
+  const boundTo = (address: string) =>
+    getMailboxChannels(runtime, operator.did(), address);
+  const bound = () => boundTo(MAILBOX);
+
+  const bind = (id: string, requestId: string, caller = alice) =>
+    processGmailBind(deps, caller.did(), {
+      id,
+      accessToken: "token-1",
+      requestId,
+    });
+
+  const unbind = (id: string, requestId: string, caller = alice) =>
+    processGmailUnbind(deps, caller.did(), { id, requestId });
+
+  const revoke = async (id: string) => {
+    const registration = await getRegistration(runtime, operator.did(), id);
+    ok(
+      await processRevoke(deps, alice.did(), {
+        id,
+        requestId: "req-revoke",
+        expectedRevision: registration?.revision ?? 0,
+      }),
+    );
+  };
+
+  /** Fills alice's claim store with as many live claims as it retains. */
+  const fillClaimStore = async () => {
+    const { cell } = requestClaim(runtime, operator.did(), {
+      owner: alice.did(),
+      requestId: "unused",
+      channel: "unused",
+    });
+    await cell.sync();
+    await runtime.storageManager.synced();
+    const at = Date.now();
+    await durableSet(
+      cell,
+      Array.from(
+        { length: 500 },
+        (_, n) => ({ id: `filler-${n}`, at, channel: "filler" }),
+      ),
+    );
+  };
 
   describe("processGmailBind()", () => {
     it("binds the mailbox the access token reads to a channel the caller owns", async () => {
       const id = await mintChannel();
 
-      const result = await processGmailBind(deps, alice.did(), {
-        id,
-        accessToken: "token-1",
-      });
+      const result = await bind(id, "req-1");
 
       expect(ok(result)).toEqual({ id, emailAddress: MAILBOX });
       expect(lookups).toEqual(["token-1"]);
@@ -123,10 +163,7 @@ describe("gmail-binding.utils", () => {
     it("returns 403 for a caller who does not own the channel's space, without asking Gmail", async () => {
       const id = await mintChannel();
 
-      const result = await processGmailBind(deps, mallory.did(), {
-        id,
-        accessToken: "token-1",
-      });
+      const result = await bind(id, "req-1", mallory);
 
       expect(result.status).toBe(403);
       expect(lookups).toEqual([]);
@@ -134,10 +171,10 @@ describe("gmail-binding.utils", () => {
     });
 
     it("returns 403 for a channel that does not exist", async () => {
-      const result = await processGmailBind(deps, alice.did(), {
-        id: "ing_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        accessToken: "token-1",
-      });
+      const result = await bind(
+        "ing_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "req-1",
+      );
 
       expect(result.status).toBe(403);
       expect(lookups).toEqual([]);
@@ -147,10 +184,7 @@ describe("gmail-binding.utils", () => {
       const id = await mintChannel();
       lookup = { ok: false, reason: "rejected" };
 
-      const result = await processGmailBind(deps, alice.did(), {
-        id,
-        accessToken: "stale",
-      });
+      const result = await bind(id, "req-1");
 
       expect(result.status).toBe(400);
       expect(await bound()).toEqual([]);
@@ -160,10 +194,7 @@ describe("gmail-binding.utils", () => {
       const id = await mintChannel();
       lookup = { ok: false, reason: "unavailable" };
 
-      const result = await processGmailBind(deps, alice.did(), {
-        id,
-        accessToken: "token-1",
-      });
+      const result = await bind(id, "req-1");
 
       expect(result.status).toBe(502);
       expect(await bound()).toEqual([]);
@@ -171,31 +202,75 @@ describe("gmail-binding.utils", () => {
 
     it("returns 409 for a revoked channel", async () => {
       const id = await mintChannel();
-      const registration = await getRegistration(runtime, operator.did(), id);
-      ok(
-        await processRevoke(deps, alice.did(), {
-          id,
-          requestId: "req-revoke",
-          expectedRevision: registration?.revision ?? 0,
-        }),
-      );
+      await revoke(id);
 
-      const result = await processGmailBind(deps, alice.did(), {
-        id,
-        accessToken: "token-1",
-      });
+      const result = await bind(id, "req-1");
 
       expect(result.status).toBe(409);
       expect(lookups).toEqual([]);
+    });
+
+    it("returns 400 for a request id that is not a single clean segment", async () => {
+      const id = await mintChannel();
+
+      const result = await bind(id, "req/1");
+
+      expect(result.status).toBe(400);
+      expect(lookups).toEqual([]);
+    });
+
+    it("returns 409 for a replayed request id, without asking Gmail again", async () => {
+      const id = await mintChannel();
+      ok(await bind(id, "req-1"));
+
+      const result = await bind(id, "req-1");
+
+      expect(result.status).toBe(409);
+      expect(lookups).toHaveLength(1);
+    });
+
+    it("leaves a later binding in place when an earlier bind is replayed", async () => {
+      const id = await mintChannel();
+      ok(await bind(id, "req-1"));
+      lookup = { ok: true, emailAddress: "bob@example.com" };
+      ok(await bind(id, "req-2"));
+      lookup = { ok: true, emailAddress: MAILBOX };
+
+      const result = await bind(id, "req-1");
+
+      expect(result.status).toBe(409);
+      expect(await boundTo("bob@example.com")).toEqual([id]);
+      expect(await bound()).toEqual([]);
+    });
+
+    it("accepts a request id again after the bind that carried it failed", async () => {
+      const id = await mintChannel();
+      lookup = { ok: false, reason: "unavailable" };
+      expect((await bind(id, "req-1")).status).toBe(502);
+      lookup = { ok: true, emailAddress: MAILBOX };
+
+      const result = await bind(id, "req-1");
+
+      expect(ok(result)).toEqual({ id, emailAddress: MAILBOX });
+    });
+
+    it("returns 429 and binds nothing when the caller's claim store is full", async () => {
+      const id = await mintChannel();
+      await fillClaimStore();
+
+      const result = await bind(id, "req-1");
+
+      expect(result.status).toBe(429);
+      expect(await bound()).toEqual([]);
     });
   });
 
   describe("processGmailUnbind()", () => {
     it("unbinds a channel the caller owns", async () => {
       const id = await mintChannel();
-      ok(await processGmailBind(deps, alice.did(), { id, accessToken: "t" }));
+      ok(await bind(id, "req-1"));
 
-      const result = await processGmailUnbind(deps, alice.did(), { id });
+      const result = await unbind(id, "req-u");
 
       expect(ok(result)).toEqual({ id, unbound: true });
       expect(await bound()).toEqual([]);
@@ -204,16 +279,16 @@ describe("gmail-binding.utils", () => {
     it("returns `unbound: false` for a channel that was not bound", async () => {
       const id = await mintChannel();
 
-      const result = await processGmailUnbind(deps, alice.did(), { id });
+      const result = await unbind(id, "req-u");
 
       expect(ok(result)).toEqual({ id, unbound: false });
     });
 
     it("returns 403 for a caller who does not own the channel's space", async () => {
       const id = await mintChannel();
-      ok(await processGmailBind(deps, alice.did(), { id, accessToken: "t" }));
+      ok(await bind(id, "req-1"));
 
-      const result = await processGmailUnbind(deps, mallory.did(), { id });
+      const result = await unbind(id, "req-u", mallory);
 
       expect(result.status).toBe(403);
       expect(await bound()).toEqual([id]);
@@ -221,19 +296,52 @@ describe("gmail-binding.utils", () => {
 
     it("unbinds a channel that has since been revoked", async () => {
       const id = await mintChannel();
-      ok(await processGmailBind(deps, alice.did(), { id, accessToken: "t" }));
-      const registration = await getRegistration(runtime, operator.did(), id);
-      ok(
-        await processRevoke(deps, alice.did(), {
-          id,
-          requestId: "req-revoke",
-          expectedRevision: registration?.revision ?? 0,
-        }),
-      );
+      ok(await bind(id, "req-1"));
+      await revoke(id);
 
-      const result = await processGmailUnbind(deps, alice.did(), { id });
+      const result = await unbind(id, "req-u");
 
       expect(ok(result)).toEqual({ id, unbound: true });
+    });
+
+    it("returns 400 for a request id that is not a single clean segment", async () => {
+      const id = await mintChannel();
+
+      expect((await unbind(id, "..")).status).toBe(400);
+    });
+
+    it("leaves a later binding in place when an earlier unbind is replayed", async () => {
+      const id = await mintChannel();
+      ok(await bind(id, "req-1"));
+      ok(await unbind(id, "req-u"));
+      ok(await bind(id, "req-2"));
+
+      const result = await unbind(id, "req-u");
+
+      expect(result.status).toBe(409);
+      expect(await bound()).toEqual([id]);
+    });
+
+    it("leaves a later binding in place when an unbind that found nothing bound is replayed", async () => {
+      const id = await mintChannel();
+      ok(await unbind(id, "req-u"));
+      ok(await bind(id, "req-1"));
+
+      const result = await unbind(id, "req-u");
+
+      expect(result.status).toBe(409);
+      expect(await bound()).toEqual([id]);
+    });
+
+    it("unbinds even when the caller's claim store is full", async () => {
+      const id = await mintChannel();
+      ok(await bind(id, "req-1"));
+      await fillClaimStore();
+
+      const result = await unbind(id, "req-u");
+
+      expect(ok(result)).toEqual({ id, unbound: true });
+      expect(await bound()).toEqual([]);
     });
   });
 });

@@ -1,5 +1,10 @@
 import { sha256 } from "@commonfabric/content-hash";
-import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
+import type {
+  IExtendedStorageTransaction,
+  JSONSchema,
+  MemorySpace,
+  Runtime,
+} from "@commonfabric/runner";
 import { isLink } from "@commonfabric/runner";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -617,6 +622,58 @@ const liveClaims = (
     .filter((entry) => now - entry.at < CLAIM_RETENTION_MS)
     .map((entry) => ({ id: entry.id, at: entry.at, channel: entry.channel }));
 
+/** What checking a request claim inside a transaction found. */
+export type ClaimCheck =
+  /** The id is unused. `record()` writes the claim into the transaction. */
+  | { kind: "fresh"; record: () => void }
+  /** The id was already used, for `channel`. */
+  | { kind: "used"; channel: string }
+  /** The caller has as many live claims as the store retains. */
+  | { kind: "full" };
+
+/**
+ * Prepares the claim of a request id, for a write that has to be at most once.
+ * The caller syncs `cell` before its transaction, calls `check()` inside it
+ * ahead of any write, and calls `record()` on a fresh result once every other
+ * check has passed, so that an id is consumed only by a write that lands.
+ *
+ * `check()` reads through the transaction, which is what puts the claims in
+ * its read set and makes two concurrent uses of one id conflict.
+ */
+export function requestClaim(
+  runtime: Runtime,
+  serviceSpace: string,
+  claim: ClaimRequest,
+): {
+  cell: ReturnType<typeof mintRequestCell>;
+  check: (tx: IExtendedStorageTransaction) => ClaimCheck;
+} {
+  const cell = mintRequestCell(runtime, serviceSpace, claim.owner);
+  return {
+    cell,
+    check(tx) {
+      const bound = cell.withTx(tx);
+      const now = claim.now ?? Date.now();
+      const live = liveClaims(bound.get(), now);
+      const seen = live.find((entry) => entry.id === claim.requestId);
+      // The channel the claim was MADE for, not the one now being asked for.
+      if (seen !== undefined) return { kind: "used", channel: seen.channel };
+      // Full: refuse rather than evict. Dropping the oldest entry would discard
+      // a claim still inside the replay window — the entry that proves a replay
+      // — so a flood of fresh ids would buy a second live token for a used id.
+      if (live.length >= MAX_RETAINED_CLAIMS) return { kind: "full" };
+      return {
+        kind: "fresh",
+        record: () =>
+          bound.set([
+            ...live,
+            { id: claim.requestId, at: now, channel: claim.channel },
+          ]),
+      };
+    },
+  };
+}
+
 /**
  * The channel a request id was already used for, or `null` if it is unused.
  *
@@ -777,9 +834,10 @@ export async function saveRegistration(
   const month = auditMonth(registration.createdAt);
   const auditIndex = auditShardCell(runtime, serviceSpace, month);
   const shardList = auditShardListCell(runtime, serviceSpace);
-  const claimsCell = claim === undefined
+  const pendingClaim = claim === undefined
     ? undefined
-    : mintRequestCell(runtime, serviceSpace, claim.owner);
+    : requestClaim(runtime, serviceSpace, claim);
+  const claimsCell = pendingClaim?.cell;
   const ownerIndex = registration.owner === undefined
     ? undefined
     : ownerIndexCell(runtime, serviceSpace, registration.owner);
@@ -825,29 +883,18 @@ export async function saveRegistration(
     // closure did to the transaction, so a write followed by an early return
     // still lands — which would consume a request id on a write that was then
     // refused, the exact failure this atomicity exists to prevent.
-    let pendingClaim:
-      | { id: string; at: number; channel: string }[]
-      | undefined;
-    if (claim !== undefined && claimsCell !== undefined) {
-      const now = claim.now ?? Date.now();
-      const live = liveClaims(claimsCell.withTx(tx).get(), now);
-      const seen = live.find((entry) => entry.id === claim.requestId);
-      if (seen !== undefined) {
-        // The channel the claim was MADE for, not the one now being asked for.
-        claimedBy = seen.channel;
+    let recordClaim: (() => void) | undefined;
+    if (pendingClaim !== undefined) {
+      const checked = pendingClaim.check(tx);
+      if (checked.kind === "used") {
+        claimedBy = checked.channel;
         return;
       }
-      // Full: refuse rather than evict. Dropping the oldest entry would discard
-      // a claim still inside the replay window — the entry that proves a replay
-      // — so a flood of fresh ids would buy a second live token for a used id.
-      if (live.length >= MAX_RETAINED_CLAIMS) {
+      if (checked.kind === "full") {
         claimsFull = true;
         return;
       }
-      pendingClaim = [
-        ...live,
-        { id: claim.requestId, at: now, channel: claim.channel },
-      ];
+      recordClaim = checked.record;
     }
 
     const bound = cell.withTx(tx);
@@ -916,9 +963,7 @@ export async function saveRegistration(
       }
     }
 
-    if (pendingClaim !== undefined && claimsCell !== undefined) {
-      claimsCell.withTx(tx).set(pendingClaim);
-    }
+    recordClaim?.();
 
     if (acquiring && lifetimeCell !== undefined) {
       const ever = (lifetimeCell.withTx(tx).get() as number | undefined) ?? 0;

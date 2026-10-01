@@ -23,9 +23,14 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   appendToJournal,
   channelRefusal,
+  type ClaimCheck,
+  type ClaimRequest,
+  ClaimStoreFullError,
   getRegistration,
   type IngestLogger,
   recordLastSeen,
+  RequestAlreadyClaimedError,
+  requestClaim,
 } from "@/routes/ingest/ingest.utils.ts";
 
 /** How many channels one mailbox may be bound to at once. */
@@ -199,22 +204,34 @@ export async function getMailboxChannels(
  * gives up its place in the mailbox's list here, so that dead channels do not
  * hold the mailbox at its cap.
  *
+ * With `claim`, the request id is recorded in the transaction that writes the
+ * binding, so a second request carrying the same id binds nothing.
+ *
  * @throws MailboxBindingFullError when the mailbox is already at
  *   `MAX_CHANNELS_PER_MAILBOX` live channels.
  * @throws BindingConflictError when the channel's binding changed while this
  *   ran; the caller may try again.
+ * @throws RequestAlreadyClaimedError when `claim` names a request id already
+ *   used.
+ * @throws ClaimStoreFullError when the caller has too many recent claims for
+ *   another to be recorded.
  */
 export async function bindMailbox(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
   address: string,
+  claim?: ClaimRequest,
 ): Promise<void> {
   const key = mailboxKey(address);
   const target = mailboxChannelsCell(runtime, serviceSpace, key);
   const binding = channelBindingCell(runtime, serviceSpace, id);
+  const pendingClaim = claim === undefined
+    ? undefined
+    : requestClaim(runtime, serviceSpace, claim);
   await target.sync();
   await binding.sync();
+  await pendingClaim?.cell.sync();
   await runtime.storageManager.synced();
 
   const previousKey = (binding.get() as ChannelBinding | undefined)?.mailbox;
@@ -240,12 +257,16 @@ export async function bindMailbox(
 
   let full = false;
   let moved = false;
+  let claimed: ClaimCheck | undefined;
   const result = await runtime.editWithRetry((tx) => {
     full = false;
     moved = false;
 
     // Every check runs before any write, because `editWithRetry` commits
-    // whatever the closure wrote even when it returns early.
+    // whatever the closure wrote even when it returns early. That holds for
+    // the claim too: a request id is recorded only by a bind that lands.
+    claimed = pendingClaim?.check(tx);
+    if (claimed !== undefined && claimed.kind !== "fresh") return;
     const boundBinding = binding.withTx(tx);
     const currentKey = (boundBinding.get() as ChannelBinding | undefined)
       ?.mailbox;
@@ -264,6 +285,7 @@ export async function bindMailbox(
       ids.push(id);
     }
 
+    claimed?.record();
     if (previous !== undefined) {
       const boundPrevious = previous.withTx(tx);
       const previousIds = (boundPrevious.get() as string[] | undefined) ?? [];
@@ -275,6 +297,7 @@ export async function bindMailbox(
   if (result.error) {
     throw new Error(result.error.message, { cause: result.error });
   }
+  throwOnRefusedClaim(claimed);
   if (moved) throw new BindingConflictError();
   if (full) throw new MailboxBindingFullError();
 }
@@ -283,42 +306,78 @@ export async function bindMailbox(
  * Unbinds channel `id` from whatever mailbox it is bound to, and returns
  * whether it was bound to one.
  *
+ * With `claim`, the request id is recorded even when the channel was bound to
+ * nothing, so that a second request carrying the same id cannot clear a
+ * binding made in between.
+ *
  * @throws BindingConflictError when the channel's binding changed while this
  *   ran; the caller may try again.
+ * @throws RequestAlreadyClaimedError when `claim` names a request id already
+ *   used.
+ * @throws ClaimStoreFullError when the caller has too many recent claims for
+ *   another to be recorded.
  */
 export async function unbindChannel(
   runtime: Runtime,
   serviceSpace: string,
   id: string,
+  claim?: ClaimRequest,
 ): Promise<boolean> {
   const binding = channelBindingCell(runtime, serviceSpace, id);
+  const pendingClaim = claim === undefined
+    ? undefined
+    : requestClaim(runtime, serviceSpace, claim);
   await binding.sync();
+  await pendingClaim?.cell.sync();
   await runtime.storageManager.synced();
   const key = (binding.get() as ChannelBinding | undefined)?.mailbox;
-  if (key === undefined) return false;
+  if (key === undefined && pendingClaim === undefined) return false;
 
-  const channels = mailboxChannelsCell(runtime, serviceSpace, key);
-  await channels.sync();
-  await runtime.storageManager.synced();
+  const channels = key === undefined
+    ? undefined
+    : mailboxChannelsCell(runtime, serviceSpace, key);
+  if (channels !== undefined) {
+    await channels.sync();
+    await runtime.storageManager.synced();
+  }
 
   let moved = false;
+  let claimed: ClaimCheck | undefined;
   const result = await runtime.editWithRetry((tx) => {
     moved = false;
+    claimed = pendingClaim?.check(tx);
+    if (claimed !== undefined && claimed.kind !== "fresh") return;
     const boundBinding = binding.withTx(tx);
     if ((boundBinding.get() as ChannelBinding | undefined)?.mailbox !== key) {
       moved = true;
       return;
     }
-    const boundChannels = channels.withTx(tx);
-    const ids = (boundChannels.get() as string[] | undefined) ?? [];
-    boundChannels.set(ids.filter((other) => other !== id));
-    boundBinding.set({});
+
+    claimed?.record();
+    if (channels !== undefined) {
+      const boundChannels = channels.withTx(tx);
+      const ids = (boundChannels.get() as string[] | undefined) ?? [];
+      boundChannels.set(ids.filter((other) => other !== id));
+      boundBinding.set({});
+    }
   });
   if (result.error) {
     throw new Error(result.error.message, { cause: result.error });
   }
+  throwOnRefusedClaim(claimed);
   if (moved) throw new BindingConflictError();
-  return true;
+  return key !== undefined;
+}
+
+/**
+ * Helper for `bindMailbox()` and `unbindChannel()`, which throws the error for
+ * a claim check that found the request id used or the claim store full.
+ */
+function throwOnRefusedClaim(claimed: ClaimCheck | undefined): void {
+  if (claimed?.kind === "used") {
+    throw new RequestAlreadyClaimedError(claimed.channel);
+  }
+  if (claimed?.kind === "full") throw new ClaimStoreFullError();
 }
 
 /**

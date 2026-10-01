@@ -71,7 +71,8 @@ request proof, its 16 KB body limit, and its gate on
 `INGEST_SELF_SERVE_ENABLED`, and are gated a second time on Gmail push being
 configured.
 
-`gmail-bind` takes `{ id, accessToken }` and returns `{ id, emailAddress }`.
+`gmail-bind` takes `{ id, accessToken, requestId }` and returns
+`{ id, emailAddress }`.
 It binds channel `id` to the mailbox `accessToken` reads, moving the channel
 off any mailbox it was bound to before. Two proofs stand behind a binding:
 
@@ -87,22 +88,34 @@ off any mailbox it was bound to before. Two proofs stand behind a binding:
 Ownership is checked first, so a caller who does not own the channel never
 causes a request to Gmail.
 
+`requestId` is a random id the caller generates for each request, as on mint,
+rotate and revoke. The proof on a request stays valid for several minutes, so
+without it a late duplicate of an earlier bind would move the channel back to
+the mailbox that bind named, and a late duplicate of an unbind would clear a
+binding made since. The id is recorded in the transaction that writes the
+binding, so a second request carrying it answers 409 and changes nothing, and
+a request that failed leaves its id free to retry with.
+
 | Status | When |
 | --- | --- |
 | 200 | Bound |
-| 400 | Gmail did not accept the access token |
+| 400 | Gmail did not accept the access token, or `requestId` is malformed |
 | 401 | Missing or invalid first-party request proof |
 | 403 | Not an owner of the channel's space, or no such channel |
-| 409 | The channel is revoked or expired, the mailbox is at its limit, the binding changed concurrently, or this deployment cannot write to the space |
+| 409 | `requestId` was already used, the channel is revoked or expired, the mailbox is at its limit, the binding changed concurrently, or this deployment cannot write to the space |
 | 413 | Body over 16 KB, checked before the proof |
 | 422 | Body failed schema validation, checked after the proof |
-| 429 | Rate limited |
+| 429 | Rate limited, or the caller has too many recent request ids on record |
 | 502 | Storage failed, or the Gmail lookup failed |
 
-`gmail-unbind` takes `{ id }` and returns `{ id, unbound }`, where `unbound`
-says whether the channel was bound to anything. It needs only ownership, and
-works on a revoked channel, so a retired channel can still be cleared. It
-answers with the same statuses as `gmail-bind`, apart from 400.
+`gmail-unbind` takes `{ id, requestId }` and returns `{ id, unbound }`, where
+`unbound` says whether the channel was bound to anything. It needs only
+ownership, and works on a revoked channel, so a retired channel can still be
+cleared. It answers with the same statuses as `gmail-bind`, with two
+differences: its 400 is only for a malformed `requestId`, and it never answers
+429 for too many recent request ids. In that case the unbind goes ahead
+without recording its id, because refusing it would leave notifications
+flowing to a channel the caller is trying to cut off.
 
 `gmail-bind` shares the mint and rotate rate-limit bucket, because each call
 costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it

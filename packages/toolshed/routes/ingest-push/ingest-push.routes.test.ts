@@ -51,7 +51,7 @@ describe("ingest-push.routes", () => {
         "Content-Type": "application/json",
         "X-Forwarded-For": "10.9.0.1",
       },
-      body: JSON.stringify({ id: "ing_x", accessToken: "t" }),
+      body: JSON.stringify({ id: "ing_x", accessToken: "t", requestId: "r" }),
     });
     expect(res.status).toBe(401);
   });
@@ -63,7 +63,7 @@ describe("ingest-push.routes", () => {
         "Content-Type": "application/json",
         "X-Forwarded-For": "10.9.0.2",
       },
-      body: JSON.stringify({ id: "ing_x" }),
+      body: JSON.stringify({ id: "ing_x", requestId: "r" }),
     });
     expect(res.status).toBe(401);
   });

@@ -168,7 +168,8 @@ Four forks were resolved explicitly rather than by default:
    routine, and a beacon offline across one otherwise cannot tell "re-pair me"
    from "the server is broken" — it drops its buffer or retries forever.
 2. **The deployment precondition below is documented, not enforced by a flag.**
-3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1).
+3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1),
+   and on `gmail-bind` and `gmail-unbind`.
 4. **The control plane's paths are NOT added to
    `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES`.** That list is the in-runtime
    signer's allowlist; adding these would let any pattern mint a channel with

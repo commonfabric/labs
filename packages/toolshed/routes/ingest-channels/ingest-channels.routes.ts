@@ -34,7 +34,7 @@ const spaceField = z.string().describe(
 // needs one when request proofs have no replay cache.
 const requestIdField = z.string().describe(
   "A caller-generated random id. Replaying a request with an id already used " +
-    "returns 409 and no secret.",
+    "returns 409, and changes nothing and returns no secret.",
 );
 
 const channelSummary = z.object({
@@ -276,6 +276,7 @@ export const gmailBind = createRoute({
               "A Google access token that can read the mailbox's Gmail " +
                 "profile. Used for one lookup and not stored.",
             ),
+            requestId: requestIdField,
           }),
         },
       },
@@ -299,9 +300,9 @@ export const gmailBind = createRoute({
     [HttpStatusCodes.CONFLICT]: {
       ...jsonError,
       description:
-        "The channel is revoked or expired, the mailbox is at its channel " +
-        "limit, the binding changed concurrently, or this deployment cannot " +
-        "write to the space",
+        "Replayed requestId, the channel is revoked or expired, the mailbox " +
+        "is at its channel limit, the binding changed concurrently, or this " +
+        "deployment cannot write to the space",
     },
     [HttpStatusCodes.BAD_GATEWAY]: {
       ...jsonError,
@@ -317,7 +318,9 @@ export const gmailUnbind = createRoute({
   request: {
     body: {
       content: {
-        "application/json": { schema: z.object({ id: z.string() }) },
+        "application/json": {
+          schema: z.object({ id: z.string(), requestId: requestIdField }),
+        },
       },
     },
   },
@@ -335,8 +338,8 @@ export const gmailUnbind = createRoute({
     [HttpStatusCodes.CONFLICT]: {
       ...jsonError,
       description:
-        "The binding changed concurrently, or this deployment cannot write " +
-        "to the space",
+        "Replayed requestId, the binding changed concurrently, or this " +
+        "deployment cannot write to the space",
     },
   },
 });
