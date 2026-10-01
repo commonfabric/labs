@@ -91,9 +91,11 @@ That function does, in order:
    get transformed during this recursion (depth-first).
 5. `expandCapturedObjectSpreads`
    (`src/closures/utils/captured-object-spread.ts`) writes out a spread of a
-   captured `const` object literal with static keys as the properties it copies,
-   read through the capture with `.key(...)`. Inside the new pattern a capture
-   is an opaque reference, which has no keys to spread.
+   captured `const` whose keys are known where it is declared (an object
+   literal with static keys, a literal that spreads one, or an alias of one)
+   as the properties it copies, read through the capture with `.key(...)`.
+   Inside the new pattern a capture is an opaque reference, which has no keys
+   to spread, so a spread of any other capture is reported as an error.
 6. `createPatternCallWithParams` synthesizes the new shape:
    `array.mapWithPattern(pattern((destructured) => …), capturesObj)`.
 7. `rewriteArrayMethodCallbackExpressionSites` (called from `createPattern…` via

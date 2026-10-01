@@ -1546,17 +1546,27 @@ Result shape:
   lift-applied wrappers where needed
 - a spread of a capture, in the callback body outside any function nested in
   it, is written out as the properties it copies when the capture is a `const`
-  declared outside module scope and initialized with an object literal whose
-  properties all have static keys (identifiers or string literals; no spread,
-  method, accessor, or computed key). A `__proto__:` assignment sets the
-  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
-  property and is written back as `["__proto__"]`:
+  declared outside module scope whose keys are known where it is declared
+  (`staticKeysOfInitializer`): an object literal whose properties all have
+  static keys (identifiers, string literals, or numeric literals; no method,
+  accessor, or computed key), a spread inside that literal of another such
+  object, or a `const` that names one, at any depth. A `__proto__:` assignment
+  sets the prototype and contributes no key; the shorthand `{ __proto__ }`
+  makes an own property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
   `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
   callback reads a capture as an opaque reference, which has no keys to spread;
   those keys are exactly what the spread copies where `records` is declared
   (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
-  `closures/map-captured-object-spread.expected.jsx`)
+  `closures/map-captured-object-spread.expected.jsx`). A spread of any other
+  capture — a `const` initialized by a function call, a literal with a
+  computed key — is left as written and reported as an error,
+  `pattern-context:computation`: "Spread of the captured value `records`
+  copies nothing…" (`reportUnexpandedSpread`). The report is made once per
+  spread: the pattern-context check of §9.7 reports the same spread when the
+  capture is a tracked opaque value, and `reportComputationError` lets the
+  earlier report stand (`reportDiagnosticOnce`;
+  `test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
@@ -4084,9 +4094,10 @@ null when it does not apply. Current built-in behavior:
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
 7. A spread, inside a reactive collection callback, of a capture that §9.4 does
    not write out — a `const` initialized by a function call, say — copies
-   nothing, because the callback reads the capture as an opaque reference. No
-   diagnostic reports it unless the capture is a tracked reactive root, whose
-   spread §9.7 reports as not lowerable.
+   nothing, because the callback reads the capture as an opaque reference.
+   §9.4 reports it as an error rather than writing it out; the keys of such a
+   capture are not known when the code is compiled, so the spread itself
+   stays unsupported.
 
 ## 20. Test Coverage Snapshot
 

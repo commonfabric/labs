@@ -156,12 +156,18 @@ function registerReplacement(
   }
 }
 
+/**
+ * Reports a computation the pattern context cannot lower. At most one report
+ * lands on a source range: the closure stage reports a spread of a capture it
+ * cannot write out (`captured-object-spread.ts`) under this same type, and a
+ * spread this check would also report is then already reported.
+ */
 export function reportComputationError(
   context: TransformationContext,
   node: ts.Node,
   message: string,
 ): void {
-  context.reportDiagnostic({
+  context.reportDiagnosticOnce({
     severity: "error",
     type: "pattern-context:computation",
     message,
