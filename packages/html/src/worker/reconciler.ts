@@ -465,10 +465,15 @@ export class WorkerReconciler {
       };
 
       addCancel(
-        this.#sinkCell(vnode, (resolvedVnode: unknown, read) => {
-          rootConsumed = read;
-          renderRoot(resolvedVnode);
-        }, !this.#admitsEverything(this.#rootRenderPolicy)),
+        this.#sinkCell(
+          vnode,
+          (resolvedVnode: unknown, read) => {
+            rootConsumed = read;
+            renderRoot(resolvedVnode);
+          },
+          !this.#admitsEverything(this.#rootRenderPolicy),
+          true,
+        ),
       );
     } else {
       // Static VNode - render directly into container
@@ -1131,11 +1136,16 @@ export class WorkerReconciler {
     return undefined;
   }
 
-  /** Keeps a rendered subscription responsive to session access loss and recovery. */
+  /**
+   * Keeps a rendered subscription responsive to session access loss and
+   * recovery. `renderRead` makes the subscription's read a render read, which
+   * the mounted root takes; see `SinkOptions.renderRead` in the runner.
+   */
   #sinkCell<T>(
     cell: Cell<T>,
     deliver: (value: T | undefined, consumed?: SinkConsumedLabel) => void,
     includeConsumedLabel = false,
+    renderRead = false,
   ): Cancel {
     const [cancel, addCancel] = useCancelGroup();
     const watched = new Set<string>();
@@ -1160,7 +1170,7 @@ export class WorkerReconciler {
         }
       }
       emit();
-    }, { readOnly: true, includeConsumedLabel }));
+    }, { readOnly: true, includeConsumedLabel, renderRead }));
     return () => {
       active = false;
       cancel();
