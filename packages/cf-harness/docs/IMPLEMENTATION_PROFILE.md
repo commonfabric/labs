@@ -380,14 +380,14 @@ placeholders resolve only at the SQLite query boundary.
    binding. The class is the descriptor's static one unless the tool classes
    each call (`effectClassOf`): `finish_task` is `side-effect` when it carries
    client actions and `read` otherwise, so an answer, question or give-up keeps
-   the read path while actions need a direct-command binding. The decision is recorded before the tool runs, so
-   it is not a commit point, and it consults no sink and no label. `run_pattern`
-   is the exception and shows the shape the rest want: a named sink, an explicit
-   ceiling, and the runner's commit boundary deciding. Owner: `cf-harness` and
-   the CFC runtime. Retirement: each side-effecting tool's effect is declared as
-   a named sink whose ceiling the runner's boundary commit evaluates, so that a
-   refusal comes back as structured evidence rather than as an allow recorded in
-   advance.
+   the read path while actions need a direct-command binding. The decision is
+   recorded before the tool runs, so it is not a commit point, and it consults
+   no sink and no label. `run_pattern` is the exception and shows the shape the
+   rest want: a named sink, an explicit ceiling, and the runner's commit
+   boundary deciding. Owner: `cf-harness` and the CFC runtime. Retirement: each
+   side-effecting tool's effect is declared as a named sink whose ceiling the
+   runner's boundary commit evaluates, so that a refusal comes back as
+   structured evidence rather than as an allow recorded in advance.
 7. **Direct-command bindings not bound to a subject or a submitted value.** Both
    minting surfaces produce a binding from constants: the console's is a
    module-level value reused for every turn of every session, and the CLI's
