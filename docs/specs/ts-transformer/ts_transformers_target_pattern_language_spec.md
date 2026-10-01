@@ -219,10 +219,10 @@ Why:
 - dynamic access, receiver methods, and true-cell eager reads are valid here
 - `.get()` on ordinary opaque/reactive values is still not part of the
   language, even inside a computation callback
-- `input[SELF]` looks like the known-symbol access `computed(() => input[key])`
-  permits, but the callback sees the input as a plain value, on which `SELF`
-  names nothing; `const self = input[SELF]` in the pattern body, captured here,
-  is the form that works
+- `input[SELF]` looks like any other key read off the input, and dynamic access
+  such as `computed(() => input[key])` is valid here, but the callback sees the
+  input as a plain value, on which `SELF` names nothing; `const self =
+  input[SELF]` in the pattern body, captured here, is the form that works
 
 ### Where A Builder's Callback May Come From
 
