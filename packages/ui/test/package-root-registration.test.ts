@@ -56,7 +56,9 @@ async function collectRegistrationDecorators(
     const path = join(dir, entry.name);
 
     if (entry.isDirectory) {
-      files.push(...await collectRegistrationDecorators(path));
+      for (const file of await collectRegistrationDecorators(path)) {
+        files.push(file);
+      }
       continue;
     }
 

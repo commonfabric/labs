@@ -404,7 +404,7 @@ describe("plain-schema array traversal", () => {
     const nativeTrackReadPaths = tx.trackReadPaths!.bind(tx);
     tx.trackReadPaths = (address, paths, options) => {
       if (address.id.startsWith(`data:${DATA_URI_MEDIA_TYPE}`)) {
-        trackedDataPaths.push(...paths.map((path) => [...path]));
+        for (const path of paths) trackedDataPaths.push([...path]);
       }
       return nativeTrackReadPaths(address, paths, options);
     };

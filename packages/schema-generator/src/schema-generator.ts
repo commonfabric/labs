@@ -43,6 +43,7 @@ import {
   readUnionMemberNodes,
   sameBesidesUndefined,
   typeParameterOfReference,
+  typeParameterOfType,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import { resolveWriterBinding } from "./typescript/writer-binding.ts";
@@ -1042,13 +1043,8 @@ function boundArgumentOf(
   context: GenerationContext,
 ): BoundTypeArgument | undefined {
   const bound = context.boundTypeParameters;
-  if (!bound || (type.flags & ts.TypeFlags.TypeParameter) === 0) {
-    return undefined;
-  }
-  const declaration = type.symbol?.declarations?.find(
-    ts.isTypeParameterDeclaration,
-  );
-  return declaration && bound.arguments.get(declaration);
+  const declaration = bound && typeParameterOfType(type);
+  return declaration && bound?.arguments.get(declaration);
 }
 
 /**

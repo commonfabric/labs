@@ -75,7 +75,7 @@ describe("in-process-reference-attributes", () => {
     let batchId = 0;
     const reconciler = new WorkerReconciler({
       onOps: (batch) => {
-        ops.push(...batch);
+        for (const op of batch) ops.push(op);
         applicator.applyBatch({ batchId: batchId++, ops: batch });
         return batchId;
       },

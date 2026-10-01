@@ -114,7 +114,9 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
   const mount = async (tree: WorkerVNode) => {
     const ops: VDomOp[] = [];
     const cancel = new WorkerReconciler({
-      onOps: (batch) => ops.push(...batch),
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
     }).mount(tree);
     await t.settle();
     return {

@@ -1012,11 +1012,34 @@ Mechanics:
   "length">` a labelled `{ length: number }`, a recursion through
   `Partial<Node>` a definition of its own, and `Pick<Sec<X>, "a">` keeps the
   label though `Pick` drops the carrier. The checker names a `Pick` or an
-  `Omit` over literal keys by a user's alias of it, so an alias whose whole
-  body references one is followed to it. Written under bindings, a `Pick` or
-  an `Omit` of a labelled operand keeps the label too. Any other object that
-  holds a carrier as a property, as a mapped type its author wrote does
-  (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labelled by it, each
+  `Omit` over literal keys by a user's alias of it, and holds that alias's
+  arguments, so an alias whose whole body references another alias is
+  followed to it, down a chain of such aliases, until it reaches one of
+  these; a chain that reaches anything else, or comes back to an alias on
+  it, is not followed. Each alias along the chain binds its parameters to the
+  arguments the one before writes for them, one left out to its parameter's
+  default, and the first alias to the checker's arguments. The operand is the
+  type the last alias's reference writes, read under that alias's bindings,
+  so the alias reads as the one it names written out with its arguments in
+  place: `Select<Sec<X>>`, where `type Select<T> = Pick<T, "a">`, as
+  `Pick<Sec<X>, "a">`, and `Select<["b"]>`, where `type Select<L> =
+  Pick<Confidential<X, L>, "a">`, as `Pick<Confidential<X, ["b"]>, "a">`. A
+  bound parameter is its argument, and a carrier's metadata is read with the
+  parameters it holds bound. Where the operand's payload is a bound
+  parameter, the checker folds the argument into the operand's intersection:
+  the carriers of an argument that is itself labeled join the operand's, and
+  an argument that leaves the intersection no carrier (`never`, `null`,
+  `undefined`, a union of the last two, or `any`) leaves the operand
+  unlabeled. Any other argument keeps the operand's carriers as they are, a
+  union among them, whose every member carries them, though the alias
+  written out distributes its intersection over the union and reads
+  unlabeled. Both sides bind the first alias's parameters to the checker's
+  arguments, never to the ones a reference writes, so they agree. Written
+  under bindings, a `Pick` or an `Omit` of a labeled operand keeps the label
+  too, while a user's alias of one there is a mapped type over a bound
+  parameter, which is not fully read (below). Any other object that holds a
+  carrier as a property, as a mapped type its author wrote does
+  (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
   metadata the carrier's type holds read in full or none, and never holds
   the carrier as a member: no value does.
 - User alias chains are followed with type-parameter node substitution until a
@@ -1201,11 +1224,14 @@ Mechanics:
   `src/typescript/type-node.ts`). That is how a label written in a type
   literal or an interface keeps a binding that only its syntax names. The same
   member of a generic declaration, instantiated, is read from its type, as is
-  the value of an optional member with no such annotation. `AnyOf<X>` is
-  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
-  alias name, so an authored type named `AnyOf` is read as itself. A
-  `PolicyOf` reached from a type alone, with no annotation that denotes it,
-  has no binding to read: its brand is read as an ordinary object,
+  the value of an optional member with no such annotation. Read from a type,
+  a type parameter the reading binds is its argument, as a bare reference to
+  it is, and a spread element of a tuple (`[...L, "b"]`) is the elements of
+  the list it reads as, or one unread element where it reads as none.
+  `AnyOf<X>` is recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`,
+  never by an alias name, so an authored type named `AnyOf` is read as
+  itself. A `PolicyOf` reached from a type alone, with no annotation that
+  denotes it, has no binding to read: its brand is read as an ordinary object,
   `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
   extraction cannot read in full is reported as the `cfc-label:unread` warning
   (`unread-label-diagnostics.ts`), naming the label: an argument that is not a

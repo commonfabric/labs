@@ -11,6 +11,9 @@
  * recomputed from the edited text.
  */
 
+import { spliceAll } from "@commonfabric/utils/arrays";
+import { maxOf } from "@commonfabric/utils/math";
+
 import type { Document, Line, Span, ViewMode } from "./model.ts";
 import { cpLen } from "./ansi.ts";
 import {
@@ -556,11 +559,7 @@ function reconstructNewSide(
       if (oldNoNewline || newNoNewline) trailingNewline = !newNoNewline;
       else if (oldLineCount === 0 && hunk.newCount > 0) trailingNewline = true;
     }
-    lines.splice(
-      start,
-      hunk.oldCount,
-      ...replacement,
-    );
+    spliceAll(lines, start, hunk.oldCount, replacement);
   }
   if (trailingNewline && lines.at(-1) !== "") lines.push("");
   if (!trailingNewline && lines.length > 1 && lines.at(-1) === "") lines.pop();
@@ -671,10 +670,11 @@ function baselineWithCurrentHunks(original: string, current: string): string {
   for (let index = beforeHunks.length - 1; index >= 0; index--) {
     const beforeHunk = beforeHunks[index].hunk;
     const afterHunk = afterHunks[index].hunk;
-    baselineLines.splice(
+    spliceAll(
+      baselineLines,
       beforeHunk.headerLine,
       beforeHunk.endLine - beforeHunk.headerLine + 1,
-      ...currentLines.slice(afterHunk.headerLine, afterHunk.endLine + 1),
+      currentLines.slice(afterHunk.headerLine, afterHunk.endLine + 1),
     );
   }
   return baselineLines.join("\n");
@@ -2474,7 +2474,7 @@ function collectFileOutputs(
     const fileLines = fileContentLines(base);
     const representedLineCount = Math.max(
       0,
-      ...splices.map((splice) => splice.startIndex + splice.newCount),
+      maxOf(splices.map((splice) => splice.startIndex + splice.newCount)),
     );
     if (
       representedLineCount === fileLines.length + 1 &&
@@ -2510,7 +2510,7 @@ function collectFileOutputs(
           nearbyProvenanceEnding(index, h.lineEndings, ending),
         );
       });
-      fileLines.splice(h.startIndex, h.newCount, ...replacement);
+      spliceAll(fileLines, h.startIndex, h.newCount, replacement);
     }
     out.set(
       path,

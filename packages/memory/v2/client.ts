@@ -1,6 +1,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   isPlainObject,
@@ -1772,7 +1773,7 @@ export class SpaceSession {
       this.#readyOnConnection = true;
       replayedThroughLocalSeq = Math.max(
         0,
-        ...this.#outstandingCommits.keys(),
+        maxOf(this.#outstandingCommits.keys()),
       );
       const replayTasks = [...this.#outstandingCommits.entries()].map((
         [localSeq, pendingCommit],

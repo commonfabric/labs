@@ -1,7 +1,5 @@
 # ChatMessageWindow
 
-Status: proposed design (see [`README.md`](README.md)).
-
 A run of consecutive messages from one view of a conversation, opened by a
 client. A room's [`ChatMessageList`](ChatMessageList.md) keeps each of a
 session's open windows in `windows`, under the `windowId` the client chose.

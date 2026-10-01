@@ -11,12 +11,19 @@
  * written down. They join on piece, connection, and companion key. Connection
  * identity names a grant; its declared CFC classes describe what it holds.
  *
- * A handle whose class cannot be read is not guessed at and not granted: it is
- * returned as unnamed, with the reason, for the launcher to print. A console
- * that silently held one fewer reference than its report claimed would be the
- * failure this whole launch path exists to prevent.
+ * The classes are description, not identity: a contract that declares none is
+ * still granted, under its connection's name. A handle the records cannot
+ * place is not guessed at and not granted: it is returned as unnamed, with the
+ * reason, for the launcher to print. A console that silently held one fewer
+ * reference than its report claimed would be the failure this whole launch
+ * path exists to prevent.
  */
 
+import {
+  rowLabelSpecOf,
+  ruleConstrainsConfidentiality,
+  validateRowLabelSpec,
+} from "@commonfabric/memory/sqlite/row-label";
 import { renderCellReference } from "@commonfabric/runner/shared";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -110,6 +117,65 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
     }
   }
   return classes;
+};
+
+/**
+ * Whether one `sqlite_sources` entry's table contract declares confidentiality
+ * for what it reads: a column with a non-empty `ifc.confidentiality`, or a
+ * table whose `rowLabel` is valid and constrains confidentiality (as the
+ * runner judges it). Integrity alone does not count. A contract that declares
+ * none serves its rows without confidentiality, so it is not granted, whatever
+ * classes it does or does not name.
+ */
+export const declaresConfidentiality = (
+  source: Record<string, unknown>,
+): boolean => {
+  // An invalid rule is refused separately (`invalidRowLabel`), before this.
+  const tables = asRecord(source.tables) ?? {};
+  for (const table of Object.values(tables)) {
+    const properties = asRecord(asRecord(table)?.properties) ?? {};
+    const rule = rowLabelSpecOf(table);
+    if (
+      rule !== undefined &&
+      validateRowLabelSpec(rule, Object.keys(properties), properties) ===
+        undefined &&
+      ruleConstrainsConfidentiality(rule)
+    ) {
+      return true;
+    }
+    for (const column of Object.values(properties)) {
+      const confidentiality = asRecord(asRecord(column)?.ifc)?.confidentiality;
+      if (Array.isArray(confidentiality) && confidentiality.length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+/**
+ * Why a table's `rowLabel` in one `sqlite_sources` entry is invalid, judged
+ * with the runner's own validator and arguments, or undefined when every rule
+ * is valid. The runner refuses every read of a database whose rule fails this
+ * (`row-label-read.ts`), so granting it would hand sessions a store no query
+ * can read.
+ */
+export const invalidRowLabel = (
+  source: Record<string, unknown>,
+): string | undefined => {
+  const tables = asRecord(source.tables) ?? {};
+  for (const [name, table] of Object.entries(tables)) {
+    const record = asRecord(table);
+    if (record?.rowLabel === undefined) continue;
+    const properties = asRecord(record.properties) ?? {};
+    const reason = validateRowLabelSpec(
+      record.rowLabel,
+      Object.keys(properties),
+      properties,
+    );
+    if (reason !== undefined) return `table \`${name}\`: ${reason}`;
+  }
+  return undefined;
 };
 
 /**
@@ -418,14 +484,24 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
-    const classes = declaredClasses(matchingSources[0]!);
-    if (classes.length === 0) {
+    const badRule = invalidRowLabel(matchingSources[0]!);
+    if (badRule !== undefined) {
       skip(
-        "its declared table contract carries no CFC class",
-        "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+        `its declared rowLabel is invalid (${badRule})`,
+        "Correct the rowLabel in this connector's sqlite_sources, then restart the console.",
       );
       continue;
     }
+    if (!declaresConfidentiality(matchingSources[0]!)) {
+      skip(
+        "its declared table contract declares no confidentiality",
+        "Declare per-column ifc.confidentiality (or a rowLabel confidentiality) in this connector's sqlite_sources, then restart the console.",
+      );
+      continue;
+    }
+    // Descriptive only: the grant is named by its connection, and a contract
+    // that classifies nothing is granted with an empty list.
+    const classes = declaredClasses(matchingSources[0]!);
     const name = connectorGrantName(grantSource);
     if (RESERVED_GRANT_NAMES.has(name)) {
       skip(
@@ -463,15 +539,17 @@ export const resolveConnectorGrants = (
   }
   for (const entries of candidates.values()) {
     const first = entries[0]!;
-    if (
-      entries.every((entry) =>
-        entry.ref === first.ref &&
-        entry.cfcClasses!.length === first.cfcClasses!.length &&
-        entry.cfcClasses!.every((value) => first.cfcClasses!.includes(value))
-      )
-    ) {
+    // One store, one reference. Two pieces may declare it with contracts that
+    // classify it differently (one is relabeled before the other); the
+    // classes only describe the store, so the grant carries every class
+    // either declares. A different reference is a different store under one
+    // name, and that is withheld.
+    if (entries.every((entry) => entry.ref === first.ref)) {
       for (const entry of entries.slice(1)) {
         mergeReceiptMetadata(first, entry);
+        for (const value of entry.cfcClasses ?? []) {
+          if (!first.cfcClasses!.includes(value)) first.cfcClasses!.push(value);
+        }
       }
       grants.push(first);
     } else {
@@ -479,7 +557,7 @@ export const resolveConnectorGrants = (
         unnamed.push({
           ...entry.source,
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
           remedy:
             "Reconcile the connection's store declarations and receipts in Loom, then restart the console.",
           state: "degraded",

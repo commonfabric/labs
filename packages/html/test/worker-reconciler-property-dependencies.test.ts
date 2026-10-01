@@ -21,7 +21,7 @@ describe("worker-reconciler-property-dependencies", () => {
     const ops: VDomOp[] = [];
     const reconciler = new WorkerReconciler({
       onOps: (batch) => {
-        ops.push(...batch);
+        for (const op of batch) ops.push(op);
       },
     });
     try {

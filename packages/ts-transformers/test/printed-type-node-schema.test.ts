@@ -1446,6 +1446,38 @@ export default pattern<{
           ifc: { confidentiality: ["secret"] },
         });
       });
+
+      it("reads a nested label that spreads a parameter as the list its argument writes, on both sides", async () => {
+        // The spread element stands for the elements of the argument's list,
+        // not for the list as one atom.
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Outer<L extends readonly unknown[]> = Confidential<
+  { inner: Confidential<{ x: string }, readonly [...L, "b"]> },
+  ["z"]
+>;
+export default pattern<{ a: Outer<readonly ["c", "d"]> }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        const expected = {
+          type: "object",
+          properties: {
+            inner: {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              ifc: { confidentiality: ["c", "d", "b"] },
+            },
+          },
+          required: ["inner"],
+          ifc: { confidentiality: ["z"] },
+        };
+        expect((input.properties as Schema).a).toEqual(expected);
+        expect((output.properties as Schema).a).toEqual(expected);
+      });
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {
@@ -1556,6 +1588,77 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           expect((output.properties as Schema).a).toEqual(expected);
         });
       }
+
+      describe("a user's generic alias of one", () => {
+        // The alias is read with each of its parameters as the argument it
+        // is given, so both sides read it as the alias it names written out
+        // with those arguments in place.
+
+        const schemasOf = async (declarations: string, a: string) => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, readonly ["a"]>;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          return {
+            input: (input.properties as Schema).a,
+            output: (output.properties as Schema).a,
+          };
+        };
+
+        for (
+          const [declarations, a, written, ifc] of [
+            [
+              'type Select<T extends { x: string }> = Pick<T, "x">;',
+              "Select<Sec<{ x: string; y: number }>>",
+              'Pick<Sec<{ x: string; y: number }>, "x">',
+              { confidentiality: ["a"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Pick<Confidential<{ x: string; y: number }, L>, "x">;',
+              'Select<readonly ["b"]>',
+              'Pick<Confidential<{ x: string; y: number }, readonly ["b"]>, "x">',
+              { confidentiality: ["b"] },
+            ],
+            [
+              `type Select<T extends { x: string }> = Pick<T, "x">;
+type Outer<T extends { x: string }> = Select<Sec<T>>;`,
+              "Outer<{ x: string; y: number }>",
+              'Pick<Sec<{ x: string; y: number }>, "x">',
+              { confidentiality: ["a"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Pick<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "x">;',
+              'Select<readonly ["c", "d"]>',
+              'Pick<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "x">',
+              { confidentiality: ["c", "d", "b"] },
+            ],
+            [
+              'type Select<L extends readonly unknown[]> = Omit<Confidential<{ x: string; y: number }, readonly [...L, "b"]>, "y">;',
+              'Select<readonly ["c", "d"]>',
+              'Omit<Confidential<{ x: string; y: number }, readonly ["c", "d", "b"]>, "y">',
+              { confidentiality: ["c", "d", "b"] },
+            ],
+          ] as const
+        ) {
+          it(`reads \`${a}\` as \`${written}\`, on both sides`, async () => {
+            const read = await schemasOf(declarations, a);
+            const expected = {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              ifc,
+            };
+            expect(read).toEqual({ input: expected, output: expected });
+            expect(await schemasOf(declarations, written)).toEqual(read);
+          });
+        }
+      });
     });
 
     describe("a default-library alias mapping a labelled type the checker builds apart", () => {

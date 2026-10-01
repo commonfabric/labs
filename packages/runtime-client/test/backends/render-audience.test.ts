@@ -261,8 +261,8 @@ describe("render-audience", () => {
         const allText: string[] = [];
         const reconciler = new WorkerReconciler({
           onOps: (batch) => {
-            ops.push(...batch);
-            allText.push(...emittedText(batch));
+            for (const op of batch) ops.push(op);
+            for (const text of emittedText(batch)) allText.push(text);
           },
           renderDeclassificationPolicy: options.renderDeclassificationPolicy,
           renderConfidentialityCeiling: ceiling,
@@ -384,7 +384,9 @@ describe("render-audience", () => {
       const manifests = renderModulePolicySourceFor(runtime, ceiling);
       const ops: VDomOp[] = [];
       const reconciler = new WorkerReconciler({
-        onOps: (batch) => ops.push(...batch),
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
         renderDeclassificationPolicy: options.renderDeclassificationPolicy,
         renderConfidentialityCeiling: ceiling,
         resolveRenderConfidentiality: renderConfidentialityResolverFor(
@@ -578,7 +580,9 @@ describe("render-audience", () => {
       const manifests = renderModulePolicySourceFor(runtime, ceiling);
       const ops: VDomOp[] = [];
       const reconciler = new WorkerReconciler({
-        onOps: (batch) => ops.push(...batch),
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
         renderDeclassificationPolicy: options.renderDeclassificationPolicy,
         renderConfidentialityCeiling: ceiling,
         resolveRenderConfidentiality: renderConfidentialityResolverFor(
@@ -738,7 +742,9 @@ describe("render-audience", () => {
       const manifests = renderModulePolicySourceFor(runtime, ceiling);
       const ops: VDomOp[] = [];
       const reconciler = new WorkerReconciler({
-        onOps: (batch) => ops.push(...batch),
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
         renderDeclassificationPolicy: options.renderDeclassificationPolicy,
         renderConfidentialityCeiling: ceiling,
         resolveRenderConfidentiality: renderConfidentialityResolverFor(

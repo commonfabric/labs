@@ -30,7 +30,7 @@ function fillInput(ui: unknown, id: string, value: string): void {
 const captureRecommendations = handler<
   { books: Book[] },
   { sent: Writable<Book[]> }
->(({ books }, { sent }) => sent.push(...books));
+>(({ books }, { sent }) => sent.pushAll(books));
 const captureBook = handler<Book, { libraryBooks: Writable<Book[]> }>((
   book,
   { libraryBooks },

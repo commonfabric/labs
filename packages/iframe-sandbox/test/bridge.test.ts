@@ -387,7 +387,7 @@ describe("Fabric iframe bridge", () => {
       items: cellResource(() => value, {
         push: (members) => {
           pushes.push([...members]);
-          value.push(...members as number[]);
+          for (const member of members as number[]) value.push(member);
         },
       }),
     });

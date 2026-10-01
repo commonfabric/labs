@@ -360,7 +360,7 @@ function decodeCStyle(quoted: string): string {
     const ch = quoted[i];
     if (ch === '"') return new TextDecoder().decode(new Uint8Array(out));
     if (ch !== "\\") {
-      out.push(...new TextEncoder().encode(ch));
+      for (const byte of new TextEncoder().encode(ch)) out.push(byte);
       i++;
       continue;
     }

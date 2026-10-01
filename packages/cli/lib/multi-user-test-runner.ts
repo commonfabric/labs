@@ -572,21 +572,19 @@ export async function runMultiUserTestPattern(
         nonIdempotent: string[];
       };
       if (!participant.allowRuntimeErrors) {
-        runtimeErrors.push(
-          ...health.runtimeErrors.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const error of health.runtimeErrors) {
+          runtimeErrors.push(`[${participant.spec.name}] ${error}`);
+        }
       }
       if (!participant.allowConsoleErrors) {
-        consoleErrors.push(
-          ...health.consoleErrors.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const error of health.consoleErrors) {
+          consoleErrors.push(`[${participant.spec.name}] ${error}`);
+        }
       }
       if (!participant.allowConsoleWarnings) {
-        consoleWarnings.push(
-          ...health.consoleWarnings.map((e) =>
-            `[${participant.spec.name}] ${e}`
-          ),
-        );
+        for (const warning of health.consoleWarnings) {
+          consoleWarnings.push(`[${participant.spec.name}] ${warning}`);
+        }
       }
       if (participant.expectNonIdempotent) {
         anyExpectNonIdempotent = true;
@@ -594,9 +592,9 @@ export async function runMultiUserTestPattern(
           expectedNonIdempotentDetected = true;
         }
       } else {
-        nonIdempotent.push(
-          ...health.nonIdempotent.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const violation of health.nonIdempotent) {
+          nonIdempotent.push(`[${participant.spec.name}] ${violation}`);
+        }
       }
     }
     // expectNonIdempotent asserts the detector fires. Which runtime re-runs
