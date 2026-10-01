@@ -6,6 +6,7 @@
  */
 
 import type { Cell } from "@commonfabric/api";
+import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 import { ANNOTATION_KEYS } from "@commonfabric/piece/schema-compatibility";
 import {
   ContextualFlowControl,
@@ -21,6 +22,7 @@ import {
   type Runtime,
   sanitizeSchemaForLinks,
 } from "@commonfabric/runner";
+import type { IfcKey } from "@commonfabric/runner/cfc";
 import {
   cfcSchemaResolvedRoot,
   hoistCfcSchemaDefs,
@@ -1640,6 +1642,101 @@ function dereferencedElementSchema(
   return Object.keys(dereferenced).length === 0 ? true : dereferenced;
 }
 
+/**
+ * Whether the schemas a selection installs carry each `ifc` key the source
+ * states at a position, or drop it.
+ *
+ * A selection reads the source and writes only into cells of its own: the
+ * argument that links to the source, and the results that hold a copy of what
+ * it read. The schema on such a cell is policy for the selection's write to
+ * it. A key is carried where it restricts whoever reads the value, since a
+ * copy read under less than its source is a leak. It is dropped where it
+ * binds or vouches for the writer of the source position: the writer of the
+ * selection's cells is the selection, which is not the writer the source
+ * names and holds no integrity to assert.
+ *
+ * The mapped type makes a key the runtime gains fail to type-check here until
+ * it has a row. A key this table does not name — an extension the runtime
+ * does not know either — is carried, which refuses the read where the key
+ * turns out to bind a writer rather than weakening a label where it does not.
+ */
+const SELECTION_IFC_KEYS: {
+  readonly [K in IfcKey | "observes"]: "carried" | "dropped";
+} = {
+  // The label a reader of the value is held to, and the read observations
+  // that label is consumed by.
+  confidentiality: "carried",
+  observes: "carried",
+  // Atoms the runner adds to the integrity of what a write to the position
+  // stores (`derivePersistedLabel()` in the runner's `cfc/prepare.ts`).
+  integrity: "dropped",
+  addIntegrity: "dropped",
+  // Gates a write to the position has to pass, on what the writer read
+  // before it and on the value it stores.
+  requiredIntegrity: "dropped",
+  maxConfidentiality: "dropped",
+  // Who may write the position, and through which gesture.
+  ownerPrincipal: "dropped",
+  writeAuthorizedBy: "dropped",
+  writePolicyAnyOf: "dropped",
+  uiContract: "dropped",
+  // How the value derives from another path of the document it is stored in,
+  // which the runner checks against that document at the write.
+  exactCopyOf: "dropped",
+  projection: "dropped",
+  collection: "dropped",
+  // What the writer claimed about the precision of its own flow.
+  flowPrecisionClaim: "dropped",
+};
+
+/** Helper for {@link schemaForSelection}, which rewrites one `ifc` map. */
+function ifcForSelection(
+  ifc: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | undefined {
+  const roles: Readonly<Record<string, "carried" | "dropped">> =
+    SELECTION_IFC_KEYS;
+  const kept = Object.entries(ifc).filter(([key]) =>
+    !Object.hasOwn(roles, key) || roles[key] === "carried"
+  );
+  if (kept.length === Object.keys(ifc).length) return ifc;
+  return kept.length === 0 ? undefined : Object.fromEntries(kept);
+}
+
+/**
+ * `schema` as a selection states it on the cells it writes and the links it
+ * reads through: every position keeps the `ifc` keys
+ * {@link SELECTION_IFC_KEYS} carries and loses the ones it drops. A schema
+ * stating none of the dropped keys comes back as the same object.
+ *
+ * The rewrite reaches every subschema `schema` holds, the bodies of its
+ * `$defs` included, so a position written as a reference into them is covered
+ * by the definition it names. A reference to another schema document is left
+ * as written, and so is a schema object at the point it holds itself.
+ *
+ * @internal Exported for focused schema tests.
+ */
+export function schemaForSelection(schema: JSONSchema): JSONSchema {
+  const active = new Set<object>();
+  const rewrite = (node: JSONSchema): JSONSchema => {
+    if (!isObjectNotArray(node) || active.has(node)) return node;
+    active.add(node);
+    try {
+      const rewritten = mapSubschemas(node, rewrite, {
+        includeDefs: true,
+        includeUnused: true,
+      });
+      if (!isObjectNotArray(rewritten.ifc)) return rewritten;
+      const ifc = ifcForSelection(rewritten.ifc);
+      if (ifc === rewritten.ifc) return rewritten;
+      const { ifc: _ifc, ...rest } = rewritten;
+      return (ifc === undefined ? rest : { ...rest, ifc }) as JSONSchema;
+    } finally {
+      active.delete(node);
+    }
+  };
+  return rewrite(schema);
+}
+
 function filteredOutputSchema(
   sourceSchema: JSONSchema | undefined,
   outputItemSchema: JSONSchema | undefined,
@@ -3151,7 +3248,9 @@ async function sourceRootIsArray(cell: Cell<unknown>): Promise<boolean> {
  * shape from source-schema-selected reads, preventing an identity alias from
  * widening back to a broader linked target. Caller schemas describe output
  * shape only; source schemas remain authoritative for CFC and other Fabric
- * metadata.
+ * metadata. The graph's own cells state the source's labels and none of the
+ * claims the source makes about its writer, as {@link schemaForSelection}
+ * rewrites them: the source is read here and never written.
  *
  * A marker is answered beside that graph rather than through it: the marked
  * position contributes the rejecting selector to the read, so nothing behind
@@ -3184,16 +3283,23 @@ export async function deriveSelectedValue(
     );
   }
   const declaredSourceSchema = sourceCell.schema;
-  const sourceSchema = isObjectOrArray(declaredSourceSchema) &&
+  const sourceValueSchema = isObjectOrArray(declaredSourceSchema) &&
       declaredSourceSchema.asCell !== undefined
     ? dereferencedElementSchema(declaredSourceSchema)
     : declaredSourceSchema;
-  const sourceValueCell = sourceSchema === declaredSourceSchema
+  const sourceValueCell = sourceValueSchema === declaredSourceSchema
     ? sourceCell
-    : sourceCell.asSchema(sourceSchema);
+    : sourceCell.asSchema(sourceValueSchema);
   if (selection.filter === undefined && selection.projection === undefined) {
     return await sourceValueCell.pull();
   }
+  // Every schema the graph below installs is derived from this one: on the
+  // cells the selection writes its argument and its results into, and on the
+  // links it reads the source through. The source is only ever read, so the
+  // claims its schema makes about its own writer are stated on none of them.
+  const sourceSchema = sourceValueSchema === undefined
+    ? undefined
+    : schemaForSelection(sourceValueSchema);
 
   const rootKind = schemaRootKind(sourceSchema);
   const sourceIsArray = rootKind === "unknown"
@@ -3469,7 +3575,8 @@ export async function deriveSelectedValue(
     const committed = await timeSelectionPhase("commit", () => tx.commit());
     if (committed.error !== undefined) {
       throw new CellSelectionError(
-        `Could not apply get transform: ${committed.error}`,
+        `Could not apply get transform: ${committed.error.message}`,
+        { cause: committed.error },
       );
     }
     // A session-local projection can reuse space-scoped mapped children.

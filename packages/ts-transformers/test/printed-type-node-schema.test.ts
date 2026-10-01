@@ -352,6 +352,58 @@ export default function contextualCell() {
       });
     }
 
+    for (const tuple of ["readonly []", "[]"]) {
+      const wrap = {
+        type: "object",
+        properties: {
+          x: { type: "string" },
+          l: { type: "array", items: false },
+        },
+        required: ["x", "l"],
+      };
+
+      it(`reads an alias given \`${tuple}\` in a pattern's inferred result as its instantiation, on both sides`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export default pattern<{ a: Wrap<${tuple}> }>(({ a }) => ({ a }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+
+        for (const root of [input, output]) {
+          expect(root).toEqual({
+            type: "object",
+            properties: { a: wrap },
+            required: ["a"],
+          });
+        }
+        expect(diagnostics).toEqual([]);
+      });
+
+      it(`reads an alias given \`${tuple}\` in a lift's inferred result as its instantiation`, async () => {
+        const { result } = await liftSchemas(
+          `import { lift } from "commonfabric";
+type Wrap<L extends readonly unknown[]> = { x: string; l: L };
+export const f = lift((a: { w: Wrap<${tuple}> }) => ({ out: a.w }));`,
+          "a.w",
+        );
+
+        expect(result).toEqual({
+          type: "object",
+          properties: { out: wrap },
+          required: ["out"],
+        });
+      });
+    }
+
     it("keeps the cell boundary of an array of cells with an empty default", async () => {
       const { result } = await liftSchemas(
         `${IMPORTS}interface Item { title: string; attachments: Writable<any>[] | Default<[]>; }
@@ -408,6 +460,86 @@ export default pattern<{ n: number }>(() => {
         },
         required: ["host", "run"],
       });
+    });
+  });
+
+  describe("a type the checker cannot print", () => {
+    // The checker prints no type node for the instance type of an anonymous
+    // class expression, which has no name to print it by, so each case below
+    // reads a result whose type has no print.
+
+    const makeObject =
+      "const makeObject = () => ({ a: new (class { v = 1 })() });";
+    const instance = {
+      type: "object",
+      properties: { v: { type: "number" } },
+      required: ["v"],
+    };
+
+    it("reports `pattern:any-result-schema` for a pattern's inferred result", async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern:any-result-schema" }]);
+    });
+
+    it('emits a `{ type: "unknown" }` result schema, and no diagnostic, for a lift taking no parameters', async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { lift } from "commonfabric";
+function make() { return new (class { v = 1 })(); }
+export const f = lift(() => ({ a: make() }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+
+      expect(callSchemas(parseModule(files["/main.tsx"]!), "lift")).toEqual([
+        false,
+        { type: "unknown" },
+      ]);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads a lift's result as its authored return annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((n: number): ReturnType<typeof makeObject> =>
+  n > 0 ? makeObject() : makeObject()
+);`,
+        "makeObject()",
+      );
+
+      expect(result).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" } },
+        required: ["a"],
+        $defs: { __class: instance },
+      });
+    });
+
+    it("reads a lift's projected result from its parameter's annotation", async () => {
+      const { result } = await liftSchemas(
+        `import { lift } from "commonfabric";
+${makeObject}
+export const f = lift((x: ReturnType<typeof makeObject>) => x.a);`,
+        "x.a",
+      );
+
+      expect(result).toEqual(instance);
     });
   });
 

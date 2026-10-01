@@ -1483,7 +1483,7 @@ the per-epic implementation notes).
   ceiling behind a shell dogfood flag (Epic H3a)" (#4550, 2026-07-07).
 - **Purpose.** Populates the CFC render confidentiality ceiling in the shell's
   runtime. Display sinks admit the acting user's identity and personal-space
-  atoms plus allow-listed influence-class caveat kinds. Before the fit check,
+  atoms plus the prompt-caveat family (SC-54). Before the fit check,
   the worker resolves shared `Space` labels through verified reader membership,
   and runs the exchange rules of any module policy (`PolicyOf`) a label
   selects, reading that policy's manifest from the space the label is stored
