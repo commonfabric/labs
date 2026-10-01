@@ -3,8 +3,6 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
-import { InboxError, type InboxMessage } from "@commonfabric/memory/inbox";
-import { InboxStore } from "@commonfabric/memory/inbox-store";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
@@ -13,10 +11,10 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { noticeSpaceAccess } from "../../src/builder/space-access-notice.ts";
 import type { Cell } from "../../src/cell.ts";
+import { FakeInbox } from "../../src/fake-inbox.deno.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
-import { verifyFirstPartyHttpRequest } from "../../src/toolshed-http-auth.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
 import { RecordingSessionFactory } from "../support/recording-session-factory.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
@@ -74,66 +72,6 @@ type NoticePatternResult = Cell<{
   notice: unknown;
 }>;
 
-/**
- * An inbox service over an in-memory store, answering the inbox `send`
- * operation for a runtime's `fetch`. It verifies each request's signature the
- * way the toolshed routes do, so a message's sender is the identity that
- * signed it.
- */
-class FakeInbox {
-  #store = new InboxStore(":memory:");
-  #sends = 0;
-  #refusals: string[] = [];
-
-  /** How many `send` requests have arrived, accepted or not. */
-  get sends(): number {
-    return this.#sends;
-  }
-
-  /** The codes of the `send` requests the store refused, in order. */
-  get refusals(): readonly string[] {
-    return this.#refusals;
-  }
-
-  /** Enables delivery to `recipient`. */
-  enable(recipient: Identity): void {
-    this.#store.enable(recipient.did());
-  }
-
-  /** Returns the messages pending in `recipient`'s inbox. */
-  messagesFor(recipient: Identity): InboxMessage[] {
-    return this.#store.list(recipient.did()).messages;
-  }
-
-  /** Answers one request, as a runtime's `fetch`. */
-  async fetch(
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<Response> {
-    const request = new Request(input, init);
-    const url = new URL(request.url);
-    if (url.origin !== API_URL || url.pathname !== "/api/inbox/send") {
-      return Response.json({ code: "invalid-request" }, { status: 404 });
-    }
-    this.#sends++;
-    const { userDid } = await verifyFirstPartyHttpRequest({
-      request: request.clone(),
-    });
-    try {
-      return Response.json(this.#store.send(userDid, await request.json()));
-    } catch (error) {
-      if (!(error instanceof InboxError)) throw error;
-      this.#refusals.push(error.code);
-      return Response.json({ code: error.code }, { status: 409 });
-    }
-  }
-
-  /** Closes the store. */
-  close(): void {
-    this.#store.close();
-  }
-}
-
 /** `payload` as an event the renderer marked as a trusted gesture. */
 function gesture(payload: Record<string, unknown>): Record<string, unknown> {
   const event = {
@@ -167,9 +105,9 @@ describe("space-access-notice", () => {
       acl: { mode: "enforce" },
       subscriptionRefreshDelayMs: 0,
     });
-    inbox = new FakeInbox();
-    inbox.enable(bob);
-    inbox.enable(carol);
+    inbox = new FakeInbox({ apiUrl: API_URL });
+    inbox.enable(bob.did());
+    inbox.enable(carol.did());
   });
 
   afterEach(async () => {
@@ -395,7 +333,7 @@ describe("space-access-notice", () => {
 
       await send(runtime, result, { principal: bob.did() });
 
-      const messages = inbox.messagesFor(bob);
+      const messages = inbox.messagesFor(bob.did());
       expect(messages.length).toBe(1);
       expect(messages[0].receipt.senderDid).toBe(alice.did());
       expect(messages[0].payload).toStrictEqual(noticeOf(room));
@@ -414,7 +352,7 @@ describe("space-access-notice", () => {
       );
 
       expect(errors).toEqual([]);
-      expect(inbox.messagesFor(bob).map((message) => message.payload))
+      expect(inbox.messagesFor(bob.did()).map((message) => message.payload))
         .toEqual([noticeOf(room)]);
     });
 
@@ -448,7 +386,7 @@ describe("space-access-notice", () => {
 
       expect(result.key("notes").get()).toEqual([`noticed ${bob.did()}`]);
       expect(inbox.sends).toBe(1);
-      expect(inbox.messagesFor(bob).length).toBe(1);
+      expect(inbox.messagesFor(bob.did()).length).toBe(1);
     });
 
     it("sends nothing, and commits the handler's writes, for a principal without an entry of their own", async () => {
@@ -591,10 +529,10 @@ describe("space-access-notice", () => {
       await noticeAndCommit(runtime, room, "evk:space-access-notice:one");
       await noticeAndCommit(runtime, room, "evk:space-access-notice:one");
       expect(inbox.sends).toBe(2);
-      expect(inbox.messagesFor(bob).length).toBe(1);
+      expect(inbox.messagesFor(bob.did()).length).toBe(1);
 
       await noticeAndCommit(runtime, room, "evk:space-access-notice:two");
-      expect(inbox.messagesFor(bob).length).toBe(2);
+      expect(inbox.messagesFor(bob.did()).length).toBe(2);
     });
 
     it("sends one message for two runs of one event whose entries differ, and the inbox refuses the second", async () => {
@@ -610,7 +548,7 @@ describe("space-access-notice", () => {
 
       expect(inbox.sends).toBe(2);
       expect(inbox.refusals).toEqual(["operation-conflict"]);
-      expect(inbox.messagesFor(bob).map((message) => message.payload))
+      expect(inbox.messagesFor(bob.did()).map((message) => message.payload))
         .toEqual([noticeOf(room)]);
     });
 

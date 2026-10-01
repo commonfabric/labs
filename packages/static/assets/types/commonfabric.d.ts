@@ -4619,7 +4619,9 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * file's default export to run each participant pattern in its own isolated
  * runtime (own identity) against one shared space. The optional `setup`
  * pattern instantiates shared state once; each participant pattern receives
- * its result as the `setup` input. Participants coordinate through
+ * its result as the `setup` input, and the notices its own runtime sent with
+ * `noticeSpaceAccess()` as the `spaceAccessNotices` input (see
+ * `SentSpaceAccessNotice`). Participants coordinate through
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
@@ -4869,6 +4871,28 @@ export declare function noticeSpaceAccess(
   principal: DID,
   entry: AnyCell<unknown>,
 ): void;
+
+/**
+ * A notice `noticeSpaceAccess()` sent during a pattern test, as `cf test`
+ * reports it. A test pattern, or a participant of a multi-user test, that
+ * declares the input `spaceAccessNotices: SentSpaceAccessNotice[]` is handed
+ * the notices its own runtime has sent, in the order the inbox accepted them.
+ * A send is a post-commit effect, so the list is brought up to date at each
+ * `{ settle: true }` step and at no other: an assertion on it follows one.
+ */
+export interface SentSpaceAccessNotice {
+  /** The actor that sent it, as the inbox verified it from the signature. */
+  readonly sender: DID;
+
+  /** The principal it was sent to. */
+  readonly recipient: DID;
+
+  /** The space it names. */
+  readonly space: DID;
+
+  /** The id of the document it names, in `space`. */
+  readonly entry: string;
+}
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

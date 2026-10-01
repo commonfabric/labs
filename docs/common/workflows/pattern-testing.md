@@ -144,6 +144,69 @@ what a pattern decides from the level it is given, such as a control only an
 OWNER is offered. What the memory server refuses a principal is a question for
 a test against a server that enforces access lists.
 
+### Notices a handler sends
+
+A handler that tells a member of a space about it with `noticeSpaceAccess()`
+sends a message to that member's DID inbox once its commit is accepted. The
+test's runtime has an inbox of its own, answered in-process, so the notice is
+delivered without a server, and every recipient counts as having enabled their
+inbox. The checks on the access list still apply: the actor needs `OWNER` in
+the space, and the recipient an entry of their own, or the send is refused and
+logged at error level, which fails the test.
+
+The test reads what was sent from the input `spaceAccessNotices`, a list with
+one `SentSpaceAccessNotice` per notice the inbox accepted: its `sender`,
+`recipient`, `space` and `entry`. A send is a post-commit effect, so the list
+is brought up to date at each `{ settle: true }` step and nowhere else; put one
+between the action and the assertion.
+
+```tsx
+// Shown at module scope.
+import {
+  assert,
+  type DID,
+  handler,
+  noticeSpaceAccess,
+  pattern,
+  type SentSpaceAccessNotice,
+  TESTS,
+  Writable,
+} from "commonfabric";
+
+const GUEST: DID = "did:key:z6MkfXnSkGc27B8ahD4GEgW7egL6kYfu7kpNiUV9ESpMRHAk";
+
+const tell = handler<unknown, { room: Writable<{ title: string }> }>(
+  (_event, { room }) => {
+    noticeSpaceAccess(GUEST, room);
+  },
+);
+
+export default pattern<{ spaceAccessNotices: SentSpaceAccessNotice[] }>(
+  ({ spaceAccessNotices }) => {
+    const room = Writable.of({ title: "Donut committee" });
+    return {
+      [TESTS]: [
+        { action: tell({ room }), event: {} },
+        { settle: true },
+        { assertion: assert(() => spaceAccessNotices.length === 1) },
+        {
+          assertion: assert(() => spaceAccessNotices[0]?.recipient === GUEST),
+        },
+      ],
+    };
+  },
+);
+```
+
+A single-user test's space is its identity's home space, whose list names
+that identity alone, so a handler there tells someone about a space it creates
+with `inSpace()`, whose `grants` give the recipient an entry. In a multi-user
+test the shared space's list is the one above, and each participant is handed
+the notices its own runtime sent: a participant whose handler sent none reads
+an empty list, whatever another participant sent it.
+[Space-access notices](../../features/space-access-notices.md#in-a-pattern-test)
+describes the inbox the lane answers with.
+
 ## Test Step Format
 
 Tests use a **discriminated union** format:
