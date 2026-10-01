@@ -8255,15 +8255,16 @@ export class Runner {
     // again, and the commit is refused. Nothing the piece holds links to a
     // manifest, so the walks above reach none. The manifest's schema brings
     // in the rule documents it links.
+    const manifests = new Set<Cell<any>>();
     for (const digest of modulePolicyDigestsOf(pattern)) {
-      cells.push(
-        this.#runtime.getCellFromEntityId(
-          resultCell.space,
-          cfcPolicyManifestDocId(digest),
-          [],
-          CFC_POLICY_MANIFEST_DOC_SCHEMA,
-        ),
+      const manifest = this.#runtime.getCellFromEntityId(
+        resultCell.space,
+        cfcPolicyManifestDocId(digest),
+        [],
+        CFC_POLICY_MANIFEST_DOC_SCHEMA,
       );
+      manifests.add(manifest);
+      cells.push(manifest);
     }
 
     // Per-cell spans: `n` in the timing stats is the number of cells this
@@ -8273,9 +8274,22 @@ export class Runner {
     const cellSyncWaveStart = performance.now();
     await Promise.all(cells.map((c) => {
       const cellSyncStart = performance.now();
-      return this.#syncFamilyCell(c, identity).finally(() =>
+      const synced = this.#syncFamilyCell(c, identity).finally(() =>
         logger.time(cellSyncStart, "start", "resumeCellSync")
       );
+      // A start that writes nothing carrying the policy needs no manifest,
+      // and one that does reads it as absent and fails its commit loudly, so
+      // a manifest that cannot be loaded does not hold the start up.
+      return manifests.has(c)
+        ? synced.catch((error) => {
+          logger.warn("resume-pre-sync", () => [
+            "could not load a policy manifest the pattern names; starting " +
+            "without it",
+            c.getAsNormalizedFullLink().id,
+            error,
+          ]);
+        })
+        : synced;
     }));
     logger.time(cellSyncWaveStart, "start", "resumeCellSyncWave");
 

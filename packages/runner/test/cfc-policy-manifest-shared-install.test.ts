@@ -803,6 +803,45 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(rtV.runner.isRunning(piece)).toBe(false);
     });
 
+    it("starts it again for the participant who set it up when the manifest cannot be loaded", async () => {
+      // A manifest that cannot be loaded does not stop the start. A commit
+      // that needs the manifest still reads it as absent and fails, and says
+      // so, as the part's own start does here.
+
+      const installedId = await setUpByFirstParticipant();
+      const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      try {
+        const provider = storage.open(space);
+        const sync = provider.sync.bind(provider);
+        using _unreachable = stub(
+          provider,
+          "sync",
+          (id, selector, scope, instance) =>
+            id === installedId
+              ? Promise.reject(new Error("the memory server is unreachable"))
+              : sync(id, selector, scope, instance),
+        );
+        const piece = runtime.getCell(space, "per-user-piece");
+        await piece.sync();
+
+        expect(await runtime.start(piece)).toBe(true);
+        await runtime.idle();
+        await runtime.runner.idlePieceInstantiationSettlements();
+
+        expect(runtime.runner.isRunning(piece)).toBe(true);
+      } finally {
+        runtime.runner.stopAll();
+        await runtime.idle();
+        await storage.synced();
+        await runtime.dispose();
+        await storage.close();
+      }
+    });
+
     it("refuses to start it over a different manifest stored at the digest", async () => {
       // The refusal leaves the stored manifest as it was: the start reads
       // the manifest that is there, and never replaces it.
