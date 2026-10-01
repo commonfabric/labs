@@ -63,20 +63,74 @@ const hasExactlyKeys = (
     keys.every((key) => Object.hasOwn(record, key));
 };
 
-/** An http or https address, or undefined for anything else. */
-const readHttpUrl = (value: string): string | undefined => {
-  // URL parsing percent-encodes a space in a path rather than refusing it, so
-  // whitespace is refused on the string as given; Loom's edge and the Weaver
-  // refuse the same.
-  if (/\s/.test(value) || !URL.canParse(value)) return undefined;
-  // A host must follow the scheme as written: URL parsing reads
-  // `https:///path` as host `path`, where Loom and the Weaver see none.
-  if (!/^https?:\/\/[^/?#]/i.test(value)) return undefined;
-  const { protocol, port } = new URL(value);
-  // Port 0 parses but names no service; Loom and the Weaver refuse it too.
-  if (port === "0") return undefined;
-  return protocol === "http:" || protocol === "https:" ? value : undefined;
+/** One DNS label as Loom holds it: letters, digits, inner hyphens, 1..63. */
+const HOST_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+
+/** Whether `text` is an IPv6 address literal (no zone), as `ipaddress` reads. */
+const isIpv6 = (text: string): boolean => {
+  const halves = text.split("::");
+  if (halves.length > 2) return false;
+  const groups = (half: string): string[] => half === "" ? [] : half.split(":");
+  const parts = halves.map(groups);
+  const last = parts[parts.length - 1];
+  let slots = 0;
+  // A trailing dotted IPv4 quad stands for two groups.
+  const tail = last[last.length - 1];
+  if (tail !== undefined && tail.includes(".")) {
+    const quad = tail.split(".");
+    if (
+      quad.length !== 4 ||
+      !quad.every((n) => /^(0|[1-9][0-9]{0,2})$/.test(n) && Number(n) < 256)
+    ) return false;
+    last.pop();
+    slots = 2;
+  }
+  const all = parts.flat();
+  if (!all.every((g) => /^[0-9A-Fa-f]{1,4}$/.test(g))) return false;
+  slots += all.length;
+  return halves.length === 2 ? slots < 8 : slots === 8;
 };
+
+/**
+ * Whether the authority of an http(s) address is one Loom's final validator
+ * accepts (loom#6768 fdf37da4), read from the string as given rather than
+ * from URL parsing, which lowercases and punycodes the host. Userinfo is
+ * stripped as Python's `urlsplit(...).hostname` does (everything up to the
+ * last `@`); the port, if any, is 1..65535; no `%` appears anywhere; a
+ * bracketed host must be an IPv6 literal, any other every dot-separated
+ * label of letters, digits and inner hyphens, with no empty label.
+ */
+const authorityIsWellFormed = (value: string): boolean => {
+  const authority = /^https?:\/\/([^/?#]*)/.exec(value)?.[1];
+  if (authority === undefined || authority.includes("%")) return false;
+  const hostinfo = authority.slice(authority.lastIndexOf("@") + 1);
+  let host: string;
+  let port: string;
+  if (authority.includes("[") || authority.includes("]")) {
+    const bracketed = /^\[([^\]]*)\](?::(.*))?$/.exec(hostinfo);
+    if (bracketed === null) return false;
+    host = bracketed[1];
+    port = bracketed[2] ?? "";
+    if (!isIpv6(host)) return false;
+  } else {
+    const colon = hostinfo.indexOf(":");
+    host = colon < 0 ? hostinfo : hostinfo.slice(0, colon);
+    port = colon < 0 ? "" : hostinfo.slice(colon + 1);
+    if (!host.split(".").every((label) => HOST_LABEL.test(label))) {
+      return false;
+    }
+  }
+  if (port === "") return true;
+  return /^[0-9]+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+};
+
+/**
+ * An http or https address as Loom's final validator reads it, or undefined.
+ * Whitespace is refused on the string as given (URL parsing would encode it),
+ * and the scheme is matched case-sensitively as Loom's `re.match` does.
+ */
+const readHttpUrl = (value: string): string | undefined =>
+  !/\s/.test(value) && authorityIsWellFormed(value) ? value : undefined;
 
 /**
  * Reads one client action, or undefined when its kind is unknown or any
@@ -100,7 +154,7 @@ export const readHarnessClientAction = (
       return hasExactlyKeys(record, ["kind", "line"]) &&
           line !== undefined &&
           HARNESS_CLIENT_COMMAND_LINE_PATTERN.test(line) &&
-          line.trim().length > 1 &&
+          line.trim().length > 1 && !/\s/.test(line[1]) &&
           line.length <= HARNESS_CLIENT_COMMAND_MAX_LENGTH
         ? { kind: "command", line }
         : undefined;

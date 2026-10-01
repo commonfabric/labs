@@ -84,6 +84,79 @@ Deno.test("a url with whitespace, a bad port, or no host is not a client action"
   );
 });
 
+Deno.test("a url's authority must be well-formed, as Loom's final validator holds it", () => {
+  // Loom (loom#6768 fdf37da4) checks the raw authority: no `%`, an IPv6
+  // literal in brackets, otherwise LDH labels with no empty label.
+  for (
+    const url of [
+      "https://%",
+      "https://exa%20mple.com",
+      "https://-bad.com",
+      "https://bad-.com",
+      "https://a..b",
+      "https://example.com.",
+      "https://.example.com",
+      "https://example.com:0",
+      "https://example.com:99999",
+      "https://example.com:bad",
+      "https://bücher.example",
+      "https://[::1",
+      "https://[example.com]/",
+      "https://[::1%25eth0]/",
+      "https://[1:2:3:4:5:6:7:8:9]/",
+      "https://[1::2::3]/",
+      "https://[::1]:0/",
+      "https://[::1]x/",
+      "https://[::1]:bad/",
+      "https://user@/x",
+      "https://" + "a".repeat(64) + ".com",
+      "https://u%40@example.com",
+      "ftp://example.com",
+      "HTTP://example.com",
+    ]
+  ) {
+    assertEquals(
+      readHarnessClientAction({ kind: "open_url", url }),
+      undefined,
+      url,
+    );
+  }
+  for (
+    const url of [
+      "https://[::1]:8443/x",
+      "https://[2001:db8::1]/",
+      "https://[::ffff:1.2.3.4]/",
+      "https://[1:2:3:4:5:6:7:8]/",
+      "https://localhost:8080",
+      "https://xn--bcher-kva.example",
+      "https://example.com/a?b=c#d",
+      "https://example.com?q=a@b",
+      "https://example.com#frag%20x",
+      "https://user:pw@example.com:8080/x",
+      "http://127.0.0.1:65535/",
+      "https://" + "a".repeat(63) + ".com",
+    ]
+  ) {
+    assertEquals(
+      readHarnessClientAction({ kind: "open_url", url }),
+      { kind: "open_url", url },
+      url,
+    );
+  }
+});
+
+Deno.test("a command's first character after the slash is not whitespace", () => {
+  for (const line of ["/ ", "/\t", "/  x", "/ x", "/"]) {
+    assertEquals(readHarnessClientAction({ kind: "command", line }), undefined);
+  }
+  for (const line of ["/a", "/weave notes"]) {
+    assertEquals(readHarnessClientAction({ kind: "command", line }), {
+      kind: "command",
+      line,
+    });
+  }
+});
+
 Deno.test("a url longer than the client accepts is not a client action", () => {
   // The Weaver refuses an address over HARNESS_CLIENT_URL_MAX_LENGTH; the
   // harness reads actions with the same limit so the two edges agree.
