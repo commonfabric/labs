@@ -222,6 +222,15 @@ Deno.test("resolve_client_action names unknown, repeated, and malformed answers"
     outcome: "done",
   });
   assertEquals(unknown.ok === false && unknown.error.code, "unknown_action");
+  const noSession = await h.request("resolve_client_action", {
+    sessionId: "elsewhere",
+    actionId: "id-1",
+    outcome: "done",
+  });
+  assertEquals(
+    noSession.ok === false && noSession.error.code,
+    "session_not_found",
+  );
   const bad = await h.request("resolve_client_action", {
     sessionId: "s",
     actionId: "id-1",
@@ -478,7 +487,10 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
       sessionStore: store,
       randomUUID: () => `id-${++ids}`,
       onEvent: (event) => {
-        if (event.event.kind === "client_action_requested") {
+        if (
+          event.event.kind === "client_action_requested" &&
+          event.event.actionId === "id-2"
+        ) {
           requested.resolve();
         }
       },
@@ -493,7 +505,7 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
           } as unknown as HarnessToolContext;
           await weaverActionTool.invoke(
             context,
-            { actions: [command] } as never,
+            { actions: [url, command] } as never,
           );
           return await never.promise;
         },
@@ -511,6 +523,16 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
       input: { text: "go" },
     });
     await requested.promise;
+    // The person answers the first ask before the process goes.
+    assertEquals(
+      (await service.resolveClientAction("r-a", {
+        sessionId: "s",
+        actionId: "id-1",
+        outcome: "done",
+        result: "opened",
+      })).ok,
+      true,
+    );
     // The process dies here: the person never answered, and nothing in the
     // stored log says the request closed.
 
@@ -522,24 +544,38 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
     const kinds = (await store.listEvents({ sessionId: "s" }))
       .map((e) => e.event)
       .filter((e) => e.kind.startsWith("client_action_"));
+    // Only the ask nobody answered is closed by the restart.
     assertEquals(kinds, [
       {
         kind: "client_action_requested",
         turnId: "t",
         actionId: "id-1",
+        action: url,
+      },
+      {
+        kind: "client_action_requested",
+        turnId: "t",
+        actionId: "id-2",
         action: command,
       },
       {
         kind: "client_action_resolved",
         turnId: "t",
         actionId: "id-1",
+        outcome: "done",
+        result: "opened",
+      },
+      {
+        kind: "client_action_resolved",
+        turnId: "t",
+        actionId: "id-2",
         outcome: "failed",
         result: "interrupted",
       },
     ]);
     const late = await restored.resolveClientAction("r3", {
       sessionId: "s",
-      actionId: "id-1",
+      actionId: "id-2",
       outcome: "done",
     });
     assertEquals(
@@ -550,4 +586,19 @@ Deno.test("a request left open by a restart is settled as interrupted, so a repl
     await store.close?.();
     await Deno.remove(path).catch(() => undefined);
   }
+});
+
+Deno.test("a call made after the turn was canceled declines at once and shows the person nothing", async () => {
+  const h = harness({ calls: [] });
+  await h.start();
+  await settle();
+  const requestClientActions = h.loopOptions[0]
+    .requestClientActions as HarnessClientActionRequester;
+  assertEquals(await requestClientActions([open], AbortSignal.abort()), [
+    { action: open, outcome: "declined", result: "canceled" },
+  ]);
+  assertEquals(h.kinds("client_action_requested"), []);
+  assertEquals(h.kinds("client_action_resolved"), []);
+  h.release.resolve();
+  await h.service.waitForIdle();
 });
