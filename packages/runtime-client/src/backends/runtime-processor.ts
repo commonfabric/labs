@@ -458,6 +458,17 @@ function cellValueForClient(value: unknown): FabricValue {
   );
 }
 
+/**
+ * Whether `cell` holds no value: nothing at all, or an empty object. A pull can
+ * find a scoped target in either state while the write that creates its value
+ * is still committing, which the commit-aware barrier waits for.
+ */
+function holdsNoValue(cell: Cell<unknown>): boolean {
+  const raw = cell.getRaw({ lastNode: "value" });
+  return raw === undefined ||
+    (isObjectNotArray(raw) && Object.keys(raw).length === 0);
+}
+
 function sqliteParamsForRuntime(
   runtime: Runtime,
   params: SqliteParams,
@@ -1565,11 +1576,14 @@ export class RuntimeProcessor {
   async handleCellPull(
     request: CellPullRequest,
   ): Promise<CellGetResponse> {
-    await getCell(this.#runtime, request.cell).pull();
+    const cell = getCell(this.#runtime, request.cell);
+    await cell.pull();
     // The durable pull crosses the commit-aware fixpoint so subsequent
     // operations observe all work causally demanded here. Rendering can read
-    // reactive state while the host continues to report unconfirmed writes.
-    if (request.awaitCommit !== false) {
+    // reactive state while the host continues to report unconfirmed writes,
+    // once there is a value to read. A cell holding none may be waiting on the
+    // very write that creates it, so that pull crosses the barrier too.
+    if (request.awaitCommit !== false || holdsNoValue(cell)) {
       await this.#runtime.scheduler.idleWithPendingCommits();
     }
     return this.handleCellGet({
@@ -2457,11 +2471,7 @@ export class RuntimeProcessor {
 
   async #pullSqliteDbRef(cell: Cell<unknown>): Promise<SqliteDbRef> {
     await cell.pull();
-    const raw = cell.getRaw({ lastNode: "value" });
-    const missing = raw === undefined ||
-      (isObjectNotArray(raw) &&
-        Object.keys(raw).length === 0);
-    if (missing) {
+    if (holdsNoValue(cell)) {
       // A resolved scoped target can be demanded while its lazy factory write
       // is still committing. Its object schema presents that missing value as
       // an empty object rather than `undefined`. Pull waits for reactive work,

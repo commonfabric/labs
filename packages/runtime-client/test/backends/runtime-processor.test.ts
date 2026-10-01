@@ -189,6 +189,16 @@ describe("runtime-processor", () => {
     }
   });
 
+  it("returns `null` diagnostics for a storage manager without them", async () => {
+    const processor = buildProcessor({ runtime: { storageManager: {} } });
+
+    expect(
+      await processor.handleRequest({
+        type: RequestType.GetStorageDiagnostics,
+      }),
+    ).toEqual({ diagnostics: null });
+  });
+
   describe("render-readiness pulls", () => {
     it("demands a stale lazy producer while unrelated writes remain pending", async () => {
       const { runtime, storageManager } = createRuntime();
@@ -300,6 +310,58 @@ describe("runtime-processor", () => {
         },
       );
     }
+
+    it("returns the value a pending commit creates when the cell had none", async () => {
+      // The render pull skips the barrier only when there is a value to
+      // render. Here there is none until a write commits while the pull waits.
+
+      const { runtime, storageManager } = createRuntime();
+      const releaseCommit = Promise.withResolvers<void>();
+      const barrierEntered = Promise.withResolvers<void>();
+      let pull: Promise<unknown> | undefined;
+      const originalBarrier = storageManager.pendingCommitsSettled.bind(
+        storageManager,
+      );
+      try {
+        const cell = runtime.getCell<number>(
+          cfcSigner.did(),
+          "render-readiness-missing",
+          { type: "number" },
+        );
+        await cell.sync();
+
+        storageManager.trackPendingCommit(releaseCommit.promise);
+        using _barrier = stub(
+          storageManager,
+          "pendingCommitsSettled",
+          () => {
+            barrierEntered.resolve();
+            return originalBarrier();
+          },
+        );
+        pull = buildProcessor({ runtime }).handleCellPull({
+          type: RequestType.CellPull,
+          cell: createCellRef(cell),
+          awaitCommit: false,
+        });
+        const first = await Promise.race([
+          pull.then(() => "read"),
+          barrierEntered.promise.then(() => "commit-barrier"),
+        ]);
+        expect(first).toBe("commit-barrier");
+
+        const tx = runtime.edit();
+        cell.withTx(tx).set(7);
+        expect((await tx.commit()).error).toBeUndefined();
+        releaseCommit.resolve();
+        await expect(pull).resolves.toMatchObject({ value: 7 });
+      } finally {
+        releaseCommit.resolve();
+        await pull;
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   describe("renderConfidentialityResolverFor()", () => {

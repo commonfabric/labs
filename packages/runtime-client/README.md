@@ -8,7 +8,9 @@
 durability before returning their value. Renderers can use
 `pull({ awaitCommit: false })` to demand producers and read reactive state while
 writes remain unconfirmed. This option still waits for reactive work and
-required loads; it cannot bypass a blocked producer or storage read.
+required loads; it cannot bypass a blocked producer or storage read. A cell with
+no value yet, or only an empty object, waits for durability as the default pull
+does, because the write that creates its value may be one still in flight.
 
 A rendered value does not confirm that a write was saved. Hosts using this
 option should continue observing `RuntimeClient.hasPendingWrites()` and

@@ -668,9 +668,10 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Demand lazy producers before fetching a value. By default, also wait for
+   * Demands lazy producers before fetching a value. By default, also waits for
    * runtime-wide commit durability. Rendering can pass `awaitCommit: false`
-   * to read reactive state while writes remain unconfirmed.
+   * to read reactive state while writes remain unconfirmed; a cell with no
+   * value yet still waits, since the write that creates it may be in flight.
    */
   async pull(
     options: { awaitCommit?: boolean } = {},
