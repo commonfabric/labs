@@ -16,9 +16,10 @@ export const MATERIAL_RISK_KINDS: readonly string[] = [
   CFC_CONCEPT_KIND.PromptInjectionRiskValueScreened,
 ];
 
-// Short aliases participate in discharge only. The tier gradient is defined
-// over the canonical URIs, into which a deployment normalizes aliases before
-// tier evaluation (§10.1 SHOULD-normalize).
+// Short aliases are accepted for discharge, and the display admits them (see
+// `PROMPT_CAVEAT_FAMILY_KINDS`). Only the tier gradient is canonical-only: it
+// is defined over the canonical URIs, into which a deployment normalizes
+// aliases before tier evaluation (§10.1 SHOULD-normalize).
 const MATERIAL_RISK_ALIAS_KINDS: readonly string[] = [
   "prompt-injection-risk-unscreened",
   "prompt-injection-risk-ingress-screened",
