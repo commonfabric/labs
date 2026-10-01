@@ -601,6 +601,20 @@ const SHOWN_IN: readonly ShownIn[] = ["main", "thread", "both"];
 const isOwnerOf = (cell: Cell<unknown>): boolean =>
   spaceAccess(cell) === "OWNER";
 
+/**
+ * Whether the viewer can send, edit, delete, and react in the room whose
+ * messages are `messages`: their profile resolves, and the room's space grants
+ * them WRITE or OWNER. A level not known yet (`undefined`) is not a grant.
+ */
+const canActIn = (
+  messages: MessagesCell,
+  myProfile: ProfileCell | undefined,
+): boolean => {
+  const level = spaceAccess(messages);
+  return myProfile?.get() !== undefined &&
+    (level === "WRITE" || level === "OWNER");
+};
+
 /** A `ChatWindowAnchor` as `windowSlice()` takes it, if it is well formed. */
 const anchorOf = (
   from: WindowEvent["from"] | undefined,
@@ -1277,7 +1291,7 @@ export const FabriChatMessageRow = pattern<
       `fabrichat-reactors-${key}`,
     );
   });
-  const cannotWrite = computed(() => myProfile?.get() === undefined);
+  const cannotWrite = computed(() => !canActIn(messages, myProfile));
   const isDeletedNow = computed(() => isDeleted(message.get()));
   const isMine = computed(() => {
     const author = message.get()?.authorProfile;
@@ -1861,13 +1875,7 @@ export const FabriChatRoomCore = pattern<
   const participants = computed(() =>
     participantsOf(spaceParticipants, entries)
   );
-  // A reader sends once their profile resolves and the room's space grants
-  // them WRITE or OWNER; `undefined` (not known yet) is not a grant.
-  const canSend = computed(() => {
-    const level = spaceAccess(messages);
-    return myProfile?.get() !== undefined &&
-      (level === "WRITE" || level === "OWNER");
-  });
+  const canSend = computed(() => canActIn(messages, myProfile));
   const cannotSend = computed(() => !canSend);
   // The policy is a document of its own, which `about` links.
   const policy = new Writable.perSpace<ChatRoomPolicy>(FABRICHAT_POLICY);

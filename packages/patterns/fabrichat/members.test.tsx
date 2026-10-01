@@ -1,9 +1,9 @@
 /**
  * A FabriChat group room, as its space's access list decides who may do what
  * in it: its OWNER obliterates anyone's messages; a member with WRITE sends
- * but can't obliterate someone else's; a reader with READ can't send; and
- * someone the list leaves out sees a placement of the room as not theirs.
- * Who is in the space is the space's business, not the room's.
+ * but can't obliterate someone else's; a reader with READ is offered no way to
+ * write; and someone the list leaves out sees a placement of the room as not
+ * theirs. Who is in the space is the space's business, not the room's.
  *
  * The test lane doesn't enforce the list, so what this checks is what the room
  * decides from the level `spaceAccess()` reports, not what the memory server
@@ -15,9 +15,11 @@ import {
   multiUserTest,
   pattern,
   TESTS,
+  UI,
   VIEWS,
   Writable,
 } from "commonfabric";
+import { findNodeByProp, propValue } from "../test/vnode-helpers.ts";
 import FabriChatPlacement from "./placement.tsx";
 import {
   type ActivityCounters,
@@ -76,6 +78,15 @@ const bodies = (messages: Writable<MessagesValue>): string =>
   ((messages.get() ?? []) as MessageRecord[]).map((message) =>
     typeof message?.body === "string" ? message.body : "<gone>"
   ).join(" | ");
+
+// Whether a message row's reaction field, one of its write controls, is
+// disabled.
+const reactingDisabled = (row: unknown): unknown =>
+  propValue(findNodeByProp(row, "placeholder", "Any emoji"), "disabled");
+
+// Whether a room's main composer is disabled.
+const composerDisabled = (room: unknown): unknown =>
+  propValue(findNodeByProp(room, "inputId", "fabrichat-message"), "disabled");
 
 /** What makes the shared room a group room of its own. */
 const groupRoom = {
@@ -174,7 +185,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   return {
     [TESTS]: [
       { await: "alice-sent" },
-      { assertion: assert(() => room.canSend === true) },
+      {
+        assertion: assert(() =>
+          room.canSend === true && composerDisabled(room[UI]) === false &&
+          reactingDisabled(onAlices[UI]) === false
+        ),
+      },
       {
         action: room.composerSend,
         event: typed("From Bob"),
@@ -210,10 +226,26 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
   const room = FabriChatRoomCore(
     { myProfile: profile, ...groupRoom, ...records } as RoomArg,
   );
+  const onAlices = FabriChatMessageRow({
+    message: setup.records.messages.key(0),
+    myProfile: profile,
+    inThread: false,
+    kind: "group" as const,
+    composer: Writable.of({}),
+    ...records,
+  } as RowArg);
 
   return {
     [TESTS]: [
-      { assertion: assert(() => room.canSend === false) },
+      { await: "alice-sent" },
+      // Carol's profile resolves, but her access is READ, so the room offers
+      // her no way to write.
+      {
+        assertion: assert(() =>
+          room.canSend === false && composerDisabled(room[UI]) === true &&
+          reactingDisabled(onAlices[UI]) === true
+        ),
+      },
     ],
   };
 });
