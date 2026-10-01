@@ -8,7 +8,7 @@ import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import { effectTargetKey } from "../executor/effect-completion.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -104,11 +104,6 @@ export function streamData(
       setResultCell(pending, parentCell);
       setResultCell(result, parentCell);
       setResultCell(error, parentCell);
-      // Link the new result cells to the pattern cell too
-      const patternCellPtr = parentCell.key("pattern");
-      setPatternCell(pending, patternCellPtr);
-      setPatternCell(result, patternCellPtr);
-      setPatternCell(error, patternCellPtr);
 
       // Since we'll only write into the docs above, we only have to call this once
       // here, instead of in the action.

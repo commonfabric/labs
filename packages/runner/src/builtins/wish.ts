@@ -62,7 +62,7 @@ import {
   DocumentPending,
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
-import { setPatternCell, setResultCell } from "../result-utils.ts";
+import { setResultCell } from "../result-utils.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -2225,7 +2225,6 @@ export function wish(
     recordRuntimeOwnedStore(tx, parentCell, scoped);
     enrollRuntimeOwnedStore(tx, parentCell, scoped);
     setResultCell(scoped, parentCell.withTx(tx));
-    setPatternCell(scoped, parentCell.withTx(tx).key("pattern"));
     scoped.set(value);
     surfaceWishStateCommitFailure(tx, scoped);
     sendResult(tx, scoped);

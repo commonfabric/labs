@@ -7,6 +7,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
+import { isCellResult } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";
 import { UI } from "../src/shared.ts";
@@ -51,10 +52,12 @@ describe("render-read-link-schema", () => {
   });
 
   /**
-   * A holder whose value is a link to a piece, the link built to carry the
-   * narrow view as its stored schema.
+   * A holder whose value is a link to a piece, the link built to carry
+   * `storedSchema`, the narrow view unless another is given.
    */
-  const holderOverBuiltLink = (): Cell<unknown> => {
+  const holderOverBuiltLink = (
+    storedSchema: JSONSchema = narrowSchema,
+  ): Cell<unknown> => {
     const piece = runtime.getCell(space, `piece-${seq}`, undefined, tx);
     piece.setRaw(pieceValue);
     const link = piece.getAsNormalizedFullLink();
@@ -65,7 +68,7 @@ describe("render-read-link-schema", () => {
         space: link.space,
         scope: link.scope,
         path: [...link.path],
-        schema: narrowSchema,
+        schema: storedSchema,
       }) as never,
     );
     return holder;
@@ -86,7 +89,7 @@ describe("render-read-link-schema", () => {
   describe("a render read at a slot holding a narrowly typed link", () => {
     it("reads `[UI]` through a built link", () => {
       const read = holderOverBuiltLink().asSchema(rendererVDOMSchema)
-        .get({ renderRead: true });
+        .get();
 
       expect(Object.keys(read as object)).toContain(UI);
       expect((read as Record<string, { name: string }>)[UI].name).toBe("div");
@@ -94,12 +97,12 @@ describe("render-read-link-schema", () => {
 
     it("reads `[UI]` through a link `set()` stored under the writer's view", () => {
       const read = holderOverSetLink().asSchema(rendererVDOMSchema)
-        .get({ renderRead: true });
+        .get();
 
       expect(Object.keys(read as object)).toContain(UI);
     });
 
-    it("delivers `[UI]` to a render-read sink", async () => {
+    it("delivers `[UI]` to a renderer's sink", async () => {
       const holder = holderOverBuiltLink();
       await tx.commit();
       tx = runtime.edit();
@@ -108,7 +111,7 @@ describe("render-read-link-schema", () => {
       const cancel = holder.withTx(undefined).asSchema(rendererVDOMSchema)
         .sink((value) => {
           delivered.push(value);
-        }, { readOnly: true, renderRead: true });
+        }, { readOnly: true });
       cancel();
 
       expect(delivered).toHaveLength(1);
@@ -116,14 +119,23 @@ describe("render-read-link-schema", () => {
     });
   });
 
-  describe("a read at the same slot that is not a render read", () => {
-    // The contrast with the block above: the entry crossing adopts the stored
-    // schema, so the read projects by the narrow view.
+  describe("a render read at a slot whose link holds the read back", () => {
+    // A stored `false` or `unknown` keeps its answer at a read's entry
+    // whatever the reader declared, a renderer included.
 
-    it("reads the narrow view's keys and not `[UI]`", () => {
-      const read = holderOverBuiltLink().asSchema(rendererVDOMSchema).get();
+    it("selects nothing through a stored `false`", () => {
+      const read = holderOverBuiltLink(false).asSchema(rendererVDOMSchema)
+        .get();
 
-      expect(Object.keys(read as object)).toEqual(["about", "$VIEWS"]);
+      expect(read).toBeUndefined();
+    });
+
+    it("holds a reference without `[UI]` through a stored `unknown`", () => {
+      const read = holderOverBuiltLink({ type: "unknown" })
+        .asSchema(rendererVDOMSchema).get();
+
+      expect(isCellResult(read)).toBe(true);
+      expect(Object.keys(read as object)).not.toContain(UI);
     });
   });
 });
