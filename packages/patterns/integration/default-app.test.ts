@@ -2908,18 +2908,18 @@ async function collectNoteCreateProfile(page: Page): Promise<unknown> {
           .toFixed(3),
       ),
       maxDurationMs: Number(
-        Math.max(
+        recentHistory.reduce(
+          (most, entry) => Math.max(most, entry.stats.totalDurationMs),
           0,
-          ...recentHistory.map((entry) => entry.stats.totalDurationMs),
         ).toFixed(3),
       ),
       latestDurationMs: Number(
         (recentHistory[recentHistory.length - 1]?.stats.totalDurationMs ?? 0)
           .toFixed(3),
       ),
-      maxIterations: Math.max(
+      maxIterations: recentHistory.reduce(
+        (most, entry) => Math.max(most, entry.stats.iterations.length),
         0,
-        ...recentHistory.map((entry) => entry.stats.iterations.length),
       ),
       latestIterations:
         recentHistory[recentHistory.length - 1]?.stats.iterations.length ?? 0,

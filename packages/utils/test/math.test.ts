@@ -27,6 +27,7 @@ describe("math", () => {
 
     it("handles more values than fit in a call's argument list", () => {
       const values = Array.from({ length: 1_000_000 }, (_, i) => i + 1);
+      // deno-lint-ignore cf-spread/no-spread-arguments -- shows that the spread overflows
       expect(() => Math.min(...values)).toThrow(RangeError);
       expect(minOf(values)).toBe(1);
     });
@@ -55,6 +56,7 @@ describe("math", () => {
 
     it("handles more values than fit in a call's argument list", () => {
       const values = Array.from({ length: 1_000_000 }, (_, i) => i + 1);
+      // deno-lint-ignore cf-spread/no-spread-arguments -- shows that the spread overflows
       expect(() => Math.max(...values)).toThrow(RangeError);
       expect(maxOf(values)).toBe(1_000_000);
     });

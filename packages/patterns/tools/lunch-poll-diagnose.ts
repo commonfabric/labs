@@ -520,7 +520,9 @@ function diagnosticsSummary(
 }
 
 const maxOf = (values: readonly number[]): number =>
-  values.length === 0 ? 0 : Math.max(...values);
+  values.length === 0
+    ? 0
+    : values.reduce((most, value) => Math.max(most, value), -Infinity);
 
 /**
  * An authored source location, as the module identity carries it:

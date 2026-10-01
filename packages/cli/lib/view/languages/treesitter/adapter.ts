@@ -426,7 +426,9 @@ function structureNodes(
   for (const child of node.children) {
     const entry = grammar.structureEntry(child);
     if (entry === undefined) {
-      out.push(...structureNodes(grammar, child, source, depth));
+      for (const nested of structureNodes(grammar, child, source, depth)) {
+        out.push(nested);
+      }
       continue;
     }
     const extent = entry.extent ?? child;

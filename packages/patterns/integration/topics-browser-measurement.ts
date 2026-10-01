@@ -694,11 +694,15 @@ export function formatTopicsSample(
   lines.push(
     `  main thread, ${vdomApply.totalMs.toFixed(1)}ms applying ` +
       `${vdomApply.count} VDOM batches:`,
-    ...sample.timing.mainThread.slice(0, timingRows).map(timingLine),
-    "  worker:",
-    ...sample.timing.worker.slice(0, timingRows).map(timingLine),
-    ...sample.notes.map((note) => `  note: ${note}`),
   );
+  for (const row of sample.timing.mainThread.slice(0, timingRows)) {
+    lines.push(timingLine(row));
+  }
+  lines.push("  worker:");
+  for (const row of sample.timing.worker.slice(0, timingRows)) {
+    lines.push(timingLine(row));
+  }
+  for (const note of sample.notes) lines.push(`  note: ${note}`);
   return lines;
 }
 

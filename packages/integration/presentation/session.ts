@@ -1,4 +1,7 @@
 import { basename, join } from "@std/path";
+
+import { maxOf, minOf } from "@commonfabric/utils/math";
+
 import type { Page } from "../page.ts";
 import type { PresentationConfig, PresentationParticipant } from "./config.ts";
 import { presentationConfig } from "./config.ts";
@@ -274,13 +277,13 @@ export class PresentationSession {
   }
 
   #normalizeTimelines(participants: ParticipantState[]): void {
-    const start = Math.min(
-      ...participants.map((participant) =>
+    const start = minOf(
+      participants.map((participant) =>
         participant.manifest.captureStartedAtMs
       ),
     );
-    const end = Math.max(
-      ...participants.map((participant) =>
+    const end = maxOf(
+      participants.map((participant) =>
         participant.manifest.captureEndedAtMs ??
           participant.manifest.captureStartedAtMs
       ),

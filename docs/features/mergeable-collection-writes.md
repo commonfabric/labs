@@ -278,7 +278,8 @@ missing value is a zero default, `increment` is always zero-based: a counter
 whose displayed starting value should be non-zero must be `set` to that value
 first, since the op carries only the delta.
 
-- **Call sites** — `Cell.push` (`packages/runner/src/cell.ts`) calls
+- **Call sites** — `Cell.pushAll` (`packages/runner/src/cell.ts`), which
+  `Cell.push` calls with its arguments as the list, calls
   `recordMergeableOp` with an `append` delta after writing the combined array, so
   id anchoring, cross-space link elements, and CFC write-policy recording
   continue to run through the existing `diffAndUpdate` path unchanged.
@@ -552,7 +553,8 @@ Two further responses make the keyed case cheaper and catch misuse (see
 
 ## Scope
 
-Four mergeable ops are implemented: tail append (`Cell.push`), set-add
+Four mergeable ops are implemented: tail append (`Cell.push`, and
+`Cell.pushAll` for a list of any length), set-add
 (`Cell.addUnique`), numeric increment (`Cell.increment`), and remove-by-value
 (`Cell.removeByValue`). Together with `elementById` for deterministic element
 addressing, these cover the keyed-collection mutations (insert-if-new, set my

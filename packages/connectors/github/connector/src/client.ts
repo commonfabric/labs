@@ -372,7 +372,8 @@ export class GithubClient {
     const missing = previouslyKnown.filter((pullRequest) =>
       !ids.has(pullRequest.id)
     );
-    pullRequests.push(...await this.#retainUnknownMissing(missing, signal));
+    const retained = await this.#retainUnknownMissing(missing, signal);
+    for (const pullRequest of retained) pullRequests.push(pullRequest);
     return {
       viewer: viewer!,
       observedAt,

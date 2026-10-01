@@ -4357,7 +4357,8 @@ describe("cell-bridge", () => {
 
           const entryInvalidations: string[] = [];
           bridge.onInvalidate = (parent, names) => {
-            if (parent === pieceIno) entryInvalidations.push(...names);
+            if (parent !== pieceIno) return;
+            for (const name of names) entryInvalidations.push(name);
           };
 
           resultCell.set(null);

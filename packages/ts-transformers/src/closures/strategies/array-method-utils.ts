@@ -347,8 +347,6 @@ export function rewriteCallbackBody(
     );
   }
 
-  const statements: ts.Statement[] = [...prologue, ...block.statements];
-
   const keyStatements: ts.Statement[] = [];
   for (const info of analysis.computedAliases) {
     keyStatements.push(
@@ -369,9 +367,8 @@ export function rewriteCallbackBody(
     );
   }
 
-  if (keyStatements.length > 0) {
-    statements.unshift(...keyStatements);
-  }
-
-  return factory.createBlock(statements, true);
+  return factory.createBlock(
+    [...keyStatements, ...prologue, ...block.statements],
+    true,
+  );
 }

@@ -1806,7 +1806,9 @@ export class AgentFabricTarget implements CommandTarget {
     this.#assertCommandCellBound();
     const values: unknown[] = [];
     for (const { cell } of this.#boundQueues()) {
-      values.push(...await readStableActions(this.conn, cell));
+      for (const action of await readStableActions(this.conn, cell)) {
+        values.push(action);
+      }
     }
     return values;
   }

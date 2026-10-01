@@ -151,6 +151,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { stringSchema } from "@commonfabric/runner/schemas";
 import type { CellHandle } from "@commonfabric/runtime-client";
+import { spliceAll } from "@commonfabric/utils/arrays";
 
 import {
   createMockCellHandle,
@@ -521,7 +522,7 @@ describe("CFTabs plain-string value contract (one-behind regression)", () => {
       nt.onClickDispatch = t.onClickDispatch;
       return nt;
     });
-    h.fakeTabs.splice(0, h.fakeTabs.length, ...fresh);
+    spliceAll(h.fakeTabs, 0, h.fakeTabs.length, fresh);
     (h.tabs as unknown as { value: string }).value = newValue;
     const changed = new Map<string | number | symbol, unknown>([[
       "value",

@@ -10,6 +10,8 @@
  * pair. Cursor moves step whole characters; edits splice whole characters.
  */
 
+import { spliceAll } from "@commonfabric/utils/arrays";
+
 /** What a kill operation appends to: tracks consecutive kills for accretion. */
 type LastKill = "none" | "append" | "prepend";
 
@@ -153,8 +155,8 @@ export class EditBuffer {
       }
       replacementEndings = replacement.map(() => inherited);
     }
-    this.lines.splice(row, count, ...replacement);
-    this.#lineEndings.splice(row, count, ...replacementEndings);
+    spliceAll(this.lines, row, count, replacement);
+    spliceAll(this.#lineEndings, row, count, replacementEndings);
     if (this.lines.length === 0) {
       this.lines = [""];
       this.#lineEndings = [undefined];
@@ -579,7 +581,7 @@ export class EditBuffer {
     const cps = this.#chars(this.row);
     const seg = cps.slice(this.col, end.col).join("");
     const replaced = [...fn(seg)];
-    cps.splice(this.col, end.col - this.col, ...replaced);
+    spliceAll(cps, this.col, end.col - this.col, replaced);
     this.lines[this.row] = cps.join("");
     this.col = this.col + replaced.length;
   }

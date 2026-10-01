@@ -586,7 +586,7 @@ export class WorkerReconciler {
    * Queue operations to be sent to the main thread.
    */
   #queueOps(ops: VDomOp[]): void {
-    this.#pendingOps.push(...ops);
+    for (const op of ops) this.#pendingOps.push(op);
     this.#scheduleFlush();
   }
 

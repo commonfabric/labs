@@ -152,7 +152,9 @@ reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
 one per schema, naming each unread type once. An authored `any`, or a name
 declared as `any`, is a reading, not a guess, and is not reported; nor is a
 guess inside an intersection that accepts nothing, which leaves nothing of it in
-the schema.
+the schema. Reaching the nesting limit of a CFC alias chain instead reports
+`cfc-schema:recursion-limit` as an error: the unread remainder could discard
+policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
@@ -972,7 +974,12 @@ Mechanics:
   alias is read from its type alone. A `WriteAuthorizedBy` written through
   another alias, whose binding neither way reads, is the
   `cfc-write-authorized-by:unread` error (`writer-binding-diagnostics.ts`),
-  since its schema would carry no write restriction. A payload that is itself a
+  since its schema would carry no write restriction. A binding node that is
+  not a direct `typeof` of an identifier reports the same error, including an
+  alias for `typeof writer` passed through another alias's parameter: its type
+  does not stand in for the written binding. A parameter bound only to a type,
+  with no argument node, remains a type-only read rather than an authored
+  indirect binding and is not reported by this check. A payload that is itself a
   CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
@@ -1005,11 +1012,34 @@ Mechanics:
   "length">` a labelled `{ length: number }`, a recursion through
   `Partial<Node>` a definition of its own, and `Pick<Sec<X>, "a">` keeps the
   label though `Pick` drops the carrier. The checker names a `Pick` or an
-  `Omit` over literal keys by a user's alias of it, so an alias whose whole
-  body references one is followed to it. Written under bindings, a `Pick` or
-  an `Omit` of a labelled operand keeps the label too. Any other object that
-  holds a carrier as a property, as a mapped type its author wrote does
-  (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labelled by it, each
+  `Omit` over literal keys by a user's alias of it, and holds that alias's
+  arguments, so an alias whose whole body references another alias is
+  followed to it, down a chain of such aliases, until it reaches one of
+  these; a chain that reaches anything else, or comes back to an alias on
+  it, is not followed. Each alias along the chain binds its parameters to the
+  arguments the one before writes for them, one left out to its parameter's
+  default, and the first alias to the checker's arguments. The operand is the
+  type the last alias's reference writes, read under that alias's bindings,
+  so the alias reads as the one it names written out with its arguments in
+  place: `Select<Sec<X>>`, where `type Select<T> = Pick<T, "a">`, as
+  `Pick<Sec<X>, "a">`, and `Select<["b"]>`, where `type Select<L> =
+  Pick<Confidential<X, L>, "a">`, as `Pick<Confidential<X, ["b"]>, "a">`. A
+  bound parameter is its argument, and a carrier's metadata is read with the
+  parameters it holds bound. Where the operand's payload is a bound
+  parameter, the checker folds the argument into the operand's intersection:
+  the carriers of an argument that is itself labeled join the operand's, and
+  an argument that leaves the intersection no carrier (`never`, `null`,
+  `undefined`, a union of the last two, or `any`) leaves the operand
+  unlabeled. Any other argument keeps the operand's carriers as they are, a
+  union among them, whose every member carries them, though the alias
+  written out distributes its intersection over the union and reads
+  unlabeled. Both sides bind the first alias's parameters to the checker's
+  arguments, never to the ones a reference writes, so they agree. Written
+  under bindings, a `Pick` or an `Omit` of a labeled operand keeps the label
+  too, while a user's alias of one there is a mapped type over a bound
+  parameter, which is not fully read (below). Any other object that holds a
+  carrier as a property, as a mapped type its author wrote does
+  (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
   metadata the carrier's type holds read in full or none, and never holds
   the carrier as a member: no value does.
 - User alias chains are followed with type-parameter node substitution until a
@@ -1102,10 +1132,22 @@ Mechanics:
   instantiation. A type read under bindings is
   identified, as a recursive definition's name and in cycle detection, by its
   type together with that instantiation and the arguments as written, or with
-  its bindings where no instantiation is carried, so two instantiations of one
-  declaration keep apart, and a recursion whose instantiation the checker
-  settles to the same type (`Sec<T | undefined>` inside `Sec<T>`) refers to
-  its definition although the written arguments nest without end.
+  its bindings where no instantiation is carried. Each argument also retains
+  the ordered `typeof` bindings reached through its outer bindings and
+  alias bodies, identified by the writer declaration they resolve to (or by
+  the query node where no writer resolves): two writers with the same function
+  type still name distinct write policies in recursive definitions. Repeated
+  union and intersection members contribute their query origins once, so adding
+  the same policy again does not change the recursion key. An alias's arguments,
+  including defaults read under earlier arguments, contribute at their uses in
+  its body, under that position's union or intersection operator. Two
+  instantiations of one declaration keep apart. A recursion whose instantiation
+  the checker settles to the same type (`Sec<T | undefined>` inside `Sec<T>`)
+  refers to its definition when its query origins also settle. Conditional and
+  indexed aliases can retain query syntax the checker drops, or repeat a
+  parameter under an operator other than union or intersection, so their keys
+  may keep growing even when their types settle. Such chains reach the nesting
+  limit and report an error.
 - A chain is also tracked from the written reference it is entered from
   (`SchemaGenerator.readAliasChain`), so a chain entered again from that
   reference inside itself is found as a recursion through it. One whose
@@ -1152,8 +1194,13 @@ Mechanics:
   same type read inside itself with the same arguments written for it, each
   under deeper bindings, is taken for a recursion that instantiates the chain
   without end (`Nest<T[]>` inside `Nest<T>`) rather than a nesting its author
-  wrote out (`Pair<Pair<string>>`); the innermost accepts any value and is
-  reported, a chain reached by its alias as the checker prints its type.
+  wrote out (`Pair<Pair<string>>`). The bound is three nested readings. A CFC
+  alias chain reaching it reports a `cfc-schema:recursion-limit` error, including
+  one whose writer-query key cannot settle. Its unread remainder would discard
+  confidentiality or write policies, so the schema must not be used. A chain
+  reached by its alias is located at its type node where available. The separate
+  bound on a type read under bindings and a scope-wrapper chain reaching its
+  nesting bound continue to report an unread-type warning.
   A label reads a parameter it holds as its type wherever the label reader
   pairs that position. A `typeof` binding that a chain entered from a type
   receives only as a type argument cannot be read from a type, so a
@@ -1177,11 +1224,14 @@ Mechanics:
   `src/typescript/type-node.ts`). That is how a label written in a type
   literal or an interface keeps a binding that only its syntax names. The same
   member of a generic declaration, instantiated, is read from its type, as is
-  the value of an optional member with no such annotation. `AnyOf<X>` is
-  recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`, never by an
-  alias name, so an authored type named `AnyOf` is read as itself. A
-  `PolicyOf` reached from a type alone, with no annotation that denotes it,
-  has no binding to read: its brand is read as an ordinary object,
+  the value of an optional member with no such annotation. Read from a type,
+  a type parameter the reading binds is its argument, as a bare reference to
+  it is, and a spread element of a tuple (`[...L, "b"]`) is the elements of
+  the list it reads as, or one unread element where it reads as none.
+  `AnyOf<X>` is recognized by its brand, `{ readonly __ct_cfc_any_of__?: X }`,
+  never by an alias name, so an authored type named `AnyOf` is read as
+  itself. A `PolicyOf` reached from a type alone, with no annotation that
+  denotes it, has no binding to read: its brand is read as an ordinary object,
   `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
   extraction cannot read in full is reported as the `cfc-label:unread` warning
   (`unread-label-diagnostics.ts`), naming the label: an argument that is not a

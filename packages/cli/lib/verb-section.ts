@@ -329,7 +329,8 @@ export function projectionInSectionRefusal(
   for (const unit of sectionUnits(sectionArgs, spendsNext)) {
     const moves = unit.flag !== undefined &&
       READ_OPTION_NAMES.includes(unit.flag) && !declared.has(unit.flag);
-    (moves ? lifted : kept).push(...unit.tokens);
+    const destination = moves ? lifted : kept;
+    for (const token of unit.tokens) destination.push(token);
   }
   const render = (tokens: readonly string[]) =>
     [prefix, ...tokens.map(quoteToken)].join(" ").trimEnd();

@@ -36,14 +36,17 @@ import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   denotesSameType,
+  getTypeAliasDeclaration,
   holdsFreeTypeParameter,
   holdsTypeParameter,
   readAuthoredTypeNode,
   readUnionMemberNodes,
   sameBesidesUndefined,
   typeParameterOfReference,
+  typeParameterOfType,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
+import { resolveWriterBinding } from "./typescript/writer-binding.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -59,7 +62,10 @@ import {
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
-import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
+import {
+  reportUnreadCfcRecursion,
+  reportUnreadTypes,
+} from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 import {
@@ -1037,13 +1043,8 @@ function boundArgumentOf(
   context: GenerationContext,
 ): BoundTypeArgument | undefined {
   const bound = context.boundTypeParameters;
-  if (!bound || (type.flags & ts.TypeFlags.TypeParameter) === 0) {
-    return undefined;
-  }
-  const declaration = type.symbol?.declarations?.find(
-    ts.isTypeParameterDeclaration,
-  );
-  return declaration && bound.arguments.get(declaration);
+  const declaration = bound && typeParameterOfType(type);
+  return declaration && bound?.arguments.get(declaration);
 }
 
 /**
@@ -1174,6 +1175,9 @@ export class SchemaGenerator {
 
   /** Identities of the types and declarations a binding key names. */
   #bindingIds: WeakMap<object, number> = new WeakMap();
+
+  /** Each immutable binding environment's query-origin key. */
+  #bindingQueryKeys: WeakMap<BoundTypeParameters, string> = new WeakMap();
 
   /** Counter for `#bindingIds`. */
   #bindingIdCounter: number = 0;
@@ -1538,8 +1542,8 @@ export class SchemaGenerator {
   }
 
   /**
-   * Formats `type` with `read`, the reading of a CFC alias chain entered from
-   * `entry`, where the checker instantiates `instantiated`: a written reference
+   * Formats `type` with `read`, the reading of an alias chain of `kind` entered
+   * from `entry`, where the checker instantiates `instantiated`: a written reference
    * to the chain, or, for a chain reached with none, as through an index
    * signature or a tuple element read by type, the alias it is reached by. A
    * reading entered again from the same reference inside itself is a recursion
@@ -1555,14 +1559,16 @@ export class SchemaGenerator {
    * reading for labels alone, which names no definition
    * (`GenerationContext.labelsOnly`). An entry nested in itself
    * `MAX_BOUND_NESTING` deep without settling instantiates the chain without
-   * end, as `Nest<T[]>` inside `Nest<T>` does; the innermost accepts any value
-   * and is reported as not fully read.
+   * end, as `Nest<T[]>` inside `Nest<T>` does. Reaching that bound in a CFC
+   * chain is an error: the unread remainder could hold confidentiality or
+   * write policies. A scope chain reports an unread-type warning.
    */
   public readAliasChain(
     type: ts.Type,
     context: GenerationContext,
     entry: ts.TypeNode | ts.Symbol,
     instantiated: ts.Type | undefined,
+    kind: "cfc" | "scope",
     read: () => MutableJSONSchema,
   ): MutableJSONSchema {
     const readings = this.#chainReadings.get(context.definitionStack) ?? [];
@@ -1576,12 +1582,16 @@ export class SchemaGenerator {
       : undefined;
     if (settled) return this.#referToReading(settled.type, settled.context);
     if (again.length >= MAX_BOUND_NESTING) {
-      // One reached with no written reference is reported as the checker
-      // prints its type.
+      // Locate the diagnostic at the reference, or at the type being read
+      // where the chain was reached without a written reference.
       const node = written ? entry : context.typeNode ??
         checker.typeToTypeNode(type, undefined, undefined);
-      const unread = context.uninterpretedTypeNodes;
-      if (unread && node && !unread.includes(node)) unread.push(node);
+      if (kind === "cfc") {
+        reportUnreadCfcRecursion(context, node);
+      } else {
+        const unread = context.uninterpretedTypeNodes;
+        if (unread && node && !unread.includes(node)) unread.push(node);
+      }
       return {};
     }
     readings.push({ entry, instantiated, type, context });
@@ -1907,13 +1917,135 @@ export class SchemaGenerator {
     // Where the checker's instantiation at the position is known, it says what
     // the arguments denote, so a recursion whose arguments settle reads under
     // the same key however deep their bindings nest; the arguments as written
-    // tell apart only what their syntax adds, such as a `Default`.
+    // tell apart what their syntax adds, such as a `Default`. A `typeof`
+    // reached through an outer binding retains its authored identity too.
     const instantiatedAs = context.instantiatedAs;
     return instantiatedAs
       ? `as:${this.#bindingId(instantiatedAs)}|${
         this.#bindingsKey(bound, false)
-      }`
+      }|queries:${this.#bindingQueriesKey(bound, context.typeChecker)}`
       : this.#bindingsKey(bound);
+  }
+
+  /**
+   * Helper for {@link #bindingKey}: the ordered `typeof` bindings
+   * each argument reaches through its outer bindings and alias bodies.
+   * The checker can give distinct writers the same type, so their authored
+   * queries remain part of a recursive definition's identity. Repeated union
+   * and intersection members contribute once so their recursion can settle.
+   */
+  #bindingQueriesKey(
+    bound: BoundTypeParameters,
+    checker: ts.TypeChecker,
+  ): string {
+    const cached = this.#bindingQueryKeys.get(bound);
+    if (cached !== undefined) return cached;
+
+    /** Query origins, grouped where union or intersection repetition can settle. */
+    type Queries = number | {
+      kind: "sequence" | "union" | "intersection";
+      parts: Queries[];
+    };
+
+    /** Combines origins, flattening repetitions that do not add another policy. */
+    const combine = (
+      kind: Exclude<Queries, number>["kind"],
+      children: Queries[],
+    ): Queries | undefined => {
+      const parts = children.flatMap((child) =>
+        typeof child !== "number" && child.kind === kind ? child.parts : [child]
+      );
+      const distinct = kind === "sequence" ? parts : dedupeByValueEqual(parts);
+      return distinct.length === 0
+        ? undefined
+        : distinct.length === 1
+        ? distinct[0]
+        : { kind, parts: distinct };
+    };
+
+    const key = [...bound.arguments].map(([parameter, argument]) => {
+      const aliases = new Set<ts.TypeAliasDeclaration>();
+      const argumentsBeingRead = new Set<BoundTypeArgument>();
+
+      /** Visits an argument in the scope where its node is written. */
+      const readArgument = (value: BoundTypeArgument): Queries | undefined => {
+        if (!value.node || argumentsBeingRead.has(value)) return undefined;
+        argumentsBeingRead.add(value);
+        const queries = visit(value.node, value.bound);
+        argumentsBeingRead.delete(value);
+        return queries;
+      };
+
+      /** Collects query nodes in source order, resolving bound parameters. */
+      const visit = (
+        node: ts.Node,
+        under?: BoundTypeParameters,
+        parameters?: ReadonlyMap<
+          ts.TypeParameterDeclaration,
+          Queries | undefined
+        >,
+      ): Queries | undefined => {
+        if (ts.isTypeReferenceNode(node)) {
+          const parameter = typeParameterOfReference(node, checker);
+          if (parameter && parameters?.has(parameter)) {
+            return parameters.get(parameter);
+          }
+          const value = parameter && under?.arguments.get(parameter);
+          if (value) return readArgument(value);
+
+          const declaration = getTypeAliasDeclaration(node, checker);
+          if (declaration && !aliases.has(declaration)) {
+            // Arguments contribute where the body uses them, under that
+            // position's operator. Reading them alongside the body would
+            // turn `W | typeof writer` into an ever-growing sequence.
+            const boundHere = new Map(parameters);
+            for (
+              const [index, param] of (declaration.typeParameters ?? [])
+                .entries()
+            ) {
+              const argument = node.typeArguments?.[index];
+              boundHere.set(
+                param,
+                argument
+                  ? visit(argument, under, parameters)
+                  : param.default
+                  ? visit(param.default, under, boundHere)
+                  : undefined,
+              );
+            }
+            aliases.add(declaration);
+            const queries = visit(declaration.type, under, boundHere);
+            aliases.delete(declaration);
+            return queries;
+          }
+        }
+        const children: Queries[] = [];
+        if (ts.isTypeQueryNode(node)) {
+          const binding = ts.isIdentifier(node.exprName)
+            ? resolveWriterBinding(node.exprName, checker)
+            : undefined;
+          children.push(this.#bindingId(binding?.declaration ?? node));
+        }
+        ts.forEachChild(node, (child) => {
+          const queries = visit(child, under, parameters);
+          if (queries !== undefined) children.push(queries);
+        });
+        return combine(
+          ts.isUnionTypeNode(node)
+            ? "union"
+            : ts.isIntersectionTypeNode(node)
+            ? "intersection"
+            : "sequence",
+          children,
+        );
+      };
+
+      return `${this.#bindingId(parameter)}=${
+        JSON.stringify(readArgument(argument))
+      }`;
+    }).sort().join(";");
+    this.#bindingQueryKeys.set(bound, key);
+    return key;
   }
 
   /**

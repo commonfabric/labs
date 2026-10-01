@@ -2319,14 +2319,15 @@ const appendStructuredResultInstructions = (
   if (structuredResult === undefined) {
     return;
   }
+  lines.push("", "Structured result contract:");
+  if (
+    allowedToolIds === undefined || allowedToolIds.includes("submit_result")
+  ) {
+    lines.push(
+      "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+    );
+  }
   lines.push(
-    "",
-    "Structured result contract:",
-    ...(allowedToolIds === undefined || allowedToolIds.includes("submit_result")
-      ? [
-        "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
-      ]
-      : []),
     `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
@@ -2829,7 +2830,9 @@ export const formatCfHarnessCliResult = (
       }`,
     );
     if (posture.record !== undefined) {
-      lines.push(...renderCfcPostureReport(posture.record));
+      for (const line of renderCfcPostureReport(posture.record)) {
+        lines.push(line);
+      }
     }
   }
   const docsCorpus = result.runState.docsCorpus;

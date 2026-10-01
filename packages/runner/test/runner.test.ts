@@ -1031,7 +1031,10 @@ describe("runPattern", () => {
                     ? values.reduce((a, b) => a + b, 0) / values.length
                     : 0;
                 case "max":
-                  return Math.max(...values);
+                  return values.reduce(
+                    (most, value) => Math.max(most, value),
+                    -Infinity,
+                  );
                 default:
                   return 0;
               }

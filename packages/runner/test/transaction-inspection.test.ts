@@ -353,7 +353,7 @@ describe("transaction inspection", () => {
     const observed: ITransactionWriteRequest[] = [];
     const wrapped = new TransactionWrapper({
       writeValuesOrThrow(batch: Iterable<ITransactionWriteRequest>) {
-        observed.push(...batch);
+        for (const write of batch) observed.push(write);
       },
       writeValueOrThrow() {
         throw new Error("wrapper should not replay batch writes");
