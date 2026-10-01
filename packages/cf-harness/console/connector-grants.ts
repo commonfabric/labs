@@ -11,10 +11,12 @@
  * written down. They join on piece, connection, and companion key. Connection
  * identity names a grant; its declared CFC classes describe what it holds.
  *
- * A handle whose class cannot be read is not guessed at and not granted: it is
- * returned as unnamed, with the reason, for the launcher to print. A console
- * that silently held one fewer reference than its report claimed would be the
- * failure this whole launch path exists to prevent.
+ * The classes are description, not identity: a contract that declares none is
+ * still granted, under its connection's name. A handle the records cannot
+ * place is not guessed at and not granted: it is returned as unnamed, with the
+ * reason, for the launcher to print. A console that silently held one fewer
+ * reference than its report claimed would be the failure this whole launch
+ * path exists to prevent.
  */
 
 import { renderCellReference } from "@commonfabric/runner/shared";
@@ -110,6 +112,31 @@ export const declaredClasses = (source: Record<string, unknown>): string[] => {
     }
   }
   return classes;
+};
+
+/**
+ * Whether one `sqlite_sources` entry's table contract labels what it reads: a
+ * column with a non-empty `ifc.confidentiality`, or a table whose `rowLabel`
+ * declares confidentiality. A contract that labels nothing serves its rows
+ * unlabeled, so it is not granted, whatever classes it does or does not name.
+ */
+export const declaresConfidentiality = (
+  source: Record<string, unknown>,
+): boolean => {
+  const tables = asRecord(source.tables) ?? {};
+  for (const table of Object.values(tables)) {
+    if (asRecord(asRecord(table)?.rowLabel)?.confidentiality !== undefined) {
+      return true;
+    }
+    const properties = asRecord(asRecord(table)?.properties) ?? {};
+    for (const column of Object.values(properties)) {
+      const confidentiality = asRecord(asRecord(column)?.ifc)?.confidentiality;
+      if (Array.isArray(confidentiality) && confidentiality.length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
 };
 
 /**
@@ -418,14 +445,16 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
-    const classes = declaredClasses(matchingSources[0]!);
-    if (classes.length === 0) {
+    if (!declaresConfidentiality(matchingSources[0]!)) {
       skip(
-        "its declared table contract carries no CFC class",
-        "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+        "its declared table contract labels no column",
+        "Declare per-column ifc.confidentiality (or a rowLabel) in this connector's sqlite_sources, then restart the console.",
       );
       continue;
     }
+    // Descriptive only: the grant is named by its connection, and a contract
+    // that classifies nothing is granted with an empty list.
+    const classes = declaredClasses(matchingSources[0]!);
     const name = connectorGrantName(grantSource);
     if (RESERVED_GRANT_NAMES.has(name)) {
       skip(
@@ -463,15 +492,17 @@ export const resolveConnectorGrants = (
   }
   for (const entries of candidates.values()) {
     const first = entries[0]!;
-    if (
-      entries.every((entry) =>
-        entry.ref === first.ref &&
-        entry.cfcClasses!.length === first.cfcClasses!.length &&
-        entry.cfcClasses!.every((value) => first.cfcClasses!.includes(value))
-      )
-    ) {
+    // One store, one reference. Two pieces may declare it with contracts that
+    // classify it differently (one is relabeled before the other); the
+    // classes only describe the store, so the grant carries every class
+    // either declares. A different reference is a different store under one
+    // name, and that is withheld.
+    if (entries.every((entry) => entry.ref === first.ref)) {
       for (const entry of entries.slice(1)) {
         mergeReceiptMetadata(first, entry);
+        for (const value of entry.cfcClasses ?? []) {
+          if (!first.cfcClasses!.includes(value)) first.cfcClasses!.push(value);
+        }
       }
       grants.push(first);
     } else {
@@ -479,7 +510,7 @@ export const resolveConnectorGrants = (
         unnamed.push({
           ...entry.source,
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
           remedy:
             "Reconcile the connection's store declarations and receipts in Loom, then restart the console.",
           state: "degraded",

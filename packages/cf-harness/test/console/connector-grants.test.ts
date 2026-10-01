@@ -275,11 +275,11 @@ describe("connector-grants", () => {
         .toEqual([{
           connection: "gmail-work",
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
         }, {
           connection: "gmail-work",
           reason:
-            "its connection and companion name identifies conflicting handles or classes",
+            "its connection and companion name identifies conflicting handles",
         }]);
     });
 
@@ -295,7 +295,11 @@ describe("connector-grants", () => {
       expect(result.unnamed).toEqual([]);
     });
 
-    it("refuses inconsistent classes for a store exposed by two pieces", () => {
+    it("describes a store two pieces declare differently with every class either declares", () => {
+      // Two pieces can expose one store with contracts that disagree, for a
+      // while: one declarer is relabeled before another. The classes describe
+      // what the store holds, and the grant is named by the connection and
+      // reaches one reference, so the disagreement withholds nothing.
       const result = resolveConnectorGrants(records({
         handlesJson: handlesJson([
           handle(MAIL_PIECE.name, "gmail-work", MAIL_REF),
@@ -308,11 +312,18 @@ describe("connector-grants", () => {
           ],
         }]),
       }));
-      expect(result.grants).toEqual([]);
-      expect(result.unnamed.map(({ state }) => state)).toEqual([
-        "degraded",
-        "degraded",
-      ]);
+      expect(
+        result.grants.map(({ name, ref, cfcClasses }) => ({
+          name,
+          ref,
+          cfcClasses,
+        })),
+      ).toEqual([{
+        name: "gmail-work",
+        ref: MAIL_REF,
+        cfcClasses: ["email", "calendar"],
+      }]);
+      expect(result.unnamed).toEqual([]);
     });
 
     it("refuses duplicate source declarations for one receipt identity", () => {
@@ -448,7 +459,35 @@ describe("connector-grants", () => {
       }]);
     });
 
-    it("reports a handle whose contract declares no class rather than naming it", () => {
+    it("grants a handle whose contract declares no class, named by its connection", () => {
+      // A contract whose columns carry the owner and no `Resource` class. The
+      // grant's name comes from the connection, so nothing about the store is
+      // unknown; the description just names no class.
+      const ownerOnly = {
+        type: "string",
+        ifc: { confidentiality: [OWNER] },
+      };
+      const unlabeled = {
+        name: "cf-gmail-messages--gmail-work",
+        sqlite_sources: [source("gmail-work", { subject: ownerOnly })],
+      };
+      const result = resolveConnectorGrants(
+        records({ piecesJson: piecesJson([unlabeled, BANK_PIECE]) }),
+      );
+      expect(
+        result.grants.map(({ name, ref, cfcClasses }) => ({
+          name,
+          ref,
+          cfcClasses,
+        })),
+      ).toEqual([
+        { name: "gmail-work", ref: MAIL_REF, cfcClasses: [] },
+        { name: "plaid-sim", ref: BANK_REF, cfcClasses: ["finance"] },
+      ]);
+      expect(result.unnamed).toEqual([]);
+    });
+
+    it("reports a handle whose contract labels no column rather than granting it", () => {
       const unlabeled = {
         name: "cf-gmail-messages--gmail-work",
         sqlite_sources: [source("gmail-work", { subject: { type: "string" } })],
@@ -458,8 +497,34 @@ describe("connector-grants", () => {
       );
       expect(result.grants.map((grant) => grant.name)).toEqual(["plaid-sim"]);
       expect(result.unnamed[0]?.reason).toBe(
-        "its declared table contract carries no CFC class",
+        "its declared table contract labels no column",
       );
+    });
+
+    it("grants a handle whose contract labels rows by a rule alone", () => {
+      const ruled = {
+        name: "cf-gmail-messages--gmail-work",
+        sqlite_sources: [{
+          ...source("gmail-work", { subject: { type: "string" } }),
+          tables: {
+            rows: {
+              properties: { subject: { type: "string" } },
+              rowLabel: { version: 1, confidentiality: { dbOwner: true } },
+            },
+          },
+        }],
+      };
+      const result = resolveConnectorGrants(
+        records({ piecesJson: piecesJson([ruled, BANK_PIECE]) }),
+      );
+      expect(
+        result.grants.map(({ name, cfcClasses }) => ({ name, cfcClasses })),
+      )
+        .toEqual([
+          { name: "gmail-work", cfcClasses: [] },
+          { name: "plaid-sim", cfcClasses: ["finance"] },
+        ]);
+      expect(result.unnamed).toEqual([]);
     });
 
     it("grants a handle with all classes its contract declares", () => {
@@ -1172,7 +1237,7 @@ describe("connector-grants", () => {
 
   describe("parseConnectorGrants()", () => {
     for (
-      const invalid of [null, "email", [], ["email", null], [
+      const invalid of [null, "email", ["email", null], [
         "email",
         "bad class",
       ]]
@@ -1188,6 +1253,28 @@ describe("connector-grants", () => {
         ).toThrow("CFC class must match");
       });
     }
+
+    it("round-trips a grant that declares no class and describes it by its connection alone", async () => {
+      const specs = parseConnectorGrants(JSON.stringify([{
+        name: "gmail-work",
+        cfcClasses: [],
+        ref: MAIL_REF,
+        source: { connection: "gmail-work", piece: MAIL_PIECE.name },
+      }]));
+      expect(specs.map(({ name, cfcClasses }) => ({ name, cfcClasses })))
+        .toEqual([{ name: "gmail-work", cfcClasses: [] }]);
+      const { grants } = await mintWellKnownGrants(
+        undefined,
+        "no-class",
+        specs,
+      );
+      const line = wellKnownGrantsContextMessage(
+        JSON.parse(JSON.stringify(grants)),
+      )!.split("\n").find((candidate) => candidate.includes(grants[0]!.token))!;
+      expect(line).toContain("gmail-work");
+      expect(line).not.toContain("gmail-work ()");
+      expect(line).not.toContain("gmail-work (gmail-work)");
+    });
 
     it("rejects competing singular and plural class metadata", () => {
       expect(() =>

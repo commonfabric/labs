@@ -80,12 +80,16 @@ const connectorGrantClasses = (grant: HarnessConnectorGrantSpec): string[] =>
     : [grant.cfcClass !== undefined ? grant.cfcClass : grant.name];
 
 /** Human-readable connection and classes, shared by prompts and launch reports. */
-export const connectorGrantLabel = (grant: HarnessConnectorGrantSpec): string =>
-  `${grant.source.connection}${
+export const connectorGrantLabel = (
+  grant: HarnessConnectorGrantSpec,
+): string => {
+  const classes = connectorGrantClasses(grant);
+  return `${grant.source.connection}${
     grant.source.companionKey === undefined
       ? ""
       : ` / ${grant.source.companionKey}`
-  } (${connectorGrantClasses(grant).join(", ")})`;
+  }${classes.length === 0 ? "" : ` (${classes.join(", ")})`}`;
+};
 
 /** Describes the receipt's account state, quoting provider text as data. */
 const connectorViewerDescription = (
@@ -218,9 +222,12 @@ export const checkConnectorGrantSpec = (
     throw new Error("connector grant must carry only one class metadata field");
   }
   if (spec.cfcClasses !== undefined || spec.cfcClass !== undefined) {
+    // An empty list is a store whose contract classifies nothing; a singular
+    // class, when present, still has to name one.
     const classes = connectorGrantClasses(spec);
     if (
-      !Array.isArray(classes) || classes.length === 0 ||
+      !Array.isArray(classes) ||
+      (spec.cfcClasses === undefined && classes.length === 0) ||
       classes.some((value) =>
         typeof value !== "string" || !HANDLE_NAME_PATTERN.test(value)
       )

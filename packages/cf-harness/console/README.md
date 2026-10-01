@@ -1227,10 +1227,11 @@ what each one's reference is, and records no class. `pieces.json` declares each
 connector piece's `sqlite_sources`, whose table contract carries the per-column
 `ifc` the daemon seeded, and that is where the class is written down. They join
 on the piece, connection, and optional companion key Loom names in both.
-Repeated receipts for the same connection/store, reference, and class set yield
-one grant. Conflicting references or classes for that store are reported and
-withheld. Grants carry the class list as `cfcClasses`; persisted grants with a
-singular `cfcClass` or a class as their name remain readable.
+Repeated receipts for the same connection/store and reference yield one grant,
+described with every class any of them declares. Conflicting references for that
+store are reported and withheld. Grants carry the class list as `cfcClasses`;
+persisted grants with a singular `cfcClass` or a class as their name remain
+readable.
 
 The session description carries the receipt's account identity, physical row
 count, and newest record observation time. Counts come from linked `sources`
@@ -1273,8 +1274,11 @@ does for every other flow.
 
 Three cases the launch printout states rather than resolving silently:
 
-- A handle whose declared contract carries no CFC class is printed as
-  `grant <connection>  (none: <reason>)` and is not granted.
+- A handle whose declared contract labels no column (no per-column
+  confidentiality and no `rowLabel`) is printed as
+  `grant <connection>  (none: <reason>)` and is not granted. A contract that
+  labels its reads but names no `Resource` class is granted under its
+  connection, described with no class.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up

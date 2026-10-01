@@ -210,9 +210,9 @@ describe("launch", () => {
         value: "granted: gmail-other (email)",
       });
       expect(plan.health.connectors[3]).toMatchObject({
-        reason: "its declared table contract carries no CFC class",
+        reason: "its declared table contract labels no column",
         remedy:
-          "Declare the per-column ifc.confidentiality Resource class in this connector's sqlite_sources, then restart the console.",
+          "Declare per-column ifc.confidentiality (or a rowLabel) in this connector's sqlite_sources, then restart the console.",
       });
       expect(JSON.stringify(plan.health.connectors)).not.toContain(MAIL_REF);
       expect(plan.health.connectors[4]).toMatchObject({
@@ -693,7 +693,7 @@ describe("launch", () => {
       );
 
       expect(plan.environment.CF_HARNESS_CONNECTOR_GRANTS).toBeUndefined();
-      expect(reported?.value).toContain("no CFC class");
+      expect(reported?.value).toContain("labels no column");
     });
 
     it("refuses to start when the receipt does not parse", () => {
