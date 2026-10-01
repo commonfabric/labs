@@ -476,42 +476,93 @@ export default pattern<{ n: number }>(() => {
       required: ["v"],
     };
 
-    it("reports `pattern:any-result-schema` for a pattern's inferred result", async () => {
+    /**
+     * The transformed module whose `make()` returns an anonymous class
+     * instance and whose remaining source is `body`, with the diagnostics its
+     * transform reports.
+     */
+    async function transformWithMake(
+      body: string,
+    ): Promise<
+      { root: ts.SourceFile; diagnostics: TransformationDiagnostic[] }
+    > {
       const diagnostics: TransformationDiagnostic[] = [];
-      await transformFiles({
+      const files = await transformFiles({
         "/main.tsx": `/// <cts-enable />
-import { pattern } from "commonfabric";
+import { lift, pattern } from "commonfabric";
 function make() { return new (class { v = 1 })(); }
-export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));`,
+${body}`,
       }, {
         types: COMMONFABRIC_TYPES,
         typeCheck: true,
         pipelineDiagnostics: diagnostics,
       });
+      return { root: parseModule(files["/main.tsx"]!), diagnostics };
+    }
+
+    it("reads a pattern's inferred result as its type", async () => {
+      const { root, diagnostics } = await transformWithMake(
+        "export default pattern<{ n: number }>(({ n }) => ({ a: make(), n }));",
+      );
+
+      expect(patternSchemas(root).output).toEqual({
+        type: "object",
+        properties: { a: { $ref: "#/$defs/__class" }, n: { type: "number" } },
+        required: ["a", "n"],
+        $defs: { __class: instance },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports `pattern-result:unknown-type` for each field and array element of a pattern's inferred result typed `unknown`", async () => {
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ u: unknown }>(({ u }) => ({ a: make(), u, us: [u] }));",
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern-result:unknown-type" }]);
+      expect(diagnostics[0]!.message).toContain("fields `u`, `us[]` have");
+    });
+
+    it("reports `pattern:any-result-schema` for a pattern whose result is its callback's type parameter", async () => {
+      // A result typed by a bare type parameter has neither a print nor a
+      // type to read, so it is read as permissive.
+      const { diagnostics } = await transformWithMake(
+        "export default pattern<{ v: string }>(<T,>({ v }: { v: T }) => v);",
+      );
 
       expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
         .toEqual([{ severity: "error", type: "pattern:any-result-schema" }]);
     });
 
-    it('emits a `{ type: "unknown" }` result schema, and no diagnostic, for a lift taking no parameters', async () => {
-      const diagnostics: TransformationDiagnostic[] = [];
-      const files = await transformFiles({
-        "/main.tsx": `/// <cts-enable />
-import { lift } from "commonfabric";
-function make() { return new (class { v = 1 })(); }
-export const f = lift(() => ({ a: make() }));`,
-      }, {
-        types: COMMONFABRIC_TYPES,
-        typeCheck: true,
-        pipelineDiagnostics: diagnostics,
-      });
+    for (
+      const [parameters, callback, schema] of [
+        ["no parameters", "() => ({ a: make() })", {
+          properties: { a: { $ref: "#/$defs/__class" } },
+          required: ["a"],
+        }],
+        ["a parameter", "(n: number) => ({ a: make(), n })", {
+          properties: {
+            a: { $ref: "#/$defs/__class" },
+            n: { type: "number" },
+          },
+          required: ["a", "n"],
+        }],
+      ] as const
+    ) {
+      it(`reads the result of a lift taking ${parameters} as its type`, async () => {
+        const { root, diagnostics } = await transformWithMake(
+          `export const f = lift(${callback});`,
+        );
 
-      expect(callSchemas(parseModule(files["/main.tsx"]!), "lift")).toEqual([
-        false,
-        { type: "unknown" },
-      ]);
-      expect(diagnostics).toEqual([]);
-    });
+        expect(callSchemas(root, "lift").at(-1)).toEqual({
+          type: "object",
+          ...schema,
+          $defs: { __class: instance },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
 
     it("reads a lift's result as its authored return annotation", async () => {
       const { result } = await liftSchemas(

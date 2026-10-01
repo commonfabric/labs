@@ -778,10 +778,15 @@ function collectFunctionSchemaTypeNodes(
     }
   }
 
-  // 3. If we couldn't infer a type, we can't transform at all
-  // Both types are required for lift-applied calls to work
-  if (!argumentNode && !resultNode) {
-    return {}; // No types could be determined
+  // A result type the checker prints no node for, and that no recovery above
+  // read, stands as a placeholder printed from it, which schema generation
+  // reads as that type.
+  if (!resultNode && resultType && context) {
+    resultNode = typeToTypeNodeWithRegistry(
+      resultType,
+      { checker, factory, sourceFile, state: context.state },
+      typeRegistry,
+    );
   }
 
   // Build result object with only defined properties
@@ -2793,8 +2798,14 @@ function isTopLevelAnyOrUnknownTypeNode(
 function shouldReportPermissiveInferredPatternResult(
   resultNode: ts.TypeNode | undefined,
   resultType: ts.Type | undefined,
+  state: CrossStageState,
 ): boolean {
   if (!resultNode) return true;
+  // A print is read as the type it was printed from, as schema generation
+  // reads it, and that type is all a placeholder for a type with no print
+  // carries.
+  const printedFrom = state.printedFrom(resultNode);
+  if (printedFrom) return isAnyOrUnknownType(printedFrom);
   if (isTopLevelAnyOrUnknownTypeNode(resultNode)) return true;
   return isAnyOrUnknownType(resultType);
 }
@@ -2828,12 +2839,25 @@ function reportUnknownPatternResult(
   resultNode: ts.TypeNode | undefined,
   resultType: ts.Type | undefined,
 ): void {
-  if (shouldReportPermissiveInferredPatternResult(resultNode, resultType)) {
+  if (
+    shouldReportPermissiveInferredPatternResult(
+      resultNode,
+      resultType,
+      context.state,
+    )
+  ) {
     reportAnyResultSchema(context, node);
     return;
   }
   if (!resultNode) return;
-  const paths = collectUnknownResultPaths(resultNode);
+  // A placeholder for a type with no print holds none of its structure, so
+  // the type it stands for is walked in its place.
+  const placeholderFor = isTopLevelAnyOrUnknownTypeNode(resultNode)
+    ? context.state.printedFrom(resultNode)
+    : undefined;
+  const paths = placeholderFor
+    ? collectUnknownResultTypePaths(placeholderFor, context.checker)
+    : collectUnknownResultPaths(resultNode);
   if (paths.length === 0) return;
   const fields = paths.map((p) => `\`${p}\``).join(", ");
   context.reportDiagnosticOnce({
@@ -2880,6 +2904,45 @@ function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
     }
   };
   walk(resultNode, "");
+  return paths;
+}
+
+/**
+ * Like `collectUnknownResultPaths()`, except that it reads `type`, for a
+ * result that stands as a placeholder printed from a type the checker prints
+ * no node for. It descends what a print writes out as structure: an object
+ * type with no name, and an array's element.
+ */
+function collectUnknownResultTypePaths(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): string[] {
+  const paths: string[] = [];
+  // A type refers to itself only through a name, which ends the descent, so
+  // the walk ends where the print's own structure would.
+  const walk = (current: ts.Type, path: string): void => {
+    if (current.flags & ts.TypeFlags.Unknown) {
+      paths.push(path || "(result)");
+      return;
+    }
+    if (checker.isArrayType(current)) {
+      const [element] = checker.getTypeArguments(current as ts.TypeReference);
+      if (element) walk(element, `${path}[]`);
+    } else if (
+      (current.flags & ts.TypeFlags.Object) !== 0 &&
+      ((current as ts.ObjectType).objectFlags & ts.ObjectFlags.Anonymous) !==
+        0 &&
+      !current.aliasSymbol
+    ) {
+      for (const property of checker.getPropertiesOfType(current)) {
+        walk(
+          checker.getTypeOfSymbol(property),
+          path ? `${path}.${property.name}` : property.name,
+        );
+      }
+    }
+  };
+  walk(type, "");
   return paths;
 }
 
