@@ -85,6 +85,41 @@ describe("widenLiterals option", () => {
     });
   });
 
+  it("keeps a cell apart from a plain value of its type", async () => {
+    // The merge pass merges only members identical but for literal values,
+    // so a member's `asCell` keeps it apart.
+    const schema = await generate(
+      `interface O { v: Cell<string> | string | number }`,
+      "O",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      type: "object",
+      properties: {
+        v: {
+          anyOf: [
+            { type: ["number", "string"] },
+            { type: "string", asCell: ["cell"] },
+          ],
+        },
+      },
+      required: ["v"],
+    });
+  });
+
+  it("keeps the metadata members share when it merges them", async () => {
+    const schema = await generate(
+      `type U = { x: Cell<1 | 2> } | { x: Cell<3 | 4> };`,
+      "U",
+      WIDEN,
+    );
+    expect(schema).toEqual({
+      type: "object",
+      properties: { x: { type: "number", asCell: ["cell"] } },
+      required: ["x"],
+    });
+  });
+
   it("without the flag, literal unions and single literals keep enums", async () => {
     expect(await generate(`type T = "a" | "b";`, "T")).toEqual({
       enum: ["a", "b"],

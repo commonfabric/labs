@@ -2,7 +2,7 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
-import { hashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
@@ -32,6 +32,13 @@ import { dedupeByValueEqual } from "../value-equality.ts";
 
 // Simple primitive schemas only have these keys (possibly just one)
 const PRIMITIVE_SCHEMA_KEY_SET = new Set(["type", "enum"]);
+
+/**
+ * The keywords that decide how a value is read (`asCell`, `scope`) and what
+ * policy it carries (`ifc`). Literal widening merges only members that agree
+ * on them, and the merged member keeps them.
+ */
+const WIDENING_PRESERVED_KEYWORDS = ["asCell", "ifc", "scope"] as const;
 
 type DefaultUnionKind = "Default" | "DeepDefault";
 
@@ -1080,7 +1087,9 @@ export class UnionFormatter implements TypeFormatter {
   /**
    * Merge schemas that are structurally identical except for literal enum values.
    * Used when widenLiterals is true to collapse unions like
-   * {x: {enum: [10]}} | {x: {enum: [20]}} into {x: {type: "number"}}
+   * {x: {enum: [10]}} | {x: {enum: [20]}} into {x: {type: "number"}}.
+   * Schemas that differ in a `WIDENING_PRESERVED_KEYWORDS` keyword, at any
+   * depth, stay apart.
    */
   #mergeIdenticalSchemas(
     schemas: MutableJSONSchema[],
@@ -1092,7 +1101,7 @@ export class UnionFormatter implements TypeFormatter {
 
     for (const schema of schemas) {
       const normalized = this.#normalizeSchemaForComparison(schema);
-      const key = JSON.stringify(normalized);
+      const key = hashStringOf(normalized as FabricValue);
       const group = groups.get(key) ?? [];
       group.push(schema);
       groups.set(key, group);
@@ -1258,6 +1267,9 @@ export class UnionFormatter implements TypeFormatter {
     if ("additionalProperties" in schema) {
       result.additionalProperties = schema.additionalProperties;
     }
+    for (const keyword of WIDENING_PRESERVED_KEYWORDS) {
+      if (keyword in schema) result[keyword] = schema[keyword];
+    }
 
     return result;
   }
@@ -1325,10 +1337,16 @@ export class UnionFormatter implements TypeFormatter {
       }
     }
 
-    // Copy other structural fields from first schema
+    // Copy other structural fields from first schema; the group agrees on the
+    // preserved keywords, so the first schema's stand for every member's.
     if ("required" in first) result.required = first.required;
     if ("additionalProperties" in first) {
       result.additionalProperties = first.additionalProperties;
+    }
+    for (const keyword of WIDENING_PRESERVED_KEYWORDS) {
+      if (keyword in first) {
+        (result as Record<string, unknown>)[keyword] = first[keyword];
+      }
     }
 
     return result;

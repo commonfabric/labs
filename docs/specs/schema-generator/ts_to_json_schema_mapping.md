@@ -786,9 +786,14 @@ Default paths of §7:
   **`type` arrays** — how `string | undefined` becomes
   `{ type: ["string","undefined"] }` (fixture `default-with-undefined-union`).
   Singletons unwrap.
-- **`widenLiterals`** additionally merges structurally-identical-modulo-enum
-  member schemas before the anyOf pass (`mergeIdenticalSchemas`). It does
-  **not** reach the all-literal path:
+- **`widenLiterals`** additionally merges member schemas that differ only in
+  literal `enum` values, widening those to their base type, before the anyOf
+  pass (`mergeIdenticalSchemas`). It compares `type`, `properties`, `items`,
+  `required` and `additionalProperties`, and `asCell`, `ifc` and `scope`,
+  which the merged member keeps, so a cell and a plain value of one type, or
+  two cells under different labels, stay separate members. It compares no
+  other keyword and keeps none: two members differing only in `$ref` merge
+  into a schema without one. It does **not** reach the all-literal path:
   `"a" | "b"` still emits `{ enum: ["a","b"] }` under `widenLiterals: true`
   (probe; the all-literal `enum` branch runs first and never consults the
   flag).
@@ -1489,12 +1494,12 @@ declaration file is the default library's (the transformer supplies
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);
-(2) structurally-identical-modulo-enum union members merge recursively
-(`union-formatter.ts`). It does **not** widen all-literal
-unions (§8) and has no other effects. `test/widen-literals.test.ts` pins the
-in-package behavior; consumer-side it is extracted from `toSchema` options and
-exercised via ts-transformers' injection paths
-(`ts-transformers/.../schema-generator.ts`).
+(2) union members that differ only in literal `enum` values merge
+recursively, keeping `asCell`, `ifc` and `scope` (`union-formatter.ts`). It
+does **not** widen all-literal unions (§8) and has no other effects.
+`test/widen-literals.test.ts` pins the in-package behavior; consumer-side it is
+extracted from `toSchema` options and exercised via ts-transformers' injection
+paths (`ts-transformers/.../schema-generator.ts`).
 
 ## 15. Fail-Loud Inventory And Silent Degradations
 
@@ -1529,7 +1534,9 @@ synthetic node resolution failure → `any` → `true`
 (`schema-generator.ts`); unsupported intersections → permissive object
 + `$comment` (§9); the `{ type: "string", enum: ["unknown"] }` sentinel (§4);
 `applyWrapperSemantics` with an unmappable kind returns the schema unchanged
-(`common-fabric-formatter.ts`).
+(`common-fabric-formatter.ts`); under `widenLiterals`, union members differing
+only in a keyword the merge does not compare, such as `$ref`, merge into a
+schema without it (§8).
 
 ## 16. Known Limits And Observed Quirks
 

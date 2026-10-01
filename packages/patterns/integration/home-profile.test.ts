@@ -197,9 +197,9 @@ describe("home-space profile creation", () => {
     await waitForCondition(page, defaultMarkerShownIs, { args: [false] });
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
-    // Home declares `defaultProfile` writable only by `setDefaultProfile`,
-    // from the picker's "Set default" action, so the write lands through that
-    // gate.
+    // The marker shows the "Set default" write landed. It does not show the
+    // declared writer was consulted: the picker writes a cell that carries
+    // none of `TrustedDefaultProfile`'s labels.
     await waitForCondition(page, defaultMarkerShownIs, { args: [true] });
 
     await clickProfileLink(page, "Alan Turing");

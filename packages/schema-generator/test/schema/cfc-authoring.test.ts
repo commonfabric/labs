@@ -3272,8 +3272,14 @@ describe("Schema: CFC authoring aliases", () => {
   });
 
   describe("a labeled cell that may be missing", () => {
-    /** The schema of `SchemaRoot`'s `field`, declared as `declaration`. */
-    const fieldSchema = async (declaration: string) => {
+    /**
+     * The schema of `SchemaRoot`'s `field`, declared as `declaration`,
+     * generated with `options`.
+     */
+    const fieldSchema = async (
+      declaration: string,
+      options?: { widenLiterals?: boolean },
+    ) => {
       const { type, checker } = await getTypeFromCode(
         `
         type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -3284,7 +3290,7 @@ describe("Schema: CFC authoring aliases", () => {
         "SchemaRoot",
       );
       return asObjectSchema(
-        new SchemaGenerator().generateSchema(type, checker),
+        new SchemaGenerator().generateSchema(type, checker, undefined, options),
       ).properties?.field;
     };
 
@@ -3328,6 +3334,21 @@ describe("Schema: CFC authoring aliases", () => {
           { type: "undefined" },
           LABELED_CELL,
           { type: "number", asCell: ["cell"] },
+        ],
+      });
+    });
+
+    it("keeps two labeled cells of one type apart when widening literals", async () => {
+      expect(
+        await fieldSchema(
+          'Confidential<Cell<string>, readonly ["b"]> | Confidential<Cell<string>, readonly ["d"]> | undefined',
+          { widenLiterals: true },
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "undefined" },
+          LABELED_CELL,
+          { ...LABELED_CELL, ifc: { confidentiality: ["d"] } },
         ],
       });
     });
