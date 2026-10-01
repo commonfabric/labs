@@ -8,7 +8,20 @@ The router phases are proposed. They depend on the direct connection-auth
 protocol described in that design. The first public stage serves existing spaces
 through one client WebSocket that can reach several toolsheds. It uses the
 design's Mode A: one upstream connection per client per toolshed. Mode B needs a
-separate security review before deployment.
+separate security review before deployment. That review must establish a
+payload-opaque multiplexer that holds no router identity key. The link agent
+authenticates each toolshed link and transfers only its data channel to the
+multiplexer. The multiplexer assigns client IDs from worker IPC channels, never
+from client fields; scopes request IDs by client ID at the toolshed instead of
+rewriting payloads; moves client-specific flags into `session.open`; and signals
+client loss once per client without tracking session IDs in the multiplexer. The
+directory service must be outside the client data path. The review must bound
+per-client queues and chunk sizes, interleave chunks fairly, enforce per-client
+rate limits, and cap per-client and total reassembly at the toolshed. Only a
+client's worker and the multiplexer may hold its data channel. The review must
+assess the shared multiplexer compromise and crash blast radius, including
+sharding per toolshed. Section 5.3 of the multiplexing design must be reconciled
+with those constraints before Mode B is implemented.
 
 This stage assumes that space creation is restricted, spaces have the intended
 access-control documents, and no legacy spaces are served. Those are deployment
@@ -19,12 +32,14 @@ review.
 ## Trust boundary
 
 The client authenticates a principal by signing a fresh challenge issued by the
-router. The router terminates the client socket and can read, modify, omit, and
-inject all later messages. The toolshed verifies the client signature and trusts
-an allowlisted router only for challenge freshness and the binding between a
-client connection and its forwarded requests. The toolshed remains the authority
-for space ACLs, session admission, and every operation. A router identity grants
-no space capability, service identity, or ability to bypass ACL checks.
+router's link agent. The router terminates the client socket and can read,
+modify, omit, and inject all later messages. The toolshed verifies the client
+signature and the link agent's evidence of challenge issuance and timely receipt
+of the signed statement. It trusts an allowlisted router for the binding between
+a client connection and its forwarded requests. The toolshed remains the
+authority for space ACLs, session admission, and every operation. A router
+identity grants no space capability, service identity, or ability to bypass ACL
+checks.
 
 Consequently, compromise of a router permits acting as its authenticated clients
 while their backend contexts remain valid. Process isolation limits which router
@@ -32,24 +47,35 @@ can be compromised; it does not make traffic through a compromised router
 end-to-end authenticated. This authority must be represented explicitly in the
 threat model and operational response. With the one-hour lease proposed below,
 compromise can preserve a disconnected client's authority for the remainder of
-that hour.
+that hour. The TLS listener remains a shared handshake boundary: compromise can
+interfere with connections it accepts, and retaining the certificate private key
+there also exposes that key.
 
 ## Authentication and authorization
 
 1. **Bind each proof to one router.** `connection.auth` must sign the protocol,
    deployment audience, router identity, router-issued unpredictable challenge,
    principal, issue time, and expiry. A toolshed must verify the signature and
-   all these fields before accepting a forwarded proof. A proof for one router
-   must fail through another; failover requires a new challenge and signature.
-   The router accepts a challenge signature only once for a principal on its
-   client connection. It may then forward that verified statement to assigned
-   toolsheds for the same client context before expiry. Each toolshed binds the
-   statement to one router client-context ID and permits at most one live
-   backend context for it. Re-presentation for recovery atomically replaces the
-   old context; presentation for another client-context ID is rejected. A new
-   router-link epoch requires a new client signature. Both peers reject expired,
-   future-dated, or malformed proofs and a client-chosen `exp` beyond the
-   deployment's maximum authorization lease.
+   all these fields before accepting a forwarded proof. The link agent must
+   attest the challenge's issuance, router identity, and client-context binding
+   in a form the toolshed can verify. It must also attest that it received the
+   exact signed statement within the challenge's one-minute lifetime, binding
+   that receipt to the statement and context without trusting the worker's
+   claimed timestamp. The toolshed verifies both attestations and records
+   accepted challenges per router and context; later presentation to another
+   assigned toolshed remains valid until the statement's lease expires. A proof
+   for one router must fail through another; failover requires a new challenge
+   and signature. The router accepts a challenge signature only once for a
+   principal on its client connection. It may then forward that verified
+   statement to assigned toolsheds for the same client context before expiry.
+   Each toolshed binds the statement to one router client-context ID and permits
+   at most one live backend context for it. Re-presentation for recovery
+   atomically replaces the old context; presentation for another client-context
+   ID is rejected. A new router-link epoch requires a new client signature. Both
+   peers reject expired, future-dated, or malformed proofs and a client-chosen
+   `exp` beyond the deployment's maximum authorization lease. The forwarding
+   protocol in the multiplexing design must carry this evidence before Mode A is
+   implemented.
 2. **Authenticate the forwarding channel.** Every router has its own identity
    and key. The toolshed accepts forwarded proofs only over a mutually
    authenticated, encrypted link whose peer identity is on its router allowlist
@@ -63,7 +89,9 @@ that hour.
    short-lived, and bound to the issuing toolshed, router identity, router-link
    epoch, and one upstream connection. It must not authenticate a client by
    itself. Ticket redemption must be atomic, and tickets must be invalidated
-   when the parent link is revoked or replaced.
+   when the parent link is revoked or replaced. A ticketed upstream carries no
+   router-only control authority beyond its one bound client context; link
+   control stays on the router link.
 4. **Track client contexts at the toolshed.** A forwarded principal belongs to
    one router-authenticated client context, not to the router link in general.
    The context binds the signed proof, client connection, negotiated protocol
@@ -118,7 +146,7 @@ that hour.
     comparison applies to text frames and any transformed frames. No
     authorization decision may rely on a header the client can edit.
 11. **Validate at both boundaries.** Before allocating expensive state, the
-    router and toolshed reject invalid WebSocket framing, invalid UTF-8,
+    client worker and toolshed reject invalid WebSocket framing, invalid UTF-8,
     duplicate or ambiguous security fields, malformed DIDs, unsupported envelope
     versions, impossible lengths, and frames with inconsistent `space`,
     `sessionId`, `requestId`, or principal fields. Define one parser
@@ -128,21 +156,52 @@ that hour.
 12. **Bound work before and after authentication.** Set explicit limits for
     handshake state and duration, raw and decompressed frame sizes, expansion
     ratio, nesting depth, concurrent decompressions, principals, sessions,
-    watches, holdings, queued bytes, and outstanding requests. Enforce quotas
-    per network source before auth and per principal, client context, router,
-    and toolshed after auth. Dropping a slow or abusive client must release its
-    upstream and backend state without blocking other clients.
+    watches, holdings, queued bytes, and outstanding requests. Enforce ingress
+    limits per network source and a global cap on unauthenticated workers before
+    each accepted connection consumes a process; require an authentication
+    deadline after TLS and HTTP upgrade. Enforce quotas per principal, client
+    context, router, and toolshed after auth. Measure private memory for idle
+    and active workers at expected concurrency before public deployment.
+    Dropping a slow or abusive client must release its upstream and backend
+    state without blocking other clients.
 
 ## Process isolation and operations
 
-13. **Isolate content inspection.** Run untrusted JSON and compressed-frame
-    parsing in restricted Rust worker processes. Workers have no router or
-    toolshed signing keys, no other client's traffic, no direct toolshed or
-    directory write access, and only the file and network access needed for
-    their task. The broker keeps authenticated connection state and treats
-    worker output as an untrusted parse result. Bound worker memory, CPU, input
-    size, and IPC messages; a worker crash or timeout closes affected client
-    contexts without exposing another router's traffic.
+13. **Isolate content inspection.** HTTP upgrade, `Origin` checks, WebSocket
+    framing, decompression, and Memory payload parsing run in a dedicated Rust
+    worker process for one client connection. A worker is never reused for
+    another client. No process with a router identity key, a long-term TLS key,
+    or another client's application state parses those bytes. The TLS listener
+    handles the client handshake and transfers exclusive custody of the socket
+    before application parsing; long-term certificate signing can be delegated
+    to a separate key process. A secret-free, single-threaded process creates
+    workers from an image that has never held credentials or client application
+    data. It holds no listening socket, does not read client bytes, and renews
+    worker address-space layout after a bounded number of forks by re-exec or
+    equivalent isolation. Each worker holds only its own client connection and
+    upstream TLS sessions, cannot create or connect sockets, and asks a
+    credential-free directory process for a canonical space DID rather than
+    naming an upstream address. The directory process passes an unnegotiated TCP
+    connection and a single-use ticket to the worker and closes its copy of the
+    socket; the worker performs upstream TLS and verifies the toolshed. Only a
+    separate link agent holds the router identity key, issues client challenges,
+    obtains toolshed-issued tickets, and controls router links. The pristine
+    process creates a narrow worker-to-link-agent IPC channel so the link agent
+    can bind each challenge and proof receipt to that channel's client context.
+    Broker services never trust a context ID supplied in a message. The link
+    agent accepts bounded, fixed-format IPC metadata and hashes opaque
+    statements without parsing Memory payloads. Processes have the minimum
+    network access for their roles: the listener has no egress, workers cannot
+    create sockets, and the directory process can reach only the directory and
+    assigned toolsheds. Network namespaces or equivalent egress controls and
+    syscall filters enforce this; cgroups bound resources. Sibling workers
+    cannot inspect or signal each other through process APIs, inherited
+    descriptors, or shared credentials. Bound worker memory, CPU, input size,
+    and IPC messages; a worker crash or timeout closes only its own client
+    context. Before choosing a TLS socket handoff, validate exclusive descriptor
+    custody and TLS post-handshake behavior on the deployment kernel and TLS
+    stack. If per-client processes are too costly, a weaker isolation model
+    requires a separate security review before public deployment.
 14. **Isolate routers from one another.** Each router has separate credentials,
     process boundaries, state, and resource budgets. A compromised router
     process must not read another router's client traffic, proofs, tickets, or
@@ -150,11 +209,13 @@ that hour.
     so one router can be revoked without removing all routing.
 15. **Harden the Rust boundary.** Keep `unsafe` and native-code dependencies
     small and reviewed; pin and update parser, compression, TLS, and WebSocket
-    dependencies. Fuzz the JSON and binary envelope parsers, compression
-    decoder, routing-hint comparison, and state transitions. Redact signatures,
-    tickets, challenges, and user payloads from logs. Record router identity,
-    client-context ID, space, toolshed, and authorization verdict for incident
-    investigation without logging private content.
+    dependencies. Fuzz HTTP upgrade, WebSocket framing, JSON and binary envelope
+    parsers, compression decoder, routing-hint comparison, and state
+    transitions. Exercise TLS handoff and descriptor cleanup under failure
+    injection. Redact signatures, tickets, challenges, and user payloads from
+    logs. Record router identity, client-context ID, space, toolshed, and
+    authorization verdict for incident investigation without logging private
+    content.
 16. **Protect ingress and egress.** Use TLS for client sockets and authenticated
     encryption for router-to-toolshed links. Validate browser WebSocket `Origin`
     against the deployed client origins, with no cookie-only authentication.
@@ -171,8 +232,9 @@ that hour.
   toolshed or survive a router-link epoch change. Recovery atomically replaces
   the old context.
 - A challenge expires within one minute; a client-chosen lease longer than one
-  hour is rejected; renewing with the same proof cannot extend a backend
-  context.
+  hour is rejected. A statement received after its challenge expired is
+  rejected; one received in time may reach another assigned toolshed until its
+  lease expires. Renewing with the same proof cannot extend a backend context.
 - Disconnecting a client or killing its router eventually removes its backend
   authority within the documented lease; an expired proof cannot reopen it.
 - The router denies unknown spaces in this public stage, and a client cannot
@@ -180,9 +242,12 @@ that hour.
 - Incompatible client flags are rejected even when the router's upstream
   advertises compatible flags. A header/body space mismatch, ambiguous JSON, and
   a compressed expansion attack fail before any write or watch is admitted.
-- A worker crash, malformed frame, or slow client affects only its bounded
-  contexts. Revoking one router ends all its backend contexts and sessions while
-  other routers continue serving their own clients.
+- A worker crash, malformed frame, or slow client affects only its own context.
+  A compromised worker cannot read a sibling's memory or descriptors, reach
+  arbitrary network destinations, obtain another worker's ticket, or use the
+  router identity key. A compromised directory process cannot read upstream
+  plaintext or confer client authority. Revoking one router ends all its backend
+  contexts and sessions while other routers continue serving their own clients.
 - Public ingress has a separate decision for every HTTP route; exposing the
   Memory router does not implicitly expose toolshed HTTP APIs.
 
