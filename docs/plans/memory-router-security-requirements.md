@@ -47,9 +47,9 @@ can be compromised; it does not make traffic through a compromised router
 end-to-end authenticated. This authority must be represented explicitly in the
 threat model and operational response. With the one-hour lease proposed below,
 compromise can preserve a disconnected client's authority for the remainder of
-that hour. The TLS listener remains a shared handshake boundary: compromise can
-interfere with connections it accepts, and retaining the certificate private key
-there also exposes that key.
+that hour. The listener remains a shared ingress boundary: compromise can
+interfere with connections it accepts. If it terminates TLS and retains the
+certificate private key, compromise exposes that key too.
 
 ## Authentication and authorization
 
@@ -171,34 +171,36 @@ there also exposes that key.
     framing, decompression, and Memory payload parsing run in a dedicated Rust
     worker process for one client connection. A worker is never reused for
     another client. No process with a router identity key, a long-term TLS key,
-    or another client's application state parses those bytes. The TLS listener
-    handles the client handshake and transfers exclusive custody of the socket
-    before application parsing; long-term certificate signing can be delegated
-    to a separate key process. A secret-free, single-threaded process creates
-    workers from an image that has never held credentials or client application
-    data. It holds no listening socket, does not read client bytes, and renews
-    worker address-space layout after a bounded number of forks by re-exec or
-    equivalent isolation. Each worker holds only its own client connection and
-    upstream TLS sessions, cannot create or connect sockets, and asks a
-    credential-free directory process for a canonical space DID rather than
-    naming an upstream address. The directory process passes an unnegotiated TCP
-    connection and a single-use ticket to the worker and closes its copy of the
-    socket; the worker performs upstream TLS and verifies the toolshed. Only a
-    separate link agent holds the router identity key, issues client challenges,
-    obtains toolshed-issued tickets, and controls router links. The pristine
-    process creates a narrow worker-to-link-agent IPC channel so the link agent
-    can bind each challenge and proof receipt to that channel's client context.
-    Broker services never trust a context ID supplied in a message. The link
-    agent accepts bounded, fixed-format IPC metadata and hashes opaque
-    statements without parsing Memory payloads. Processes have the minimum
-    network access for their roles: the listener has no egress, workers cannot
-    create sockets, and the directory process can reach only the directory and
-    assigned toolsheds. Network namespaces or equivalent egress controls and
-    syscall filters enforce this; cgroups bound resources. Sibling workers
-    cannot inspect or signal each other through process APIs, inherited
+    or another client's application state parses those bytes. A narrow listener
+    accepts client sockets and transfers exclusive custody before application
+    parsing. Either the listener completes TLS with a reviewed record-layer
+    handoff, or the per-client worker completes TLS with certificate signing
+    delegated to a separate key process; neither path puts the certificate
+    private key in a payload parser. A secret-free, single-threaded process
+    creates workers from an image that has never held credentials or client
+    application data. It holds no listening socket, does not read client bytes,
+    and renews worker address-space layout after a bounded number of forks by
+    re-exec or equivalent isolation. Each worker holds only its own client
+    connection and upstream TLS sessions, cannot create or connect sockets, and
+    asks a credential-free directory process for a canonical space DID rather
+    than naming an upstream address. The directory process passes an
+    unnegotiated TCP connection and a single-use ticket to the worker and closes
+    its copy of the socket; the worker performs upstream TLS and verifies the
+    toolshed. Only a separate link agent holds the router identity key, issues
+    client challenges, obtains toolshed-issued tickets, and controls router
+    links. The pristine process creates a narrow worker-to-link-agent IPC
+    channel so the link agent can bind each challenge and proof receipt to that
+    channel's client context. Broker services never trust a context ID supplied
+    in a message. The link agent accepts bounded, fixed-format IPC metadata and
+    hashes opaque statements without parsing Memory payloads. Processes have the
+    minimum network access for their roles: the listener has no egress, workers
+    cannot create sockets, and the directory process can reach only the
+    directory and assigned toolsheds. Network namespaces or equivalent egress
+    controls and syscall filters enforce this; cgroups bound resources. Sibling
+    workers cannot inspect or signal each other through process APIs, inherited
     descriptors, or shared credentials. Bound worker memory, CPU, input size,
     and IPC messages; a worker crash or timeout closes only its own client
-    context. Before choosing a TLS socket handoff, validate exclusive descriptor
+    context. Before choosing listener-side TLS, validate exclusive descriptor
     custody and TLS post-handshake behavior on the deployment kernel and TLS
     stack. If per-client processes are too costly, a weaker isolation model
     requires a separate security review before public deployment.
