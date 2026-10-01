@@ -117,15 +117,20 @@ export function linkOfTarget(
   target: unknown,
   call: string,
 ): NormalizedFullLink {
-  let cell: Cell<unknown>;
-  if (isCell(target)) {
-    cell = target;
-  } else if (isCellResult(target)) {
-    cell = getCellOrThrow(target);
-  } else {
-    throw new Error(`\`${call}\` takes a cell as its target.`);
-  }
-  return cell.resolveAsCell().getAsNormalizedFullLink();
+  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink();
+}
+
+/**
+ * Returns the cell `target` is, whether pattern code holds it as a cell or as
+ * the value a cell's reactive proxy reads as. `call` names the call `target`
+ * was passed to, for the error.
+ *
+ * @throws Error when `target` is not a cell.
+ */
+export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
+  if (isCell(target)) return target;
+  if (isCellResult(target)) return getCellOrThrow(target);
+  throw new Error(`\`${call}\` takes a cell as its target.`);
 }
 
 /**
