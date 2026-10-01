@@ -17,10 +17,10 @@ import {
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import {
   isTransparentWrapper,
+  outermostTransparentWrapper,
   unwrapExpression,
   unwrapParentheses,
 } from "../utils/expression.ts";
-import { isBrandedCellType } from "./cell-type.ts";
 import {
   isPatternFactoryCalleeExpression,
   isPatternFactoryHelperExpression,
@@ -31,6 +31,26 @@ type CausePath = readonly CausePathElement[];
 type ForCause = string | CausePath | { readonly stream: string | CausePath };
 
 const PATTERN_RESULT_CAUSE = "__patternResult";
+
+/**
+ * Per transform run, the variables whose initializer this stage found to be a
+ * reactive value by construction: a call or `new` it classified as one, or
+ * a chain that already carries an authored `.for()`. A reference to one is a
+ * reactive node whatever its type says (`isCellByType()`).
+ */
+const causedVariablesByRun = new WeakMap<
+  TransformationContext,
+  Set<ts.Symbol>
+>();
+
+function causedVariablesOf(context: TransformationContext): Set<ts.Symbol> {
+  let variables = causedVariablesByRun.get(context);
+  if (!variables) {
+    variables = new Set();
+    causedVariablesByRun.set(context, variables);
+  }
+  return variables;
+}
 
 export class ReactiveVariableForTransformer extends HelpersOnlyTransformer {
   override transform(context: TransformationContext): ts.SourceFile {
@@ -84,6 +104,13 @@ function createReactiveVariableForVisitor(
         visit,
         { includeRoot: false },
       );
+
+      if (isReactiveByConstruction(initializer, context)) {
+        const symbol = context.checker.getSymbolAtLocation(declaration.name);
+        if (symbol) {
+          causedVariablesOf(context).add(symbol);
+        }
+      }
 
       if (shouldAddVariableFor(initializer, context)) {
         initializer = createForCall(
@@ -567,6 +594,22 @@ function shouldAddVariableFor(
   });
 }
 
+/**
+ * Reports whether `initializer` is a reactive value by construction: a call or
+ * `new` this stage classifies as one without consulting its type, or a chain
+ * that already carries an authored `.for()`.
+ */
+function isReactiveByConstruction(
+  initializer: ts.Expression,
+  context: TransformationContext,
+): boolean {
+  return chainContainsForCall(initializer) ||
+    shouldAddReactiveFor(initializer, context, {
+      includeRuntimeCalls: true,
+      useTypeFallback: false,
+    });
+}
+
 function shouldAddPropertyFor(
   initializer: ts.Expression,
   context: TransformationContext,
@@ -646,7 +689,7 @@ function shouldAddReactiveFor(
     context.checker,
     context.state.typeRegistry,
   );
-  return isCellLikeType(type, context.checker);
+  return isCellByType(expression, type, context);
 }
 
 function isInternalSyntheticName(name: string): boolean {
@@ -758,8 +801,7 @@ function shouldRetargetReactiveReference(
     context.state.typeRegistry,
   );
   if (type) {
-    return isBrandedCellType(type, context.checker) ||
-      isCellLikeType(type, context.checker);
+    return isCellByType(target, type, context);
   }
 
   return isReactiveValueExpression(target, context.checker);
@@ -855,15 +897,21 @@ function createForCall(
  * either one. A call the runtime provides is left out: it returns a cell
  * whatever type the value in that cell has.
  *
- * The type is read both inside and outside any `as`, `satisfies`, or `!`
- * around the expression. `x satisfies T | undefined` states the nullish arm
- * outside, and `x as unknown` erases the one inside, so either admitting one
- * is enough, unless a `!` asserts the value is present.
+ * A non-null assertion `!` around the expression says the value is present,
+ * and wins over both the chain and the type. The other wrappers, `as` and
+ * `satisfies`, leave the question to the expression inside them: `satisfies`
+ * never changes a type, a cast to a type that admits a cell is refused
+ * (`cast-validation.ts`), and `as unknown` only hides the arm the type inside
+ * still has.
  */
 function mayBeNullish(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {
+  if (assertsNonNull(unwrapParentheses(expression))) {
+    return false;
+  }
+
   const target = unwrapExpression(expression);
   if (ts.isOptionalChain(target)) {
     return true;
@@ -875,15 +923,12 @@ function mayBeNullish(
     return false;
   }
 
-  const typeOf = (node: ts.Expression) =>
-    getTypeAtLocationWithFallback(
-      node,
-      context.checker,
-      context.state.typeRegistry,
-    );
-  const outer = unwrapParentheses(expression);
-  return admitsNullish(typeOf(outer)) ||
-    (!assertsNonNull(outer) && admitsNullish(typeOf(target)));
+  const type = getTypeAtLocationWithFallback(
+    target,
+    context.checker,
+    context.state.typeRegistry,
+  );
+  return unionMembers(type).some(isNullishType);
 }
 
 /**
@@ -905,22 +950,145 @@ function assertsNonNull(expression: ts.Expression): boolean {
 }
 
 /**
- * Helper for `mayBeNullish()`, which reports whether `type` admits `null`,
- * `undefined`, or `void`. A type that could not be determined admits none.
+ * Reports whether `expression`, of type `type`, is a cell on the strength of
+ * its type: the test behind a `.for()` added at variable position as the last
+ * resort in `shouldAddReactiveFor()`, and behind a re-rooted identifier
+ * (`shouldRetargetReactiveReference()`).
+ *
+ * A type that is a cell in every arm a value can take qualifies: a cell-like
+ * type, or a union whose every member is one apart from `undefined`, `null`,
+ * and `void` (those arms make the access optional, `mayBeNullish()`). A type
+ * with a plain-value arm beside a cell arm, such as `Writable<string> |
+ * string`, qualifies only for an identifier that is a reactive node by
+ * provenance (`isReactiveNodeByProvenance`): a parameter of a reactive scope,
+ * a variable whose lowered initializer this stage classified as reactive, or
+ * a `const` alias of either. In a pattern body, a `??` over a cell and a
+ * `Reactive<T>` read hoists to a lift whose result is typed `Cell<T> | T` yet
+ * is a reactive node, and a pattern input of that type is one too; in a
+ * handler the same type, on a plain call or on a state member, is a value
+ * that may be the string, on which `.for()` would throw. The type alone
+ * cannot tell the two apart, and `isReactiveValueExpression` answers from
+ * the type first (as does `isReactiveValueSymbol` for any builder's
+ * parameter, a handler's included), so the symbol is asked directly. A type
+ * with no cell arm, or that could not be determined, is no cell.
  */
-function admitsNullish(type: ts.Type | undefined): boolean {
-  // deno-coverage-ignore-start -- the type is `undefined` only when the
-  // checker throws inside `getTypeAtLocationWithFallback()`
-  if (!type) {
+function isCellByType(
+  expression: ts.Expression,
+  type: ts.Type | undefined,
+  context: TransformationContext,
+): boolean {
+  const arms = unionMembers(type).filter((member) => !isNullishType(member));
+  const cellArms = arms.filter((arm) => isCellLikeType(arm, context.checker));
+  if (cellArms.length === 0) {
     return false;
   }
-  // deno-coverage-ignore-stop
+  if (cellArms.length === arms.length) {
+    return true;
+  }
+  if (!ts.isIdentifier(expression)) {
+    return false;
+  }
+  const symbol = context.checker.getSymbolAtLocation(expression);
+  return symbol !== undefined &&
+    isReactiveNodeByProvenance(symbol, context, new Set());
+}
 
-  const parts = type.isUnion() ? type.types : [type];
-  return parts.some((part) =>
-    (part.flags &
-      (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
-  );
+/**
+ * Helper for `isCellByType()`, which reports whether `symbol` names a
+ * reactive node by where it comes from: a parameter of a reactive scope
+ * (`isReactiveScopeParameter()`), a variable whose lowered initializer this
+ * stage classified as reactive (`causedVariablesOf()`), or a `const`
+ * initialized with a bare reference to one of those, at any depth, which is
+ * the same node under another name. `seen` holds the symbols already asked,
+ * so a `const` that names itself ends the walk.
+ */
+function isReactiveNodeByProvenance(
+  symbol: ts.Symbol,
+  context: TransformationContext,
+  seen: Set<ts.Symbol>,
+): boolean {
+  if (seen.has(symbol)) {
+    return false;
+  }
+  seen.add(symbol);
+
+  if (
+    causedVariablesOf(context).has(symbol) ||
+    isReactiveScopeParameter(symbol, context.checker)
+  ) {
+    return true;
+  }
+
+  const declaration = symbol.valueDeclaration;
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0
+  ) {
+    return false;
+  }
+
+  const aliased = unwrapExpression(declaration.initializer);
+  if (!ts.isIdentifier(aliased)) {
+    return false;
+  }
+  const target = context.checker.getSymbolAtLocation(aliased);
+  return target !== undefined &&
+    isReactiveNodeByProvenance(target, context, seen);
+}
+
+/**
+ * Helper for `isReactiveNodeByProvenance()`, which reports whether `symbol`
+ * is declared as a parameter of a reactive scope, where every value is a
+ * reactive node: the callback of a pattern builder call, or of a reactive
+ * array method such as a `.map()` over a reactive collection. The callback
+ * may sit inside parentheses or another transparent wrapper,
+ * `pattern(((input) => …))`. A handler's, lift's, or `computed()`'s parameter
+ * is not one: its values are real.
+ */
+function isReactiveScopeParameter(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+): boolean {
+  return (symbol.getDeclarations() ?? []).some((declaration) => {
+    let node: ts.Node = declaration;
+    while (
+      ts.isBindingElement(node) ||
+      ts.isObjectBindingPattern(node) ||
+      ts.isArrayBindingPattern(node)
+    ) {
+      node = node.parent;
+    }
+    if (!ts.isParameter(node)) {
+      return false;
+    }
+    const callback = node.parent;
+    if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) {
+      return false;
+    }
+    const argument = outermostTransparentWrapper(callback);
+    const call = argument.parent;
+    if (!ts.isCallExpression(call)) {
+      return false;
+    }
+    return getPatternBuilderCallbackArgument(call, checker) === callback ||
+      (classifyArrayMethodCallSite(call, checker)?.ownership === "reactive" &&
+        call.arguments.includes(argument));
+  });
+}
+
+/**
+ * The members of a union type, or the type itself; a type that could not be
+ * determined has none.
+ */
+function unionMembers(type: ts.Type | undefined): readonly ts.Type[] {
+  return type === undefined ? [] : type.isUnion() ? type.types : [type];
+}
+
+function isNullishType(type: ts.Type): boolean {
+  return (type.flags &
+    (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0;
 }
 
 function createCauseExpression(

@@ -179,6 +179,7 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import {
   createStorageAddressResolver,
   RemoteSessionFactory,
+  type SessionConnection,
   type SessionFactory,
   storageAddressForHost,
   toWebSocketAddress,
@@ -234,7 +235,7 @@ const isArrayLengthChildPath = (
   arrayPath.every((segment, index) => path[index] === segment);
 
 export { watchIdForEntry } from "./v2-watch.ts";
-export type { SessionFactory } from "./v2-remote-session.ts";
+export type { SessionConnection, SessionFactory } from "./v2-remote-session.ts";
 export {
   RemoteSessionFactory,
   storageAddressForHost,
@@ -432,6 +433,20 @@ const rejectionAttribution = (
   ],
 });
 
+/**
+ * Whether `rejection` refused a derived write for lack of a grant: an
+ * `AuthorizationError` the server did not mark retriable, of a transaction
+ * whose writes are derived from its reads. Such a write is kept locally rather
+ * than reverted, since the principal can compute it but never store it.
+ */
+const isRefusedDerivedWrite = (
+  rejection: StorageTransactionRejected,
+  source: IStorageTransaction | undefined,
+): boolean =>
+  source?.derivedWrites === true &&
+  rejection.name === "AuthorizationError" &&
+  (rejection as { retriable?: boolean }).retriable !== true;
+
 const activeCommitPreconditions = (
   preconditions: readonly CommitPrecondition[] | undefined,
 ): readonly CommitPrecondition[] =>
@@ -527,6 +542,13 @@ type PendingVersion =
   & {
     /** A sealed verdict already accepted this operation at the store seq. */
     acceptedSeq?: number;
+
+    /**
+     * Seq of the confirmed version this entry was layered on. While the
+     * confirmed seq still equals it, the entry sits directly on the value its
+     * writer read.
+     */
+    baseSeq: number;
   }
   & (
     | {
@@ -548,6 +570,14 @@ type PendingVersion =
 
 type ConfirmedVersion = MaterializedVersion & {
   seq: number;
+
+  /**
+   * Whether `value` is the store's value at `seq` with a derived write folded
+   * over it by this replica alone, because the space refused that write for
+   * lack of a grant. The store never held it: a frame at a later seq replaces
+   * it, and a write over it goes to the store whole rather than as a patch.
+   */
+  localFold?: true;
 
   /** Partial local promotion of a wave whose contributions share one seq.
    * An authoritative frame replaces this record, so same-seq delivery is
@@ -640,7 +670,8 @@ const pendingVersion = (
     | { op: "set"; value: EntityDocument }
     | { op: "patch"; patches: PatchOp[]; value: EntityDocument }
     | { op: "delete" },
-): PendingVersion => ({ localSeq, ...operation });
+  baseSeq: number,
+): PendingVersion => ({ localSeq, baseSeq, ...operation });
 
 const confirmedVersion = (
   seq: number,
@@ -1184,6 +1215,9 @@ export class StorageManager implements IStorageManager {
 
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
+
+  /** What `setSharedMemoryConnection()` last declared. */
+  #sharedMemoryConnection = false;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
 
@@ -1562,6 +1596,18 @@ export class StorageManager implements IStorageManager {
     };
   }
 
+  /** See `IStorageManager.setSharedMemoryConnection`. */
+  setSharedMemoryConnection(enabled: boolean): void {
+    if (enabled !== this.#sharedMemoryConnection && this.#providers.size > 0) {
+      throw new Error(
+        "setSharedMemoryConnection: a session is already open; changing " +
+          "the choice now would leave the sessions on two topologies",
+      );
+    }
+    this.#sharedMemoryConnection = enabled;
+    this.#sessionFactory.setSharedConnections?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {
@@ -1634,6 +1680,17 @@ export class StorageManager implements IStorageManager {
    */
   noteSpaceAclChanged(space: MemorySpace): void {
     this.#providers.get(space)?.noteAclChanged();
+  }
+
+  /** @inheritDoc */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    // Already-open providers only, as in `noteSpaceAclChanged()`: a space
+    // this manager has never opened has no refusal to retry.
+    const provider = this.#providers.get(space);
+    await provider?.retryAccess(() =>
+      this.#spaceAccessErrors.has(space) ||
+      provider.authorizationError() !== undefined
+    );
   }
 
   isContentAddressedDocPersisted(space: MemorySpace, hash: string): boolean {
@@ -1776,7 +1833,7 @@ export class StorageManager implements IStorageManager {
           : new Error("memory replica route replaced");
       }
     };
-    const activeClients = new Set<MemoryV2Client.Client>();
+    const activeClients = new Set<SessionConnection>();
     const closeActiveClients = (): void => {
       for (const client of activeClients) {
         void client.close().catch(() => {});
@@ -1969,6 +2026,9 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      // The providers have ended their sessions, so whatever connection the
+      // factory kept open for them has nothing left on it.
+      await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
@@ -1994,6 +2054,7 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
@@ -2013,9 +2074,19 @@ export class StorageManager implements IStorageManager {
 
   async pullOpenSpacesToHead(): Promise<void> {
     await Promise.all(
-      [...this.#providers.values()].map((provider) =>
-        provider.pullToServerHead()
-      ),
+      [...this.#providers.values()].map(async (provider) => {
+        try {
+          await provider.pullToServerHead();
+        } catch (error) {
+          // The server fans nothing out on a space it refuses this session,
+          // so a denied space has nothing to catch up on. The denial may be
+          // this round trip's own, arriving before the space records it.
+          if (
+            provider.authorizationError() === undefined &&
+            !MemoryV2Client.isPermanentAuthorizationError(error)
+          ) throw error;
+        }
+      }),
     );
   }
 
@@ -2838,7 +2909,7 @@ type ProviderRouteState = {
 };
 
 type OpenedSpaceSession = {
-  client: MemoryV2Client.Client;
+  client: SessionConnection;
   session: MemoryV2Client.SpaceSession;
 };
 
@@ -3358,6 +3429,38 @@ class Provider
     this.replica.noteAclChanged();
   }
 
+  /**
+   * Opens a session on this space again, as an ACL change would, when
+   * `refused()` says the memory server refused the last one, and then makes
+   * again the loads it refused for want of access. Resolves once the server
+   * has decided. A refusal is recorded where the first one was, and does not
+   * reject; any other failure, of the open or of a load, rejects, and leaves
+   * the refused loads to the next retry. A session that stands is not opened
+   * again, though loads it was refused are.
+   */
+  async retryAccess(refused: () => boolean): Promise<void> {
+    // An open already in flight may be decided on the access list as it
+    // stood before this call, so the retry waits for it before deciding
+    // anything.
+    await this.#followReplacement((replica) => replica.sessionSettled());
+    if (this.#destroyed) return;
+    // Arming the latch on a session that stands would remount it the next
+    // time some other verdict ended it.
+    if (refused()) {
+      this.replica.noteAclChanged();
+      try {
+        await this.ensureSession();
+      } catch (error) {
+        // The session's own failure path has recorded the refusal.
+        if (error instanceof Error && isPermanentAuthorizationFailure(error)) {
+          return;
+        }
+        throw error;
+      }
+    }
+    await this.#followReplacement((replica) => replica.repullRefused());
+  }
+
   listEntityIds(): Promise<string[] | undefined> {
     return this.#followReplacement((replica) => replica.listEntityIds());
   }
@@ -3582,17 +3685,17 @@ export class SpaceReplica
   #ownInstanceKeys: Map<string, string> | undefined;
 
   readonly #createSession: () => Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }>;
   #sessionHandle?: Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }>;
 
   /** The client of the last RESOLVED session handle — for synchronous
    *  capability reads (`sqliteServerCommitRowLabelEval`). */
-  #sessionClient?: MemoryV2Client.Client;
+  #sessionClient?: SessionConnection;
 
   /** The session of the last RESOLVED handle — read synchronously so
    *  `authorizationError()` can observe a denial that terminated the session
@@ -3600,11 +3703,23 @@ export class SpaceReplica
    *  to record. */
   #sessionSession?: MemoryV2Client.SpaceSession;
 
+  /**
+   * The loads the memory server refused this replica for want of access, by
+   * watch id, which `repullRefused()` makes again once a retry is admitted.
+   * Nothing else re-asks for them: a refused load leaves no selector behind
+   * to cover it, and its readers see no change to run again on.
+   */
+  readonly #refusedPulls = new Map<
+    string,
+    [WatchAddress, SchemaPathSelector]
+  >();
+
   /** THE SESSION REMOUNT's latch (see `noteAclChanged` /
    *  `#consumeOwedSessionRemount`): an admitted commit touched this space's
-   *  ACL doc, so the verdict a terminated session died of may have changed.
-   *  Cleared when the owed remount is consumed — or immediately, when there
-   *  is no memoized mount to replace. */
+   *  ACL doc, or a host retried the space, so the verdict a terminated
+   *  session died of may have changed. Cleared when the owed remount is
+   *  consumed — or immediately, when there is no memoized mount to
+   *  replace. */
   #aclChangedSinceMount = false;
 
   readonly #docs = new Map<string, DocumentRecord>();
@@ -4311,10 +4426,7 @@ export class SpaceReplica
    */
   #noteAuthorizationStatus(result: Result<Unit, PullError>): void {
     if (result.error) {
-      if (
-        result.error.name === "AuthorizationError" &&
-        (result.error as { retriable?: unknown }).retriable !== true
-      ) {
+      if (isPermanentAuthorizationFailure(result.error)) {
         this.#lastAuthorizationError = result.error as IAuthorizationError;
         this.#onAccessChange?.(
           authorizationErrorToThrow(this.#lastAuthorizationError),
@@ -4330,9 +4442,40 @@ export class SpaceReplica
   }
 
   /**
+   * Resolves once the session open in flight, if there is one, has been
+   * admitted or refused, and at once otherwise. Opens nothing.
+   */
+  async sessionSettled(): Promise<void> {
+    await this.#sessionHandle?.then(() => {}, () => {});
+  }
+
+  /**
+   * Makes again every load the memory server refused this replica for want
+   * of access, and resolves once they have been admitted or refused. A load
+   * stays recorded until a replay of it succeeds, so one refused again is
+   * kept for the next retry, and a replay that fails for any other reason
+   * rejects and keeps it too.
+   */
+  async repullRefused(): Promise<void> {
+    if (this.#refusedPulls.size === 0) return;
+    const replayed = [...this.#refusedPulls];
+    const result = await this.pull(replayed.map(([, entry]) => entry));
+    if (result.error) {
+      if (isPermanentAuthorizationFailure(result.error)) return;
+      throw Object.assign(new Error(result.error.message), {
+        name: result.error.name,
+      });
+    }
+    for (const [id, entry] of replayed) {
+      if (this.#refusedPulls.get(id) === entry) this.#refusedPulls.delete(id);
+    }
+  }
+
+  /**
    * THE SESSION REMOUNT's latch (the fifth face of profile starvation).
    *
-   * An admitted commit touched this space's ACL document, so the
+   * An admitted commit touched this space's ACL document, or a host that
+   * has word of a grant retried the space (`Provider.retryAccess()`), so the
    * AUTHORIZATION VERDICT that terminated this replica's session may have
    * changed. Record it; `#memoizedSessionHandle()` consumes it on the next
    * load.
@@ -4376,14 +4519,16 @@ export class SpaceReplica
    * written: "the convergence argument is sound, only the remount is
    * missing."
    *
-   * WHY AN ACL COMMIT IS THE ONLY TRIGGER. The verdict that killed the
+   * WHY ONLY WORD OF AN ACL CHANGE TRIGGERS IT. The verdict that killed the
    * session is a function of the space's ACL, so re-opening on any other
    * schedule re-runs a decision whose inputs have not changed — one doomed
    * round-trip per retry, exactly the cost `isTransientCommitRejection`
    * refuses to pay for `SessionError`. This is the space-root ensure's own
    * discipline for the very same boot order, one layer down: latch the owed
    * work at the fail-closed refusal, consume it when a commit touches
-   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`).
+   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`). A
+   * client sees no ACL commit for a space it was refused, so its word is a
+   * host's retry instead, one attempt per call.
    *
    * WHY IT CANNOT WIDEN AUTHORITY. This re-opens a session; it does not
    * decide one. `session.open` re-runs the server's full admission against
@@ -4442,8 +4587,9 @@ export class SpaceReplica
     // recorded (the reconnect case that never produced a watch result;
     // see `authorizationError`'s own note), `authorizationError()` reads
     // undefined between the remount arming and the next pull re-recording it.
-    // No serving-loop caller reads it in that window, and no CLIENT manager is
-    // ever notified at all (the host is the only caller). FLAGGED, not filled.
+    // No serving-loop caller reads it in that window. A retry acts only on a
+    // space whose refusal the manager's `spaceAccessError()` holds until an
+    // admitted open clears it, and `spaceAccess(target)` reads that first.
     this.#sessionSession = undefined;
     // The dead session's views. `terminateSession` already closed the
     // SESSION's own view; these are the replica's references to it, which a
@@ -4459,7 +4605,7 @@ export class SpaceReplica
     stale.then(({ client }) => client.close()).catch(() => {});
     sessionRemountLogger.warn("session-remount", () => [
       `space ${this.#space}: the memoized session was terminated by ` +
-      `${closeError.name} and a commit touched its ACL doc; remounting. ` +
+      `${closeError.name} and its ACL may have changed; remounting. ` +
       "A fresh session.open re-runs the server's admission against the " +
       "ACL as it now stands (OW31: a serving mount's READ decisions " +
       "resolve as the space's OWNER), so a genuine de-authorization is " +
@@ -5129,7 +5275,7 @@ export class SpaceReplica
     if (sessionHandle) {
       let resolved:
         | {
-          client: MemoryV2Client.Client;
+          client: SessionConnection;
           session: MemoryV2Client.SpaceSession;
         }
         | undefined;
@@ -5503,6 +5649,11 @@ export class SpaceReplica
       // and must not invalidate selectors whose fetch succeeded here.
       const result = await fetchPromise;
       if (result.error) {
+        if (isPermanentAuthorizationFailure(result.error)) {
+          for (const entry of newEntries) {
+            this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
+          }
+        }
         for (const [address, selector] of newEntries) {
           const baseAddress = {
             id: address.id,
@@ -5529,7 +5680,7 @@ export class SpaceReplica
     const preconditions = activeCommitPreconditions(transaction.preconditions);
     const operations = withCommitTiming(
       ["commitNative", "normalize"],
-      () => documentOperationsOf(transaction),
+      () => this.#wholeOverLocalFolds(documentOperationsOf(transaction)),
     );
 
     const sqliteOps = transaction.sqliteOps ?? [];
@@ -5584,7 +5735,10 @@ export class SpaceReplica
     },
   ): SealedNativeCommit {
     return this.#sealOperations(
-      documentOperationsOf(transaction),
+      this.#wholeOverLocalFolds(
+        documentOperationsOf(transaction),
+        options?.identity,
+      ),
       source,
       activeCommitPreconditions(transaction.preconditions),
       transaction.sqliteOps ?? [],
@@ -5614,13 +5768,18 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
+    const operations = this.#wholeOverLocalFolds(
+      documentOperationsOf(transaction),
+      identity,
+    );
     return {
-      operations: storeOperationsOf(
-        documentOperationsOf(transaction),
-        transaction.sqliteOps ?? [],
-      ),
+      operations: storeOperationsOf(operations, transaction.sqliteOps ?? []),
       preconditions: activeCommitPreconditions(transaction.preconditions),
-      reads: this.#buildReads(source, this.#nextLocalSeq, identity),
+      reads: this.#readsOverLocalFolds(
+        operations,
+        this.#buildReads(source, this.#nextLocalSeq, identity),
+        identity,
+      ),
     };
   }
 
@@ -5649,7 +5808,11 @@ export class SpaceReplica
     }
     const commit: ClientCommit = {
       localSeq,
-      reads: options?.reads ?? this.#buildReads(source, localSeq, identity),
+      reads: this.#readsOverLocalFolds(
+        operations,
+        options?.reads ?? this.#buildReads(source, localSeq, identity),
+        identity,
+      ),
       // Cell ops first, folded SQLite ops last — the same commit shape
       // commitOperations builds, so the wave batch is made of ordinary
       // client commits.
@@ -6300,7 +6463,10 @@ export class SpaceReplica
       ["commitOperations", "buildCommit"],
       (): ClientCommit => ({
         localSeq,
-        reads: this.#buildReads(source, localSeq),
+        reads: this.#readsOverLocalFolds(
+          operations,
+          this.#buildReads(source, localSeq),
+        ),
         // Cell ops first, folded SQLite ops last (applied in array order by the
         // engine; sqlite ops are not entity revisions and carry no id/scope).
         operations: storeOperationsOf(operations, sqliteOps),
@@ -7004,6 +7170,9 @@ export class SpaceReplica
         )
         : undefined;
       await this.#waitForConflictReadRepair(rejection);
+      if (isRefusedDerivedWrite(rejection, source)) {
+        this.#foldRefusedWrite(localSeq, touched, identity);
+      }
       this.#dropPending(localSeq);
       // Every drop funnels through here (server conflict, preempt, cascade,
       // reset — this is dropPending's only call site), so scanning right
@@ -7037,6 +7206,110 @@ export class SpaceReplica
     } finally {
       this.#rejectedPendingLayers.delete(localSeq);
       dropped.resolve();
+    }
+  }
+
+  /**
+   * Returns `operations` with each patch of a document whose confirmed value
+   * is a local fold turned into a whole-document set. The store's value
+   * differs from the one the patch was computed against, so only the whole
+   * document says what the write means.
+   */
+  #wholeOverLocalFolds(
+    operations: NativeCommitOperation[],
+    identity?: ScopeKeyIdentity,
+  ): NativeCommitOperation[] {
+    return operations.map((operation) => {
+      if (operation.op !== "patch") return operation;
+      const record = this.#docs.get(
+        docKey(operation.id, this.instanceKey(operation.scope, identity)),
+      );
+      if (record?.confirmed.localFold !== true) return operation;
+      const { patches: _patches, ...whole } = operation;
+      return { ...whole, op: "set" };
+    });
+  }
+
+  /**
+   * Returns `reads` with a read of the whole document added, at its confirmed
+   * seq, for each document `operations` writes whose confirmed value is a
+   * local fold. Such a write goes to the store whole, so it has to conflict
+   * with any change the store took to the document since, not only with
+   * changes to the paths its writer read; a read the commit already makes of
+   * the whole document at that seq is not repeated.
+   */
+  #readsOverLocalFolds(
+    operations: readonly NativeCommitOperation[],
+    reads: ClientCommit["reads"],
+    identity?: ScopeKeyIdentity,
+  ): ClientCommit["reads"] {
+    const added: ConfirmedCommitRead[] = [];
+    for (const operation of operations) {
+      const scope = normalizeCellScope(operation.scope);
+      const record = this.#docs.get(
+        docKey(operation.id, this.instanceKey(operation.scope, identity)),
+      );
+      if (record?.confirmed.localFold !== true) continue;
+      const seq = record.confirmed.seq;
+      const covered = [...reads.confirmed, ...added].some((read) =>
+        read.id === operation.id &&
+        normalizeCellScope(read.scope) === scope &&
+        read.path.length === 0 && read.nonRecursive !== true &&
+        read.seq === seq
+      );
+      if (!covered) {
+        added.push({
+          id: operation.id,
+          scope,
+          path: toCommitReadPath([]),
+          seq,
+        });
+      }
+    }
+    return added.length === 0
+      ? reads
+      : { ...reads, confirmed: [...reads.confirmed, ...added] };
+  }
+
+  /**
+   * Helper for `#finalizeRejection()`, which keeps the write of the refused
+   * commit `localSeq` as each touched document's confirmed value, marked as a
+   * local fold, instead of letting the drop revert it. A document is folded
+   * only where that write sits directly on the confirmed version it was made
+   * over, with no other pending write beneath it; the drop reverts the rest.
+   */
+  #foldRefusedWrite(
+    localSeq: number,
+    touched: readonly LocalDocAddress[],
+    identity?: ScopeKeyIdentity,
+  ): void {
+    for (const { id, scope, scopeKey } of touched) {
+      const record = this.#docs.get(
+        docKey(id, this.instanceKey(scope, identity, scopeKey)),
+      );
+      const entry = record?.pending[0];
+      if (
+        record === undefined || entry === undefined ||
+        entry.localSeq !== localSeq ||
+        entry.baseSeq !== record.confirmed.seq ||
+        record.confirmed.localWavePromotion !== undefined
+      ) {
+        continue;
+      }
+      record.confirmed = {
+        ...confirmedVersion(
+          record.confirmed.seq,
+          applyPendingVersion(record.confirmed.value, entry, {
+            space: this.#space,
+            id,
+            scope,
+          }),
+          record.confirmed.coverClass,
+        ),
+        localFold: true,
+      };
+      record.pending = record.pending.slice(1);
+      record.materialized = undefined;
     }
   }
 
@@ -7775,6 +8048,11 @@ export class SpaceReplica
       if (upsert.seq < record.confirmed.seq) {
         continue;
       }
+      // A same-seq frame is the value a local fold was made over, so the
+      // fold stands until the store moves on; the frame is still recorded as
+      // delivered below.
+      const keepsLocalFold = upsert.seq === record.confirmed.seq &&
+        record.confirmed.localFold === true;
       const previousConfirmedSeq = record.confirmed.seq;
       const previousCoverClass = record.confirmed.coverClass;
       // The covering commit's class (speculation.md §4's arrival-witness
@@ -7786,12 +8064,14 @@ export class SpaceReplica
       // commit — the stale class must not ride onto it.
       const coverClass = upsert.coverClass ??
         (upsert.seq === previousConfirmedSeq ? previousCoverClass : undefined);
-      record.confirmed = confirmedVersion(
-        upsert.seq,
-        upsert.deleted === true ? undefined : upsert.doc,
-        coverClass,
-      );
-      record.materialized = undefined;
+      if (!keepsLocalFold) {
+        record.confirmed = confirmedVersion(
+          upsert.seq,
+          upsert.deleted === true ? undefined : upsert.doc,
+          coverClass,
+        );
+        record.materialized = undefined;
+      }
       // The arrival wake fires on a FORWARD move — and on a same-seq
       // frame whose class arrives LATE (undefined -> defined): an entry
       // failed CLOSED at its floor under an unknown class (a mixed-window
@@ -8414,7 +8694,9 @@ export class SpaceReplica
   ): void {
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
-    record.pending.push(pendingVersion(localSeq, pending));
+    record.pending.push(
+      pendingVersion(localSeq, pending, record.confirmed.seq),
+    );
   }
 
   /**
@@ -9107,7 +9389,7 @@ export class SpaceReplica
   }
 
   #memoizedSessionHandle(): Promise<{
-    client: MemoryV2Client.Client;
+    client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
   }> {
     if (this.#closed) {
@@ -9169,8 +9451,7 @@ export class SpaceReplica
           this.#sessionHandle = undefined;
           if (
             !this.#closed && error instanceof Error &&
-            error.name === "AuthorizationError" &&
-            (error as { retriable?: unknown }).retriable !== true
+            isPermanentAuthorizationFailure(error)
           ) this.#onAccessChange?.(error);
         }
         throw error;
@@ -9213,6 +9494,15 @@ const toConnectionError = (error: unknown): IConnectionError =>
       code: 500,
     },
   }) as IConnectionError;
+
+/**
+ * Returns whether `error` is an `AuthorizationError` the memory server did not
+ * mark retriable, which is the denial a retry cannot heal until the access
+ * list changes.
+ */
+const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
+  error.name === "AuthorizationError" &&
+  (error as { retriable?: unknown }).retriable !== true;
 
 // Preserve a real AuthorizationError (name, message, and the server's retriable
 // marker) instead of flattening it to a generic ConnectionError, so a caller can

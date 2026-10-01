@@ -480,6 +480,21 @@ also runs *before* the OWNER capability check on the same commit, so a
 malformed ACL write reports `ProtocolError` even from a principal that has no
 OWNER capability at all.
 
+The capability check that follows requires OWNER for an ACL mutation, with one
+exception: a member may remove its own entry. A session principal without OWNER
+is admitted for a mutation whose document is exactly the stored ACL document
+less that principal's own entry, every other entry and every other document
+field as stored. Nothing else passes under it: not an added entry, not a change
+to another entry's level, not a promotion, not a removal of anyone else's
+entry. It is refused when the stored list has a `"*"` entry, under which the
+principal would keep what that entry grants, and when the stored list has no
+entry for the principal. The exception is computed from the server's own
+state, never from anything the client supplies, and holds in `observe` and
+`enforce` alike; a refused one is an `AuthorizationError`, like any other
+shortfall of OWNER. A space's last concrete OWNER cannot leave this way, since
+the result must keep a concrete OWNER; it holds OWNER, so it may instead make
+another member OWNER, and then leave, through the ordinary check.
+
 On the whole-document clause specifically, one mechanical observation is
 available and no stated rationale is: the validity clause inspects
 `operation.value?.value` — the document the operation itself carries — and of
@@ -497,7 +512,22 @@ Layer: server admission (`#validateAclCommit` in
 `grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
 satisfies the rule by addressing the whole document at path `[]` — a write
 through the ordinary value surface decomposes into per-key `op: "patch"`
-details and is refused).
+details and is refused). The self-removal exception to the capability check
+is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
+the client that sends one.
+
+The served plane has no writer of the ACL document, and refuses one outright,
+in every mode, `off` included. A serving wave commits engine-direct, so
+`#validateAclCommit` never sees its commits, and neither its `derived` lease
+admission nor its foreign batches' delegated admission checks this rule or
+the acting user's level. So the wave's seal refuses a run that writes
+`of:<space>` of any space, failing that run alone
+(`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
+refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
+and the wave sink refuses a foreign batch carrying one
+(`packages/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
+the run is in
+[`serving-loop.md` §3d](../server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave).
 
 Soundness direction: none — an exact admission predicate, with a real cost on
 each side. Over-rejection is not merely a retry: a client that cannot produce
@@ -513,9 +543,18 @@ preserve a concrete owner" (rejects `delete`, `patch`, `scope: "user"`, and
 empty / wildcard-only-owner / downgraded-owner / invalid-capability values) and
 "ACL mutations are default-branch ACL-only commits" (rejects a non-default
 branch and a mixed ACL+data commit, asserting the data operation did not land).
+The self-removal exception: "a principal without `OWNER` removing its own
+entry" in the same file (admits a READ or WRITE member's own removal, in
+`observe` too; refuses one that also removes, changes or adds another entry,
+adds a document field, keeps its own entry at another level, removes someone
+else's entry, or is sent under a `"*"` entry).
 Client side, `packages/runner/test/memory-v2-acl-mutation.test.ts` asserts the
 emitted operation *shape and count* against a real server, not just the
-resulting value.
+resulting value. Served plane,
+`packages/runner/test/executor-acl-document-write.test.ts` drives a served
+handler's cell-shaped and whole-document writes under `off` and `enforce`,
+and `packages/runner/test/executor-wave.test.ts` hands the engine and the
+sink batches built directly, past the seal.
 
 ### INV-13 — ACL genesis precedence and authority
 

@@ -2,7 +2,7 @@ import type { SpaceAccessLevel } from "@commonfabric/api";
 import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
-import { type Cell, isCell } from "../cell.ts";
+import { type Cell, unwrapCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
@@ -102,15 +102,22 @@ export function spaceAccess(
  * @throws Error when `target` is not a cell.
  */
 export function spaceOfTarget(target: unknown, call: string): MemorySpace {
-  let cell: Cell<unknown>;
-  if (isCell(target)) {
-    cell = target;
-  } else if (isCellResult(target)) {
-    cell = getCellOrThrow(target);
-  } else {
-    throw new Error(`\`${call}\` takes a cell as its target.`);
-  }
-  return cell.resolveAsCell().getAsNormalizedFullLink().space;
+  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink()
+    .space;
+}
+
+/**
+ * Returns the cell `target` is, whether pattern code holds it as a cell, as a
+ * `Reactive` proxy over a whole cell, or as the value a cell's query-result
+ * proxy reads as. `call` names the call `target` was passed to, for the error.
+ *
+ * @throws Error when `target` is not a cell.
+ */
+export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
+  const cell = unwrapCell(target);
+  if (cell !== undefined) return cell;
+  if (isCellResult(target)) return getCellOrThrow(target);
+  throw new Error(`\`${call}\` takes a cell as its target.`);
 }
 
 /**

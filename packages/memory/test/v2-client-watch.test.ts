@@ -308,6 +308,10 @@ Deno.test("memory v2 session closed mid-watch-set arms no ack timer", async () =
       if (payload.includes('"session.watch.set"')) {
         setRequestId = /"requestId":"([^"]+)"/.exec(payload)?.[1] ?? null;
       }
+      // The response to the close's own `session.close` would arm the
+      // loopback's delivery turn, which is a timer and not the one under
+      // observation, so that request stops here.
+      if (payload.includes('"session.close"')) return Promise.resolve();
       return inner.send(payload);
     },
     close: () => inner.close(),

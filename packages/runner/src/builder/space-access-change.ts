@@ -171,6 +171,8 @@ function stageChange(
     );
   }
   if (runtime.servingPosture) {
+    // TODO(danfuzz): Carry the change through the wave instead, once the
+    // commit carrying a served change checks the actor's level in the space.
     throw new Error(
       `\`${call}\` is not available on a serving runtime, which cannot yet ` +
         "check that the event's actor holds `OWNER` in the space.",

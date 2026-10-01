@@ -106,7 +106,11 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
+import {
+  type DelegatedCarriage,
+  waveRunActorOf,
+  waveRunContextOf,
+} from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -377,6 +381,18 @@ export interface ExperimentalOptions {
 
   /** Web client override; an explicit value takes precedence over the default. */
   webViewScopedReplication?: boolean | undefined;
+
+  /**
+   * The memory sessions of every space on one host share one connection,
+   * which each key authenticates on once
+   * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
+   * space has a connection of its own, named in the connection's address,
+   * and every `session.open` is signed. A memory server under this flag
+   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
+   * off: a deployment that routes a connection by the space its address
+   * names cannot serve a connection that carries several.
+   */
+  sharedMemoryConnection?: boolean | undefined;
 }
 
 /**
@@ -1904,6 +1920,11 @@ export class Runtime {
       (this.storageManager as {
         setTelemetry?: (telemetry: RuntimeTelemetry) => void;
       }).setTelemetry?.(this.telemetry);
+      // Declared before any session opens, since the choice is made per
+      // session as it is created.
+      this.storageManager.setSharedMemoryConnection?.(
+        this.experimental.sharedMemoryConnection === true,
+      );
       this.moduleByteCache = options.moduleByteCache;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
@@ -4209,10 +4230,7 @@ export class Runtime {
    */
   actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
     if (!this.servingPosture) return this.userIdentityDID;
-    const user = tx === undefined
-      ? undefined
-      : waveRunContextOf(tx)?.acting?.user;
-    return isDID(user) ? user : undefined;
+    return tx === undefined ? undefined : waveRunActorOf(tx);
   }
 
   getHomeSpaceCell(
@@ -4307,6 +4325,20 @@ export class Runtime {
     } finally {
       tx.abort();
     }
+  }
+
+  /**
+   * Asks the memory server once more for `space`, if it refused this
+   * runtime's session there, and resolves once it has decided. An admission
+   * runs again every computation whose `spaceAccess(target)` answer turned on
+   * the refusal, and repeats the loads the refusal failed; a refusal leaves
+   * the space refused. It is for a host that has reason to think the verdict
+   * changed, and does nothing for a space this runtime has not opened. It
+   * rejects on any failure other than a refusal. See
+   * `IStorageManager.retrySpaceAccess()`.
+   */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    await this.storageManager.retrySpaceAccess?.(space);
   }
 
   /**

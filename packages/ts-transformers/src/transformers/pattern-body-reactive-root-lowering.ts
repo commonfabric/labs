@@ -169,6 +169,28 @@ export function reportComputationError(
   });
 }
 
+/**
+ * Reports a spread the pattern context cannot lower, at most once per spread.
+ * Two stages can report one spread: the closure stage, for a capture a
+ * reactive collection callback cannot write out (`captured-object-spread.ts`),
+ * and this stage's pattern-context check, when the operand is a tracked
+ * opaque value. Both report through here, under their own messages, and the
+ * earlier report stands. Only spread reports share the key, so any other
+ * computation error on the same range is still made.
+ */
+export function reportSpreadError(
+  context: TransformationContext,
+  spread: ts.Node,
+  message: string,
+): void {
+  context.reportDiagnosticOnce({
+    severity: "error",
+    type: "pattern-context:computation",
+    message,
+    node: spread,
+  });
+}
+
 function reportReceiverMethodError(
   context: TransformationContext,
   node: ts.Node,
@@ -292,7 +314,7 @@ function rewriteTrackedOpaquePatternBody(
   };
   const reportOnce = (
     node: ts.Node,
-    type: "computation" | "receiver-method",
+    type: "computation" | "spread" | "receiver-method",
     message: string,
   ): void => {
     const diagnosticNode = resolveDiagnosticNode(node);
@@ -306,6 +328,8 @@ function rewriteTrackedOpaquePatternBody(
     }
     if (type === "computation") {
       reportComputationError(context, diagnosticNode, message);
+    } else if (type === "spread") {
+      reportSpreadError(context, diagnosticNode, message);
     } else {
       reportReceiverMethodError(context, diagnosticNode, message);
     }
@@ -446,12 +470,13 @@ function rewriteTrackedOpaquePatternBody(
     expression: ts.Expression | undefined,
     diagnosticNode: ts.Node,
     message: string,
+    type: "computation" | "spread" = "computation",
   ): void => {
     if (!expression || !getTrackedOpaqueAccessInfo(expression)) {
       return;
     }
 
-    reportOnce(diagnosticNode, "computation", message);
+    reportOnce(diagnosticNode, type, message);
   };
 
   const registerOpaqueBindingState = (
@@ -971,6 +996,7 @@ function rewriteTrackedOpaquePatternBody(
         visited.expression,
         visited,
         "Spread traversal of opaque pattern values is not lowerable. Move this expression into computed().",
+        "spread",
       );
     }
 

@@ -1167,8 +1167,11 @@ What remains live here:
   trigger-read set: the addresses whose changes made this node invalid.
   Consumed into the run's transaction at start (`addCfcTriggerReads`),
   restored on retry (commit rejection / RetryImmediately) because the retry
-  still exists because of them. Self-suppressed changes (P5) never enter
-  `invalidCauses` — a change that did not cause scheduling must not taint it.
+  still exists because of them. On a fanned-out node the restore dirties no
+  instance: the causes dirtied the instances they cover when they arrived,
+  the retry dirties only the retried instance, and its siblings stay current.
+  Self-suppressed changes (P5) never enter `invalidCauses` — a change that
+  did not cause scheduling must not taint it.
 - **`attemptedWrites`** remain CFC prepare/digest evidence only — never
   dependency or scheduling evidence. Reads marked as attempted writes retain
   that evidence when they are ignored for scheduling, including no-op writes.

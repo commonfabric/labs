@@ -276,8 +276,9 @@ Normative behavior:
    member. Each member's claim is stamped with its module identity where the
    list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
    stamp admits no writer, as a stored lone claim with none does.
-5. An `AuthoredByCurrentUser` label beside it requires every member to name a
-   contract, so every write the position admits carries a reviewed gesture.
+5. An `AuthoredByCurrentUser` label beside it needs nothing more of the list:
+   every member names a writer, which is what a claim about the current
+   principal requires, and a member naming a contract keeps its gesture.
 
 ## Pipeline Contract
 

@@ -1247,7 +1247,9 @@ different policy, and avoid cell-backed `$author` for purely decorative author
 names.
 
 The component itself checks its value's `authored-by` against the same
-principal, and marks the content verified when they match. When either check
+principal, and marks the content verified when they match. Verified means
+that a run acting for that principal wrote the content, not that they asked
+for it. When either check
 matches a principal claim, it reads the atom only as the object the runtime
 writes, `{ kind, subject }`, taking the subject exactly as written and ignoring
 any other field; a `represents-principal` subject counts only when it is a

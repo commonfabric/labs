@@ -28,6 +28,8 @@
 // Phase 1 stage F. The machinery lands dark, exercised by tests.
 
 import type { CellScope } from "@commonfabric/api";
+import { type DID, isDID } from "@commonfabric/identity/did";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type CommitPrecondition,
   type ConfirmedRead,
@@ -61,6 +63,7 @@ import type {
 import { parsePointer, pathsOverlap } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { ACL_DOCUMENT_WRITE_REFUSED } from "../scheduler/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
 import {
   getTransactionReadActivities,
@@ -344,6 +347,19 @@ export function waveRunContextOf(
 }
 
 /**
+ * Returns the actor a served run on `tx` acts for: the user its stamped run
+ * context carries, when that is a DID. `undefined` for a run stamped with no
+ * actor, and for a transaction the serving loop did not stamp, which
+ * `waveRunContextOf()` tells apart.
+ */
+export function waveRunActorOf(
+  tx: IExtendedStorageTransaction,
+): DID | undefined {
+  const user = waveRunContextOf(tx)?.acting?.user;
+  return isDID(user) ? user : undefined;
+}
+
+/**
  * A delegated carriage (protocol.md §2b): the acting identity a write crossing
  * into another space is made for, and the grant it is admitted under.
  */
@@ -483,10 +499,13 @@ export interface WaveSpaceCommit {
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];
 
-  /** Owning contribution index per operation — home batch only. The sink
-   * returns the failed operation for a proven-no-commit row-label refusal,
-   * letting the accumulator identify the one event whose deterministic write
-   * was refused without terminalizing unrelated events in the same wave. */
+  /**
+   * Owning contribution index per operation — home batch only. The sink
+   * returns the failed operation for a proven-no-commit row-label refusal or
+   * ACL-document refusal, letting the accumulator identify the one event
+   * whose deterministic write was refused without terminalizing unrelated
+   * events in the same wave.
+   */
   operationOwners?: number[];
 
   annotations: WaveWriteAnnotation[];
@@ -537,6 +556,20 @@ export interface WaveSpaceCommit {
 }
 
 /**
+ * Whether `error` is the seal's refusal of a transaction that writes a space's
+ * ACL document, carried as the `reason` Error's message, the sentinel
+ * `ACL_DOCUMENT_WRITE_REFUSED`.
+ */
+export function isAclDocumentWriteRefusal(
+  error: unknown,
+): error is { readonly message: string; readonly reason: Error } {
+  const reason = (error as { reason?: unknown } | undefined)?.reason;
+  return reason instanceof Error &&
+    reason.message === ACL_DOCUMENT_WRITE_REFUSED &&
+    typeof (error as { message?: unknown }).message === "string";
+}
+
+/**
  * Why the sink refused a wave commit. `conflictedDocs` names doc-instance
  * keys whose head moved past the wave's basis after the accumulator's own
  * head query — the race window the resolve loop closes;
@@ -544,12 +577,18 @@ export interface WaveSpaceCommit {
  * array. A rejection naming neither is terminal for the wave.
  */
 export interface WaveCommitRejection {
-  name: "WaveCommitRejected" | "RowLabelCommitError";
+  name:
+    | "WaveCommitRejected"
+    | "RowLabelCommitError"
+    | "AclDocumentWriteRefused";
   message: string;
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
 
-  /** Operation index for a deterministic RowLabelCommitError. */
+  /**
+   * Operation index for a deterministic `RowLabelCommitError` or
+   * `AclDocumentWriteRefused`.
+   */
   failedOperation?: number;
 }
 
@@ -1383,9 +1422,22 @@ export class WaveAccumulator
    * have gone consequenced-clean in the committed wave; the serving
    * loop's pre-commit seal-chain barrier is what keeps this arm
    * unreachable in production.
+   *
+   * `error` is the seal's refusal, when the caller has it. A refusal of a
+   * write to a space's ACL document by a run delivering a durable entry
+   * (one whose context carries its `streamEntry`) notes nothing: the refusal
+   * is deterministic, the scheduler seals it as that entry's error
+   * consequence, and a replay would reach the identical refusal. The same
+   * refusal of an in-process run, which has no entry to carry the error,
+   * requeues its event like any other failed seal.
    */
-  noteSealFailure(context: WaveRunContext | undefined): void {
+  noteSealFailure(context: WaveRunContext | undefined, error?: unknown): void {
     if (context?.kind !== "event-handler" || context.eventId === undefined) {
+      return;
+    }
+    if (
+      isAclDocumentWriteRefusal(error) && context.streamEntry !== undefined
+    ) {
       return;
     }
     if (this.#closed) {
@@ -1539,6 +1591,28 @@ export class WaveAccumulator
           name: "StorageTransactionAborted",
           message: "sealSpaceCommit outside a seal() call",
           reason: new Error("seal-out-of-order"),
+        },
+      };
+    }
+    // No run on the served plane writes a space's ACL document, home or
+    // foreign, in any memory ACL mode: nothing here checks INV-12's shape or
+    // the acting user's level, and the engine-direct commit skips the memory
+    // server's check (09-invariants.md, INV-12). Refusing at the seal fails
+    // only this run; `noteSealFailure()` says what happens to its event.
+    const aclId = aclDocId(space);
+    if (native.operations.some((operation) => operation.id === aclId)) {
+      const actionId = assembly.context?.actionId;
+      logger.warn("acl-document-write-refused", () => [
+        `access-list write refused at wave accumulation: action ` +
+        `${actionId ?? "<unstamped>"} attempted to write ${aclId}`,
+      ]);
+      return {
+        error: {
+          name: "StorageTransactionAborted",
+          message: `${aclId} is the space ACL document, and no run on the ` +
+            `served plane may write it: action ` +
+            `${actionId ?? "<unstamped>"} attempted to (INV-12)`,
+          reason: new Error(ACL_DOCUMENT_WRITE_REFUSED),
         },
       };
     }
@@ -2408,8 +2482,12 @@ export class WaveAccumulator
               : { kind: "dropped" };
         }
         this.#reportRequeuedEvents(outcome, () => true);
+        // A deterministic refusal naming its operation terminalizes the
+        // one event that wrote it; replaying it would reach the identical
+        // refusal.
         if (
-          rejection.name === "RowLabelCommitError" &&
+          (rejection.name === "RowLabelCommitError" ||
+            rejection.name === "AclDocumentWriteRefused") &&
           Number.isInteger(rejection.failedOperation)
         ) {
           const owner = batch.operationOwners?.[rejection.failedOperation!];
@@ -2435,7 +2513,9 @@ export class WaveAccumulator
               eventId: context.eventId,
               streamEntry,
               failureClass: "protocol",
-              recoveryEpoch: "row-label-verdict",
+              recoveryEpoch: rejection.name === "RowLabelCommitError"
+                ? "row-label-verdict"
+                : "acl-document-write",
               permanentEvidence: true,
             });
           }

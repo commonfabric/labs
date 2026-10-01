@@ -32,6 +32,7 @@
 import { Identity } from "@commonfabric/identity";
 
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
+import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import {
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
@@ -123,7 +124,13 @@ export class StandaloneMemoryServer {
       acl?: {
         mode: MemoryServer.MemoryAclMode;
         serviceDids?: readonly string[];
+        delegatingDids?: readonly string[];
       };
+
+      /** Whether the server verifies `connection.auth`, and so advertises
+       *  `connectionAuth`. Default: it does not, and every `session.open`
+       *  is signed. */
+      connectionAuth?: boolean;
 
       /** Answers the non-websocket requests this address receives. Anything
        *  it declines, by answering `undefined`, is told to upgrade. */
@@ -134,6 +141,9 @@ export class StandaloneMemoryServer {
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
       authorizeSessionOpen,
+      ...(options.connectionAuth === true
+        ? { authorizeConnection: verifyConnectionAuthorization }
+        : {}),
       sessionOpenAuth: {
         audience: standaloneMemoryAudience,
       },
@@ -226,7 +236,7 @@ export class StandaloneMemoryServer {
           return;
         }
         if (closed) return;
-        channel.receive(frame, async (payload) => {
+        channel.receive(frame, (payload) => {
           const control = parseMemoryCompressionControlMessage(payload);
           if (control && helloReceived) {
             const enabled = compressionNegotiated && control.enabled;
@@ -237,7 +247,11 @@ export class StandaloneMemoryServer {
             }));
             return;
           }
-          await connection.receive(payload);
+          // The connection takes the frame's place in its turn order as it
+          // is handed over, so the handling is not waited for: waiting would
+          // hold every later frame behind this one, whichever spaces they
+          // name.
+          connection.receive(payload).catch(failChannel);
           if (debugWrites) {
             logCommitOperations(connectionTag, payload);
           }

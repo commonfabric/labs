@@ -3,6 +3,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { resolveEntryIdentity } from "../src/harness/entry-identity.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 
 const ENTRY = "export default 1;\n";
@@ -38,6 +39,93 @@ function get(path: string, headers: Record<string, string> = {}): Request {
 }
 
 describe("PatternsRoute", () => {
+  it("includes requested source roots in the identity and cache key", async () => {
+    const files = {
+      "main.tsx": ENTRY,
+      "attached.ts": IMPORTER,
+      "leaf.ts": ENTRY,
+    };
+    await withRoute(files, async (route) => {
+      const entry = await route.identity("main.tsx");
+      const complete = await route.serve(
+        get(
+          "/api/patterns/main.tsx?identity&sourceRoot=/api/patterns/attached.ts",
+        ),
+      );
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        (name) => route.getText(name.slice("/api/patterns/".length)),
+        { sourceRoots: ["/api/patterns/attached.ts"] },
+      );
+      expect(complete?.status).toBe(200);
+      expect(await complete?.text()).toBe(expected);
+      expect(expected).not.toBe(entry);
+      expect(await route.identity("main.tsx")).toBe(entry);
+    });
+  });
+
+  it("preserves encoded source-root names in the complete identity", async () => {
+    await withRoute({
+      "main.tsx": ENTRY,
+      "foo bar.ts": IMPORTER,
+      "leaf.ts": ENTRY,
+    }, async (route) => {
+      const root = "/api/patterns/foo%20bar.ts";
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      url.searchParams.append("sourceRoot", root);
+      const response = await route.serve(new Request(url));
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        async (name) => {
+          const source = await route.serve(get(name));
+          expect(source?.status).toBe(200);
+          return await source!.text();
+        },
+        { sourceRoots: [root] },
+      );
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe(expected);
+    });
+  });
+
+  it("rejects attached roots outside the patterns route", async () => {
+    await withRoute({ "main.tsx": ENTRY }, async (route) => {
+      for (
+        const path of [
+          "/etc/passwd",
+          "/api/patterns/../secret.ts",
+          "file:///secret.ts",
+          "/api/patterns/%2e%2e/secret.ts",
+          "/api/patterns/..%2fsecret.ts",
+          "/api/patterns/%252e%252e/secret.ts",
+          "/api/patterns/%5csecret.ts",
+          "/api/patterns/%00secret.ts",
+          "/api/patterns/%",
+        ]
+      ) {
+        const url = new URL(
+          "https://host.invalid/api/patterns/main.tsx?identity",
+        );
+        url.searchParams.append("sourceRoot", path);
+        expect((await route.serve(new Request(url)))?.status).toBe(400);
+      }
+    });
+  });
+
+  it("bounds the number of attached roots an identity request can name", async () => {
+    await withRoute({ "main.tsx": ENTRY }, async (route) => {
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      for (let index = 0; index < 33; index++) {
+        url.searchParams.append("sourceRoot", `/api/patterns/root-${index}.ts`);
+      }
+      expect((await route.serve(new Request(url)))?.status).toBe(400);
+    });
+  });
+
   it("serves a file's source under the patterns route", async () => {
     await withRoute({ "system/main.tsx": ENTRY }, async (route) => {
       const response = await route.serve(get("/api/patterns/system/main.tsx"));

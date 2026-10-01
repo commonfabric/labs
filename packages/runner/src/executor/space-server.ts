@@ -2114,8 +2114,10 @@ export class SpaceServer implements TransactionSealDestination {
           // with the intent lost. Noted INSIDE the seal chain, so the
           // flush's pre-commit `await #sealChain` barrier guarantees
           // the mark precedes commitWave. Non-event contexts note
-          // nothing (noteSealFailure filters).
-          wave.noteSealFailure(waveRunContextOf(tx));
+          // nothing (noteSealFailure filters, and it also leaves out a
+          // durable entry's ACL-document refusal, whose consequence is the
+          // error the scheduler seals for it).
+          wave.noteSealFailure(waveRunContextOf(tx), result.error);
         } else {
           // The drain's in-flight guard: an ACCEPTED event-handler seal
           // for a drained copy means its consequence mark now rides an

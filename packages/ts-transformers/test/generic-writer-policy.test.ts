@@ -112,6 +112,46 @@ export default ${
       });
     }
 
+    it(`keeps collapsed writer alternatives through a generic member in the ${position} schema`, async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const output = await transformSource(
+        `import { handler, pattern, WriteAuthorizedBy } from "commonfabric";
+const f = handler<void, {}>(() => {});
+const g: typeof f = handler<void, {}>(() => {});
+interface Box<T> { value: T }
+type Payload = Box<WriteAuthorizedBy<string, typeof f> | WriteAuthorizedBy<string, typeof g>>;
+export default ${
+          position === "input"
+            ? "pattern<Payload>(() => ({}))"
+            : "pattern<{}, Payload>(() => ({} as Payload))"
+        };`,
+        {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        },
+      );
+      expect(diagnostics.filter((item) => item.severity === "error")).toEqual(
+        [],
+      );
+      const schema = patternSchemas(
+        parseModule(output),
+      )[position] as JSONSchemaObj;
+      const root = valueSchema(schema, schema);
+      const value = root.properties?.value as JSONSchemaObj;
+      expect(value.anyOf).toHaveLength(2);
+      expect(
+        value.anyOf?.map((branch) => {
+          const alternative = valueSchema(branch, schema);
+          expect(alternative.type).toBe("string");
+          return alternative.ifc?.writeAuthorizedBy;
+        }),
+      ).toEqual([
+        { __ctWriterIdentityOf: expect.objectContaining({ path: ["f"] }) },
+        { __ctWriterIdentityOf: expect.objectContaining({ path: ["g"] }) },
+      ]);
+    });
+
     for (
       const [name, declarations, spelling, field] of [
         ["a direct member", "", "{ value: POLICY }", "value"],

@@ -750,6 +750,115 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       cancel();
     }
   });
+
+  it("stops re-running an instance whose seal is always refused, and leaves its sibling instance current", async () => {
+    // Alice's retries carry the causes her failed run consumed, and leave
+    // bob's instance current. Were they to re-run bob, each of his commits
+    // would reset the retry budget the two instances share, and alice's
+    // retries would never stop.
+
+    const rootId = "of:p2f-refused-seal-root";
+    const userDoc = runtime.getCellFromLink<{ v?: number }>({
+      space,
+      id: "of:p2f-refused-seal-user-doc" as never,
+      scope: "user",
+      path: [],
+    });
+    const spaceDoc = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-refused-seal-space-doc" as never,
+      scope: "space",
+      path: [],
+    });
+    const output = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-refused-seal-output" as never,
+      scope: "user",
+      path: [],
+    });
+    // Once `refuseAlice` is set, alice's seals are refused, the way a wave
+    // refuses a write its acting identity holds no grant for, and bob's
+    // commit. A refusal settles after the commits sealed before it, as a
+    // wave's seals settle in the order they sealed.
+    let refuseAlice = false;
+    let committed: Promise<unknown> = Promise.resolve();
+    runtime.installSealDestination({
+      seal: (tx: IExtendedStorageTransaction) => {
+        if (
+          refuseAlice &&
+          waveRunContextOf(tx)?.scopeKeyIdentity?.principal === alice.principal
+        ) {
+          const reason = new Error("write refused for alice");
+          tx.tx.abort(reason);
+          return committed.then(() => ({
+            error: {
+              name: "StorageTransactionAborted",
+              message: "write refused for alice",
+              reason,
+            },
+          }));
+        }
+        const result = tx.tx.commit();
+        committed = result;
+        return result;
+      },
+    }, {
+      runStamper: recordingStamper,
+      runDemanderResolver: (pieceRootIds) =>
+        pieceRootIds.includes(rootId) ? [alice, bob] : [],
+    });
+    const runs = { alice: 0, bob: 0 };
+    let writes = 0;
+    const overBudget = Promise.withResolvers<"over budget">();
+    const action = Object.assign(
+      (tx: IExtendedStorageTransaction) => {
+        userDoc.withTx(tx).get();
+        // Every run writes a value of its own, so that every commit of bob's
+        // carries a write.
+        writes += 1;
+        output.withTx(tx).set((spaceDoc.withTx(tx).get() ?? 0) * 1000 + writes);
+        const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
+        if (principal === alice.principal) {
+          runs.alice += 1;
+          if (runs.alice > 4 * MAX_RETRIES_FOR_REACTIVE) {
+            overBudget.resolve("over budget");
+          }
+        } else if (principal === bob.principal) {
+          runs.bob += 1;
+        }
+      },
+      {
+        schedulerObservationIdentity: {
+          pieceId: `space:${rootId}`,
+          pieceRootId: rootId,
+        },
+      },
+    );
+    const cancel = runtime.scheduler.register(action, undefined, {
+      isEffect: true,
+    });
+    try {
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toEqual({ alice: 1, bob: 1 });
+
+      // A write to a space document both instances read dirties both.
+      refuseAlice = true;
+      await runtime.editWithRetry((tx) => spaceDoc.withTx(tx).set(1));
+      expect(
+        await Promise.race([
+          runtime.scheduler.idleWithPendingCommits().then(() => "idle"),
+          overBudget.promise,
+        ]),
+      ).toBe("idle");
+      // Bob ran once more, for the write. Alice ran for the write and then
+      // through her retry budget, which bob's one commit reset once.
+      expect(runs.bob).toBe(2);
+      expect(runs.alice - 1).toBeGreaterThanOrEqual(MAX_RETRIES_FOR_REACTIVE);
+      expect(runs.alice - 1).toBeLessThanOrEqual(MAX_RETRIES_FOR_REACTIVE + 1);
+    } finally {
+      cancel();
+    }
+  });
 });
 
 // F1 (RULED 2026-08-13, option c): the piece-start setup commit's

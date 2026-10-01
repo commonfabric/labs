@@ -21,7 +21,9 @@ rewrite. In particular:
   remains deferred for this pass
 - the toolshed v2 websocket route requires a signed `session.open`
   invocation whose subject, challenge, audience, and session descriptor match
-  the current request
+  the current request, or, where the server advertises `connectionAuth`, a
+  `session.open` naming a principal a signed `connection.auth` authenticated
+  on the same connection
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
@@ -60,7 +62,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
-    "presenceV1": true
+    "presenceV1": true,
+    "sessionClose": true
   }
 }
 ```
@@ -82,7 +85,8 @@ If the server accepts the protocol, it returns:
     "entityIdLookup": true,
     "sessionHoldings": true,
     "sessionReadCeiling": true,
-    "presenceV1": true
+    "presenceV1": true,
+    "sessionClose": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -274,6 +278,20 @@ commands and the `presence/upsert` and `presence/remove` pushes of section
 connected to an older server does not send a presence message, and reports
 presence as unavailable to whatever asked for it.
 
+`sessionClose` advertises that the server ends one session on a
+`session.close` request (section 4.3.7) and leaves the connection and its other
+sessions open. It is build-inherent and defaults to `false` when absent: a
+client connected to an older server closes a session locally, and the server
+keeps the session attached until the connection closes.
+
+`connectionAuth` advertises that the server verifies `connection.auth`, and
+that a `session.open` may name an authenticated principal of its connection
+in place of carrying a signature (section 4.5.1). A server advertises it when
+its host verifies `connection.auth`; toolshed does under the
+`sharedMemoryConnection` experimental flag. It defaults to `false` when
+absent: a client then signs each `session.open`, one at a time, since each
+uses the connection's current challenge and receives the next.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -288,6 +306,9 @@ interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
   space: SpaceId;
+  // An authenticated principal of the connection (section 4.5.1). A request
+  // naming one carries neither `invocation` nor `authorization`.
+  principal?: DID;
   session: {
     sessionId?: SessionId;
     seenSeq?: number;
@@ -377,6 +398,9 @@ Rules:
 
 - the client MUST open or resume a session before issuing any memory commands
   for that space on the current connection
+- a connection may hold sessions for several spaces, and several sessions for
+  one space, each opened as the principal its own `session.open` was
+  authorized as
 - `sessionId` is caller-supplied in the current pass when the client wants to
   resume an existing logical session; server-issued, principal-bound ids remain
   deferred
@@ -454,6 +478,9 @@ interface HelloMessage {
     entityIdLookup?: boolean;
     sessionHoldings?: boolean;
     sessionReadCeiling?: boolean;
+    presenceV1?: boolean;
+    sessionClose?: boolean;
+    connectionAuth?: boolean;
   };
 }
 
@@ -467,6 +494,7 @@ interface RequestMessage {
     | "session.watch.set"
     | "session.watch.add"
     | "session.ack"
+    | "session.close"
     | "event.attention.resolve"
     | "presence.join"
     | "presence.publish"
@@ -474,6 +502,12 @@ interface RequestMessage {
   requestId: string;
   space: SpaceId;
   sessionId?: SessionId;
+}
+
+/** Requests about the connection itself, which name no space. */
+interface ConnectionRequestMessage {
+  type: "connection.auth" | "connection.challenge" | "connection.release";
+  requestId: string;
 }
 ```
 
@@ -976,7 +1010,42 @@ Semantics:
 - watch mutations are applied in order per session; clients must serialize
   `session.watch.set` and `session.watch.add`
 
-### 4.3.7 Branch Lifecycle Commands
+### 4.3.7 `session.close` — End One Session
+
+`session.close` ends a session and leaves the connection open. A client that
+holds sessions for several spaces on one connection uses it to release one of
+them.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SessionCloseRequest {
+  type: "session.close";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+}
+
+/** `ok` of the response. */
+type SessionCloseResult = Record<string, never>;
+```
+
+Semantics:
+
+- the session leaves the connection: a later request naming it gets a
+  `SessionError`, and the server sends it no further `session/effect`
+- the session's presence memberships end, and the rooms' other members are
+  told (section 4.13.1)
+- the session stays resumable for the detach grace a session keeps after its
+  connection closes, so a client that opens it again soon after, presenting
+  its latest `sessionToken`, resumes it
+- the connection's other sessions are unaffected
+- a `session.close` naming a session the connection does not hold gets a
+  `SessionError`
+
+### 4.3.8 Branch Lifecycle Commands
 
 Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
@@ -997,7 +1066,8 @@ Write-class requests may carry `invocation` / `authorization` payloads so they
 can be persisted alongside accepted commits, but the current wire protocol
 still uses plain JSON envelopes rather than full UCAN message framing.
 
-On memory WebSocket routes, `session.open` itself is authenticated:
+On memory WebSocket routes, `session.open` itself is authenticated, in one of
+two ways. A signed `session.open` carries its own authorization:
 
 - the request must carry `invocation` and `authorization`
 - `invocation.cmd` must be `"session.open"`
@@ -1013,6 +1083,99 @@ On memory WebSocket routes, `session.open` itself is authenticated:
 - `invocation.exp` must not be expired beyond the server clock-skew grace
 - the signature must verify against `invocation.iss` for the hash of
   `invocation`
+
+A `session.open` naming a `principal` rests on the connection's
+authentication of that principal, where the server advertises
+`connectionAuth`. A key authenticates once per connection:
+
+```typescript
+// Shown at module scope.
+type DID = string;
+
+interface ConnectionAuthInvocation {
+  iss: DID;
+  cmd: "connection.auth";
+  aud: DID;
+  args: { protocol: "memory" };
+  challenge: string;
+  iat: number;
+  exp: number;
+}
+
+interface ConnectionAuthRequest {
+  type: "connection.auth";
+  requestId: string;
+  invocation: ConnectionAuthInvocation;
+  authorization: { signature: Uint8Array };
+}
+
+/** `ok` of the response. */
+interface ConnectionAuthResult {
+  principal: DID;
+  /** Unix second the authentication runs out at. */
+  expiresAt: number;
+}
+
+interface ConnectionChallengeRequest {
+  type: "connection.challenge";
+  requestId: string;
+}
+
+/** `ok` of the response. */
+interface ConnectionChallengeResult {
+  challenge: { value: string; expiresAt: number };
+}
+
+interface ConnectionReleaseRequest {
+  type: "connection.release";
+  requestId: string;
+  principal: DID;
+}
+```
+
+- `invocation.cmd` must be `"connection.auth"` and `invocation.args.protocol`
+  the memory protocol
+- `invocation.aud` must match the server audience from `hello.ok`
+- `invocation.challenge` must be a challenge the server issued on this
+  connection — in `hello.ok`, in a `session.open` response, or in response to
+  `connection.challenge` — that has not expired and that `invocation.iss` has
+  not already signed
+- `invocation.exp` must not be expired beyond the server clock-skew grace
+- the signature must verify against `invocation.iss` for the hash of
+  `invocation`
+
+A challenge that is unknown to the connection, expired, or already signed by
+the same key is refused with a `retriable` `AuthorizationError`; every other
+refusal is permanent. One challenge accepts several keys, once each, so
+authenticating two keys needs no ordering between them. A client holding no
+usable challenge asks for one with `connection.challenge`.
+
+An authentication is a lease. It runs out at the invocation's `exp`, or an
+hour after it was accepted, whichever is sooner, and the response says
+which. From then on a `session.open` naming the principal is refused, a
+request on a session opened as it is refused with a `retriable`
+`AuthorizationError`, and such a session is sent no `session/effect`. A new
+`connection.auth` for the same key, over a challenge of its own, renews the
+lease: the sessions are served again, each evaluated in full so nothing it
+missed is lost. A client renews ahead of the end. A `connection.release`
+ends the authentication early and leaves the sessions the principal opened
+under the lease they had. A connection holds at most 64 principals, and a
+`connection.auth` for a new one past that is refused, permanently, until one
+is released.
+
+A `session.open` naming a principal the connection has not authenticated is
+refused with a permanent `AuthorizationError`. One naming an authenticated
+principal is admitted as that principal exactly as a signed open is admitted
+as its verified issuer: the space's ACL decides what the session may do, and
+a resume by a principal other than the one the session is bound to is
+refused. It uses no challenge, so such opens are handled concurrently across
+spaces. Its session descriptor is not signed; the connection is what
+authenticates the sender.
+
+A signed `connection.auth` authorizes more than a signed `session.open`
+does: every space its key can reach through this server, for as long as the
+connection stays open, where a signed open is good for one space. The
+challenge binds it to one connection.
 
 Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
@@ -1039,7 +1202,10 @@ last-owner removal are rejected. These shape and genesis rules are hard
 storage invariants in both `observe` and `enforce`; `observe` relaxes only
 READ and WRITE shortfalls on an already valid ACL, and refuses a principal
 lacking OWNER, so no principal can write a space's ACL while a deployment
-stages its access control.
+stages its access control. The one ACL mutation a principal without OWNER may
+make, in both modes, is removing its own entry: a replacement whose document is
+the stored one less that principal's entry, and nothing else, from a list with
+no `"*"` entry.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority) in
@@ -1297,6 +1463,20 @@ Clients MUST:
 The server processes writes serially within a branch, or with equivalent
 serializable isolation.
 
+A connection handles the frames it is handed in turns, and a turn is per space.
+A frame naming a space is handled after the frames handed over before it for
+that space, and after every frame naming no space that was handed over before
+it. A frame handled in the connection's own turn — `hello`, a `connection.*`
+request, a message the server cannot read, and a signed `session.open`, which
+uses the connection's one current challenge — is handled after every frame
+handed over before it, so a `session.open` handed over behind the
+`connection.auth` it depends on finds its principal authenticated, and two
+signed opens handed over together are handled one at a time whatever spaces
+they name. Frames for different spaces on
+one connection do not wait for each other, so a `transact` waiting for its
+space's publication lock delays nothing addressed to another space. Presence
+messages stay outside these turns (section 4.13.4).
+
 For live sync, transact verdicts return INLINE before the independently batched
 fan-out: N commits can apply against one watch-union recompute, which is where
 the subscription pipeline's throughput comes from. A per-space publication lock
@@ -1393,18 +1573,18 @@ advertises the capability as `presenceV1` (section 4.1.1).
 A room is addressed by an opaque identifier under a space. Joining requires an
 open session for that space on the same connection: space access, decided by
 the memory ACL, is what admits a participant, and there is no separate
-presence authentication. A connection is in a room at most once, keyed by the
-connection itself, and the membership belongs to the session that joined: a
-join, publish, or leave of that room through another session on the same
-connection is refused with a `PresenceError`. Several observers of one room on
-a client share the one membership their session holds.
+presence authentication. A membership belongs to one session on one
+connection, and a session is in a room at most once. Two sessions on the same
+connection each hold a membership of their own, with a participant id of its
+own, and neither can publish under or end the other's. Several observers of
+one room on a client share the one membership their session holds.
 
 The server assigns the participant id at join and identifies every later
 publication by the membership it arrives on, never by a claimed id. A
 membership ends, and the room's other members are told, on an explicit
-`presence.leave`, on the connection closing, and on the joining session being
-revoked or detached — a takeover by another connection resuming the same
-session included.
+`presence.leave`, on the connection closing, on a `session.close` of the
+joining session, and on the joining session being revoked or detached — a
+takeover by another connection resuming the same session included.
 
 ### 4.13.2 Record
 
@@ -1505,12 +1685,12 @@ interface PresenceRecord {
 }
 ```
 
-A join on a membership that already exists, through the session that holds
-it, returns the same participant id and a current snapshot. A publish before
-a join, a publish whose `revision` does not exceed the membership's last
-accepted one, and a join, publish, or leave through another session on the
-connection are refused with a `PresenceError`. A member that has never
-published is in no snapshot and announced to nobody.
+A join on a membership that already exists returns the same participant id
+and a current snapshot. A publish before a join, and a publish whose
+`revision` does not exceed the membership's last accepted one, are refused
+with a `PresenceError`. A leave by a session that is not a member does
+nothing. A member that has never published is in no snapshot and announced to
+nobody.
 
 Server to client, pushes with no request id, addressed to the session the
 receiving membership joined through:
@@ -1550,16 +1730,12 @@ interface PresenceRecord {
 ### 4.13.4 Ordering
 
 The connection parses each frame as it is handed to it. A `presence.*`
-message is handled at that point; every other message enters the connection's
-ordered queue (section 4.11.2), so a presence message never waits for the
-commands already queued there. What that buys depends on how frames reach the
-connection, and on the WebSocket hosts today it is bounded: both hand frames
-to the connection one at a time, each after the one before it has been
-handled, so a presence frame behind a large `transact` on the same socket
-shares that command's latency and reaches the room only once it is decided.
-That is an accepted cost of sharing the socket. A host that handed frames over
-as they arrived would let presence overtake the queue without any change to
-the protocol.
+message is handled at that point; every other message waits for its turn
+(section 4.11.2), so a presence message never waits for the commands already
+waiting there. The WebSocket hosts hand each frame to the connection as soon
+as the frame before it has been handed over, without waiting for that one to
+be handled, so a presence frame behind a large `transact` on the same socket
+reaches the room while the command is still being decided.
 
 Within one membership the revision orders publications: the server relays only
 a record whose revision exceeds the last it accepted for that membership, and

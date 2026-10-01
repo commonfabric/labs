@@ -85,6 +85,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal a cell's label attests, inside the computation or
+  // handler that calls it, and returns a plain DID rather than a reactive
+  // value. It builds no graph node.
+  {
+    exportName: "principalOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {

@@ -480,7 +480,7 @@ export const resolveConsoleLaunchPlan = (
       connectorResolved.push({
         name: `grant ${connectorGrantLabel(grant)}`,
         value: grant.ref,
-        source: `\`${instance.handlesJsonPath}\`, classed by ` +
+        source: `\`${instance.handlesJsonPath}\`, declared by ` +
           `\`${grant.source.piece}\` in \`${instance.piecesJsonPath}\``,
       });
       connectorHealth.push({
