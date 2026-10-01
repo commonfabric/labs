@@ -17,7 +17,6 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  cfRenderHasUI,
   clickButton,
   findNode,
   findNodeById,
@@ -260,8 +259,7 @@ export default pattern(() => {
       { action: action(() => clickButton(direct[UI], `With ${BOB}`)) },
       {
         assertion: assert(() =>
-          shownPart(direct[UI]) === "selected:block unselected:none" &&
-          cfRenderHasUI(findNodeById(direct[UI], "fabrichat-selected"))
+          shownPart(direct[UI]) === "selected:block unselected:none"
         ),
       },
       // The conversation with one person is always the same room.

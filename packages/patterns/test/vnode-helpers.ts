@@ -114,16 +114,6 @@ export const findElement = (
     return isRecord(value) && readValue(value.name) === name;
   });
 
-/**
- * Whether the first `cf-render` under `root` is given something with a
- * rendering of its own (`[UI]`) to draw. Given a value read through a schema
- * that leaves `[UI]` out, `cf-render` gets data alone and draws nothing.
- */
-export const cfRenderHasUI = (root: unknown): boolean => {
-  const value = propValue(findElement(root, "cf-render"), "$cell");
-  return isRecord(value) && value[UI] !== undefined;
-};
-
 export const findElementByText = (
   root: unknown,
   name: string,

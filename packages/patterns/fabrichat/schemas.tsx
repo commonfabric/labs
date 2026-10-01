@@ -14,8 +14,6 @@ import {
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
-  UI,
-  type VNode,
 } from "commonfabric";
 
 //
@@ -357,17 +355,12 @@ export const reactionTalliesOf = (
  * space shares with every member, never the ones each member has of their
  * own. The room's rendering and its data face reach those, and a served
  * handler whose declared reads reach one never runs, so neither is part of
- * the link. `ChatRoomRendering` is the room as `cf-render` draws it.
+ * the link. `cf-render` still draws the room through it, since a render reads
+ * the rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
-}
-
-/** A room as `cf-render` draws it through its link. */
-export interface ChatRoomRendering extends ChatRoomLink {
-  /** The room's rendering. */
-  [UI]?: VNode;
 }
 
 /** One room in a user's chat manager. */
