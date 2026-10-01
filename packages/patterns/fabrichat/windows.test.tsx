@@ -48,6 +48,12 @@ const MORE_WINDOWS = Array.from({ length: 50 }, (_, index) => ({
   count: 1,
 }));
 
+// Enough sends, with the three below, to pass the room's window limit by one.
+const MORE_MESSAGES = Array.from(
+  { length: 98 },
+  (_, index) => ({ type: "click", target: { value: `More ${index}` } }),
+);
+
 const typed = (text: string) => ({ type: "click", target: { value: text } });
 
 // The session's windows, as the room's output offers them.
@@ -129,7 +135,7 @@ export default pattern(() => {
           windowText(windowsOf(alice.messages.windows).w) === "One Two >"
         ),
       },
-      // A count beyond the room's limit gets the limit.
+      // A count beyond the view gets the whole view.
       {
         action: alice.messages.openWindow,
         event: {
@@ -160,6 +166,30 @@ export default pattern(() => {
           Object.keys(windowsOf(alice.messages.windows)).length === 50 &&
           windowsOf(alice.messages.windows)["many-49"] === undefined
         ),
+      },
+
+      // A count beyond the room's limit gets the limit: moving a window in a
+      // view of 101 messages, asking for 5000, gets the newest 100.
+      ...MORE_MESSAGES.map((event) => ({
+        action: alice.sendMessage,
+        event,
+        trustedUi: sendGesture,
+      })),
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "x-2",
+          windowId: "x",
+          from: { before: "end" },
+          count: 5000,
+        },
+      },
+      {
+        assertion: assert(() => {
+          const window = windowsOf(alice.messages.windows).x;
+          return window?.messages.length === 100 && window.hasOlder &&
+            !window.hasNewer && window.messages[0]?.get()?.body === "Two";
+        }),
       },
 
       // With no default pattern listing anyone, the room's participants are
