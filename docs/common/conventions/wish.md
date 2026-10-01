@@ -42,15 +42,18 @@ return { [UI]: <div>{wishResult.result}</div> };
 
 ### Results wait for loading documents
 
-Wish waits for the backing documents of its discovery collections and of the
-favorite and mentionable candidates before selecting a result. This loading
-behavior applies to every hashtag Wish. Pending document loads leave any
-existing state untouched; a cold Wish with no existing state publishes none
-until loading settles. A favorite whose piece document is confirmed absent is
-excluded from matches; its bookmark remains in the home collection. UI loading
+Wish waits for the backing documents of its discovery collections and candidates
+before selecting a result. This loading behavior applies to every hashtag Wish.
+Pending document loads leave any existing state untouched; a cold Wish with no
+existing state publishes none until loading settles. A favorite or profile
+element whose piece document is confirmed absent is excluded from matches; its
+entry remains in the discovery collection. Failed favorite and profile element
+loads are skipped when another readable match remains. If no readable match
+remains and a candidate load failed, Wish reports the load error. The legacy
+`#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error; a failed document load produces a load
-error.
+collection produces a no-match error; a failed discovery-collection load produces
+a load error.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
