@@ -80,7 +80,12 @@ import {
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
-import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./cfc/policy.ts";
+import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
+  CFC_POLICY_MANIFEST_ID_PREFIX,
+  cfcPolicyManifestDocId,
+  collectModulePolicyDigests,
+} from "./cfc/policy.ts";
 import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
@@ -326,6 +331,33 @@ const refusalNamesPolicyManifest = (error: CommitError): boolean => {
   };
   return named(conflict?.of) ||
     (conflicts ?? []).some((entry) => named(entry?.of));
+};
+
+/**
+ * The digests of the module policies a run of `pattern` can install, which
+ * are those its schemas name, its nodes' and its nested patterns' included.
+ */
+const modulePolicyDigestsOf = (pattern: Pattern): Set<string> => {
+  const digests = new Set<string>();
+  const seen = new Set<Pattern>();
+  const visit = (current: Pattern): void => {
+    if (seen.has(current)) return;
+    seen.add(current);
+    collectModulePolicyDigests(current.argumentSchema, digests);
+    collectModulePolicyDigests(current.resultSchema, digests);
+    for (const cell of current.derivedInternalCells ?? []) {
+      collectModulePolicyDigests(cell.schema, digests);
+    }
+    for (const { module } of current.nodes) {
+      collectModulePolicyDigests(module.argumentSchema, digests);
+      collectModulePolicyDigests(module.resultSchema, digests);
+      if (module.type === "pattern" && isPattern(module.implementation)) {
+        visit(module.implementation);
+      }
+    }
+  };
+  visit(pattern);
+  return digests;
 };
 
 type InternalCellDescriptor = {
@@ -8151,6 +8183,25 @@ export class Runner {
     ) {
       cells.push(resultCell.key(UI).asSchema(rendererVDOMSchema));
     }
+
+    // The policy manifests the pattern names. Where instantiation writes a
+    // value carrying a module policy, it reads the policy's manifest and
+    // installs it when the read finds nothing, so a manifest another
+    // participant installed that this replica has not loaded is installed
+    // again, and the commit is refused. Nothing the piece holds links to a
+    // manifest, so the walks above reach none. The manifest's schema brings
+    // in the rule documents it links.
+    for (const digest of modulePolicyDigestsOf(pattern)) {
+      cells.push(
+        this.#runtime.getCellFromEntityId(
+          resultCell.space,
+          cfcPolicyManifestDocId(digest),
+          [],
+          CFC_POLICY_MANIFEST_DOC_SCHEMA,
+        ),
+      );
+    }
+
     // Per-cell spans: `n` in the timing stats is the number of cells this
     // resume pre-synced, total/max its round-trip cost (spans overlap, so the
     // wall cost is bounded by the enclosing `#syncCellsForRunningPattern()`

@@ -90,6 +90,7 @@ import {
 import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
 import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
+  CFC_POLICY_MANIFEST_DOC_SCHEMA,
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
   validateCfcPolicyArtifactManifest,
@@ -1025,11 +1026,6 @@ export const spaceCellSchema = internSchema(
     },
   },
 );
-
-const CFC_POLICY_MANIFEST_DOC_SCHEMA = {
-  type: "object",
-  additionalProperties: true,
-} as const satisfies JSONSchema;
 
 /** The allocation record a space holds for one `PatternFactory.inSpace`
  *  name: the DID of the space the name reaches. */
