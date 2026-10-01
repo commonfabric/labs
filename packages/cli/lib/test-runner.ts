@@ -1261,7 +1261,7 @@ export async function runTestPattern(
           .join("\n")
       }`
     );
-    budgetFailures.push(...failures);
+    for (const failure of failures) budgetFailures.push(failure);
     if (options.verbose && readBudgets !== undefined) {
       console.log(
         `    Read budget (${label}): ${budgetMeasurement.total} attempt accesses, ${budgetMeasurement.perRun} maximum body accesses${
@@ -2661,7 +2661,7 @@ export async function discoverTestFiles(dir: string): Promise<string[]> {
       } else if (entry.isDirectory) {
         // Recursively search subdirectories
         const subFiles = await discoverTestFiles(`${dir}/${entry.name}`);
-        testFiles.push(...subFiles);
+        for (const subFile of subFiles) testFiles.push(subFile);
       }
     }
   } catch {

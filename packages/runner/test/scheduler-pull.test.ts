@@ -1,5 +1,7 @@
 // Pull scheduler core behavior and stale dependency propagation tests.
 
+import { maxOf } from "@commonfabric/utils/math";
+
 import {
   afterEach,
   beforeEach,
@@ -2045,7 +2047,7 @@ describe("pull-based scheduling", () => {
       // The fix: no preflight walked the 200-wide fan-in. The forward walk
       // would have visited ~200 per dispatch; the inverted walk visits O(1).
       expect(preflights.length).toBeGreaterThanOrEqual(1);
-      const maxVisit = Math.max(...preflights.map((p) => p.stats.visitCount));
+      const maxVisit = maxOf(preflights.map((p) => p.stats.visitCount));
       expect(maxVisit).toBeLessThan(20);
     } finally {
       runtime.telemetry.removeEventListener("telemetry", listener);

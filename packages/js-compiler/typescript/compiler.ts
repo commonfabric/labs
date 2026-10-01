@@ -450,7 +450,9 @@ export class TypeScriptCompiler {
     {
       const errors = checker.collectProgramErrors();
       for (const sourceFile of checker.checkableSources()) {
-        errors.push(...checker.collectSyntacticErrors(sourceFile));
+        for (const error of checker.collectSyntacticErrors(sourceFile)) {
+          errors.push(error);
+        }
       }
       checker.throwIfErrors(errors);
       yield;
@@ -459,7 +461,9 @@ export class TypeScriptCompiler {
       const errors = [];
       for (const sourceFile of checker.checkableSources()) {
         const typeCheckStart = performance.now();
-        errors.push(...checker.collectSemanticErrors(sourceFile));
+        for (const error of checker.collectSemanticErrors(sourceFile)) {
+          errors.push(error);
+        }
         compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
         yield;
       }
@@ -469,7 +473,9 @@ export class TypeScriptCompiler {
       const errors = [];
       for (const sourceFile of checker.checkableSources()) {
         const declCheckStart = performance.now();
-        errors.push(...checker.collectDeclarationErrors(sourceFile));
+        for (const error of checker.collectDeclarationErrors(sourceFile)) {
+          errors.push(error);
+        }
         compileTimingLogger.time(declCheckStart, "phase", "declCheckFile");
         yield;
       }
@@ -504,7 +510,9 @@ export class TypeScriptCompiler {
         { before: beforeTransformers },
       );
       compileTimingLogger.time(emitStart, "phase", "emitFile");
-      emitDiagnostics.push(...emitResult.diagnostics);
+      for (const diagnostic of emitResult.diagnostics) {
+        emitDiagnostics.push(diagnostic);
+      }
       emitSkipped ||= emitResult.emitSkipped;
       yield;
     }

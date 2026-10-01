@@ -46,7 +46,10 @@ export default pattern<State>((state) => {
 
         <h3>Array Method Calls</h3>
         <p>Sum: {state.values.reduce((a, b) => a + b, 0)}</p>
-        <p>Max value: {Math.max(...state.values)}</p>
+        <p>Max value: {
+          // deno-lint-ignore cf-spread/no-spread-arguments -- the fixture covers a spread argument
+          Math.max(...state.values)
+        }</p>
         <p>Joined: {state.values.join(", ")}</p>
 
         <h3>Complex Function Calls</h3>

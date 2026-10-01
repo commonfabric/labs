@@ -12,6 +12,30 @@ import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformFiles, transformSource } from "./utils.ts";
 
 describe("protected cell policy", () => {
+  it("accepts a computed read of a wished profile's defaulted owner-protected field", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformSource(
+      `import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, WriteAuthorizedBy, computed, handler, pattern, wish } from "commonfabric";
+const setBio = handler<void, {}>(() => {});
+type OwnerProtected<T, Binding> = RepresentsCurrentUser<
+  Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>
+>;
+export type ProfileOut = { bio: Default<OwnerProtected<string, typeof setBio>, ""> };
+export default pattern<{}>(() => {
+  const profileWish = wish<ProfileOut>({ query: "#profile" });
+  const bio = computed(() => String(profileWish.result?.bio as string).trim());
+  return { bio };
+});`,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+
+    expect(diagnostics.filter(isError)).toEqual([]);
+  });
+
   it("preserves a writer binding in a lifted cell's result schema", async () => {
     const source = `
 import { Cfc, CurrentPrincipal, handler, pattern, RepresentsCurrentUser, Writable, WriteAuthorizedBy } from "commonfabric";
@@ -257,6 +281,11 @@ export default pattern<{ initialName: string }>(({ initialName }) => {
       expect(diagnostics.filter(isError)).toMatchObject([{
         type: "cfc-write-authorized-by",
         message: expect.stringContaining("direct typeof binding"),
+      }, {
+        type: "cfc-write-authorized-by:unread",
+        message: expect.stringContaining(
+          "schema would carry no write restriction",
+        ),
       }]);
     });
   }
@@ -603,6 +632,11 @@ export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ 
     expect(diagnostics.filter(isError)).toMatchObject([{
       type: "cfc-write-authorized-by",
       message: expect.stringContaining("direct typeof binding"),
+    }, {
+      type: "cfc-write-authorized-by:unread",
+      message: expect.stringContaining(
+        "schema would carry no write restriction",
+      ),
     }]);
   });
 

@@ -56,6 +56,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { maxOf } from "@commonfabric/utils/math";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -289,8 +290,8 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
       server,
       () => derivedSeqs(engine).some((seq) => seq > authoredSeq),
     );
-    const tail = Math.max(
-      ...derivedSeqs(engine).filter((seq) => seq > authoredSeq),
+    const tail = maxOf(
+      derivedSeqs(engine).filter((seq) => seq > authoredSeq),
     );
     const authoredBefore = authoredCount(engine);
 
@@ -376,8 +377,8 @@ describe("S1 drain-settle quiescence advance (RULED 2026-08-19)", () => {
     const overlay = clientRuntime.speculationOverlay;
     expect(overlay).toBeDefined();
     await awaitReplica(clientManager, () => overlay!.entryCount(space) === 0);
-    const derivedTail = Math.max(
-      ...derivedSeqs(engine).filter((seq) => seq > authoredSeq),
+    const derivedTail = maxOf(
+      derivedSeqs(engine).filter((seq) => seq > authoredSeq),
     );
     const authoredBefore = authoredCount(engine);
 

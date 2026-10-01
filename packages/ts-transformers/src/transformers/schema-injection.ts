@@ -817,7 +817,7 @@ function createToSchemaCall(
 
   const args: ts.Expression[] = [];
   if (isSchemaCallOptionExpressions(options)) {
-    args.push(...options);
+    for (const option of options) args.push(option);
   } else if (options?.widenLiterals || options?.scope) {
     const properties: ts.ObjectLiteralElementLike[] = [];
     if (options.widenLiterals) {

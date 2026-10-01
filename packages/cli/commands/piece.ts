@@ -29,6 +29,7 @@ import {
   renderCellReference,
 } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/utils/encoding";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
@@ -380,7 +381,7 @@ function fieldSectionLines(
   fields: PieceFieldDescription[],
 ): string[] {
   if (fields.length === 0) return [];
-  const width = Math.max(...fields.map((field) => field.name.length));
+  const width = maxOf(fields.map((field) => field.name.length));
   const lines: string[] = ["", label];
   for (const field of fields) {
     lines.push(`  ${field.name.padEnd(width)}  ${field.type}`);
@@ -449,8 +450,12 @@ export function pieceDescribeLines(
       lines.push(`  ${line}`);
     }
   }
-  lines.push(...fieldSectionLines("STATE", description.state ?? []));
-  lines.push(...fieldSectionLines("INPUTS", description.inputs ?? []));
+  for (const line of fieldSectionLines("STATE", description.state ?? [])) {
+    lines.push(line);
+  }
+  for (const line of fieldSectionLines("INPUTS", description.inputs ?? [])) {
+    lines.push(line);
+  }
   lines.push("", "VERBS");
   if (shown.length === 0) {
     lines.push(
@@ -459,9 +464,9 @@ export function pieceDescribeLines(
         : "  <no callable verbs>",
     );
   } else {
-    lines.push(...describedVerbLines(shown));
+    for (const line of describedVerbLines(shown)) lines.push(line);
   }
-  lines.push(...notes.map((note) => `(${note})`));
+  for (const note of notes) lines.push(`(${note})`);
   return lines;
 }
 

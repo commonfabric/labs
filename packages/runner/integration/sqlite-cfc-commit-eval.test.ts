@@ -180,7 +180,9 @@ async function runTest(base: URL) {
         await dtx.commit();
         const conf: unknown[] = [];
         for (const entry of view?.entries ?? []) {
-          conf.push(...(entry.label.confidentiality ?? []));
+          for (const atom of entry.label.confidentiality ?? []) {
+            conf.push(atom);
+          }
         }
         return conf.map((a) => JSON.stringify(a));
       };

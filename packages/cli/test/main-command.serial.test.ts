@@ -88,7 +88,7 @@ describe("main command", () => {
     ]);
 
     for (const command of commands) {
-      commands.push(...command.getCommands());
+      for (const subcommand of command.getCommands()) commands.push(subcommand);
       if (customUsageCommands.has(command.getPath())) continue;
 
       const typedArguments = command.getArgsDefinition();

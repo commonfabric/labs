@@ -1549,7 +1549,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       redeliveries.length > 0 && (operations.length > 0 || sqliteOps?.length)
     ) {
-      operations.push(...redeliveries);
+      for (const redelivery of redeliveries) operations.push(redelivery);
     }
 
     return {
@@ -3677,8 +3677,12 @@ export class V2StorageTransaction implements IStorageTransaction {
         abandoned.push(encodePointer(intent.path));
         continue;
       }
-      ops.push(...built.ops);
-      suppress.push(...built.suppress);
+      for (const op of built.ops) {
+        ops.push(op);
+      }
+      for (const suppression of built.suppress) {
+        suppress.push(suppression);
+      }
     }
     for (const pathKey of abandoned) {
       doc.mergeableOps.delete(pathKey);

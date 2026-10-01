@@ -1880,12 +1880,17 @@ full model-context CFC record atomically with resumable history. A later root
 task retains that goal alongside its current request and inherits those findings
 as historical context, including after SQLite restart. It receives current
 grants independently; earlier bindings are not automatically transferred to a
-child. By default, failed and canceled turns retain the previous checkpoint. The
-Loom interactive host opts into `finalizeOnTurnLimit`: a failed provider call
-can retain the last resumable checkpoint: a validated complete tool batch or
+child. By default, a failed turn retains the previous checkpoint. The Loom
+interactive host opts into `finalizeOnTurnLimit`: a failed provider call can
+retain the last resumable checkpoint: a validated complete tool batch or
 opening-research handoff with matching research, CFC state, and omission
-provenance. Unpaired work, canceled turns, and process interruptions do not
-advance that checkpoint; their evidence remains in the audit trail.
+provenance. A turn the person cancels always advances the checkpoint to its own
+request plus that last complete batch, followed by a host notice that the turn
+was stopped before it finished, so a following turn reads the request as
+interrupted rather than answered. A session closed mid-turn saves nothing.
+Unpaired work, including a tool call still running when the cancel lands, and
+process interruptions do not advance the checkpoint; their evidence remains in
+the audit trail.
 
 `finalizeOnTurnLimit` reserves the last root model turn for a partial answer
 with harness and native tools disabled. It warns two turns beforehand and

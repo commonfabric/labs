@@ -8097,8 +8097,8 @@ export class Runner {
         resultCell,
         argumentLink,
       );
-      cells.push(...planned.cells);
-      plans.push(...planned.plans);
+      for (const cell of planned.cells) cells.push(cell);
+      for (const plan of planned.plans) plans.push(plan);
       // The argument document itself, whole and under no schema: setup
       // reads it raw to write the argument over the slots it holds. The
       // node syncs above carry the narrower schemas the runs read through
@@ -8246,7 +8246,9 @@ export class Runner {
       // follows links from there the way a read does: as deep as the
       // declaration goes, through `asCell` positions, stopping at an opaque
       // one. What arrives is what the node's first run reads.
-      cells.push(...this.#cellsNodePlanReads(plan, resultCell));
+      for (const cell of this.#cellsNodePlanReads(plan, resultCell)) {
+        cells.push(cell);
+      }
       // What the node writes through, under the output binding's schema.
       for (const link of plan.writes) {
         cells.push(this.#runtime.getCellFromLink(link));
@@ -8383,8 +8385,8 @@ export class Runner {
             resultCell,
             argumentLink,
           );
-          cells.push(...planned.cells);
-          plans.push(...planned.plans);
+          for (const cell of planned.cells) cells.push(cell);
+          for (const plan of planned.plans) plans.push(plan);
           cells.push(
             this.#runtime.getCellFromLink({
               ...argumentLink,
@@ -8745,8 +8747,10 @@ export class Runner {
                     ),
                 );
               }
-              next.push(...nested);
-              namedInstances.push(...nested);
+              for (const instance of nested) {
+                next.push(instance);
+                namedInstances.push(instance);
+              }
             }
           }
         }
@@ -9560,11 +9564,12 @@ export class Runner {
         (asCell.includes("cell") || asCell.includes("writeonly"))
       ) {
         if (shouldCollectPath(path)) {
-          links.push(
-            ...findAllWriteRedirectCells(currentValue, resultCell, {
-              followRedirectChains: !usesLocalReads(cellTx(resultCell)),
-            }),
+          const redirectLinks = findAllWriteRedirectCells(
+            currentValue,
+            resultCell,
+            { followRedirectChains: !usesLocalReads(cellTx(resultCell)) },
           );
+          for (const link of redirectLinks) links.push(link);
         }
         return;
       }

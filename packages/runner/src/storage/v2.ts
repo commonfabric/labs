@@ -75,6 +75,7 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
+import { maxOf, minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -1006,10 +1007,11 @@ const compactCommitReads = <
 
   const compacted: Read[] = [];
   for (const group of grouped.values()) {
-    compacted.push(
-      ...compactRecursiveReads([...group.recursiveByPath.values()]),
-      ...group.nonRecursiveByPath.values(),
-    );
+    const recursive = compactRecursiveReads([
+      ...group.recursiveByPath.values(),
+    ]);
+    for (const read of recursive) compacted.push(read);
+    for (const read of group.nonRecursiveByPath.values()) compacted.push(read);
   }
 
   return compacted.toSorted((left, right) => {
@@ -1057,7 +1059,7 @@ const toCommitReadPath = (
 // server could durably accept a commit the client cascade-rejects (a
 // split-brain: caller sees ConflictError for a write that landed).
 const scalarizeLocalSeq = (localSeq: number | number[]): number =>
-  Array.isArray(localSeq) ? Math.max(...localSeq) : localSeq;
+  Array.isArray(localSeq) ? maxOf(localSeq) : localSeq;
 
 const scalarizePendingReadStacks = (commit: ClientCommit): ClientCommit => {
   const hasStack = (reads: { localSeq: number | number[] }[]): boolean =>
@@ -4664,7 +4666,7 @@ export class SpaceReplica
       });
       if (page === undefined) return undefined;
       expectedServerSeq ??= page.serverSeq;
-      ids.push(...page.ids);
+      for (const id of page.ids) ids.push(id);
       if (page.nextAfter === undefined) return ids;
       after = page.nextAfter;
     }
@@ -8934,8 +8936,8 @@ export class SpaceReplica
     const seqs = frame.map((upsert) => upsert.seq);
     this.#applySessionSync({
       type: "sync",
-      fromSeq: Math.min(...seqs),
-      toSeq: Math.max(...seqs),
+      fromSeq: minOf(seqs),
+      toSeq: maxOf(seqs),
       upserts: frame,
       removes: [],
     }, type);

@@ -91,21 +91,21 @@ function processItem(item: AutocompleteItem): ProcessedItem {
 
   // Add words from label
   if (item.label) {
-    words.push(...splitIntoWords(item.label));
+    for (const word of splitIntoWords(item.label)) words.push(word);
   }
 
   // Add words from value
-  words.push(...splitIntoWords(item.value));
+  for (const word of splitIntoWords(item.value)) words.push(word);
 
   // Add words from group
   if (item.group) {
-    words.push(...splitIntoWords(item.group));
+    for (const word of splitIntoWords(item.group)) words.push(word);
   }
 
   // Add words from all searchAliases
   if (item.searchAliases) {
     for (const alias of item.searchAliases) {
-      words.push(...splitIntoWords(alias));
+      for (const word of splitIntoWords(alias)) words.push(word);
     }
   }
 

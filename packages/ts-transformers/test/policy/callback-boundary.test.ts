@@ -112,27 +112,29 @@ Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned 
 });
 
 Deno.test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
-  // The `SqliteTableFunction` alias is declared locally rather than by Common
-  // Fabric's typings, so the declaration-provenance check rejects it.
-  const { sourceFile, checker } = createProgramWithFiles({
-    "/test.tsx": `
-      type SqliteTableFunction = <T>(
+  // A local alias must not match, whether its name resembles the framework's
+  // alias or belongs to an unrelated API.
+  for (const alias of ["SqliteTableFunction", "UserTableFunction"]) {
+    const { sourceFile, checker } = createProgramWithFiles({
+      "/test.tsx": `
+      type ${alias} = <T>(
         columns: T,
         rule: (row: Record<string, unknown>) => unknown,
       ) => unknown;
-      declare const table: SqliteTableFunction;
+      declare const table: ${alias};
       const result = table(
         { id: "id" },
         (row) => ({ display: row.id }),
       );
     `,
-  });
+    });
 
-  const callback = findTableRowCallback(sourceFile);
-  const decision = classifyCallbackBoundary(callback, checker);
-  assertEquals(
-    decision.kind !== "supported" || decision.boundaryKind !==
-        "sqlite-row-label-rule",
-    true,
-  );
+    const callback = findTableRowCallback(sourceFile);
+    const decision = classifyCallbackBoundary(callback, checker);
+    assertEquals(
+      decision.kind !== "supported" || decision.boundaryKind !==
+          "sqlite-row-label-rule",
+      true,
+    );
+  }
 });

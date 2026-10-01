@@ -66,7 +66,7 @@ describe("pending write elision provenance", () => {
         return Promise.resolve({ ok: {} });
       },
       sealSpaceReads(_target, reads) {
-        readOnly.push(...reads);
+        for (const read of reads) readOnly.push(read);
       },
     };
     const seed = storage.edit();

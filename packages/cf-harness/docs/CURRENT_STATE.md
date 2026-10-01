@@ -537,17 +537,19 @@ The current package provides:
   replay, cancellation, and restore state; a session's durable transcript
   normally advances at a completed turn. On failure, the Loom host can retain
   the last resumable checkpoint (a validated complete batch or opening handoff),
-  atomically with its matching research/CFC state and omission provenance.
-  Unpaired work, cancellation, and interrupted activity stay on the audit trail;
-  turn-local budget notices stay in audit artifacts and are excluded from
-  resumable history; a completed turn's history is checked before it is
-  promoted, and promotion commits with the completion or not at all; and a
-  restored session whose recorded history does not pair its tool calls with tool
-  results preserves that history and adds explicit unknown-outcome results for
-  missing results, while orphan results and duplicate call IDs refuse the
-  session locally rather than sending malformed history to a provider; and a
-  listener that cannot take an event is reported to the host as a delivery
-  failure and does not change the outcome of the turn that produced it;
+  atomically with its matching research/CFC state and omission provenance. A
+  canceled turn advances it to the turn's request and last complete batch,
+  followed by a host notice that the person stopped the turn. Unpaired work and
+  interrupted activity stay on the audit trail; turn-local budget notices stay
+  in audit artifacts and are excluded from resumable history; a completed turn's
+  history is checked before it is promoted, and promotion commits with the
+  completion or not at all; and a restored session whose recorded history does
+  not pair its tool calls with tool results preserves that history and adds
+  explicit unknown-outcome results for missing results, while orphan results and
+  duplicate call IDs refuse the session locally rather than sending malformed
+  history to a provider; and a listener that cannot take an event is reported to
+  the host as a delivery failure and does not change the outcome of the turn
+  that produced it;
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;

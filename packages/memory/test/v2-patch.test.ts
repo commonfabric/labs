@@ -396,6 +396,25 @@ Deno.test("memory v2 append creates the array when absent", () => {
   assertEquals(nested, { value: { items: [1, 2] } });
 });
 
+Deno.test("memory v2 append and splice take more values than one call's arguments can hold", () => {
+  const values = Array.from({ length: 200_000 }, (_, i) => i);
+
+  const appended = applyPatch({ value: [-1] }, [
+    { op: "append", path: "/value", values },
+  ]) as { value: number[] };
+  assertEquals(appended.value.length, 200_001);
+  assertEquals(appended.value[0], -1);
+  assertEquals(appended.value.at(-1), 199_999);
+
+  const spliced = applyPatch({ value: [-1, -2, -3] }, [
+    { op: "splice", path: "/value", index: 1, remove: 1, add: values },
+  ]) as { value: number[] };
+  assertEquals(spliced.value.length, 200_002);
+  assertEquals(spliced.value[1], 0);
+  assertEquals(spliced.value.at(-2), 199_999);
+  assertEquals(spliced.value.at(-1), -3);
+});
+
 Deno.test("memory v2 append rejects a non-array target", () => {
   let threw = false;
   try {
