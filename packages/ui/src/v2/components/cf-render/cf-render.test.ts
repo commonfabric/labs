@@ -22,7 +22,6 @@ import {
   normalizeVariant,
   PIECE_CONTEXT_MENU_EVENT,
   type PieceContextMenuDetail,
-  variantPresenceSchema,
 } from "./index.ts";
 
 // NOTE: Full rendering lifecycle tests (cell swap cleanup, subscription
@@ -1087,7 +1086,7 @@ describe("CFRender variants", () => {
     // look alike to the presence read, so the host cannot tell them apart.
 
     const outcomes = [];
-    for (const leadsTo of ["a sealed view", "a sealed empty value"]) {
+    for (const leadsTo of [{ type: "vnode" }, null]) {
       const { piece, schemas, reads } = pieceAnswering({
         [TILE_UI]: createMockCellHandle(leadsTo),
       });
@@ -1112,7 +1111,10 @@ describe("CFRender variants", () => {
     expect(outcomes[0]).toEqual({
       mounted: [[TILE_UI]],
       defaults: 0,
-      schemas: [variantPresenceSchema(TILE_UI)],
+      schemas: [{
+        type: "object",
+        properties: { [TILE_UI]: { type: "unknown", asCell: ["cell"] } },
+      }],
       reads: [],
     });
     expect(outcomes[1]).toEqual(outcomes[0]);
