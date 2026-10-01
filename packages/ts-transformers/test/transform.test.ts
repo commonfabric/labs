@@ -809,17 +809,24 @@ export { model, lookup, days, matcher, scopes, years, tags, proxied, passthrough
 
   it("wraps a top-level fabric primitive construction with __cfHelpers.__cf_data", async () => {
     const source = `
+import * as cf from "commonfabric";
 import { FabricDurationNsec, FabricEpochNsec as Epoch } from "commonfabric";
 
 class FabricHash {
   constructor(readonly value: string) {}
 }
 
+const Duration = FabricDurationNsec;
+const Again = Duration;
+
 const span = new FabricDurationNsec(600n);
 const renamed = new Epoch(1n);
+const viaNamespace = new cf.FabricDurationNsec(2n);
+const viaConst = new Duration(3n);
+const viaTwoConsts = new Again(4n);
 const lookalike = new FabricHash("not the data model's");
 
-export { span, renamed, lookalike };
+export { span, renamed, viaNamespace, viaConst, viaTwoConsts, lookalike };
 export default new FabricDurationNsec(1n);
 `;
 
@@ -843,6 +850,11 @@ export default new FabricDurationNsec(1n);
     // name is not.
     assert(wrapped.has("span"), "expected span to be __cf_data-wrapped");
     assert(wrapped.has("renamed"), "expected renamed to be __cf_data-wrapped");
+    // The constructor may be reached as a namespace member, or through a
+    // `const` bound to it, at any depth.
+    for (const name of ["viaNamespace", "viaConst", "viaTwoConsts"]) {
+      assert(wrapped.has(name), `expected ${name} to be __cf_data-wrapped`);
+    }
     assert(!wrapped.has("lookalike"), "expected lookalike to stay unwrapped");
     const defaultExport = collect(root, ts.isExportAssignment)[0];
     assert(defaultExport && ts.isCallExpression(defaultExport.expression));
@@ -889,17 +901,21 @@ export { imposter };
 import { FABRIC_PRIMITIVE_BRAND, FabricDurationNsec } from "commonfabric";
 
 class Longer extends FabricDurationNsec {}
+const AlsoLonger = Longer;
 
 const branded = new (class Branded {
   declare readonly [FABRIC_PRIMITIVE_BRAND]: true;
 })();
 const subclass = new Longer(1n);
+const viaConst = new AlsoLonger(1n);
 const genuine = new FabricDurationNsec(1n);
 
-export { branded, subclass, genuine };
+export { branded, subclass, viaConst, genuine };
 `);
     assert(!realSymbol.has("branded"));
     assert(!realSymbol.has("subclass"));
+    // A `const` bound to the author's own class names that class.
+    assert(!realSymbol.has("viaConst"));
     assert(realSymbol.has("genuine"));
   });
 

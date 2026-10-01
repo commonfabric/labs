@@ -187,7 +187,8 @@ function shouldWrapTopLevelExpression(
  *
  * The class has to be one `commonfabric` declares, and its instance type has
  * to carry the `FabricPrimitive` brand. Neither is a matter of name: a renamed
- * import is wrapped, and a user class that shares a primitive's name is not.
+ * import, a namespace member (`cf.FabricDurationNsec`), and a `const` bound to
+ * either are wrapped, and a user class that shares a primitive's name is not.
  * The brand alone is not enough, since it is read by the name of its key
  * (`declaresFabricPrimitiveBrand`): a class of the author's own, whether it
  * declares a member under a symbol of that name or under the real one, or
@@ -199,15 +200,52 @@ function constructsFabricPrimitive(
   context: TransformationContext,
 ): boolean {
   const { checker } = context;
-  const named = checker.getSymbolAtLocation(
-    unwrapExpression(expression.expression),
+  const constructor = constructorNamedBy(
+    expression.expression,
+    checker,
+    new Set(),
   );
-  const constructor = named && named.flags & ts.SymbolFlags.Alias
-    ? checker.getAliasedSymbol(named)
-    : named;
   return constructor !== undefined &&
     isCommonFabricSymbol(constructor) &&
     declaresFabricPrimitiveBrand(checker.getTypeAtLocation(expression));
+}
+
+/**
+ * Helper for `constructsFabricPrimitive()`, which returns the symbol of the
+ * constructor `expression` names: the declaration an import or a namespace
+ * member resolves to, read through any `const` bound to a bare reference to
+ * one, `const D = FabricDurationNsec`, at any depth. Returns `undefined` for
+ * an expression that names nothing, such as an inline class, and for a
+ * `const` that names itself. `seen` holds the symbols already read.
+ */
+function constructorNamedBy(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Symbol>,
+): ts.Symbol | undefined {
+  const named = checker.getSymbolAtLocation(unwrapExpression(expression));
+  const symbol = named && named.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(named)
+    : named;
+  if (!symbol || seen.has(symbol)) {
+    return undefined;
+  }
+  seen.add(symbol);
+
+  const declaration = symbol.valueDeclaration;
+  if (
+    declaration &&
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0
+  ) {
+    const bound = unwrapExpression(declaration.initializer);
+    if (ts.isIdentifier(bound) || ts.isPropertyAccessExpression(bound)) {
+      return constructorNamedBy(bound, checker, seen);
+    }
+  }
+
+  return symbol;
 }
 
 function isTrustedBuilderCall(expression: ts.CallExpression): boolean {

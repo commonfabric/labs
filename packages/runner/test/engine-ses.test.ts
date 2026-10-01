@@ -365,7 +365,9 @@ describe("Engine in SES mode", () => {
           name: "/main.tsx",
           contents: [
             'import { FabricDurationNsec } from "commonfabric";',
+            "const Duration = FabricDurationNsec;",
             "export const window = new FabricDurationNsec(600n);",
+            "export const viaConst = new Duration(2n);",
             "export default new FabricDurationNsec(1n);",
           ].join("\n"),
         },
@@ -385,6 +387,8 @@ describe("Engine in SES mode", () => {
     );
     expect(main?.window).toBeInstanceOf(FabricDurationNsec);
     expect(main?.window?.value).toBe(600n);
+    expect(main?.viaConst).toBeInstanceOf(FabricDurationNsec);
+    expect(main?.viaConst?.value).toBe(2n);
     expect(main?.default).toBeInstanceOf(FabricDurationNsec);
     expect(main?.default?.value).toBe(1n);
   });
