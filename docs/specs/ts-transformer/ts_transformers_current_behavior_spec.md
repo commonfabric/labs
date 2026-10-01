@@ -776,7 +776,9 @@ structurally representable.
   it explicit with `pattern<Input, Output>(...)`
 
 This inference runs through `collectFunctionSchemaTypeNodes` via
-`inferReturnType`, object-literal recovery, and direct projection recovery.
+`inferReturnType`, object-literal recovery, and direct projection recovery. The
+inferred return type is printed under the flags §10.1 names, so a result type
+holding `[]` anywhere is printed whole.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1546,17 +1548,32 @@ Result shape:
   lift-applied wrappers where needed
 - a spread of a capture, in the callback body outside any function nested in
   it, is written out as the properties it copies when the capture is a `const`
-  declared outside module scope and initialized with an object literal whose
-  properties all have static keys (identifiers or string literals; no spread,
-  method, accessor, or computed key). A `__proto__:` assignment sets the
-  prototype and contributes no key; the shorthand `{ __proto__ }` makes an own
-  property and is written back as `["__proto__"]`:
+  declared outside module scope whose keys are known where it is declared
+  (`staticKeysOfInitializer`): an object literal whose properties all have
+  static keys (identifiers, string literals, or numeric literals, a numeric
+  one read under its decimal name; no method, accessor, or computed key), a
+  spread inside that literal of another such object, or a `const` that names
+  one, at any depth, an object two spreads share being read each time. The
+  operand is read through any parentheses, `as`, `satisfies`, or `!` around
+  it. A `__proto__:` assignment
+  sets the prototype and contributes no key; the shorthand `{ __proto__ }`
+  makes an own property and is written back as `["__proto__"]`:
   `{ ...records, id: item.id }` ->
   `{ log: records.key("log"), prefix: records.key("prefix"), id: … }`. The
   callback reads a capture as an opaque reference, which has no keys to spread;
   those keys are exactly what the spread copies where `records` is declared
   (`expandCapturedObjectSpreads`, `src/closures/utils/captured-object-spread.ts`;
-  `closures/map-captured-object-spread.expected.jsx`)
+  `closures/map-captured-object-spread.expected.jsx`). A spread of any other
+  capture — a `const` initialized by a function call, a literal with a
+  computed key — is left as written and reported as an error,
+  `pattern-context:computation`: "Spread of the captured value `records`
+  copies nothing…" (`reportUnexpandedSpread`). The report is made once per
+  spread: the pattern-context check of §9.7 reports the same spread when the
+  capture is a tracked opaque value, and both go through `reportSpreadError`
+  (`reportDiagnosticOnce`), where the earlier report stands. Only spread
+  reports share that key, so two different computation errors on one node, a
+  non-static default and a rest element of one parameter say, are each made
+  (`test/closures/captured-object-spread.test.ts`)
 
 ### 9.5 Lift-applied strategy
 
@@ -1686,6 +1703,16 @@ builder call it rebuilds carries the replaced call's source-map range (§11.5).
 - otherwise infers from signatures/contextual types
 - `_param` convention implies `never` schema for that parameter
 - failed inference falls back to `unknown`
+- every print of a type as a type node allows the empty tuple, without which
+  the checker prints nothing at all for a type holding `[]` anywhere, so an
+  inferred result holding an alias given `readonly []` reads as its
+  instantiation. The shared flag set is `TYPE_NODE_FLAGS`
+  (`src/ast/type-inference.ts`); `DEFAULT_TYPE_NODE_FLAGS` adds
+  `UseAliasDefinedOutsideCurrentScope` to it for an annotation printed into
+  the output, and `typeToTypeNodeWithRegistry()` adds `AllowEmptyTuple` to
+  whatever flags its caller passes. `test/type-node-print-flags.test.ts`
+  checks that every raw `checker.typeToTypeNode()` call in the package names
+  `AllowEmptyTuple` or one of the two sets
 - `typeRegistry` is consulted first for synthetic nodes/types
 - Common Fabric generic aliases retain their authored type arguments when
   qualified through `__cfHelpers`; argument pairing uses the alias arguments,
@@ -3098,11 +3125,29 @@ encloses the original expression, wrappers included:
     `void`, and unions/intersections thereof (`isPrimitiveSnapshotCall`,
     `isPrimitiveLikeType`);
   - any call whose callee is a property access (`receiver.method(...)`).
-- **`new` expressions.** Only `new Map(...)` and `new Set(...)`
-  (`CF_DATA_CONSTRUCTOR_NAMES`). Notably `new Proxy(...)` is left unwrapped —
-  "Proxy snapshots stay unsupported until Proxy is re-enabled in SES
-  compartments" (`test/transform.test.ts`, "wraps top-level data candidates
-  with __cfHelpers.__cf_data").
+- **`new` expressions.** `new Map(...)` and `new Set(...)`
+  (`CF_DATA_CONSTRUCTOR_NAMES`, by name), and a construction of a
+  `FabricPrimitive` such as `new FabricDurationNsec(600n)`, which the runtime
+  freezer keeps as it is (`SES_SANDBOXING_SPEC.md` §4.2.3). The class has to
+  be one `commonfabric` declares — under any import name, as a namespace
+  member (`cf.FabricDurationNsec`), or through a `const` bound to a bare
+  reference to one (`constructorNamedBy`, `isCommonFabricSymbol`) — and its
+  instance type has to carry the
+  `FabricPrimitive` brand (`constructsFabricPrimitive`;
+  `declaresFabricPrimitiveBrand` from
+  `@commonfabric/schema-generator/fabric-primitive-brand`, which reads the
+  brand by the name of its key and so is not enough alone). A class of the
+  author's own is not wrapped, whether it shares a primitive's name, declares
+  a member under a symbol named `FABRIC_PRIMITIVE_BRAND` or under the real
+  one, or extends a primitive, nor is a `const` bound to one, so the verifier refuses it before its
+  constructor runs (tests: "wraps a top-level fabric primitive construction
+  with __cfHelpers.__cf_data", "does not wrap a construction that only looks
+  like a fabric primitive"; `packages/runner/test/engine-ses.test.ts`, "keeps
+  a fabric primitive constructed at top level as it is", "refuses a top-level
+  construction that only looks like a fabric primitive"). Notably `new Proxy(...)` is left
+  unwrapped — "Proxy snapshots stay unsupported until Proxy is re-enabled in
+  SES compartments" (`test/transform.test.ts`, "wraps top-level data
+  candidates with __cfHelpers.__cf_data").
 - **Literals.** Regular-expression literals, object literals, and array
   literals are always wrapped.
 - Everything else — identifier references, primitive literals, template
@@ -4125,9 +4170,10 @@ null when it does not apply. Current built-in behavior:
    diagnostic. The open follow-up is recorded in the design-deltas addendum.
 7. A spread, inside a reactive collection callback, of a capture that §9.4 does
    not write out — a `const` initialized by a function call, say — copies
-   nothing, because the callback reads the capture as an opaque reference. No
-   diagnostic reports it unless the capture is a tracked reactive root, whose
-   spread §9.7 reports as not lowerable.
+   nothing, because the callback reads the capture as an opaque reference.
+   §9.4 reports it as an error rather than writing it out; the keys of such a
+   capture are not known when the code is compiled, so the spread itself
+   stays unsupported.
 
 ## 20. Test Coverage Snapshot
 

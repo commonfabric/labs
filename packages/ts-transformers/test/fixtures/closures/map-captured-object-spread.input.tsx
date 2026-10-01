@@ -28,18 +28,22 @@ const record = handler<
 const moduleStyle = { color: "red" };
 
 // FIXTURE: map-captured-object-spread
-// Verifies: a spread of a captured `const` object literal with static keys, in
-//   a reactive `.map()` callback, is written out as the properties it copies
+// Verifies: a spread of a captured `const` whose keys are known where it is
+//   declared, in a reactive `.map()` callback, is written out as the
+//   properties it copies
 //   { ...records, id: item.id } → { log: records.key("log"), prefix: records.key("prefix"), id: ... }
 //   { ...moduleStyle }          → unchanged (a module binding is not captured)
 //   { ...withPrototype }        → { log: withPrototype.key("log") }, since
 //                                 `__proto__: null` sets the prototype
 //   { ...ownProto }             → { ["__proto__"]: ownProto.key("__proto__") },
 //                                 since the shorthand makes an own property
-//   { ...nested }, { ...numbered }
-//                               → unchanged, since neither literal's keys are
-//                                 all static: one holds a spread, one a
-//                                 numeric key
+//   { ...nested }               → { color: nested.key("color"), log: nested.key("log"),
+//                                   prefix: nested.key("prefix") }, the keys
+//                                 the literal's own spreads copy, a module
+//                                 binding's included
+//   { ...numbered }             → { 0: numbered.key("0") }
+//   { ...aliased }              → { log: aliased.key("log"), prefix: aliased.key("prefix") },
+//                                 the keys of the literal the alias names
 // Context: the capture reaches the callback as an opaque reference, which has
 //   no keys to spread
 export default pattern<State>(({ items, log, prefix }) => {
@@ -47,8 +51,9 @@ export default pattern<State>(({ items, log, prefix }) => {
   const withPrototype = { __proto__: null, log };
   const __proto__ = "own";
   const ownProto = { __proto__ };
-  const nested = { ...records };
+  const nested = { ...moduleStyle, ...records };
   const numbered = { 0: log };
+  const aliased = records;
   return {
     [UI]: (
       <div>
@@ -60,6 +65,7 @@ export default pattern<State>(({ items, log, prefix }) => {
             data={{ ...ownProto }}
             nested={{ ...nested }}
             numbered={{ ...numbered }}
+            aliased={{ ...aliased }}
           >
             {item.id}
           </cf-button>

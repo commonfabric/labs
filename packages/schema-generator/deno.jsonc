@@ -6,6 +6,7 @@
     "./cell-brand": "./src/typescript/cell-brand.ts",
     "./common-fabric-symbols": "./src/typescript/common-fabric-symbols.ts",
     "./default-brand": "./src/typescript/default-brand.ts",
+    "./fabric-primitive-brand": "./src/typescript/fabric-primitive-brand.ts",
     "./wrapper-names": "./src/typescript/wrapper-names.ts",
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",

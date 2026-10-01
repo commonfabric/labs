@@ -4,7 +4,6 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { type Cell, unwrapCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
@@ -103,21 +102,8 @@ export function spaceAccess(
  * @throws Error when `target` is not a cell.
  */
 export function spaceOfTarget(target: unknown, call: string): MemorySpace {
-  return linkOfTarget(target, call).space;
-}
-
-/**
- * Returns the link to where the value of the cell `target` lives, after
- * following any links it holds. `call` names the call `target` was passed to,
- * for the error.
- *
- * @throws Error when `target` is not a cell.
- */
-export function linkOfTarget(
-  target: unknown,
-  call: string,
-): NormalizedFullLink {
-  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink();
+  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink()
+    .space;
 }
 
 /**

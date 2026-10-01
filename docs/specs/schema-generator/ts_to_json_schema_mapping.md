@@ -1246,13 +1246,23 @@ Mechanics:
   a label's syntax is read first, each node paired with the part of the type
   it denotes: literal nodes, tuples, type literals, `readonly`, `typeof` value
   reads, and alias references, with the alias's arguments substituted into its
-  body. Syntax the reader does not evaluate, such as a conditional or mapped
-  alias, a spread, rest, or optional tuple element, or a parameter an alias
-  leaves to its default, is read from the paired type instead, and so is a
-  label with no syntax at all. Read from nodes, the extraction recognizes
-  `AnyOf<X>` as
-  `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
-  `__ctPolicyIdentityOf: { file, path }`. Read from a type, an object type's
+  body. A spread tuple element (`...X`, named or not) stands for the
+  elements of the list its operand reads as, so `readonly [...L, "b"]` with
+  `L` bound to `readonly ["c", "d"]` reads as `["c", "d", "b"]`; the tuple's
+  type holds those elements spread already, so no element node pairs with a
+  part of it, and each is read alone. Syntax the reader does not evaluate,
+  such as a conditional or mapped alias, an optional tuple element, a spread
+  whose operand reads as no list (a rest element over an array type), a tuple
+  any of whose elements a spread leaves unread, or a parameter an alias leaves
+  to its default, is read from the paired type instead, and so is a label
+  with no syntax at all. Read from nodes, the extraction recognizes
+  `AnyOf<X>` as `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom
+  containing `__ctPolicyIdentityOf: { file, path }`, each where the alias the
+  reference names is that operator's brand:
+  `{ readonly __ct_cfc_any_of__?: X }` or
+  `{ readonly __ct_cfc_policy_of__?: Rules }`. An alias an author declares
+  under either name, and not as its brand, is read as the type it is, from
+  its syntax as from its type. Read from a type, an object type's
   member is read at its declared annotation, paired with its type, wherever
   that annotation denotes the member's type apart from the `undefined` an
   optional member's `?` adds (`readMemberAnnotation`,

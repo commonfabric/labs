@@ -85,6 +85,17 @@ hop, not an entry, and combines. One policy for the entry and the hops is
 not stated here yet; the pins in `stored-link-schema-precedence.test.ts`
 record both answers as they stand.
 
+A render read is exempt from the entry rule: at the entry it combines
+the way a hop does (`combineSchemaForLink`), so the renderer's schema
+stands against a shaped stored one. A render read is the read a renderer
+takes of the cell it mounts — the worker reconciler's root subscription,
+and the walk of a view's roots that collects what the view renders — and
+the renderer opts in per read, with the `renderRead` option of `get()`
+and `sink()`. That is what lets a piece reached through a link typed by a
+narrow view of it, one that leaves out `[UI]`, still render: the entry
+rule would project the read by the view, which selects no `[UI]`. Every
+other read keeps the entry rule.
+
 A link into another space carries its stored schema across the boundary
 recomposed into a self-contained form, its `cid:` closure loaded from the
 space that holds the link
@@ -228,6 +239,10 @@ broken-declaration arms.
 cell-level reads — the entry rule (by path against within the array, a
 stored `false`, both `unknown` directions, a link into another space), the
 asCell handle regression, and the inherited default.
+`packages/runner/test/render-read-link-schema.test.ts` pins the render
+read's exemption from the entry rule, and
+`packages/html/test/in-process-link-schema.test.ts` the reconciler's root
+mount taking it.
 `packages/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
 recomposition route by route, and
 `packages/patterns/collection-naming/board.test.tsx` pins a lift's view

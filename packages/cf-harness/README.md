@@ -231,9 +231,9 @@ What works today:
 - provider-reported per-turn token usage in run reports, with aggregate input,
   cached-input, cache-write, output, reasoning, and total tokens surfaced in
   operator and batch results
-- GPT-5.6 gateway cost estimates when the provider returns complete cache usage
-  detail; estimates use the public OpenAI token schedule and are kept distinct
-  from provider-reported cost
+- GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
+  cache usage detail; estimates use the public OpenAI token schedule and are
+  kept distinct from provider-reported cost
 - stable prompt-cache affinity across an interactive session, plus opt-in
   reasoning effort and GPT-5.6 gateway implicit/explicit cache-mode controls
 - transcript-based resumability
@@ -488,8 +488,10 @@ including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
 that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
-schedule and is not an invoice or a subscription quota conversion.
+`estimatedCostUsd` is an estimate based on the
+[public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
+for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
+subscription quota conversion.
 
 Interactive streams emit `turn_usage` after each completed model call with the
 root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
@@ -1679,7 +1681,7 @@ limits; the question determines how much research is useful:
 
 The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
-`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
+`gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.

@@ -83,6 +83,9 @@ const WRITER_POLICY_ALIAS_NAMES: ReadonlySet<string> = new Set([
 ]);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
+
+/** The property `PolicyOf<Rules>` is as a type (`@commonfabric/api/cfc`). */
+const CFC_POLICY_OF_BRAND = "__ct_cfc_policy_of__";
 /**
  * What the literal reader returns for syntax it does not evaluate, so that the
  * type paired with that syntax is read in its place. `undefined` is a value it
@@ -548,6 +551,17 @@ type LibraryView = {
    */
   readonly primitive: boolean;
 };
+
+/**
+ * The operand of `element`, a tuple element node, where it spreads one:
+ * `...X`, or `...name: X` in a named tuple.
+ */
+const spreadOperand = (element: ts.TypeNode): ts.TypeNode | undefined =>
+  ts.isRestTypeNode(element)
+    ? element.type
+    : ts.isNamedTupleMember(element) && element.dotDotDotToken
+    ? element.type
+    : undefined;
 
 /**
  * Whether `value`, metadata read from a type, holds no `undefined`: no value
@@ -3331,16 +3345,41 @@ export class CommonFabricFormatter implements TypeFormatter {
       return UNREAD;
     }
     if (ts.isTupleTypeNode(typeNode)) {
-      // A spread, optional, or rest element leaves no element-for-element
-      // reading of the tuple, which its type then decides.
+      // An optional element leaves no element-for-element reading of the
+      // tuple, which its type then decides.
       if (
         typeNode.elements.some((element) =>
-          ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element) ||
-          (ts.isNamedTupleMember(element) &&
-            (element.dotDotDotToken || element.questionToken))
+          ts.isOptionalTypeNode(element) ||
+          (ts.isNamedTupleMember(element) && element.questionToken)
         )
       ) {
         return UNREAD;
+      }
+      if (typeNode.elements.some((element) => spreadOperand(element))) {
+        // A spread element stands for the elements of the list its operand
+        // reads as. The tuple's type holds those elements spread already, so
+        // none pairs with an element node, and each node is read alone. A
+        // tuple that leaves an element unread that way, or spreads what reads
+        // as no list, is left to its type.
+        const values: unknown[] = [];
+        for (const element of typeNode.elements) {
+          const operand = spreadOperand(element);
+          const value = this.#extractLiteralLikeValue(
+            undefined,
+            operand ??
+              (ts.isNamedTupleMember(element) ? element.type : element),
+            context,
+            parameterTypes,
+          );
+          if (!operand) {
+            values.push(value);
+          } else if (Array.isArray(value)) {
+            for (const atom of value) values.push(atom);
+          } else {
+            return UNREAD;
+          }
+        }
+        return readInFull(values) ? values : UNREAD;
       }
       const elementTypes = type && checker.isTupleType(type)
         ? checker.getTypeArguments(type as ts.TypeReference)
@@ -3362,7 +3401,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         typeNode.typeName,
         context,
       );
-      if (referencedName === "AnyOf") {
+      if (
+        referencedName === "AnyOf" &&
+        this.#namesBrand(typeNode.typeName, CFC_ANY_OF_BRAND, context)
+      ) {
         const alternatives = this.#extractLiteralLikeValue(
           type && this.#anyOfBrandPayload(type, context),
           typeNode.typeArguments?.[0],
@@ -3371,7 +3413,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         );
         return Array.isArray(alternatives) ? { anyOf: alternatives } : UNREAD;
       }
-      if (referencedName === "PolicyOf") {
+      if (
+        referencedName === "PolicyOf" &&
+        this.#namesBrand(typeNode.typeName, CFC_POLICY_OF_BRAND, context)
+      ) {
         const bindingNode = typeNode.typeArguments?.[0];
         if (
           bindingNode && ts.isTypeQueryNode(bindingNode) &&
@@ -3547,6 +3592,28 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return undefined;
+  }
+
+  /**
+   * Whether `typeName` refers to an alias whose type is the brand `brand`
+   * names, an object holding that member alone, as `AnyOf` and `PolicyOf` are
+   * (`@commonfabric/api/cfc`). An authored alias that shares their name and
+   * not their brand is read as the type it is, as it is from its type.
+   */
+  #namesBrand(
+    typeName: ts.EntityName,
+    brand: string,
+    context: GenerationContext,
+  ): boolean {
+    const checker = context.typeChecker;
+    const symbol = checker.getSymbolAtLocation(typeName);
+    const declared = symbol &&
+      checker.getDeclaredTypeOfSymbol(resolveAliasedSymbol(symbol, checker));
+    if (!declared || (declared.flags & ts.TypeFlags.Object) === 0) {
+      return false;
+    }
+    const properties = checker.getPropertiesOfType(declared);
+    return properties.length === 1 && properties[0]!.getName() === brand;
   }
 
   /**

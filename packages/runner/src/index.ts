@@ -276,10 +276,6 @@ export {
   pushFrameFromCause,
 } from "./builder/pattern.ts";
 export {
-  SPACE_ACCESS_NOTICE_TYPE,
-  type SpaceAccessNotice,
-} from "./builder/space-access-notice.ts";
-export {
   AuthSchema,
   type Cell as BuilderCell,
   CHIP_UI,

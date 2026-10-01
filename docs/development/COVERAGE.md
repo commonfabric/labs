@@ -780,7 +780,9 @@ is what it promises. In brief:
   under test. A set with no baseline the branch contains is reported rather than
   failed.
 - A **rise** above the baseline fails the pull request, unless its description
-  accepts it.
+  accepts it. Every line of the member that the set's tests newly cover lowers
+  the count, so where the new code cannot all be covered, tests for other
+  uncovered lines of the member bring the count back down.
 
 Accept a rise with a marker in the pull request's description, on a line of its
 own and flush against the left margin:
@@ -805,8 +807,7 @@ reach. The gate passes the set when its uncovered-line count is at most the
 baseline plus that number. Stating the rise is what makes the marker survive a
 rebase: the baseline moves with the commit the branch contains, and a total
 written for one baseline says something different against the next, while a rise
-says the same thing against every baseline. The gate prints the line to paste,
-with the rise it measured already filled in.
+says the same thing against every baseline.
 
 The left margin is what tells an acceptance from a mention of one. A description
 can name the marker in a sentence, and can indent an example of it into a code
