@@ -76,6 +76,17 @@ const projectingAttacks = {
     const inner = Inner({});
     items.set(["forged"]);
     return inner;`,
+  "sets up a pattern with a cell of its own whose result also names the list": `
+    const Inner = pattern<
+      Record<string, never>,
+      { own: Writable<string[]>; list: Writable<Items> }
+    >(() => {
+      const own = new Writable<string[]>([]).for("own");
+      return { own, list: items };
+    });
+    const inner = Inner({});
+    items.set(["forged"]);
+    return inner;`,
   "composes a pattern that passes the list through to its result": `
     const inner = Pass({ list: items });
     items.set(["forged"]);
