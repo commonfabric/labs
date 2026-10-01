@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { URI } from "@commonfabric/memory/interface";
+import type { FabricValue } from "@commonfabric/data-model";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
@@ -77,10 +78,22 @@ const COUNTED_ITEMS_SCHEMA = internSchema(
   true,
 );
 
+/**
+ * The write policy for a write that leaves anything at `items`, keeping the
+ * label the seeded documents give the array's membership.
+ */
+const LABELED_ITEMS_SCHEMA = internSchema(
+  {
+    type: "object",
+    properties: { items: { ifc: { confidentiality: ["count-secret"] } } },
+  } as JSONSchema,
+  true,
+);
+
 type ItemsWrite = (
   runtime: Runtime,
   id: URI,
-  items: string[],
+  items: FabricValue,
 ) => Promise<void>;
 
 /**
@@ -139,15 +152,21 @@ async (runtime, id, items) => {
 };
 
 /**
- * Runs an effect that reads `items.length` of a document `write` stores, adds
- * a third item with `write`, and returns the confidentiality of the label the
- * rerun's own write derives. The rerun reads the count again only when
- * `rereads` is set.
+ * Runs an effect that reads `items.length` of a document `write` stores as
+ * two items, stores `next` in their place with `write`, and returns the
+ * confidentiality of the label the rerun's own write derives. The rerun reads
+ * the count again only when `rereads` is set, and writes `rerunWrites` to
+ * `items` itself when it is given. Only the first rerun writes, so the label
+ * is that rerun's even when its own write schedules another.
  */
 const derivedLabelAfterCountChange = async (
   name: string,
   write: ItemsWrite,
-  rereads: boolean,
+  { rereads = false, next = ["a", "b", "c"], rerunWrites }: {
+    rereads?: boolean;
+    next?: FabricValue;
+    rerunWrites?: FabricValue;
+  } = {},
 ): Promise<readonly string[] | undefined> => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -178,10 +197,23 @@ const derivedLabelAfterCountChange = async (
     let runs = 0;
     const action: Action = (atx) => {
       runs++;
-      if (runs === 1 || rereads) {
+      if (runs === 1 || (runs === 2 && rereads)) {
         source.withTx(atx).key("items").key("length").getRaw();
       }
-      if (runs > 1) flag.withTx(atx).set({ ran: runs });
+      if (runs !== 2) return;
+      if (rerunWrites !== undefined) {
+        atx.writeOrThrow(
+          { space: signer.did(), scope: "space", id, path: ["value", "items"] },
+          rerunWrites,
+        );
+        atx.recordCfcWritePolicyInput({
+          kind: "schema",
+          target: { space: signer.did(), scope: "space", id, path: [] },
+          schemaHash: LABELED_ITEMS_SCHEMA.taggedHashString,
+          schema: LABELED_ITEMS_SCHEMA.schema,
+        });
+      }
+      flag.withTx(atx).set({ ran: runs });
     };
     runtime.scheduler.subscribe(
       action,
@@ -191,9 +223,9 @@ const derivedLabelAfterCountChange = async (
     await runtime.idle();
     expect(runs).toBe(1);
 
-    await write(runtime, id, ["a", "b", "c"]);
+    await write(runtime, id, next);
     await runtime.idle();
-    expect(runs).toBe(2);
+    expect(runs).toBeGreaterThan(1);
 
     return replicaEntries(storageManager, flag.getAsNormalizedFullLink().id)
       .find((entry) => entry.origin === "derived")?.label.confidentiality;
@@ -1227,7 +1259,6 @@ describe("CFC flow labels (default transition)", () => {
         await derivedLabelAfterCountChange(
           "schema-enumerate",
           writeThroughCountedSchema,
-          false,
         ),
       ).toContainEqual("count-secret");
     });
@@ -1237,7 +1268,6 @@ describe("CFC flow labels (default transition)", () => {
         await derivedLabelAfterCountChange(
           "stored-enumerate",
           seedItemsLabeled({ origin: "declared", observes: "enumerate" }),
-          false,
         ),
       ).toContainEqual("count-secret");
     });
@@ -1247,7 +1277,6 @@ describe("CFC flow labels (default transition)", () => {
         await derivedLabelAfterCountChange(
           "stored-structure",
           seedItemsLabeled({ origin: "structure" }),
-          false,
         ),
       ).toContainEqual("count-secret");
     });
@@ -1257,7 +1286,47 @@ describe("CFC flow labels (default transition)", () => {
         await derivedLabelAfterCountChange(
           "schema-enumerate-reread",
           writeThroughCountedSchema,
-          true,
+          { rereads: true },
+        ),
+      ).toContainEqual("count-secret");
+    });
+
+    // The change that schedules the rerun may replace the array with
+    // something that is not one, and the count it read still changed. The
+    // array's own label joins the rerun whatever the array was replaced by.
+    for (
+      const [kind, entry] of [
+        ["an enumerate", { origin: "declared", observes: "enumerate" }],
+        ["a structure", { origin: "structure" }],
+      ] as const
+    ) {
+      for (
+        const [replacement, next] of [
+          ["a string", "gone"],
+          ["null", null],
+          ["an object with a length field", { length: 3 }],
+        ] as const
+      ) {
+        it(`joins ${kind} label when the array is replaced by ${replacement}`, async () => {
+          expect(
+            await derivedLabelAfterCountChange(
+              `${kind}-replaced-by-${replacement}`.replaceAll(" ", "-"),
+              seedItemsLabeled(entry),
+              { next },
+            ),
+          ).toContainEqual("count-secret");
+        });
+      }
+    }
+
+    it("joins the label when the rerun itself replaces the array", async () => {
+      // The rerun's own write is in the transaction its labels are prepared
+      // in, so what it leaves at `items` does not decide what the count read.
+      expect(
+        await derivedLabelAfterCountChange(
+          "stored-enumerate-rerun-replaces",
+          seedItemsLabeled({ origin: "declared", observes: "enumerate" }),
+          { rerunWrites: "gone" },
         ),
       ).toContainEqual("count-secret");
     });

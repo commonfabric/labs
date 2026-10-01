@@ -294,25 +294,22 @@ const nativeLengthParent = (
 };
 
 /**
- * Returns the logical path of the array whose native `length` a trigger read
- * names, or `undefined` when it names none. A trigger read (§8.9.2) holds the
- * logical path of the read whose change scheduled the run, and is charged as
- * that read is in the journal: {@link nativeLengthParent} decides, at the
- * same path rooted at the stored document.
+ * Returns the logical path of the parent a trigger read of a `length` names,
+ * or `undefined` when its path does not end in `length`. A trigger read
+ * (§8.9.2) holds the logical path of the read whose change scheduled the run.
+ * A read of an array's `length` observes the array's membership, so the
+ * parent is charged as a shape read whatever it holds when the rerun
+ * prepares: the change that scheduled the rerun, or the rerun's own write,
+ * may have replaced the array with something that is not one, and the count
+ * the run read still came from it. An object field named `length` is charged
+ * the same way, which over-charges, the safe direction.
  */
 const triggerReadLengthParent = (
-  tx: IExtendedStorageTransaction,
-  trigger: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "path">,
-): readonly string[] | undefined => {
-  const parent = nativeLengthParent(tx, {
-    space: trigger.space,
-    id: trigger.id,
-    scope: trigger.scope,
-    type: "application/json",
-    path: ["value", ...trigger.path],
-  });
-  return parent === undefined ? undefined : canonicalizeDocumentPath(parent);
-};
+  path: readonly string[],
+): readonly string[] | undefined =>
+  path.at(-1) === "length"
+    ? canonicalizeLogicalPath(path.slice(0, -1))
+    : undefined;
 
 const labelForEntriesAtPath = (
   entries: readonly LabelMapEntry[],
@@ -4077,14 +4074,8 @@ const forEachFlowObservation = (
     ) {
       return true;
     }
-    // A trigger read of an array's `length` observes the array's membership,
-    // as the same read in the journal does above.
-    const lengthOf = triggerReadLengthParent(tx, {
-      space: trigger.space,
-      id,
-      scope,
-      path: trigger.path,
-    });
+    // A trigger read of a `length` observes its parent's membership.
+    const lengthOf = triggerReadLengthParent(trigger.path);
     if (
       lengthOf !== undefined &&
       consume(
@@ -9308,7 +9299,7 @@ const collectConsumedLabelImpl = (
     const lengthOf = isLinkResolutionProbe(read.meta)
       ? undefined
       : isTriggerRead
-      ? triggerReadLengthParent(tx, read)
+      ? triggerReadLengthParent(read.path)
       : nativeLengthParent(tx, read);
     if (lengthOf !== undefined) {
       collectAt(toLogical(lengthOf), true);
