@@ -174,7 +174,7 @@ Four forks were resolved explicitly rather than by default:
    signer's allowlist; adding these would let any pattern mint a channel with
    the user's authority and read the one-time token back. Webhooks solve the
    equivalent problem with `cf-secret-viewer`, and that is the prerequisite for
-   an in-pattern client. All four verbs are POST so it stays possible.
+   an in-pattern client. Every verb is POST so it stays possible.
 
 ## Deployment precondition — state it, don't bury it
 

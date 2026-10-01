@@ -1,8 +1,9 @@
 # Gmail push ingest
 
-Gmail push ingest lets a mailbox change wake whatever syncs that mailbox,
-without the syncer polling Gmail on a timer or being reachable from the
-internet. Gmail's `users.watch` publishes to a Cloud Pub/Sub topic when a
+Gmail push ingest lets a mailbox change wake whatever syncs that mailbox
+promptly, without the syncer being reachable from the internet. It replaces
+frequent polling of Gmail as the way new mail is noticed; a slower poll stays
+as the backstop for a notification that never arrives. Gmail's `users.watch` publishes to a Cloud Pub/Sub topic when a
 watched mailbox changes. A Pub/Sub push subscription delivers each message to
 toolshed, and toolshed appends a record to the journal of every
 [ingest channel](self-serve-ingest-channels.md) bound to that mailbox. The
@@ -90,17 +91,23 @@ causes a request to Gmail.
 | --- | --- |
 | 200 | Bound |
 | 400 | Gmail did not accept the access token |
+| 401 | Missing or invalid first-party request proof |
 | 403 | Not an owner of the channel's space, or no such channel |
-| 409 | The channel is revoked or expired, the mailbox is at its limit, or the binding changed concurrently |
+| 409 | The channel is revoked or expired, the mailbox is at its limit, the binding changed concurrently, or this deployment cannot write to the space |
+| 413 | Body over 16 KB, checked before the proof |
+| 422 | Body failed schema validation, checked after the proof |
+| 429 | Rate limited |
 | 502 | Storage failed, or the Gmail lookup failed |
 
 `gmail-unbind` takes `{ id }` and returns `{ id, unbound }`, where `unbound`
 says whether the channel was bound to anything. It needs only ownership, and
-works on a revoked channel, so a retired channel can still be cleared.
+works on a revoked channel, so a retired channel can still be cleared. It
+answers with the same statuses as `gmail-bind`, apart from 400.
 
 `gmail-bind` shares the mint and rotate rate-limit bucket, because each call
-costs a request to Gmail. `gmail-unbind` shares revoke's, because it is the
-verb that has to stay available.
+costs a request to Gmail. `gmail-unbind` has a bucket of its own, so that it
+stays available when binding is throttled and never spends the budget that
+revoke relies on.
 
 ## The record
 

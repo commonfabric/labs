@@ -56,13 +56,14 @@ const readLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 const revokeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
 // Binding shares the mint bucket, because each bind costs an outbound call to
 // Gmail. Unbinding, like revoking, is the verb that must stay available, so it
-// shares revoke's.
+// stays out of that bucket; and it has one of its own rather than revoke's, so
+// that unbind traffic can never refuse a revoke.
+const unbindLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
 for (const verb of ["mint", "rotate", "gmail-bind"]) {
   router.use(`${routes.BASE}/${verb}`, rateLimit(mintLimiter));
 }
-for (const verb of ["revoke", "gmail-unbind"]) {
-  router.use(`${routes.BASE}/${verb}`, rateLimit(revokeLimiter));
-}
+router.use(`${routes.BASE}/revoke`, rateLimit(revokeLimiter));
+router.use(`${routes.BASE}/gmail-unbind`, rateLimit(unbindLimiter));
 router.use(`${routes.BASE}/list`, rateLimit(readLimiter));
 
 // Deliberately NO cors(): a credentialed control plane must not opt into the

@@ -332,6 +332,12 @@ export const gmailUnbind = createRoute({
         "The channel is bound to no mailbox; `unbound` says whether it was",
     },
     ...commonResponses,
+    [HttpStatusCodes.CONFLICT]: {
+      ...jsonError,
+      description:
+        "The binding changed concurrently, or this deployment cannot write " +
+        "to the space",
+    },
   },
 });
 

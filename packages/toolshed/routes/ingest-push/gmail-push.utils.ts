@@ -423,7 +423,7 @@ function decodeNotification(rawBody: string): GmailNotification | null {
 
   let notification: unknown;
   try {
-    const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
+    const bytes = Uint8Array.fromBase64(data);
     notification = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;

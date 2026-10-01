@@ -48,7 +48,7 @@ export async function processGmailBind(
   if (channelRefusal(owned.registration) !== null) {
     return {
       status: 409,
-      body: { error: "Channel is revoked or expired; rotate it first" },
+      body: { error: "Channel is revoked or expired; it must be live to bind" },
     };
   }
 
