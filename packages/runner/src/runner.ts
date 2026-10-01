@@ -892,9 +892,10 @@ const recordSetupProjectionPolicyInputs = (
   // still-deferred binding of an embedded pattern) is inert there. The
   // prepare gate agrees: marker verification requires the stored value to be
   // a sigil redirect (`setupProjectionSourceMatchesValue`), and recording a
-  // marker for an alias would wrongly widen
+  // result-projection marker for an alias would wrongly widen
   // `writeIsPatternSetupInitialization`'s trusted-initialization exemption to
-  // a path nothing redirects to.
+  // a path nothing redirects to. An argument-projection marker grants that
+  // exemption nothing; one for an alias would name a slot no check accepts.
   if (isWriteRedirectLink(projection)) {
     const target = resultCell.getAsNormalizedFullLink();
     const source = parseLink(projection, target);
