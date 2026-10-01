@@ -7,6 +7,7 @@ import {
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessRunArtifacts } from "../src/artifacts.ts";
 import {
@@ -837,19 +838,15 @@ Deno.test("parseCfHarnessCliArgs resolves run manifest paths", async () => {
   assertEquals(parsed.runManifestPath, "/tmp/project/loom-run.json");
 });
 
-Deno.test("parseCfHarnessCliArgs rejects malformed max-model-turns values", async () => {
-  await assertRejects(
-    () =>
-      parseCfHarnessCliArgs(
-        ["--prompt", "hi", "--max-model-turns", "2.5"],
-        {
-          cwd: "/tmp/project",
-          env: {},
-        },
-      ),
-    Error,
-    "--max-model-turns must be a positive integer",
-  );
+describe("CLI model turn budgets", () => {
+  for (const value of ["2.5", "0", "9007199254740993"]) {
+    it(`rejects a turn budget of ${value}`, async () => {
+      await expect(parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--max-model-turns", value],
+        { cwd: "/tmp/project", env: {} },
+      )).rejects.toThrow("--max-model-turns must be a positive integer");
+    });
+  }
 });
 
 Deno.test("parseCfHarnessCliArgs refuses a misspelled restriction flag, naming the flag it meant", async () => {

@@ -202,7 +202,7 @@ Deno.test("GPT-5.6 long-context pricing applies to the full request", () => {
 });
 
 describe("current OpenAI model usage estimates", () => {
-  it("GPT-6.1 Sol estimates price cached reads, writes, and long context", () => {
+  it("estimates GPT-6.1 Sol prices for cached reads, writes, and long context", () => {
     expect(estimateOpenAIModelUsageCostUsd("gpt-6.1-sol", {
       inputTokens: 2_000,
       cachedInputTokens: 1_200,
