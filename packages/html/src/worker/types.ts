@@ -325,7 +325,7 @@ export function normalizeRenderDeclassificationPolicy(
  * narrows further. `atoms` are admitted by structural equality (the place
  * for acting-user identity atoms); `caveatKinds` admits Caveat-type atoms
  * by kind (the prompt-caveat family, SC-54). Admitting a caveat is not
- * discharging it: it stays on the value for every other sink. Everything
+ * discharging it: it stays on the value. Everything
  * else renders as the blocked placeholder. Undefined = no default ceiling
  * (today's behavior); the profile may only be tightened, not loosened,
  * without a new release judgment (SC-54 is one).

@@ -3244,12 +3244,14 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
     await t.step(
       "the prompt-caveat family renders the acting user's own unscreened text",
       async () => {
-        // Spec §8.10.6 admits the §10.1 prompt-caveat family at the default
-        // display ceiling: a prompt caveat says not to trust the content as
-        // instructions to a model, and a display shows it to the acting user.
-        // The acting user's own note under the unscreened tier renders. The
-        // same note under a caveat kind outside the family stays hidden, so
-        // the family is not "any caveat".
+        // SC-54 (proposed §8.10.6) admits the §10.1 prompt-caveat family at
+        // the default display ceiling: a prompt caveat says not to trust the
+        // content as instructions to a model, and a display shows it to the
+        // acting user. The acting user's own note renders under the
+        // unscreened tier in either spelling. The same note stays hidden
+        // under the retired unsuffixed kind (#5661) and under a caveat kind
+        // outside the family, so the family is not "any caveat". The ceiling
+        // and resolver are the production shape lib-shell builds.
         const seedTx = runtime.edit();
         const seedCaveated = (id: string, value: string, kind: string) => {
           const cell = runtime.getCell<string>(
@@ -3292,6 +3294,16 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           "Owner's own unscreened message",
           CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
         );
+        const unscreenedShort = seedCaveated(
+          "cfc-render-policy-own-unscreened-short",
+          "Owner's own message, short spelling",
+          "prompt-injection-risk-unscreened",
+        );
+        const retired = seedCaveated(
+          "cfc-render-policy-own-retired-kind",
+          "Owner's note under the retired kind",
+          "prompt-injection-risk",
+        );
         const offFamily = seedCaveated(
           "cfc-render-policy-own-off-family",
           "Owner's note under another caveat",
@@ -3303,15 +3315,28 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const reconciler = new WorkerReconciler({
           onOps: collector.onOps,
           renderConfidentialityCeiling: {
-            atoms: [signer.did()],
+            atoms: [
+              cfcAtom.user(signer.did()),
+              cfcAtom.personalSpace(signer.did()),
+              signer.did(),
+            ],
             caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
           },
+          resolveRenderConfidentiality: createRenderConfidentialityResolver({
+            actingPrincipal: signer.did(),
+            memberSpaces: [signer.did()],
+          }),
         });
         const cancel = reconciler.mount({
           type: "vnode",
           name: "div",
           props: {},
-          children: [unscreened as never, offFamily as never],
+          children: [
+            unscreened as never,
+            unscreenedShort as never,
+            retired as never,
+            offFamily as never,
+          ],
         });
         try {
           await t.settle();
@@ -3320,6 +3345,14 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           assertEquals(
             renderedText.includes("Owner's own unscreened message"),
             true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's own message, short spelling"),
+            true,
+          );
+          assertEquals(
+            renderedText.includes("Owner's note under the retired kind"),
+            false,
           );
           assertEquals(
             renderedText.includes("Owner's note under another caveat"),

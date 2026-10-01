@@ -94,10 +94,10 @@ export function defaultRenderConfidentialityCeiling(
       cfcAtom.personalSpace(actingUser),
       actingUser,
     ],
-    // The whole §10.1 prompt-caveat family (§8.10.6), screening tiers
-    // included. A prompt caveat says not to trust the content as
-    // instructions to a model; a display shows it to the acting user. The
-    // caveat stays on the value, so a model sink still evaluates it.
+    // The whole §10.1 prompt-caveat family (SC-54, proposed §8.10.6),
+    // screening tiers included. A prompt caveat says not to trust the
+    // content as instructions to a model; a display shows it to the acting
+    // user. Admitting it is not discharging it: it stays on the value.
     caveatKinds: [...PROMPT_CAVEAT_FAMILY_KINDS],
   };
 }

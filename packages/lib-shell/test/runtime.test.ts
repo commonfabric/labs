@@ -968,7 +968,8 @@ describe("RuntimeInternals", () => {
     // and its short spelling (the unsuffixed form is retired, #5661). A prompt
     // caveat says not to trust the content as instructions to a model; a
     // display shows it to the acting user, so the default display ceiling
-    // admits it (§8.10.6). Admission is not discharge: the caveat stays on
+    // admits it (SC-54, proposed §8.10.6). Admission is not discharge: the
+    // caveat stays on
     // the value. Spelled out here rather than read from the constant the
     // ceiling is built from, so a family member missing there fails here.
     const family = [

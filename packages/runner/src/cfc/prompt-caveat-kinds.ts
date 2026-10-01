@@ -41,10 +41,11 @@ export const MATERIAL_RISK_DISCHARGE_KINDS: readonly string[] = [
  * is not a member: labs retired it (#5661) and keeps it inert.
  *
  * Every member says the same thing: do not trust this content as instructions
- * to a model. The default display ceiling admits the family (§8.10.6),
- * because a display shows content to the acting user. Admitting a caveat at a
- * display is not discharging it: the caveat stays on the value, and every
- * model sink still evaluates it.
+ * to a model. The default display ceiling admits the family (SC-54, proposed
+ * §8.10.6), because a display shows content to the acting user. Admitting a
+ * caveat at a display is not discharging it: the caveat stays on the value.
+ * That alone does not make a model sink refuse it; labs' llm sinks are
+ * ungated today (docs/plans/cfc-llm-sink-admission.md).
  */
 export const PROMPT_CAVEAT_FAMILY_KINDS: readonly string[] = [
   ...MATERIAL_RISK_KINDS,
