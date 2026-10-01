@@ -2276,10 +2276,19 @@ export default pattern<
         entries().length === 2 &&
         entries().every((entry) => entry.consequenced),
     );
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: {
+        phase: "dispatch-load",
+        failureClass: "protocol",
+        code: "permanent-delivery-failure",
+      },
+    });
     const stored = readDoc(engine, {
       id: argument.getAsNormalizedFullLink().id,
     })?.value as { links: unknown[] };
-    expect(parseLink(stored.links.at(-1))).toMatchObject({
+    expect(stored.links).toHaveLength(1);
+    expect(parseLink(stored.links[0])).toMatchObject({
       id: later.getAsNormalizedFullLink().id,
     });
   });
