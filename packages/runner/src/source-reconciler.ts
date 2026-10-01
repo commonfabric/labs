@@ -646,11 +646,9 @@ export class SourceReconciler {
   }
 
   /**
-   * A pattern this deployment's toolshed serves. Its `?identity` route reports
-   * the identity the current source compiles to, so one conditional request
-   * settles whether anything moved before any source is downloaded. Attached
-   * source entries belong to that program's identity, so both the identity
-   * request and resolution carry the retained source roots.
+   * Follows a pattern this deployment's toolshed serves. An entry-only identity
+   * match needs no stored-source read; a mismatch loads the retained source
+   * roots and checks their combined identity before downloading an update.
    */
   async #followSystem(
     resultCell: Cell<unknown>,
@@ -661,25 +659,36 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     const fetch = this.#revalidatingFetch(signal);
     const target = this.#systemSourceUrl(origin.route, state.space);
-    const stored = await this.#runtime.patternManager
-      .getPatternSourceProgramByIdentity(
-        state.running.identity,
-        state.space,
-      );
-    signal.throwIfAborted();
-    // Missing stored source retains the existing origin-recovery policy:
-    // rebuild the entry and record the displaced identity. Retained roots
-    // can only be protected when the verified program still names them.
-    const sourceRoots = stored?.sourceRoots ?? [];
-    const answer = await this.#advertisedIdentity(
-      target,
-      fetch,
-      signal,
-      sourceRoots,
-    );
+    let answer = await this.#advertisedIdentity(target, fetch, signal);
     if ("detail" in answer) {
       state.detail = answer.detail;
       return "unavailable";
+    }
+    let sourceRoots: readonly string[] = [];
+    // Attached roots participate in the stored identity. An entry-only match
+    // therefore needs no stored-source verification or compiler-stack load.
+    if (answer.identity !== state.running.identity) {
+      const stored = await this.#runtime.patternManager
+        .getPatternSourceProgramByIdentity(
+          state.running.identity,
+          state.space,
+        );
+      signal.throwIfAborted();
+      // Missing stored source permits rebuilding the entry and recording the
+      // displaced identity. Roots can only be retained from a verified program.
+      sourceRoots = stored?.sourceRoots ?? [];
+      if (sourceRoots.length > 0) {
+        answer = await this.#advertisedIdentity(
+          target,
+          fetch,
+          signal,
+          sourceRoots,
+        );
+        if ("detail" in answer) {
+          state.detail = answer.detail;
+          return "unavailable";
+        }
+      }
     }
     const advertised = answer.identity;
     state.offered = { identity: advertised, symbol: state.running.symbol };

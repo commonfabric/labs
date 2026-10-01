@@ -120,6 +120,37 @@ describe("PatternsRoute", () => {
     });
   });
 
+  it("accepts 32 distinct attached roots", async () => {
+    const sourceRoots = Array.from(
+      { length: 32 },
+      (_, i) => `/api/patterns/root-${i}.ts`,
+    );
+    const files = {
+      "main.tsx": ENTRY,
+      "leaf.ts": ENTRY,
+      ...Object.fromEntries(sourceRoots.map((name) => [
+        name.slice("/api/patterns/".length),
+        IMPORTER,
+      ])),
+    };
+    await withRoute(files, async (route) => {
+      const url = new URL(
+        "https://host.invalid/api/patterns/main.tsx?identity",
+      );
+      for (const root of sourceRoots) {
+        url.searchParams.append("sourceRoot", root);
+      }
+      const response = await route.serve(new Request(url));
+      const expected = await resolveEntryIdentity(
+        "/api/patterns/main.tsx",
+        (name) => route.getText(name.slice("/api/patterns/".length)),
+        { sourceRoots },
+      );
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe(expected);
+    });
+  });
+
   it("bounds the number of attached roots an identity request can name", async () => {
     await withRoute({ "main.tsx": ENTRY }, async (route) => {
       const url = new URL(

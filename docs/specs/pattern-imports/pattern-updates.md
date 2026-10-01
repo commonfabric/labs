@@ -428,6 +428,12 @@ light computation (`resolveEntryIdentity` in the runner). The worker
 independently checks the result by compiling the downloaded closure and
 comparing its compiler-produced entry identity.
 
+Attached source roots travel as repeated `sourceRoot` query parameters naming
+full `/api/patterns/` pathnames, retaining any percent-encoding. The route accepts
+up to 32 distinct roots, validates their paths, and caches by the entry and sorted
+roots. Closure validation shares one import graph across the entry and every
+root, so adding roots does not repeatedly parse the combined file set.
+
 Three implementation facts make the light identity equal what the worker stores
 as `patternIdentity`, verified by a parity test against the real
 `default-app.tsx`, `home.tsx`, and `examples/phonetic-speller.tsx`:
@@ -477,6 +483,11 @@ then start it:
    after a `304`; the browser may not replay it without validation. An HTTP
    failure, empty response, or exception performs no metadata write; the
    subsequent start retains its normal loud failure.
+   When the entry-only identity differs from the running identity, read the
+   verified stored program. If it carries attached source roots, request the
+   identity again with those roots and retain them during source resolution.
+   A matching entry-only identity needs no stored-source read. If an attached
+   root cannot be resolved, the piece keeps its running source.
 3. If `currentId` equals the running `patternIdentity.identity`, probe that
    exact stored artifact. A successful load is done. A missing or unloadable
    artifact continues to compile from source rather than taking the fast path,

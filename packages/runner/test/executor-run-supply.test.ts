@@ -31,6 +31,10 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  createDocumentReadiness,
+  DocumentPending,
+} from "../src/document-readiness.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import { stampWaveRunContext, waveRunContextOf } from "../src/executor/wave.ts";
 import { MAX_RETRIES_FOR_REACTIVE } from "../src/scheduler/constants.ts";
@@ -857,6 +861,148 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       expect(runs.alice - 1).toBeLessThanOrEqual(MAX_RETRIES_FOR_REACTIVE + 1);
     } finally {
       cancel();
+    }
+  });
+
+  it("re-runs only the instance that awaited a document when its confirmation completes, so a refused instance's retries stop at the budget", async () => {
+    // A builtin that holds its output while a document loads re-arms its
+    // action once the document's presence or absence is confirmed. Were the
+    // re-arm to re-run bob, each of his commits would reset the retry budget
+    // the two instances share, and every document alice awaited would hand
+    // her refused retries another budget.
+
+    const rootId = "of:p2f-readiness-root";
+    const awaitedDocuments = 3;
+    const userDoc = runtime.getCellFromLink<{ v?: number }>({
+      space,
+      id: "of:p2f-readiness-user-doc" as never,
+      scope: "user",
+      path: [],
+    });
+    const spaceDoc = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-readiness-space-doc" as never,
+      scope: "space",
+      path: [],
+    });
+    const output = runtime.getCellFromLink<number>({
+      space,
+      id: "of:p2f-readiness-output" as never,
+      scope: "user",
+      path: [],
+    });
+    const awaited = (index: number) =>
+      runtime.getCellFromLink<number>({
+        space,
+        id: `of:p2f-readiness-awaited-${index}` as never,
+        scope: "space",
+        path: [],
+      });
+    let refuseAlice = false;
+    let committed: Promise<unknown> = Promise.resolve();
+    runtime.installSealDestination({
+      seal: (tx: IExtendedStorageTransaction) => {
+        if (
+          refuseAlice &&
+          waveRunContextOf(tx)?.scopeKeyIdentity?.principal === alice.principal
+        ) {
+          const reason = new Error("write refused for alice");
+          tx.tx.abort(reason);
+          return committed.then(() => ({
+            error: {
+              name: "StorageTransactionAborted",
+              message: "write refused for alice",
+              reason,
+            },
+          }));
+        }
+        const result = tx.tx.commit();
+        committed = result;
+        return result;
+      },
+    }, {
+      runStamper: recordingStamper,
+      runDemanderResolver: (pieceRootIds) =>
+        pieceRootIds.includes(rootId) ? [alice, bob] : [],
+    });
+    const cancels: (() => void)[] = [];
+    const readiness = createDocumentReadiness(
+      runtime,
+      (cancel) => cancels.push(cancel),
+    );
+    const runs = { alice: 0, bob: 0 };
+    let refusedRuns = 0;
+    let writes = 0;
+    const action = Object.assign(
+      (tx: IExtendedStorageTransaction) => {
+        userDoc.withTx(tx).get();
+        const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
+        if (principal === alice.principal) {
+          runs.alice += 1;
+          if (refuseAlice) {
+            // Each of alice's first refused runs awaits a document of its own.
+            refusedRuns += 1;
+            if (refusedRuns <= awaitedDocuments) {
+              try {
+                readiness.requireDocument(awaited(refusedRuns), tx);
+              } catch (error) {
+                if (!(error instanceof DocumentPending)) throw error;
+              }
+            }
+          }
+        } else if (principal === bob.principal) {
+          runs.bob += 1;
+        }
+        writes += 1;
+        output.withTx(tx).set((spaceDoc.withTx(tx).get() ?? 0) * 1000 + writes);
+      },
+      {
+        schedulerObservationIdentity: {
+          pieceId: `space:${rootId}`,
+          pieceRootId: rootId,
+        },
+      },
+    );
+    const cancel = runtime.scheduler.register(action, undefined, {
+      isEffect: true,
+    });
+    readiness.onActionRegistered(action);
+    try {
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toEqual({ alice: 1, bob: 1 });
+
+      // A write to a space document both instances read dirties both.
+      refuseAlice = true;
+      await runtime.editWithRetry((tx) => spaceDoc.withTx(tx).set(1));
+      await runtime.scheduler.idleWithPendingCommits();
+      await storageManager.crossSpaceSettled();
+      await runtime.scheduler.idleWithPendingCommits();
+
+      // Every awaited document's confirmation completed.
+      for (let index = 1; index <= awaitedDocuments; index += 1) {
+        const tx = runtime.edit();
+        let pending = false;
+        try {
+          readiness.requireDocument(awaited(index), tx);
+        } catch (error) {
+          pending = error instanceof DocumentPending;
+        } finally {
+          tx.abort();
+        }
+        expect(pending).toBe(false);
+      }
+
+      // Alice ran for the write, through her retry budget, and once more for
+      // each confirmation that completed after the budget was spent. Bob ran
+      // once more, for the write.
+      expect(runs.alice - 1).toBeGreaterThanOrEqual(MAX_RETRIES_FOR_REACTIVE);
+      expect(runs.alice - 1).toBeLessThanOrEqual(
+        MAX_RETRIES_FOR_REACTIVE + 1 + awaitedDocuments,
+      );
+      expect(runs.bob).toBe(2);
+    } finally {
+      cancel();
+      cancels.forEach((cancelReadiness) => cancelReadiness());
     }
   });
 });
