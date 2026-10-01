@@ -10,13 +10,24 @@ import {
   FabriChatManagerCore,
   type FabriChatManagerOutput,
 } from "../../../fabrichat/manager.tsx";
-import { type ChatProfile } from "../../../fabrichat/schemas.tsx";
+import {
+  type ChatIndexEntry,
+  type ChatManagerNotice,
+  type ChatProfile,
+  type ChatRequestOutcome,
+} from "../../../fabrichat/schemas.tsx";
 
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
 export default pattern<Record<PropertyKey, never>, FabriChatManagerOutput>(
   () => {
     const profile = Writable.of<ChatProfile>({ name: "Starter" });
-    return FabriChatManagerCore({ myProfile: profile } as ManagerArg);
+    return FabriChatManagerCore({
+      myProfile: profile,
+      rooms: Writable.of<ChatIndexEntry[]>([]),
+      direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+      requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+      outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    } as ManagerArg);
   },
 );

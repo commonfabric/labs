@@ -80,13 +80,13 @@ export default pattern(() => {
   // A direct room: one per counterpart, found again after it is forgotten.
   const directRooms = Writable.of<ChatIndexEntry[]>([]);
   const directNotices = Writable.of<ChatManagerNotice[]>([]);
-  const direct = FabriChatManagerCore(
-    {
-      myProfile: profile,
-      rooms: directRooms,
-      outgoingNotices: directNotices,
-    } as ManagerArg,
-  );
+  const direct = FabriChatManagerCore({
+    myProfile: profile,
+    rooms: directRooms,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    outgoingNotices: directNotices,
+  } as ManagerArg);
   const directHeld = Writable.of<HeldRoom>({});
   const action_hold_direct = action(() =>
     directHeld.key("room").set(directRooms.key(0).key("room").resolveAsCell())
@@ -103,14 +103,13 @@ export default pattern(() => {
   const groupRooms = Writable.of<ChatIndexEntry[]>([]);
   const groupNotices = Writable.of<ChatManagerNotice[]>([]);
   const groupRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
-  const group = FabriChatManagerCore(
-    {
-      myProfile: profile,
-      rooms: groupRooms,
-      requests: groupRequests,
-      outgoingNotices: groupNotices,
-    } as ManagerArg,
-  );
+  const group = FabriChatManagerCore({
+    myProfile: profile,
+    rooms: groupRooms,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: groupRequests,
+    outgoingNotices: groupNotices,
+  } as ManagerArg);
   const action_create_group = action(() =>
     group.createGroup.send({
       requestId: "g-1",
@@ -128,13 +127,13 @@ export default pattern(() => {
   // Accepting a group room, and a direct room only with its counterpart.
   const acceptRooms = Writable.of<ChatIndexEntry[]>([]);
   const acceptRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
-  const accepting = FabriChatManagerCore(
-    {
-      myProfile: profile,
-      rooms: acceptRooms,
-      requests: acceptRequests,
-    } as ManagerArg,
-  );
+  const accepting = FabriChatManagerCore({
+    myProfile: profile,
+    rooms: acceptRooms,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: acceptRequests,
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
   const acceptHeld = Writable.of<HeldRoom>({});
   const action_hold_accepted = action(() =>
     acceptHeld.key("room").set(acceptRooms.key(0).key("room").resolveAsCell())
@@ -179,9 +178,13 @@ export default pattern(() => {
 
   // A notice reported delivered.
   const deliveredNotices = Writable.of<ChatManagerNotice[]>([]);
-  const delivering = FabriChatManagerCore(
-    { myProfile: profile, outgoingNotices: deliveredNotices } as ManagerArg,
-  );
+  const delivering = FabriChatManagerCore({
+    myProfile: profile,
+    rooms: Writable.of<ChatIndexEntry[]>([]),
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
+    outgoingNotices: deliveredNotices,
+  } as ManagerArg);
   const action_report_delivered = action(() =>
     delivering.delivered.send({
       requestId: "n-1",

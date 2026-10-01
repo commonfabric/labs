@@ -492,7 +492,8 @@ interface ShownEntry {
 }
 
 /** What a manager's core needs: what it stores, and whose it is. */
-export interface FabriChatManagerCoreInput extends FabriChatManagerInput {
+export interface FabriChatManagerCoreInput
+  extends Required<FabriChatManagerInput> {
   /** The user's profile, which holds no value until it resolves. */
   myProfile: ProfileCell | undefined;
 }
@@ -512,14 +513,14 @@ export const FabriChatManagerCore = pattern<
     );
     const records = {
       myProfile,
-      rooms: rooms!,
-      direct: direct!,
-      requests: requests!,
-      outgoingNotices: outgoingNotices!,
+      rooms,
+      direct,
+      requests,
+      outgoingNotices,
       draft,
     };
     const newestFirst = computed(() =>
-      [...((rooms!.get() ?? []) as ChatIndexEntry[])].sort((a, b) =>
+      [...((rooms.get() ?? []) as ChatIndexEntry[])].sort((a, b) =>
         nsecOf(b.since) < nsecOf(a.since)
           ? -1
           : nsecOf(b.since) > nsecOf(a.since)
@@ -544,7 +545,7 @@ export const FabriChatManagerCore = pattern<
     const selectedDisplay = computed(() => (hasSelection ? "block" : "none"));
     const unselectedDisplay = computed(() => (hasSelection ? "none" : "block"));
     const noticeList = computed(
-      () => [...((outgoingNotices!.get() ?? []) as ChatManagerNotice[])],
+      () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
     );
     const cannotStart = computed(() => myProfile?.get() === undefined);
     const streams = {
@@ -582,12 +583,7 @@ export const FabriChatManagerCore = pattern<
                   variant="ghost"
                   onClick={commitManager({
                     act: "forget",
-                    myProfile,
-                    rooms: rooms!,
-                    direct: direct!,
-                    requests: requests!,
-                    outgoingNotices: outgoingNotices!,
-                    draft,
+                    ...records,
                     room: entry.room,
                   })}
                 >
@@ -649,12 +645,7 @@ export const FabriChatManagerCore = pattern<
                 variant="ghost"
                 onClick={commitManager({
                   act: "delivered",
-                  myProfile,
-                  rooms: rooms!,
-                  direct: direct!,
-                  requests: requests!,
-                  outgoingNotices: outgoingNotices!,
-                  draft,
+                  ...records,
                   id: notice.id,
                 })}
               >
@@ -686,7 +677,7 @@ const FabriChatManager = pattern<
       direct: input.direct,
       requests: input.requests,
       outgoingNotices: input.outgoingNotices,
-    } as Parameters<typeof FabriChatManagerCore>[0],
+    },
   );
   return {
     [NAME]: core[NAME],

@@ -507,20 +507,22 @@ const claimTime = (
 };
 
 /**
- * Appends an activity entry, and drops entries older than the activity
- * window. `dropFor` also drops every earlier entry about that message. Each
- * entry is a document of its own, so appending one never rewrites another's.
+ * Appends an activity entry recorded at `at`, and drops entries older than the
+ * activity window. `dropFor` also drops every earlier entry about that
+ * message. Each entry is a document of its own, so appending one never
+ * rewrites another's. The act claims `at` before it writes anything, so an
+ * act with no time left for its entry is refused rather than recorded without
+ * one.
  */
 const appendActivity = (
   activity: ActivityCell,
   counters: ActivityCountersCell,
-  usedTimes: UsedTimesCell,
+  at: FabricEpochNsec,
   clock: bigint,
   requestId: string,
   what: Cell<unknown>,
   dropFor?: MessageCell,
 ): void => {
-  const at = claimTime(usedTimes, clock);
   const record = counters.elementById(NUMBERING_KEY);
   const numbering = (record.get() ?? NO_ACTIVITY) as ActivityCounters;
   const horizon = clock - FABRICHAT_POLICY.recentActivityWindowNsec.value;
@@ -542,13 +544,11 @@ const appendActivity = (
     );
     cleared.set(undefined);
   });
-  if (at !== undefined) {
-    const entry = activity.elementById(String(numbering.nextSeq));
-    entry.set({ seq: numbering.nextSeq, at, requestId, what } as SentActivity);
-    activity.addUnique(entry);
-  }
+  const entry = activity.elementById(String(numbering.nextSeq));
+  entry.set({ seq: numbering.nextSeq, at, requestId, what } as SentActivity);
+  activity.addUnique(entry);
   record.set({
-    nextSeq: numbering.nextSeq + (at === undefined ? 0 : 1),
+    nextSeq: numbering.nextSeq + 1,
     expiredThrough,
   } as StoredActivityCounters);
   counters.addUnique(record);
@@ -833,6 +833,8 @@ const performMessageAct = (
       target?.sentAt,
     );
     if (sentAt === undefined) return;
+    const loggedAt = claimTime(usedTimes, clock);
+    if (loggedAt === undefined) return;
     // The message and its reactions are addressed by the request that sent
     // it, which names one message in every session.
     const record = messages.elementById(requestKey);
@@ -851,7 +853,7 @@ const performMessageAct = (
       reactions,
     } as SentMessage);
     messages.addUnique(record);
-    appendActivity(activity, counters, usedTimes, clock, requestId, record);
+    appendActivity(activity, counters, loggedAt, clock, requestId, record);
     rememberRequest(requests, requestKey, clock);
     if (state.replyFrom === "replyTo" && composing?.replyTo !== undefined) {
       composer.key("replyTo").set(undefined);
@@ -877,6 +879,8 @@ const performMessageAct = (
     if (op === "delete" && isDeleted(current)) return;
     const editedAt = claimTime(usedTimes, clock);
     if (editedAt === undefined) return;
+    const loggedAt = claimTime(usedTimes, clock);
+    if (loggedAt === undefined) return;
     current.reactions?.set([]);
     target.set({
       body: { deleted: true },
@@ -888,7 +892,7 @@ const performMessageAct = (
     appendActivity(
       activity,
       counters,
-      usedTimes,
+      loggedAt,
       clock,
       requestId,
       target,
@@ -909,6 +913,8 @@ const performMessageAct = (
   if (op === "delete") {
     const editedAt = claimTime(usedTimes, clock);
     if (editedAt === undefined) return;
+    const loggedAt = claimTime(usedTimes, clock);
+    if (loggedAt === undefined) return;
     current.reactions?.set([]);
     target.set({
       authorProfile: current.authorProfile,
@@ -918,7 +924,7 @@ const performMessageAct = (
       earlierVersions: kept,
       ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
     } as SentMessage);
-    appendActivity(activity, counters, usedTimes, clock, requestId, target);
+    appendActivity(activity, counters, loggedAt, clock, requestId, target);
     rememberRequest(requests, requestKey, clock);
     return;
   }
@@ -926,6 +932,8 @@ const performMessageAct = (
   if (version === undefined || !isValidBody(version.body)) return;
   const editedAt = claimTime(usedTimes, clock, nsecOf(version.sentAt));
   if (editedAt === undefined) return;
+  const loggedAt = claimTime(usedTimes, clock);
+  if (loggedAt === undefined) return;
   target.set({
     authorProfile: current.authorProfile,
     body: version.body,
@@ -937,7 +945,7 @@ const performMessageAct = (
       ? {}
       : { reactions: current.reactions }),
   } as SentMessage);
-  appendActivity(activity, counters, usedTimes, clock, requestId, target);
+  appendActivity(activity, counters, loggedAt, clock, requestId, target);
   rememberRequest(requests, requestKey, clock);
   const editing = composer.get()?.editing;
   if (editing !== undefined && equals(editing, target)) {
@@ -985,11 +993,15 @@ const performReactionAct = (
   if (op === "add" && !present) {
     const sentAt = claimTime(usedTimes, clock);
     if (sentAt === undefined) return;
+    const loggedAt = claimTime(usedTimes, clock);
+    if (loggedAt === undefined) return;
     mine.set({ reactorProfile: profile, emoji, sentAt } as SentReaction);
     list.addUnique(mine);
-    appendActivity(activity, counters, usedTimes, clock, requestId, target);
+    appendActivity(activity, counters, loggedAt, clock, requestId, target);
   }
   if (op === "remove" && present) {
+    const loggedAt = claimTime(usedTimes, clock);
+    if (loggedAt === undefined) return;
     list.removeByValue(mine);
     // The record outlives its place in the list, and it is the record that
     // says whether the reaction is there, so removing it clears it too.
@@ -997,7 +1009,7 @@ const performReactionAct = (
       reactionKey,
     );
     cleared.set(undefined);
-    appendActivity(activity, counters, usedTimes, clock, requestId, target);
+    appendActivity(activity, counters, loggedAt, clock, requestId, target);
   }
   rememberRequest(requests, requestKey, clock);
 };
@@ -1876,7 +1888,8 @@ export const FabriChatRoomCore = pattern<
     policy,
   };
   const expiredThrough = computed(() =>
-    ((counters.get() ?? [])[0] ?? NO_ACTIVITY).expiredThrough
+    ((counters.elementById(NUMBERING_KEY).get() ??
+      NO_ACTIVITY) as ActivityCounters).expiredThrough
   );
   const title = computed(() =>
     about?.title ?? (kind === "direct" ? "Direct chat" : "Chat")
@@ -2130,7 +2143,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         usedTimes: input.usedTimes,
         activity: input.activity,
         counters: input.counters,
-      } as Parameters<typeof FabriChatRoomCore>[0],
+      },
     );
 
     return {
