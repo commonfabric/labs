@@ -20,10 +20,19 @@ export const HARNESS_CLIENT_ACTION_LIMIT = 8;
 export const HARNESS_CLIENT_COMMAND_MAX_LENGTH = 500;
 
 /**
- * A client command: one line starting with "/". A carriage return or line
- * feed would let one action carry several commands, so neither is allowed.
+ * A client command: one line starting with "/". Any line break, Unicode's
+ * included (CR, LF, U+0085, U+2028, U+2029), would let one action carry
+ * several commands, and the client shows an action as one line for the person
+ * to approve, so none is allowed.
  */
-export const HARNESS_CLIENT_COMMAND_LINE_PATTERN = /^\/[^\r\n]*$/;
+export const HARNESS_CLIENT_COMMAND_LINE_PATTERN =
+  /^\/[^\r\n\u0085\u2028\u2029]*$/;
+
+/**
+ * Any line break, Unicode's included. A URL parser silently drops a raw
+ * newline, so a url is checked as given, not as parsed.
+ */
+const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
 
 /** A loom identifier as the service mints it. */
 const LOOM_ID = /^loom-[a-f0-9]{16}$/;
@@ -84,7 +93,7 @@ export const readHarnessClientAction = (
     case "open_url": {
       const url = ownString(record, "url");
       return hasExactlyKeys(record, ["kind", "url"]) && url !== undefined &&
-          readHttpUrl(url) !== undefined
+          !LINE_BREAK.test(url) && readHttpUrl(url) !== undefined
         ? { kind: "open_url", url }
         : undefined;
     }

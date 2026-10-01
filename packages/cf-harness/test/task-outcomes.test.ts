@@ -7,6 +7,7 @@ import { readConsoleTurnResult } from "../console/turn-result.ts";
 import type { HarnessChatEventEnvelope } from "../src/contracts/interactive-chat.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
 import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
+import { readHarnessClientAction } from "../src/contracts/client-action.ts";
 import type { HarnessToolCall } from "../src/contracts/transcript.ts";
 import {
   type HarnessInteractiveChatEventListener,
@@ -429,9 +430,51 @@ describe("task-outcomes", () => {
       .find((schema) => schema !== undefined)!;
     const pattern = new RegExp(line.pattern!);
     expect(pattern.test("/ask what is next")).toBe(true);
-    for (const value of ["/first\n/second", "/first\r/second", "/first\n"]) {
+    for (
+      const value of [
+        "/first\n/second",
+        "/first\r/second",
+        "/first\n",
+        "/first\u0085/second",
+        "/first\u2028/second",
+        "/first\u2029/second",
+      ]
+    ) {
       expect(pattern.test(value)).toBe(false);
     }
+  });
+
+  it("refuses a client action whose command or url holds any line break, Unicode's included", () => {
+    // The client shows an action as one line and the person approves what
+    // they see. A URL parser silently drops a raw newline, so the url is
+    // checked as given.
+    for (const brk of ["\n", "\r", "\u0085", "\u2028", "\u2029"]) {
+      expect(
+        readHarnessClientAction({
+          kind: "command",
+          line: `/first${brk}/second`,
+        }),
+      )
+        .toBeUndefined();
+      expect(
+        readHarnessClientAction({
+          kind: "open_url",
+          url: `https://example.org/a${brk}b`,
+        }),
+      )
+        .toBeUndefined();
+    }
+    expect(
+      readHarnessClientAction({ kind: "command", line: "/ask what is next" }),
+    )
+      .toEqual({ kind: "command", line: "/ask what is next" });
+    expect(
+      readHarnessClientAction({
+        kind: "open_url",
+        url: "https://example.org/a",
+      }),
+    )
+      .toEqual({ kind: "open_url", url: "https://example.org/a" });
   });
 
   it("carries a completed answer and its actions to turn_completed and the console result", async () => {
