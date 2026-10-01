@@ -1,4 +1,5 @@
 import { getPieceBoundary, render } from "@commonfabric/html/client";
+import { NestedRenderReferenceSchema } from "@commonfabric/runner/component-read-contract";
 import type { DID } from "@commonfabric/identity";
 import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
@@ -552,7 +553,7 @@ export class CFRender extends BaseElement {
     // This schema reports the current target as a Cell. The subscription can
     // also wake for a write within that target, so the callback compares target
     // identity before starting another render.
-    const linkCell = cell.asSchema<CellHandle>({ asCell: ["cell"] });
+    const linkCell = cell.asSchema<CellHandle>(NestedRenderReferenceSchema);
     try {
       const synchronizedTarget = await linkCell.sync();
       if (

@@ -40,6 +40,7 @@ import {
   useCancelGroup,
 } from "@commonfabric/runner";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { nestedRenderReadContracts } from "@commonfabric/runner/component-read-contract";
 import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
 import {
   atomsOutsideCeiling,
@@ -116,7 +117,6 @@ const REFERENCE_BINDING_SINKS: ReadonlyMap<string, ReadonlySet<string>> =
     ],
     ["cf-custody-answer", new Set(["terms", "policy", "output"])],
   ]);
-
 /**
  * The label a render decision was made on, as a denial reports it: a cell's
  * stored label, its schema's, a read's consumed labels, or none it could
@@ -929,10 +929,15 @@ export class WorkerReconciler {
    * the decision follows that read: it is made again whenever what the read
    * consumed changes, labels included, and whenever the membership those
    * labels name changes, and the binding is removed while the policy refuses
-   * it. `replacing` says whether the element may hold a binding for
-   * `propName` from before. `read` is the cell whose read decides, when the
-   * binding was reached through a slot whose labels the choice of `cell`
-   * carries.
+   * it. A nested render root, a binding in `nestedRenderReadContracts`, is
+   * decided on the read its component makes of it instead, which stops at
+   * the document its reference lands on and leaves that document's contents
+   * to the renders mounted from it, wherever such a render is held to everything
+   * the element is (see `#rootPolicyCovers()`); elsewhere it is decided on
+   * everything the bound cell reaches. `replacing` says whether the element
+   * may hold a binding for `propName` from before. `read` is the cell whose
+   * read decides, when the binding was reached through a slot whose labels
+   * the choice of `cell` carries.
    */
   #bindCell(
     state: NodeState,
@@ -973,7 +978,11 @@ export class WorkerReconciler {
       );
       first = false;
     };
-    addCancel(this.#sinkCell(read, (_value, labels) => {
+    const hostSchema = nestedRenderReadContracts[state.tagName]?.[propName];
+    const hostRead = hostSchema === undefined ? read : read.asSchema(
+      this.#rootPolicyCovers(state.renderPolicy) ? hostSchema : true,
+    );
+    addCancel(this.#sinkCell(hostRead, (_value, labels) => {
       consumed = labels;
       watch.reeval();
     }, true));
@@ -1481,6 +1490,23 @@ export class WorkerReconciler {
   #admitsEverything(policy: RenderPolicy): boolean {
     return policy.maxConfidentiality === undefined &&
       policy.declassifyConfidentiality.length === 0;
+  }
+
+  /**
+   * Whether a render mounted from a reference, which starts from the root
+   * policy, holds what it shows to everything `policy` holds an element to:
+   * the policy's ceiling holds every clause (`CfcConfClause`) of the root
+   * ceiling, and no text-integrity requirement is in force, since a nested
+   * render applies none. A boundary only narrows a ceiling and only adds
+   * declassification, so the first condition holds exactly when no boundary
+   * above the element lowered the ceiling.
+   */
+  #rootPolicyCovers(policy: RenderPolicy): boolean {
+    const root = this.#rootRenderPolicy.maxConfidentiality;
+    const own = policy.maxConfidentiality;
+    return policy.textIntegrity === undefined &&
+      (root === undefined ? own === undefined : own !== undefined &&
+        root.every((atom) => own.some((held) => deepEqual(atom, held))));
   }
 
   /** Whether `policy` admits `cell`'s labels, as {@link #cellLabelRefusal} decides. */
