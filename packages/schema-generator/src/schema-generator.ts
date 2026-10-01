@@ -2222,7 +2222,13 @@ export class SchemaGenerator {
     const stackKey = bindingKey === undefined
       ? type
       : `${this.#bindingId(type)}|${bindingKey}`;
-    const tracksCycle = !scopesHandle && !isWrapperContext;
+    // `never` holds no type, so it is never met inside itself and is not a
+    // cycle's entry. A wrapper the checker reduces to it, as it reduces
+    // `PerUser<never>` (`never & brand` is `never`), has `never` both for its
+    // own type and for its payload's, and the payload read inside it is the
+    // value it wraps, not its recursion.
+    const tracksCycle = !scopesHandle && !isWrapperContext &&
+      (type.flags & ts.TypeFlags.Never) === 0;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author
     // wrote out, `Pair<Pair<string>>`, or a recursion that instantiates it

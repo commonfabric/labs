@@ -1,7 +1,5 @@
 # ChatIndexEntry
 
-Status: proposed design (see [`README.md`](README.md)).
-
 One room in a user's chat manager. A manager's `rooms` and `direct` hold these
 ([`ChatManagerOutput`](ChatManagerOutput.md)).
 

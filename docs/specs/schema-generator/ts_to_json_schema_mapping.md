@@ -463,12 +463,15 @@ get synthetic `$defs` names `AnonymousType_N` (`ensureSyntheticName`; fixture
 the `$ref`-with-siblings shape `{ "$ref": "#/$defs/AnonymousType_1", "asCell":
 ["cell"], "default": [] }`).
 
-Stack keys are specialized for `Default` and wrapper reference nodes —
-kind + type flags + argument text + file + position instead of type identity
-(`createStackKey`) — because TypeScript reuses one type object for
-identical wrapper instantiations at different positions, which would otherwise
-create false cycles (fixtures `nested-default-aliases`,
-`default-array-recursive`).
+A wrapper (`Default`, a cell, a scope wrapper around a cell) is not a cycle's
+entry, because TypeScript reuses one type object for identical wrapper
+instantiations at different positions, which would otherwise create false
+cycles; the cycle is found at the wrapper's value instead (fixtures
+`nested-default-aliases`, `default-array-recursive`). Nor is `never`, which
+holds no type and so is never met inside itself. A wrapper the checker reduces
+to `never` has `never` for its own type and for its payload's:
+`PerUser<never>` is `never & brand`, which is `never`, and its payload is read
+as the value it wraps (§10), not as its recursion.
 
 **Dead computation (observed implementation note):** every run performs a full
 DFS cycle pre-pass (`getCycles`, using `safe*` wrappers that
@@ -873,6 +876,20 @@ both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
 
+A payload whose schema is a boolean becomes an object for the scope to sit on:
+`PerUser<any>` → `{ scope: "user" }`, and a payload that accepts nothing →
+`{ not: true, scope }`. `never & brand` is `never`, so a wrapper around
+`never`, or around a payload the checker reduces to it such as
+`string & number`, has no type of its own, and a node naming the wrapper is
+what keeps its scope: `PerUser<never>` → `{ not: true, scope: "user" }` at the
+root and as a property, and `Cell<PerUser<never>>` →
+`{ not: true, scope: "user", asCell: ["cell"] }` (tested,
+scope-wrappers.test.ts, and end-to-end in ts-transformers
+`never-payload-schema.test.ts`). Where no node names the wrapper, `never`
+carries no alias or brand to find it by, so an alias of one
+(`type Rec = PerUser<never>`), a record's values, and a tuple's elements lower
+as `never` does, to `false`.
+
 The payload is read from the node when a node names the wrapper, so that
 structure only the node carries reaches the schema. The wrapper type's own
 first type argument supplies the payload instead in two cases, and only where
@@ -993,13 +1010,17 @@ Mechanics:
   `string & carrier`, and `Confidential<null, L>` is `never`. A rewrite such as
   `NonNullable<…>`, which intersects with `{}`, drops the name too. A written
   reference that names the policy still lowers it from its own arguments,
-  `null` and a `typeof` writer binding included. Read from a type alone, the
-  value is its one member besides the carriers, labelled with each carrier's
-  metadata as its types spell it (`cfcCarriedParts`), provided every value in
-  it reads. A writer binding, which only a `typeof` node names, does not, and a
-  policy read in part could claim what its author never wrote together, such
-  as an `ownerPrincipal` without its `writeAuthorizedBy`. Then the value is its
-  payload alone. The `null` the checker dropped is in the schema neither way.
+  `null` and a `typeof` writer binding included. A payload that is itself
+  `never`, as in `Confidential<never, L>` or `Confidential<string & number, L>`,
+  accepts nothing, and lowers to `{ not: true, ifc }` like any payload whose
+  schema is `false`, whether written directly or through an alias (`type Sec<T>
+  = Confidential<T, L>`, `Sec<never>`). Read from a type alone, the value is its
+  one member besides the carriers, labelled with each carrier's metadata as its
+  types spell it (`cfcCarriedParts`), provided every value in it reads. A writer
+  binding, which only a `typeof` node names, does not, and a policy read in part
+  could claim what its author never wrote together, such as an `ownerPrincipal`
+  without its `writeAuthorizedBy`. Then the value is its payload alone. The
+  `null` the checker dropped is in the schema neither way.
 - A default-library alias that maps an object's members (`Readonly`,
   `Partial`, `Required`, `Pick`, `Omit`) does not keep a labeled operand's
   carrier as a member of its own: over an object it folds the carrier into

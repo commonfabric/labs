@@ -259,6 +259,7 @@ import {
   type RegisterSpaceHostRequest,
   RequestType,
   type ResolveEventAttentionRequest,
+  type RetrySpaceAccessRequest,
   RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
@@ -3209,6 +3210,13 @@ export class RuntimeProcessor {
     };
   }
 
+  /** Forwards to `Runtime.retrySpaceAccess()`, and resolves once it has. */
+  async handleRetrySpaceAccess(
+    request: RetrySpaceAccessRequest,
+  ): Promise<void> {
+    await this.#runtime.retrySpaceAccess(request.space);
+  }
+
   async handleCreateSpace(
     request: CreateSpaceRequest,
   ): Promise<SpaceResponse> {
@@ -3606,6 +3614,8 @@ export class RuntimeProcessor {
         return this.handleRegisterSpaceHost(request);
       case RequestType.RegisterSpaceHostDetailed:
         return this.handleRegisterSpaceHostDetailed(request);
+      case RequestType.RetrySpaceAccess:
+        return await this.handleRetrySpaceAccess(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetLoggerCounts:

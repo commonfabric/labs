@@ -150,7 +150,7 @@ export interface HarnessSessionConfig {
 
   /**
    * Connector handles every session on this console is granted, named by the
-   * CFC class the loom instance behind it declares for each.
+   * loom connection behind each and described by the CFC classes it declares.
    */
   connectorGrants: readonly HarnessConnectorGrantSpec[];
 

@@ -106,7 +106,11 @@ import {
 } from "./cfc/types.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { type DelegatedCarriage, waveRunContextOf } from "./executor/wave.ts";
+import {
+  type DelegatedCarriage,
+  waveRunActorOf,
+  waveRunContextOf,
+} from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -4209,10 +4213,7 @@ export class Runtime {
    */
   actingPrincipalFor(tx?: IExtendedStorageTransaction): DID | undefined {
     if (!this.servingPosture) return this.userIdentityDID;
-    const user = tx === undefined
-      ? undefined
-      : waveRunContextOf(tx)?.acting?.user;
-    return isDID(user) ? user : undefined;
+    return tx === undefined ? undefined : waveRunActorOf(tx);
   }
 
   getHomeSpaceCell(
@@ -4307,6 +4308,20 @@ export class Runtime {
     } finally {
       tx.abort();
     }
+  }
+
+  /**
+   * Asks the memory server once more for `space`, if it refused this
+   * runtime's session there, and resolves once it has decided. An admission
+   * runs again every computation whose `spaceAccess(target)` answer turned on
+   * the refusal, and repeats the loads the refusal failed; a refusal leaves
+   * the space refused. It is for a host that has reason to think the verdict
+   * changed, and does nothing for a space this runtime has not opened. It
+   * rejects on any failure other than a refusal. See
+   * `IStorageManager.retrySpaceAccess()`.
+   */
+  async retrySpaceAccess(space: MemorySpace): Promise<void> {
+    await this.storageManager.retrySpaceAccess?.(space);
   }
 
   /**

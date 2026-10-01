@@ -27,6 +27,7 @@
  * frame stack).
  */
 
+import type { SentSpaceAccessNotice } from "@commonfabric/api";
 import type { RealmEncodedValue } from "@commonfabric/data-model/codec-realm";
 import {
   CFC_ENFORCEMENT_MODES,
@@ -40,6 +41,7 @@ import {
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
+import type { FakeInbox } from "@commonfabric/runner/for-testing-only";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -71,6 +73,11 @@ import {
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
+import {
+  publishSentNotices,
+  sentNoticesCell,
+  SPACE_ACCESS_NOTICES_INPUT,
+} from "./space-access-notices.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
@@ -146,7 +153,25 @@ const markersSchema = {
   default: {},
 } as const;
 
+/**
+ * One notices document per participant, for the same reason as the markers:
+ * the participant's own runner is its only writer.
+ */
+function noticesCause(participant: string): string {
+  return `space-access-notices:${participant}`;
+}
+
 let runtime: Runtime | undefined;
+
+/**
+ * The inbox this participant's `noticeSpaceAccess()` sends reach, answered by
+ * the runtime's `fetch`; see `space-access-notices.ts`. Each participant has
+ * one of its own, so what it holds is what this participant sent.
+ */
+let inbox: FakeInbox | undefined;
+
+/** The cell this participant's pattern reads its sent notices from. */
+let noticesCell: Cell<SentSpaceAccessNotice[]> | undefined;
 let storageManager:
   | { synced(): Promise<void>; close(): Promise<void> }
   | undefined;
@@ -370,14 +395,31 @@ const handlers: Record<
       // internally (see createStorageAddressResolver).
       memoryHost: new URL(args.apiUrl as string),
     });
+    // The fake inbox's store is SQLite, which `@db/sqlite` opens as it loads,
+    // and a worker whose module opens a native library while it loads never
+    // receives the message its creator posted during that load. Loaded here,
+    // the `init` request has already arrived.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const { FakeInbox } = await import(
+      "@commonfabric/runner/for-testing-only"
+    );
+    // Every recipient counts as enabled: whether a person has opened their
+    // inbox is no fact about the pattern under test. A request to any other
+    // origin reaches the real `fetch`.
+    inbox = new FakeInbox({
+      everyRecipientEnabled: true,
+      fallback: (input, init) => globalThis.fetch(input, init),
+    });
+    const participantInbox = inbox;
     // `runtimePresets.patternTest` carries the shared first-party posture
     // (CT-1814) and the same env-honored experimental flags as the
     // single-user runner (this worker previously ignored EXPERIMENTAL_*, so
     // the two harness modes could run under different flags).
     runtime = new Runtime(runtimePresets.patternTest({
-      apiUrl: new URL(import.meta.url),
+      apiUrl: inbox.apiUrl,
       storageManager: storageManager as never,
       experimental: experimentalOptionsFromEnv(Deno.env.get),
+      fetch: (input, init) => participantInbox.fetch(input, init),
       errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
       moduleByteCache: getDefaultModuleByteCache(),
       ...(flowLabels !== undefined ? { cfcFlowLabels: flowLabels } : {}),
@@ -530,10 +572,23 @@ const handlers: Record<
       undefined,
       tx,
     );
+    // Written empty, so a participant reading its notices before any
+    // `{ settle: true }` step reads a list.
+    const notices = sentNoticesCell(
+      rt(),
+      space,
+      noticesCause(selfParticipant),
+      tx,
+    );
+    notices.set([]);
+    noticesCell = sentNoticesCell(rt(), space, noticesCause(selfParticipant));
     rt().run(
       tx,
       participantFactory,
-      setupCell !== undefined ? { setup: setupCell } : {},
+      {
+        ...(setupCell !== undefined ? { setup: setupCell } : {}),
+        [SPACE_ACCESS_NOTICES_INPUT]: notices,
+      },
       resultCell,
     );
     rt().prepareTxForCommit?.(tx);
@@ -622,8 +677,12 @@ const handlers: Record<
    * Settle fully (scheduler, storage, and in-flight async builtin I/O) for an
    * explicit `{ settle: true }` step. Every step already settles before the
    * next, so this is a demand for full settlement at a point the author names.
+   * Settled, every notice the steps so far sent has reached the inbox, so this
+   * is where the participant's view of them is brought up to date.
    */
   async settleStep() {
+    await rt().settled();
+    await publishSentNotices(rt(), noticesCell!, inbox!);
     await settle();
     return {};
   },
@@ -708,6 +767,9 @@ const handlers: Record<
     await runtime?.dispose();
     await storageManager?.close();
     flushDefaultModuleByteCache();
+    inbox?.close();
+    inbox = undefined;
+    noticesCell = undefined;
     runtime = undefined;
     storageManager = undefined;
     engine = undefined;

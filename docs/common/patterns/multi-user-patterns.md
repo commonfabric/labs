@@ -329,6 +329,44 @@ use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
 
+An `AuthoredByCurrentUser` position names the handler that writes it, and the
+runtime labels each write that handler makes `authored-by` the user it acts
+for. No gesture is needed:
+
+```tsx
+// Shown at module scope.
+import type { AuthoredByCurrentUser, WriteAuthorizedBy } from "commonfabric";
+
+type Order = AuthoredByCurrentUser<
+  WriteAuthorizedBy<{ glaze: string }, typeof placeOrder>
+>;
+
+interface Orders {
+  orders: Writable<Order[]>;
+}
+
+const placeOrder = handler<{ glaze: string }, Orders>(
+  ({ glaze }, { orders }) => {
+    orders.push({ glaze });
+  },
+);
+```
+
+- The label is _authority_, as `currentPrincipal()` is: the write ran for that
+  user, through the named handler, whether their click or another pattern's
+  `send()` reached it. Wrap a `TrustedActionWrite` instead where each write
+  must also come with the person's gesture on the named surface.
+- A handler the position does not name cannot write it, and a position naming
+  no writer cannot carry the label. Nor can a handler run that acts for no one,
+  where `currentPrincipal()` returns `undefined`: its write is refused.
+- A new value of the type that any handler creates, with
+  `new Writable<Order>(…)`, is labeled for the user that handler acts for as
+  well, with no writer and no gesture. That too is authority: the user's run
+  made it.
+- Give the handler's state a name of its own, as `Orders` is above. Written
+  inline in `handler<…>`, it makes `Order` refer to itself through
+  `typeof placeOrder`, which TypeScript refuses.
+
 ### Checking a DID read from data
 
 A DID a pattern reads from its data — a member list, a message's author, an
@@ -355,6 +393,42 @@ const addFan = action(({ fan }: { fan: unknown }) => {
 - It reads nothing but its argument, so it works anywhere: in an action or
   handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
   call on a reactive value is lifted like a call to any other function.
+
+### The principal a profile or record names
+
+A profile, or a record written with `AuthoredByCurrentUser`, carries a claim in
+its label naming a principal, and `principalOf(target, kind)`, exported from
+`commonfabric`, returns that principal's DID. `kind` is `"represents-principal"`
+for whom a profile stands for, or `"authored-by"` for who wrote a record:
+
+```tsx
+// Shown at module scope.
+const inviteBaker = handler<
+  { baker: Writable<{ name: string }> },
+  { invited: Writable<DID[]> }
+>(({ baker }, { invited }) => {
+  const principal = principalOf(baker, "represents-principal");
+  if (principal === undefined || principal === currentPrincipal()) return;
+  invited.push(principal);
+});
+```
+
+- It returns `undefined` unless the label names exactly one principal, in the
+  form only the runtime writes. A pattern cannot write that form for anyone but
+  the user it runs for, so a DID it returns is one that user's runtime put
+  there. `undefined` means no verified single principal: refuse whatever needs
+  one. A label that cannot be read throws rather than returning `undefined`.
+- It reads the label, and no contents of the value beyond the link pointers
+  needed to reach it. Call it in a handler, including on a cell the event
+  names, or in a `computed()` or `lift()`, where it updates when the label
+  changes. Called in a pattern body it throws.
+- The DID is data. Writing it into a label as a claim's subject is refused, like
+  any DID a pattern writes there, unless the schema declares it as the
+  `ownerPrincipal` and it is the user the pattern runs for.
+- A claim binds honest runtimes. The memory server does not check one, so it
+  does not hold against a modified client.
+
+[`principal-of.md`](../../features/principal-of.md) has the details.
 
 ### Anti-patterns (do not ship these)
 
@@ -665,6 +739,45 @@ Both calls throw on a serving runtime for now.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
 details.
 
+### Telling someone about a space
+
+`noticeSpaceAccess(principal, entry)` tells `principal` about the space
+`entry` lives in, by a message to their DID inbox, so that someone a handler
+has admitted can find the space without sharing another one with the sender.
+`entry` is what they should open: a piece, or any cell at the root of its own
+document, in the space's own scope. The message names the space and that
+document and nothing else, and arrives from the person who sent the event.
+
+```tsx
+// Shown at module scope.
+const invite = handler<
+  { member: DID },
+  { board: Writable<{ title: string }>; members: Writable<DID[]> }
+>(({ member }, { board, members }) => {
+  grantSpaceAccess(board, member, "WRITE");
+  noticeSpaceAccess(member, board);
+  members.addUnique(member);
+});
+```
+
+The call works only in a handler, and throws anywhere else, on a serving
+runtime, for a `principal` that is not a `did:key` DID, and for an `entry` that
+is not the root of a document. The person who sent the event must hold `OWNER`
+in the space, and `principal` must have an entry of their own in its access
+list, counting any `grantSpaceAccess()` the same handler made to that same
+space; an entry for `"*"` does not count. Those two are checked only when the
+message is about to go out, after the handler's writes commit: a notice that
+fails them is dropped, the handler's writes stand, and only the log shows it.
+
+The message goes out only after the handler's writes commit. An event sends a
+principal at most one notice, however many times its handler runs. Nothing
+retries a message that fails to send, and one reaches only a recipient who has
+enabled their inbox, so a notice may not arrive: keep another way for the person
+to find the space. The recipient cannot trust what a notice says beyond who sent
+it, and opening the space is what checks the rest.
+[`space-access-notices.md`](../../features/space-access-notices.md) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell
@@ -734,8 +847,15 @@ Three escalating options:
    headlessly. It serves the authored patterns tree beside its in-process
    storage server, so a `#profile` wish opens the real create surface and a
    pattern whose identity is a profile cell can be driven without a test seam
-   standing in for one. See `cfc-group-chat-demo-multi-runtime.test.ts` and
-   `profile-create-surface-multi-runtime.test.ts`.
+   standing in for one. Its storage server checks no access list unless given
+   `aclMode`; `enforce`, the mode a deployed toolshed runs, is what a test of
+   who may read which space needs. A session's `read()`, `readRaw()`,
+   `link()`, `send()`, `set()` and `push()` address the piece the harness
+   opened, or, given `piece`, another piece, such as one living in a space of
+   its own, at the address `link()` returns for a link to it. See
+   `cfc-group-chat-demo-multi-runtime.test.ts`,
+   `profile-create-surface-multi-runtime.test.ts`, and
+   `space-access-multi-runtime.test.ts`.
 3. **Two simultaneous browsers**
    (`cfc-group-chat-demo-two-browsers.test.ts`,
    `lunch-poll-vote.test.ts`): guards the real DOM input binding /

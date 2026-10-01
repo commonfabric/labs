@@ -1,0 +1,1 @@
+{"date":"2026-09-30","from":{"k":"unit","s":"runner","n":"executor-acl-document-write > refuses a served handler's cell write to the space's access list, which keeps its value"},"to":{"k":"unit","s":"runner","n":"executor-acl-document-write > under memory ACL mode `off` > refuses a served handler's cell write to the space's access list, which keeps its value"}}

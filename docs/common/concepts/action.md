@@ -112,8 +112,9 @@ const claimDonut = action(() => {
 - It is _authority_, not _intent_. A handler that another pattern calls with
   `.send()` sees the user that pattern runs as, so the value says on whose
   behalf the action runs, not that the person asked for it. Where the person's
-  own request matters, rely on a trusted UI gesture or an
-  `AuthoredByCurrentUser` value instead.
+  own request matters, rely on a trusted UI gesture instead. A value labeled
+  `AuthoredByCurrentUser` is authority too: it shows that the write ran for
+  that user, not that they asked for it.
 - It is available only in an action or a handler for now. It throws in a
   pattern body, a `computed()` and a `lift()`. To show who is viewing, resolve
   their profile as [multi-user patterns](../patterns/multi-user-patterns.md)

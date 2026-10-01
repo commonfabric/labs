@@ -3360,8 +3360,8 @@ export declare function isWellFormedDID(value: unknown): value is DID;
  *
  * The value is _authority_, not _intent_: a handler that another pattern
  * invokes sees the user that pattern runs as, so it does not show that the
- * person asked for the action. A trusted gesture, or a value labeled
- * `AuthoredByCurrentUser`, is what shows that.
+ * person asked for the action. A trusted gesture is what shows that. A value
+ * labeled `AuthoredByCurrentUser` is authority too.
  *
  * Available only in a handler for now, and throws anywhere else. A pattern body
  * builds one graph for every viewer, and reading the viewer in a `computed()`
@@ -3369,6 +3369,45 @@ export declare function isWellFormedDID(value: unknown): value is DID;
  * label saying who may see the viewer's DID.
  */
 export declare function currentPrincipal(): DID | undefined;
+
+/**
+ * A kind of principal claim a label can carry: `represents-principal` names
+ * whom a value stands for, as a profile's label does, and `authored-by` names
+ * who wrote it, as `AuthoredByCurrentUser` records.
+ */
+export type PrincipalClaimKind = "authored-by" | "represents-principal";
+
+/**
+ * Returns the one principal that the label on `target`'s value attests with a
+ * claim of `kind`: the DID a profile represents, or the author of a record.
+ * The claim is read at the value's root and on its top-level fields, and only
+ * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
+ * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
+ * for anyone but the principal it runs for.
+ *
+ * `undefined` means the label names no verified single principal of that kind:
+ * none, more than one, or a claim in some other form. It also means that
+ * `target` is `undefined`, which is what a value that cannot be read yet reads
+ * as. It is never a guess, and a caller refuses whatever needs a principal. A
+ * label that cannot be read throws instead.
+ *
+ * It reads the label, and no contents of the value beyond the link pointers
+ * needed to reach it. In a reactive computation
+ * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * also be called in a handler, on a cell an event names. Calling it in a
+ * pattern body throws: wrap it in `computed()` instead.
+ *
+ * What a principal claim names is public to anyone who holds the value, so the
+ * result carries no label of its own. Compare it with `currentPrincipal()`, or
+ * check it with `isWellFormedDID()`; writing it into a label as a claim's
+ * subject is refused, like any other literal DID a pattern writes there,
+ * unless the schema declares it as the `ownerPrincipal` and it is the
+ * principal the write acts for.
+ */
+export declare function principalOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID | undefined;
 
 /**
  * Returns the event key of the event the running handler handles: a string
@@ -3776,7 +3815,9 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * file's default export to run each participant pattern in its own isolated
  * runtime (own identity) against one shared space. The optional `setup`
  * pattern instantiates shared state once; each participant pattern receives
- * its result as the `setup` input. Participants coordinate through
+ * its result as the `setup` input, and the notices its own runtime sent with
+ * `noticeSpaceAccess()` as the `spaceAccessNotices` input (see
+ * `SentSpaceAccessNotice`). Participants coordinate through
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
@@ -3997,6 +4038,59 @@ export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,
   principal: DID,
 ): void;
+
+/**
+ * Tells `principal`, a member of the space `entry`'s value lives in, about
+ * `entry`: once the handler's commit is accepted, sends a message to
+ * `principal`'s DID inbox naming the space and `entry`'s document, and nothing
+ * else. The inbox tells the recipient who sent it; the recipient trusts none of
+ * what it says, and opening the space is what checks it.
+ *
+ * `principal` must be a `did:key` DID, which an inbox can address, and `entry`
+ * a cell at the root of a document in the space's own scope. The acting
+ * principal, the event's actor, must hold `OWNER` in the space, and `principal`
+ * must have an entry of its own in the space's access list, including any the
+ * handler's own `grantSpaceAccess()` added to that space. Those two are checked
+ * only just before the message is sent, after the handler's writes commit; a
+ * notice that fails them is dropped, and only the log shows it.
+ *
+ * The message goes out after the handler's writes commit, and is not sent if
+ * they fail. Nothing retries a send that fails, so a notice may not arrive,
+ * and one arrives only if its recipient has enabled their inbox. An event
+ * sends a principal at most one notice, however many times the handler runs.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else.
+ * The call throws for a malformed `principal` or `entry`, before staging
+ * anything, so one the handler catches sends nothing.
+ */
+export declare function noticeSpaceAccess(
+  principal: DID,
+  entry: AnyCell<unknown>,
+): void;
+
+/**
+ * A notice `noticeSpaceAccess()` sent during a pattern test, as `cf test`
+ * reports it. A test pattern, or a participant of a multi-user test, that
+ * declares the input `spaceAccessNotices: SentSpaceAccessNotice[]` is handed
+ * the notices its own runtime has sent, in the order the inbox accepted them.
+ * A send is a post-commit effect, so the list is brought up to date at each
+ * `{ settle: true }` step and at no other: an assertion on it follows one. A
+ * run against a caller-supplied storage host sends to that host's inbox, and
+ * the list stays empty.
+ */
+export interface SentSpaceAccessNotice {
+  /** The actor that sent it, as the inbox verified it from the signature. */
+  readonly sender: DID;
+
+  /** The principal it was sent to. */
+  readonly recipient: DID;
+
+  /** The space it names. */
+  readonly space: DID;
+
+  /** The id of the document it names, in `space`. */
+  readonly entry: string;
+}
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

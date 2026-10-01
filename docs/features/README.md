@@ -84,6 +84,9 @@ a line for each new document to the index below.
   for: where `currentPrincipal()` gets it on a client and on a serving runtime,
   what cannot steer it, why it is authority rather than intent, and why it is
   available only in a handler
+- [`principal-of.md`](principal-of.md) — the principal a cell's label attests:
+  which claims `principalOf(target, kind)` reads, when it returns `undefined`,
+  what it reads to find out, and why the result carries no label
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
@@ -93,6 +96,10 @@ a line for each new document to the index below.
   `revokeSpaceAccess()`: what a grant exposes, who may change the list and
   where each refusal happens, how the change commits ahead of the handler's own
   writes, and why a serving runtime refuses both
+- [`space-access-notices.md`](space-access-notices.md) — how a handler tells a
+  member of a space about it with `noticeSpaceAccess()`: what the inbox message
+  holds and discloses, who may tell whom, when the message is sent, and why it
+  may not arrive
 
 ## Talking to the outside world
 

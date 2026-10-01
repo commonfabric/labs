@@ -34,11 +34,19 @@
 // Stage G also forwards the wave's durable outbound-append rows
 // (serving-loop.md §5, FP1): `batch.outboxAppends` land INSIDE the same
 // engine transaction as the wave commit, via applyWaveCommit.
+//
+// No batch this sink commits writes a space's ACL document, in any memory
+// ACL mode (INV-12 on the served plane, serving-loop.md §3d): the wave's
+// seal refuses the run that writes one, the engine's derived admission
+// refuses one in a home batch, and `commitWave` below refuses one in a
+// foreign batch, each naming the operation.
 
+import { aclDocId } from "@commonfabric/memory/acl";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import {
   applyCommit,
   applyWaveCommit,
+  DerivedAclDocumentWriteError,
   hasIntrusionSince,
   readState,
   RowLabelCommitError,
@@ -75,6 +83,15 @@ export function waveCommitFailureResult(
         name: "WaveCommitRejected",
         message: error.message,
         failedPreconditions: error.failedPreconditions,
+      },
+    };
+  }
+  if (error instanceof DerivedAclDocumentWriteError) {
+    return {
+      error: {
+        name: "AclDocumentWriteRefused",
+        message: error.message,
+        failedOperation: error.operationIndex,
       },
     };
   }
@@ -268,7 +285,9 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // never lands in a FRESH store ahead of its genesis ACL — the
         // space's commit #1 is the ACL, signed by the space's own keys
         // and naming the acting user OWNER. The session plane enforces
-        // this in `#validateAclCommit`'s precedence clause; of the two
+        // this in `#validateAclCommit`'s precedence clause, in the
+        // `observe` and `enforce` memory ACL modes; this mirror holds in
+        // every mode, `off` included. Of the two
         // other engine-direct committers, this sink is the one that
         // writes provisioning DATA batches (the third,
         // `Server.commitDelegatedAppend`, appends outbox-carried events
@@ -298,6 +317,26 @@ export class EngineWaveCommitSink implements WaveCommitSink {
                 "acting user OWNER — before any data commit (INV-13 " +
                 "mirrored at the sink; OW31, protocol.md §2's genesis " +
                 "clause, §2b)",
+            },
+          });
+        }
+        // No foreign batch writes the target space's ACL document: the
+        // delegated admission checks carriage and nothing of INV-12's shape
+        // or of the carried actor's level, so it is refused here, naming the
+        // operation, in every memory ACL mode. The engine refuses the same
+        // write in a derived (home) batch.
+        const aclId = aclDocId(batch.space);
+        const aclOperation = batch.operations.findIndex((op) =>
+          op.op !== "sqlite" && op.id === aclId
+        );
+        if (aclOperation !== -1) {
+          return Promise.resolve({
+            error: {
+              name: "AclDocumentWriteRefused",
+              message: `foreign wave batch into ${batch.space} refused: ` +
+                `operation ${aclOperation} writes ${aclId}, the space ACL ` +
+                "document, which no wave batch may write (INV-12)",
+              failedOperation: aclOperation,
             },
           });
         }

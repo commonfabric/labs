@@ -466,10 +466,10 @@ describe("Schema: CFC authoring aliases", () => {
       ifc,
     });
     expect(schema.properties?.none).toEqual({ type: "null", ifc });
-    // A payload that is itself `never` is the type the checker gave, not a
-    // member the reduction dropped, so the policy accepts nothing, as written.
-    expect(schema.properties?.nothing).toBe(false);
-    expect(schema.properties?.impossible).toBe(false);
+    // A payload that is itself `never` accepts nothing, and its `false`
+    // becomes `{ not: true }` beside the labels.
+    expect(schema.properties?.nothing).toEqual({ not: true, ifc });
+    expect(schema.properties?.impossible).toEqual({ not: true, ifc });
     expect(schema.properties?.writer).toEqual({
       anyOf: [{ type: "string" }, { type: "null" }],
       ifc: {
@@ -477,6 +477,33 @@ describe("Schema: CFC authoring aliases", () => {
           __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
         },
       },
+    });
+  });
+
+  it("emits `{ not: true, ifc }` for a generic alias of a policy read at `never`", async () => {
+    // `never & carrier` is `never`, so the checker gives the alias the type of
+    // its payload. The payload accepts nothing, and its `false` becomes
+    // `{ not: true }` beside the labels.
+    const { type, checker } = await getTypeFromCode(
+      `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Sec<T> = Confidential<T, readonly ["a"]>;
+      interface SchemaRoot {
+        nothing: Sec<never>;
+        later: never;
+      }
+    `,
+      "SchemaRoot",
+    );
+
+    expect(new SchemaGenerator().generateSchema(type, checker)).toEqual({
+      type: "object",
+      properties: {
+        nothing: { not: true, ifc: { confidentiality: ["a"] } },
+        later: false,
+      },
+      required: ["nothing", "later"],
     });
   });
 

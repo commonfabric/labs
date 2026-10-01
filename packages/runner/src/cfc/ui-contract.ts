@@ -4,7 +4,12 @@ import {
 } from "@commonfabric/data-model/codec-data-uri";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { CellScope, FabricValue, JSONSchema } from "../builder/types.ts";
+import type {
+  CellScope,
+  FabricValue,
+  JSONSchema,
+  JSONSchemaObj,
+} from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { findAndInlineDataUriLinks } from "../data-uri.ts";
 import { isNormalizedFullLink } from "../link-types.ts";
@@ -180,43 +185,49 @@ const trustRequirementsFromContract = (
   };
 };
 
+/**
+ * The refs one branch of a walk has followed, each held under the document
+ * that gives it its meaning. A local pointer names a definition of the
+ * document it is read in, so it is held under that document's root, and the
+ * same pointer in another document is another ref. An embedded or external
+ * ref names its document wherever it sits, and is held under `undefined`.
+ *
+ * A set is never added to once it is in a map; recording a ref replaces the
+ * set. Copying the map therefore gives a branch a record of its own.
+ */
+type SeenRefs = Map<JSONSchema | undefined, ReadonlySet<string>>;
+
+/** Whether `schema` is a ref site, an object schema carrying a `$ref`. */
+const hasSchemaRef = (
+  schema: JSONSchema | undefined,
+): schema is JSONSchemaObj & { $ref: string } =>
+  isObjectOrArray(schema) && typeof schema.$ref === "string";
+
 // Follow a `$ref` of any form the runtime resolves — a local pointer, an
 // embedded schema, or an external `cid:` document — one chain at a time. The
-// resolver guards the chain; `seenRefs`, the refs this branch of the walk has
-// followed, guards the descent, where a recursive document reaches its own
-// ref again below the body it resolved to. The schema comes back as it is
-// where it carries no ref, where the ref closes a cycle, or where it resolves
-// to nothing.
+// resolver guards the chain; `seenRefs` guards the descent, where a recursive
+// document reaches its own ref again below the body it resolved to. A resolved
+// view can be a document of its own, so a recursion may alternate between
+// documents; a pointer stays recorded under its document for as long as the
+// branch runs, which is what closes such a cycle. The schema comes back as it
+// is where it carries no ref, where the ref closes a cycle, or where it
+// resolves to nothing.
 const followSchemaRef = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
 ): JSONSchema | undefined => {
-  if (!isObjectOrArray(schema) || typeof schema.$ref !== "string") {
-    return schema;
-  }
+  if (!hasSchemaRef(schema)) return schema;
   const ref = schema.$ref;
-  if (seenRefs.has(ref)) return schema;
-  seenRefs.add(ref);
+  const document = ref.startsWith("#") ? root ?? schema : undefined;
+  const refs = seenRefs.get(document);
+  if (refs?.has(ref)) return schema;
+  seenRefs.set(document, new Set(refs).add(ref));
   return ContextualFlowControl.resolveSchemaRefs(
     schema,
     isObjectOrArray(root) ? root : schema,
   ) ?? schema;
 };
-
-// The seen refs to carry below a resolution. A resolution that enters another
-// document — its root is not the one the ref was read in — leaves the local
-// pointers followed so far behind: each named a definition of the document
-// being left, and the same pointer in the new document is another ref. An
-// embedded or external ref names its document wherever it sits, and stays.
-const seenRefsBelow = (
-  seenRefs: Set<string>,
-  root: JSONSchema | undefined,
-  resolvedRoot: JSONSchema,
-): Set<string> =>
-  resolvedRoot === root
-    ? seenRefs
-    : new Set([...seenRefs].filter((ref) => !ref.startsWith("#")));
 
 // The root a resolved ref's target resolves against: its own document where
 // the ref's chain ended in another one — a definition body that is an
@@ -234,7 +245,7 @@ const resolvedRootFor = (
 const uiContractFromSchemaInternal = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
 ): UiContract | undefined => {
   const resolvedSchema = followSchemaRef(schema, root, seenRefs);
   if (resolvedSchema !== schema && schema !== undefined) {
@@ -246,7 +257,7 @@ const uiContractFromSchemaInternal = (
     return uiContractFromSchemaInternal(
       resolvedSchema,
       resolvedRoot,
-      seenRefsBelow(seenRefs, root, resolvedRoot),
+      seenRefs,
     );
   }
   if (
@@ -283,17 +294,18 @@ const uiContractFromSchemaInternal = (
 export const uiContractFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContract | undefined =>
-  uiContractFromSchemaInternal(schema, schema, new Set());
+  uiContractFromSchemaInternal(schema, schema, new Map());
 
 const uiContractsFromSchemaInternal = (
   schema: JSONSchema | undefined,
   root: JSONSchema | undefined,
   path: string[],
-  seenRefs: Set<string>,
+  seenRefs: SeenRefs,
   conditional = false,
   includeAlternatives = false,
 ): UiContractEntry[] => {
-  const branchRefs = new Set(seenRefs);
+  // Following a ref records it, and only this branch may see the record.
+  const branchRefs = hasSchemaRef(schema) ? new Map(seenRefs) : seenRefs;
   const resolvedSchema = followSchemaRef(schema, root, branchRefs);
   if (resolvedSchema !== schema && schema !== undefined) {
     const resolvedRoot = resolvedRootFor(
@@ -305,7 +317,7 @@ const uiContractsFromSchemaInternal = (
       resolvedSchema,
       resolvedRoot,
       path,
-      seenRefsBelow(branchRefs, root, resolvedRoot),
+      branchRefs,
       conditional,
       includeAlternatives,
     );
@@ -319,7 +331,7 @@ const uiContractsFromSchemaInternal = (
   const contract = uiContractFromSchemaInternal(
     resolvedSchema,
     childRoot,
-    new Set(),
+    new Map(),
   );
   if (contract !== undefined) {
     entries.push(
@@ -338,7 +350,7 @@ const uiContractsFromSchemaInternal = (
   ) {
     for (const policy of resolvedSchema.ifc.writePolicyAnyOf) {
       const alternative = isObjectOrArray(policy)
-        ? uiContractFromSchemaInternal({ ifc: policy }, childRoot, new Set())
+        ? uiContractFromSchemaInternal({ ifc: policy }, childRoot, new Map())
         : undefined;
       if (alternative !== undefined) {
         entries.push(
@@ -380,7 +392,7 @@ const uiContractsFromSchemaInternal = (
           definition as JSONSchema,
           definition as JSONSchema,
           [],
-          new Set(),
+          new Map(),
           false,
           includeAlternatives,
         )
@@ -477,7 +489,7 @@ const uiContractsFromSchemaInternal = (
 export const uiContractsFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContractEntry[] =>
-  uiContractsFromSchemaInternal(schema, schema, [], new Set());
+  uiContractsFromSchemaInternal(schema, schema, [], new Map());
 
 /**
  * Like {@link uiContractsFromSchema}, except that it also returns the contract
@@ -491,7 +503,7 @@ export const uiContractsFromSchema = (
 const uiContractCandidatesFromSchema = (
   schema: JSONSchema | undefined,
 ): UiContractEntry[] =>
-  uiContractsFromSchemaInternal(schema, schema, [], new Set(), false, true);
+  uiContractsFromSchemaInternal(schema, schema, [], new Map(), false, true);
 
 export const trustedEventProvenanceMatchesUiContract = (
   provenance: unknown,

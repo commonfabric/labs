@@ -297,6 +297,14 @@ export enum RequestType {
    */
   RegisterSpaceHostDetailed = "runtime:registerSpaceHostDetailed",
 
+  /**
+   * Asks the memory server once more for a space it refused this runtime,
+   * and is done once the server has admitted or refused it again. It is for a
+   * host that has word the runtime's principal was granted access, and does
+   * nothing for a space the runtime has not opened or was not refused.
+   */
+  RetrySpaceAccess = "runtime:retrySpaceAccess",
+
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
 
@@ -1878,6 +1886,16 @@ export type RegisterSpaceHostDetailedRequest = BaseRequest & {
   host: string;
 };
 
+/** The {@link RequestType.RetrySpaceAccess} request. */
+export type RetrySpaceAccessRequest = BaseRequest & {
+  type: RequestType.RetrySpaceAccess;
+
+  /**
+   * The space to ask for again.
+   */
+  space: DID;
+};
+
 /**
  * Await all in-flight compile-cache write-backs (persistence durability), as
  * distinct from `Idle` (reactive/scheduler quiescence). Used by tests that
@@ -3273,6 +3291,7 @@ export type IPCClientRequest =
   | CreateSpaceRequest
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
+  | RetrySpaceAccessRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -4221,6 +4240,10 @@ export type Commands = {
   [RequestType.RegisterSpaceHostDetailed]: {
     request: RegisterSpaceHostDetailedRequest;
     response: SpaceHostRegistrationResponse;
+  };
+  [RequestType.RetrySpaceAccess]: {
+    request: RetrySpaceAccessRequest;
+    response: EmptyResponse;
   };
   [RequestType.PieceGet]: {
     request: PieceGetRequest;

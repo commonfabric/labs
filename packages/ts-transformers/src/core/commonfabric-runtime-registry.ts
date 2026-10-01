@@ -85,6 +85,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal a cell's label attests, inside the computation or
+  // handler that calls it, and returns a plain DID rather than a reactive
+  // value. It builds no graph node.
+  {
+    exportName: "principalOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {
@@ -310,6 +318,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   },
   {
     exportName: "revokeSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // noticeSpaceAccess(principal, entry) stages a message to send once the
+  // running handler commits, and returns nothing. It builds no graph node, so
+  // it is a plain call inside the handler that makes it.
+  {
+    exportName: "noticeSpaceAccess",
     category: "ignored",
     reactiveOrigin: false,
   },

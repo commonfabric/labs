@@ -1835,9 +1835,11 @@ export class Server {
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
-       * registration need OWNER. Enforcement is only meaningful when
-       * `authorizeSessionOpen` is configured — without it sessions carry no
-       * principal and only `"*"` grants can apply.
+       * registration need OWNER, but for a member removing its own entry
+       * from a list with no `"*"` entry, which needs only that entry.
+       * Enforcement is only meaningful when `authorizeSessionOpen` is
+       * configured — without it sessions carry no principal and only `"*"`
+       * grants can apply.
        */
       acl?: {
         mode: MemoryAclMode;
@@ -2176,9 +2178,9 @@ export class Server {
       );
     }
     // Observe mode relaxes ordinary shortfalls only. An OWNER requirement —
-    // writing a space's ACL, or registering a disk source — is enforced in
-    // every mode but `off`, so staging never lets a principal take a space
-    // over.
+    // writing a space's ACL, but for a member removing its own entry, or
+    // registering a disk source — is enforced in every mode but `off`, so
+    // staging never lets a principal take a space over.
     if (this.#aclMode() === "observe" && requirement !== "OWNER") {
       this.aclStats.wouldDeny += 1;
       console.warn(
@@ -2241,10 +2243,11 @@ export class Server {
     );
   }
 
-  /** Enforce ACL document shape and fresh-space genesis independently of the
-   *  observe/enforce access-decision dial. These are storage invariants: an
-   *  invalid ACL or an ordinary first write would make later enforcement
-   *  ambiguous or impossible. */
+  /** Enforce ACL document shape and fresh-space genesis in the `observe` and
+   *  `enforce` modes alike, apart from the access decision those modes
+   *  differ on. These are storage invariants: an invalid ACL or an ordinary
+   *  first write would make later enforcement ambiguous or impossible. The
+   *  `off` mode skips them, and checks only a genesis root reservation. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
@@ -2341,6 +2344,39 @@ export class Server {
       );
     }
     return null;
+  }
+
+  /**
+   * Whether `commit`, whose shape {@link #validateAclCommit} admitted, is
+   * `principal` removing its own entry from the access list of `space` and
+   * nothing else: the stored document, every field and every other entry as
+   * stored, less `principal`'s entry. A stored list with a `"*"` entry admits
+   * no such removal, since `principal` would keep what that entry grants, and
+   * neither does a list without an entry for `principal`. Any member may make
+   * this change, whatever level its entry holds (INV-12).
+   */
+  #isSelfRemoval(
+    engine: Engine.Engine,
+    space: string,
+    principal: string | undefined,
+    commit: ClientCommit,
+  ): boolean {
+    if (principal === undefined || principal === ANYONE_USER) return false;
+    const state = this.#aclState(engine, space);
+    if (
+      state.kind !== "valid" || state.acl[ANYONE_USER] !== undefined ||
+      state.acl[principal] === undefined
+    ) {
+      return false;
+    }
+    const stored = Engine.readState(engine, { id: aclDocId(space) });
+    const operation = commit.operations[0];
+    if (stored?.document == null || operation?.op !== "set") return false;
+    const { [principal]: _removed, ...remaining } = state.acl;
+    return valueEqual(
+      operation.value as FabricValue,
+      { ...stored.document, value: remaining } as FabricValue,
+    );
   }
 
   /**
@@ -4233,16 +4269,29 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space — OWNER only.
+          // ACL-document writes change who may access the space, so they need
+          // OWNER, with one exception: a member removing its own entry and
+          // nothing else (`#isSelfRemoval()`, INV-12) needs only READ, which
+          // any entry grants. That holds in `observe` mode as in `enforce`.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
           );
+          const requirement: Capability = !aclTouched
+            ? "WRITE"
+            : this.#isSelfRemoval(
+                engine,
+                message.space,
+                session.principal,
+                message.commit,
+              )
+            ? "READ"
+            : "OWNER";
           const deny = this.#authorizeMessageWithEngine(
             engine,
             message.space,
             session.principal,
-            aclTouched ? "OWNER" : "WRITE",
+            requirement,
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(
