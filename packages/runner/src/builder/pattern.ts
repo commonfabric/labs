@@ -24,6 +24,7 @@ import { type AliasBinding } from "../alias-binding.ts";
 import {
   exportCell,
   isCell,
+  linkCellOutsideHandlerSpace,
   schemaCellScope,
   setCellUnlinkedSpace,
 } from "../cell.ts";
@@ -292,7 +293,11 @@ function factoryFromPattern<T, R>(
     traverseValue(value, (value) => {
       if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
       if (isCell(value) && !allCells.has(value)) {
-        const { frame, nodes, path, scope, name } = exportCell(value, true);
+        // A cell a handler pinned to another space takes its link here, with
+        // the handler's body finished, and no earlier: until the cell has a
+        // link, the handler may still name it with `.for()`.
+        linkCellOutsideHandlerSpace(value);
+        const { frame, nodes, path, scope, name } = exportCell(value);
         if (isReactive(value) && frame !== getTopFrame()) {
           throw new Error(
             closureCaptureErrorMessage({

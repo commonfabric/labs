@@ -1127,10 +1127,6 @@ interface CauseContainer {
   // Entity reference - shared across all siblings
   id: URI | undefined;
   space: MemorySpace | undefined;
-
-  /** Whether the pattern builder explicitly selected this output space. */
-  spacePinned?: boolean;
-
   // Cause for creating the entity ID
   cause: unknown | undefined;
 }
@@ -1163,10 +1159,8 @@ let runtimeOf: (cell: CellImpl<FabricValue>) => Runtime;
 let txOf: (
   cell: CellImpl<FabricValue>,
 ) => IExtendedStorageTransaction | undefined;
-let exportOf: (
-  cell: CellImpl<FabricValue>,
-  linkPinnedHandlerCell?: boolean,
-) => CellExport;
+let exportOf: (cell: CellImpl<FabricValue>) => CellExport;
+let linkOutsideHandlerSpaceOf: (cell: CellImpl<FabricValue>) => void;
 let setOf: (
   cell: CellImpl<FabricValue>,
   value: unknown,
@@ -1398,7 +1392,6 @@ export class CellImpl<T extends FabricValue>
       );
     }
     this.#causeContainer.space = space;
-    this.#causeContainer.spacePinned = true;
     this.#_link = frozenLink({ ...this.#_link, space });
     for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
       (node.module as Module).targetSpace = space;
@@ -1465,6 +1458,17 @@ export class CellImpl<T extends FabricValue>
 
     // Update this cell's link
     this.#_link = frozenLink({ ...this.#_link, id, space });
+  }
+
+  /** Does what `linkCellOutsideHandlerSpace()` does for this cell. */
+  #linkOutsideHandlerSpace(): void {
+    const space = this.#causeContainer.space;
+    if (
+      this.#frame?.inHandler && space !== undefined &&
+      space !== this.#frame.space && !this.#hasFullLink()
+    ) {
+      this.#ensureLink();
+    }
   }
 
   get space(): MemorySpace {
@@ -3800,14 +3804,7 @@ export class CellImpl<T extends FabricValue>
   }
 
   /** Returns what `exportCell()` does for this cell. */
-  #export(linkPinnedHandlerCell: boolean = false): CellExport {
-    // Partial causes bind in the handler's space. At graph serialization,
-    // concrete links preserve each explicitly selected output space. Naming
-    // remains available throughout the handler, including after node binding.
-    if (
-      linkPinnedHandlerCell && this.#causeContainer.spacePinned &&
-      this.#frame?.inHandler
-    ) this.#ensureLink();
+  #export(): CellExport {
     // Exporting a cell is a step in building a pattern, and the builder checks
     // the exported frame against the one it is building under.
     if (!this.#frame) {
@@ -4428,8 +4425,8 @@ export class CellImpl<T extends FabricValue>
     isCellImpl = (value): value is CellImpl<FabricValue> => #_link in value;
     runtimeOf = (cell) => cell.#runtime;
     txOf = (cell) => cell.#tx;
-    exportOf = (cell, linkPinnedHandlerCell) =>
-      cell.#export(linkPinnedHandlerCell);
+    exportOf = (cell) => cell.#export();
+    linkOutsideHandlerSpaceOf = (cell) => cell.#linkOutsideHandlerSpace();
     setOf = (cell, value, onCommit, sendOptions) => {
       cell.#set(value as FabricValue, onCommit, sendOptions);
     };
@@ -4536,15 +4533,24 @@ export function cellTx(
 /**
  * Returns `cell`'s metadata, for building a pattern, and throws for anything
  * but a cell or a `Reactive` proxy over one. Host code only: it carries the
- * frame the cell was built under. At graph serialization,
- * `linkPinnedHandlerCell` assigns addresses to handler-created outputs with
- * an explicit space, preserving that space in their serialized references.
+ * frame the cell was built under.
  */
-export function exportCell(
-  cell: unknown,
-  linkPinnedHandlerCell: boolean = false,
-): CellExport {
-  return exportOf(requireCellImpl(cell), linkPinnedHandlerCell);
+export function exportCell(cell: unknown): CellExport {
+  return exportOf(requireCellImpl(cell));
+}
+
+/**
+ * Gives `cell` its link, if a handler built it and it is pinned to a space
+ * other than the one the handler runs in, and does nothing to any other cell.
+ * Throws for anything but a cell or a `Reactive` proxy over one. Host code
+ * only.
+ *
+ * The pattern built from a handler's frame names a cell that has no link by a
+ * partial cause, and a partial cause binds in the space that pattern runs in.
+ * A link is what carries a pinned cell's own space into that pattern.
+ */
+export function linkCellOutsideHandlerSpace(cell: unknown): void {
+  linkOutsideHandlerSpaceOf(requireCellImpl(cell));
 }
 
 /**
