@@ -222,6 +222,22 @@ describe("setup-argument-projection", () => {
       }
     });
 
+    it("refuses a plain link to the list written over it in the transaction staging it", async () => {
+      // A capture records whether its link is a write redirect, and a plain
+      // link to the same cell is not the link the setup staged.
+      await initializeOwnersList();
+      const tx = runtime.edit();
+      const argument = await setUpChild(tx, binding(tx));
+      const slot = argument.getAsNormalizedFullLink();
+      tx.writeValueOrThrow(
+        { ...slot, path: [...slot.path, "list"] },
+        runtime.getCell(space, "board", undefined, tx).key("items")
+          .getAsLink(),
+      );
+
+      expect(await commit(tx)).toContain(`${refusal} at /list`);
+    });
+
     it("refuses a later setup staging a redirect to another list over it", async () => {
       // The slot keeps the cell it was first given, as a list builtin's
       // captured binding does. Whether a trusted setup may re-point it when a
