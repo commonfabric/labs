@@ -17,6 +17,7 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -34,6 +35,14 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 
 /** Whether this run's harness serves handlers from a serving loop. */
 const SERVER_EXECUTION = resolveServerExecution();
+
+/** The CFC write gate's refusals, out of one runtime's logger counts. */
+const writeRefusals = (
+  counts: Record<string, Record<string, { total: number }> | number>,
+): number => {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+};
 
 describe("owner-private inbox across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -69,13 +78,31 @@ describe("owner-private inbox across runtimes", () => {
       .map((offer) => offer.note);
 
   /**
+   * How many commits the CFC write gate has refused, in the sender's runtime
+   * and in this process, where the serving loop runs. The gate counts each
+   * refusal whatever the log level shows.
+   */
+  const refusals = async (): Promise<number> =>
+    writeRefusals(await sender.loggerCounts()) +
+    writeRefusals(getLoggerCountsBreakdown());
+
+  /**
    * Has the sender's own handler send an offer, and waits for the owner to
-   * read it. The sender's handler sends on to the inbox's own, so the append
-   * is a consequence of a consequence, which a `settle()` does not wait for.
+   * read it or for the append to be refused, then asserts the first. The
+   * sender's handler sends on to the inbox's own, so the append is a
+   * consequence of a consequence, which a `settle()` does not wait for. The
+   * sender's own runtime refuses before the wait begins; the serving loop
+   * seals its refusal as the event's consequence, a commit that wakes it.
    */
   const offer = async (note: string): Promise<void> => {
+    const refusedBefore = await refusals();
     await sender.send("offer", { note });
-    await harness.settleUntil(async () => (await ownerNotes()).includes(note));
+    await harness.settleUntil(async () =>
+      (await ownerNotes()).includes(note) ||
+      await refusals() > refusedBefore
+    );
+    expect(await refusals()).toBe(refusedBefore);
+    expect(await ownerNotes()).toContain(note);
   };
 
   it("delivers each offer a sender's own handler appends", async () => {
@@ -105,8 +132,12 @@ describe("owner-private inbox across runtimes", () => {
     await harness.settle();
     expect(await stranger.read(["copiedTitle"])).toBe("Offers");
 
+    const refusedBefore = writeRefusals(getLoggerCountsBreakdown());
     await stranger.send("copyOffers");
     await harness.settle();
+    expect(writeRefusals(getLoggerCountsBreakdown())).toBeGreaterThan(
+      refusedBefore,
+    );
     expect(await stranger.read(["copiedOffers"])).toEqual([]);
   });
 });
