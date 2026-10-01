@@ -43,6 +43,7 @@ import {
   type ChatRequestOutcome,
   type ChatRoomKind,
   type ChatRoomLink,
+  type ChatRoomRendering,
   epochNsecFromMsec,
   nsecOf,
   type ProfileCell,
@@ -556,7 +557,11 @@ export const FabriChatManagerCore = pattern<
   ({ myProfile, rooms, direct, requests, outgoingNotices }) => {
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
-    const selected = new Writable.perSession<{ room?: Cell<ChatRoomLink> }>(
+    // The selection holds the room as `cf-render` draws it. `selectRoom`,
+    // which writes it, declares the link alone, as every handler does.
+    const selected = new Writable.perSession<
+      { room?: Cell<ChatRoomRendering> }
+    >(
       {},
     );
     const records = {

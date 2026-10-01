@@ -15,7 +15,6 @@ import {
   FabricDurationNsec,
   FabricEpochNsec,
   UI,
-  VIEWS,
   type VNode,
 } from "commonfabric";
 
@@ -352,18 +351,23 @@ export const reactionTalliesOf = (
 //
 
 /**
- * A room as a manager or a placement links it: only the part of
- * `ChatRoomOutput` a consumer reads through the link.
+ * A room as a manager links it: only the part of `ChatRoomOutput` the manager
+ * reads through the link. The manager runs in its user's home, not in the
+ * room's space, and a server running it reads only the documents the room's
+ * space shares with every member, never the ones each member has of their
+ * own. The room's rendering and its data face reach those, and a served
+ * handler whose declared reads reach one never runs, so neither is part of
+ * the link. `ChatRoomRendering` is the room as `cf-render` draws it.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
   about?: ChatRoomAbout;
+}
 
-  /** The room's rendering, which `cf-render` reads through the link. */
+/** A room as `cf-render` draws it through its link. */
+export interface ChatRoomRendering extends ChatRoomLink {
+  /** The room's rendering. */
   [UI]?: VNode;
-
-  /** The room's data face. */
-  [VIEWS]?: { room: object };
 }
 
 /** One room in a user's chat manager. */
