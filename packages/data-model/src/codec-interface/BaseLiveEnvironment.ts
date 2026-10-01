@@ -14,4 +14,9 @@ export abstract class BaseLiveEnvironment implements LiveEnvironment {
   abstract getCell(
     ref: { id: string; path: string[]; space: string },
   ): FabricInstance;
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

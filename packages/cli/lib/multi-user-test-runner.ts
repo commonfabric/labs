@@ -31,6 +31,13 @@
  * worker runs that same instance locally (like every browser tab does), so
  * per-user scoped state behaves like production.
  *
+ * The shared space is created with an access list, which
+ * {@link participantAccess} composes: the first participant's user is its
+ * OWNER, and `{ pattern, access: "READ" }` declares another user's level. The
+ * storage server runs with access control off, so the list is what
+ * `spaceAccess()` reads and nothing more: a participant at `READ`, or left
+ * out at `"none"`, still reads and writes the space.
+ *
  * Coordination: a participant's steps run in order until an
  * `{ await: marker }` for a marker no other participant has announced via
  * `{ label: marker }` yet; the orchestrator then switches to the next
@@ -46,9 +53,12 @@
  * after a marker is therefore read once, and a false value is a failure.
  */
 
-import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import type { SpaceAccessLevel } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
+import { type ACL, isCapability } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
@@ -70,6 +80,9 @@ export interface MultiUserParticipantSpec {
 
   /** Identity seed; participants with the same `user` share an identity. */
   user: string;
+
+  /** Level the participant declares for its user, if it declares one. */
+  access?: SpaceAccessLevel;
 }
 
 export interface MultiUserDescriptorMeta {
@@ -78,8 +91,12 @@ export interface MultiUserDescriptorMeta {
 
 /**
  * Recognize a multi-user descriptor (default export with a `participants`
- * record of pattern factories or `{ pattern, user? }` entries). Returns the
- * orchestration metadata, or undefined for ordinary single-runtime tests.
+ * record of pattern factories or `{ pattern, user?, access? }` entries).
+ * Returns the orchestration metadata, or undefined for ordinary
+ * single-runtime tests.
+ *
+ * @throws If a participant declares an `access` that is not a
+ *   `SpaceAccessLevel`.
  */
 export function multiUserDescriptorMeta(
   defaultExport: unknown,
@@ -101,16 +118,69 @@ export function multiUserDescriptorMeta(
       isObjectOrArray(entry) &&
       typeof (entry as { pattern?: unknown }).pattern === "function"
     ) {
-      const user = (entry as { user?: unknown }).user;
+      const { user, access } = entry as { user?: unknown; access?: unknown };
+      if (access !== undefined && !isSpaceAccessLevel(access)) {
+        throw new Error(
+          debugStr`Participant \`${name}\` declares access $quote${access}, ` +
+            "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
+        );
+      }
       participants.push({
         name,
         user: typeof user === "string" ? user : name,
+        ...(access === undefined ? {} : { access }),
       });
     } else {
       return undefined;
     }
   }
   return participants.length > 0 ? { participants } : undefined;
+}
+
+/** Whether `value` is a level a participant may declare. */
+function isSpaceAccessLevel(value: unknown): value is SpaceAccessLevel {
+  return value === "none" || isCapability(value);
+}
+
+/**
+ * Composes the level each user holds in the shared space's access list, keyed
+ * by user. The first participant's user is the space's OWNER. Every other user
+ * holds the level its participants declare, or `WRITE` when none of them
+ * declares one. A user at `"none"` is one the list leaves out.
+ *
+ * @throws If the first participant's user declares a level other than
+ *   `OWNER`, or if two participants of one user declare different levels.
+ */
+export function participantAccess(
+  participants: readonly MultiUserParticipantSpec[],
+): Map<string, SpaceAccessLevel> {
+  const declared = new Map<string, SpaceAccessLevel>();
+  for (const { name, user, access } of participants) {
+    if (access === undefined) continue;
+    const other = declared.get(user);
+    if (other !== undefined && other !== access) {
+      throw new Error(
+        `Participants of user \`${user}\` declare access both \`${other}\` ` +
+          `and \`${access}\` (the second in \`${name}\`), but a user holds ` +
+          "one level",
+      );
+    }
+    declared.set(user, access);
+  }
+  const owner = participants[0].user;
+  const ownerAccess = declared.get(owner);
+  if (ownerAccess !== undefined && ownerAccess !== "OWNER") {
+    throw new Error(
+      `User \`${owner}\` of the first participant creates the shared ` +
+        `space and is its OWNER, so it cannot declare access ` +
+        `\`${ownerAccess}\``,
+    );
+  }
+  const levels = new Map<string, SpaceAccessLevel>([[owner, "OWNER"]]);
+  for (const { user } of participants) {
+    if (!levels.has(user)) levels.set(user, declared.get(user) ?? "WRITE");
+  }
+  return levels;
 }
 
 class ParticipantWorker {
@@ -260,18 +330,17 @@ export async function runMultiUserTestPattern(
       }
     }
 
-    // The first participant creates the shared space, and every participant
-    // may write to it.
+    // The first participant creates the shared space, with each user at the
+    // level `participantAccess()` gives it.
+    const acl: ACL = {};
+    for (const [user, level] of participantAccess(meta.participants)) {
+      if (level !== "none") acl[identities.get(user)!.did()] = level;
+    }
     const owner = identities.get(meta.participants[0].user)!;
     const creator = StorageManager.open({ as: owner, memoryHost: server.url });
     let spaceDid: string;
     try {
-      spaceDid = await creator.createSpace({
-        ...Object.fromEntries(
-          [...identities.values()].map((identity) => [identity.did(), "WRITE"]),
-        ),
-        [owner.did()]: "OWNER",
-      });
+      spaceDid = await creator.createSpace(acl);
     } finally {
       await creator.close();
     }
@@ -503,21 +572,19 @@ export async function runMultiUserTestPattern(
         nonIdempotent: string[];
       };
       if (!participant.allowRuntimeErrors) {
-        runtimeErrors.push(
-          ...health.runtimeErrors.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const error of health.runtimeErrors) {
+          runtimeErrors.push(`[${participant.spec.name}] ${error}`);
+        }
       }
       if (!participant.allowConsoleErrors) {
-        consoleErrors.push(
-          ...health.consoleErrors.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const error of health.consoleErrors) {
+          consoleErrors.push(`[${participant.spec.name}] ${error}`);
+        }
       }
       if (!participant.allowConsoleWarnings) {
-        consoleWarnings.push(
-          ...health.consoleWarnings.map((e) =>
-            `[${participant.spec.name}] ${e}`
-          ),
-        );
+        for (const warning of health.consoleWarnings) {
+          consoleWarnings.push(`[${participant.spec.name}] ${warning}`);
+        }
       }
       if (participant.expectNonIdempotent) {
         anyExpectNonIdempotent = true;
@@ -525,9 +592,9 @@ export async function runMultiUserTestPattern(
           expectedNonIdempotentDetected = true;
         }
       } else {
-        nonIdempotent.push(
-          ...health.nonIdempotent.map((e) => `[${participant.spec.name}] ${e}`),
-        );
+        for (const violation of health.nonIdempotent) {
+          nonIdempotent.push(`[${participant.spec.name}] ${violation}`);
+        }
       }
     }
     // expectNonIdempotent asserts the detector fires. Which runtime re-runs

@@ -4118,7 +4118,7 @@ describe("runtime-processor", () => {
         },
       };
       const cellWithTx = {
-        push: (...values: unknown[]) => {
+        pushAll: (values: readonly unknown[]) => {
           expect(values).toEqual(["new value"]);
         },
         send: (value: unknown) => {
@@ -6247,6 +6247,33 @@ describe("runtime-processor", () => {
         expect(calls.map(([, host]) => host)).toEqual(
           Object.keys(registrations),
         );
+      });
+    });
+
+    describe("`RequestType.RetrySpaceAccess`", () => {
+      it("forwards the space to the runtime and resolves after the runtime's retry does", async () => {
+        const events: string[] = [];
+        const gate = Promise.withResolvers<void>();
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: async (space: string) => {
+              events.push(`retry ${space}`);
+              await gate.promise;
+              events.push("retried");
+            },
+          },
+        });
+        const handled = processor.handleRequest({
+          type: RequestType.RetrySpaceAccess,
+          space: "did:key:z6Mk-ipc-retry",
+        }).then(() => events.push("handled"));
+        gate.resolve();
+        await handled;
+        expect(events).toEqual([
+          "retry did:key:z6Mk-ipc-retry",
+          "retried",
+          "handled",
+        ]);
       });
     });
 

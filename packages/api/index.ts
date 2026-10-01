@@ -329,11 +329,11 @@ export interface IReadable<T> {
 /**
  * Writable cells can update their value.
  *
- * **Frozenness contract:** Values passed into `set()`, `update()`, and `push()`
- * flow through a write-boundary normalization step that shallowly freezes any
- * plain unfrozen Object/Array levels it visits. Inputs that are already
- * deep-frozen valid `FabricValue` trees are accepted identity-preservingly with
- * no further cloning.
+ * **Frozenness contract:** Values passed into `set()`, `update()`, `push()`,
+ * and `pushAll()` flow through a write-boundary normalization step that
+ * shallowly freezes any plain unfrozen Object/Array levels it visits. Inputs
+ * that are already deep-frozen valid `FabricValue` trees are accepted
+ * identity-preservingly with no further cloning.
  */
 export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
@@ -355,11 +355,26 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
   /**
    * Append one or more values to an array cell. See the
    * {@link IWritable} interface docs for the frozenness contract on the
-   * inputs.
+   * inputs. To append a list, pass it to {@link IWritable.pushAll} rather
+   * than spreading it here: every spread element is a separate argument, and a
+   * long enough list overflows the stack.
    */
   push(
     this: IsThisArray,
-    ...value: T extends (infer U)[] ? (U | AnyCellWrapping<U>)[] : never
+    ...value: T extends readonly (infer U)[] ? (U | AnyCellWrapping<U>)[]
+      : never
+  ): void;
+
+  /**
+   * Append every value in `values` to an array cell, in order, as one
+   * mergeable append, exactly as `push(...values)` would, but for a list of
+   * any length. See the {@link IWritable} interface docs for the frozenness
+   * contract on the inputs.
+   */
+  pushAll(
+    this: IsThisArray,
+    values: T extends readonly (infer U)[] ? readonly (U | AnyCellWrapping<U>)[]
+      : never,
   ): void;
 
   /**
@@ -403,9 +418,9 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
 
 /**
  * How the pattern transformer classifies a mergeable write: an
- * `array-identity-writer` takes element arguments whose identity is tracked
- * (`push` / `addUnique` / `removeByValue`); a `scalar-writer` does not
- * (`increment`).
+ * `array-identity-writer` takes elements whose identity is tracked, as
+ * arguments (`push` / `addUnique` / `removeByValue`) or as one list argument
+ * (`pushAll`); a `scalar-writer` does not (`increment`).
  */
 export type MergeableOpMethodKind = "scalar-writer" | "array-identity-writer";
 
@@ -430,9 +445,12 @@ export interface MergeableOpMethod {
  * transformer's method classification both derive from it, so adding a mergeable
  * op is one entry here plus its behavior descriptor — the transformer picks up
  * the new method with no edit, and a consistency test cross-checks the wire tags.
+ * Two methods may record the same wire op, as `push` and `pushAll` both record
+ * `append`.
  */
 export const MERGEABLE_OP_METHODS: readonly MergeableOpMethod[] = [
   { method: "push", wireOp: "append", kind: "array-identity-writer" },
+  { method: "pushAll", wireOp: "append", kind: "array-identity-writer" },
   { method: "addUnique", wireOp: "add-unique", kind: "array-identity-writer" },
   {
     method: "removeByValue",
@@ -3317,6 +3335,25 @@ export type WishTag = `/${string}` | `#${string}`;
 export type DID = `did:${string}`;
 
 /**
+ * Returns whether `value` is a DID in the syntax of the W3C DID Core
+ * specification, at most 256 characters long: `did:`, a lowercase method name,
+ * a colon, and a method-specific identifier of letters, digits, `.`, `-`, `_`,
+ * percent-escapes and inner `:` separators. Whitespace, other punctuation, a
+ * capitalized prefix and a trailing `:` all fail it.
+ *
+ * Ask it of a DID read from data before showing that DID to a person or
+ * treating it as the principal a record names, so that no other spelling of
+ * a DID passes for it. It checks syntax alone: a DID that passes names no one
+ * in particular, and says nothing about who wrote it.
+ *
+ * The runtime decides DID syntax with this same predicate. It reads nothing but
+ * its argument, so it can be called anywhere: in a handler, a `computed()` or a
+ * `lift()`, and in a pattern body, where a call on a reactive value is lifted
+ * like a call to any other function.
+ */
+export declare function isWellFormedDID(value: unknown): value is DID;
+
+/**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
  * Nothing in the event's payload can choose the value.
@@ -3332,6 +3369,45 @@ export type DID = `did:${string}`;
  * label saying who may see the viewer's DID.
  */
 export declare function currentPrincipal(): DID | undefined;
+
+/**
+ * A kind of principal claim a label can carry: `represents-principal` names
+ * whom a value stands for, as a profile's label does, and `authored-by` names
+ * who wrote it, as `AuthoredByCurrentUser` records.
+ */
+export type PrincipalClaimKind = "authored-by" | "represents-principal";
+
+/**
+ * Returns the one principal that the label on `target`'s value attests with a
+ * claim of `kind`: the DID a profile represents, or the author of a record.
+ * The claim is read at the value's root and on its top-level fields, and only
+ * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
+ * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
+ * for anyone but the principal it runs for.
+ *
+ * `undefined` means the label names no verified single principal of that kind:
+ * none, more than one, or a claim in some other form. It also means that
+ * `target` is `undefined`, which is what a value that cannot be read yet reads
+ * as. It is never a guess, and a caller refuses whatever needs a principal. A
+ * label that cannot be read throws instead.
+ *
+ * It reads the label, and no contents of the value beyond the link pointers
+ * needed to reach it. In a reactive computation
+ * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * also be called in a handler, on a cell an event names. Calling it in a
+ * pattern body throws: wrap it in `computed()` instead.
+ *
+ * What a principal claim names is public to anyone who holds the value, so the
+ * result carries no label of its own. Compare it with `currentPrincipal()`, or
+ * check it with `isWellFormedDID()`; writing it into a label as a claim's
+ * subject is refused, like any other literal DID a pattern writes there,
+ * unless the schema declares it as the `ownerPrincipal` and it is the
+ * principal the write acts for.
+ */
+export declare function principalOf(
+  target: AnyCell<unknown> | undefined,
+  kind: PrincipalClaimKind,
+): DID | undefined;
 
 /**
  * Returns the event key of the event the running handler handles: a string
@@ -3743,13 +3819,28 @@ export type ValueEqualFunction = (a: unknown, b: unknown) => boolean;
  * `{ label: "name" }` / `{ await: "name" }` entries in their `tests` arrays.
  * Use `{ pattern, user: "other" }` to run a second session of an existing
  * user's identity.
+ *
+ * The shared space is born with an access list. The first participant's user
+ * is its OWNER, and every other user holds the level its participants declare
+ * with `{ pattern, access }`, or `"WRITE"` when none declares one; `"none"`
+ * leaves the user out of the list. It is what `spaceAccess()` reads. The
+ * storage server does not enforce it: a participant reads and writes the space
+ * whatever its level.
+ *
+ * The run fails before any participant starts when a participant of the first
+ * participant's user declares a level other than `"OWNER"`, or when two
+ * participants of one user declare different levels.
  */
 export interface MultiUserTestDescriptor {
   setup?: (...args: never[]) => unknown;
   participants: Record<
     string,
     | ((...args: never[]) => unknown)
-    | { pattern: (...args: never[]) => unknown; user?: string }
+    | {
+      pattern: (...args: never[]) => unknown;
+      user?: string;
+      access?: SpaceAccessLevel;
+    }
   >;
 }
 
@@ -3884,6 +3975,96 @@ export type SpaceAccessFunction = (
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;
+
+/** The level `grantSpaceAccess()` sets an access-list entry to. */
+export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
+
+/**
+ * Sets `principal`'s entry in the access list of the space `target`'s value
+ * lives in to exactly `level`, raising or lowering it. Granting a level the
+ * principal already holds changes nothing, so a handler run again for the same
+ * event converges.
+ *
+ * A grant exposes to `principal` everything the space already holds, not only
+ * what is written after it, since adding a member changes no value's label.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture: a person's action on a rendered UI.
+ * `principal` must be a DID other than the actor's own, the space's own, and
+ * `"*"`. The space may not be the actor's own Home space. Lowering the space's
+ * last concrete `OWNER` is refused. A runtime
+ * cannot know the deployment's service DIDs, or the identities its serving
+ * runtimes act through, so it does not refuse one of those as `principal`.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function grantSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+  level: SpaceGrantLevel,
+): void;
+
+/**
+ * Removes `principal`'s entry from the access list of the space `target`'s
+ * value lives in. Revoking an entry that is not there changes nothing, so a
+ * handler run again for the same event converges. A principal the list's
+ * `"*"` entry covers keeps what that entry grants.
+ *
+ * The acting principal, the event's actor, must hold `OWNER` in the space, and
+ * the event must be a trusted gesture. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Revoking the space's last concrete `OWNER` is
+ * refused.
+ *
+ * The change commits as a commit of its own, before the handler's other
+ * writes commit. If the handler's writes then fail, the change stands.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else:
+ * a serving runtime cannot yet check that the event's actor holds `OWNER`.
+ * Every refusal throws. One the handler lets escape drops its whole
+ * transaction; the call throws before staging anything, so one the handler
+ * catches leaves nothing staged for that call.
+ */
+export declare function revokeSpaceAccess(
+  target: AnyCell<unknown>,
+  principal: DID,
+): void;
+
+/**
+ * Tells `principal`, a member of the space `entry`'s value lives in, about
+ * `entry`: once the handler's commit is accepted, sends a message to
+ * `principal`'s DID inbox naming the space and `entry`'s document, and nothing
+ * else. The inbox tells the recipient who sent it; the recipient trusts none of
+ * what it says, and opening the space is what checks it.
+ *
+ * `principal` must be a `did:key` DID, which an inbox can address, and `entry`
+ * a cell at the root of a document in the space's own scope. The acting
+ * principal, the event's actor, must hold `OWNER` in the space, and `principal`
+ * must have an entry of its own in the space's access list, including any the
+ * handler's own `grantSpaceAccess()` added to that space. Those two are checked
+ * only just before the message is sent, after the handler's writes commit; a
+ * notice that fails them is dropped, and only the log shows it.
+ *
+ * The message goes out after the handler's writes commit, and is not sent if
+ * they fail. Nothing retries a send that fails, so a notice may not arrive,
+ * and one arrives only if its recipient has enabled their inbox. An event
+ * sends a principal at most one notice, however many times the handler runs.
+ *
+ * Available only in a handler on a client runtime, and throws anywhere else.
+ * The call throws for a malformed `principal` or `entry`, before staging
+ * anything, so one the handler catches sends nothing.
+ */
+export declare function noticeSpaceAccess(
+  principal: DID,
+  entry: AnyCell<unknown>,
+): void;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a

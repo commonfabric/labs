@@ -343,7 +343,9 @@ function removeHeredocBodies(command: string): string {
       }
       continue;
     }
-    pending.push(...heredocDelimiters(line, state));
+    for (const delimiter of heredocDelimiters(line, state)) {
+      pending.push(delimiter);
+    }
     output.push(line);
   }
   if (pending[0]?.expand && body.length > 0) {
@@ -536,7 +538,9 @@ export function parseShellCommandSegments(command: string): string[][] {
       const redirection = shellRedirection(command, index);
       const substitutions = commandSubstitutions(redirection.target, true);
       if (substitutions) {
-        segments.push(...parseShellCommandSegments(substitutions));
+        for (const segment of parseShellCommandSegments(substitutions)) {
+          segments.push(segment);
+        }
       }
       index = redirection.end;
       continue;
@@ -603,7 +607,7 @@ function pieceNewMain(commandWords: string[]): string | undefined {
   for (let index = 3; index < commandWords.length; index++) {
     const word = commandWords[index];
     if (word === "--") {
-      positional.push(...commandWords.slice(index + 1));
+      for (const word of commandWords.slice(index + 1)) positional.push(word);
       break;
     }
     if (word.startsWith("-")) {

@@ -563,4 +563,9 @@ export abstract class DefaultValueVisitor<
   ): VisitingEntryResult<PlusType, ResultType> {
     return undefined;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

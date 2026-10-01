@@ -203,7 +203,7 @@ export function debugTransactionWrites(
   const writes: IMemorySpaceAddress[] = [];
   const directLog = getDirectTransactionReactivityLog(tx);
   if (directLog) {
-    writes.push(...directLog.writes);
+    for (const write of directLog.writes) writes.push(write);
   } else {
     for (const activity of status.journal.activity()) {
       if ("write" in activity && activity.write) {

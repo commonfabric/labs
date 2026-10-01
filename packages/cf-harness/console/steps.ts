@@ -730,7 +730,7 @@ export const consoleRunSteps = (
         }
       }
     }
-    inScope.push(...introduced);
+    for (const token of introduced) inScope.push(token);
     return introduced;
   };
 

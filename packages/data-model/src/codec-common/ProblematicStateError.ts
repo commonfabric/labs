@@ -82,6 +82,11 @@ export class ProblematicStateError extends Error {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Returns an instance accounting for something a codec threw, which
    * JavaScript permits to be any value at all. An `Error` contributes its

@@ -4,6 +4,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { type Cell, isCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
@@ -88,28 +89,48 @@ export function spaceAccess(
   return accessLevel(
     runtime,
     tx,
-    spaceOfTarget(target),
+    spaceOfTarget(target, "spaceAccess(target)"),
     principal,
     kind === "lift",
   );
 }
 
 /**
- * Helper for {@link spaceAccess}, which returns the space `target` lives in,
- * after following any links it holds.
+ * Returns the space the value of the cell `target` lives in, after following
+ * any links it holds. `call` names the call `target` was passed to, for the
+ * error.
+ *
+ * @throws Error when `target` is not a cell.
  */
-function spaceOfTarget(target: unknown): MemorySpace {
-  let cell: Cell<unknown>;
-  if (isCell(target)) {
-    cell = target;
-  } else if (isCellResult(target)) {
-    cell = getCellOrThrow(target);
-  } else {
-    throw new Error(
-      "`spaceAccess(target)` takes a cell, or `undefined`, as its target.",
-    );
-  }
-  return cell.resolveAsCell().getAsNormalizedFullLink().space;
+export function spaceOfTarget(target: unknown, call: string): MemorySpace {
+  return linkOfTarget(target, call).space;
+}
+
+/**
+ * Returns the link to where the value of the cell `target` lives, after
+ * following any links it holds. `call` names the call `target` was passed to,
+ * for the error.
+ *
+ * @throws Error when `target` is not a cell.
+ */
+export function linkOfTarget(
+  target: unknown,
+  call: string,
+): NormalizedFullLink {
+  return cellOfTarget(target, call).resolveAsCell().getAsNormalizedFullLink();
+}
+
+/**
+ * Returns the cell `target` is, whether pattern code holds it as a cell or as
+ * the value a cell's reactive proxy reads as. `call` names the call `target`
+ * was passed to, for the error.
+ *
+ * @throws Error when `target` is not a cell.
+ */
+export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
+  if (isCell(target)) return target;
+  if (isCellResult(target)) return getCellOrThrow(target);
+  throw new Error(`\`${call}\` takes a cell as its target.`);
 }
 
 /**

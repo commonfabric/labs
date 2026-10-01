@@ -8,6 +8,7 @@ import { LLMClient, type LLMResponse } from "@commonfabric/llm";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { maxOf } from "@commonfabric/utils/math";
 
 import type { Cell } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
@@ -218,8 +219,8 @@ describe("executor-llm-supersession", () => {
     argument.withTx(tx).set({ prompt });
     expect((await tx.commit()).error).toBeUndefined();
     const engine = await server.engineForSpace(space);
-    const seq = Math.max(
-      ...Engine.selectCommitsSince(engine, { fromSeq: 0 })
+    const seq = maxOf(
+      Engine.selectCommitsSince(engine, { fromSeq: 0 })
         .filter((commit) => commit.class === "authored")
         .map((commit) => commit.seq),
     );

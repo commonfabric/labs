@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
+import { encodeBase64 } from "@std/encoding/base64";
 
 import { saAssertion, type ServiceAccountKey } from "./gcp-auth.ts";
 
@@ -20,11 +21,7 @@ async function generateKey(): Promise<
   const der = new Uint8Array(
     await crypto.subtle.exportKey("pkcs8", pair.privateKey),
   );
-  let base64 = "";
-  for (let i = 0; i < der.length; i += 0x8000) {
-    base64 += String.fromCharCode(...der.subarray(i, i + 0x8000));
-  }
-  const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(base64)}\n` +
+  const pem = `-----BEGIN PRIVATE KEY-----\n${encodeBase64(der)}\n` +
     "-----END PRIVATE KEY-----\n";
   return {
     key: {

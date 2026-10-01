@@ -1,6 +1,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { maxOf } from "@commonfabric/utils/math";
 import {
   isObjectNotArray,
   isPlainObject,
@@ -2134,7 +2135,7 @@ export class SpaceSession {
       this.#readyOnConnection = true;
       replayedThroughLocalSeq = Math.max(
         0,
-        ...this.#outstandingCommits.keys(),
+        maxOf(this.#outstandingCommits.keys()),
       );
       const replayTasks = [...this.#outstandingCommits.entries()].map((
         [localSeq, pendingCommit],
@@ -3313,17 +3314,27 @@ const protocolError = (message: string): Error => {
 const permanentProtocolError = (message: string): Error =>
   Object.assign(new Error(message), { name: "ProtocolError", permanent: true });
 
-// An authorization denial retrying cannot change. A retriable auth failure — an
-// anti-replay race the server marked `retriable` (an expired/used/mismatched
-// challenge, a stale signed `exp`) — is excluded, so the client keeps reopening
-// through a token-refresh window or a challenge race a fresh handshake heals.
+/**
+ * Whether `error` is an authorization denial the server marked `retriable`:
+ * an anti-replay race (an expired, used, or mismatched challenge, a stale
+ * signed `exp`) or a lease that has run out, each of which a new signature
+ * heals.
+ */
 const isRetriableAuthorizationError = (error: unknown): boolean =>
   error instanceof Error && error.name === "AuthorizationError" &&
   (error as { retriable?: unknown }).retriable === true;
 
-const isPermanentAuthorizationError = (error: unknown): boolean =>
-  error instanceof Error && error.name === "AuthorizationError" &&
-  (error as { retriable?: unknown }).retriable !== true;
+/**
+ * Whether `error` is an authorization denial retrying cannot change. A
+ * retriable auth failure — an anti-replay race the server marked `retriable`
+ * (an expired/used/mismatched challenge, a stale signed `exp`) — is excluded,
+ * so the client keeps reopening through a token-refresh window or a challenge
+ * race a fresh handshake heals.
+ */
+export function isPermanentAuthorizationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { retriable?: unknown }).retriable !== true;
+}
 
 // A reconnect handshake failure the whole client must give up on rather than
 // retry: an incompatible protocol negotiation at hello. An authorization denial

@@ -96,4 +96,9 @@ export abstract class BaseCodecAct<Encoded> {
     seen.push(value);
     return true;
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

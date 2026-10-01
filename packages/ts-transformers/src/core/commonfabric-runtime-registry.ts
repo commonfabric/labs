@@ -85,10 +85,25 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads the principal a cell's label attests, inside the computation or
+  // handler that calls it, and returns a plain DID rather than a reactive
+  // value. It builds no graph node.
+  {
+    exportName: "principalOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {
     exportName: "eventKey",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // A predicate over its argument alone, returning a plain boolean rather than
+  // a reactive value.
+  {
+    exportName: "isWellFormedDID",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -289,6 +304,28 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // so it is a plain call inside the computation or handler that makes it.
   {
     exportName: "spaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // grantSpaceAccess(target, principal, level) and revokeSpaceAccess(target,
+  // principal) stage an access-list change in the running handler and return
+  // nothing. They build no graph node, so each is a plain call inside the
+  // handler that makes it.
+  {
+    exportName: "grantSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  {
+    exportName: "revokeSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // noticeSpaceAccess(principal, entry) stages a message to send once the
+  // running handler commits, and returns nothing. It builds no graph node, so
+  // it is a plain call inside the handler that makes it.
+  {
+    exportName: "noticeSpaceAccess",
     category: "ignored",
     reactiveOrigin: false,
   },

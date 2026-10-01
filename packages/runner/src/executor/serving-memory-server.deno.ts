@@ -154,13 +154,25 @@ export async function listenServingMemoryServer(
     serve?: (
       request: Request,
     ) => Response | undefined | Promise<Response | undefined>;
+
+    /**
+     * The memory server's access-list mode. When given, the service identity
+     * is the server's one delegating principal, as a toolshed running server
+     * execution lists its own process identity, and no principal is a
+     * service principal. Absent, the server has no access-list
+     * configuration at all: `off`, with no delegating principal.
+     */
+    aclMode?: MemoryV2Server.MemoryAclMode;
   } = {},
 ): Promise<ListeningServingMemoryServer> {
-  const { apiUrl, serve: answer, ...hostOptions } = options;
+  const { apiUrl, serve: answer, aclMode, ...hostOptions } = options;
   const serviceIdentity = options.serviceIdentity ?? await Identity.generate();
-  const standalone = StandaloneMemoryServer.start(
-    answer !== undefined ? { serve: answer } : {},
-  );
+  const standalone = StandaloneMemoryServer.start({
+    ...(aclMode !== undefined
+      ? { acl: { mode: aclMode, delegatingDids: [serviceIdentity.did()] } }
+      : {}),
+    ...(answer !== undefined ? { serve: answer } : {}),
+  });
   const served = attachServingLoop({
     server: standalone.server,
     apiUrl: apiUrl ?? standalone.url,

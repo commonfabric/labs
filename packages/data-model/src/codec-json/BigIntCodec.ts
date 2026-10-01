@@ -63,4 +63,9 @@ export class BigIntCodec extends BaseTerminalCodec<JsonCodecValue, string> {
       );
     }
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

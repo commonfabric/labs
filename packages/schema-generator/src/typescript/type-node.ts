@@ -227,6 +227,19 @@ export function typeParameterOfReference(
 }
 
 /**
+ * Returns the declaration of the type parameter that `type` is, and
+ * `undefined` for any other type. A `this` type is a type parameter that no
+ * such declaration declares, so it has none.
+ */
+export function typeParameterOfType(
+  type: ts.Type,
+): ts.TypeParameterDeclaration | undefined {
+  return (type.flags & ts.TypeFlags.TypeParameter) === 0
+    ? undefined
+    : type.symbol?.declarations?.find(ts.isTypeParameterDeclaration);
+}
+
+/**
  * Whether `node` holds a reference the checker binds to a type parameter, or,
  * given `parameters`, to one of those.
  */

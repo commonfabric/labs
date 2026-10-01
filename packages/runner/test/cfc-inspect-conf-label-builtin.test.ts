@@ -29,8 +29,8 @@ const signer = await Identity.fromPassphrase(
 );
 const space = signer.did();
 
-// Inv-12 Stage 2: the pattern-facing `inspectConfLabel` builtin — the ONLY
-// application surface for label-metadata introspection (spec §4.6.4.1). End to
+// Inv-12 Stage 2: the pattern-facing `inspectConfLabel` builtin — one of the
+// application surfaces for label-metadata introspection (spec §4.6.4.1). End to
 // end: result labeling through the flow derivation, the fail-closed flow-off
 // degradation, and the untouched display path.
 

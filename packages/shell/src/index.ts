@@ -15,6 +15,8 @@ import { handleDeviceLink } from "./lib/device-link-login.ts";
 import { consumeDeviceLinkFragment } from "./lib/device-link.ts";
 import { API_URL, COMMIT_SHA, ENVIRONMENT } from "./lib/env.ts";
 import { setupHostToggles } from "./lib/host-toggles.ts";
+import { handleLoomPairingLink } from "./lib/loom-pairing-login.ts";
+import { consumeLoomPairingFragment } from "./lib/loom-pairing.ts";
 
 import "./components/index.ts";
 import "./views/index.ts";
@@ -33,6 +35,10 @@ import { publishShellApp } from "./globals.ts";
 // Interim pre-key-delegation pairing flow; delete when delegation lands.
 const deviceLink = consumeDeviceLinkFragment();
 
+// Loom pairing: /#pair=<code>[&loom=<Loom URL>]. Scrubbed at once for the
+// same reason, though a code is one-time and expires in ten minutes.
+const loomPairingLink = consumeLoomPairingFragment();
+
 // Handle a scan while the app is ALREADY loaded at the QR's target URL. The QR
 // deliberately points at the page the user bookmarked as mobile Loom, so
 // re-scanning it is a same-document fragment navigation: no reload fires, the
@@ -45,6 +51,14 @@ globalThis.addEventListener("hashchange", () => {
   const rescan = consumeDeviceLinkFragment();
   if (rescan.kind === "absent") return;
   void handleDeviceLink(rescan, { reloadOnReplace: true });
+});
+
+// The same for a pairing link opened while the app is loaded. A stored key
+// takes effect only on a reload, whether or not someone was signed in.
+globalThis.addEventListener("hashchange", () => {
+  const link = consumeLoomPairingFragment();
+  if (link.kind === "absent") return;
+  void handleLoomPairingLink(link, { reloadOnAccept: true });
 });
 
 if ("serviceWorker" in navigator) {
@@ -76,6 +90,11 @@ async function initializeKeys(app: XRootView): Promise<void> {
 // skipping initializeKeys and Navigation entirely.
 if (deviceLink.kind !== "absent") {
   await handleDeviceLink(deviceLink);
+}
+
+// Before initializeKeys for the same reason, and likewise never throws.
+if (loomPairingLink.kind !== "absent") {
+  await handleLoomPairingLink(loomPairingLink);
 }
 
 await initializeKeys(root);

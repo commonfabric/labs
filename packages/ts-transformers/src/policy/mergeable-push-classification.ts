@@ -1,10 +1,10 @@
 /**
  * Mergeable-push misuse classification
  *
- * The capability analysis reports a `Cell.push` whose receiver collection the
- * same function also reads explicitly. This module classifies the relationship
- * between that read and the push, so the diagnostic can say the right thing —
- * or nothing:
+ * The capability analysis reports a `Cell.push` or `Cell.pushAll` whose
+ * receiver collection the same function also reads explicitly. This module
+ * classifies the relationship between that read and the push, so the
+ * diagnostic can say the right thing — or nothing:
  *
  * - `read-dependent-push`: the push depends on the read, either through a
  *   guard (the dedup-then-push shape: an enclosing condition or an earlier
@@ -35,12 +35,12 @@ export type MergeablePushMisuseKind =
   | "independent-read-modify-write";
 
 /**
- * A `Cell.push(...)` whose receiver collection is also read explicitly within
- * the same analyzed function. Reported through
+ * A `Cell.push(...)` or `Cell.pushAll(...)` whose receiver collection is also
+ * read explicitly within the same analyzed function. Reported through
  * `CapabilityAnalysisOptions.mergeablePushMisuseSink`.
  */
 export interface MergeablePushMisuse {
-  /** The `push(...)` call to point the diagnostic at. */
+  /** The `push(...)` or `pushAll(...)` call to point the diagnostic at. */
   readonly node: ts.Node;
 
   /** The collection path that is both read and pushed, relative to its root. */

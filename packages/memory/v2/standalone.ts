@@ -124,6 +124,7 @@ export class StandaloneMemoryServer {
       acl?: {
         mode: MemoryServer.MemoryAclMode;
         serviceDids?: readonly string[];
+        delegatingDids?: readonly string[];
       };
 
       /** Whether the server verifies `connection.auth`, and so advertises

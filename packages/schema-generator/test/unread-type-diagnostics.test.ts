@@ -6,7 +6,7 @@ import ts from "typescript";
 
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
-import { createTestProgram } from "./utils.ts";
+import { createTestProgram, getTypeFromCode } from "./utils.ts";
 
 const f = ts.factory;
 
@@ -107,11 +107,11 @@ describe("unread-type-diagnostics", () => {
       const original = logger.warn;
       const logged: string[] = [];
       logger.warn = (_key, ...messages) => {
-        logged.push(
-          ...messages.map((message) =>
-            String(typeof message === "function" ? message() : message)
-          ),
-        );
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
       };
       try {
         new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
@@ -127,6 +127,34 @@ describe("unread-type-diagnostics", () => {
 
       expect(logged.length).toBe(1);
       expect(logged[0]).toContain("`PrintedElsewhere`");
+    });
+
+    it("logs an error when a CFC recursion cannot be read and no callback is supplied", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `
+        type Confidential<T, L> = T & { readonly __ct_cfc__?: { confidentiality: L } };
+        type Nest<T> = Confidential<{ value: T; next?: Nest<T[]> }, readonly ["secret"]>;
+        interface Holder { value: Nest<string> }
+      `,
+        "Holder",
+      );
+      const logger = getLogger("schema-generator.unread");
+      const original = logger.error;
+      const logged: string[] = [];
+      logger.error = (_key, ...messages) => {
+        for (const message of messages) {
+          logged.push(
+            String(typeof message === "function" ? message() : message),
+          );
+        }
+      };
+      try {
+        new SchemaGenerator().generateSchema(type, checker);
+      } finally {
+        logger.error = original;
+      }
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain("recursion limit");
     });
 
     it("reports nothing for a schema it reads in full", async () => {

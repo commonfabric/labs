@@ -14,6 +14,7 @@ With `Writable<T>` in your signature:
 | `.set(value)` | Replace entire value |
 | `.update({ key: value })` | Partial update (objects) |
 | `.push(...items)` | Append to an array (mergeable — see below) |
+| `.pushAll(items)` | Append every item of a list, however long, as one `push` (mergeable) |
 | `.addUnique(...items)` | Append each item only if not already present (mergeable) |
 | `.increment(by?)` | Add a number (default `+1`, may be negative) to a number cell (mergeable) |
 | `.remove(item)` | Remove first `item` from array |
@@ -44,9 +45,9 @@ value the handler happened to read. The methods also drop the reads they make
 for themselves from the commit's conflict set, so two of them touching the same
 collection do not conflict with each other. The practical effect:
 
-- `push` / `addUnique`: concurrent appends from different users all land. With
-  `addUnique`, adding an item that is already present is a no-op (deduplicated
-  on the server too), so re-adding the same item is safe.
+- `push` / `pushAll` / `addUnique`: concurrent appends from different users
+  all land. With `addUnique`, adding an item that is already present is a no-op
+  (deduplicated on the server too), so re-adding the same item is safe.
 - `increment`: concurrent increments sum instead of clobbering. A missing value
   counts as zero, so a counter needs no initialization; a zero amount is
   rejected.

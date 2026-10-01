@@ -199,6 +199,11 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Refuses a key this runtime reserves on the way out.
    *

@@ -375,9 +375,14 @@ The current package provides:
 
 - a console operator snapshot at `GET /api/health/detail`, retaining launch
   decisions for all connector grants and refusals alongside independently cached
-  observations of the selected sandbox driver and the index, with deciding
-  records, timestamps, causes, and remedies; unknown observations remain
-  distinct from failures, and reading the route never waits for a live probe;
+  observations of the selected sandbox driver — on macOS, of the direct driver's
+  VM too, holding any answer its daemon gave for the idle timeout and 30 s so
+  that watching the row does not on its own keep the VM up, and asking sooner
+  only where it holds none because the last question went unanswered, the
+  daemon's socket has changed, or a connection between questions failed — and
+  the index, with deciding records, timestamps, causes, and remedies; unknown
+  observations remain distinct from failures, and reading the route never waits
+  for a live probe;
 - owner retraction through console `POST /api/index/retract`, signed by the
   configured identity and requiring an active same-owner direct successor; the
   generic index proxy stays read-only and standalone deletion is unsupported;
@@ -532,31 +537,36 @@ The current package provides:
   replay, cancellation, and restore state; a session's durable transcript
   normally advances at a completed turn. On failure, the Loom host can retain
   the last resumable checkpoint (a validated complete batch or opening handoff),
-  atomically with its matching research/CFC state and omission provenance.
-  Unpaired work, cancellation, and interrupted activity stay on the audit trail;
-  turn-local budget notices stay in audit artifacts and are excluded from
-  resumable history; a completed turn's history is checked before it is
-  promoted, and promotion commits with the completion or not at all; and a
-  restored session whose recorded history does not pair its tool calls with tool
-  results preserves that history and adds explicit unknown-outcome results for
-  missing results, while orphan results and duplicate call IDs refuse the
-  session locally rather than sending malformed history to a provider; and a
-  listener that cannot take an event is reported to the host as a delivery
-  failure and does not change the outcome of the turn that produced it;
+  atomically with its matching research/CFC state and omission provenance. A
+  canceled turn advances it to the turn's request and last complete batch,
+  followed by a host notice that the person stopped the turn. Unpaired work and
+  interrupted activity stay on the audit trail; turn-local budget notices stay
+  in audit artifacts and are excluded from resumable history; a completed turn's
+  history is checked before it is promoted, and promotion commits with the
+  completion or not at all; and a restored session whose recorded history does
+  not pair its tool calls with tool results preserves that history and adds
+  explicit unknown-outcome results for missing results, while orphan results and
+  duplicate call IDs refuse the session locally rather than sending malformed
+  history to a provider; and a listener that cannot take an event is reported to
+  the host as a delivery failure and does not change the outcome of the turn
+  that produced it;
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
-- parent-only `finish_task` for a question or a give-up reason, admitted through
-  ordinary policy and artifacts as the sole call in a model turn. It ends the
-  loop without another provider request, retaining the completed lifecycle and
-  reusable conversation. Reports carry the canonical task outcome; console
-  polling and SSE carry the same outcome, session identity, and current
-  continuation availability. The live pane renders the question or reason.
-  Children report blockers to the parent. Missing-input discovery distinguishes
-  released evidence, absence within an enumerated granted scope, and unknown
-  reads; it stops for input rather than repeating author delegation. Shared
-  target-selection guidance asks for an unnamed, unattached piece without a
-  registry read and preserves established conversation targets. The parent
+- parent-only `finish_task` for a completed answer, a question, or a give-up
+  reason, admitted through ordinary policy and artifacts as the sole call in a
+  model turn. A completed answer satisfies the Fabric piece contract and may
+  carry validated client actions (`open_loom`, `command`, `open_url`). It ends
+  the loop without another provider request, retaining the completed lifecycle
+  and reusable conversation. Reports carry the canonical task outcome;
+  interactive `turn_completed` events, console polling and SSE carry the same
+  outcome with its answer and actions, session identity, and current
+  continuation availability. The live pane renders the answer, question, or
+  reason. Children report blockers to the parent. Missing-input discovery
+  distinguishes released evidence, absence within an enumerated granted scope,
+  and unknown reads; it stops for input rather than repeating author delegation.
+  Shared target-selection guidance asks for an unnamed, unattached piece without
+  a registry read and preserves established conversation targets. The parent
   resolves a user-supplied slug with `resolve_piece` before author delegation,
   using the input-cell path's exact-address resolver and space restriction. Only
   an opaque handle returns; source remains child-only. An unheld slug or a

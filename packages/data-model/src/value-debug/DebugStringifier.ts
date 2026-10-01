@@ -594,6 +594,11 @@ export class DebugStringifier {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Renders the elided form of a `FabricPrimitive` whose state cannot be had,
    * given its class name. The slash suggests a known encodable type rather

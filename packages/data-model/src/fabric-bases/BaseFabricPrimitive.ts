@@ -103,6 +103,11 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
   // Static members
   //
 
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
+
   /**
    * Type guard for `BaseFabricPrimitive`, which also enforces the invariant
    * that every `FabricPrimitive` is in fact a `BaseFabricPrimitive` which was

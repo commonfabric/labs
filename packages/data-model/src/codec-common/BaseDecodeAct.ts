@@ -360,4 +360,9 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
   #settleFrozenness(value: FabricValue): FabricValue {
     return this.config.mutable ? value : deepFreeze(value);
   }
+
+  static {
+    Object.freeze(this);
+    Object.freeze(this.prototype);
+  }
 }

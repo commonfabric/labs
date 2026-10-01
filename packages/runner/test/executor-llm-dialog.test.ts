@@ -14,6 +14,7 @@ import {
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { maxOf } from "@commonfabric/utils/math";
 
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { sendEvent } from "../src/cell.ts";
@@ -367,8 +368,8 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
           expect((await seedPeer.commit()).error).toBeUndefined();
           cancelPeer = peerResult.sink(() => {});
           const engine = await server.engineForSpace(space);
-          const seq = Math.max(
-            ...Engine.selectCommitsSince(engine, { fromSeq: 0 }).filter((
+          const seq = maxOf(
+            Engine.selectCommitsSince(engine, { fromSeq: 0 }).filter((
               entry,
             ) => entry.class === "authored").map((entry) => entry.seq),
           );

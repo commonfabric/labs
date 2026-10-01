@@ -128,6 +128,40 @@ describe("plain-data sandbox helper", () => {
     expect(Object.isFrozen(result)).toBe(true);
   });
 
+  it("throws for a proxy over a fabric primitive, validating or freezing", () => {
+    // A primitive is kept as is only because it is inert, and a proxy over one
+    // is not: it can trap every read, or be revoked after the snapshot is
+    // taken.
+
+    const proxied = new Proxy(new FabricDurationNsec(5n), {});
+
+    expect(() => assertPlainData({ spans: [proxied] })).toThrow(
+      "Detected counterfeit `FabricPrimitive`",
+    );
+    expect(() => freezeVerifiedPlainData({ spans: [proxied] })).toThrow(
+      "Detected counterfeit `FabricPrimitive`",
+    );
+  });
+
+  it("throws for an object on a fabric primitive's prototype that no constructor built", () => {
+    // A subclass of a primitive class cannot construct an instance, so an
+    // object on its prototype, or on the primitive class's own, is the shape
+    // such a value can take.
+
+    class Sub extends FabricDurationNsec {}
+
+    for (const proto of [FabricDurationNsec.prototype, Sub.prototype]) {
+      const fake = Object.create(proto);
+
+      expect(() => assertPlainData({ span: fake })).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
+      );
+      expect(() => freezeVerifiedPlainData({ span: fake })).toThrow(
+        "Detected counterfeit `FabricPrimitive`",
+      );
+    }
+  });
+
   it("rejects unsupported object prototypes during validation", () => {
     expect(() => assertPlainData(new Date())).toThrow(
       "Unsupported object prototype 'Date'",

@@ -1,10 +1,16 @@
 /**
- * Thrown from a handler/action `postRun` when the run referenced a pattern space
- * by name (`PatternFactory.inSpace("name")`) whose DID had not yet been
- * resolved. Before throwing, the runner resolves the pending name(s) into the
- * runtime's space-name cache; the scheduler then aborts the current transaction
- * and re-runs the same handler/action, which now resolves the name(s)
- * synchronously from the cache and proceeds normally.
+ * Thrown to have the scheduler abort the current transaction and re-run the
+ * same handler/action, once what the run was missing is in place. Among the
+ * runs that throw it:
+ *
+ * - A run that referenced a pattern space by name
+ *   (`PatternFactory.inSpace("name")`) whose DID had not yet been resolved.
+ *   Before throwing, the runner resolves the pending name(s) into the
+ *   runtime's space-name cache, so the re-run resolves them synchronously and
+ *   proceeds normally.
+ * - A handler run whose access-list commit (`grantSpaceAccess()`,
+ *   `revokeSpaceAccess()`) conflicted with a concurrent change to the list.
+ *   The re-run stages its changes again against the list as it now stands.
  *
  * This is an internal control-flow signal, not a user-facing error.
  */

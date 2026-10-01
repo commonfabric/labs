@@ -38,6 +38,20 @@ export type WorkerResponse =
   | { id: number; ok: RealmEncodedValue }
   | { id: number; error: string };
 
+/**
+ * A piece other than the one a harness opened, named by its result cell's
+ * entity id and the space that cell lives in. `MultiRuntimeSession.link()`
+ * returns a value of this shape, so a piece another piece holds a link to is
+ * addressed by linking to it through the first one.
+ */
+export type PieceAddress = {
+  /** The result cell's entity id. */
+  id: string;
+
+  /** The DID of the space the result cell lives in. */
+  space: string;
+};
+
 export type TrustedUiDescriptor = {
   /** `data-ui-pattern` / `data-ui-event-integrity` of the trusted surface. */
   surface: string;

@@ -2,7 +2,7 @@ import {
   isFabricDataUri,
   valueFromDataUri,
 } from "@commonfabric/data-model/codec-data-uri";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope, FabricValue, JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
@@ -401,16 +401,15 @@ const uiContractsFromSchemaInternal = (
 
   if (hasProperties) {
     for (const [key, child] of Object.entries(resolvedSchema.properties)) {
-      entries.push(
-        ...uiContractsFromSchemaInternal(
-          child as JSONSchema,
-          childRoot,
-          [...path, key],
-          seenRefs,
-          conditional,
-          includeAlternatives,
-        ),
+      const propertyEntries = uiContractsFromSchemaInternal(
+        child as JSONSchema,
+        childRoot,
+        [...path, key],
+        seenRefs,
+        conditional,
+        includeAlternatives,
       );
+      for (const entry of propertyEntries) entries.push(entry);
     }
   }
 
@@ -426,16 +425,15 @@ const uiContractsFromSchemaInternal = (
     compound.push([child as JSONSchema, conditional]);
   }
   for (const [child, childConditional] of compound) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
-        child,
-        childRoot,
-        path,
-        seenRefs,
-        childConditional,
-        includeAlternatives,
-      ),
+    const branchEntries = uiContractsFromSchemaInternal(
+      child,
+      childRoot,
+      path,
+      seenRefs,
+      childConditional,
+      includeAlternatives,
     );
+    for (const entry of branchEntries) entries.push(entry);
   }
 
   // `items` keeps its `*` entry even beside prefixItems, mirroring
@@ -448,30 +446,28 @@ const uiContractsFromSchemaInternal = (
     isObjectOrArray(resolvedSchema.items) ||
     typeof resolvedSchema.items === "boolean"
   ) {
-    entries.push(
-      ...uiContractsFromSchemaInternal(
-        resolvedSchema.items as JSONSchema,
-        childRoot,
-        [...path, "*"],
-        seenRefs,
-        conditional,
-        includeAlternatives,
-      ),
+    const itemEntries = uiContractsFromSchemaInternal(
+      resolvedSchema.items as JSONSchema,
+      childRoot,
+      [...path, "*"],
+      seenRefs,
+      conditional,
+      includeAlternatives,
     );
+    for (const entry of itemEntries) entries.push(entry);
   }
 
   if (Array.isArray(resolvedSchema.prefixItems)) {
     for (let index = 0; index < resolvedSchema.prefixItems.length; index++) {
-      entries.push(
-        ...uiContractsFromSchemaInternal(
-          resolvedSchema.prefixItems[index] as JSONSchema,
-          childRoot,
-          [...path, String(index)],
-          seenRefs,
-          conditional,
-          includeAlternatives,
-        ),
+      const slotEntries = uiContractsFromSchemaInternal(
+        resolvedSchema.prefixItems[index] as JSONSchema,
+        childRoot,
+        [...path, String(index)],
+        seenRefs,
+        conditional,
+        includeAlternatives,
       );
+      for (const entry of slotEntries) entries.push(entry);
     }
   }
 
@@ -615,6 +611,18 @@ const trustedEventMatchCandidates = (event: unknown): unknown[] => {
 
   return candidates;
 };
+
+/**
+ * Whether `event` is a trusted gesture: an event the renderer marked, whose
+ * provenance says the browser trusted a DOM event on a UI surface. This is
+ * the test `commitSnapshotShare()` and `commitCustodySeal()` apply, without
+ * their match on which surface it was, so it shows that a person acted and
+ * not on what.
+ */
+export const isTrustedGesture = (event: unknown): boolean =>
+  isRendererTrustedEvent(event) && isObjectNotArray(event) &&
+  isTrustedDomProvenance(event.provenance) &&
+  isObjectNotArray(event.provenance.ui);
 
 const pathsEqual = (
   left: readonly unknown[],

@@ -162,6 +162,7 @@ import type { HarnessChatSessionStore } from "../src/session-store.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
+  type ConsoleHealthProbe,
   type ConsoleHealthRow,
   consoleHealthUrl,
   type ConsoleObservedLaunchHealth,
@@ -171,6 +172,8 @@ import {
   consolePatternIndexHealthProbes,
   consoleRunscHealthProbe,
   consoleSandboxHealthProbe,
+  consoleVmHealthProbe,
+  consoleVmStore,
 } from "./health-probes.ts";
 import { type ConsolePolicyReport, consolePolicyReport } from "./policy.ts";
 import { liveCanonicalRedirect } from "./src/mount.ts";
@@ -1210,10 +1213,9 @@ export const consoleHealthRows = (
     }
   }
   if (launch !== undefined && launch.connectors.length > 0) {
-    rows.push(...launch.connectors.map((row): ConsoleHealthRow => ({
-      ...row,
-      checkedAt: launch.checkedAt,
-    })));
+    for (const row of launch.connectors) {
+      rows.push({ ...row, checkedAt: launch.checkedAt });
+    }
   } else {
     rows.push({
       id: "connectors.inventory",
@@ -1229,16 +1231,18 @@ export const consoleHealthRows = (
       remedy:
         "Launch the console for its Loom instance to retain the full connector decision report.",
     });
-    rows.push(...config.connectorGrants.map((grant): ConsoleHealthRow => ({
-      id: `connector.granted.${grant.name}`,
-      group: "connectors",
-      label: connectorGrantName(grant.source),
-      value: `granted: ${connectorGrantLabel(grant)}`,
-      source: "console connector configuration",
-      detail: "CF_HARNESS_CONNECTOR_GRANTS",
-      state: "ok",
-      checkedAt,
-    })));
+    for (const grant of config.connectorGrants) {
+      rows.push({
+        id: `connector.granted.${grant.name}`,
+        group: "connectors",
+        label: connectorGrantName(grant.source),
+        value: `granted: ${connectorGrantLabel(grant)}`,
+        source: "console connector configuration",
+        detail: "CF_HARNESS_CONNECTOR_GRANTS",
+        state: "ok",
+        checkedAt,
+      });
+    }
   }
   if (modelOptions === undefined) {
     rows.push({
@@ -1346,17 +1350,41 @@ export const runscWithoutPolicyRefusesTurns = (
 };
 
 /**
+ * The VM row's probe for a console on the direct runsc driver whose runsc
+ * keeps a macOS cfc-vm store, named by `env` as runsc names it, and otherwise
+ * none. None too where the runsc configuration does not resolve, which the
+ * runsc probe reports. `platform` replaces `Deno.build.os`.
+ */
+export const consoleVmHealthProbes = (
+  config: ConsoleConfig,
+  env: Record<string, string | undefined>,
+  options: { platform?: string } = {},
+): ConsoleHealthProbe[] => {
+  if (config.sandboxRuntimeKind !== "runsc") return [];
+  let rootfs: string;
+  try {
+    rootfs = resolveConsoleRunscConfig(config).rootfs;
+  } catch {
+    return [];
+  }
+  const store = consoleVmStore(rootfs, env, options);
+  return store === undefined ? [] : [consoleVmHealthProbe(store)];
+};
+
+/**
  * Combines retained decisions with independently cached host probes. The
  * sandbox probe is the selected driver's: a console on the direct runsc
  * driver never asks Docker anything, and is judged at the enforcement mode
- * its turns resolve from the options each is built with. `readDockerRuntimes`
- * replaces the Docker driver's `docker info` reading.
+ * its turns resolve from the options each is built with. On macOS it also
+ * asks the VM that driver runs in, from the store `env` names. `env` is the
+ * process's environment unless given, since that is the one runsc runs with.
+ * `readDockerRuntimes` replaces the Docker driver's `docker info` reading.
  */
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
   modelOptions?: CreateHarnessPromptLoopOptions,
-  env?: Record<string, string | undefined>,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
   indexFactory?: HarnessPatternIndexClientFactory,
   readDockerRuntimes?: Parameters<typeof consoleSandboxHealthProbe>[0],
 ): ConsoleHealth =>
@@ -1367,6 +1395,7 @@ export const createConsoleHealth = (
         consoleTurnEnforcementMode(config),
       )
       : consoleSandboxHealthProbe(readDockerRuntimes),
+    ...consoleVmHealthProbes(config, env),
     ...(indexFactory !== undefined && config.patternIndex !== undefined
       ? consolePatternIndexHealthProbes(
         config.patternIndex.baseUrl,
@@ -1509,6 +1538,16 @@ export class ConsoleServer {
         ? { outcome: "question" as const, question: envelope.event.question }
         : envelope.event.outcome === "gave-up"
         ? { outcome: "gave-up" as const, reason: envelope.event.reason }
+        : envelope.event.outcome === "completed"
+        ? {
+          outcome: "completed" as const,
+          ...(envelope.event.answer !== undefined
+            ? { answer: envelope.event.answer }
+            : {}),
+          ...(envelope.event.actions !== undefined
+            ? { actions: envelope.event.actions }
+            : {}),
+        }
         : { outcome: "completed" as const }),
       sessionId: envelope.sessionId,
       continuable: this.#sessionContinuable(envelope.sessionId),
